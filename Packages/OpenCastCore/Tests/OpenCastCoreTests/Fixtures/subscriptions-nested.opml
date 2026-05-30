@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="1.0">
+  <body>
+    <outline text="News">
+      <outline text="Nested Show" xmlURL="https://example.com/nested.xml" />
+      <outline type="rss" title="Caps URL Show" xmlurl="https://example.com/caps.xml" />
+    </outline>
+    <outline type="notrss" text="Non RSS Type" xmlUrl="https://example.com/non-rss-type.xml" />
+  </body>
+</opml>

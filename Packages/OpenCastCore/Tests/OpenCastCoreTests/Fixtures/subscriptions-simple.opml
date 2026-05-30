@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head>
+    <title>Subscriptions</title>
+  </head>
+  <body>
+    <outline type="rss" text="Alpha &amp; Beta" title="Alpha &amp; Beta" xmlUrl="https://example.com/alpha.xml" htmlUrl="https://example.com/alpha" />
+    <outline type="rss" text="Beta Show" xmlUrl="https://example.com/beta.xml" />
+  </body>
+</opml>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline text="Folder">
+      <outline text="Missing URL" />
+      <outline text="FTP Feed" xmlUrl="ftp://example.com/feed.xml" />
+      <outline text="Relative Feed" xmlUrl="/feeds/show.xml" />
+      <outline text="Hostless Feed" xmlUrl="https:///feed.xml" />
+    </outline>
+  </body>
+</opml>
