@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline type="rss" text="Display Show" title="Author Name" xmlUrl="https://example.com/display.xml" />
+  </body>
+</opml>

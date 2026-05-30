@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline type="rss" text="Text Only Show" xmlUrl="https://example.com/text-only.xml" />
+  </body>
+</opml>

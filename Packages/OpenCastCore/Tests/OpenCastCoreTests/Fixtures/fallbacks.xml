@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Fallback Show</title>
+    <link>https://example.com/fallbacks</link>
+    <description>Small fixture for parser fallback behavior.</description>
+    <item>
+      <title>Audio URL Stable Original</title>
+      <pubDate>Wed, 08 Apr 2026 12:00:00 +0000</pubDate>
+      <description>Missing GUID and duration, but has audio.</description>
+      <enclosure url="https://example.com/audio/stable-audio.mp3" length="123456" type="audio/mpeg" />
+    </item>
+    <item>
+      <title>Title Date Stable</title>
+      <pubDate>Thu, 09 Apr 2026 12:00:00 +0000</pubDate>
+      <description>Missing GUID, audio, and duration.</description>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline type="rss" text="First Query Show" xmlUrl="HTTPS://EXAMPLE.com/feed.xml?b=2&amp;a=1" />
+    <outline type="rss" text="Duplicate Query Show" xmlUrl="https://example.com/feed.xml?a=1&amp;b=2" />
+    <outline type="rss" text="Trailing Slash Show" xmlUrl="https://example.com/trailing.xml/" />
+    <outline type="rss" text="Trailing Slash Duplicate" xmlUrl="https://example.com/trailing.xml" />
+  </body>
+</opml>
