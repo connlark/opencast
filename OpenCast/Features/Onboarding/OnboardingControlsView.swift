@@ -3,6 +3,7 @@ import SwiftUI
 struct OnboardingControlsView: View {
     let page: OnboardingPage
     let canGoBack: Bool
+    let isPrimaryDisabled: Bool
     let onBack: () -> Void
     let onPrimary: () -> Void
 
@@ -18,6 +19,7 @@ struct OnboardingControlsView: View {
 
                 Button(page.primaryActionTitle, systemImage: page.primaryActionSystemImage, action: onPrimary)
                     .buttonStyle(.glassProminent)
+                    .disabled(isPrimaryDisabled)
             }
         }
         .accessibilityIdentifier("Onboarding Controls")

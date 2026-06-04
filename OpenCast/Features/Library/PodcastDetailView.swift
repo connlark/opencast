@@ -5,6 +5,9 @@ struct PodcastDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @State private var isConfirmingUnsubscribe = false
+    @State private var searchQuery = ""
+    @State private var searchMode: EpisodeSearchMode = .episodes
+    @State private var searchSession = EpisodeSearchSession()
 
     let feedURL: String
     var onUnsubscribe: () -> Void = {}
@@ -14,8 +17,24 @@ struct PodcastDetailView: View {
         appModel.library.subscriptions.first { $0.feedURL == feedURL }
     }
 
+    private var podcastCache: PodcastCacheRecord? {
+        appModel.library.podcastCache(for: feedURL)
+    }
+
     private var episodes: [EpisodeCacheRecord] {
         appModel.library.episodes(forPodcastID: feedURL)
+    }
+
+    private var hasSearchQuery: Bool {
+        EpisodeSearch.isSearchActive(query: searchQuery)
+    }
+
+    private var searchPrompt: String {
+        guard let subscription else {
+            return "Search Podcast"
+        }
+
+        return "Search \(subscription.title)"
     }
 
     private var isRefreshing: Bool {
@@ -37,12 +56,25 @@ struct PodcastDetailView: View {
     }
 
     var body: some View {
+        let podcastEpisodes = episodes
+        let searchTaskKey = EpisodeSearchRequestKey(
+            episodes: podcastEpisodes,
+            query: searchQuery,
+            mode: searchMode
+        )
+
         Group {
             if let subscription {
                 List {
                     Section {
                         HStack(spacing: 14) {
-                            ArtworkPlaceholder(title: subscription.title, imageURL: subscription.artworkURL, size: 76)
+                            ArtworkPlaceholder(
+                                title: subscription.title,
+                                imageURL: podcastCache?.artworkURL ?? subscription.artworkURL,
+                                size: 76,
+                                preview: podcastCache?.artworkPreview,
+                                onPreviewResolved: updatePodcastArtworkPreview
+                            )
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(spacing: 8) {
                                     Text(subscription.title)
@@ -75,10 +107,26 @@ struct PodcastDetailView: View {
                     }
 
                     Section("Episodes") {
-                        if episodes.isEmpty {
+                        if podcastEpisodes.isEmpty {
                             ContentUnavailableView("No Episodes", systemImage: "waveform")
+                        } else if hasSearchQuery {
+                            if searchSession.isSearching {
+                                ProgressView("Searching")
+                            } else if searchSession.results.isEmpty {
+                                ContentUnavailableView.search
+                            } else {
+                                ForEach(searchSession.results) { result in
+                                    Button {
+                                        openEpisode(result.episode)
+                                    } label: {
+                                        EpisodeRowView(episode: result.episode, searchResult: result)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityIdentifier(EpisodeRowView.accessibilityIdentifier(for: result.episode.episodeID))
+                                }
+                            }
                         } else {
-                            ForEach(episodes) { episode in
+                            ForEach(podcastEpisodes) { episode in
                                 Button {
                                     openEpisode(episode)
                                 } label: {
@@ -101,6 +149,17 @@ struct PodcastDetailView: View {
         }
         .navigationTitle(subscription?.title ?? "Podcast")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchQuery, prompt: searchPrompt)
+        .searchScopes($searchMode) {
+            EpisodeSearchScopePicker()
+        }
+        .task(id: searchTaskKey) {
+            await searchSession.update(
+                episodes: podcastEpisodes,
+                query: searchQuery,
+                mode: searchMode
+            )
+        }
         .toolbar {
             if subscription != nil {
                 ToolbarItem(placement: .primaryAction) {
@@ -144,5 +203,13 @@ struct PodcastDetailView: View {
     private func openEpisode(_ episode: EpisodeCacheRecord) {
         appModel.requestEpisodeAutoplayOnOpenIfNotListening(episodeID: episode.episodeID)
         onOpenEpisode(episode.episodeID)
+    }
+
+    private func updatePodcastArtworkPreview(_ preview: ArtworkPreview) {
+        guard let podcastCache else {
+            return
+        }
+
+        appModel.library.updateArtworkPreview(preview, for: podcastCache, modelContext: modelContext)
     }
 }

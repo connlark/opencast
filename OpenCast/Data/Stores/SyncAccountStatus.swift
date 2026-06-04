@@ -9,7 +9,7 @@ enum SyncAccountStatus: Equatable, Sendable {
     case couldNotDetermine
     case temporarilyUnavailable(String)
 
-    var displayName: String {
+    nonisolated var displayName: String {
         switch self {
         case .notChecked:
             "Not Checked"
@@ -28,7 +28,7 @@ enum SyncAccountStatus: Equatable, Sendable {
         }
     }
 
-    var detail: String? {
+    nonisolated var detail: String? {
         switch self {
         case .available:
             nil

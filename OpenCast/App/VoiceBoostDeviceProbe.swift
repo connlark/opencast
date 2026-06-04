@@ -10,7 +10,7 @@ import UIKit
 struct VoiceBoostDeviceProbe {
     static let reportFileName = "opencast-voiceboost-device-probe.json"
 
-    private static let feedURLString = OpenCastConstants.debuggerAlmanacFeedURL
+    private static let feedURLString = OpenCastConstants.thisAmericanLifeFeedURL
     private static let processingTimeout: TimeInterval = 45
 
     @discardableResult

@@ -8,9 +8,7 @@ struct EpisodeDetailView: View {
 
     let episodeID: String
     @State private var episodeSummaryText: String?
-    @State private var showNotesHTML: String?
     @State private var showNotesPlainText: String?
-    @State private var showNotesNeedsWebView = false
     @State private var showNotesShouldRender = false
     @State private var isConfirmingClearProgress = false
 
@@ -34,7 +32,9 @@ struct EpisodeDetailView: View {
                                 title: episode.podcastTitle,
                                 imageURL: episode.artworkURL,
                                 size: 96,
-                                cacheKind: .episode
+                                cacheKind: .episode,
+                                preview: episode.artworkPreview,
+                                onPreviewResolved: updateArtworkPreview
                             )
 
                             VStack(alignment: .leading, spacing: 8) {
@@ -66,7 +66,7 @@ struct EpisodeDetailView: View {
 
                         EpisodeDownloadControlsView(
                             record: appModel.downloads.record(for: episode.episodeID),
-                            lastErrorMessage: appModel.downloads.lastErrorMessage,
+                            lastErrorMessage: appModel.downloads.lastErrorMessage(for: episode.episodeID),
                             onDownload: { download(episode) },
                             onCancel: { cancelDownload(episode) },
                             onDelete: { deleteDownload(episode) },
@@ -83,20 +83,15 @@ struct EpisodeDetailView: View {
                             }
                         }
 
-                        if showNotesShouldRender, let showNotesHTML {
+                        if showNotesShouldRender, let showNotesPlainText {
                             VStack(alignment: .leading, spacing: 10) {
                                 Text("Show Notes")
                                     .font(.headline)
 
-                                if showNotesNeedsWebView {
-                                    ShowNotesWebView(html: showNotesHTML)
-                                        .frame(minHeight: 360)
-                                        .clipShape(.rect(cornerRadius: 8))
-                                } else {
-                                    Text(showNotesPlainText ?? "")
-                                        .font(.body)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
+                                Text(showNotesPlainText)
+                                    .font(.body)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
@@ -165,6 +160,14 @@ struct EpisodeDetailView: View {
         runPlaybackAction {
             try appModel.playEpisode(record, modelContext: modelContext)
         }
+    }
+
+    private func updateArtworkPreview(_ preview: ArtworkPreview) {
+        guard let episode else {
+            return
+        }
+
+        appModel.library.updateArtworkPreview(preview, for: episode, modelContext: modelContext)
     }
 
     private func markPlayed(_ record: EpisodeCacheRecord) {
@@ -275,9 +278,7 @@ struct EpisodeDetailView: View {
 
     private func applyTextContent(_ textContent: EpisodeTextContent) {
         episodeSummaryText = textContent.summary
-        self.showNotesHTML = textContent.showNotesHTML
         showNotesPlainText = textContent.showNotesPlainText
-        showNotesNeedsWebView = textContent.showNotesNeedsWebView
         showNotesShouldRender = textContent.showNotesShouldRender
     }
 }

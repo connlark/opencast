@@ -169,6 +169,7 @@ struct AddPodcastView: View {
         do {
             try await appModel.library.subscribe(to: feedURLString, modelContext: modelContext)
             dismiss()
+        } catch is CancellationError {
         } catch {
             subscriptionErrorMessage = error.localizedDescription
         }

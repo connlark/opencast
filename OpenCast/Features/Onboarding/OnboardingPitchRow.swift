@@ -31,7 +31,13 @@ struct OnboardingPitchRow: View {
     }
 
     private var rowContent: some View {
-        Label {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.headline)
+                .foregroundStyle(.red)
+                .frame(width: 28, alignment: .center)
+                .padding(.top, 2)
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.headline)
@@ -41,10 +47,17 @@ struct OnboardingPitchRow: View {
                     .font(.body)
                     .foregroundStyle(.secondary)
             }
-        } icon: {
-            Image(systemName: systemImage)
-                .foregroundStyle(.red)
+
+            Spacer(minLength: 12)
+
+            if destination != nil {
+                Image(systemName: "arrow.up.forward")
+                    .font(.caption)
+                    .bold()
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 4)
+            }
         }
-        .labelStyle(.titleAndIcon)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

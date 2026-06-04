@@ -12,41 +12,61 @@ final class SyncStatusStore {
     private(set) var lastRepairErrorMessage: String?
 
     @ObservationIgnored private let accountStatusProvider: any CloudKitAccountStatusProviding
-    @ObservationIgnored private var isRefreshingAccountStatus = false
+    @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private var accountStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var lastAccountStatusRefreshAt: Date?
 
-    init(accountStatusProvider: any CloudKitAccountStatusProviding = CloudKitAccountStatusProvider()) {
+    init(
+        accountStatusProvider: any CloudKitAccountStatusProviding = CloudKitAccountStatusProvider(),
+        now: @escaping () -> Date = { Date.now }
+    ) {
         self.accountStatusProvider = accountStatusProvider
+        self.now = now
     }
 
-    func refreshAccountStatus() async {
-        guard !isRefreshingAccountStatus else {
-            return
-        }
-        guard shouldRefreshAccountStatus() else {
-            return
+    @discardableResult
+    func refreshAccountStatus(force: Bool = false) async -> SyncAccountStatus {
+        if let accountStatusRefreshTask {
+            await accountStatusRefreshTask.value
+            return accountStatus
         }
 
-        isRefreshingAccountStatus = true
+        guard force || shouldRefreshAccountStatus() else {
+            return accountStatus
+        }
+
+        let task = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            await self.performAccountStatusRefresh()
+        }
+        accountStatusRefreshTask = task
+        await task.value
+        return accountStatus
+    }
+
+    private func performAccountStatusRefresh() async {
         if accountStatus == .notChecked {
             updateAccountStatus(.checking)
         }
 
         defer {
-            isRefreshingAccountStatus = false
+            accountStatusRefreshTask = nil
         }
 
         do {
             let refreshedStatus = try await accountStatusProvider.accountStatus()
             updateAccountStatus(refreshedStatus)
-            lastAccountStatusRefreshAt = .now
+            lastAccountStatusRefreshAt = now()
         } catch is CancellationError {
             if accountStatus == .checking {
                 updateAccountStatus(.notChecked)
             }
         } catch {
             updateAccountStatus(.temporarilyUnavailable(error.localizedDescription))
-            lastAccountStatusRefreshAt = .now
+            lastAccountStatusRefreshAt = now()
         }
     }
 
@@ -76,7 +96,7 @@ final class SyncStatusStore {
             return true
         }
 
-        return Date.now.timeIntervalSince(lastAccountStatusRefreshAt) >= Self.accountStatusRefreshInterval
+        return now().timeIntervalSince(lastAccountStatusRefreshAt) >= Self.accountStatusRefreshInterval
     }
 
     private func updateAccountStatus(_ status: SyncAccountStatus) {

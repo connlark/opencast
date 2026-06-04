@@ -4,6 +4,8 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
+    @State private var sampleSubscriptionErrorMessage: String?
+    @State private var isSubscribingSample = false
 
     let usesNavigationLinks: Bool
     let onAdd: () -> Void
@@ -18,7 +20,12 @@ struct LibraryView: View {
                 ContentUnavailableView("Library Unavailable", systemImage: "exclamationmark.triangle", description: Text(message))
             default:
                 if appModel.library.subscriptions.isEmpty {
-                    ContentUnavailableView("No Subscriptions", systemImage: "books.vertical")
+                    LibraryEmptyStateView(
+                        isSubscribingSample: isSubscribingSample,
+                        sampleSubscriptionErrorMessage: sampleSubscriptionErrorMessage,
+                        onAdd: onAdd,
+                        onSubscribeSample: subscribeToSample
+                    )
                 } else {
                     ForEach(appModel.library.subscriptions) { subscription in
                         LibrarySubscriptionRowView(
@@ -38,6 +45,34 @@ struct LibraryView: View {
             ToolbarItem(placement: .primaryAction) {
                 Button("Add", systemImage: "plus", action: onAdd)
             }
+        }
+    }
+
+    private func subscribeToSample() {
+        guard !isSubscribingSample else {
+            return
+        }
+
+        Task {
+            await performSampleSubscription()
+        }
+    }
+
+    private func performSampleSubscription() async {
+        sampleSubscriptionErrorMessage = nil
+        isSubscribingSample = true
+        defer {
+            isSubscribingSample = false
+        }
+
+        do {
+            try await appModel.library.subscribe(
+                to: OpenCastConstants.thisAmericanLifeFeedURL,
+                modelContext: modelContext
+            )
+        } catch is CancellationError {
+        } catch {
+            sampleSubscriptionErrorMessage = error.localizedDescription
         }
     }
 }

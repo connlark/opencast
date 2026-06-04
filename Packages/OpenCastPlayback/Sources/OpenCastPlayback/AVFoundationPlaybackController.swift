@@ -187,6 +187,12 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
 
         isPlaybackRequested = true
+        if needsCurrentItemRebuildForPlaybackRetry,
+           !rebuildCurrentItemForPlaybackRetry()
+        {
+            return
+        }
+
         do {
             try activateAudioSession()
         } catch {
@@ -779,6 +785,45 @@ public final class AVFoundationPlaybackController: PlaybackController {
             snapshot.state = .buffering
         }
         publishPlaybackState()
+    }
+
+    private var needsCurrentItemRebuildForPlaybackRetry: Bool {
+        guard snapshot.currentEpisode != nil else {
+            return false
+        }
+        guard let currentItem = player.currentItem else {
+            return true
+        }
+
+        return currentItem.status == .failed
+    }
+
+    private func rebuildCurrentItemForPlaybackRetry() -> Bool {
+        guard let episode = snapshot.currentEpisode,
+              let audioURL = episode.audioURL
+        else {
+            failPlayback(message: "This episode could not be played.")
+            return false
+        }
+
+        removeCurrentItemObservations()
+        resetStreamingCachePlaybackState()
+        voiceBoostTrackLoadTask?.cancel()
+        voiceBoostTrackLoadTask = nil
+        currentVoiceBoostTap = nil
+        player.pause()
+
+        let retryItem = makePlayerItem(for: episode, audioURL: audioURL)
+        player.replaceCurrentItem(with: retryItem)
+        observeCurrentItem(retryItem)
+
+        if snapshot.position > 0 {
+            player.seek(to: CMTime(seconds: snapshot.position, preferredTimescale: 600))
+        }
+
+        snapshot.state = .loading
+        publishPlaybackState()
+        return true
     }
 
     private func fallbackFromStreamingCacheIfNeeded(failedItem: AVPlayerItem) -> Bool {

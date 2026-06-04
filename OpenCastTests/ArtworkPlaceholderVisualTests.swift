@@ -9,7 +9,11 @@ struct ArtworkPlaceholderVisualTests {
     @Test("Transparent loaded artwork leaves parent background visible")
     func transparentLoadedArtworkLeavesParentBackgroundVisible() throws {
         let renderer = ImageRenderer(
-            content: ArtworkPlaceholderVisual(title: "Transparent", image: try transparentImage(width: 24, height: 24))
+            content: ArtworkPlaceholderVisual(
+                title: "Transparent",
+                image: try artworkTestTransparentImage(width: 24, height: 24),
+                preview: try artworkTestPreview()
+            )
                 .frame(width: 24, height: 24)
                 .background(.white)
         )
@@ -17,7 +21,7 @@ struct ArtworkPlaceholderVisualTests {
         renderer.isOpaque = true
 
         let renderedImage = try #require(renderer.uiImage)
-        let pixel = try pixel(in: renderedImage, x: 12, y: 12)
+        let pixel = try artworkTestPixel(in: renderedImage, x: 12, y: 12)
 
         #expect(pixel.red > 245)
         #expect(pixel.green > 245)
@@ -25,79 +29,77 @@ struct ArtworkPlaceholderVisualTests {
         #expect(pixel.alpha == 255)
     }
 
-    private func transparentImage(width: Int, height: Int) throws -> UIImage {
-        let bytesPerPixel = 4
-        let bytesPerRow = width * bytesPerPixel
-        let pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
-        let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
-            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+    @Test("Wide loaded artwork keeps letterbox space instead of cropping")
+    func wideLoadedArtworkKeepsLetterboxSpaceInsteadOfCropping() throws {
+        let renderer = ImageRenderer(
+            content: ArtworkPlaceholderVisual(
+                title: "Wide",
+                image: try artworkTestWideSplitImage(width: 20, height: 10),
+                preview: nil
+            )
+                .frame(width: 20, height: 20)
+                .background(.white)
         )
+        renderer.scale = 1
+        renderer.isOpaque = true
 
-        guard let provider = CGDataProvider(data: Data(pixels) as CFData),
-              let image = CGImage(
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bitsPerPixel: bytesPerPixel * 8,
-                bytesPerRow: bytesPerRow,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: bitmapInfo,
-                provider: provider,
-                decode: nil,
-                shouldInterpolate: true,
-                intent: .defaultIntent
-              )
-        else {
-            throw CocoaError(.fileWriteUnknown)
-        }
+        let renderedImage = try #require(renderer.uiImage)
+        let topPixel = try artworkTestPixel(in: renderedImage, x: 10, y: 2)
+        let leftPixel = try artworkTestPixel(in: renderedImage, x: 2, y: 10)
+        let rightPixel = try artworkTestPixel(in: renderedImage, x: 17, y: 10)
 
-        return UIImage(cgImage: image, scale: 1, orientation: .up)
+        #expect(topPixel.red > 245)
+        #expect(topPixel.green > 245)
+        #expect(topPixel.blue > 245)
+        #expect(leftPixel.red > 200)
+        #expect(leftPixel.blue < 80)
+        #expect(rightPixel.red < 80)
+        #expect(rightPixel.blue > 200)
     }
 
-    private func pixel(in image: UIImage, x: Int, y: Int) throws -> Pixel {
-        let cgImage = try #require(image.cgImage)
-        let width = cgImage.width
-        let height = cgImage.height
-        let bytesPerPixel = 4
-        let bytesPerRow = width * bytesPerPixel
-        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
-        let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
-            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+    @Test("Preview pixels render when decoded artwork is unavailable")
+    func previewPixelsRenderWhenDecodedArtworkIsUnavailable() throws {
+        let renderer = ImageRenderer(
+            content: ArtworkPlaceholderVisual(title: "Preview", image: nil, preview: try artworkTestPreview())
+                .frame(width: 24, height: 24)
         )
+        renderer.scale = 1
+        renderer.isOpaque = true
 
-        let didDraw = pixels.withUnsafeMutableBytes { buffer in
-            guard let context = CGContext(
-                data: buffer.baseAddress,
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bytesPerRow: bytesPerRow,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: bitmapInfo.rawValue
-            ) else {
-                return false
-            }
+        let renderedImage = try #require(renderer.uiImage)
+        let pixel = try artworkTestPixel(in: renderedImage, x: 12, y: 12)
 
-            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
-        }
-        guard didDraw else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-
-        let offset = (y * width + x) * bytesPerPixel
-        return Pixel(
-            red: pixels[offset],
-            green: pixels[offset + 1],
-            blue: pixels[offset + 2],
-            alpha: pixels[offset + 3]
-        )
+        #expect(pixel.red > 220)
+        #expect(pixel.green < 80)
+        #expect(pixel.blue < 80)
+        #expect(pixel.alpha == 255)
     }
 
-    private struct Pixel {
-        let red: UInt8
-        let green: UInt8
-        let blue: UInt8
-        let alpha: UInt8
+    @Test("Wide preview keeps letterbox space instead of stretching")
+    func widePreviewKeepsLetterboxSpaceInsteadOfStretching() throws {
+        let renderer = ImageRenderer(
+            content: ArtworkPlaceholderVisual(
+                title: "Preview",
+                image: nil,
+                preview: try artworkTestWideSplitPreview(width: 8, height: 4)
+            )
+            .frame(width: 20, height: 20)
+            .background(.white)
+        )
+        renderer.scale = 1
+        renderer.isOpaque = true
+
+        let renderedImage = try #require(renderer.uiImage)
+        let topPixel = try artworkTestPixel(in: renderedImage, x: 10, y: 2)
+        let leftPixel = try artworkTestPixel(in: renderedImage, x: 2, y: 10)
+        let rightPixel = try artworkTestPixel(in: renderedImage, x: 17, y: 10)
+
+        #expect(topPixel.red > 245)
+        #expect(topPixel.green > 245)
+        #expect(topPixel.blue > 245)
+        #expect(leftPixel.red > 200)
+        #expect(leftPixel.blue < 80)
+        #expect(rightPixel.red < 80)
+        #expect(rightPixel.blue > 200)
     }
 }

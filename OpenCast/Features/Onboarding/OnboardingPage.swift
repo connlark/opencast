@@ -3,7 +3,7 @@ import Foundation
 enum OnboardingPage: Int, CaseIterable, Identifiable {
     case welcome
     case importOPML
-    case popular
+    case podcastSetup
 
     var id: Int {
         rawValue
@@ -23,7 +23,7 @@ enum OnboardingPage: Int, CaseIterable, Identifiable {
             "Continue"
         case .importOPML:
             "Skip"
-        case .popular:
+        case .podcastSetup:
             "Done"
         }
     }
@@ -34,7 +34,7 @@ enum OnboardingPage: Int, CaseIterable, Identifiable {
             "chevron.right"
         case .importOPML:
             "forward"
-        case .popular:
+        case .podcastSetup:
             "checkmark"
         }
     }

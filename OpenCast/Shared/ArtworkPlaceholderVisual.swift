@@ -3,13 +3,16 @@ import SwiftUI
 struct ArtworkPlaceholderVisual: View {
     let title: String
     let image: UIImage?
+    let preview: ArtworkPreview?
 
     @ViewBuilder
     var body: some View {
         if let image {
             Image(uiImage: image)
                 .resizable()
-                .scaledToFill()
+                .scaledToFit()
+        } else if let preview {
+            ArtworkPreviewImage(preview: preview)
         } else {
             RoundedRectangle(cornerRadius: 8)
                 .fill(placeholderBackground)

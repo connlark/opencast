@@ -92,6 +92,26 @@ final class OpenCastCacheController {
         }
     }
 
+    func clearCachesNow() async throws {
+        maintenanceGeneration += 1
+        maintenanceTask?.cancel()
+        maintenanceTask = nil
+
+        do {
+            try await Self.removeDirectoryContents(feedCacheDirectory)
+            try await Self.removeDirectoryContents(artworkCacheDirectory)
+            let summaries = try await Self.cacheSummaries(
+                feedCacheDirectory: feedCacheDirectory,
+                artworkCacheDirectory: artworkCacheDirectory
+            )
+            apply(summaries)
+            lastErrorMessage = nil
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
     func pruneIfNeeded() {
         let feedCacheDirectory = feedCacheDirectory
         let artworkCacheDirectory = artworkCacheDirectory

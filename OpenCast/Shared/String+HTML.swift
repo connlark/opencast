@@ -1,16 +1,8 @@
 import Foundation
 
 extension String {
-    var plainTextFromHTML: String {
-        replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-            .replacing("&amp;", with: "&")
-            .replacing("&quot;", with: "\"")
-            .replacing("&#39;", with: "'")
-            .replacing("&lt;", with: "<")
-            .replacing("&gt;", with: ">")
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
+    nonisolated var plainTextFromHTML: String {
+        HTMLPlainText.collapsedText(from: self)
     }
 
     var initials: String {

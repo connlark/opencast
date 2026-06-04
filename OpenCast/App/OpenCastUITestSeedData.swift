@@ -20,6 +20,13 @@ enum OpenCastUITestSeedData {
         let completedPublishedAt = Date(timeIntervalSince1970: 1_777_775_000)
         let refreshedAt = Date(timeIntervalSince1970: 1_777_776_500)
         let artworkURL = try deterministicArtworkURL()?.absoluteString
+        let usesVariedArtworkPreviews = ProcessInfo.processInfo.environment[
+            "OPENCAST_SEED_VARIED_ARTWORK_PREVIEWS"
+        ] == "1"
+        let artworkPreview = seededArtworkPreview(
+            artworkURL: artworkURL,
+            variantIndex: usesVariedArtworkPreviews ? 0 : nil
+        )
         let usesBadAudioURL = ProcessInfo.processInfo.environment["OPENCAST_SEED_BAD_AUDIO_URL"] == "1"
         let usesLongShowNotes = ProcessInfo.processInfo.environment["OPENCAST_SEED_LONG_SHOW_NOTES"] == "1"
         let extraFeedCount = Int(ProcessInfo.processInfo.environment["OPENCAST_SEED_EXTRA_FEED_COUNT"] ?? "") ?? 0
@@ -39,59 +46,68 @@ enum OpenCastUITestSeedData {
                 lastRefreshAt: refreshedAt
             )
         )
-        context.insert(
-            PodcastCacheRecord(
-                feedURL: feedURL,
-                title: podcastTitle,
-                author: "UI Test Author",
-                summary: "A deterministic show seeded for UI tests.",
-                websiteURL: "https://example.com/ui-test-show",
-                artworkURL: artworkURL,
-                updatedAt: refreshedAt
-            )
+        let podcast = PodcastCacheRecord(
+            feedURL: feedURL,
+            title: podcastTitle,
+            author: "UI Test Author",
+            summary: "A deterministic show seeded for UI tests.",
+            websiteURL: "https://example.com/ui-test-show",
+            artworkURL: artworkURL,
+            updatedAt: refreshedAt
         )
-        context.insert(
-            EpisodeCacheRecord(
-                episodeID: episodeID,
-                podcastID: feedURL,
-                podcastTitle: podcastTitle,
-                title: episodeTitle,
-                summary: "A deterministic episode seeded for UI tests.",
-                showNotesHTML: showNotesHTML,
-                publishedAt: publishedAt,
-                duration: 180,
-                audioURL: audioURL,
-                artworkURL: artworkURL,
-                guid: episodeID,
-                cachedAt: refreshedAt
-            )
+        if let artworkPreview {
+            podcast.storeArtworkPreviewIfChanged(artworkPreview)
+        }
+        context.insert(podcast)
+
+        let episode = EpisodeCacheRecord(
+            episodeID: episodeID,
+            podcastID: feedURL,
+            podcastTitle: podcastTitle,
+            title: episodeTitle,
+            summary: "A deterministic episode seeded for UI tests.",
+            showNotesHTML: showNotesHTML,
+            publishedAt: publishedAt,
+            duration: 180,
+            audioURL: audioURL,
+            artworkURL: artworkURL,
+            guid: episodeID,
+            cachedAt: refreshedAt
         )
+        if let artworkPreview {
+            episode.storeArtworkPreviewIfChanged(artworkPreview)
+        }
+        context.insert(episode)
 
         seedExtraFeeds(
             count: extraFeedCount,
             context: context,
             audioURL: audioURL,
             artworkURL: artworkURL,
+            artworkPreview: artworkPreview,
+            usesVariedArtworkPreviews: usesVariedArtworkPreviews,
             refreshedAt: refreshedAt
         )
 
         if includesEpisodeProgress {
-            context.insert(
-                EpisodeCacheRecord(
-                    episodeID: completedEpisodeID,
-                    podcastID: feedURL,
-                    podcastTitle: podcastTitle,
-                    title: completedEpisodeTitle,
-                    summary: "A completed deterministic episode seeded for UI tests.",
-                    showNotesHTML: "<p>Completed deterministic show notes for UI tests.</p>",
-                    publishedAt: completedPublishedAt,
-                    duration: 180,
-                    audioURL: audioURL,
-                    artworkURL: artworkURL,
-                    guid: completedEpisodeID,
-                    cachedAt: refreshedAt
-                )
+            let completedEpisode = EpisodeCacheRecord(
+                episodeID: completedEpisodeID,
+                podcastID: feedURL,
+                podcastTitle: podcastTitle,
+                title: completedEpisodeTitle,
+                summary: "A completed deterministic episode seeded for UI tests.",
+                showNotesHTML: "<p>Completed deterministic show notes for UI tests.</p>",
+                publishedAt: completedPublishedAt,
+                duration: 180,
+                audioURL: audioURL,
+                artworkURL: artworkURL,
+                guid: completedEpisodeID,
+                cachedAt: refreshedAt
             )
+            if let artworkPreview {
+                completedEpisode.storeArtworkPreviewIfChanged(artworkPreview)
+            }
+            context.insert(completedEpisode)
             context.insert(
                 EpisodeProgressRecord(
                     episodeID: episodeID,
@@ -156,6 +172,8 @@ enum OpenCastUITestSeedData {
         context: ModelContext,
         audioURL: String,
         artworkURL: String?,
+        artworkPreview: ArtworkPreview?,
+        usesVariedArtworkPreviews: Bool,
         refreshedAt: Date
     ) {
         guard count > 0 else {
@@ -177,33 +195,41 @@ enum OpenCastUITestSeedData {
                     lastRefreshAt: refreshedAt
                 )
             )
-            context.insert(
-                PodcastCacheRecord(
-                    feedURL: feedURL,
-                    title: title,
-                    author: "UI Test Author \(index)",
-                    summary: "A deterministic extra show seeded for UI performance tests.",
-                    websiteURL: "https://example.com/ui-test-extra-\(index)",
-                    artworkURL: artworkURL,
-                    updatedAt: refreshedAt
-                )
+            let podcast = PodcastCacheRecord(
+                feedURL: feedURL,
+                title: title,
+                author: "UI Test Author \(index)",
+                summary: "A deterministic extra show seeded for UI performance tests.",
+                websiteURL: "https://example.com/ui-test-extra-\(index)",
+                artworkURL: artworkURL,
+                updatedAt: refreshedAt
             )
-            context.insert(
-                EpisodeCacheRecord(
-                    episodeID: episodeID,
-                    podcastID: feedURL,
-                    podcastTitle: title,
-                    title: "Extra Deterministic Episode \(index)",
-                    summary: "An extra deterministic episode seeded for UI performance tests.",
-                    showNotesHTML: "<p>Extra deterministic show notes.</p>",
-                    publishedAt: publishedAt,
-                    duration: 180,
-                    audioURL: audioURL,
-                    artworkURL: artworkURL,
-                    guid: episodeID,
-                    cachedAt: refreshedAt
-                )
+            let resolvedArtworkPreview = usesVariedArtworkPreviews
+                ? seededArtworkPreview(artworkURL: artworkURL, variantIndex: index)
+                : artworkPreview
+            if let resolvedArtworkPreview {
+                podcast.storeArtworkPreviewIfChanged(resolvedArtworkPreview)
+            }
+            context.insert(podcast)
+
+            let episode = EpisodeCacheRecord(
+                episodeID: episodeID,
+                podcastID: feedURL,
+                podcastTitle: title,
+                title: "Extra Deterministic Episode \(index)",
+                summary: "An extra deterministic episode seeded for UI performance tests.",
+                showNotesHTML: "<p>Extra deterministic show notes.</p>",
+                publishedAt: publishedAt,
+                duration: 180,
+                audioURL: audioURL,
+                artworkURL: artworkURL,
+                guid: episodeID,
+                cachedAt: refreshedAt
             )
+            if let resolvedArtworkPreview {
+                episode.storeArtworkPreviewIfChanged(resolvedArtworkPreview)
+            }
+            context.insert(episode)
         }
     }
 
@@ -236,6 +262,40 @@ enum OpenCastUITestSeedData {
         default:
             try writeDeterministicArtwork()
         }
+    }
+
+    private static func seededArtworkPreview(artworkURL: String?, variantIndex: Int?) -> ArtworkPreview? {
+        guard ProcessInfo.processInfo.environment["OPENCAST_SEED_ARTWORK_PREVIEW"] == "1" else {
+            return nil
+        }
+
+        let variantIndex = variantIndex ?? 0
+        let canonicalKey = ArtworkPreview.canonicalArtworkURLKey(for: artworkURL)
+            ?? "opencast-ui-test-preview-\(variantIndex)"
+        var rgbData = Data()
+        rgbData.reserveCapacity(ArtworkPreview.requiredRGBByteCount(
+            width: ArtworkPreview.fixedPixelWidth,
+            height: ArtworkPreview.fixedPixelHeight
+        ))
+        for index in 0..<(ArtworkPreview.fixedPixelWidth * ArtworkPreview.fixedPixelHeight) {
+            let row = index / ArtworkPreview.fixedPixelWidth
+            let column = index % ArtworkPreview.fixedPixelWidth
+            let red = 220 + (variantIndex + column * 3) % 33
+            let green = 36 + (variantIndex * 17 + row * 11 + column * 5) % 128
+            let blue = 28 + (variantIndex * 13 + row * 7 + column * 3) % 88
+            rgbData.append(UInt8(red))
+            rgbData.append(UInt8(green))
+            rgbData.append(UInt8(blue))
+        }
+
+        return ArtworkPreview(
+            version: ArtworkPreview.currentVersion,
+            canonicalArtworkURLKey: canonicalKey,
+            sourceHash: "opencast-ui-test-preview-v\(ArtworkPreview.currentVersion)-\(variantIndex)",
+            pixelWidth: ArtworkPreview.fixedPixelWidth,
+            pixelHeight: ArtworkPreview.fixedPixelHeight,
+            rgbData: rgbData
+        )
     }
 
     private static func writeDeterministicArtwork() throws -> URL {

@@ -90,6 +90,10 @@ struct EpisodeDownloadFileStore: Sendable {
         }
     }
 
+    nonisolated func removeAllDownloads() throws {
+        try removeItemIfPresent(at: downloadsDirectory)
+    }
+
     nonisolated func safeStem(episodeID: String) -> String {
         let allowedScalars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         var value = ""

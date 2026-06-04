@@ -44,13 +44,6 @@ struct OpenCastApp: App {
                 )
             )
             let podcastDirectoryService = ITunesPodcastDirectoryService(httpClient: httpClient)
-            #if DEBUG
-            let podcastDiscoveryService: any PodcastDiscoveryService = launchConfiguration.usesStubPopularPodcasts
-                ? OpenCastUITestPodcastDiscoveryService()
-                : podcastDirectoryService
-            #else
-            let podcastDiscoveryService: any PodcastDiscoveryService = podcastDirectoryService
-            #endif
             let playback = AVFoundationPlaybackController(
                 voiceBoostTapDiagnostics: voiceBoostDiagnostics,
                 nowPlayingArtworkLoader: SharedNowPlayingArtworkLoader()
@@ -63,7 +56,6 @@ struct OpenCastApp: App {
                 exposesVoiceBoostDiagnosticsStatus: launchConfiguration.exposesVoiceBoostDiagnosticsStatus,
                 runsVoiceBoostDeviceProbe: launchConfiguration.runsVoiceBoostDeviceProbe,
                 podcastDirectoryService: podcastDirectoryService,
-                podcastDiscoveryService: podcastDiscoveryService,
                 allowsAutomaticFeedRefresh: !launchConfiguration.usesInMemoryStore
             ))
         } catch {

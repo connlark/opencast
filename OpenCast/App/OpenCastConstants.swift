@@ -1,17 +1,8 @@
 import Foundation
 
 enum OpenCastConstants {
-    static let debuggerAlmanacFeedURL = "https://debuggers-almanac.example.com/feed.xml"
-    static let seedFeedURL = "https://seed.example.com/feed.xml"
-
-    static var defaultFeedURL: String {
-        let environment = ProcessInfo.processInfo.environment
-        if environment["OPENCAST_UI_TESTING"] == "1",
-           let override = environment["OPENCAST_DEFAULT_FEED_URL"] {
-            return override
-        }
-        return debuggerAlmanacFeedURL
-    }
+    static let thisAmericanLifeFeedURL = "https://www.thisamericanlife.org/podcast/rss.xml"
+    static let libriVoxCommunityFeedURL = "https://feeds.feedburner.com/LibrivoxCommunityPodcast"
 
     static var addPodcastInitialFeedURL: String {
         let environment = ProcessInfo.processInfo.environment

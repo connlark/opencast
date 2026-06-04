@@ -6,15 +6,24 @@ struct SettingsPlaybackSection: View {
 
     var body: some View {
         Section {
-            Picker("Voice Boost", selection: voiceBoostModeBinding) {
-                ForEach(VoiceBoostMode.allCases) { mode in
-                    Text(mode.title)
-                        .tag(mode)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Voice Boost")
+                    .font(.headline)
+
+                Text("Makes quiet speech easier to hear by lifting voices and evening out podcast volume.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Picker("Voice Boost", selection: voiceBoostModeBinding) {
+                    ForEach(VoiceBoostMode.allCases) { mode in
+                        Text(mode.title)
+                            .tag(mode)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Voice Boost")
+                .accessibilityValue(appModel.playbackSettings.voiceBoostMode.fullTitle)
             }
-            .pickerStyle(.segmented)
-            .accessibilityLabel("Voice Boost")
-            .accessibilityValue(appModel.playbackSettings.voiceBoostMode.fullTitle)
 
             LabeledContent("Skip Back") {
                 Picker("Skip Back", selection: skipBackwardBinding) {
@@ -45,8 +54,6 @@ struct SettingsPlaybackSection: View {
             }
         } header: {
             Text("Playback")
-        } footer: {
-            Text("Voice Boost is on by default. Per Episode lets the Now Playing card control the current episode only.")
         }
     }
 

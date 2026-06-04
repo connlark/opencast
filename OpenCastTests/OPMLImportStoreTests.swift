@@ -115,16 +115,16 @@ struct OPMLImportStoreTests {
     func importsHTTPPodcastFeedsFromOPML() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let feedURL = "http://feeds.example.com/subscriber/feed.xml"
+        let feedURL = "http://example.com/subscriber-feed.xml"
         let feedService = StubOPMLFeedService(responses: [
-            feedURL: .success(makeSnapshot(feedURL: feedURL, podcastTitle: "Example Subscriber Show"))
+            feedURL: .success(makeSnapshot(feedURL: feedURL, podcastTitle: "Example Subscriber Podcast"))
         ])
         let libraryStore = LibraryStore(feedService: feedService)
         let importStore = OPMLImportStore()
 
         await importStore.importOPML(
             data: opmlData([
-                ("Example Subscriber Show \u{2014} Subscriber Feed", feedURL)
+                ("Example Subscriber Podcast \u{2014} Subscriber Feed", feedURL)
             ]),
             libraryStore: libraryStore,
             modelContext: context

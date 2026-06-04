@@ -22,6 +22,10 @@ struct OPMLSettingsSection: View {
                 importAction: showImporter
             )
 
+            Link(destination: OpenCastConstants.applePodcastsOPMLShortcutURL) {
+                Label("Get Apple Podcasts Export Shortcut", systemImage: "link")
+            }
+
             Button(
                 "Export Subscriptions",
                 systemImage: "square.and.arrow.up",

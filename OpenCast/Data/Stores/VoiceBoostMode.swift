@@ -10,9 +10,9 @@ enum VoiceBoostMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .globalOn:
-            "On"
+            "Always"
         case .perEpisode:
-            "Episode"
+            "Per Episode"
         case .globalOff:
             "Off"
         }
@@ -21,11 +21,11 @@ enum VoiceBoostMode: String, CaseIterable, Identifiable {
     var fullTitle: String {
         switch self {
         case .globalOn:
-            "Global On"
+            "Always On"
         case .perEpisode:
             "Per Episode"
         case .globalOff:
-            "Global Off"
+            "Off"
         }
     }
 }

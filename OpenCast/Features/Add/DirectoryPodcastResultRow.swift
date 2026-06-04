@@ -37,5 +37,7 @@ struct DirectoryPodcastResultRow<TrailingContent: View>: View {
             trailingContent()
         }
         .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
     }
 }

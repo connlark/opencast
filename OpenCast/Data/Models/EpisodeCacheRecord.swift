@@ -13,6 +13,12 @@ final class EpisodeCacheRecord {
     var duration: Double?
     var audioURL: String?
     var artworkURL: String?
+    var artworkPreviewVersion: Int?
+    var artworkPreviewCanonicalURLKey: String?
+    var artworkPreviewSourceHash: String?
+    var artworkPreviewPixelWidth: Int?
+    var artworkPreviewPixelHeight: Int?
+    var artworkPreviewRGBData: Data?
     var guid: String?
     var cachedAt: Date = Date()
 

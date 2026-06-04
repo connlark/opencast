@@ -16,8 +16,6 @@ struct SettingsDebugSection: View {
             }
         } header: {
             Text("Debug")
-        } footer: {
-            Text("Cache diagnostics, repair tools, refresh logs, CloudKit details, and fixture information.")
         }
     }
 

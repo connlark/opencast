@@ -7,6 +7,7 @@ struct OpenCastTabRootView: View {
     @Binding var inboxNavigationPath: [AppRoute]
     let isNowPlayingPresented: Bool
     let onAdd: () -> Void
+    let onPresentDataNukeConfirmation: () -> Void
     let onPresentNowPlaying: () -> Void
 
     var body: some View {
@@ -29,6 +30,7 @@ struct OpenCastTabRootView: View {
             Tab(AppSection.inbox.title, systemImage: AppSection.inbox.systemImage, value: AppSection.inbox) {
                 NavigationStack(path: $inboxNavigationPath) {
                     InboxView(
+                        onAdd: onAdd,
                         onOpenEpisode: { episodeID in
                             inboxNavigationPath.append(.episodeDetail(id: episodeID))
                         }
@@ -39,7 +41,9 @@ struct OpenCastTabRootView: View {
 
             Tab(AppSection.settings.title, systemImage: AppSection.settings.systemImage, value: AppSection.settings) {
                 NavigationStack {
-                    SettingsView()
+                    SettingsView(
+                        onPresentDataNukeConfirmation: onPresentDataNukeConfirmation
+                    )
                 }
             }
         }

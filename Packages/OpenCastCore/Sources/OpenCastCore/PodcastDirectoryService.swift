@@ -4,25 +4,12 @@ public protocol PodcastDirectoryService: Sendable {
     func search(query: String) async throws -> [DirectoryPodcastResult]
 }
 
-public struct ITunesPodcastDirectoryService: PodcastDirectoryService, PodcastDiscoveryService {
-    public static let defaultPopularFallbackIDs = [
-        201671138,
-        1535809341,
-        1561051077,
-        121493675,
-        1200361736
-    ]
-
+public struct ITunesPodcastDirectoryService: PodcastDirectoryService {
     let httpClient: any OpenCastHTTPClient
-    let popularFallbackIDs: [Int]
     static let jsonDecoder = JSONDecoder()
 
-    public init(
-        httpClient: any OpenCastHTTPClient = URLSessionOpenCastHTTPClient(),
-        popularFallbackIDs: [Int] = Self.defaultPopularFallbackIDs
-    ) {
+    public init(httpClient: any OpenCastHTTPClient = URLSessionOpenCastHTTPClient()) {
         self.httpClient = httpClient
-        self.popularFallbackIDs = popularFallbackIDs
     }
 
     public func search(query: String) async throws -> [DirectoryPodcastResult] {

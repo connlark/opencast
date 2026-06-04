@@ -1,9 +1,12 @@
+import SwiftData
 import SwiftUI
 
 struct EpisodeRowView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.modelContext) private var modelContext
 
     let episode: EpisodeCacheRecord
+    var searchResult: EpisodeSearchResult?
 
     static func accessibilityIdentifier(for episodeID: String) -> String {
         "episode-row-\(episodeID)"
@@ -17,17 +20,31 @@ struct EpisodeRowView: View {
                 title: episode.podcastTitle,
                 imageURL: episode.artworkURL,
                 size: 56,
-                cacheKind: .episode
+                cacheKind: .episode,
+                preview: episode.artworkPreview,
+                onPreviewResolved: updateArtworkPreview
             )
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(episode.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                Text(episode.podcastTitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if let searchResult {
+                    Text(searchResult.highlightedTitle)
+                        .font(.headline)
+                        .lineLimit(2)
+                } else {
+                    Text(episode.title)
+                        .font(.headline)
+                        .lineLimit(2)
+                }
+                if let searchResult {
+                    Text(searchResult.highlightedPodcastTitle)
+                        .font(.subheadline)
+                        .lineLimit(1)
+                } else {
+                    Text(episode.podcastTitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 HStack(spacing: 8) {
                     if let publishedAt = episode.publishedAt {
                         Text(publishedAt, format: .dateTime.month(.abbreviated).day().year())
@@ -54,6 +71,12 @@ struct EpisodeRowView: View {
                     }
                     .padding(.top, 2)
                 }
+
+                if let snippet = searchResult?.snippet {
+                    Text(snippet)
+                        .font(.caption)
+                        .lineLimit(1)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -65,12 +88,16 @@ struct EpisodeRowView: View {
         .accessibilityValue(progressSummary.accessibilityDescription)
     }
 
+    private func updateArtworkPreview(_ preview: ArtworkPreview) {
+        appModel.library.updateArtworkPreview(preview, for: episode, modelContext: modelContext)
+    }
+
     @ViewBuilder
     private func statusIcon(for progressSummary: EpisodeProgressSummary) -> some View {
         if progressSummary.isCompleted {
-            Image(systemName: "checkmark.circle")
+            Image(systemName: "checkmark.circle.fill")
                 .font(.title2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.green)
                 .frame(width: 34, height: 34)
                 .accessibilityHidden(true)
         } else {
