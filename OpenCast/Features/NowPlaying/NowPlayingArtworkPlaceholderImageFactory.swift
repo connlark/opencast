@@ -18,7 +18,7 @@ final class NowPlayingArtworkPlaceholderImageFactory {
         }
 
         let renderer = ImageRenderer(
-            content: ArtworkPlaceholderVisual(title: title, image: nil)
+            content: ArtworkPlaceholderVisual(title: title, image: nil, preview: nil)
                 .frame(width: size.width, height: size.height)
                 .clipShape(.rect(cornerRadius: 8))
         )

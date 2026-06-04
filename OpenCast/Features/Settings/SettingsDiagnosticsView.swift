@@ -70,11 +70,6 @@ struct SettingsDiagnosticsView: View {
                 } label: {
                     Label("CloudKit Container", systemImage: "shippingbox")
                 }
-                LabeledContent {
-                    Text(OpenCastConstants.defaultFeedURL)
-                } label: {
-                    Label("Default RSS Fixture", systemImage: "dot.radiowaves.right")
-                }
             }
         }
         .navigationTitle("Diagnostics")

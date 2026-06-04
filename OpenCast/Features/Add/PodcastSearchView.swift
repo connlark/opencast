@@ -6,6 +6,8 @@ struct PodcastSearchView: View {
     let subscribingFeedURLString: String?
     let onSubscribe: (DirectoryPodcastResult) -> Void
 
+    @FocusState private var isSearchFocused: Bool
+
     var body: some View {
         Group {
             Section("Search") {
@@ -13,6 +15,8 @@ struct PodcastSearchView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
+                    .focused($isSearchFocused)
+                    .onSubmit(hideKeyboard)
             }
 
             switch store.state {
@@ -43,7 +47,7 @@ struct PodcastSearchView: View {
                 Section("Results") {
                     ForEach(results) { result in
                         Button {
-                            onSubscribe(result)
+                            subscribe(to: result)
                         } label: {
                             PodcastSearchResultRow(
                                 result: result,
@@ -64,6 +68,15 @@ struct PodcastSearchView: View {
 
     private var isSubscribing: Bool {
         subscribingFeedURLString != nil
+    }
+
+    private func hideKeyboard() {
+        isSearchFocused = false
+    }
+
+    private func subscribe(to result: DirectoryPodcastResult) {
+        hideKeyboard()
+        onSubscribe(result)
     }
 
     private func isSubscribingResult(_ result: DirectoryPodcastResult) -> Bool {

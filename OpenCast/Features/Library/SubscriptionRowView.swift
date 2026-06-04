@@ -1,7 +1,12 @@
+import SwiftData
 import SwiftUI
 
 struct SubscriptionRowView: View {
+    @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.modelContext) private var modelContext
+
     let subscription: SubscriptionRecord
+    let podcastCache: PodcastCacheRecord?
     let latestRefreshLog: RefreshLogRecord?
     let isRefreshing: Bool
 
@@ -17,7 +22,13 @@ struct SubscriptionRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ArtworkPlaceholder(title: subscription.title, imageURL: subscription.artworkURL, size: 52)
+            ArtworkPlaceholder(
+                title: subscription.title,
+                imageURL: podcastCache?.artworkURL ?? subscription.artworkURL,
+                size: 52,
+                preview: podcastCache?.artworkPreview,
+                onPreviewResolved: updateArtworkPreview
+            )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(subscription.title)
@@ -55,5 +66,13 @@ struct SubscriptionRowView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private func updateArtworkPreview(_ preview: ArtworkPreview) {
+        guard let podcastCache else {
+            return
+        }
+
+        appModel.library.updateArtworkPreview(preview, for: podcastCache, modelContext: modelContext)
     }
 }

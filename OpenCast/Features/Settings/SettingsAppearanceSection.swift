@@ -21,8 +21,6 @@ struct SettingsAppearanceSection: View {
             }
         } header: {
             Text("Appearance")
-        } footer: {
-            Text("System follows the device appearance setting.")
         }
     }
 

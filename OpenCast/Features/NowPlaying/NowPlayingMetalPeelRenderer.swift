@@ -116,8 +116,10 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
         from cgImage: CGImage,
         device: MTLDevice
     ) async -> NowPlayingMetalPeelLoadedTexture {
-        let width = cgImage.width
-        let height = cgImage.height
+        let imageSize = CGSize(width: CGFloat(cgImage.width), height: CGFloat(cgImage.height))
+        let canvasSize = NowPlayingArtworkCanvas.squareSize(for: imageSize)
+        let width = Int(canvasSize.width)
+        let height = Int(canvasSize.height)
         let bytesPerPixel = 4
         let bytesPerRow = width * bytesPerPixel
         let bufferSize = bytesPerRow * height
@@ -146,9 +148,12 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
         }
 
         context.interpolationQuality = .high
-        context.setFillColor(red: 0.966, green: 0.948, blue: 0.900, alpha: 1)
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
+        context.fill(CGRect(origin: .zero, size: canvasSize))
+        context.draw(
+            cgImage,
+            in: NowPlayingArtworkCanvas.aspectFitRect(imageSize: imageSize, canvasSize: canvasSize)
+        )
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm_srgb,

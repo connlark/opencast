@@ -3,6 +3,9 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
+
+    let onPresentDataNukeConfirmation: () -> Void
+
     @State private var isConfirmingClearCaches = false
     @State private var isConfirmingDeleteAllDownloads = false
     @State private var isRunningVoiceBoostDeviceProbe = false
@@ -11,8 +14,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             SettingsSyncSection(
-                accountStatus: appModel.syncStatus.accountStatus,
-                onRefresh: refreshSyncStatusFromButton
+                accountStatus: appModel.syncStatus.accountStatus
             )
 
             SettingsAppearanceSection()
@@ -46,6 +48,10 @@ struct SettingsView: View {
             )
 
             OPMLSettingsSection()
+
+            SettingsDangerZoneSection(
+                onNukeData: onPresentDataNukeConfirmation
+            )
 
             SettingsDebugSection()
 
@@ -94,12 +100,6 @@ struct SettingsView: View {
 
     private func refreshSyncStatus() async {
         await appModel.syncStatus.refreshAccountStatus()
-    }
-
-    private func refreshSyncStatusFromButton() {
-        Task {
-            await refreshSyncStatus()
-        }
     }
 
     private func confirmClearCaches() {

@@ -55,8 +55,6 @@ struct SettingsLocalStorageSection: View {
             }
         } header: {
             Text("Local Storage")
-        } footer: {
-            Text("Feed and artwork cache files can be cleared without deleting explicit downloads. Normal playback streams unless you choose Play Downloaded.")
         }
     }
 }

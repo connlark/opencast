@@ -184,6 +184,23 @@ struct DownloadStoreTests {
         #expect(downloadStore.record(for: episode.episodeID)?.state == .missing)
     }
 
+    @Test("Download setup errors are scoped to the failed episode")
+    func downloadSetupErrorsAreScopedToFailedEpisode() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = DownloadStore()
+        let failedEpisode = makeEpisode(episodeID: "missing-audio")
+        failedEpisode.audioURL = nil
+        let unrelatedEpisode = makeEpisode(episodeID: "playable-audio")
+
+        store.startDownload(for: failedEpisode, modelContext: context)
+
+        let expectedMessage = EpisodeDownloadError.invalidAudioURL.localizedDescription
+        #expect(store.lastErrorMessage == expectedMessage)
+        #expect(store.lastErrorMessage(for: failedEpisode.episodeID) == expectedMessage)
+        #expect(store.lastErrorMessage(for: unrelatedEpisode.episodeID) == nil)
+    }
+
     @Test("Unsubscribe removes only downloads for that feed")
     func unsubscribeRemovesOnlyDownloadsForThatFeed() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

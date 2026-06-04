@@ -25,10 +25,12 @@ final class LibraryStore {
     private(set) var activePodcastIDs: Set<String> = []
     private(set) var visibleEpisodeIDs: Set<String> = []
     private(set) var inboxEpisodes: [EpisodeCacheRecord] = []
+    private(set) var podcastCacheByFeedURL: [String: PodcastCacheRecord] = [:]
     private(set) var latestRefreshLogByFeedURL: [String: RefreshLogRecord] = [:]
     private(set) var lastErrorMessage: String?
 
     @ObservationIgnored private let feedService: any FeedService
+    @ObservationIgnored private var writeGeneration = 0
 
     init(feedService: any FeedService = DefaultFeedService()) {
         self.feedService = feedService
@@ -67,6 +69,7 @@ final class LibraryStore {
         modelContext: ModelContext,
         reloadAfter: Bool = true
     ) async throws {
+        let generation = writeGeneration
         guard let feedURL = URL(string: feedURLString.trimmingCharacters(in: .whitespacesAndNewlines)),
               feedURL.scheme != nil,
               feedURL.host != nil
@@ -81,6 +84,7 @@ final class LibraryStore {
 
         do {
             let snapshot = try await feedService.fetchFeed(at: feedURL)
+            try ensureCurrentGeneration(generation)
             try upsert(snapshot: snapshot, modelContext: modelContext, subscribe: true)
             if reloadAfter {
                 try reloadFromStore(modelContext: modelContext)
@@ -100,6 +104,7 @@ final class LibraryStore {
     }
 
     func refresh(feedURL: String, modelContext: ModelContext) async {
+        let generation = writeGeneration
         lastErrorMessage = nil
         do {
             try reloadFromStore(modelContext: modelContext)
@@ -110,7 +115,7 @@ final class LibraryStore {
                 return
             }
 
-            try await refresh(subscription: subscription, modelContext: modelContext)
+            try await refresh(subscription: subscription, generation: generation, modelContext: modelContext)
             try reloadFromStore(modelContext: modelContext)
             if state != .refreshing {
                 state = .idle
@@ -126,12 +131,14 @@ final class LibraryStore {
     }
 
     func refreshAll(modelContext: ModelContext) async {
+        let generation = writeGeneration
         state = .refreshing
         lastErrorMessage = nil
         do {
             try reloadFromStore(modelContext: modelContext)
             try await refreshAll(
                 feedURLStrings: subscriptions.map(\.feedURL),
+                generation: generation,
                 modelContext: modelContext
             )
             try reloadFromStore(modelContext: modelContext)
@@ -256,6 +263,26 @@ final class LibraryStore {
         return result
     }
 
+    func prepareForDataNuke() {
+        writeGeneration += 1
+        refreshingFeedURLs.removeAll()
+    }
+
+    func resetAfterDataNuke() {
+        state = .idle
+        subscriptions.removeAll()
+        episodes.removeAll()
+        progressRecords.removeAll()
+        refreshLogs.removeAll()
+        refreshingFeedURLs.removeAll()
+        activePodcastIDs.removeAll()
+        visibleEpisodeIDs.removeAll()
+        inboxEpisodes.removeAll()
+        podcastCacheByFeedURL.removeAll()
+        latestRefreshLogByFeedURL.removeAll()
+        lastErrorMessage = nil
+    }
+
     func episode(with id: String) -> EpisodeCacheRecord? {
         let activeIDs = activePodcastIDs
         return episodes.first { $0.episodeID == id && activeIDs.contains($0.podcastID) }
@@ -269,6 +296,10 @@ final class LibraryStore {
         return episodes
             .filter { $0.podcastID == podcastID }
             .sorted(by: EpisodeCacheRecord.newestFirst)
+    }
+
+    func podcastCache(for feedURL: String) -> PodcastCacheRecord? {
+        podcastCacheByFeedURL[feedURL]
     }
 
     func isActivelySubscribed(to feedURL: String) -> Bool {
@@ -390,6 +421,36 @@ final class LibraryStore {
     }
 
     @discardableResult
+    func updateArtworkPreview(
+        _ preview: ArtworkPreview,
+        for episode: EpisodeCacheRecord,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard activePodcastIDs.contains(episode.podcastID),
+              preview.matchesArtworkURLString(episode.artworkURL)
+        else {
+            return false
+        }
+
+        return persistArtworkPreview(preview, to: episode, modelContext: modelContext)
+    }
+
+    @discardableResult
+    func updateArtworkPreview(
+        _ preview: ArtworkPreview,
+        for podcast: PodcastCacheRecord,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard activePodcastIDs.contains(podcast.feedURL),
+              preview.matchesArtworkURLString(podcast.artworkURL)
+        else {
+            return false
+        }
+
+        return persistArtworkPreview(preview, to: podcast, modelContext: modelContext)
+    }
+
+    @discardableResult
     private func updateProgressRecord(
         episodeID: String,
         podcastID: String,
@@ -471,6 +532,7 @@ final class LibraryStore {
 
     private func refresh(
         subscription: SubscriptionRecord,
+        generation: Int,
         modelContext: ModelContext
     ) async throws {
         let feedURLString = subscription.feedURL
@@ -496,6 +558,7 @@ final class LibraryStore {
         do {
             let snapshot = try await feedService.fetchFeed(at: feedURL)
             try Task.checkCancellation()
+            try ensureCurrentGeneration(generation)
             try upsert(snapshot: snapshot, modelContext: modelContext, subscribe: false)
             log.finishedAt = .now
             log.errorMessage = nil
@@ -515,6 +578,7 @@ final class LibraryStore {
 
     private func refreshAll(
         feedURLStrings: [String],
+        generation: Int,
         modelContext: ModelContext
     ) async throws {
         let feedURLStrings = uniqueFeedURLStrings(from: feedURLStrings)
@@ -544,6 +608,7 @@ final class LibraryStore {
 
                 for try await result in group {
                     try Task.checkCancellation()
+                    try ensureCurrentGeneration(generation)
                     try applyRefreshResult(
                         result,
                         refreshLogsByFeedURL: refreshLogsByFeedURL,
@@ -634,6 +699,7 @@ final class LibraryStore {
         )
         subscriptions = fetchedSubscriptions.filter { !$0.isArchived }
         activePodcastIDs = Set(subscriptions.map(\.feedURL))
+        let podcastCaches = try modelContext.fetch(FetchDescriptor<PodcastCacheRecord>())
 
         let activeIDs = activePodcastIDs
         let fetchedEpisodes = try modelContext.fetch(
@@ -646,15 +712,29 @@ final class LibraryStore {
         progressRecords = try modelContext.fetch(FetchDescriptor<EpisodeProgressRecord>())
         refreshLogs = try modelContext.fetch(FetchDescriptor<RefreshLogRecord>())
             .sorted(by: Self.refreshLogNewestFirst)
-        rebuildDerivedLibraryData()
+        rebuildDerivedLibraryData(podcastCaches: podcastCaches)
     }
 
     private func reloadProgressRecords(modelContext: ModelContext) throws {
-        let previousPlayedEpisodeIDs = playedEpisodeIDs
         progressRecords = try modelContext.fetch(FetchDescriptor<EpisodeProgressRecord>())
-        let updatedPlayedEpisodeIDs = playedEpisodeIDs
-        if updatedPlayedEpisodeIDs != previousPlayedEpisodeIDs {
-            rebuildInboxEpisodes(playedIDs: updatedPlayedEpisodeIDs)
+    }
+
+    @discardableResult
+    private func persistArtworkPreview(
+        _ preview: ArtworkPreview,
+        to record: some ArtworkPreviewStoring,
+        modelContext: ModelContext
+    ) -> Bool {
+        do {
+            guard record.storeArtworkPreviewIfChanged(preview) else {
+                return false
+            }
+
+            try modelContext.save()
+            return true
+        } catch {
+            recordFailure(error)
+            return false
         }
     }
 
@@ -731,7 +811,9 @@ final class LibraryStore {
             existingPodcast.author = snapshot.podcast.author
             existingPodcast.summary = snapshot.podcast.summary
             existingPodcast.websiteURL = snapshot.podcast.websiteURL?.absoluteString
-            existingPodcast.artworkURL = snapshot.podcast.artworkURL?.absoluteString
+            let artworkURL = snapshot.podcast.artworkURL?.absoluteString
+            existingPodcast.clearArtworkPreviewIfURLChanged(to: artworkURL)
+            existingPodcast.artworkURL = artworkURL
             existingPodcast.updatedAt = now
         } else {
             modelContext.insert(
@@ -768,7 +850,9 @@ final class LibraryStore {
                 existingEpisode.publishedAt = episode.publishedAt
                 existingEpisode.duration = episode.duration
                 existingEpisode.audioURL = episode.audioURL?.absoluteString
-                existingEpisode.artworkURL = episode.artworkURL?.absoluteString
+                let artworkURL = episode.artworkURL?.absoluteString
+                existingEpisode.clearArtworkPreviewIfURLChanged(to: artworkURL)
+                existingEpisode.artworkURL = artworkURL
                 existingEpisode.guid = episode.guid
                 existingEpisode.cachedAt = now
             } else {
@@ -830,6 +914,14 @@ final class LibraryStore {
     private func uniqueFeedURLStrings(from feedURLStrings: [String]) -> [String] {
         var seenFeedURLStrings: Set<String> = []
         return feedURLStrings.filter { seenFeedURLStrings.insert($0).inserted }
+    }
+
+    private func ensureCurrentGeneration(_ generation: Int) throws {
+        if generation != writeGeneration {
+            // Data nuke invalidation should unwind refresh work like cancellation,
+            // without surfacing a user-visible refresh error.
+            throw CancellationError()
+        }
     }
 
     private static func refreshLogNewestFirst(_ lhs: RefreshLogRecord, _ rhs: RefreshLogRecord) -> Bool {
@@ -899,19 +991,23 @@ final class LibraryStore {
         }
     }
 
-    private var playedEpisodeIDs: Set<String> {
-        Set(progressRecords.filter(\.isPlayed).map(\.episodeID))
-    }
-
-    private func rebuildDerivedLibraryData() {
-        rebuildInboxEpisodes(playedIDs: playedEpisodeIDs)
+    private func rebuildDerivedLibraryData(podcastCaches: [PodcastCacheRecord]) {
+        rebuildPodcastCacheByFeedURL(podcastCaches: podcastCaches)
+        rebuildInboxEpisodes()
         rebuildLatestRefreshLogByFeedURL()
     }
 
-    private func rebuildInboxEpisodes(playedIDs: Set<String>) {
+    private func rebuildPodcastCacheByFeedURL(podcastCaches: [PodcastCacheRecord]) {
+        podcastCacheByFeedURL = Dictionary(
+            podcastCaches.map { ($0.feedURL, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    private func rebuildInboxEpisodes() {
         let activeIDs = activePodcastIDs
         inboxEpisodes = episodes
-            .filter { activeIDs.contains($0.podcastID) && !playedIDs.contains($0.episodeID) }
+            .filter { activeIDs.contains($0.podcastID) }
             .sorted(by: EpisodeCacheRecord.newestFirst)
     }
 

@@ -9,6 +9,12 @@ final class PodcastCacheRecord {
     var summary: String?
     var websiteURL: String?
     var artworkURL: String?
+    var artworkPreviewVersion: Int?
+    var artworkPreviewCanonicalURLKey: String?
+    var artworkPreviewSourceHash: String?
+    var artworkPreviewPixelWidth: Int?
+    var artworkPreviewPixelHeight: Int?
+    var artworkPreviewRGBData: Data?
     var updatedAt: Date = Date()
 
     init(

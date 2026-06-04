@@ -6,7 +6,7 @@ import Testing
 struct EpisodeIdentityTests {
     @Test("Uses RSS GUID when present")
     func usesGUID() throws {
-        let feedURL = URL(string: "https://jumble.top/f/americanprestige.xml")!
+        let feedURL = URL(string: "https://example.com/american-prestige.xml")!
 
         let first = EpisodeIdentity.makeID(
             feedURL: feedURL,
@@ -28,7 +28,7 @@ struct EpisodeIdentityTests {
 
     @Test("Falls back to audio URL when GUID is missing")
     func fallsBackToAudioURL() throws {
-        let feedURL = URL(string: "https://jumble.top/f/americanprestige.xml")!
+        let feedURL = URL(string: "https://example.com/american-prestige.xml")!
 
         let first = EpisodeIdentity.makeID(
             feedURL: feedURL,

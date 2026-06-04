@@ -8,7 +8,7 @@ struct OpenCastRootPresentationModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .sheet(item: $sheetDestination) { destination in
-                SheetDestinationView(destination: destination)
+                SheetDestinationView(destination: destination, onDismiss: dismissSheet)
             }
             // The alert API needs Bool bindings because the presented Strings are not Identifiable.
             .alert(
@@ -36,6 +36,10 @@ struct OpenCastRootPresentationModifier: ViewModifier {
             get: { appModel.lastPlaybackError != nil },
             set: { if !$0 { appModel.lastPlaybackError = nil } }
         )
+    }
+
+    private func dismissSheet() {
+        sheetDestination = nil
     }
 
     private var libraryErrorAlertBinding: Binding<Bool> {

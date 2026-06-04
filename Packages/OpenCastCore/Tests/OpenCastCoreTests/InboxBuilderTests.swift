@@ -4,9 +4,9 @@ import Testing
 
 @Suite("Inbox builder")
 struct InboxBuilderTests {
-    @Test("Sorts newest first and filters played episodes")
-    func sortsAndFilters() {
-        let podcastID = PodcastID(rawValue: "https://jumble.top/f/americanprestige.xml")
+    @Test("Sorts newest first and keeps played episodes by default")
+    func sortsAndKeepsPlayedEpisodes() {
+        let podcastID = PodcastID(rawValue: "https://example.com/american-prestige.xml")
         let old = Episode(
             id: EpisodeID(rawValue: "old"),
             podcastID: podcastID,
@@ -26,13 +26,13 @@ struct InboxBuilderTests {
         ]
 
         let inbox = InboxBuilder.buildInbox(episodes: [old, new], progressByEpisodeID: progress)
-        let includingPlayed = InboxBuilder.buildInbox(
+        let hidingPlayed = InboxBuilder.buildInbox(
             episodes: [old, new],
             progressByEpisodeID: progress,
-            includePlayed: true
+            includePlayed: false
         )
 
-        #expect(inbox.map(\.id.rawValue) == ["old"])
-        #expect(includingPlayed.map(\.id.rawValue) == ["new", "old"])
+        #expect(inbox.map(\.id.rawValue) == ["new", "old"])
+        #expect(hidingPlayed.map(\.id.rawValue) == ["old"])
     }
 }

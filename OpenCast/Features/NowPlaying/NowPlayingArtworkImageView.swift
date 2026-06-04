@@ -5,7 +5,10 @@ struct NowPlayingArtworkImageView: View {
     let image: UIImage?
 
     var body: some View {
-        ArtworkPlaceholderVisual(title: title, image: image)
+        ZStack {
+            Color.black
+            ArtworkPlaceholderVisual(title: title, image: image, preview: nil)
+        }
             .accessibilityHidden(true)
     }
 }

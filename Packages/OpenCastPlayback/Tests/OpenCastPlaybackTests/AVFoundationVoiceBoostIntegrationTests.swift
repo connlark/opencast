@@ -8,7 +8,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
     private let remoteVoiceBoostTestFlag = "OPENCAST_RUN_REMOTE_VOICEBOOST_TESTS"
     private let mp3VoiceBoostTestFlag = "OPENCAST_RUN_MP3_VOICEBOOST_TESTS"
     private let remoteFeedURLOverrideKey = "OPENCAST_VOICEBOOST_REMOTE_FEED_URL"
-    private let debuggerAlmanacFeedURL = URL(string: "https://debuggersalmanac.mindovermatterismagic.com/feed.xml")!
+    private let libriVoxFeedURL = URL(string: "https://feeds.feedburner.com/LibrivoxCommunityPodcast")!
 
     private enum InjectedVoiceBoostTapError: Error {
         case failed
@@ -737,7 +737,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
 
     private func firstRemotePodcastEpisode(environment: [String: String]) async throws -> Episode {
         let feedURL = environment[remoteFeedURLOverrideKey]
-            .flatMap(URL.init(string:)) ?? debuggerAlmanacFeedURL
+            .flatMap(URL.init(string:)) ?? libriVoxFeedURL
         let feed = try await DefaultFeedService().fetchFeed(at: feedURL)
         return try #require(feed.episodes.first { $0.audioURL != nil })
     }

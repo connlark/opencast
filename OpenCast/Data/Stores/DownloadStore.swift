@@ -7,6 +7,7 @@ import SwiftData
 final class DownloadStore {
     private(set) var records: [EpisodeDownloadRecord] = []
     private(set) var lastErrorMessage: String?
+    private var lastErrorEpisodeID: String?
 
     @ObservationIgnored private let downloader: any EpisodeAudioDownloading
     @ObservationIgnored private let fileStore: EpisodeDownloadFileStore
@@ -40,6 +41,7 @@ final class DownloadStore {
             try reconcile(modelContext: modelContext)
             try reload(modelContext: modelContext)
             lastErrorMessage = nil
+            lastErrorEpisodeID = nil
         } catch {
             recordFailure(error)
         }
@@ -47,6 +49,14 @@ final class DownloadStore {
 
     func record(for episodeID: String) -> EpisodeDownloadRecord? {
         records.first { $0.episodeID == episodeID }
+    }
+
+    func lastErrorMessage(for episodeID: String) -> String? {
+        guard lastErrorEpisodeID == episodeID else {
+            return nil
+        }
+
+        return lastErrorMessage
     }
 
     func localFileURL(for record: EpisodeDownloadRecord) -> URL? {
@@ -124,6 +134,7 @@ final class DownloadStore {
                 )
             }
             lastErrorMessage = nil
+            lastErrorEpisodeID = nil
         } catch {
             recordFailure(error)
         }
@@ -151,6 +162,7 @@ final class DownloadStore {
         do {
             try deleteDownloadRecord(record, modelContext: modelContext)
             lastErrorMessage = nil
+            lastErrorEpisodeID = nil
         } catch {
             recordFailure(error)
         }
@@ -165,9 +177,28 @@ final class DownloadStore {
             try modelContext.save()
             try reload(modelContext: modelContext)
             lastErrorMessage = nil
+            lastErrorEpisodeID = nil
         } catch {
             recordFailure(error)
         }
+    }
+
+    func nukeAllDownloads(modelContext: ModelContext) throws {
+        for task in downloadTasks.values {
+            task.cancel()
+        }
+        downloadTasks.removeAll()
+        downloadTaskTokens.removeAll()
+        progressCheckpoints.removeAll()
+
+        for record in try fetchRecords(modelContext: modelContext) {
+            modelContext.delete(record)
+        }
+        try fileStore.removeAllDownloads()
+        try modelContext.save()
+        records.removeAll()
+        lastErrorMessage = nil
+        lastErrorEpisodeID = nil
     }
 
     func deleteDownloads(forPodcastID podcastID: String, modelContext: ModelContext) throws {
@@ -296,6 +327,7 @@ final class DownloadStore {
             progressCheckpoints[episodeID] = nil
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
             lastErrorMessage = nil
+            lastErrorEpisodeID = nil
         }
     }
 
@@ -316,7 +348,7 @@ final class DownloadStore {
                 record.updatedAt = .now
                 progressCheckpoints[episodeID] = nil
                 try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
-                lastErrorMessage = error.localizedDescription
+                recordFailure(error, episodeID: episodeID)
             }
         } catch {
             recordFailure(error)
@@ -341,6 +373,7 @@ final class DownloadStore {
         )
         try commit(episodeID: episode.episodeID, modelContext: modelContext, resort: true)
         lastErrorMessage = message
+        lastErrorEpisodeID = episode.episodeID
     }
 
     private func deleteDownloadRecord(
@@ -573,8 +606,9 @@ final class DownloadStore {
         )
     }
 
-    private func recordFailure(_ error: Error) {
+    private func recordFailure(_ error: Error, episodeID: String? = nil) {
         lastErrorMessage = error.localizedDescription
+        lastErrorEpisodeID = episodeID
     }
 
     private struct DownloadProgressCheckpoint {

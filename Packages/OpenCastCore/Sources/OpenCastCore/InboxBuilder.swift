@@ -4,7 +4,7 @@ public enum InboxBuilder {
     public static func buildInbox(
         episodes: [Episode],
         progressByEpisodeID: [EpisodeID: EpisodeProgress] = [:],
-        includePlayed: Bool = false
+        includePlayed: Bool = true
     ) -> [Episode] {
         episodes
             .filter { episode in

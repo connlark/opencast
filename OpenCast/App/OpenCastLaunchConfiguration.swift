@@ -13,7 +13,6 @@ struct OpenCastLaunchConfiguration {
     var exposesVoiceBoostDiagnosticsStatus: Bool
     var runsVoiceBoostDeviceProbe: Bool
     var seedsOnboardingCompleted: Bool
-    var usesStubPopularPodcasts: Bool
 
     static var current: OpenCastLaunchConfiguration {
         let processInfo = ProcessInfo.processInfo
@@ -48,8 +47,6 @@ struct OpenCastLaunchConfiguration {
             || environment["OPENCAST_RUN_VOICEBOOST_DEVICE_PROBE"] == "1"
         let shouldForceOnboarding = arguments.contains("--opencast-force-onboarding")
             || environment["OPENCAST_FORCE_ONBOARDING"] == "1"
-        let shouldUseStubPopularPodcasts = arguments.contains("--opencast-stub-popular-podcasts")
-            || environment["OPENCAST_STUB_POPULAR_PODCASTS"] == "1"
         #if DEBUG
         let runsVoiceBoostDeviceProbe = shouldRunVoiceBoostDeviceProbe
         let capturesVoiceBoostDiagnostics = shouldCaptureVoiceBoostDiagnostics || runsVoiceBoostDeviceProbe
@@ -76,8 +73,7 @@ struct OpenCastLaunchConfiguration {
             capturesVoiceBoostDiagnostics: capturesVoiceBoostDiagnostics,
             exposesVoiceBoostDiagnosticsStatus: exposesVoiceBoostDiagnosticsStatus,
             runsVoiceBoostDeviceProbe: runsVoiceBoostDeviceProbe,
-            seedsOnboardingCompleted: isUITesting && !shouldForceOnboarding,
-            usesStubPopularPodcasts: isUITesting && shouldUseStubPopularPodcasts
+            seedsOnboardingCompleted: isUITesting && !shouldForceOnboarding
         )
     }
 }

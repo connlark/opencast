@@ -3,13 +3,15 @@ import Foundation
 import SwiftData
 
 enum AppStoreScreenshotSeedData {
+    private static let artworkSubdirectory = "AppStoreScreenshots/Artwork"
+
     static func seed(in container: ModelContainer) throws {
         let context = ModelContext(container)
         let refreshedAt = Date(timeIntervalSince1970: 1_779_814_800)
         let audioURL = try AppStoreScreenshotSeedAudio.write().absoluteString
 
         for podcast in AppStoreScreenshotSeedCatalog.podcasts {
-            let artworkURL = artworkURL(named: podcast.artworkName)?.absoluteString
+            let artworkURL = try artworkURL(named: podcast.artworkName).absoluteString
             context.insert(
                 SubscriptionRecord(
                     feedURL: podcast.id,
@@ -74,12 +76,19 @@ enum AppStoreScreenshotSeedData {
         try context.save()
     }
 
-    private static func artworkURL(named name: String) -> URL? {
-        Bundle.main.url(
+    private static func artworkURL(named name: String) throws -> URL {
+        if let url = Bundle.main.url(
             forResource: name,
             withExtension: "png",
-            subdirectory: "AppStoreScreenshots/Artwork"
-        ) ?? Bundle.main.url(forResource: name, withExtension: "png")
+            subdirectory: artworkSubdirectory
+        ) {
+            return url
+        }
+
+        throw AppStoreScreenshotSeedArtworkError.missing(
+            name: name,
+            subdirectory: artworkSubdirectory
+        )
     }
 }
 #endif

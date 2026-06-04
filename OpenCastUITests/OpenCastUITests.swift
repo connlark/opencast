@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 final class OpenCastUITests: XCTestCase {
@@ -10,9 +11,14 @@ final class OpenCastUITests: XCTestCase {
     private static let playEpisodeTraceArmingSecondsEnvironmentKey = "OPENCAST_PLAY_EPISODE_TRACE_ARMING_SECONDS"
     private static let seededPeelTraceArmingSecondsEnvironmentKey = "OPENCAST_SEEDED_PEEL_TRACE_ARMING_SECONDS"
     private static let coldStartTraceArmingSecondsEnvironmentKey = "OPENCAST_COLD_START_TRACE_ARMING_SECONDS"
+    private static let manyArtworkTraceArmingSecondsEnvironmentKey = "OPENCAST_MANY_ARTWORK_TRACE_ARMING_SECONDS"
+    private static let manyArtworkPerformanceProbeEnvironmentKey = "OPENCAST_RUN_MANY_ARTWORK_PREVIEW_PERF_UI_TESTS"
+    private static let manyArtworkPerformanceProbeFilePath = "/tmp/opencast-run-many-artwork-preview-perf-ui-tests"
     private static let longShowNotesColdStartProbeEnvironmentKey = "OPENCAST_RUN_LONG_SHOW_NOTES_COLD_START_UI_TESTS"
     private static let longShowNotesColdStartProbeFilePath = "/tmp/opencast-run-long-show-notes-cold-start-ui-tests"
     private static let remotePeelTraceArmingSecondsEnvironmentKey = "OPENCAST_REMOTE_PEEL_TRACE_ARMING_SECONDS"
+    private static let thisAmericanLifeReviewerPathProbeEnvironmentKey = "OPENCAST_RUN_TAL_REVIEWER_PATH_UI_TESTS"
+    private static let thisAmericanLifeReviewerPathProbeFilePath = "/tmp/opencast-run-tal-reviewer-path-ui-tests"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -29,13 +35,13 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testFirstLaunchOnboardingScreenshotsOPMLSkipAndPopularSuggestions() throws {
+    func testFirstLaunchOnboardingScreenshotsOPMLSkipAndPodcastSetup() throws {
         let app = makeOnboardingApp(forcesDarkMode: true)
         app.launch()
 
-        assertExists(app.staticTexts["Welcome to OpenCast"], named: "onboarding welcome")
+        assertExists(app.staticTexts["Welcome to opencast!"], named: "onboarding welcome")
         assertExists(app.staticTexts["No third-party analytics"], named: "no third-party analytics pitch")
-        assertExists(elementContaining(label: "Open source", in: app), named: "open source pitch link")
+        assertExists(elementContaining(label: "View Source on GitHub", in: app), named: "source pitch link")
         assertExists(app.staticTexts["Tiny install"], named: "tiny install pitch")
         attachSmokeScreenshot(named: "onboarding_welcome_dark")
 
@@ -51,23 +57,40 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "onboarding_opml_import_dark")
 
         app.buttons["Skip"].tap()
-        assertExists(app.staticTexts["Popular Podcasts"], named: "Popular Podcasts onboarding screen")
-        assertExists(app.staticTexts["Deterministic Popular Show"], named: "deterministic popular podcast")
-        assertExists(app.buttons["Subscribe"].firstMatch, named: "popular podcast Subscribe button")
-        assertExists(app.staticTexts["Directory Only Suggestion"], named: "disabled popular podcast suggestion")
-        attachSmokeScreenshot(named: "onboarding_popular_podcasts_dark")
+        assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
+        assertExists(app.textFields["Podcast or creator"], named: "onboarding podcast search field")
+        assertExists(app.staticTexts["Sample Podcasts"], named: "sample podcasts section")
+        assertExists(app.staticTexts["This American Life"], named: "This American Life sample")
+        app.buttons["RSS"].tap()
+        assertExists(app.textFields["RSS Feed URL"], named: "onboarding RSS feed field")
+        assertExists(app.buttons["Paste"], named: "onboarding Paste button")
+        let rssSubscribeButton = app.buttons["Onboarding RSS Subscribe"]
+        assertExists(rssSubscribeButton, named: "onboarding RSS Subscribe button")
+        XCTAssertGreaterThan(rssSubscribeButton.frame.width, 280)
+        attachSmokeScreenshot(named: "onboarding_podcast_setup_rss_dark")
+        app.buttons["Search"].tap()
+        assertExists(app.textFields["Podcast or creator"], named: "onboarding podcast search field after returning to search")
+        app.textFields["Podcast or creator"].tap()
+        app.textFields["Podcast or creator"].typeText("history\n")
+        assertExists(app.staticTexts["Find Podcasts"], named: "onboarding stays visible after keyboard search submit")
+        XCTAssertFalse(app.buttons["Add This American Life"].exists)
+        scrollUntilExists(app.staticTexts["LibriVox Community Podcast"], in: app, maxSwipes: 2)
+        assertExists(app.staticTexts["LibriVox Community Podcast"], named: "LibriVox Community Podcast sample")
+        attachSmokeScreenshot(named: "onboarding_podcast_setup_dark")
 
         app.buttons["Done"].tap()
-        assertExists(app.tabBars.buttons["Library"], named: "Library after onboarding")
-        assertDoesNotExist(app.staticTexts["Welcome to OpenCast"], named: "onboarding after Done")
+        assertExists(app.buttons["Add This American Life"], named: "fallback sample confirmation action")
+        assertExists(
+            elementContaining(label: "OpenCast will add This American Life", in: app),
+            named: "fallback sample confirmation copy"
+        )
     }
 
     @MainActor
     func testSettingsDebugRunOnboardingScreenshotsAndKeepsSubscriptions() throws {
         let app = makeSeededApp(
             forcesDarkMode: false,
-            forcesLightMode: true,
-            usesStubPopularPodcasts: true
+            forcesLightMode: true
         )
         app.launch()
 
@@ -80,13 +103,17 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "settings_debug_run_onboarding")
 
         runOnboardingButton.tap()
-        assertExists(app.staticTexts["Welcome to OpenCast"], named: "debug onboarding welcome")
+        assertExists(app.staticTexts["Welcome to opencast!"], named: "debug onboarding welcome")
         attachSmokeScreenshot(named: "settings_debug_onboarding_welcome_light")
 
         app.buttons["Continue"].tap()
         app.buttons["Skip"].tap()
-        assertExists(app.staticTexts["Deterministic Popular Show"], named: "debug popular suggestions")
-        attachSmokeScreenshot(named: "settings_debug_onboarding_popular_light")
+        assertExists(app.staticTexts["Find Podcasts"], named: "debug podcast setup")
+        assertExists(app.textFields["Podcast or creator"], named: "debug onboarding podcast search field")
+        assertExists(app.staticTexts["This American Life"], named: "debug sample suggestion")
+        scrollUntilExists(app.staticTexts["LibriVox Community Podcast"], in: app, maxSwipes: 2)
+        assertExists(app.staticTexts["LibriVox Community Podcast"], named: "debug LibriVox sample suggestion")
+        attachSmokeScreenshot(named: "settings_debug_onboarding_podcast_setup_light")
         app.buttons["Done"].tap()
 
         openLibrary(in: app)
@@ -150,6 +177,113 @@ final class OpenCastUITests: XCTestCase {
 
         dismissNowPlayingOverlay(in: app)
         assertExists(app.buttons["Play Episode"], named: "episode detail behind Now Playing")
+    }
+
+    @MainActor
+    func testSeededInboxRendersLocalArtworkPreviewOnFirstScreenshot() throws {
+        let app = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true,
+            seedsArtworkPreview: true,
+            artworkVariant: "placeholder"
+        )
+        app.launch()
+
+        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
+        app.tabBars.buttons["Inbox"].tap()
+
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode with preview")
+        let firstRowScreenshot = inboxEpisode.screenshot()
+        let attachment = XCTAttachment(screenshot: firstRowScreenshot)
+        attachment.name = "inbox_first_paint_artwork_preview_row"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let pixelSummary = try artworkPreviewPixelSummary(from: firstRowScreenshot)
+        XCTAssertGreaterThan(pixelSummary.previewPixels, 100)
+        XCTAssertGreaterThan(pixelSummary.previewPixels, pixelSummary.placeholderPixels * 8)
+        attachSmokeScreenshot(named: "inbox_first_paint_artwork_preview")
+    }
+
+    @MainActor
+    func testSeededInboxRendersManyVariedLocalArtworkPreviews() throws {
+        let app = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true,
+            seedsArtworkPreview: true,
+            seedsVariedArtworkPreviews: true,
+            extraFeedCount: 80,
+            artworkVariant: "placeholder"
+        )
+        app.launch()
+
+        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
+        waitForExternalTraceIfRequested(environmentKey: Self.manyArtworkTraceArmingSecondsEnvironmentKey)
+        app.tabBars.buttons["Inbox"].tap()
+
+        let firstRow = seededEpisodeRow(in: app)
+        assertExists(firstRow, named: "first seeded inbox episode with varied preview")
+        let firstPixelSummary = try artworkPreviewPixelSummary(from: firstRow.screenshot())
+        XCTAssertGreaterThan(firstPixelSummary.previewPixels, firstPixelSummary.placeholderPixels * 8)
+
+        let deeperRow = seededExtraEpisodeRow(in: app, index: 24)
+        scrollUntilExists(deeperRow, in: app, maxSwipes: 10)
+        let deeperPixelSummary = try artworkPreviewPixelSummary(from: deeperRow.screenshot())
+        XCTAssertGreaterThan(deeperPixelSummary.previewPixels, deeperPixelSummary.placeholderPixels * 8)
+        attachSmokeScreenshot(named: "inbox_many_varied_artwork_previews")
+    }
+
+    @MainActor
+    func testOptInSeededManyArtworkPreviewInboxFirstPaintPerformance() throws {
+        try requireManyArtworkPerformanceProbe()
+
+        measureSeededInboxFirstPaintPerformance(
+            seedsArtworkPreview: true,
+            seedsVariedArtworkPreviews: true
+        )
+    }
+
+    @MainActor
+    func testOptInSeededManyPlaceholderInboxFirstPaintPerformance() throws {
+        try requireManyArtworkPerformanceProbe()
+
+        measureSeededInboxFirstPaintPerformance(
+            seedsArtworkPreview: false,
+            seedsVariedArtworkPreviews: false
+        )
+    }
+
+    @MainActor
+    private func measureSeededInboxFirstPaintPerformance(
+        seedsArtworkPreview: Bool,
+        seedsVariedArtworkPreviews: Bool
+    ) {
+        let app = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true,
+            seedsArtworkPreview: seedsArtworkPreview,
+            seedsVariedArtworkPreviews: seedsVariedArtworkPreviews,
+            extraFeedCount: 80,
+            artworkVariant: "placeholder"
+        )
+        let options = XCTMeasureOptions()
+        options.iterationCount = 3
+
+        measure(
+            metrics: [
+                XCTClockMetric(),
+                XCTCPUMetric(application: app),
+                XCTMemoryMetric(application: app)
+            ],
+            options: options
+        ) {
+            app.launch()
+            XCTAssertTrue(app.tabBars.buttons["Library"].waitForExistence(timeout: 5))
+            app.tabBars.buttons["Inbox"].tap()
+            XCTAssertTrue(seededEpisodeRow(in: app).waitForExistence(timeout: 5))
+            app.terminate()
+        }
     }
 
     @MainActor
@@ -352,7 +486,26 @@ final class OpenCastUITests: XCTestCase {
 
         XCTAssertTrue(podcastRow.waitForNonExistence(timeout: 5))
         assertExists(app.staticTexts["No Subscriptions"], named: "empty library after removal")
+        let libraryAddPodcastButton = app.buttons["Library Empty Add Podcast"]
+        let librarySampleButton = app.buttons["Library Empty Try This American Life"]
+        assertExists(libraryAddPodcastButton, named: "empty library Add Podcast action")
+        assertExists(librarySampleButton, named: "empty library sample action")
+        XCTAssertLessThan(libraryAddPodcastButton.frame.height, 80)
+        XCTAssertLessThan(librarySampleButton.frame.height, 80)
+        XCTAssertGreaterThan(libraryAddPodcastButton.frame.width, 180)
+        XCTAssertGreaterThan(librarySampleButton.frame.width, 180)
+        XCTAssertLessThan(abs(libraryAddPodcastButton.frame.midX - app.staticTexts["No Subscriptions"].frame.midX), 4)
+        XCTAssertLessThan(abs(librarySampleButton.frame.midX - app.staticTexts["No Subscriptions"].frame.midX), 4)
         attachSmokeScreenshot(named: "library_after_swipe_remove")
+
+        openInbox(in: app)
+        assertExists(app.staticTexts["Inbox Empty"], named: "empty inbox after removal")
+        let inboxAddPodcastButton = app.buttons["Inbox Empty Add Podcast"]
+        assertExists(inboxAddPodcastButton, named: "empty inbox Add Podcast action")
+        XCTAssertLessThan(inboxAddPodcastButton.frame.height, 80)
+        XCTAssertGreaterThan(inboxAddPodcastButton.frame.width, 180)
+        XCTAssertLessThan(abs(inboxAddPodcastButton.frame.midX - app.staticTexts["Inbox Empty"].frame.midX), 4)
+        attachSmokeScreenshot(named: "inbox_after_library_swipe_remove")
     }
 
     @MainActor
@@ -666,16 +819,13 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "library_compact_after_dismiss")
 
         app.tabBars.buttons["Settings"].tap()
-        let episodeProgressRow = app.staticTexts["Episode Progress"]
-        scrollUntilExists(episodeProgressRow, in: app)
         assertExists(app.staticTexts["iCloud Sync"], named: "iCloud Sync section")
-        assertExists(app.staticTexts["Status"], named: "iCloud sync status row")
-        assertExists(app.staticTexts["Subscriptions"], named: "Subscriptions row")
-        assertExists(episodeProgressRow, named: "Episode Progress row")
+        assertExists(syncStatusTitle(in: app), named: "iCloud sync status")
         let downloadedEpisodesRow = app.staticTexts["Downloaded Episodes"]
         scrollUntilExists(downloadedEpisodesRow, in: app)
         assertExists(app.staticTexts["Local Storage"], named: "Local Storage section")
         assertExists(app.staticTexts["Feed Cache"], named: "Feed Cache row")
+        assertExists(app.staticTexts["Artwork Cache"], named: "Artwork Cache row")
         assertExists(downloadedEpisodesRow, named: "Downloaded Episodes row")
         attachSmokeScreenshot(named: "settings_sync")
 
@@ -897,11 +1047,11 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testOptInDebuggerAlmanacRemoteFeedCanPlayFromAppUI() throws {
+    func testOptInLibriVoxRemoteFeedCanPlayFromAppUI() throws {
         let shouldRunRemoteProbe = ProcessInfo.processInfo.environment["OPENCAST_RUN_REMOTE_VOICEBOOST_UI_TESTS"] == "1"
             || FileManager.default.fileExists(atPath: "/tmp/opencast-run-remote-voiceboost-ui-tests")
         guard shouldRunRemoteProbe else {
-            throw XCTSkip("Set OPENCAST_RUN_REMOTE_VOICEBOOST_UI_TESTS=1 or create /tmp/opencast-run-remote-voiceboost-ui-tests to run the live Debugger's Almanac UI playback probe.")
+            throw XCTSkip("Set OPENCAST_RUN_REMOTE_VOICEBOOST_UI_TESTS=1 or create /tmp/opencast-run-remote-voiceboost-ui-tests to run the live LibriVox UI playback probe.")
         }
 
         let app = XCUIApplication()
@@ -911,7 +1061,7 @@ final class OpenCastUITests: XCTestCase {
         ]
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
         app.launchEnvironment["OPENCAST_FORCE_DARK_MODE"] = "1"
-        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = "https://debuggersalmanac.mindovermatterismagic.com/feed.xml"
+        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = "https://feeds.feedburner.com/LibrivoxCommunityPodcast"
         app.launchEnvironment["OPENCAST_CAPTURE_VOICEBOOST_DIAGNOSTICS"] = "1"
         app.launch()
 
@@ -919,11 +1069,11 @@ final class OpenCastUITests: XCTestCase {
         tapAddPodcastButton(in: app)
         app.buttons["Subscribe"].tap()
 
-        assertExists(app.staticTexts["The Debugger's Almanac"], named: "Debugger's Almanac subscription", timeout: 30)
+        assertExists(app.staticTexts["Librivox Community Podcast - LibriVox"], named: "LibriVox subscription", timeout: 30)
         openInbox(in: app)
 
-        let firstEpisode = debuggerAlmanacFirstEpisode(in: app)
-        assertExists(firstEpisode, named: "Debugger's Almanac inbox episode", timeout: 30)
+        let firstEpisode = libriVoxFirstEpisode(in: app)
+        assertExists(firstEpisode, named: "LibriVox inbox episode", timeout: 30)
         firstEpisode.tap()
 
         assertNowPlayingOverlay(in: app)
@@ -1010,11 +1160,123 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testOptInDebuggerAlmanacNowPlayingArtworkPeelScreenshot() throws {
+    func testOptInThisAmericanLifeFallbackDismissesOnboarding() throws {
+        try requireThisAmericanLifeReviewerPathProbe()
+
+        let app = makeOnboardingApp(forcesDarkMode: false)
+        app.launch()
+
+        assertExists(app.staticTexts["Welcome to opencast!"], named: "clean onboarding welcome", timeout: 20)
+        app.buttons["Continue"].tap()
+        assertExists(app.buttons["Skip"], named: "Skip OPML onboarding action")
+        app.buttons["Skip"].tap()
+        assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
+
+        app.buttons["Done"].tap()
+        let addThisAmericanLife = app.buttons["Add This American Life"]
+        assertExists(addThisAmericanLife, named: "This American Life fallback confirmation", timeout: 10)
+        addThisAmericanLife.tap()
+        XCTAssertTrue(
+            app.staticTexts["Find Podcasts"].waitForNonExistence(timeout: 90),
+            "Onboarding should dismiss after accepting the This American Life fallback."
+        )
+
+        openLibrary(in: app)
+        assertExists(app.staticTexts["This American Life"], named: "This American Life library subscription", timeout: 90)
+        openInbox(in: app)
+        assertExists(
+            thisAmericanLifeEpisodeRow(in: app),
+            named: "This American Life inbox episode",
+            timeout: 90
+        )
+    }
+
+    @MainActor
+    func testOptInThisAmericanLifeCleanReviewerPath() throws {
+        try requireThisAmericanLifeReviewerPathProbe()
+
+        let app = makeOnboardingApp(forcesDarkMode: false)
+        app.launch()
+
+        assertExists(app.staticTexts["Welcome to opencast!"], named: "clean onboarding welcome", timeout: 20)
+        app.buttons["Continue"].tap()
+        assertExists(app.buttons["Skip"], named: "Skip OPML onboarding action")
+        app.buttons["Skip"].tap()
+        assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
+        assertExists(app.textFields["Podcast or creator"], named: "onboarding podcast search field")
+        assertExists(app.buttons["RSS"], named: "onboarding RSS mode")
+        assertExists(app.staticTexts["This American Life"], named: "This American Life sample suggestion")
+
+        app.buttons["Done"].tap()
+        let addThisAmericanLife = app.buttons["Add This American Life"]
+        assertExists(addThisAmericanLife, named: "This American Life fallback confirmation", timeout: 10)
+        addThisAmericanLife.tap()
+        XCTAssertTrue(
+            app.staticTexts["Find Podcasts"].waitForNonExistence(timeout: 90),
+            "Onboarding should dismiss after accepting the This American Life fallback."
+        )
+
+        openLibrary(in: app)
+        assertExists(app.staticTexts["This American Life"], named: "This American Life library subscription", timeout: 90)
+        openInbox(in: app)
+        let inboxEpisode = thisAmericanLifeEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "This American Life inbox episode", timeout: 90)
+        inboxEpisode.tap()
+
+        assertNowPlayingOverlay(in: app)
+        assertExists(playbackProgress(in: app), named: "Playback Progress control", timeout: 30)
+        dismissNowPlayingOverlay(in: app)
+
+        let playEpisodeButton = app.buttons["Play Episode"]
+        assertExists(playEpisodeButton, named: "Play Episode button", timeout: 20)
+        playEpisodeButton.tap()
+        assertNowPlayingOverlay(in: app)
+        assertExists(playbackProgress(in: app), named: "Playback Progress control after Play Episode", timeout: 30)
+
+        let pauseButton = nowPlayingOverlay(in: app).buttons["Pause"].firstMatch
+        assertExists(pauseButton, named: "Pause button", timeout: 30)
+        pauseButton.tap()
+        let playButton = nowPlayingOverlay(in: app).buttons["Play"].firstMatch
+        assertExists(playButton, named: "Play button after pausing", timeout: 10)
+        playButton.tap()
+        assertExists(nowPlayingOverlay(in: app).buttons["Pause"].firstMatch, named: "Pause button after resuming", timeout: 30)
+
+        let progress = playbackProgress(in: app)
+        let scrubStart = progress.coordinate(withNormalizedOffset: CGVector(dx: 0.18, dy: 0.5))
+        let scrubEnd = progress.coordinate(withNormalizedOffset: CGVector(dx: 0.36, dy: 0.5))
+        scrubStart.press(forDuration: 0.08, thenDragTo: scrubEnd)
+
+        let pauseAfterScrubButton = nowPlayingOverlay(in: app).buttons["Pause"].firstMatch
+        if pauseAfterScrubButton.waitForExistence(timeout: 5) {
+            pauseAfterScrubButton.tap()
+        }
+        RunLoop.current.run(until: Date.now.addingTimeInterval(2))
+
+        app.terminate()
+        app.launch()
+
+        if !nowPlayingOverlay(in: app).waitForExistence(timeout: 5) {
+            let miniPlayer = app.buttons["Open Now Playing"]
+            assertExists(miniPlayer, named: "mini-player after relaunch", timeout: 20)
+            miniPlayer.tap()
+        }
+        assertNowPlayingOverlay(in: app)
+        assertExists(playbackProgress(in: app), named: "Playback Progress control after relaunch", timeout: 20)
+        dismissNowPlayingOverlay(in: app)
+
+        openSettings(in: app)
+        assertExists(app.staticTexts["Settings"], named: "Settings title", timeout: 10)
+        scrollUntilExists(app.staticTexts["Import & Export"], in: app, maxSwipes: 4)
+        assertExists(app.staticTexts["Import & Export"], named: "OPML Import & Export section", timeout: 10)
+        assertExists(app.buttons["Export Subscriptions"], named: "OPML Export Subscriptions action", timeout: 10)
+    }
+
+    @MainActor
+    func testOptInLibriVoxNowPlayingArtworkPeelScreenshot() throws {
         let shouldRunRemotePeelProbe = ProcessInfo.processInfo.environment["OPENCAST_RUN_REMOTE_PEEL_UI_TESTS"] == "1"
             || FileManager.default.fileExists(atPath: "/tmp/opencast-run-remote-peel-ui-tests")
         guard shouldRunRemotePeelProbe else {
-            throw XCTSkip("Set OPENCAST_RUN_REMOTE_PEEL_UI_TESTS=1 or create /tmp/opencast-run-remote-peel-ui-tests to run the live Debugger's Almanac peel visual probe.")
+            throw XCTSkip("Set OPENCAST_RUN_REMOTE_PEEL_UI_TESTS=1 or create /tmp/opencast-run-remote-peel-ui-tests to run the live LibriVox peel visual probe.")
         }
 
         let app = XCUIApplication()
@@ -1024,18 +1286,18 @@ final class OpenCastUITests: XCTestCase {
         ]
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
         app.launchEnvironment["OPENCAST_FORCE_LIGHT_MODE"] = "1"
-        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = "https://debuggersalmanac.mindovermatterismagic.com/feed.xml"
+        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = "https://feeds.feedburner.com/LibrivoxCommunityPodcast"
         app.launch()
 
         openLibrary(in: app)
         tapAddPodcastButton(in: app)
         app.buttons["Subscribe"].tap()
 
-        assertExists(app.staticTexts["The Debugger's Almanac"], named: "Debugger's Almanac subscription", timeout: 30)
+        assertExists(app.staticTexts["Librivox Community Podcast - LibriVox"], named: "LibriVox subscription", timeout: 30)
         openInbox(in: app)
 
-        let firstEpisode = debuggerAlmanacFirstEpisode(in: app)
-        assertExists(firstEpisode, named: "Debugger's Almanac inbox episode", timeout: 30)
+        let firstEpisode = libriVoxFirstEpisode(in: app)
+        assertExists(firstEpisode, named: "LibriVox inbox episode", timeout: 30)
         waitForExternalTraceIfRequested(environmentKey: Self.remotePeelTraceArmingSecondsEnvironmentKey)
         firstEpisode.tap()
 
@@ -1048,7 +1310,7 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Smart Speed"].exists)
         XCTAssertFalse(app.buttons["Skip Intros"].exists)
         XCTAssertFalse(app.buttons["Show Alerts"].exists)
-        attachSmokeScreenshot(named: "debuggers_almanac_now_playing_peel_open")
+        attachSmokeScreenshot(named: "librivox_now_playing_peel_open")
     }
 
     @MainActor
@@ -1096,7 +1358,7 @@ final class OpenCastUITests: XCTestCase {
         forcesLightMode: Bool,
         screenshotName: String
     ) throws {
-        let pastedFeedURL = "http://seed.mindovermatterismagic.com/feed.xml"
+        let pastedFeedURL = "https://example.com/seed.xml"
         let app = makeSeededApp(
             forcesDarkMode: forcesDarkMode,
             forcesLightMode: forcesLightMode
@@ -1126,10 +1388,11 @@ final class OpenCastUITests: XCTestCase {
         seedsCompletedDownload: Bool = false,
         seedsBadAudioURL: Bool = false,
         seedsEpisodeProgress: Bool = false,
+        seedsArtworkPreview: Bool = false,
+        seedsVariedArtworkPreviews: Bool = false,
         seedsPerEpisodeVoiceBoost: Bool = false,
         seedsLongShowNotes: Bool = false,
         extraFeedCount: Int = 0,
-        usesStubPopularPodcasts: Bool = false,
         artworkVariant: String? = nil,
         preferredContentSizeCategoryName: String? = nil
     ) -> XCUIApplication {
@@ -1160,6 +1423,12 @@ final class OpenCastUITests: XCTestCase {
             app.launchArguments.append("--opencast-seed-episode-progress")
             app.launchEnvironment["OPENCAST_SEED_EPISODE_PROGRESS"] = "1"
         }
+        if seedsArtworkPreview {
+            app.launchEnvironment["OPENCAST_SEED_ARTWORK_PREVIEW"] = "1"
+        }
+        if seedsVariedArtworkPreviews {
+            app.launchEnvironment["OPENCAST_SEED_VARIED_ARTWORK_PREVIEWS"] = "1"
+        }
         if seedsBadAudioURL {
             app.launchEnvironment["OPENCAST_SEED_BAD_AUDIO_URL"] = "1"
         }
@@ -1171,10 +1440,6 @@ final class OpenCastUITests: XCTestCase {
         }
         if extraFeedCount > 0 {
             app.launchEnvironment["OPENCAST_SEED_EXTRA_FEED_COUNT"] = String(extraFeedCount)
-        }
-        if usesStubPopularPodcasts {
-            app.launchArguments.append("--opencast-stub-popular-podcasts")
-            app.launchEnvironment["OPENCAST_STUB_POPULAR_PODCASTS"] = "1"
         }
         if let artworkVariant {
             app.launchEnvironment["OPENCAST_UI_TEST_ARTWORK_VARIANT"] = artworkVariant
@@ -1201,12 +1466,10 @@ final class OpenCastUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "--opencast-ui-testing",
-            "--opencast-force-onboarding",
-            "--opencast-stub-popular-podcasts"
+            "--opencast-force-onboarding"
         ]
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
         app.launchEnvironment["OPENCAST_FORCE_ONBOARDING"] = "1"
-        app.launchEnvironment["OPENCAST_STUB_POPULAR_PODCASTS"] = "1"
         if forcesDarkMode {
             app.launchArguments.append("--opencast-force-dark-mode")
             app.launchEnvironment["OPENCAST_FORCE_DARK_MODE"] = "1"
@@ -1218,8 +1481,82 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func artworkPreviewPixelSummary(from screenshot: XCUIScreenshot) throws -> ArtworkPreviewPixelSummary {
+        guard let image = UIImage(data: screenshot.pngRepresentation),
+              let cgImage = image.cgImage
+        else {
+            throw XCTSkip("Could not decode row screenshot for artwork preview smoke check.")
+        }
+
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
+            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        )
+
+        let didDraw = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: bitmapInfo.rawValue
+            ) else {
+                return false
+            }
+
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard didDraw else {
+            throw XCTSkip("Could not draw row screenshot for artwork preview smoke check.")
+        }
+
+        var previewPixels = 0
+        var placeholderPixels = 0
+        let scanWidth = max(width / 3, 1)
+        for y in 0..<height {
+            for x in 0..<scanWidth {
+                let offset = (y * width + x) * bytesPerPixel
+                let red = pixels[offset]
+                let green = pixels[offset + 1]
+                let blue = pixels[offset + 2]
+
+                if red > 200, green < 220, blue < 120 {
+                    previewPixels += 1
+                }
+                if red < 110, green > 100, blue > 110 {
+                    placeholderPixels += 1
+                } else if red > 40, red < 140, green < 140, blue > 120 {
+                    placeholderPixels += 1
+                }
+            }
+        }
+
+        return ArtworkPreviewPixelSummary(
+            previewPixels: previewPixels,
+            placeholderPixels: placeholderPixels
+        )
+    }
+
+    private struct ArtworkPreviewPixelSummary {
+        let previewPixels: Int
+        let placeholderPixels: Int
+    }
+
+    @MainActor
     private func seededEpisodeRow(in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
+    }
+
+    @MainActor
+    private func seededExtraEpisodeRow(in app: XCUIApplication, index: Int) -> XCUIElement {
+        app.buttons.matching(identifier: "episode-row-ui-test-extra-episode-\(index)").firstMatch
     }
 
     @MainActor
@@ -1501,6 +1838,7 @@ final class OpenCastUITests: XCTestCase {
         }
 
         XCTContext.runActivity(named: "Wait \(seconds)s for external trace") { _ in
+            print("TRACE_ARMING \(environmentKey) \(seconds)s")
             RunLoop.current.run(until: Date.now.addingTimeInterval(seconds))
         }
     }
@@ -1528,14 +1866,38 @@ final class OpenCastUITests: XCTestCase {
         }
     }
 
+    private func requireManyArtworkPerformanceProbe() throws {
+        let isEnabled = ProcessInfo.processInfo.environment[Self.manyArtworkPerformanceProbeEnvironmentKey] == "1"
+        guard isEnabled || FileManager.default.fileExists(atPath: Self.manyArtworkPerformanceProbeFilePath) else {
+            throw XCTSkip("Set \(Self.manyArtworkPerformanceProbeEnvironmentKey)=1 to run the many-artwork preview performance probe.")
+        }
+    }
+
+    private func requireThisAmericanLifeReviewerPathProbe() throws {
+        let isEnabled = ProcessInfo.processInfo.environment[Self.thisAmericanLifeReviewerPathProbeEnvironmentKey] == "1"
+        guard isEnabled || FileManager.default.fileExists(atPath: Self.thisAmericanLifeReviewerPathProbeFilePath) else {
+            throw XCTSkip("Set \(Self.thisAmericanLifeReviewerPathProbeEnvironmentKey)=1 or create \(Self.thisAmericanLifeReviewerPathProbeFilePath) to run the live This American Life reviewer-path UI tests.")
+        }
+    }
+
     @MainActor
-    private func debuggerAlmanacFirstEpisode(in app: XCUIApplication) -> XCUIElement {
-        let button = app.buttons.containing(.staticText, identifier: "Rubber Duck, Final Witness").firstMatch
+    private func libriVoxFirstEpisode(in app: XCUIApplication) -> XCUIElement {
+        let button = app.buttons.containing(.staticText, identifier: "LibriVox Community Podcast").firstMatch
         if button.waitForExistence(timeout: 2) {
             return button
         }
 
-        return app.cells.containing(.staticText, identifier: "Rubber Duck, Final Witness").element
+        return app.cells.containing(.staticText, identifier: "LibriVox Community Podcast").element
+    }
+
+    @MainActor
+    private func thisAmericanLifeEpisodeRow(in app: XCUIApplication) -> XCUIElement {
+        let button = app.buttons.containing(.staticText, identifier: "This American Life").firstMatch
+        if button.waitForExistence(timeout: 2) {
+            return button
+        }
+
+        return app.cells.containing(.staticText, identifier: "This American Life").element
     }
 
     @MainActor
@@ -1575,6 +1937,18 @@ final class OpenCastUITests: XCTestCase {
     private func elementContaining(label: String, in app: XCUIApplication) -> XCUIElement {
         let predicate = NSPredicate(format: "label CONTAINS %@", label)
         return app.descendants(matching: .any).matching(predicate).firstMatch
+    }
+
+    @MainActor
+    private func syncStatusTitle(in app: XCUIApplication) -> XCUIElement {
+        let predicate = NSPredicate(
+            format: "label == %@ OR label == %@ OR label == %@ OR label == %@",
+            "iCloud Sync On",
+            "Checking iCloud",
+            "iCloud Sync Off",
+            "iCloud Sync Unavailable"
+        )
+        return app.staticTexts.matching(predicate).firstMatch
     }
 
     @MainActor

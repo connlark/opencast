@@ -55,18 +55,23 @@ actor ArtworkLoader {
         targetPixelSize: CGSize,
         cacheKind: ArtworkCacheKind = .show
     ) async throws -> UIImage? {
-        try await image(
+        try await loadResult(
             for: ArtworkRequest(url: artworkURL, targetPixelSize: targetPixelSize),
             cacheKind: cacheKind
-        )
+        )?.image
     }
 
     func image(for request: ArtworkRequest, cacheKind: ArtworkCacheKind = .show) async throws -> UIImage? {
+        try await loadResult(for: request, cacheKind: cacheKind)?.image
+    }
+
+    func loadResult(for request: ArtworkRequest, cacheKind: ArtworkCacheKind = .show) async throws -> ArtworkLoadResult? {
         try Task.checkCancellation()
 
         if let cachedImage = memoryCache.image(for: request) {
+            let preview = await cachedOrBackfilledPreview(for: request)
             await scheduleRevalidationIfNeeded(for: request.url, cacheKind: cacheKind)
-            return cachedImage
+            return ArtworkLoadResult(image: cachedImage, preview: preview)
         }
 
         if let diskEntry = try await diskCache.cachedEntry(for: request.url) {
@@ -76,10 +81,11 @@ actor ArtworkLoader {
                 imageDecoder: imageDecoder
             ) {
                 memoryCache.insert(image, for: request)
+                let preview = await preview(for: diskEntry, request: request)
                 if diskEntry.metadata.isStale(for: cacheKind) {
                     scheduleRevalidation(for: request.url, metadata: diskEntry.metadata)
                 }
-                return image
+                return ArtworkLoadResult(image: image, preview: preview)
             }
 
             try? await diskCache.remove(for: request.url)
@@ -99,12 +105,24 @@ actor ArtworkLoader {
                 imageDecoder: imageDecoder
             )
             if let image {
-                _ = try await diskCache.store(data: response.data, response: response.response, for: request.url)
+                let preview = await ArtworkPreviewGenerator.generate(
+                    from: response.data,
+                    canonicalArtworkURLKey: request.imageKey
+                )
+                _ = try await diskCache.store(
+                    data: response.data,
+                    response: response.response,
+                    for: request.url,
+                    preview: preview
+                )
                 memoryCache.insert(image, for: request)
+                finishLoad(inFlightLoad.id, for: canonicalURLString)
+                try Task.checkCancellation()
+                return ArtworkLoadResult(image: image, preview: preview)
             }
             finishLoad(inFlightLoad.id, for: canonicalURLString)
             try Task.checkCancellation()
-            return image
+            return nil
         } catch is CancellationError {
             if !Task.isCancelled || inFlightLoad.task.isCancelled {
                 finishLoad(inFlightLoad.id, for: canonicalURLString)
@@ -121,6 +139,37 @@ actor ArtworkLoader {
         for task in tasks {
             await task.value
         }
+    }
+
+    private func cachedOrBackfilledPreview(for request: ArtworkRequest) async -> ArtworkPreview? {
+        guard let diskEntry = try? await diskCache.cachedEntry(for: request.url) else {
+            return nil
+        }
+
+        return await preview(for: diskEntry, request: request)
+    }
+
+    private func preview(
+        for diskEntry: ArtworkDiskCacheEntry,
+        request: ArtworkRequest
+    ) async -> ArtworkPreview? {
+        if let preview = diskEntry.metadata.preview {
+            return preview
+        }
+
+        guard let preview = await ArtworkPreviewGenerator.generate(
+            from: diskEntry.data,
+            canonicalArtworkURLKey: diskEntry.metadata.canonicalURL
+        ) else {
+            return nil
+        }
+
+        do {
+            try await diskCache.updatePreview(preview, for: request.url)
+        } catch {
+            // Ignore preview update errors; preview is an optional optimization
+        }
+        return preview
     }
 
     private func task(for artworkURL: URL) -> (id: UUID, task: Task<ArtworkDataResponse?, Error>) {
@@ -188,10 +237,15 @@ actor ArtworkLoader {
                             imageDecoder: imageDecoder
                         )
                         if canStore {
+                            let preview = await ArtworkPreviewGenerator.generate(
+                                from: response.data,
+                                canonicalArtworkURLKey: metadata.canonicalURL
+                            )
                             _ = try await diskCache.store(
                                 data: response.data,
                                 response: response.response,
-                                for: artworkURL
+                                for: artworkURL,
+                                preview: preview
                             )
                         }
                     }

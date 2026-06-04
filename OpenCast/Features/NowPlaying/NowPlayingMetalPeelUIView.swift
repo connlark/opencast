@@ -108,9 +108,9 @@ final class NowPlayingMetalPeelUIView: UIView {
     }
 
     private func configureFallbackImageView() {
-        imageView.backgroundColor = .clear
+        imageView.backgroundColor = .black
         imageView.clipsToBounds = true
-        imageView.contentMode = .scaleAspectFill
+        imageView.contentMode = .scaleAspectFit
         addSubview(imageView)
     }
 

@@ -244,6 +244,153 @@ struct ArtworkLoaderTests {
         #expect(await probe.requestCount == 1)
     }
 
+    @Test("Disk cache stores and returns generated artwork previews")
+    func diskCacheStoresAndReturnsGeneratedArtworkPreviews() async throws {
+        let directory = try makeTemporaryDirectory()
+        let data = try pngData(width: 400, height: 400)
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
+        let firstLoader = ArtworkLoader(
+            diskCache: ArtworkDiskCache(directory: directory),
+            dataLoader: probe.load
+        )
+        let secondLoader = ArtworkLoader(
+            diskCache: ArtworkDiskCache(directory: directory),
+            dataLoader: probe.load
+        )
+        let url = URL(string: "https://example.com/preview-cache.png")!
+        let request = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 56, height: 56))
+
+        let networkResult = try #require(try await firstLoader.loadResult(for: request))
+        let metadata = try #require(try await ArtworkDiskCache(directory: directory).metadata(for: url))
+        let diskResult = try #require(try await secondLoader.loadResult(for: request))
+
+        #expect(networkResult.preview != nil)
+        #expect(metadata.preview == networkResult.preview)
+        #expect(diskResult.preview == networkResult.preview)
+        #expect(await probe.requestCount == 1)
+    }
+
+    @Test("Memory cache hit returns preview from disk metadata")
+    func memoryCacheHitReturnsPreviewFromDiskMetadata() async throws {
+        let directory = try makeTemporaryDirectory()
+        let data = try pngData(width: 400, height: 400)
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
+        let loader = ArtworkLoader(
+            diskCache: ArtworkDiskCache(directory: directory),
+            dataLoader: probe.load
+        )
+        let url = URL(string: "https://example.com/memory-preview-cache.png")!
+        let request = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 56, height: 56))
+
+        let networkResult = try #require(try await loader.loadResult(for: request))
+        let memoryResult = try #require(try await loader.loadResult(for: request))
+
+        #expect(networkResult.preview != nil)
+        #expect(memoryResult.preview == networkResult.preview)
+        #expect(await probe.requestCount == 1)
+    }
+
+    @Test("Memory cache hit backfills missing disk preview")
+    func memoryCacheHitBackfillsMissingDiskPreview() async throws {
+        let directory = try makeTemporaryDirectory()
+        let data = try pngData(width: 400, height: 400)
+        let url = URL(string: "https://example.com/memory-preview-backfill.png")!
+        let request = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 56, height: 56))
+        let memoryCache = ArtworkMemoryCache()
+        let image = try #require(UIImage(data: data))
+        memoryCache.insert(image, for: request)
+        let diskCache = ArtworkDiskCache(directory: directory)
+        _ = try await diskCache.store(
+            data: data,
+            response: OpenCastHTTPResponse(
+                httpResponse(url: url, statusCode: 200, headers: ["Content-Type": "image/png"])
+            ),
+            for: url
+        )
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
+        let loader = ArtworkLoader(
+            memoryCache: memoryCache,
+            diskCache: diskCache,
+            dataLoader: probe.load
+        )
+
+        let result = try #require(try await loader.loadResult(for: request))
+        let metadata = try #require(try await diskCache.metadata(for: url))
+
+        #expect(result.preview != nil)
+        #expect(metadata.preview == result.preview)
+        #expect(await probe.requestCount == 0)
+    }
+
+    @Test("Legacy disk cache hit backfills preview without refetching")
+    func legacyDiskCacheHitBackfillsPreviewWithoutRefetching() async throws {
+        let directory = try makeTemporaryDirectory()
+        let data = try pngData(width: 400, height: 400)
+        let url = URL(string: "https://example.com/legacy-preview-backfill.png")!
+        let request = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 56, height: 56))
+        let diskCache = ArtworkDiskCache(directory: directory)
+        _ = try await diskCache.store(
+            data: data,
+            response: OpenCastHTTPResponse(
+                httpResponse(url: url, statusCode: 200, headers: ["Content-Type": "image/png"])
+            ),
+            for: url
+        )
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
+        let loader = ArtworkLoader(diskCache: diskCache, dataLoader: probe.load)
+
+        let result = try #require(try await loader.loadResult(for: request))
+        let metadata = try #require(try await diskCache.metadata(for: url))
+
+        #expect(result.preview != nil)
+        #expect(metadata.preview == result.preview)
+        #expect(await probe.requestCount == 0)
+    }
+
+    @Test("Invalid disk preview is ignored and backfilled without refetching")
+    func invalidDiskPreviewIsIgnoredAndBackfilledWithoutRefetching() async throws {
+        let directory = try makeTemporaryDirectory()
+        let data = try pngData(width: 400, height: 400)
+        let url = URL(string: "https://example.com/invalid-preview-backfill.png")!
+        let request = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 56, height: 56))
+        let diskCache = ArtworkDiskCache(directory: directory)
+        _ = try await diskCache.store(
+            data: data,
+            response: OpenCastHTTPResponse(
+                httpResponse(url: url, statusCode: 200, headers: ["Content-Type": "image/png"])
+            ),
+            for: url
+        )
+        let metadataURL = try #require(try cacheFile(in: directory, pathExtension: "json"))
+        var metadataJSON = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: metadataURL)) as? [String: Any]
+        )
+        let oldRGBData = Data((0..<(8 * 8)).flatMap { _ in [UInt8(20), 40, 60] })
+        metadataJSON["preview"] = [
+            "version": ArtworkPreview.currentVersion - 1,
+            "canonicalArtworkURLKey": URLCanonicalizer.canonicalString(for: url),
+            "sourceHash": "old-preview-source",
+            "pixelWidth": 8,
+            "pixelHeight": 8,
+            "rgbData": oldRGBData.base64EncodedString()
+        ]
+        let invalidPreviewMetadata = try JSONSerialization.data(
+            withJSONObject: metadataJSON,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try invalidPreviewMetadata.write(to: metadataURL, options: .atomic)
+
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
+        let loader = ArtworkLoader(diskCache: diskCache, dataLoader: probe.load)
+
+        let result = try #require(try await loader.loadResult(for: request))
+        let metadata = try #require(try await diskCache.metadata(for: url))
+
+        #expect(result.preview != nil)
+        #expect(metadata.preview == result.preview)
+        #expect(await probe.requestCount == 0)
+    }
+
     @Test("Corrupt disk metadata is purged and refetched")
     func corruptDiskMetadataIsPurgedAndRefetched() async throws {
         let directory = try makeTemporaryDirectory()

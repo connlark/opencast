@@ -45,19 +45,22 @@ actor ArtworkDiskCache {
         data: Data,
         response: OpenCastHTTPResponse,
         for url: URL,
+        preview: ArtworkPreview? = nil,
         now: Date = .now
     ) throws -> ArtworkDiskCacheMetadata {
         try prepareDirectory()
         let key = cacheKey(for: url)
+        let canonicalURL = URLCanonicalizer.canonicalString(for: url)
         let metadata = ArtworkDiskCacheMetadata(
-            canonicalURL: URLCanonicalizer.canonicalString(for: url),
+            canonicalURL: canonicalURL,
             sourceURL: url.absoluteString,
             mimeType: response.mimeType,
             etag: response.headerValue("etag"),
             lastModified: response.headerValue("last-modified"),
             byteCount: data.count,
             lastAccess: now,
-            lastValidation: now
+            lastValidation: now,
+            preview: preview?.canonicalArtworkURLKey == canonicalURL ? preview : nil
         )
 
         try data.write(to: dataURL(forKey: key), options: .atomic)
@@ -84,6 +87,29 @@ actor ArtworkDiskCache {
         metadata.lastAccess = now
         metadata.lastValidation = now
         try writeMetadata(metadata, to: url)
+    }
+
+    @discardableResult
+    func updatePreview(_ preview: ArtworkPreview, for url: URL) throws -> ArtworkDiskCacheMetadata? {
+        try prepareDirectory()
+        let key = cacheKey(for: url)
+        let url = metadataURL(forKey: key)
+        guard fileManager.fileExists(atPath: url.path) else {
+            return nil
+        }
+
+        var metadata = try readMetadata(at: url)
+        guard metadata.canonicalURL == preview.canonicalArtworkURLKey else {
+            return metadata
+        }
+
+        guard metadata.preview != preview else {
+            return metadata
+        }
+
+        metadata.preview = preview
+        try writeMetadata(metadata, to: url)
+        return metadata
     }
 
     func metadata(for url: URL) throws -> ArtworkDiskCacheMetadata? {

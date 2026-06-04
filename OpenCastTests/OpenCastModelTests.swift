@@ -8,28 +8,30 @@ import Testing
 @MainActor
 @Suite("SwiftData models")
 struct OpenCastModelTests {
+    private static let modelFixtureFeedURL = "https://example.com/model-fixture.xml"
+
     @Test("Creates an in-memory two-configuration model container")
     func createsInMemoryContainer() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let subscription = SubscriptionRecord(
-            feedURL: OpenCastConstants.debuggerAlmanacFeedURL,
-            title: "The Debugger's Almanac"
+            feedURL: Self.modelFixtureFeedURL,
+            title: "Model Fixture Podcast"
         )
 
         context.insert(subscription)
         try context.save()
 
         let fetched = try context.fetch(FetchDescriptor<SubscriptionRecord>())
-        #expect(fetched.map(\.feedURL) == [OpenCastConstants.debuggerAlmanacFeedURL])
+        #expect(fetched.map(\.feedURL) == [Self.modelFixtureFeedURL])
         #expect(fetched.first?.isVoiceBoostEnabled == true)
     }
 
     @Test("Synced records use logical keys instead of unique attributes")
     func syncedRecordsUseLogicalKeys() {
         let subscription = SubscriptionRecord(
-            feedURL: OpenCastConstants.debuggerAlmanacFeedURL,
-            title: "The Debugger's Almanac"
+            feedURL: Self.modelFixtureFeedURL,
+            title: "Model Fixture Podcast"
         )
         let progress = EpisodeProgressRecord(
             episodeID: "episode-id",
@@ -118,7 +120,7 @@ struct OpenCastModelTests {
         store.load(modelContext: context)
         store.updateProgress(
             episodeID: "episode-id",
-            podcastID: OpenCastConstants.debuggerAlmanacFeedURL,
+            podcastID: Self.modelFixtureFeedURL,
             position: 42,
             duration: 100,
             modelContext: context
@@ -128,7 +130,7 @@ struct OpenCastModelTests {
 
         store.updateProgress(
             episodeID: "episode-id",
-            podcastID: OpenCastConstants.debuggerAlmanacFeedURL,
+            podcastID: Self.modelFixtureFeedURL,
             position: 96,
             duration: 100,
             modelContext: context
@@ -453,6 +455,147 @@ struct OpenCastModelTests {
         #expect(store.episodes.map(\.episodeID) == ["initial-episode"])
     }
 
+    @Test("Refresh preserves artwork previews when artwork URL still matches")
+    func refreshPreservesMatchingArtworkPreviews() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/preview-preserve.xml"
+        let episodeID = "preview-preserve-episode"
+        let artworkURL = try #require(URL(string: "https://example.com/artwork/preserve.png"))
+        let preview = try makePreview(artworkURL: artworkURL)
+        let service = StubFeedService(responses: [
+            feedURL: .success(
+                makeSnapshot(
+                    feedURL: feedURL,
+                    podcastTitle: "Preview Preserve Updated",
+                    episodeID: episodeID,
+                    episodeTitle: "Preview Preserve Episode Updated",
+                    artworkURL: artworkURL
+                )
+            )
+        ])
+        let store = LibraryStore(feedService: service)
+
+        insertCachedFeed(
+            feedURL: feedURL,
+            title: "Preview Preserve",
+            episodeID: episodeID,
+            artworkURL: artworkURL,
+            artworkPreview: preview,
+            in: context
+        )
+        try context.save()
+        store.load(modelContext: context)
+
+        await store.refresh(feedURL: feedURL, modelContext: context)
+
+        let podcast = try #require(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).first)
+        let episode = try #require(try context.fetch(FetchDescriptor<EpisodeCacheRecord>()).first)
+        #expect(podcast.artworkPreview == preview)
+        #expect(episode.artworkPreview == preview)
+        #expect(store.podcastCache(for: feedURL)?.artworkPreview == preview)
+        #expect(store.episode(with: episodeID)?.artworkPreview == preview)
+    }
+
+    @Test("Refresh clears artwork previews when artwork URL changes")
+    func refreshClearsArtworkPreviewsWhenArtworkURLChanges() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/preview-clear.xml"
+        let episodeID = "preview-clear-episode"
+        let oldArtworkURL = try #require(URL(string: "https://example.com/artwork/old.png"))
+        let newArtworkURL = try #require(URL(string: "https://example.com/artwork/new.png"))
+        let preview = try makePreview(artworkURL: oldArtworkURL)
+        let service = StubFeedService(responses: [
+            feedURL: .success(
+                makeSnapshot(
+                    feedURL: feedURL,
+                    podcastTitle: "Preview Clear Updated",
+                    episodeID: episodeID,
+                    episodeTitle: "Preview Clear Episode Updated",
+                    artworkURL: newArtworkURL
+                )
+            )
+        ])
+        let store = LibraryStore(feedService: service)
+
+        insertCachedFeed(
+            feedURL: feedURL,
+            title: "Preview Clear",
+            episodeID: episodeID,
+            artworkURL: oldArtworkURL,
+            artworkPreview: preview,
+            in: context
+        )
+        try context.save()
+        store.load(modelContext: context)
+
+        await store.refresh(feedURL: feedURL, modelContext: context)
+
+        let podcast = try #require(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).first)
+        let episode = try #require(try context.fetch(FetchDescriptor<EpisodeCacheRecord>()).first)
+        #expect(podcast.artworkURL == newArtworkURL.absoluteString)
+        #expect(episode.artworkURL == newArtworkURL.absoluteString)
+        #expect(podcast.artworkPreview == nil)
+        #expect(episode.artworkPreview == nil)
+    }
+
+    @Test("Artwork preview persistence skips no-op saves")
+    func artworkPreviewPersistenceSkipsNoOpSaves() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore()
+        let feedURL = "https://example.com/preview-noop.xml"
+        let episodeID = "preview-noop-episode"
+        let artworkURL = try #require(URL(string: "https://example.com/artwork/noop.png"))
+        let firstPreview = try makePreview(artworkURL: artworkURL, sourceHash: "first-source")
+        let duplicatePreview = try makePreview(artworkURL: artworkURL, sourceHash: "first-source")
+        let updatedPreview = try makePreview(artworkURL: artworkURL, sourceHash: "updated-source")
+
+        insertCachedFeed(feedURL: feedURL, title: "Preview No-Op", episodeID: episodeID, artworkURL: artworkURL, in: context)
+        try context.save()
+        store.load(modelContext: context)
+        let episode = try #require(store.episode(with: episodeID))
+
+        let firstDidSave = store.updateArtworkPreview(firstPreview, for: episode, modelContext: context)
+        let duplicateDidSave = store.updateArtworkPreview(duplicatePreview, for: episode, modelContext: context)
+        let updatedDidSave = store.updateArtworkPreview(updatedPreview, for: episode, modelContext: context)
+
+        #expect(firstDidSave)
+        #expect(!duplicateDidSave)
+        #expect(updatedDidSave)
+        #expect(episode.artworkPreview == updatedPreview)
+    }
+
+    @Test("Artwork preview persistence replaces stale schema with same source")
+    func artworkPreviewPersistenceReplacesStaleSchemaWithSameSource() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let artworkURL = try #require(URL(string: "https://example.com/artwork/stale-schema.png"))
+        let preview = try makePreview(artworkURL: artworkURL, sourceHash: "stable-source")
+        let episode = EpisodeCacheRecord(
+            episodeID: "preview-stale-schema-episode",
+            podcastID: "https://example.com/preview-stale-schema.xml",
+            podcastTitle: "Preview Stale Schema",
+            title: "Preview Stale Schema Episode",
+            artworkURL: artworkURL.absoluteString
+        )
+        episode.artworkPreviewVersion = preview.version - 1
+        episode.artworkPreviewCanonicalURLKey = preview.canonicalArtworkURLKey
+        episode.artworkPreviewSourceHash = preview.sourceHash
+        episode.artworkPreviewPixelWidth = preview.pixelWidth / 2
+        episode.artworkPreviewPixelHeight = preview.pixelHeight
+        episode.artworkPreviewRGBData = preview.rgbData
+        context.insert(episode)
+        try context.save()
+
+        let didUpdate = episode.storeArtworkPreviewIfChanged(preview)
+        try context.save()
+
+        #expect(didUpdate)
+        #expect(episode.artworkPreview == preview)
+    }
+
     @Test("Playback progress flush persists the current snapshot")
     func playbackProgressFlushPersistsCurrentSnapshot() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -460,8 +603,8 @@ struct OpenCastModelTests {
         let appModel = OpenCastAppModel()
         let episode = EpisodeCacheRecord(
             episodeID: "episode-id",
-            podcastID: OpenCastConstants.debuggerAlmanacFeedURL,
-            podcastTitle: "The Debugger's Almanac",
+            podcastID: Self.modelFixtureFeedURL,
+            podcastTitle: "Model Fixture Podcast",
             title: "A Test Episode",
             duration: 200,
             audioURL: "https://example.com/audio.mp3"
@@ -647,8 +790,8 @@ struct OpenCastModelTests {
         #expect(store.episode(with: unsubscribedEpisodeID)?.episodeID == nil)
     }
 
-    @Test("Inbox only shows unplayed episodes from active subscriptions")
-    func inboxOnlyShowsUnplayedEpisodesFromActiveSubscriptions() throws {
+    @Test("Inbox keeps completed episodes from active subscriptions")
+    func inboxKeepsCompletedEpisodesFromActiveSubscriptions() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let store = LibraryStore()
@@ -723,7 +866,7 @@ struct OpenCastModelTests {
 
         #expect(store.subscriptions.map(\.feedURL) == [activeFeedURL])
         #expect(store.episodes.map(\.episodeID).sorted() == ["active-played", "active-unplayed"])
-        #expect(store.inboxEpisodes.map(\.episodeID) == ["active-unplayed"])
+        #expect(store.inboxEpisodes.map(\.episodeID) == ["active-played", "active-unplayed"])
     }
 
     @Test("Inbox cache keeps newest-first ordering")
@@ -816,6 +959,35 @@ struct OpenCastModelTests {
         #expect(store.progressRecords.first { $0.episodeID == episodeID }?.position == 11)
         #expect(store.inboxEpisodes.map(\.episodeID) == initialInboxEpisodeIDs)
         #expect(store.inboxEpisodes.map { ObjectIdentifier($0) } == initialInboxRecords)
+    }
+
+    @Test("Completing an episode leaves cached inbox episodes unchanged")
+    func completingEpisodeLeavesCachedInboxEpisodesUnchanged() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore()
+        let feedURL = "https://example.com/inbox-completed-progress.xml"
+        let episodeID = "inbox-completed-progress-episode"
+
+        insertCachedFeed(feedURL: feedURL, title: "Inbox Completed Progress", episodeID: episodeID, in: context)
+        try context.save()
+        store.load(modelContext: context)
+
+        let initialInboxEpisodeIDs = store.inboxEpisodes.map(\.episodeID)
+        let initialInboxRecords = store.inboxEpisodes.map { ObjectIdentifier($0) }
+        let didSave = store.updateProgress(
+            episodeID: episodeID,
+            podcastID: feedURL,
+            position: 120,
+            duration: 120,
+            modelContext: context
+        )
+
+        #expect(didSave)
+        #expect(store.progressRecords.first { $0.episodeID == episodeID }?.isPlayed == true)
+        #expect(store.inboxEpisodes.map(\.episodeID) == initialInboxEpisodeIDs)
+        #expect(store.inboxEpisodes.map { ObjectIdentifier($0) } == initialInboxRecords)
+        #expect(store.progressSummary(for: store.inboxEpisodes[0]).isCompleted)
     }
 
     @Test("Unsubscribe leaves other feeds intact")
@@ -1637,7 +1809,10 @@ struct OpenCastModelTests {
     @Test("Sync status store skips recent account status refreshes")
     func syncStatusStoreSkipsRecentAccountStatusRefreshes() async {
         let provider = CountingCloudKitAccountStatusProvider(statuses: [.available, .noAccount])
-        let store = SyncStatusStore(accountStatusProvider: provider)
+        let store = SyncStatusStore(
+            accountStatusProvider: provider,
+            now: { Date(timeIntervalSinceReferenceDate: 0) }
+        )
 
         await store.refreshAccountStatus()
         await store.refreshAccountStatus()
@@ -1653,34 +1828,59 @@ struct OpenCastModelTests {
         episodeID: String,
         lastRefreshAt: Date = .now,
         isArchived: Bool = false,
+        artworkURL: URL? = nil,
+        artworkPreview: ArtworkPreview? = nil,
         in context: ModelContext
     ) {
         context.insert(
             SubscriptionRecord(
                 feedURL: feedURL,
                 title: title,
+                artworkURL: artworkURL?.absoluteString,
                 lastRefreshAt: lastRefreshAt,
                 isArchived: isArchived
             )
         )
-        context.insert(
-            PodcastCacheRecord(
-                feedURL: feedURL,
-                title: title,
-                updatedAt: Date()
-            )
+        let podcast = PodcastCacheRecord(
+            feedURL: feedURL,
+            title: title,
+            artworkURL: artworkURL?.absoluteString,
+            updatedAt: Date()
         )
-        context.insert(
-            EpisodeCacheRecord(
-                episodeID: episodeID,
-                podcastID: feedURL,
-                podcastTitle: title,
-                title: "Episode for \(title)",
-                publishedAt: Date(),
-                duration: 120,
-                audioURL: "https://example.com/\(episodeID).mp3"
-            )
+        if let artworkPreview {
+            podcast.storeArtworkPreviewIfChanged(artworkPreview)
+        }
+        context.insert(podcast)
+
+        let episode = EpisodeCacheRecord(
+            episodeID: episodeID,
+            podcastID: feedURL,
+            podcastTitle: title,
+            title: "Episode for \(title)",
+            publishedAt: Date(),
+            duration: 120,
+            audioURL: "https://example.com/\(episodeID).mp3",
+            artworkURL: artworkURL?.absoluteString
         )
+        if let artworkPreview {
+            episode.storeArtworkPreviewIfChanged(artworkPreview)
+        }
+        context.insert(episode)
+    }
+
+    private func makePreview(
+        artworkURL: URL,
+        sourceHash: String = "preview-source"
+    ) throws -> ArtworkPreview {
+        let rgbData = Data((0..<(8 * 8)).flatMap { _ in [UInt8(240), 44, 32] })
+        return try #require(ArtworkPreview(
+            version: ArtworkPreview.currentVersion,
+            canonicalArtworkURLKey: ArtworkPreview.canonicalArtworkURLKey(for: artworkURL.absoluteString) ?? "",
+            sourceHash: sourceHash,
+            pixelWidth: 8,
+            pixelHeight: 8,
+            rgbData: rgbData
+        ))
     }
 
     private func makeSnapshot(
@@ -1689,7 +1889,8 @@ struct OpenCastModelTests {
         episodeID: String,
         episodeTitle: String,
         summary: String? = nil,
-        duration: TimeInterval = 120
+        duration: TimeInterval = 120,
+        artworkURL: URL? = nil
     ) -> FeedSnapshot {
         let podcastID = PodcastID(rawValue: feedURL)
         return FeedSnapshot(
@@ -1698,7 +1899,8 @@ struct OpenCastModelTests {
                 feedURL: URL(string: feedURL)!,
                 title: podcastTitle,
                 author: "\(podcastTitle) Author",
-                summary: "\(podcastTitle) Summary"
+                summary: "\(podcastTitle) Summary",
+                artworkURL: artworkURL
             ),
             episodes: [
                 Episode(
@@ -1710,6 +1912,7 @@ struct OpenCastModelTests {
                     publishedAt: Date(timeIntervalSince1970: 1_700_000_000),
                     duration: duration,
                     audioURL: URL(string: "https://example.com/\(episodeID).mp3"),
+                    artworkURL: artworkURL,
                     guid: episodeID
                 )
             ]

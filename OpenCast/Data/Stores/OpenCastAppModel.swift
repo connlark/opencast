@@ -20,13 +20,15 @@ final class OpenCastAppModel {
     let exposesVoiceBoostDiagnosticsStatus: Bool
     let runsVoiceBoostDeviceProbe: Bool
     let podcastDirectoryService: any PodcastDirectoryService
-    let podcastDiscoveryService: any PodcastDiscoveryService
     let syncStatus: SyncStatusStore
     let allowsAutomaticFeedRefresh: Bool
     var nowPlayingPresentationRequest = 0
     var isNowPlayingPresented = false
     var onboardingPresentationRequest = 0
     var lastPlaybackError: String?
+    var isNukingData = false
+    var lastDataNukeErrorMessage: String?
+    var dataNukeCompletionID = 0
     #if DEBUG
     var lastVoiceBoostDeviceProbeResult: String?
     var lastVoiceBoostDeviceProbeReportStatus: String?
@@ -48,7 +50,6 @@ final class OpenCastAppModel {
         exposesVoiceBoostDiagnosticsStatus: Bool = false,
         runsVoiceBoostDeviceProbe: Bool = false,
         podcastDirectoryService: (any PodcastDirectoryService)? = nil,
-        podcastDiscoveryService: (any PodcastDiscoveryService)? = nil,
         syncStatus: SyncStatusStore = SyncStatusStore(),
         allowsAutomaticFeedRefresh: Bool = true
     ) {
@@ -76,13 +77,6 @@ final class OpenCastAppModel {
         let defaultPodcastDirectoryService = ITunesPodcastDirectoryService(httpClient: resolvedHTTPClient)
         let resolvedPodcastDirectoryService = podcastDirectoryService ?? defaultPodcastDirectoryService
         self.podcastDirectoryService = resolvedPodcastDirectoryService
-        if let podcastDiscoveryService {
-            self.podcastDiscoveryService = podcastDiscoveryService
-        } else if podcastDirectoryService == nil {
-            self.podcastDiscoveryService = defaultPodcastDirectoryService
-        } else {
-            self.podcastDiscoveryService = EmptyPodcastDiscoveryService()
-        }
         self.syncStatus = syncStatus
         self.allowsAutomaticFeedRefresh = allowsAutomaticFeedRefresh
     }
@@ -239,6 +233,39 @@ final class OpenCastAppModel {
         await library.refreshAllIfStale(modelContext: modelContext)
     }
 
+    func nukeAllData(modelContext: ModelContext) async throws {
+        guard !isNukingData else {
+            return
+        }
+
+        isNukingData = true
+        lastDataNukeErrorMessage = nil
+        defer {
+            isNukingData = false
+        }
+
+        do {
+            let accountStatus = await syncStatus.refreshAccountStatus(force: true)
+            guard accountStatus == .available else {
+                throw DataNukeError.iCloudUnavailable(accountStatus)
+            }
+
+            library.prepareForDataNuke()
+            try downloads.nukeAllDownloads(modelContext: modelContext)
+            try deleteAllModelRows(modelContext: modelContext)
+            resetRuntimeStateAfterDataNuke(modelContext: modelContext)
+            try await cacheController.clearCachesNow()
+            dataNukeCompletionID += 1
+        } catch {
+            lastDataNukeErrorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    func clearDataNukeError() {
+        lastDataNukeErrorMessage = nil
+    }
+
     @discardableResult
     func markEpisodePlayed(
         _ record: EpisodeCacheRecord,
@@ -388,6 +415,44 @@ final class OpenCastAppModel {
             : "Report Missing"
     }
     #endif
+
+    private func deleteAllModelRows(modelContext: ModelContext) throws {
+        try deleteAll(SubscriptionRecord.self, modelContext: modelContext)
+        try deleteAll(EpisodeProgressRecord.self, modelContext: modelContext)
+        try deleteAll(PodcastCacheRecord.self, modelContext: modelContext)
+        try deleteAll(EpisodeCacheRecord.self, modelContext: modelContext)
+        try deleteAll(RefreshLogRecord.self, modelContext: modelContext)
+        try deleteAll(LocalPreferenceRecord.self, modelContext: modelContext)
+        try deleteAll(EpisodeDownloadRecord.self, modelContext: modelContext)
+        try modelContext.save()
+    }
+
+    private func deleteAll<Model: PersistentModel>(
+        _ modelType: Model.Type,
+        modelContext: ModelContext
+    ) throws {
+        for record in try modelContext.fetch(FetchDescriptor<Model>()) {
+            modelContext.delete(record)
+        }
+    }
+
+    private func resetRuntimeStateAfterDataNuke(modelContext: ModelContext) {
+        playback.unload()
+        isNowPlayingPresented = false
+        lastPlaybackError = nil
+        pendingAutoplayEpisodeID = nil
+        library.resetAfterDataNuke()
+        downloads.load(modelContext: modelContext)
+        appearanceSettings.load(modelContext: modelContext)
+        playbackSettings.load(modelContext: modelContext, playback: playback)
+        onboardingState.load(modelContext: modelContext)
+        #if DEBUG
+        try? FileManager.default.removeItem(at: VoiceBoostDeviceProbe.reportURL)
+        lastVoiceBoostDeviceProbeResult = nil
+        lastVoiceBoostDeviceProbeApplicationState = nil
+        refreshVoiceBoostDeviceProbeReportStatus()
+        #endif
+    }
 
     private func play(
         _ record: EpisodeCacheRecord,

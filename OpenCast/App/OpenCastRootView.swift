@@ -32,6 +32,7 @@ struct OpenCastRootView: View {
                 inboxNavigationPath: $inboxNavigationPath,
                 isNowPlayingPresented: isNowPlayingPresented,
                 onAdd: presentAddPodcast,
+                onPresentDataNukeConfirmation: presentDataNukeConfirmation,
                 onPresentNowPlaying: presentNowPlaying
             )
         }
@@ -57,6 +58,9 @@ struct OpenCastRootView: View {
                 sheetDestination: $sheetDestination
             )
         )
+        .onChange(of: appModel.dataNukeCompletionID) { _, _ in
+            resetAfterDataNuke()
+        }
     }
 
     private func presentNowPlaying() {
@@ -71,6 +75,10 @@ struct OpenCastRootView: View {
 
     private func presentAddPodcast() {
         sheetDestination = .addPodcast
+    }
+
+    private func presentDataNukeConfirmation() {
+        sheetDestination = .nukeConfirmation
     }
 
     private func presentOnboardingIfNeeded() {
@@ -209,5 +217,16 @@ struct OpenCastRootView: View {
                 self.selectedRoute = nil
             }
         }
+    }
+
+    private func resetAfterDataNuke() {
+        selectedTab = .library
+        selectedSection = .library
+        selectedRoute = nil
+        libraryNavigationPath.removeAll()
+        inboxNavigationPath.removeAll()
+        sheetDestination = nil
+        dismissNowPlaying()
+        hasFlushedProgressForLifecycleExit = false
     }
 }

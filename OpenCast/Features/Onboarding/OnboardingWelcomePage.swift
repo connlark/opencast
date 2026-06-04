@@ -10,7 +10,7 @@ struct OnboardingWelcomePage: View {
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Welcome to OpenCast")
+                    Text("Welcome to opencast!")
                         .font(.largeTitle)
                         .bold()
 
@@ -28,8 +28,8 @@ struct OnboardingWelcomePage: View {
 
                     OnboardingPitchRow(
                         systemImage: "chevron.left.forwardslash.chevron.right",
-                        title: "Open source",
-                        message: "The code will live on GitHub.",
+                        title: "View Source on GitHub",
+                        message: "MIT-licensed code and project history are public.",
                         destination: OpenCastConstants.sourceCodeURL
                     )
 

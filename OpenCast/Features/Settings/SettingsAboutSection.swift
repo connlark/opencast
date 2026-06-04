@@ -21,6 +21,15 @@ struct SettingsAboutSection: View {
                 )
             }
 
+            Link(destination: OpenCastConstants.sourceCodeURL) {
+                ExternalSettingsLinkRow(
+                    title: "GitHub",
+                    subtitle: "Source code and MIT license",
+                    systemImage: "chevron.left.forwardslash.chevron.right",
+                    tint: .indigo
+                )
+            }
+
             LabeledContent {
                 Text(versionText)
             } label: {
@@ -28,8 +37,6 @@ struct SettingsAboutSection: View {
             }
         } header: {
             Text("About")
-        } footer: {
-            Text("Links open outside OpenCast.")
         }
     }
 

@@ -10,6 +10,7 @@ struct OpenCastAdaptiveRootContentView: View {
     @Binding var inboxNavigationPath: [AppRoute]
     let isNowPlayingPresented: Bool
     let onAdd: () -> Void
+    let onPresentDataNukeConfirmation: () -> Void
     let onPresentNowPlaying: () -> Void
 
     var body: some View {
@@ -19,6 +20,7 @@ struct OpenCastAdaptiveRootContentView: View {
                 selectedRoute: $selectedRoute,
                 isNowPlayingPresented: isNowPlayingPresented,
                 onAdd: onAdd,
+                onPresentDataNukeConfirmation: onPresentDataNukeConfirmation,
                 onPresentNowPlaying: onPresentNowPlaying
             )
         } else {
@@ -28,6 +30,7 @@ struct OpenCastAdaptiveRootContentView: View {
                 inboxNavigationPath: $inboxNavigationPath,
                 isNowPlayingPresented: isNowPlayingPresented,
                 onAdd: onAdd,
+                onPresentDataNukeConfirmation: onPresentDataNukeConfirmation,
                 onPresentNowPlaying: onPresentNowPlaying
             )
         }
