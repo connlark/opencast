@@ -76,7 +76,7 @@ struct OnboardingView: View {
                     Button("Add This American Life", action: subscribeToFallbackAndComplete)
                     Button("Keep Choosing", role: .cancel) {}
                 } message: {
-                    Text("OpenCast will add This American Life so you can get acquainted with podcasts before choosing more shows.")
+                    Text("opencast will add This American Life so you can get acquainted with podcasts before choosing more shows.")
                 }
             }
             .navigationTitle("Setup")

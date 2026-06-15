@@ -18,6 +18,6 @@ enum OpenCastConstants {
     static let privacyPolicyURL = URL(string: "https://support.opencast.mobile/privacy")!
     static let sourceCodeURL = URL(string: "https://github.com/connlark/opencast")!
     static let applePodcastsOPMLShortcutURL = URL(
-        string: "https://www.icloud.com/shortcuts/1099c673de9d4b4ea34928882e7c2f4e"
+        string: "https://www.icloud.com/shortcuts/f1cc341b82494ad09166fd9133d16cf3"
     )!
 }

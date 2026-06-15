@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 struct NowPlayingView: View {
@@ -7,14 +8,21 @@ struct NowPlayingView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var scrubPosition: TimeInterval = 0
     @State private var isScrubbing = false
+    @State private var playPauseFeedback = 0
+    @State private var skipFeedback = 0
+    @State private var scrubFeedback = 0
+    @State private var scrubbingEpisodeID: String?
     @State private var utilitySheet: PlayerUtilitySheet?
     @State private var isVoiceBoostEnabled = true
 
     let bottomContentPadding: CGFloat
     let topContentPadding: CGFloat
     @Binding var isPeelInteractionActive: Bool
+    @Binding var isContentScrolledToTop: Bool
+    let isTrackingDismissDrag: Bool
     let prewarmsPeelRenderer: Bool
     let prewarmsPeelSettingsPanel: Bool
+    let allowsPeelStart: Bool
     let onDismiss: () -> Void
     let onOpenEpisode: () -> Void
     let onOpenPodcast: () -> Void
@@ -29,38 +37,51 @@ struct NowPlayingView: View {
                 if let episode = appModel.playback.currentEpisode {
                     let artworkSize = artworkWidth(in: proxy)
                     VStack(spacing: contentSpacing) {
-                        PeelableNowPlayingArtwork(
-                            title: episode.podcastTitle,
-                            imageURL: episode.artworkURL?.absoluteString,
-                            size: artworkSize,
-                            voiceBoostEnabled: $isVoiceBoostEnabled,
-                            voiceBoostControlEnabled: appModel.playbackSettings.canChangeCurrentEpisodeVoiceBoost,
-                            isPeelInteractionActive: $isPeelInteractionActive,
-                            prewarmsPeelRenderer: prewarmsPeelRenderer,
-                            prewarmsPeelSettingsPanel: prewarmsPeelSettingsPanel
-                        )
+                        if appModel.replacesNowPlayingArtworkWithPlaybackDiagnostics {
+                            NowPlayingPlaybackDiagnosticsView(
+                                text: appModel.playback.playbackDiagnosticsText,
+                                size: artworkSize
+                            )
+                        } else {
+                            PeelableNowPlayingArtwork(
+                                title: episode.podcastTitle,
+                                imageURL: episode.artworkURL?.absoluteString,
+                                size: artworkSize,
+                                voiceBoostEnabled: $isVoiceBoostEnabled,
+                                voiceBoostControlEnabled: appModel.playbackSettings.canChangeCurrentEpisodeVoiceBoost,
+                                isPeelInteractionActive: $isPeelInteractionActive,
+                                prewarmsPeelRenderer: prewarmsPeelRenderer,
+                                prewarmsPeelSettingsPanel: prewarmsPeelSettingsPanel,
+                                allowsPeelStart: allowsPeelStart
+                            )
+                        }
 
                         VStack(spacing: 6) {
                             Button(action: openEpisode) {
                                 Text(episode.title)
-                                    .font(.title2)
+                                    .font(titleFont)
                                     .multilineTextAlignment(.center)
-                                    .lineLimit(2)
-                                    .minimumScaleFactor(0.78)
+                                    .lineLimit(titleLineLimit)
+                                    .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 0.92 : 0.78)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                             .buttonStyle(.plain)
                             .accessibilityHint("Opens the episode description")
+                            .accessibilityIdentifier("Now Playing Episode Title")
 
                             Button(action: openPodcast) {
                                 Text(episode.podcastTitle)
-                                    .font(.title3)
+                                    .font(podcastFont)
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.82)
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(podcastLineLimit)
+                                    .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 0.9 : 0.82)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                             .buttonStyle(.plain)
                             .accessibilityHint("Opens the podcast feed")
                         }
+                        .layoutPriority(0)
 
                         NowPlayingProgressView(
                             duration: appModel.playback.duration,
@@ -69,6 +90,7 @@ struct NowPlayingView: View {
                             onEditingChanged: updateScrubbing
                         )
                         .padding(.top, 4)
+                        .layoutPriority(2)
 
                         if case .failed(let message) = appModel.playback.state {
                             VStack(spacing: 8) {
@@ -97,8 +119,8 @@ struct NowPlayingView: View {
                             onTogglePlayPause: togglePlayPause,
                             onSkipForward: skipForward
                         )
-                        .equatable()
                         .padding(.top, transportTopPadding(in: proxy))
+                        .layoutPriority(2)
 
                         NowPlayingUtilityControls(
                             rate: appModel.playback.rate,
@@ -106,8 +128,8 @@ struct NowPlayingView: View {
                             onShowSpeed: { utilitySheet = .speed },
                             onShowSleepTimer: { utilitySheet = .sleep }
                         )
-                        .equatable()
                         .padding(.top, utilityTopPadding)
+                        .layoutPriority(1)
                     }
                     .frame(maxWidth: contentWidth(in: proxy))
                     .padding(.horizontal, horizontalPadding)
@@ -121,9 +143,18 @@ struct NowPlayingView: View {
                 }
             }
             .scrollIndicators(.hidden)
-            .scrollDisabled(true)
+            .scrollDisabled(isTrackingDismissDrag)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                // At rest, a scroll view's top offset is the negative top inset.
+                geometry.contentOffset.y <= -geometry.contentInsets.top + 1
+            } action: { _, isAtTop in
+                isContentScrolledToTop = isAtTop
+            }
             .tint(.accentColor)
             .foregroundStyle(.primary)
+            .sensoryFeedback(.impact(flexibility: .soft), trigger: playPauseFeedback)
+            .sensoryFeedback(.selection, trigger: skipFeedback)
+            .sensoryFeedback(.selection, trigger: scrubFeedback)
             .accessibilityAction(.escape) {
                 onDismiss()
             }
@@ -131,10 +162,14 @@ struct NowPlayingView: View {
                 switch sheet {
                 case .speed:
                     PlaybackSpeedView()
+                        .environment(appModel)
+                        .modelContext(modelContext)
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
                 case .sleep:
                     SleepTimerView()
+                        .environment(appModel)
+                        .modelContext(modelContext)
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
                 }
@@ -153,6 +188,12 @@ struct NowPlayingView: View {
             }
             .onChange(of: isVoiceBoostEnabled) { _, newValue in
                 applyVoiceBoostEnabled(newValue)
+            }
+            .onChange(of: currentEpisodeID) { _, _ in
+                // A scrub in flight when the episode changes must not keep displaying
+                // the old episode's drag position.
+                isScrubbing = false
+                scrubPosition = appModel.playback.position
             }
             .task(id: currentEpisodeID) {
                 syncVoiceBoostEnabledFromStore()
@@ -191,7 +232,9 @@ struct NowPlayingView: View {
     }
 
     private var showsPauseButton: Bool {
-        appModel.playback.state == .playing || appModel.playback.state == .buffering
+        appModel.playback.state == .playing
+            || appModel.playback.state == .buffering
+            || appModel.playback.state == .loading
     }
 
     private var currentPodcastID: String? {
@@ -204,11 +247,13 @@ struct NowPlayingView: View {
 
     private func artworkWidth(in proxy: GeometryProxy) -> CGFloat {
         let availableWidth = proxy.size.width - horizontalPadding * 2
+        let availableHeight = max(proxy.size.height - topContentPadding - bottomContentPadding, 280)
         if dynamicTypeSize.isAccessibilitySize {
-            return min(availableWidth, horizontalSizeClass == .regular ? 320 : 270)
+            let heightConstrainedWidth = availableHeight * (horizontalSizeClass == .regular ? 0.30 : 0.26)
+            return min(availableWidth, heightConstrainedWidth, accessibilityArtworkCap(in: proxy))
         }
 
-        let heightConstrainedWidth = proxy.size.height * (horizontalSizeClass == .regular ? 0.42 : 0.35)
+        let heightConstrainedWidth = availableHeight * (horizontalSizeClass == .regular ? 0.46 : 0.40)
         return min(availableWidth, heightConstrainedWidth, horizontalSizeClass == .regular ? 360 : 300)
     }
 
@@ -218,7 +263,7 @@ struct NowPlayingView: View {
 
     private var contentSpacing: CGFloat {
         if dynamicTypeSize.isAccessibilitySize {
-            return 18
+            return 14
         }
 
         return 12
@@ -226,7 +271,7 @@ struct NowPlayingView: View {
 
     private func transportTopPadding(in proxy: GeometryProxy) -> CGFloat {
         if dynamicTypeSize.isAccessibilitySize {
-            return 16
+            return 8
         }
 
         return proxy.size.height > 780 ? 12 : 10
@@ -234,19 +279,61 @@ struct NowPlayingView: View {
 
     private var utilityTopPadding: CGFloat {
         if dynamicTypeSize.isAccessibilitySize {
-            return 16
+            return 8
         }
 
         return 6
     }
 
+    private var titleFont: Font {
+        dynamicTypeSize.isAccessibilitySize ? .headline : .title2
+    }
+
+    private var podcastFont: Font {
+        dynamicTypeSize.isAccessibilitySize ? .subheadline : .title3
+    }
+
+    private var titleLineLimit: Int {
+        dynamicTypeSize.isAccessibilitySize ? 3 : 2
+    }
+
+    private var podcastLineLimit: Int {
+        dynamicTypeSize.isAccessibilitySize ? 2 : 1
+    }
+
+    private func accessibilityArtworkCap(in proxy: GeometryProxy) -> CGFloat {
+        if horizontalSizeClass == .regular {
+            return 300
+        }
+
+        if proxy.size.height < 700 {
+            return 188
+        }
+
+        if proxy.size.height < 780 {
+            return 220
+        }
+
+        return 240
+    }
+
     private func updateScrubbing(_ editing: Bool) {
         if editing {
-            scrubPosition = appModel.playback.position
+            scrubbingEpisodeID = currentEpisodeID
             isScrubbing = true
+            scrubFeedback += 1
         } else {
+            // A release after the episode changed mid-drag must not seek the new
+            // episode to a position chosen on the old episode's timeline.
+            guard scrubbingEpisodeID == currentEpisodeID else {
+                isScrubbing = false
+                scrubPosition = appModel.playback.position
+                return
+            }
+
+            let seekPosition = scrubPosition
             isScrubbing = false
-            appModel.playback.seek(to: scrubPosition)
+            appModel.playback.seek(to: seekPosition)
         }
     }
 
@@ -255,14 +342,17 @@ struct NowPlayingView: View {
     }
 
     private func skipBackward() {
+        skipFeedback += 1
         appModel.playback.skip(by: -appModel.playbackSettings.skipBackwardOption.seconds)
     }
 
     private func togglePlayPause() {
+        playPauseFeedback += 1
         appModel.playback.togglePlayPause()
     }
 
     private func skipForward() {
+        skipFeedback += 1
         appModel.playback.skip(by: appModel.playbackSettings.skipForwardOption.seconds)
     }
 

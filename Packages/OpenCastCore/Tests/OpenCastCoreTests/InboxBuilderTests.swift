@@ -6,7 +6,7 @@ import Testing
 struct InboxBuilderTests {
     @Test("Sorts newest first and keeps played episodes by default")
     func sortsAndKeepsPlayedEpisodes() {
-        let podcastID = PodcastID(rawValue: "https://example.com/american-prestige.xml")
+        let podcastID = PodcastID(rawValue: "https://jumble.top/f/americanprestige.xml")
         let old = Episode(
             id: EpisodeID(rawValue: "old"),
             podcastID: podcastID,

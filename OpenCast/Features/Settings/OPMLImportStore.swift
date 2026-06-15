@@ -61,7 +61,7 @@ final class OPMLImportStore {
         modelContext: ModelContext
     ) async throws {
         let parseResult = try OPMLParser().parseResult(data: data)
-        libraryStore.load(modelContext: modelContext)
+        await libraryStore.load(modelContext: modelContext)
 
         var importedCount = 0
         var skippedDuplicateCount = parseResult.duplicateFeedReferenceCount
@@ -105,7 +105,7 @@ final class OPMLImportStore {
             }
         }
 
-        libraryStore.load(modelContext: modelContext)
+        await libraryStore.load(modelContext: modelContext)
         state = .imported(
             OPMLImportResult(
                 totalFeedReferencesFound: parseResult.usableFeedReferenceCount,

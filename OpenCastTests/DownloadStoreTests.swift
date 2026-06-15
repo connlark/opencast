@@ -122,7 +122,10 @@ struct DownloadStoreTests {
         let temporaryDirectory = try makeTemporaryDirectory()
         let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
         let downloadStore = DownloadStore(fileStore: fileStore)
-        let appModel = OpenCastAppModel(downloads: downloadStore)
+        let appModel = OpenCastAppModel(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: downloadStore
+        )
         let episode = makeEpisode(episodeID: "playback-policy")
         let downloadRecord = try insertCompletedDownload(
             episodeID: episode.episodeID,
@@ -154,7 +157,10 @@ struct DownloadStoreTests {
         let temporaryDirectory = try makeTemporaryDirectory()
         let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
         let downloadStore = DownloadStore(fileStore: fileStore)
-        let appModel = OpenCastAppModel(downloads: downloadStore)
+        let appModel = OpenCastAppModel(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: downloadStore
+        )
         let episode = makeEpisode(episodeID: "missing-at-playback")
         let downloadRecord = try insertCompletedDownload(
             episodeID: episode.episodeID,
@@ -189,8 +195,7 @@ struct DownloadStoreTests {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let store = DownloadStore()
-        let failedEpisode = makeEpisode(episodeID: "missing-audio")
-        failedEpisode.audioURL = nil
+        let failedEpisode = makeEpisode(episodeID: "missing-audio", audioURL: nil)
         let unrelatedEpisode = makeEpisode(episodeID: "playable-audio")
 
         store.startDownload(for: failedEpisode, modelContext: context)
@@ -202,13 +207,13 @@ struct DownloadStoreTests {
     }
 
     @Test("Unsubscribe removes only downloads for that feed")
-    func unsubscribeRemovesOnlyDownloadsForThatFeed() throws {
+    func unsubscribeRemovesOnlyDownloadsForThatFeed() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
         let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
         let downloadStore = DownloadStore(fileStore: fileStore)
-        let libraryStore = LibraryStore()
+        let libraryStore = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let removedFeedURL = "https://example.com/removed.xml"
         let keptFeedURL = "https://example.com/kept.xml"
         let removedPath = try insertFeedAndDownload(
@@ -224,10 +229,10 @@ struct DownloadStoreTests {
             context: context
         )
         try context.save()
-        libraryStore.load(modelContext: context)
+        await libraryStore.load(modelContext: context)
         downloadStore.load(modelContext: context)
 
-        libraryStore.unsubscribe(
+        await libraryStore.unsubscribe(
             feedURL: removedFeedURL,
             modelContext: context,
             downloadStore: downloadStore
@@ -333,16 +338,24 @@ struct DownloadStoreTests {
         #expect(cacheController.artworkCacheSummary.byteCount > 0)
     }
 
-    private func makeEpisode(episodeID: String) -> EpisodeCacheRecord {
-        EpisodeCacheRecord(
+    private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
+        makeEpisode(episodeID: episodeID, audioURL: "https://example.com/\(episodeID).mp3")
+    }
+
+    private func makeEpisode(episodeID: String, audioURL: String?) -> EpisodeListItemSnapshot {
+        EpisodeListItemSnapshot(
             episodeID: episodeID,
             podcastID: "https://example.com/feed.xml",
             podcastTitle: "Example Show",
             title: "Example Episode",
+            summary: nil,
+            publishedAt: nil,
             duration: 120,
-            audioURL: "https://example.com/\(episodeID).mp3",
+            audioURL: audioURL,
             artworkURL: "https://example.com/art.jpg",
-            guid: episodeID
+            artworkPreview: nil,
+            guid: episodeID,
+            cachedAt: .now
         )
     }
 

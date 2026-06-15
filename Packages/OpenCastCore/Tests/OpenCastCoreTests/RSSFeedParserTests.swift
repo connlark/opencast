@@ -10,7 +10,7 @@ struct RSSFeedParserTests {
 
         #expect(snapshot.podcast.title == "American Prestige")
         #expect(snapshot.podcast.author == "American Prestige")
-        #expect(snapshot.podcast.id.rawValue == "https://example.com/american-prestige.xml")
+        #expect(snapshot.podcast.id.rawValue == "https://jumble.top/f/americanprestige.xml")
         #expect(snapshot.podcast.artworkURL?.absoluteString == "https://example.com/american-prestige.jpg")
         #expect(snapshot.episodes.count == 2)
         #expect(snapshot.episodes[0].title == "Episode With GUID")
@@ -74,7 +74,7 @@ struct RSSFeedParserTests {
 private func fixtureSnapshot() throws -> FeedSnapshot {
     try fixtureSnapshot(
         named: "americanprestige",
-        feedURL: URL(string: "https://example.com/american-prestige.xml")!
+        feedURL: URL(string: "https://jumble.top/f/americanprestige.xml")!
     )
 }
 

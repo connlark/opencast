@@ -13,7 +13,7 @@ struct NukeConfirmationSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("This deletes all OpenCast subscriptions, listening progress, local episode records, downloaded files, automatic caches, and local settings.")
+                    Text("This deletes all opencast subscriptions, listening progress, local episode records, downloaded files, automatic caches, and local settings.")
 
                     TextField("Type NUKE", text: $confirmationText)
                         .textInputAutocapitalization(.characters)
@@ -21,7 +21,7 @@ struct NukeConfirmationSheet: View {
                         .accessibilityLabel("Nuke Confirmation Text")
 
                     if appModel.isNukingData {
-                        ProgressView("Deleting OpenCast Data")
+                        ProgressView("Deleting opencast Data")
                     }
 
                     if let message = appModel.lastDataNukeErrorMessage {
@@ -30,12 +30,12 @@ struct NukeConfirmationSheet: View {
                             .foregroundStyle(.orange)
                     }
                 } footer: {
-                    Text("OpenCast checks iCloud again before deleting. If iCloud is unavailable, nothing is deleted.")
+                    Text("opencast checks iCloud again before deleting. If iCloud is unavailable, nothing is deleted.")
                 }
 
                 Section {
                     Button(
-                        "Nuke OpenCast Data",
+                        "Nuke opencast Data",
                         systemImage: "trash",
                         role: .destructive,
                         action: nukeData

@@ -12,6 +12,7 @@ struct InboxView: View {
 
     let onAdd: () -> Void
     let onOpenEpisode: (String) -> Void
+    var selectsEpisodeDetailOnPlay = false
 
     private var hasSearchQuery: Bool {
         EpisodeSearch.isSearchActive(query: searchQuery)
@@ -27,7 +28,12 @@ struct InboxView: View {
 
     var body: some View {
         List {
-            if appModel.library.inboxEpisodes.isEmpty {
+            if appModel.library.state == .loading && appModel.library.inboxEpisodes.isEmpty {
+                InboxLoadingStateView()
+            } else if case .failed(let message) = appModel.library.state,
+                      appModel.library.inboxEpisodes.isEmpty {
+                InboxFailedStateView(message: message)
+            } else if appModel.library.inboxEpisodes.isEmpty {
                 InboxEmptyStateView(onAdd: onAdd)
             } else if hasSearchQuery {
                 if searchSession.isSearching {
@@ -36,24 +42,21 @@ struct InboxView: View {
                     ContentUnavailableView.search
                 } else {
                     ForEach(searchSession.results) { result in
-                        Button {
-                            openEpisode(result.episode.episodeID)
-                        } label: {
-                            EpisodeRowView(episode: result.episode, searchResult: result)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier(EpisodeRowView.accessibilityIdentifier(for: result.episode.episodeID))
+                        EpisodeRowButton(
+                            episode: result.episode,
+                            searchResult: result,
+                            selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
+                            onOpenEpisode: onOpenEpisode
+                        )
                     }
                 }
             } else {
                 ForEach(appModel.library.inboxEpisodes) { episode in
-                    Button {
-                        openEpisode(episode.episodeID)
-                    } label: {
-                        EpisodeRowView(episode: episode)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier(EpisodeRowView.accessibilityIdentifier(for: episode.episodeID))
+                    EpisodeRowButton(
+                        episode: episode,
+                        selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
+                        onOpenEpisode: onOpenEpisode
+                    )
                 }
             }
         }
@@ -77,10 +80,12 @@ struct InboxView: View {
             }
         }
         .task(id: searchTaskKey) {
+            let library = appModel.library
             await searchSession.update(
-                episodes: appModel.library.inboxEpisodes,
+                episodes: library.inboxEpisodes,
                 query: searchQuery,
-                mode: searchMode
+                mode: searchMode,
+                showNotesProvider: { await library.showNotesHTMLByEpisodeID() }
             )
         }
         .refreshable {
@@ -98,10 +103,5 @@ struct InboxView: View {
         searchQuery = ""
         searchMode = .episodes
         searchSession.clear()
-    }
-
-    private func openEpisode(_ episodeID: String) {
-        appModel.requestEpisodeAutoplayOnOpenIfNotListening(episodeID: episodeID)
-        onOpenEpisode(episodeID)
     }
 }

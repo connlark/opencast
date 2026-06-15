@@ -117,7 +117,7 @@ struct PodcastSearchStoreTests {
                 )
             )
         ])
-        let libraryStore = LibraryStore(feedService: feedService)
+        let libraryStore = LibraryStore(feedService: feedService, localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         guard let feedURLString = result.feedURLString else {
             Issue.record("Expected search result to provide a feed URL.")

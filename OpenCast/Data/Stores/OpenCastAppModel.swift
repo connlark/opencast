@@ -26,6 +26,14 @@ final class OpenCastAppModel {
     var isNowPlayingPresented = false
     var onboardingPresentationRequest = 0
     var lastPlaybackError: String?
+    var replacesNowPlayingArtworkWithPlaybackDiagnostics = false {
+        didSet {
+            guard oldValue != replacesNowPlayingArtworkWithPlaybackDiagnostics else {
+                return
+            }
+            playback.setPlaybackDiagnosticsEnabled(replacesNowPlayingArtworkWithPlaybackDiagnostics)
+        }
+    }
     var isNukingData = false
     var lastDataNukeErrorMessage: String?
     var dataNukeCompletionID = 0
@@ -35,12 +43,12 @@ final class OpenCastAppModel {
     var lastVoiceBoostDeviceProbeApplicationState: String?
     #endif
     @ObservationIgnored private var hasRunVoiceBoostDeviceProbe = false
-    @ObservationIgnored private var pendingAutoplayEpisodeID: EpisodeID?
 
     init(
         cacheController: OpenCastCacheController = OpenCastCacheController(),
         httpClient: (any OpenCastHTTPClient)? = nil,
         library: LibraryStore? = nil,
+        localLibraryCacheStore: (any LocalLibraryCacheStore)? = nil,
         downloads: DownloadStore = DownloadStore(),
         playback: AVFoundationPlaybackController? = nil,
         appearanceSettings: AppearanceSettingsStore = AppearanceSettingsStore(),
@@ -62,7 +70,10 @@ final class OpenCastAppModel {
         self.cacheController = cacheController
         self.httpClient = resolvedHTTPClient
         self.library = library ?? LibraryStore(
-            feedService: DefaultFeedService(httpClient: resolvedHTTPClient)
+            feedService: DefaultFeedService(httpClient: resolvedHTTPClient),
+            localCache: localLibraryCacheStore ?? SQLiteLocalLibraryCacheStore(
+                databaseURL: SQLiteLocalLibraryCacheStore.defaultDatabaseURL()
+            )
         )
         self.downloads = downloads
         self.playback = playback ?? AVFoundationPlaybackController(
@@ -81,56 +92,34 @@ final class OpenCastAppModel {
         self.allowsAutomaticFeedRefresh = allowsAutomaticFeedRefresh
     }
 
-    func requestEpisodeAutoplayOnOpen(episodeID: String) {
-        pendingAutoplayEpisodeID = EpisodeID(rawValue: episodeID)
-    }
-
-    func requestEpisodeAutoplayOnOpenIfNotListening(episodeID: String) {
-        guard !isActivelyListening else {
-            pendingAutoplayEpisodeID = nil
-            return
-        }
-
-        requestEpisodeAutoplayOnOpen(episodeID: episodeID)
-    }
-
-    func consumeEpisodeAutoplayOnOpen(episodeID: String) -> Bool {
-        let requestedEpisodeID = EpisodeID(rawValue: episodeID)
-        defer {
-            pendingAutoplayEpisodeID = nil
-        }
-
-        return pendingAutoplayEpisodeID == requestedEpisodeID
-    }
-
-    func playEpisode(_ record: EpisodeCacheRecord, modelContext: ModelContext) throws {
-        try play(record, source: .stream, modelContext: modelContext)
+    func playEpisode(_ episode: EpisodeListItemSnapshot, modelContext: ModelContext) throws {
+        try play(episode, source: .stream, modelContext: modelContext)
     }
 
     func playDownloadedEpisode(
-        _ record: EpisodeCacheRecord,
+        _ episode: EpisodeListItemSnapshot,
         downloadRecord: EpisodeDownloadRecord,
         modelContext: ModelContext
     ) throws {
-        try play(record, source: .downloaded(downloadRecord), modelContext: modelContext)
+        try play(episode, source: .downloaded(downloadRecord), modelContext: modelContext)
     }
 
-    func unsubscribe(feedURL: String, modelContext: ModelContext) {
+    func unsubscribe(feedURL: String, modelContext: ModelContext) async {
         let podcastID = PodcastID(rawValue: feedURL)
         if playback.currentEpisode?.podcastID == podcastID {
             playback.unload()
             clearLastPlaybackEpisode(modelContext: modelContext)
         }
 
-        library.unsubscribe(feedURL: feedURL, modelContext: modelContext, downloadStore: downloads)
+        await library.unsubscribe(feedURL: feedURL, modelContext: modelContext, downloadStore: downloads)
     }
 
     func resolvedPlaybackEpisode(
-        for record: EpisodeCacheRecord,
+        for snapshot: EpisodeListItemSnapshot,
         source: EpisodePlaybackSource = .stream,
         modelContext: ModelContext
     ) throws -> Episode {
-        var episode = library.domainEpisode(for: record)
+        var episode = library.domainEpisode(for: snapshot)
 
         switch source {
         case .stream:
@@ -138,8 +127,8 @@ final class OpenCastAppModel {
                 throw OpenCastCoreError.missingAudioURL
             }
         case .downloaded(let downloadRecord):
-            guard downloadRecord.episodeID == record.episodeID,
-                  downloadRecord.podcastID == record.podcastID
+            guard downloadRecord.episodeID == snapshot.episodeID,
+                  downloadRecord.podcastID == snapshot.podcastID
             else {
                 throw EpisodeDownloadError.invalidDownloadedRecord
             }
@@ -209,6 +198,16 @@ final class OpenCastAppModel {
         nowPlayingPresentationRequest += 1
     }
 
+    @discardableResult
+    func dismissCurrentPlayback(modelContext: ModelContext) -> Bool {
+        let hadCurrentEpisode = playback.currentEpisode != nil
+        flushPlaybackProgress(modelContext: modelContext)
+        playback.unload()
+        clearLastPlaybackEpisode(modelContext: modelContext)
+        isNowPlayingPresented = false
+        return hadCurrentEpisode
+    }
+
     func requestNowPlayingPresentationAfterPrewarm(for episodeID: EpisodeID) {
         Task { [weak self] in
             // Yield so SwiftUI can mount the hidden Now Playing overlay before presenting it.
@@ -253,7 +252,10 @@ final class OpenCastAppModel {
             library.prepareForDataNuke()
             try downloads.nukeAllDownloads(modelContext: modelContext)
             try deleteAllModelRows(modelContext: modelContext)
+            // Reset runtime state before any suspension so the UI never renders
+            // the deleted-and-saved SwiftData records, even if a later step throws.
             resetRuntimeStateAfterDataNuke(modelContext: modelContext)
+            try await library.deleteAllLocalCache()
             try await cacheController.clearCachesNow()
             dataNukeCompletionID += 1
         } catch {
@@ -268,11 +270,11 @@ final class OpenCastAppModel {
 
     @discardableResult
     func markEpisodePlayed(
-        _ record: EpisodeCacheRecord,
+        _ episode: EpisodeListItemSnapshot,
         modelContext: ModelContext
     ) -> Bool {
-        let didSave = library.markEpisodePlayed(record, modelContext: modelContext)
-        if isCurrentEpisode(record) {
+        let didSave = library.markEpisodePlayed(episode, modelContext: modelContext)
+        if isCurrentEpisode(episode) {
             // Mark Played is a playback command too, so unload even when persistence was already complete.
             playback.unload()
             clearLastPlaybackEpisode(modelContext: modelContext)
@@ -282,15 +284,15 @@ final class OpenCastAppModel {
 
     @discardableResult
     func clearEpisodeProgress(
-        _ record: EpisodeCacheRecord,
+        _ episode: EpisodeListItemSnapshot,
         modelContext: ModelContext
     ) -> Bool {
-        let didClear = library.clearProgress(for: record, modelContext: modelContext)
+        let didClear = library.clearProgress(for: episode, modelContext: modelContext)
         guard didClear else {
             return false
         }
 
-        if isCurrentEpisode(record) {
+        if isCurrentEpisode(episode) {
             playback.seek(to: 0)
             clearLastPlaybackEpisode(modelContext: modelContext)
         }
@@ -440,7 +442,6 @@ final class OpenCastAppModel {
         playback.unload()
         isNowPlayingPresented = false
         lastPlaybackError = nil
-        pendingAutoplayEpisodeID = nil
         library.resetAfterDataNuke()
         downloads.load(modelContext: modelContext)
         appearanceSettings.load(modelContext: modelContext)
@@ -455,16 +456,19 @@ final class OpenCastAppModel {
     }
 
     private func play(
-        _ record: EpisodeCacheRecord,
+        _ snapshot: EpisodeListItemSnapshot,
         source: EpisodePlaybackSource,
         modelContext: ModelContext
     ) throws {
         flushPlaybackProgress(modelContext: modelContext)
-        let episode = try resolvedPlaybackEpisode(for: record, source: source, modelContext: modelContext)
+        let episode = try resolvedPlaybackEpisode(for: snapshot, source: source, modelContext: modelContext)
+        nowPlayingProbeMark("play-validated")
         applyVoiceBoostSetting(for: episode, modelContext: modelContext)
-        try playback.load(episode, startPosition: library.resumePosition(for: record.episodeID))
-        rememberLastPlaybackEpisode(record.episodeID, modelContext: modelContext)
+        try playback.load(episode, startPosition: library.resumePosition(for: snapshot.episodeID))
+        nowPlayingProbeMark("play-loaded")
+        rememberLastPlaybackEpisode(snapshot.episodeID, modelContext: modelContext)
         playback.play()
+        nowPlayingProbeMark("play-started")
         requestNowPlayingPresentationAfterPrewarm(for: episode.id)
     }
 
@@ -477,20 +481,11 @@ final class OpenCastAppModel {
         )
     }
 
-    private func isCurrentEpisode(_ record: EpisodeCacheRecord) -> Bool {
-        playback.currentEpisode?.id.rawValue == record.episodeID
+    private func isCurrentEpisode(_ episode: EpisodeListItemSnapshot) -> Bool {
+        playback.currentEpisode?.id.rawValue == episode.episodeID
     }
 
-    private var isActivelyListening: Bool {
-        switch playback.state {
-        case .loading, .buffering, .playing:
-            true
-        case .idle, .paused, .failed:
-            false
-        }
-    }
-
-    private func restorableEpisode(modelContext: ModelContext) -> EpisodeCacheRecord? {
+    private func restorableEpisode(modelContext: ModelContext) -> EpisodeListItemSnapshot? {
         guard let episodeID = storedLastPlaybackEpisodeID(modelContext: modelContext),
               let episode = library.episode(with: episodeID),
               library.canRestorePlayback(for: episode)

@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct NowPlayingTransportControls: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let skipBackwardInterval: TimeInterval
     let skipForwardInterval: TimeInterval
     let showsPauseButton: Bool
@@ -12,18 +14,25 @@ struct NowPlayingTransportControls: View {
     @Namespace private var glassNamespace
     @ScaledMetric(relativeTo: .body) private var skipButtonSize: CGFloat = 72
     @ScaledMetric(relativeTo: .body) private var playButtonSize: CGFloat = 90
+    @ScaledMetric(relativeTo: .body) private var skipIconSize: CGFloat = 34
     @ScaledMetric(relativeTo: .body) private var playIconSize: CGFloat = 44
-    @ScaledMetric(relativeTo: .body) private var playIconOpticalOffset: CGFloat = 4
+    private let playIconOpticalOffset: CGFloat = 4
 
     var body: some View {
-        GlassEffectContainer(spacing: 34) {
-            HStack(spacing: 42) {
+        GlassEffectContainer(spacing: glassSpacing) {
+            HStack(spacing: controlSpacing) {
                 Button(action: onSkipBackward) {
-                    Label(skipBackwardLabel, systemImage: skipBackwardSystemImage)
-                        .font(.largeTitle)
-                        .labelStyle(.iconOnly)
-                        .frame(width: skipButtonSize, height: skipButtonSize)
-                        .contentShape(.circle)
+                    Label {
+                        Text(skipBackwardLabel)
+                    } icon: {
+                        Image(systemName: skipBackwardSystemImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: resolvedSkipIconSize, height: resolvedSkipIconSize)
+                    }
+                    .labelStyle(.iconOnly)
+                    .frame(width: resolvedSkipButtonSize, height: resolvedSkipButtonSize)
+                    .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .circle)
@@ -31,14 +40,19 @@ struct NowPlayingTransportControls: View {
                 .accessibilityLabel(skipBackwardLabel)
 
                 Button(action: onTogglePlayPause) {
-                    Image(systemName: showsPauseButton ? "pause.fill" : "play.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .contentTransition(.symbolEffect(.replace))
-                        .frame(width: playIconSize, height: playIconSize)
-                        .offset(x: showsPauseButton ? 0 : playIconOpticalOffset)
-                        .frame(width: playButtonSize, height: playButtonSize)
-                        .contentShape(.circle)
+                    Label {
+                        Text(showsPauseButton ? "Pause" : "Play")
+                    } icon: {
+                        Image(systemName: showsPauseButton ? "pause.fill" : "play.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .contentTransition(.symbolEffect(.replace))
+                            .frame(width: resolvedPlayIconSize, height: resolvedPlayIconSize)
+                            .offset(x: showsPauseButton ? 0 : playIconOpticalOffset)
+                    }
+                    .labelStyle(.iconOnly)
+                    .frame(width: resolvedPlayButtonSize, height: resolvedPlayButtonSize)
+                    .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
@@ -48,11 +62,17 @@ struct NowPlayingTransportControls: View {
                 .accessibilityValue(playbackStateText)
 
                 Button(action: onSkipForward) {
-                    Label(skipForwardLabel, systemImage: skipForwardSystemImage)
-                        .font(.largeTitle)
-                        .labelStyle(.iconOnly)
-                        .frame(width: skipButtonSize, height: skipButtonSize)
-                        .contentShape(.circle)
+                    Label {
+                        Text(skipForwardLabel)
+                    } icon: {
+                        Image(systemName: skipForwardSystemImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: resolvedSkipIconSize, height: resolvedSkipIconSize)
+                    }
+                    .labelStyle(.iconOnly)
+                    .frame(width: resolvedSkipButtonSize, height: resolvedSkipButtonSize)
+                    .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: .circle)
@@ -72,6 +92,46 @@ struct NowPlayingTransportControls: View {
         Int(skipForwardInterval.rounded())
     }
 
+    private var resolvedSkipButtonSize: CGFloat {
+        skipButtonSize.clamped(to: 44...maxSkipButtonSize)
+    }
+
+    private var resolvedPlayButtonSize: CGFloat {
+        playButtonSize.clamped(to: 52...maxPlayButtonSize)
+    }
+
+    private var resolvedSkipIconSize: CGFloat {
+        skipIconSize.clamped(to: 24...maxSkipIconSize)
+    }
+
+    private var resolvedPlayIconSize: CGFloat {
+        playIconSize.clamped(to: 26...maxPlayIconSize)
+    }
+
+    private var maxSkipButtonSize: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 62 : 76
+    }
+
+    private var maxPlayButtonSize: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 74 : 96
+    }
+
+    private var maxSkipIconSize: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 28 : 38
+    }
+
+    private var maxPlayIconSize: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 34 : 46
+    }
+
+    private var controlSpacing: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 24 : 42
+    }
+
+    private var glassSpacing: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 22 : 34
+    }
+
     private var skipBackwardLabel: String {
         "Skip Back \(skipBackwardSeconds) Seconds"
     }
@@ -86,14 +146,5 @@ struct NowPlayingTransportControls: View {
 
     private var skipForwardSystemImage: String {
         "goforward.\(skipForwardSeconds)"
-    }
-}
-
-extension NowPlayingTransportControls: Equatable {
-    static func == (lhs: NowPlayingTransportControls, rhs: NowPlayingTransportControls) -> Bool {
-        lhs.skipBackwardInterval == rhs.skipBackwardInterval
-            && lhs.skipForwardInterval == rhs.skipForwardInterval
-            && lhs.showsPauseButton == rhs.showsPauseButton
-            && lhs.playbackStateText == rhs.playbackStateText
     }
 }

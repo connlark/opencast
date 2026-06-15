@@ -23,6 +23,7 @@ struct PlaybackSpeedView: View {
                 }
             }
             .navigationTitle("Speed")
+            .sensoryFeedback(.selection, trigger: appModel.playback.rate)
         }
     }
 }

@@ -7,8 +7,8 @@ struct OpenCastRootView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var selectedTab = AppSection.library
-    @State private var selectedSection: AppSection? = .library
+    @State private var selectedTab = AppSection.inbox
+    @State private var selectedSection: AppSection? = .inbox
     @State private var selectedRoute: AppRoute?
     @State private var libraryNavigationPath: [AppRoute] = []
     @State private var inboxNavigationPath: [AppRoute] = []
@@ -20,6 +20,7 @@ struct OpenCastRootView: View {
     var body: some View {
         OpenCastRootLayerView(
             isNowPlayingPresented: isNowPlayingPresented,
+            onPresentNowPlaying: presentNowPlaying,
             onDismissNowPlaying: dismissNowPlaying,
             onOpenCurrentEpisode: openCurrentEpisodeFromNowPlaying,
             onOpenCurrentPodcast: openCurrentPodcastFromNowPlaying
@@ -93,21 +94,8 @@ struct OpenCastRootView: View {
         sheetDestination = .onboarding
     }
 
-    private func selectInitialSectionAfterLibraryLoad() {
-        guard selectedTab == .library, selectedSection == .library else {
-            return
-        }
-        guard !appModel.library.activePodcastIDs.isEmpty else {
-            return
-        }
-
-        selectedTab = .inbox
-        selectedSection = .inbox
-    }
-
     private func performInitialSetup() async {
-        appModel.library.load(modelContext: modelContext)
-        selectInitialSectionAfterLibraryLoad()
+        await appModel.library.load(modelContext: modelContext)
         appModel.downloads.load(modelContext: modelContext)
         appModel.appearanceSettings.load(modelContext: modelContext)
         appModel.playbackSettings.load(modelContext: modelContext, playback: appModel.playback)
@@ -220,8 +208,8 @@ struct OpenCastRootView: View {
     }
 
     private func resetAfterDataNuke() {
-        selectedTab = .library
-        selectedSection = .library
+        selectedTab = .inbox
+        selectedSection = .inbox
         selectedRoute = nil
         libraryNavigationPath.removeAll()
         inboxNavigationPath.removeAll()

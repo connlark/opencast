@@ -5,11 +5,11 @@
      xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>American Prestige</title>
-    <link>https://example.com/american-prestige</link>
+    <link>https://americanprestige.supportingcast.fm</link>
     <description>Foreign policy, politics, and history.</description>
     <itunes:author>American Prestige</itunes:author>
     <itunes:image href="https://example.com/american-prestige.jpg" />
-    <atom:link href="https://example.com/american-prestige.xml" rel="self" type="application/rss+xml" />
+    <atom:link href="https://jumble.top/f/americanprestige.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>Episode With GUID</title>
       <guid isPermaLink="false">ap-guid-001</guid>

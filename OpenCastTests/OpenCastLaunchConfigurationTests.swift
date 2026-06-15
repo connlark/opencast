@@ -26,6 +26,7 @@ struct OpenCastLaunchConfigurationTests {
         #expect(configuration.seedsCompletedDownload == false)
         #expect(configuration.seedsEpisodeProgress == false)
         #expect(configuration.forcedAppearance == .system)
+        #expect(configuration.uiTestLibraryLoadDelayMilliseconds == nil)
     }
 
     @Test("Voice Boost device probe is Debug-only and implies diagnostics")
@@ -52,6 +53,7 @@ struct OpenCastLaunchConfigurationTests {
         #expect(configuration.seedsCompletedDownload == false)
         #expect(configuration.seedsEpisodeProgress == false)
         #expect(configuration.forcedAppearance == .system)
+        #expect(configuration.uiTestLibraryLoadDelayMilliseconds == nil)
     }
 
     @Test("UI-test seed and appearance flags require UI testing mode")
@@ -75,6 +77,7 @@ struct OpenCastLaunchConfigurationTests {
         #expect(configuration.seedsCompletedDownload == false)
         #expect(configuration.seedsEpisodeProgress == false)
         #expect(configuration.forcedAppearance == .system)
+        #expect(configuration.uiTestLibraryLoadDelayMilliseconds == nil)
     }
 
     @Test("UI-test launch flags enable in-memory seeded runs")
@@ -99,6 +102,31 @@ struct OpenCastLaunchConfigurationTests {
         #expect(configuration.seedsCompletedDownload == true)
         #expect(configuration.seedsEpisodeProgress == true)
         #expect(configuration.forcedAppearance == .light)
+        #expect(configuration.uiTestLibraryLoadDelayMilliseconds == nil)
+    }
+
+    @Test("UI-test library load delay only applies in UI testing mode")
+    func uiTestLibraryLoadDelayRequiresUITestingMode() {
+        let ignoredConfiguration = OpenCastLaunchConfiguration.resolving(
+            arguments: [
+                "OpenCast"
+            ],
+            environment: [
+                "OPENCAST_UI_TEST_LIBRARY_LOAD_DELAY_MILLISECONDS": "750"
+            ]
+        )
+        let enabledConfiguration = OpenCastLaunchConfiguration.resolving(
+            arguments: [
+                "OpenCast",
+                "--opencast-ui-testing"
+            ],
+            environment: [
+                "OPENCAST_UI_TEST_LIBRARY_LOAD_DELAY_MILLISECONDS": "750"
+            ]
+        )
+
+        #expect(ignoredConfiguration.uiTestLibraryLoadDelayMilliseconds == nil)
+        #expect(enabledConfiguration.uiTestLibraryLoadDelayMilliseconds == 750)
     }
 
     @Test("UI-test diagnostics status exposure is explicit")

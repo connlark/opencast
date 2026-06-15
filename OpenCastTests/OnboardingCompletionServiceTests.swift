@@ -35,7 +35,7 @@ struct OnboardingCompletionServiceTests {
             result.artworkURL != nil
         })
         #expect(OpenCastSamplePodcastSuggestions.all.contains { result in
-            result.feedURLString?.contains("private-feed") == true
+            result.feedURLString?.contains("debuggersalmanac") == true
         } == false)
     }
 
@@ -59,7 +59,7 @@ struct OnboardingCompletionServiceTests {
                 )
             )
         ])
-        let library = LibraryStore(feedService: feedService)
+        let library = LibraryStore(feedService: feedService, localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let onboardingState = OnboardingStateStore()
 
         try await OnboardingCompletionService.subscribeToFallbackAndComplete(
@@ -84,7 +84,7 @@ struct OnboardingCompletionServiceTests {
         let feedService = StubOnboardingFeedService(responses: [
             OpenCastConstants.thisAmericanLifeFeedURL: .failure("Feed offline")
         ])
-        let library = LibraryStore(feedService: feedService)
+        let library = LibraryStore(feedService: feedService, localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let onboardingState = OnboardingStateStore()
 
         do {

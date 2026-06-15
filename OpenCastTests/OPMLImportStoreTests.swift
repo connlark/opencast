@@ -24,7 +24,10 @@ struct OPMLImportStoreTests {
             firstFeed: .success(makeSnapshot(feedURL: firstFeed, podcastTitle: "One Show")),
             secondFeed: .success(makeSnapshot(feedURL: secondFeed, podcastTitle: "Two Show"))
         ])
-        let libraryStore = LibraryStore(feedService: feedService)
+        let libraryStore = LibraryStore(
+            feedService: feedService,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
         let importStore = OPMLImportStore()
 
         await importStore.importOPML(
@@ -39,10 +42,6 @@ struct OPMLImportStoreTests {
         let result = try importedResult(from: importStore.state)
         let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
             .sorted { $0.feedURL < $1.feedURL }
-        let podcastCaches = try context.fetch(FetchDescriptor<PodcastCacheRecord>())
-            .sorted { $0.feedURL < $1.feedURL }
-        let episodeCaches = try context.fetch(FetchDescriptor<EpisodeCacheRecord>())
-            .sorted { $0.podcastID < $1.podcastID }
 
         #expect(result.totalFeedReferencesFound == 2)
         #expect(result.importedCount == 2)
@@ -50,8 +49,8 @@ struct OPMLImportStoreTests {
         #expect(result.failedCount == 0)
         #expect(await feedService.requestedURLStrings() == [firstFeed, secondFeed])
         #expect(subscriptions.map(\.feedURL) == [firstFeed, secondFeed])
-        #expect(podcastCaches.map(\.feedURL) == [firstFeed, secondFeed])
-        #expect(episodeCaches.map(\.podcastID) == [firstFeed, secondFeed])
+        #expect(libraryStore.podcastCacheByFeedURL.keys.sorted() == [firstFeed, secondFeed])
+        #expect(libraryStore.episodes.map(\.podcastID).sorted() == [firstFeed, secondFeed])
         #expect(libraryStore.subscriptions.map(\.feedURL) == [firstFeed, secondFeed])
     }
 
@@ -63,7 +62,10 @@ struct OPMLImportStoreTests {
         let feedService = StubOPMLFeedService(responses: [
             feedURL: .success(makeSnapshot(feedURL: feedURL, podcastTitle: "File Import Show"))
         ])
-        let libraryStore = LibraryStore(feedService: feedService)
+        let libraryStore = LibraryStore(
+            feedService: feedService,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
         let importStore = OPMLImportStore()
         let fileURL = try temporaryFile(named: "subscriptions.opml", data: opmlData([
             ("File Import Show", feedURL)
@@ -93,7 +95,10 @@ struct OPMLImportStoreTests {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let feedService = StubOPMLFeedService(responses: [:])
-        let libraryStore = LibraryStore(feedService: feedService)
+        let libraryStore = LibraryStore(
+            feedService: feedService,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
         let importStore = OPMLImportStore()
         let oversizedData = Data(repeating: 0, count: 11 * 1_024 * 1_024)
         let fileURL = try temporaryFile(named: "oversized.opml", data: oversizedData)
@@ -115,16 +120,19 @@ struct OPMLImportStoreTests {
     func importsHTTPPodcastFeedsFromOPML() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let feedURL = "http://example.com/subscriber-feed.xml"
+        let feedURL = "http://exiledonline.com/45wn84klrz/feed.xml"
         let feedService = StubOPMLFeedService(responses: [
-            feedURL: .success(makeSnapshot(feedURL: feedURL, podcastTitle: "Example Subscriber Podcast"))
+            feedURL: .success(makeSnapshot(feedURL: feedURL, podcastTitle: "War Nerd Radio"))
         ])
-        let libraryStore = LibraryStore(feedService: feedService)
+        let libraryStore = LibraryStore(
+            feedService: feedService,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
         let importStore = OPMLImportStore()
 
         await importStore.importOPML(
             data: opmlData([
-                ("Example Subscriber Podcast \u{2014} Subscriber Feed", feedURL)
+                ("War Nerd Radio \u{2014} Subscriber Feed", feedURL)
             ]),
             libraryStore: libraryStore,
             modelContext: context
@@ -149,7 +157,10 @@ struct OPMLImportStoreTests {
         let feedService = StubOPMLFeedService(responses: [
             newFeed: .success(makeSnapshot(feedURL: newFeed, podcastTitle: "New Show"))
         ])
-        let libraryStore = LibraryStore(feedService: feedService)
+        let libraryStore = LibraryStore(
+            feedService: feedService,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
         let importStore = OPMLImportStore()
 
         context.insert(SubscriptionRecord(feedURL: existingFeed, title: "Existing Show"))
@@ -183,7 +194,10 @@ struct OPMLImportStoreTests {
         let feedService = StubOPMLFeedService(responses: [
             feedURL: .success(makeSnapshot(feedURL: feedURL, podcastTitle: "Duplicate Show"))
         ])
-        let libraryStore = LibraryStore(feedService: feedService)
+        let libraryStore = LibraryStore(
+            feedService: feedService,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
         let importStore = OPMLImportStore()
 
         await importStore.importOPML(
@@ -216,7 +230,10 @@ struct OPMLImportStoreTests {
             goodFeed: .success(makeSnapshot(feedURL: goodFeed, podcastTitle: "Good Show")),
             badFeed: .failure("Feed is not parseable")
         ])
-        let libraryStore = LibraryStore(feedService: feedService)
+        let libraryStore = LibraryStore(
+            feedService: feedService,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
         let importStore = OPMLImportStore()
 
         await importStore.importOPML(
@@ -242,10 +259,10 @@ struct OPMLImportStoreTests {
     }
 
     @Test("Exports active subscriptions and round-trips through parser")
-    func exportsActiveSubscriptionsRoundTrip() throws {
+    func exportsActiveSubscriptionsRoundTrip() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let libraryStore = LibraryStore()
+        let libraryStore = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         context.insert(SubscriptionRecord(feedURL: "https://example.com/b.xml", title: "B Show"))
         context.insert(SubscriptionRecord(feedURL: "https://example.com/a.xml", title: "A Show"))
@@ -257,7 +274,7 @@ struct OPMLImportStoreTests {
             )
         )
         try context.save()
-        libraryStore.load(modelContext: context)
+        await libraryStore.load(modelContext: context)
 
         let data = try OPMLExportBuilder.data(
             from: libraryStore.subscriptions,

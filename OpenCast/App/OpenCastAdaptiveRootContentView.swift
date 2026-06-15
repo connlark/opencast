@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct OpenCastAdaptiveRootContentView: View {
+    @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @Binding var selectedTab: AppSection
@@ -14,25 +15,27 @@ struct OpenCastAdaptiveRootContentView: View {
     let onPresentNowPlaying: () -> Void
 
     var body: some View {
-        if horizontalSizeClass == .regular {
-            OpenCastSplitRootView(
-                selectedSection: $selectedSection,
-                selectedRoute: $selectedRoute,
-                isNowPlayingPresented: isNowPlayingPresented,
-                onAdd: onAdd,
-                onPresentDataNukeConfirmation: onPresentDataNukeConfirmation,
-                onPresentNowPlaying: onPresentNowPlaying
-            )
-        } else {
-            OpenCastTabRootView(
-                selectedTab: $selectedTab,
-                libraryNavigationPath: $libraryNavigationPath,
-                inboxNavigationPath: $inboxNavigationPath,
-                isNowPlayingPresented: isNowPlayingPresented,
-                onAdd: onAdd,
-                onPresentDataNukeConfirmation: onPresentDataNukeConfirmation,
-                onPresentNowPlaying: onPresentNowPlaying
-            )
+        Group {
+            if horizontalSizeClass == .regular {
+                OpenCastSplitRootView(
+                    selectedSection: $selectedSection,
+                    selectedRoute: $selectedRoute,
+                    isNowPlayingPresented: isNowPlayingPresented,
+                    onAdd: onAdd,
+                    onPresentDataNukeConfirmation: onPresentDataNukeConfirmation,
+                    onPresentNowPlaying: onPresentNowPlaying
+                )
+            } else {
+                OpenCastTabRootView(
+                    selectedTab: $selectedTab,
+                    libraryNavigationPath: $libraryNavigationPath,
+                    inboxNavigationPath: $inboxNavigationPath,
+                    onAdd: onAdd,
+                    onPresentDataNukeConfirmation: onPresentDataNukeConfirmation
+                )
+            }
         }
+        .sensoryFeedback(.success, trigger: appModel.library.subscriptionAddedToken)
+        .sensoryFeedback(.success, trigger: appModel.library.refreshCompletedToken)
     }
 }

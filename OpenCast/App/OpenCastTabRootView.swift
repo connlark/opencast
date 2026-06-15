@@ -1,14 +1,11 @@
 import SwiftUI
 
 struct OpenCastTabRootView: View {
-    @Environment(OpenCastAppModel.self) private var appModel
     @Binding var selectedTab: AppSection
     @Binding var libraryNavigationPath: [AppRoute]
     @Binding var inboxNavigationPath: [AppRoute]
-    let isNowPlayingPresented: Bool
     let onAdd: () -> Void
     let onPresentDataNukeConfirmation: () -> Void
-    let onPresentNowPlaying: () -> Void
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -46,14 +43,6 @@ struct OpenCastTabRootView: View {
                     )
                 }
             }
-        }
-        .openCastMiniPlayerTabAccessory(
-            isEnabled: appModel.playback.currentEpisode != nil
-        ) {
-            MiniPlayerView(
-                isNowPlayingPresented: isNowPlayingPresented,
-                onExpand: onPresentNowPlaying
-            )
         }
     }
 }

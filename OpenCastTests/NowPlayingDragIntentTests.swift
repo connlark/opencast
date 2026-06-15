@@ -36,4 +36,34 @@ struct NowPlayingDragIntentTests {
             isPeelInteractionActive: false
         ))
     }
+
+    @Test("Mini-player downward vertical drag starts dismissal")
+    func miniPlayerDownwardVerticalDragStartsDismissal() {
+        let translation = CGSize(width: 10, height: 18)
+
+        #expect(NowPlayingDragIntent.shouldStartMiniPlayerDismiss(translation: translation))
+    }
+
+    @Test("Mini-player horizontal drag does not start dismissal")
+    func miniPlayerHorizontalDragDoesNotStartDismissal() {
+        let translation = CGSize(width: 30, height: 18)
+
+        #expect(!NowPlayingDragIntent.shouldStartMiniPlayerDismiss(translation: translation))
+    }
+
+    @Test("Mini-player short downward swipe cancels dismissal")
+    func miniPlayerShortDownwardSwipeCancelsDismissal() {
+        #expect(!NowPlayingDragIntent.shouldCompleteMiniPlayerDismiss(
+            translation: CGSize(width: 4, height: 24),
+            predictedEndTranslation: CGSize(width: 6, height: 60)
+        ))
+    }
+
+    @Test("Mini-player predicted end completes dismissal")
+    func miniPlayerPredictedEndCompletesDismissal() {
+        #expect(NowPlayingDragIntent.shouldCompleteMiniPlayerDismiss(
+            translation: CGSize(width: 4, height: 24),
+            predictedEndTranslation: CGSize(width: 8, height: 96)
+        ))
+    }
 }

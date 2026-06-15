@@ -62,6 +62,8 @@ struct LibrarySubscriptionRowView: View {
     }
 
     private func unsubscribe() {
-        appModel.unsubscribe(feedURL: subscription.feedURL, modelContext: modelContext)
+        Task {
+            await appModel.unsubscribe(feedURL: subscription.feedURL, modelContext: modelContext)
+        }
     }
 }

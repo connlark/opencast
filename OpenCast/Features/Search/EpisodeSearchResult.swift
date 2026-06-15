@@ -1,7 +1,7 @@
 import Foundation
 
 struct EpisodeSearchResult: Identifiable {
-    let episode: EpisodeCacheRecord
+    let episode: EpisodeListItemSnapshot
     let highlightedTitle: AttributedString
     let highlightedPodcastTitle: AttributedString
     let snippet: AttributedString?

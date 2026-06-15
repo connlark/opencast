@@ -44,7 +44,7 @@ final class AppStoreScreenshotUITests: XCTestCase {
         assertExists(nowPlayingSoundLab(in: app), named: "Now Playing Sound Lab panel")
         attachAppStoreScreenshot(named: "app_store_05_sound_lab")
 
-        dismissNowPlayingOverlay(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
         assertExists(app.buttons["Play Episode"], named: "Play Episode button")
         assertExists(app.staticTexts["Summary"], named: "episode summary")
         attachAppStoreScreenshot(named: "app_store_06_episode_detail")
@@ -53,6 +53,7 @@ final class AppStoreScreenshotUITests: XCTestCase {
     @MainActor
     private func makeAppStoreScreenshotApp() -> XCUIApplication {
         let app = XCUIApplication()
+        setupSnapshot(app, waitForAnimations: false)
         app.launchArguments += [
             "--opencast-ui-testing",
             "--opencast-seed-app-store-screenshots",
@@ -67,6 +68,7 @@ final class AppStoreScreenshotUITests: XCTestCase {
     @MainActor
     private func attachAppStoreScreenshot(named name: String) {
         dismissSystemNotificationBanners()
+        snapshot(name, timeWaitingForIdle: 0)
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
@@ -168,6 +170,16 @@ final class AppStoreScreenshotUITests: XCTestCase {
     @MainActor
     private func assertNowPlayingOverlay(in app: XCUIApplication) {
         assertExists(nowPlayingOverlay(in: app), named: "Now Playing overlay")
+    }
+
+    @MainActor
+    private func openCurrentEpisodeDetailFromNowPlaying(in app: XCUIApplication) {
+        let overlay = nowPlayingOverlay(in: app)
+        assertExists(overlay, named: "Now Playing overlay before opening episode detail")
+        let titleButton = overlay.buttons["Now Playing Episode Title"].firstMatch
+        assertExists(titleButton, named: "Now Playing episode title button")
+        titleButton.tap()
+        assertExists(app.buttons["Play Episode"], named: "episode detail after tapping Now Playing title")
     }
 
     @MainActor
