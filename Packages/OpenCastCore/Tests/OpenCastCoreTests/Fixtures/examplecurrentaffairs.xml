@@ -5,11 +5,11 @@
      xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>Example Current Affairs</title>
-    <link>https://example.com/example-current-affairs</link>
+    <link>https://example.com/podcasts/current-affairs</link>
     <description>Foreign policy, politics, and history.</description>
     <itunes:author>Example Current Affairs</itunes:author>
     <itunes:image href="https://example.com/example-current-affairs.jpg" />
-    <atom:link href="https://example.com/example-current-affairs.xml" rel="self" type="application/rss+xml" />
+    <atom:link href="https://feeds.example.com/example-current-affairs.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>Episode With GUID</title>
       <guid isPermaLink="false">example-guid-001</guid>

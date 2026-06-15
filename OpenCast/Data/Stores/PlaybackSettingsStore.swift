@@ -9,7 +9,7 @@ final class PlaybackSettingsStore {
     private static let skipBackwardIntervalKey = "playback.skip.backward"
     private static let skipForwardIntervalKey = "playback.skip.forward"
 
-    private(set) var voiceBoostMode = VoiceBoostMode.globalOn
+    private(set) var voiceBoostMode = VoiceBoostMode.defaultMode
     private(set) var isVoiceBoostEnabled = true
     private(set) var currentEpisodeID: String?
     private(set) var currentPodcastID: String?
@@ -48,7 +48,7 @@ final class PlaybackSettingsStore {
             )
             lastErrorMessage = nil
         } catch {
-            voiceBoostMode = .globalOn
+            voiceBoostMode = .defaultMode
             skipBackwardOption = .defaultBackward
             skipForwardOption = .defaultForward
             isVoiceBoostEnabled = true
@@ -209,10 +209,10 @@ final class PlaybackSettingsStore {
             key: Self.voiceBoostModePreferenceKey,
             modelContext: modelContext
         )?.value else {
-            return .globalOn
+            return .defaultMode
         }
 
-        return VoiceBoostMode(rawValue: rawValue) ?? .globalOn
+        return VoiceBoostMode(rawValue: rawValue) ?? .defaultMode
     }
 
     private func storedSkipOption(

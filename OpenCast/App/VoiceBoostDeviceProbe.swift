@@ -175,7 +175,7 @@ struct VoiceBoostDeviceProbe {
         return report
     }
 
-    private func firstProbeEpisode(in appModel: OpenCastAppModel) -> EpisodeCacheRecord? {
+    private func firstProbeEpisode(in appModel: OpenCastAppModel) -> EpisodeListItemSnapshot? {
         appModel.library.inboxEpisodes.first { $0.podcastID == Self.feedURLString }
             ?? appModel.library.episodes(forPodcastID: Self.feedURLString).first
     }
@@ -298,7 +298,7 @@ struct VoiceBoostDeviceProbe {
     }
 
     private func startPlayback(
-        _ episode: EpisodeCacheRecord,
+        _ episode: EpisodeListItemSnapshot,
         appModel: OpenCastAppModel,
         modelContext: ModelContext
     ) async throws {

@@ -13,7 +13,16 @@ enum EpisodeSearch {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    static func documents(from episodes: [EpisodeCacheRecord]) -> [EpisodeSearchDocument] {
+    /// Whether a search with this query and mode reads summary/show-notes text.
+    /// List snapshots omit show notes, so callers fetch them only when needed.
+    static func usesShowNotes(query: String, mode: EpisodeSearchMode) -> Bool {
+        mode == .fullText && query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3
+    }
+
+    static func documents(
+        from episodes: [EpisodeListItemSnapshot],
+        showNotesHTMLByEpisodeID: [String: String] = [:]
+    ) -> [EpisodeSearchDocument] {
         episodes.enumerated().map { index, episode in
             EpisodeSearchDocument(
                 episodeID: episode.episodeID,
@@ -21,22 +30,23 @@ enum EpisodeSearch {
                 title: episode.title,
                 podcastTitle: episode.podcastTitle,
                 summaryHTML: episode.summary,
-                showNotesHTML: episode.showNotesHTML
+                showNotesHTML: showNotesHTMLByEpisodeID[episode.episodeID]
             )
         }
     }
 
     static func results(
-        in episodes: [EpisodeCacheRecord],
+        in episodes: [EpisodeListItemSnapshot],
         query: String,
-        mode: EpisodeSearchMode
+        mode: EpisodeSearchMode,
+        showNotesHTMLByEpisodeID: [String: String] = [:]
     ) -> [EpisodeSearchResult] {
         guard isSearchActive(query: query) else {
             return episodes.map(unfilteredResult)
         }
 
         let matches = matchesSynchronously(
-            in: documents(from: episodes),
+            in: documents(from: episodes, showNotesHTMLByEpisodeID: showNotesHTMLByEpisodeID),
             query: query,
             mode: mode,
             shouldStop: { false }
@@ -45,7 +55,11 @@ enum EpisodeSearch {
             episodes.map { ($0.episodeID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        return results(from: matches, episodesByID: episodesByID)
+        return results(
+            from: matches,
+            episodesByID: episodesByID,
+            showNotesHTMLByEpisodeID: showNotesHTMLByEpisodeID
+        )
     }
 
     @concurrent
@@ -64,14 +78,19 @@ enum EpisodeSearch {
 
     static func results(
         from matches: [EpisodeSearchMatch],
-        episodesByID: [String: EpisodeCacheRecord]
+        episodesByID: [String: EpisodeListItemSnapshot],
+        showNotesHTMLByEpisodeID: [String: String] = [:]
     ) -> [EpisodeSearchResult] {
         matches.compactMap { match in
             guard let episode = episodesByID[match.episodeID] else {
                 return nil
             }
 
-            return result(for: episode, match: match)
+            return result(
+                for: episode,
+                match: match,
+                showNotesHTML: showNotesHTMLByEpisodeID[match.episodeID]
+            )
         }
     }
 
@@ -249,8 +268,9 @@ enum EpisodeSearch {
     }
 
     private static func result(
-        for episode: EpisodeCacheRecord,
-        match: EpisodeSearchMatch
+        for episode: EpisodeListItemSnapshot,
+        match: EpisodeSearchMatch,
+        showNotesHTML: String?
     ) -> EpisodeSearchResult {
         EpisodeSearchResult(
             episode: episode,
@@ -260,11 +280,13 @@ enum EpisodeSearch {
                 terms: match.podcastTitleTerms,
                 baseForegroundColor: .secondary
             ),
-            snippet: match.rank.usesHiddenText ? snippet(for: episode, match: match) : nil
+            snippet: match.rank.usesHiddenText
+                ? snippet(for: episode, match: match, showNotesHTML: showNotesHTML)
+                : nil
         )
     }
 
-    private static func unfilteredResult(for episode: EpisodeCacheRecord) -> EpisodeSearchResult {
+    private static func unfilteredResult(for episode: EpisodeListItemSnapshot) -> EpisodeSearchResult {
         EpisodeSearchResult(
             episode: episode,
             highlightedTitle: AttributedString(episode.title),
@@ -274,8 +296,9 @@ enum EpisodeSearch {
     }
 
     private static func snippet(
-        for episode: EpisodeCacheRecord,
-        match: EpisodeSearchMatch
+        for episode: EpisodeListItemSnapshot,
+        match: EpisodeSearchMatch,
+        showNotesHTML: String?
     ) -> AttributedString? {
         let summaryText = plainText(episode.summary)
         if !summaryText.isEmpty, !match.summaryTerms.isEmpty {
@@ -286,7 +309,7 @@ enum EpisodeSearch {
             )
         }
 
-        let showNotesText = plainText(episode.showNotesHTML)
+        let showNotesText = plainText(showNotesHTML)
         guard !showNotesText.isEmpty, !match.showNotesTerms.isEmpty else {
             return nil
         }

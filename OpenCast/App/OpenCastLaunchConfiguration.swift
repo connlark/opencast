@@ -13,6 +13,7 @@ struct OpenCastLaunchConfiguration {
     var exposesVoiceBoostDiagnosticsStatus: Bool
     var runsVoiceBoostDeviceProbe: Bool
     var seedsOnboardingCompleted: Bool
+    var uiTestLibraryLoadDelayMilliseconds: Int?
 
     static var current: OpenCastLaunchConfiguration {
         let processInfo = ProcessInfo.processInfo
@@ -47,6 +48,9 @@ struct OpenCastLaunchConfiguration {
             || environment["OPENCAST_RUN_VOICEBOOST_DEVICE_PROBE"] == "1"
         let shouldForceOnboarding = arguments.contains("--opencast-force-onboarding")
             || environment["OPENCAST_FORCE_ONBOARDING"] == "1"
+        let uiTestLibraryLoadDelayMilliseconds = isUITesting
+            ? Self.uiTestLibraryLoadDelayMilliseconds(environment: environment)
+            : nil
         #if DEBUG
         let runsVoiceBoostDeviceProbe = shouldRunVoiceBoostDeviceProbe
         let capturesVoiceBoostDiagnostics = shouldCaptureVoiceBoostDiagnostics || runsVoiceBoostDeviceProbe
@@ -73,7 +77,19 @@ struct OpenCastLaunchConfiguration {
             capturesVoiceBoostDiagnostics: capturesVoiceBoostDiagnostics,
             exposesVoiceBoostDiagnosticsStatus: exposesVoiceBoostDiagnosticsStatus,
             runsVoiceBoostDeviceProbe: runsVoiceBoostDeviceProbe,
-            seedsOnboardingCompleted: isUITesting && !shouldForceOnboarding
+            seedsOnboardingCompleted: isUITesting && !shouldForceOnboarding,
+            uiTestLibraryLoadDelayMilliseconds: uiTestLibraryLoadDelayMilliseconds
         )
+    }
+
+    private static func uiTestLibraryLoadDelayMilliseconds(environment: [String: String]) -> Int? {
+        guard let rawValue = environment["OPENCAST_UI_TEST_LIBRARY_LOAD_DELAY_MILLISECONDS"],
+              let milliseconds = Int(rawValue),
+              milliseconds > 0
+        else {
+            return nil
+        }
+
+        return milliseconds
     }
 }

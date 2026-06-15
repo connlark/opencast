@@ -13,6 +13,7 @@ struct PeelableNowPlayingArtwork: View {
     @Binding var isPeelInteractionActive: Bool
     let prewarmsPeelRenderer: Bool
     let prewarmsPeelSettingsPanel: Bool
+    let allowsPeelStart: Bool
 
     @State private var interactionState = NowPlayingPeelInteractionState.closed
     @State private var peelProgress: CGFloat = 0
@@ -92,7 +93,7 @@ struct PeelableNowPlayingArtwork: View {
         }
         .sensoryFeedback(.selection, trigger: feedbackTrigger)
         .task(id: request) {
-            await imageState.loadArtwork(for: request, cacheKind: .episode)
+            _ = await imageState.loadArtwork(for: request, cacheKind: .episode)
         }
     }
 
@@ -119,6 +120,10 @@ struct PeelableNowPlayingArtwork: View {
 
     private var shouldRenderSettingsPanel: Bool {
         isOpen || isTrackingPeel || peelProgress > 0.001 || settleTarget > 0
+    }
+
+    private var canAcceptPeelInput: Bool {
+        allowsPeelStart || shouldRenderSettingsPanel
     }
 
     private var shouldMountSettingsPanel: Bool {
@@ -195,6 +200,10 @@ struct PeelableNowPlayingArtwork: View {
                 return
             }
 
+            guard canAcceptPeelInput else {
+                return
+            }
+
             guard let nextState = startingPeelState(with: value) else {
                 return
             }
@@ -267,6 +276,10 @@ struct PeelableNowPlayingArtwork: View {
     }
 
     private func requestSnap(open: Bool) {
+        guard canAcceptPeelInput else {
+            return
+        }
+
         Task { @MainActor in
             snap(open: open)
         }

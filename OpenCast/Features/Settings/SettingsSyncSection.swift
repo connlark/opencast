@@ -50,7 +50,7 @@ struct SettingsSyncSection: View {
         case .checking, .notChecked:
             "Subscriptions and listening progress will sync when iCloud is available."
         case .noAccount:
-            "OpenCast will keep working locally on this device."
+            "opencast will keep working locally on this device."
         case .restricted, .couldNotDetermine, .temporarilyUnavailable:
             "Subscriptions, playback, downloads, and settings remain available on this device."
         }

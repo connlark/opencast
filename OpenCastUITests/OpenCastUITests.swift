@@ -30,8 +30,22 @@ final class OpenCastUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.tabBars.buttons["Library"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.tabBars.buttons["Inbox"].exists)
+        let inboxTab = app.tabBars.buttons["Inbox"]
+        XCTAssertTrue(inboxTab.exists)
+        XCTAssertTrue(inboxTab.isSelected)
         XCTAssertTrue(app.tabBars.buttons["Settings"].exists)
+    }
+
+    @MainActor
+    func testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty() throws {
+        let app = makeCompletedOnboardingApp(libraryLoadDelayMilliseconds: 6_000)
+        app.launch()
+
+        let inboxTab = app.tabBars.buttons["Inbox"]
+        assertExists(inboxTab, named: "Inbox tab")
+        XCTAssertTrue(inboxTab.isSelected)
+        assertExists(app.descendants(matching: .any)["Inbox Loading"], named: "Inbox loading spinner")
+        assertExists(app.staticTexts["Inbox Empty"], named: "empty Inbox after load", timeout: 15)
     }
 
     @MainActor
@@ -50,7 +64,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.buttons["Skip"], named: "Skip OPML onboarding action")
         app.buttons["Apple Podcasts Export Shortcut"].tap()
         assertExists(
-            app.staticTexts["This iCloud Shortcut helps export your Apple Podcasts subscriptions into an OPML file that OpenCast can import."],
+            app.staticTexts["This iCloud Shortcut helps export your Apple Podcasts subscriptions into an OPML file that opencast can import."],
             named: "Apple Podcasts Shortcut explainer"
         )
         assertExists(app.buttons["Open Shortcut"], named: "Open Shortcut link")
@@ -68,7 +82,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(rssSubscribeButton, named: "onboarding RSS Subscribe button")
         XCTAssertGreaterThan(rssSubscribeButton.frame.width, 280)
         attachSmokeScreenshot(named: "onboarding_podcast_setup_rss_dark")
-        app.buttons["Search"].tap()
+        app.segmentedControls["Add Podcast Mode"].buttons["Search"].tap()
         assertExists(app.textFields["Podcast or creator"], named: "onboarding podcast search field after returning to search")
         app.textFields["Podcast or creator"].tap()
         app.textFields["Podcast or creator"].typeText("history\n")
@@ -81,7 +95,7 @@ final class OpenCastUITests: XCTestCase {
         app.buttons["Done"].tap()
         assertExists(app.buttons["Add This American Life"], named: "fallback sample confirmation action")
         assertExists(
-            elementContaining(label: "OpenCast will add This American Life", in: app),
+            elementContaining(label: "opencast will add This American Life", in: app),
             named: "fallback sample confirmation copy"
         )
     }
@@ -125,7 +139,9 @@ final class OpenCastUITests: XCTestCase {
         let app = makeSeededApp()
         app.launch()
 
-        XCTAssertTrue(app.tabBars.buttons["Inbox"].waitForExistence(timeout: 5))
+        let inboxTab = app.tabBars.buttons["Inbox"]
+        XCTAssertTrue(inboxTab.waitForExistence(timeout: 5))
+        XCTAssertTrue(inboxTab.isSelected)
         let inboxEpisode = seededEpisodeRow(in: app)
         XCTAssertTrue(inboxEpisode.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Deterministic UI Episode"].exists)
@@ -135,7 +151,7 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(playbackProgress(in: app).waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Pause"].exists || app.buttons["Play"].exists)
 
-        dismissNowPlayingOverlay(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
         XCTAssertTrue(app.buttons["Play Episode"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Summary"].exists)
     }
@@ -156,11 +172,11 @@ final class OpenCastUITests: XCTestCase {
         assertExists(alert, named: "Playback Failed alert", timeout: 10)
         XCTAssertTrue(alert.staticTexts.element(boundBy: 1).exists)
         alert.buttons["OK"].tap()
-        assertExists(app.buttons["Play Episode"], named: "Play Episode button after failed autoplay")
+        assertExists(inboxEpisode, named: "seeded inbox episode after failed playback")
     }
 
     @MainActor
-    func testSeededInboxEpisodeAutoplaysAndExpandsNowPlaying() throws {
+    func testSeededInboxEpisodeTapPlaysAndExpandsNowPlaying() throws {
         let app = makeSeededApp()
         app.launch()
 
@@ -176,7 +192,41 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "episode_tap_expanded_now_playing")
 
         dismissNowPlayingOverlay(in: app)
-        assertExists(app.buttons["Play Episode"], named: "episode detail behind Now Playing")
+        assertExists(app.buttons["Open Now Playing"], named: "mini-player after episode tap")
+    }
+
+    @MainActor
+    func testSeededInboxEpisodeContextMenuPeekOpensEpisodeDetail() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
+        app.tabBars.buttons["Inbox"].tap()
+
+        let inboxEpisode = seededEpisodeRow(in: app)
+        openEpisodeDetailFromContextMenu(
+            inboxEpisode,
+            in: app,
+            named: "inbox episode"
+        )
+    }
+
+    @MainActor
+    func testSeededPodcastEpisodeContextMenuPeekOpensEpisodeDetail() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+
+        let podcastEpisode = seededEpisodeRow(in: app)
+        openEpisodeDetailFromContextMenu(
+            podcastEpisode,
+            in: app,
+            named: "podcast episode"
+        )
     }
 
     @MainActor
@@ -317,7 +367,30 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testOptInSeededLongShowNotesColdStartInboxEpisodeAutoplaysAndExpandsNowPlaying() throws {
+    func testSeededMiniPlayerSwipeDownPausesAndDismisses() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
+        app.tabBars.buttons["Inbox"].tap()
+
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+
+        assertNowPlayingOverlay(in: app)
+        dismissNowPlayingOverlay(in: app)
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertExists(miniPlayer, named: "mini-player before swipe-down dismissal")
+        dragDismissMiniPlayer(miniPlayer)
+
+        assertDoesNotExist(miniPlayer, named: "mini-player after swipe-down dismissal", timeout: 5)
+        assertDoesNotExist(nowPlayingOverlay(in: app), named: "Now Playing overlay after mini-player dismissal")
+    }
+
+    @MainActor
+    func testOptInSeededLongShowNotesColdStartInboxEpisodeTapPlaysAndExpandsNowPlaying() throws {
         try requireLongShowNotesColdStartProbe()
         let app = makeSeededApp(seedsLongShowNotes: true, extraFeedCount: 8)
         app.launch()
@@ -340,7 +413,7 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testSeededEpisodeOpenWhileListeningKeepsNowPlayingCollapsed() throws {
+    func testSeededEpisodeTapWhileListeningPlaysAndExpandsNowPlaying() throws {
         let app = makeSeededApp()
         app.launch()
 
@@ -353,15 +426,13 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         dismissNowPlayingOverlay(in: app)
-        tapBackButton(in: app)
 
         assertExists(inboxEpisode, named: "seeded inbox episode after returning to Inbox")
         inboxEpisode.tap()
 
-        assertExists(app.buttons["Play Episode"], named: "episode detail while playback continues")
-        XCTAssertFalse(nowPlayingOverlay(in: app).exists)
-        assertExists(app.buttons["Open Now Playing"], named: "mini-player remains collapsed")
-        attachSmokeScreenshot(named: "episode_detail_while_listening")
+        assertNowPlayingOverlay(in: app)
+        assertExists(playbackProgress(in: app), named: "Playback Progress control after second episode tap")
+        attachSmokeScreenshot(named: "episode_tap_while_listening_expanded_now_playing")
     }
 
     @MainActor
@@ -387,7 +458,11 @@ final class OpenCastUITests: XCTestCase {
 
         let completedEpisode = seededCompletedEpisodeRow(in: app)
         assertExists(completedEpisode, named: "completed podcast episode row")
-        completedEpisode.tap()
+        openEpisodeDetailFromContextMenu(
+            completedEpisode,
+            in: app,
+            named: "completed podcast episode"
+        )
 
         let playEpisodeButton = app.buttons["Play Episode"]
         assertExists(playEpisodeButton, named: "Play Episode button while another episode is playing")
@@ -424,7 +499,11 @@ final class OpenCastUITests: XCTestCase {
         libraryPodcast.tap()
         let completedEpisode = seededCompletedEpisodeRow(in: app)
         assertExists(completedEpisode, named: "completed podcast episode row")
-        completedEpisode.tap()
+        openEpisodeDetailFromContextMenu(
+            completedEpisode,
+            in: app,
+            named: "completed podcast episode"
+        )
         let playEpisodeButton = app.buttons["Play Episode"]
         assertExists(playEpisodeButton, named: "Play Episode button while another episode is playing")
         playEpisodeButton.tap()
@@ -525,18 +604,14 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         dismissNowPlayingOverlay(in: app)
-        assertExists(app.buttons["Play Episode"], named: "Play Episode button")
-        assertExists(app.buttons["Open Now Playing"], named: "autoplay mini-player after opening library episode")
-        attachSmokeScreenshot(named: "compact_library_episode_detail")
-
-        tapBackToPodcastButton(in: app)
-        assertExists(app.staticTexts["Episodes"], named: "podcast detail after returning from episode")
-        assertExists(seededEpisodeRow(in: app), named: "podcast episode row after returning from episode")
-        attachSmokeScreenshot(named: "compact_podcast_detail_after_episode_back")
+        assertExists(app.buttons["Open Now Playing"], named: "mini-player after playing library episode")
+        assertExists(app.staticTexts["Episodes"], named: "podcast detail after dismissing Now Playing")
+        assertExists(seededEpisodeRow(in: app), named: "podcast episode row after playing episode")
+        attachSmokeScreenshot(named: "compact_podcast_detail_after_episode_play")
     }
 
     @MainActor
-    func testSeededSplitLibraryEpisodeBackReturnsToPodcast() throws {
+    func testSeededSplitLibraryEpisodeTapSelectsDetailBehindNowPlaying() throws {
         let app = makeSeededApp()
         app.launch()
 
@@ -555,15 +630,57 @@ final class OpenCastUITests: XCTestCase {
         podcastEpisode.tap()
 
         assertNowPlayingOverlay(in: app)
-        dismissNowPlayingOverlay(in: app)
-        assertExists(app.buttons["Play Episode"], named: "split Play Episode button")
-        assertExists(app.buttons["Open Now Playing"], named: "split autoplay mini-player after opening library episode")
-        attachSmokeScreenshot(named: "split_library_episode_detail")
+        dragDismissNowPlayingOverlay(in: app)
+        assertExists(app.buttons["Open Now Playing"], named: "split mini-player after playing library episode")
+        assertExists(app.buttons["Play Episode"], named: "split episode detail after dismissing Now Playing")
+        attachSmokeScreenshot(named: "split_podcast_episode_detail_after_play")
+    }
 
-        tapBackToPodcastButton(in: app)
-        assertExists(app.staticTexts["Episodes"], named: "split podcast detail after returning from episode")
-        assertExists(seededEpisodeRow(in: app), named: "split podcast episode row after returning from episode")
-        attachSmokeScreenshot(named: "split_podcast_detail_after_episode_back")
+    @MainActor
+    func testSeededSplitEpisodeTapSelectsDetailBehindNowPlaying() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        if app.tabBars.buttons["Library"].waitForExistence(timeout: 3) {
+            throw XCTSkip("Split navigation requires a regular-width destination.")
+        }
+
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "split inbox episode")
+        inboxEpisode.tap()
+
+        assertNowPlayingOverlay(in: app)
+        dragDismissNowPlayingOverlay(in: app)
+        assertExists(app.buttons["Open Now Playing"], named: "split mini-player after first tap")
+        assertExists(app.buttons["Play Episode"], named: "split episode detail after first tap")
+        assertExists(
+            app.staticTexts["A deterministic episode seeded for UI tests."],
+            named: "split episode detail description"
+        )
+        attachSmokeScreenshot(named: "split_episode_detail_after_first_tap")
+    }
+
+    @MainActor
+    func testSeededSplitLibraryEpisodeContextMenuOpensEpisodeDetail() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        if app.tabBars.buttons["Library"].waitForExistence(timeout: 3) {
+            throw XCTSkip("Split navigation requires a regular-width destination.")
+        }
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded split library podcast")
+        libraryPodcast.tap()
+
+        let podcastEpisode = seededEpisodeRow(in: app)
+        openEpisodeDetailFromContextMenu(
+            podcastEpisode,
+            in: app,
+            named: "split podcast episode"
+        )
+        assertExists(app.staticTexts["Summary"], named: "split episode detail summary heading")
     }
 
     @MainActor
@@ -616,6 +733,30 @@ final class OpenCastUITests: XCTestCase {
         dragDismissNowPlayingOverlayFromArtwork(in: app)
         XCTAssertTrue(nowPlayingOverlay(in: app).waitForNonExistence(timeout: 5))
         assertExists(app.buttons["Open Now Playing"], named: "mini-player after content-area dismiss")
+    }
+
+    @MainActor
+    func testSeededNowPlayingCanDismissAfterBackgroundForeground() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
+        app.tabBars.buttons["Inbox"].tap()
+
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+
+        assertNowPlayingOverlay(in: app)
+        RunLoop.current.run(until: Date.now.addingTimeInterval(1.5))
+        XCUIDevice.shared.press(.home)
+        RunLoop.current.run(until: Date.now.addingTimeInterval(2))
+        app.activate()
+
+        assertNowPlayingOverlay(in: app)
+        dragDismissNowPlayingOverlayFromArtwork(in: app)
+        XCTAssertTrue(nowPlayingOverlay(in: app).waitForNonExistence(timeout: 5))
+        assertExists(app.buttons["Open Now Playing"], named: "mini-player after foreground dismiss")
     }
 
     @MainActor
@@ -764,9 +905,7 @@ final class OpenCastUITests: XCTestCase {
         let app = makeSeededApp()
         app.launch()
 
-        let libraryTab = app.tabBars.buttons["Library"]
-        assertExists(libraryTab, named: "Library tab")
-        libraryTab.tap()
+        openLibrary(in: app)
         let libraryPodcast = seededSubscriptionRow(in: app)
         assertExists(libraryPodcast, named: "seeded library podcast")
 
@@ -778,13 +917,13 @@ final class OpenCastUITests: XCTestCase {
         tapBackButton(in: app)
         assertExists(libraryPodcast, named: "Library root after podcast detail")
 
-        app.tabBars.buttons["Inbox"].tap()
+        openInbox(in: app)
         let inboxEpisode = seededEpisodeRow(in: app)
         assertExists(inboxEpisode, named: "seeded inbox episode")
         inboxEpisode.tap()
 
         assertNowPlayingOverlay(in: app)
-        dismissNowPlayingOverlay(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
         let playEpisodeButton = app.buttons["Play Episode"]
         assertExists(playEpisodeButton, named: "Play Episode button")
         assertExists(app.staticTexts["Summary"], named: "episode summary heading")
@@ -798,11 +937,13 @@ final class OpenCastUITests: XCTestCase {
 
         dismissNowPlayingOverlay(in: app)
         tapBackButton(in: app)
-        assertExists(inboxEpisode, named: "Inbox root after playback")
-        assertMiniPlayerDoesNotCover(inboxEpisode, named: "seeded inbox episode", in: app)
+        openInbox(in: app)
+        let inboxEpisodeAfterPlayback = seededEpisodeRow(in: app)
+        assertExists(inboxEpisodeAfterPlayback, named: "Inbox root after playback")
+        assertMiniPlayerDoesNotCover(inboxEpisodeAfterPlayback, named: "seeded inbox episode", in: app)
         attachSmokeScreenshot(named: "inbox_compact")
 
-        libraryTab.tap()
+        openLibrary(in: app)
         assertExists(libraryPodcast, named: "seeded library podcast with mini-player")
         assertMiniPlayerDoesNotCover(libraryPodcast, named: "seeded library podcast", in: app)
         attachSmokeScreenshot(named: "library_compact")
@@ -818,7 +959,7 @@ final class OpenCastUITests: XCTestCase {
         assertMiniPlayerDoesNotCover(libraryPodcast, named: "seeded library podcast after dismiss", in: app)
         attachSmokeScreenshot(named: "library_compact_after_dismiss")
 
-        app.tabBars.buttons["Settings"].tap()
+        openSettings(in: app)
         assertExists(app.staticTexts["iCloud Sync"], named: "iCloud Sync section")
         assertExists(syncStatusTitle(in: app), named: "iCloud sync status")
         let downloadedEpisodesRow = app.staticTexts["Downloaded Episodes"]
@@ -857,7 +998,7 @@ final class OpenCastUITests: XCTestCase {
         inboxEpisode.tap()
 
         assertNowPlayingOverlay(in: app)
-        dismissNowPlayingOverlay(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
         assertExists(app.buttons["Play Episode"], named: "Play Episode button")
         assertExists(app.buttons["Play Downloaded"], named: "Play Downloaded button")
         assertExists(app.buttons["Delete Download"], named: "Delete Download button")
@@ -1225,7 +1366,7 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         assertExists(playbackProgress(in: app), named: "Playback Progress control", timeout: 30)
-        dismissNowPlayingOverlay(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
 
         let playEpisodeButton = app.buttons["Play Episode"]
         assertExists(playEpisodeButton, named: "Play Episode button", timeout: 20)
@@ -1269,6 +1410,69 @@ final class OpenCastUITests: XCTestCase {
         scrollUntilExists(app.staticTexts["Import & Export"], in: app, maxSwipes: 4)
         assertExists(app.staticTexts["Import & Export"], named: "OPML Import & Export section", timeout: 10)
         assertExists(app.buttons["Export Subscriptions"], named: "OPML Export Subscriptions action", timeout: 10)
+    }
+
+    @MainActor
+    func testOptInThisAmericanLifeRapidScrubVisualProbe() throws {
+        try requireThisAmericanLifeReviewerPathProbe()
+
+        let app = makeOnboardingApp(forcesDarkMode: false)
+        app.launch()
+
+        assertExists(app.staticTexts["Welcome to opencast!"], named: "clean onboarding welcome", timeout: 20)
+        app.buttons["Continue"].tap()
+        assertExists(app.buttons["Skip"], named: "Skip OPML onboarding action")
+        app.buttons["Skip"].tap()
+        assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
+
+        app.buttons["Done"].tap()
+        let addThisAmericanLife = app.buttons["Add This American Life"]
+        assertExists(addThisAmericanLife, named: "This American Life fallback confirmation", timeout: 10)
+        addThisAmericanLife.tap()
+        XCTAssertTrue(
+            app.staticTexts["Find Podcasts"].waitForNonExistence(timeout: 90),
+            "Onboarding should dismiss after accepting the This American Life fallback."
+        )
+
+        openInbox(in: app)
+        let inboxEpisode = thisAmericanLifeEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "This American Life inbox episode", timeout: 90)
+        inboxEpisode.tap()
+
+        assertNowPlayingOverlay(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control", timeout: 30)
+
+        RunLoop.current.run(until: Date.now.addingTimeInterval(3))
+
+        let initialValue = progress.value as? String
+        let offsets: [(CGFloat, CGFloat)] = [
+            (0.03, 0.84),
+            (0.84, 0.16),
+            (0.16, 0.80),
+            (0.80, 0.24),
+            (0.24, 0.72)
+        ]
+        for (start, end) in offsets {
+            let startCoordinate = progress.coordinate(withNormalizedOffset: CGVector(dx: start, dy: 0.5))
+            let endCoordinate = progress.coordinate(withNormalizedOffset: CGVector(dx: end, dy: 0.5))
+            startCoordinate.press(forDuration: 0.12, thenDragTo: endCoordinate)
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.35))
+        }
+
+        let scrubbed = NSPredicate { object, _ in
+            guard let element = object as? XCUIElement,
+                  let value = element.value as? String else {
+                return false
+            }
+
+            return value != initialValue && !value.hasPrefix("0:00 elapsed")
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: scrubbed, object: progress)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 4), .completed)
+
+        RunLoop.current.run(until: Date.now.addingTimeInterval(4))
+        attachSmokeScreenshot(named: "tal_rapid_scrub_visual_probe")
     }
 
     @MainActor
@@ -1332,8 +1536,7 @@ final class OpenCastUITests: XCTestCase {
         let app = makeSeededApp(forcesDarkMode: false, forcesLightMode: true)
         app.launch()
 
-        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
-        app.tabBars.buttons["Inbox"].tap()
+        openInbox(in: app)
 
         let inboxEpisode = seededEpisodeRow(in: app)
         assertExists(inboxEpisode, named: "seeded inbox episode")
@@ -1342,6 +1545,7 @@ final class OpenCastUITests: XCTestCase {
         assertNowPlayingOverlay(in: app)
         assertExists(playbackProgress(in: app), named: "Playback Progress control")
         assertPlayerUtilityControlsExist(in: app)
+        assertPlayerUtilityControlHeightsAreBalanced(in: app)
         attachSmokeScreenshot(named: "now_playing_expanded_light")
 
         let pauseButton = nowPlayingOverlay(in: app).buttons["Pause"].firstMatch
@@ -1353,12 +1557,79 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededNowPlayingAirPlayPickerCanOpen() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("AirPlay route-picker presentation is a physical-device check; see docs/simulator-limitations.md.")
+        #else
+        let app = makeSeededApp()
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let overlay = nowPlayingOverlay(in: app)
+        let pauseButton = overlay.buttons["Pause"].firstMatch
+        if pauseButton.waitForExistence(timeout: 5) {
+            pauseButton.tap()
+        }
+
+        let airPlayControl = overlay.buttons["AirPlay"].firstMatch
+        assertExists(airPlayControl, named: "AirPlay control")
+        let routeValue = (airPlayControl.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        XCTAssertFalse(routeValue.isEmpty, "AirPlay control should expose a route before opening the picker")
+
+        airPlayControl.tap()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let routePickerPresented = NSPredicate { _, _ in
+            self.routePickerDestinationExists(in: app) || self.routePickerDestinationExists(in: springboard)
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: routePickerPresented, object: app)
+        let result = XCTWaiter.wait(for: [expectation], timeout: 5)
+        attachSmokeScreenshot(named: "airplay_route_picker")
+        XCTAssertEqual(result, .completed)
+        #endif
+    }
+
+    @MainActor
+    func testSeededNowPlayingAccessibilityXXXLControlsAreReachable() throws {
+        let app = makeSeededApp(
+            preferredContentSizeCategoryName: "UICTContentSizeCategoryAccessibilityXXXL"
+        )
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let overlay = nowPlayingOverlay(in: app)
+        assertNowPlayingControlIsReachable(playbackProgress(in: app), named: "Playback Progress control", in: app)
+
+        let pauseButton = overlay.buttons["Pause"].firstMatch
+        let playButton = overlay.buttons["Play"].firstMatch
+        let playPauseButton = pauseButton.waitForExistence(timeout: 2) ? pauseButton : playButton
+        assertNowPlayingControlIsReachable(playPauseButton, named: "Play/Pause control", in: app)
+
+        let skipBackButton = overlay.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Skip Back")
+        ).firstMatch
+        assertNowPlayingControlIsReachable(skipBackButton, named: "Skip Back control", in: app)
+
+        let skipForwardButton = overlay.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Skip Forward")
+        ).firstMatch
+        assertNowPlayingControlIsReachable(skipForwardButton, named: "Skip Forward control", in: app)
+
+        assertNowPlayingControlIsReachable(app.buttons["Playback Speed"], named: "Playback Speed control", in: app)
+        assertNowPlayingControlIsReachable(app.buttons["AirPlay"], named: "AirPlay control", in: app)
+        assertNowPlayingControlIsReachable(app.buttons["Sleep Timer"], named: "Sleep Timer control", in: app)
+        assertPlayerUtilityControlHeightsAreBalanced(in: app)
+        attachSmokeScreenshot(named: "now_playing_expanded_accessibility_xxxl")
+    }
+
+    @MainActor
     private func verifyAddPodcastRSSClipboardPrefill(
         forcesDarkMode: Bool,
         forcesLightMode: Bool,
         screenshotName: String
     ) throws {
-        let pastedFeedURL = "https://example.com/seed.xml"
+        let pastedFeedURL = "https://feeds.example.com/seed.xml"
         let app = makeSeededApp(
             forcesDarkMode: forcesDarkMode,
             forcesLightMode: forcesLightMode
@@ -1454,10 +1725,15 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    private func makeCompletedOnboardingApp() -> XCUIApplication {
+    private func makeCompletedOnboardingApp(
+        libraryLoadDelayMilliseconds: Int? = nil
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments.append("--opencast-ui-testing")
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
+        if let libraryLoadDelayMilliseconds {
+            app.launchEnvironment["OPENCAST_UI_TEST_LIBRARY_LOAD_DELAY_MILLISECONDS"] = String(libraryLoadDelayMilliseconds)
+        }
         return app
     }
 
@@ -1575,29 +1851,115 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    private func tapBackToPodcastButton(in app: XCUIApplication) {
-        let labels = ["UI Test Show", "Podcast", "Back"]
-        for label in labels {
-            let button = app.buttons[label].firstMatch
-            if button.waitForExistence(timeout: 1) {
-                button.tap()
-                return
-            }
-        }
-
-        tapBackButton(in: app)
-    }
-
-    @MainActor
     private func assertNowPlayingOverlay(in app: XCUIApplication) {
         assertExists(nowPlayingOverlay(in: app), named: "Now Playing overlay")
     }
 
     @MainActor
-    private func assertPlayerUtilityControlsExist(in app: XCUIApplication) {
+    private func openCurrentEpisodeDetailFromNowPlaying(in app: XCUIApplication) {
+        let overlay = nowPlayingOverlay(in: app)
+        assertExists(overlay, named: "Now Playing overlay before opening episode detail")
+        let titleButton = overlay.buttons["Now Playing Episode Title"].firstMatch
+        assertExists(titleButton, named: "Now Playing episode title button")
+        titleButton.tap()
+        assertExists(app.buttons["Play Episode"], named: "episode detail after tapping Now Playing title")
+    }
+
+    @MainActor
+    private func openEpisodeDetailFromContextMenu(
+        _ row: XCUIElement,
+        in app: XCUIApplication,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertExists(row, named: "\(name) row", file: file, line: line)
+        row.press(forDuration: 1.2)
+
+        let detailsAction = app.buttons["View Episode Details"]
+        assertExists(detailsAction, named: "\(name) details context action", file: file, line: line)
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "\(name) context preview"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        detailsAction.tap()
+        assertExists(app.buttons["Play Episode"], named: "\(name) episode detail", file: file, line: line)
+        assertDoesNotExist(nowPlayingOverlay(in: app), named: "\(name) Now Playing overlay", file: file, line: line)
+    }
+
+    @MainActor
+    private func assertPlayerUtilityControlsExist(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
         assertExists(app.buttons["Playback Speed"], named: "Playback Speed control")
-        assertExists(app.buttons["AirPlay"], named: "AirPlay control")
+        let airPlayControl = app.buttons["AirPlay"].firstMatch
+        assertExists(airPlayControl, named: "AirPlay control", file: file, line: line)
+        let airPlayButtonCount = app.buttons.matching(NSPredicate(format: "label == %@", "AirPlay")).count
+        XCTAssertEqual(airPlayButtonCount, 1, "AirPlay should expose one accessible control", file: file, line: line)
         assertExists(app.buttons["Sleep Timer"], named: "Sleep Timer control")
+
+        let routeValue = (airPlayControl.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        XCTAssertFalse(
+            routeValue.isEmpty,
+            "AirPlay control should expose the current route as its accessibility value",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func assertPlayerUtilityControlHeightsAreBalanced(
+        in app: XCUIApplication,
+        tolerance: CGFloat = 8,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let overlay = nowPlayingOverlay(in: app)
+        let controls = [
+            (name: "Playback Speed", element: overlay.buttons["Playback Speed"].firstMatch),
+            (name: "AirPlay", element: overlay.buttons["AirPlay"].firstMatch),
+            (name: "Sleep Timer", element: overlay.buttons["Sleep Timer"].firstMatch)
+        ]
+
+        for (name, control) in controls {
+            assertExists(control, named: "\(name) control", file: file, line: line)
+        }
+
+        let heights = controls.map { $0.element.frame.height }
+        let minimumHeight = heights.min() ?? 0
+        let maximumHeight = heights.max() ?? 0
+        let frameSummary = controls
+            .map { "\($0.name)=\($0.element.frame)" }
+            .joined(separator: ", ")
+
+        XCTAssertLessThanOrEqual(
+            maximumHeight - minimumHeight,
+            tolerance,
+            "Utility control heights should stay balanced. \(frameSummary)",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func assertNowPlayingControlIsReachable(
+        _ element: XCUIElement,
+        named name: String,
+        in app: XCUIApplication,
+        maxSwipes: Int = 6,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5), "\(name) should exist", file: file, line: line)
+        for _ in 0..<maxSwipes where !element.isHittable {
+            app.swipeUp()
+        }
+
+        XCTAssertTrue(element.isHittable, "\(name) should be reachable", file: file, line: line)
     }
 
     @MainActor
@@ -1609,8 +1971,7 @@ final class OpenCastUITests: XCTestCase {
 
     @MainActor
     private func openSeededNowPlaying(in app: XCUIApplication) {
-        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
-        app.tabBars.buttons["Inbox"].tap()
+        openInbox(in: app)
 
         let inboxEpisode = seededEpisodeRow(in: app)
         assertExists(inboxEpisode, named: "seeded inbox episode")
@@ -1621,18 +1982,13 @@ final class OpenCastUITests: XCTestCase {
 
     @MainActor
     private func openSeededEpisodeDetail(in app: XCUIApplication) {
-        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
-        app.tabBars.buttons["Inbox"].tap()
+        openInbox(in: app)
 
         let inboxEpisode = seededEpisodeRow(in: app)
         assertExists(inboxEpisode, named: "seeded inbox episode")
         inboxEpisode.tap()
 
-        if nowPlayingOverlay(in: app).waitForExistence(timeout: 2) {
-            dismissNowPlayingOverlay(in: app)
-        }
-
-        assertExists(app.buttons["Play Episode"], named: "seeded episode detail")
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
     }
 
     @MainActor
@@ -1655,6 +2011,13 @@ final class OpenCastUITests: XCTestCase {
     private func dragDismissNowPlayingOverlay(in app: XCUIApplication, startY: CGFloat) {
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.74))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    @MainActor
+    private func dragDismissMiniPlayer(_ miniPlayer: XCUIElement) {
+        let start = miniPlayer.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        let end = start.withOffset(CGVector(dx: 0, dy: 110))
         start.press(forDuration: 0.05, thenDragTo: end)
     }
 
@@ -1816,7 +2179,7 @@ final class OpenCastUITests: XCTestCase {
             return
         }
 
-        let rootAddButton = app.navigationBars["OpenCast"].buttons["Add"]
+        let rootAddButton = app.navigationBars["opencast"].buttons["Add"]
         if rootAddButton.waitForExistence(timeout: 2) {
             rootAddButton.tap()
             return
@@ -1949,6 +2312,18 @@ final class OpenCastUITests: XCTestCase {
             "iCloud Sync Unavailable"
         )
         return app.staticTexts.matching(predicate).firstMatch
+    }
+
+    @MainActor
+    private func routePickerDestinationExists(in app: XCUIApplication) -> Bool {
+        let routeLabelPredicate = NSPredicate(
+            format: "label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@ OR label CONTAINS[c] %@",
+            "iPad",
+            "AirPods",
+            "Speaker",
+            "Show More"
+        )
+        return app.descendants(matching: .any).matching(routeLabelPredicate).firstMatch.exists
     }
 
     @MainActor

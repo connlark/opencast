@@ -1,7 +1,9 @@
+import SwiftData
 import SwiftUI
 
 struct OpenCastRootPresentationModifier: ViewModifier {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.modelContext) private var modelContext
 
     @Binding var sheetDestination: SheetDestination?
 
@@ -9,6 +11,8 @@ struct OpenCastRootPresentationModifier: ViewModifier {
         content
             .sheet(item: $sheetDestination) { destination in
                 SheetDestinationView(destination: destination, onDismiss: dismissSheet)
+                    .environment(appModel)
+                    .modelContext(modelContext)
             }
             // The alert API needs Bool bindings because the presented Strings are not Identifiable.
             .alert(

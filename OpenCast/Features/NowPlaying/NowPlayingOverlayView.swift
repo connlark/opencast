@@ -4,7 +4,9 @@ struct NowPlayingOverlayView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     let isPresented: Bool
     let onDismissed: () -> Void
@@ -13,14 +15,20 @@ struct NowPlayingOverlayView: View {
 
     @State private var offsetY: CGFloat?
     @State private var isTrackingDismissDrag = false
+    @State private var dismissDragLatchBaselineHeight: CGFloat = 0
     @State private var isFinishingDismissal = false
     @State private var isPeelInteractionActive = false
+    @State private var isContentScrolledToTop = true
     @State private var prewarmsPeelRenderer = false
     @State private var prewarmsPeelSettingsPanel = false
     @State private var peelPrewarmRequestID = 0
+    @State private var suppressesColdPeelStart = false
+    @State private var peelRendererPrewarmTask: Task<Void, Never>?
+    @State private var peelSettingsPanelPrewarmTask: Task<Void, Never>?
 
     private static let accessibilityTitle = "Now Playing"
     private static let peelPrewarmIdleDelay: TimeInterval = 0.6
+    private static let postForegroundPeelPrewarmDelay: TimeInterval = 1.25
 
     var body: some View {
         GeometryReader { proxy in
@@ -40,8 +48,11 @@ struct NowPlayingOverlayView: View {
                     bottomContentPadding: proxy.safeAreaInsets.bottom + bottomContentPadding,
                     topContentPadding: topContentPadding(in: proxy),
                     isPeelInteractionActive: $isPeelInteractionActive,
+                    isContentScrolledToTop: $isContentScrolledToTop,
+                    isTrackingDismissDrag: isTrackingDismissDrag,
                     prewarmsPeelRenderer: prewarmsPeelRenderer,
                     prewarmsPeelSettingsPanel: prewarmsPeelSettingsPanel,
+                    allowsPeelStart: !suppressesColdPeelStart,
                     onDismiss: { dismiss(containerHeight: proxy.size.height) },
                     onOpenEpisode: { openEpisode(containerHeight: proxy.size.height) },
                     onOpenPodcast: { openPodcast(containerHeight: proxy.size.height) }
@@ -70,6 +81,7 @@ struct NowPlayingOverlayView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
+                nowPlayingProbeMark("overlay-mounted")
                 updatePresentation(isPresented: isPresented, containerHeight: proxy.size.height)
             }
             .onChange(of: isPresented) { _, newValue in
@@ -77,6 +89,9 @@ struct NowPlayingOverlayView: View {
             }
             .onChange(of: appModel.playback.currentEpisode?.id.rawValue) { _, _ in
                 resetPresentedEpisode(isPresented: isPresented, containerHeight: proxy.size.height)
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                handleScenePhaseChange(newPhase, isPresented: isPresented)
             }
             .opacity(isPresented ? 1 : 0)
         }
@@ -112,10 +127,14 @@ struct NowPlayingOverlayView: View {
 
     private func topContentPadding(in proxy: GeometryProxy) -> CGFloat {
         if horizontalSizeClass == .regular {
-            return 96
+            return dynamicTypeSize.isAccessibilitySize ? 56 : 96
         }
 
-        return proxy.safeAreaInsets.top + 150
+        if dynamicTypeSize.isAccessibilitySize {
+            return proxy.safeAreaInsets.top + (proxy.size.height < 700 ? 14 : 28)
+        }
+
+        return proxy.safeAreaInsets.top + (proxy.size.height < 720 ? 92 : 150)
     }
 
     private func presentationProgress(offset: CGFloat, in proxy: GeometryProxy) -> CGFloat {
@@ -163,6 +182,7 @@ struct NowPlayingOverlayView: View {
 
     private func prepareForPresentation(containerHeight: CGFloat) {
         let prewarmRequestID = resetPeelRendererPrewarm()
+        suppressesColdPeelStart = false
 
         if reduceMotion {
             offsetY = 0
@@ -195,6 +215,7 @@ struct NowPlayingOverlayView: View {
         withTransaction(transaction) {
             offsetY = reduceMotion ? 0 : containerHeight
             resetPeelRendererPrewarm()
+            suppressesColdPeelStart = false
             resetOverlayInteractionState()
         }
     }
@@ -214,6 +235,7 @@ struct NowPlayingOverlayView: View {
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             offsetY = reduceMotion || shouldKeepPresentedOffset ? 0 : containerHeight
+            suppressesColdPeelStart = false
             resetOverlayInteractionState()
         }
         if isPresented {
@@ -223,25 +245,54 @@ struct NowPlayingOverlayView: View {
 
     private func resetOverlayInteractionState() {
         isTrackingDismissDrag = false
+        dismissDragLatchBaselineHeight = 0
         isFinishingDismissal = false
         isPeelInteractionActive = false
+        isContentScrolledToTop = true
     }
 
     @discardableResult
     private func resetPeelRendererPrewarm() -> Int {
+        cancelPeelPrewarmTasks()
         peelPrewarmRequestID += 1
         prewarmsPeelRenderer = false
         prewarmsPeelSettingsPanel = false
         return peelPrewarmRequestID
     }
 
-    private func schedulePeelRendererPrewarm(requestID: Int) {
-        Task {
+    private func cancelPeelPrewarmTasks() {
+        peelRendererPrewarmTask?.cancel()
+        peelRendererPrewarmTask = nil
+        peelSettingsPanelPrewarmTask?.cancel()
+        peelSettingsPanelPrewarmTask = nil
+    }
+
+    private func cancelPendingPeelPrewarmForDismissDrag() {
+        cancelPeelPrewarmTasks()
+        peelPrewarmRequestID += 1
+        if !prewarmsPeelRenderer {
+            prewarmsPeelSettingsPanel = false
+        }
+    }
+
+    private func schedulePeelRendererPrewarm(
+        requestID: Int,
+        delay: TimeInterval = Self.peelPrewarmIdleDelay
+    ) {
+        peelRendererPrewarmTask?.cancel()
+        nowPlayingProbeMark("peel-prewarm-scheduled")
+        peelRendererPrewarmTask = Task {
             // Defer the Metal peel mount (~75ms shader + drawable-surface setup) to a
             // quiet window after the entrance spring settles. Mounting it inside the
             // presentation animation drops frames; on the static, settled card the
             // one-time main-thread cost is imperceptible.
-            try? await Task.sleep(for: .seconds(Self.peelPrewarmIdleDelay))
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch is CancellationError {
+                return
+            } catch {
+                return
+            }
             finishPeelRendererPrewarm(requestID: requestID)
         }
     }
@@ -252,12 +303,21 @@ struct NowPlayingOverlayView: View {
         }
 
         prewarmsPeelRenderer = true
+        suppressesColdPeelStart = false
+        nowPlayingProbeMark("peel-prewarm-finished")
         schedulePeelSettingsPanelPrewarm(requestID: requestID)
     }
 
     private func schedulePeelSettingsPanelPrewarm(requestID: Int) {
-        Task {
-            try? await Task.sleep(for: .seconds(1))
+        peelSettingsPanelPrewarmTask?.cancel()
+        peelSettingsPanelPrewarmTask = Task {
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch is CancellationError {
+                return
+            } catch {
+                return
+            }
             finishPeelSettingsPanelPrewarm(requestID: requestID)
         }
     }
@@ -268,6 +328,31 @@ struct NowPlayingOverlayView: View {
         }
 
         prewarmsPeelSettingsPanel = true
+    }
+
+    private func handleScenePhaseChange(_ newPhase: ScenePhase, isPresented: Bool) {
+        switch newPhase {
+        case .inactive, .background:
+            nowPlayingProbeMark("scene-exit")
+            suppressesColdPeelStart = true
+            resetPeelRendererPrewarm()
+            resetOverlayInteractionState()
+        case .active:
+            nowPlayingProbeMark("scene-active")
+            guard isPresented else {
+                suppressesColdPeelStart = false
+                return
+            }
+
+            let prewarmRequestID = resetPeelRendererPrewarm()
+            suppressesColdPeelStart = true
+            schedulePeelRendererPrewarm(
+                requestID: prewarmRequestID,
+                delay: Self.postForegroundPeelPrewarmDelay
+            )
+        @unknown default:
+            break
+        }
     }
 
     private func dismiss(containerHeight: CGFloat) {
@@ -297,6 +382,7 @@ struct NowPlayingOverlayView: View {
         resetPeelRendererPrewarm()
         isFinishingDismissal = true
         isTrackingDismissDrag = false
+        dismissDragLatchBaselineHeight = 0
         withAnimation(springAnimation(response: 0.24, damping: 0.92)) {
             offsetY = containerHeight
         } completion: {
@@ -306,11 +392,15 @@ struct NowPlayingOverlayView: View {
     }
 
     private func updateDismissDrag(_ value: DragGesture.Value) {
-        guard !isFinishingDismissal, !reduceMotion else {
+        guard !isFinishingDismissal else {
             return
         }
 
         if !isTrackingDismissDrag {
+            guard isContentScrolledToTop else {
+                return
+            }
+
             guard NowPlayingDragIntent.shouldStartCardDismiss(
                 translation: value.translation,
                 isPeelInteractionActive: isPeelInteractionActive
@@ -318,13 +408,16 @@ struct NowPlayingOverlayView: View {
                 return
             }
 
+            nowPlayingProbeMark("dismiss-drag-start")
+            cancelPendingPeelPrewarmForDismissDrag()
             isTrackingDismissDrag = true
+            dismissDragLatchBaselineHeight = value.translation.height
         }
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            offsetY = max(value.translation.height, 0)
+            offsetY = reduceMotion ? 0 : max(value.translation.height - dismissDragLatchBaselineHeight, 0)
         }
     }
 
@@ -352,17 +445,31 @@ struct NowPlayingOverlayView: View {
             return
         }
 
-        let translation = max(value.translation.height, 0)
-        let predictedTranslation = max(value.predictedEndTranslation.height, translation)
+        let latchBaselineHeight = dismissDragLatchBaselineHeight
+        let translation = max(value.translation.height - latchBaselineHeight, 0)
+        let predictedTranslation = max(value.predictedEndTranslation.height - latchBaselineHeight, translation)
         let shouldDismiss = translation > dismissDistance * 0.28
             || predictedTranslation > dismissDistance * 0.56
 
         isTrackingDismissDrag = false
+        dismissDragLatchBaselineHeight = 0
         if shouldDismiss {
             dismiss(containerHeight: containerHeight)
         } else {
+            let prewarmRequestID = peelPrewarmRequestID
+            guard !reduceMotion else {
+                if !prewarmsPeelRenderer {
+                    schedulePeelRendererPrewarm(requestID: prewarmRequestID)
+                }
+                return
+            }
+
             withAnimation(springAnimation(response: 0.24, damping: 0.88)) {
                 offsetY = 0
+            } completion: {
+                if !prewarmsPeelRenderer {
+                    schedulePeelRendererPrewarm(requestID: prewarmRequestID)
+                }
             }
         }
     }

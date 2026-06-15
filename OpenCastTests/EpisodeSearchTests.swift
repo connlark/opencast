@@ -26,16 +26,21 @@ struct EpisodeSearchTests {
                 id: "episode-\(index)",
                 title: "Episode \(index)",
                 summary: "Summary text \(index)",
-                showNotesHTML: "<p>Show notes text \(index)</p>",
                 publishedAt: TimeInterval(index)
             )
         }
+        let showNotesByID = Dictionary(
+            uniqueKeysWithValues: (0..<250).map { index in
+                ("episode-\(index)", "<p>Show notes text \(index)</p>")
+            }
+        )
         let session = EpisodeSearchSession()
 
         await session.update(
             episodes: episodes,
             query: "   ",
             mode: .fullText,
+            showNotesProvider: { showNotesByID },
             debounceDuration: .zero
         )
 
@@ -146,11 +151,22 @@ struct EpisodeSearchTests {
     func fullTextSearchesSummaryAndShowNotesAsPlainText() {
         let episodes = [
             makeEpisode(id: "summary", title: "Daily Notes", summary: "<p>Keyboard membrane repair tips.</p>"),
-            makeEpisode(id: "notes", title: "Workbench", showNotesHTML: "<ul><li>Soldering station checklist</li></ul>")
+            makeEpisode(id: "notes", title: "Workbench")
         ]
+        let showNotesByID = ["notes": "<ul><li>Soldering station checklist</li></ul>"]
 
-        let summaryResults = EpisodeSearch.results(in: episodes, query: "keyboard", mode: .fullText)
-        let showNotesResults = EpisodeSearch.results(in: episodes, query: "soldering", mode: .fullText)
+        let summaryResults = EpisodeSearch.results(
+            in: episodes,
+            query: "keyboard",
+            mode: .fullText,
+            showNotesHTMLByEpisodeID: showNotesByID
+        )
+        let showNotesResults = EpisodeSearch.results(
+            in: episodes,
+            query: "soldering",
+            mode: .fullText,
+            showNotesHTMLByEpisodeID: showNotesByID
+        )
 
         #expect(resultIDs(summaryResults) == ["summary"])
         #expect(resultIDs(showNotesResults) == ["notes"])
@@ -160,13 +176,19 @@ struct EpisodeSearchTests {
     @Test("Full text ranks visible matches before summary and show notes")
     func fullTextRanksVisibleMatchesBeforeSummaryAndShowNotes() {
         let episodes = [
-            makeEpisode(id: "notes-new", title: "Newest", showNotesHTML: "<p>Nebula appendix.</p>", publishedAt: 400),
+            makeEpisode(id: "notes-new", title: "Newest", publishedAt: 400),
             makeEpisode(id: "summary-new", title: "Middle", summary: "Nebula summary.", publishedAt: 300),
             makeEpisode(id: "summary-old", title: "Older", summary: "Nebula analysis.", publishedAt: 200),
             makeEpisode(id: "title-old", title: "Nebula Dispatch", publishedAt: 100)
         ]
+        let showNotesByID = ["notes-new": "<p>Nebula appendix.</p>"]
 
-        let results = EpisodeSearch.results(in: episodes, query: "nebula", mode: .fullText)
+        let results = EpisodeSearch.results(
+            in: episodes,
+            query: "nebula",
+            mode: .fullText,
+            showNotesHTMLByEpisodeID: showNotesByID
+        )
 
         #expect(resultIDs(results) == ["title-old", "summary-new", "summary-old", "notes-new"])
     }
@@ -217,10 +239,17 @@ struct EpisodeSearchTests {
         """
         let showNotes = "<p>The show notes vector passage should not be preferred.</p>"
         let episodes = [
-            makeEpisode(id: "snippet", title: "Search Notes", summary: summary, showNotesHTML: showNotes)
+            makeEpisode(id: "snippet", title: "Search Notes", summary: summary)
         ]
 
-        let result = try #require(EpisodeSearch.results(in: episodes, query: "vector", mode: .fullText).first)
+        let result = try #require(
+            EpisodeSearch.results(
+                in: episodes,
+                query: "vector",
+                mode: .fullText,
+                showNotesHTMLByEpisodeID: ["snippet": showNotes]
+            ).first
+        )
         let snippetText = plainText(result.snippet)
 
         #expect(snippetText.contains("summary vector passage"))
@@ -246,17 +275,21 @@ struct EpisodeSearchTests {
         podcastTitle: String = "Example Podcast",
         title: String,
         summary: String? = nil,
-        showNotesHTML: String? = nil,
         publishedAt: TimeInterval = 100
-    ) -> EpisodeCacheRecord {
-        EpisodeCacheRecord(
+    ) -> EpisodeListItemSnapshot {
+        EpisodeListItemSnapshot(
             episodeID: id,
             podcastID: "https://example.com/feed.xml",
             podcastTitle: podcastTitle,
             title: title,
             summary: summary,
-            showNotesHTML: showNotesHTML,
-            publishedAt: Date(timeIntervalSince1970: publishedAt)
+            publishedAt: Date(timeIntervalSince1970: publishedAt),
+            duration: nil,
+            audioURL: nil,
+            artworkURL: nil,
+            artworkPreview: nil,
+            guid: nil,
+            cachedAt: .now
         )
     }
 

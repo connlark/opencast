@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct RefreshLogListView: View {
-    let logs: [RefreshLogRecord]
+    let logs: [RefreshLogSnapshot]
 
     var body: some View {
         List(logs) { log in

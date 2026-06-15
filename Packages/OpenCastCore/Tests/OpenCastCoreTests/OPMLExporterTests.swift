@@ -19,7 +19,7 @@ struct OPMLExporterTests {
 
         #expect(xml.hasPrefix(#"<?xml version="1.0" encoding="UTF-8"?>"#))
         #expect(xml.contains(#"<opml version="2.0">"#))
-        #expect(xml.contains("<title>OpenCast Subscriptions</title>"))
+        #expect(xml.contains("<title>opencast Subscriptions</title>"))
         #expect(xml.contains("<dateCreated>1970-01-01T00:00:00Z</dateCreated>"))
     }
 

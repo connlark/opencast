@@ -96,7 +96,7 @@ struct AVFoundationPlaybackControllerTests {
             try? FileManager.default.removeItem(at: validFixtureURL)
         }
 
-        try controller.load(episode)
+        try controller.load(episode, startPosition: 2)
         controller.play()
 
         let failedState = try await waitForTerminalPlaybackState(in: controller)
@@ -104,6 +104,7 @@ struct AVFoundationPlaybackControllerTests {
             Issue.record("Expected failed playback state before retry, got \(failedState).")
             return
         }
+        #expect(controller.snapshot.position >= 2)
 
         try Data(contentsOf: validFixtureURL).write(to: fileURL, options: .atomic)
         controller.play()
@@ -112,6 +113,7 @@ struct AVFoundationPlaybackControllerTests {
             state == .playing
         }
         #expect(recoveredState == .playing)
+        #expect(controller.snapshot.position >= 2)
     }
 
     @Test
@@ -128,6 +130,47 @@ struct AVFoundationPlaybackControllerTests {
         let info = try #require(builder.info(for: snapshot, resolvedDuration: nil, artwork: nil))
 
         #expect(floatValue(info[MPNowPlayingInfoPropertyPlaybackRate]) == 0)
+    }
+
+    @Test
+    func protectedPlaybackPositionRejectsStaleObservationUntilSeekTargetAppears() {
+        var protection = PlaybackPositionProtection()
+
+        guard let firstGeneration = protection.startSeek(to: 45) else {
+            Issue.record("Expected seek to return a protection generation.")
+            return
+        }
+        let acceptsInitialStalePosition = protection.acceptsObservedPosition(0.2)
+        #expect(!acceptsInitialStalePosition)
+        #expect(protection.position == 45)
+
+        protection.completeSeek(generation: firstGeneration, finished: true)
+        let acceptsStalePositionAfterSeekCompletion = protection.acceptsObservedPosition(0.2)
+        #expect(!acceptsStalePositionAfterSeekCompletion)
+        let acceptsSettledPosition = protection.acceptsObservedPosition(45.4)
+        #expect(acceptsSettledPosition)
+        #expect(protection.position == nil)
+
+        guard let oldGeneration = protection.startSeek(to: 30),
+              let currentGeneration = protection.startSeek(to: 80)
+        else {
+            Issue.record("Expected overlapping seeks to return protection generations.")
+            return
+        }
+
+        protection.completeSeek(generation: oldGeneration, finished: true)
+        let acceptsOldSeekTarget = protection.acceptsObservedPosition(30)
+        #expect(!acceptsOldSeekTarget)
+
+        protection.completeSeek(generation: currentGeneration, finished: false)
+        let acceptsAfterCancelledSeek = protection.acceptsObservedPosition(30)
+        #expect(acceptsAfterCancelledSeek)
+
+        _ = protection.startSeek(to: 0)
+        let acceptsPreviousPositionAfterZeroSeek = protection.acceptsObservedPosition(60)
+        #expect(!acceptsPreviousPositionAfterZeroSeek)
+        let acceptsSettledZeroPosition = protection.acceptsObservedPosition(0.2)
+        #expect(acceptsSettledZeroPosition)
     }
 
     private func waitForTerminalPlaybackState(

@@ -8,6 +8,8 @@ import Testing
 @MainActor
 @Suite("Data nuke")
 struct DataNukeTests {
+    private let seededFeedURL = "https://example.com/nuke.xml"
+
     @Test("Confirmation text ignores case and non-letters")
     func confirmationTextIgnoresCaseAndNonLetters() {
         #expect(DataNukeConfirmation.isConfirmed("NUKE"))
@@ -27,21 +29,22 @@ struct DataNukeTests {
         let fileStore = EpisodeDownloadFileStore(
             baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
         )
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
         let appModel = OpenCastAppModel(
             cacheController: cacheController,
-            library: LibraryStore(),
+            library: LibraryStore(localCache: localCache),
             downloads: DownloadStore(fileStore: fileStore),
             syncStatus: SyncStatusStore(
                 accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
             ),
             allowsAutomaticFeedRefresh: false
         )
-        let episode = try seedAllData(fileStore: fileStore, context: context)
+        let seededEpisode = try seedAllData(fileStore: fileStore, context: context)
         try writeCacheFixture(in: cacheController.feedCacheDirectory, fileName: "feed.cache")
         try writeCacheFixture(in: cacheController.artworkCacheDirectory, fileName: "artwork.cache")
         try writeOrphanPartialDownload(fileStore: fileStore)
 
-        appModel.library.load(modelContext: context)
+        await appModel.library.load(modelContext: context)
         appModel.downloads.load(modelContext: context)
         appModel.appearanceSettings.load(modelContext: context)
         appModel.playbackSettings.load(modelContext: context, playback: appModel.playback)
@@ -51,13 +54,14 @@ struct DataNukeTests {
         _ = appModel.setSkipBackwardOption(.sixty, modelContext: context)
         _ = appModel.setSkipForwardOption(.five, modelContext: context)
         _ = appModel.onboardingState.markCompleted(modelContext: context)
+        let episode = try #require(appModel.library.episode(with: seededEpisode.episodeID))
         try appModel.playback.load(appModel.library.domainEpisode(for: episode), startPosition: 42)
         appModel.lastPlaybackError = "Previous playback failure"
         appModel.isNowPlayingPresented = true
 
         try await appModel.nukeAllData(modelContext: context)
 
-        try expectAllTablesEmpty(context)
+        try await expectAllTablesEmpty(context, localCache: localCache, activeFeedURL: seededFeedURL)
         #expect(appModel.library.subscriptions.isEmpty)
         #expect(appModel.library.episodes.isEmpty)
         #expect(appModel.downloads.records.isEmpty)
@@ -65,7 +69,7 @@ struct DataNukeTests {
         #expect(appModel.lastPlaybackError == nil)
         #expect(!appModel.isNowPlayingPresented)
         #expect(appModel.appearanceSettings.mode == .system)
-        #expect(appModel.playbackSettings.voiceBoostMode == .globalOn)
+        #expect(appModel.playbackSettings.voiceBoostMode == .perEpisode)
         #expect(appModel.playbackSettings.isVoiceBoostEnabled)
         #expect(appModel.playbackSettings.skipBackwardOption == .defaultBackward)
         #expect(appModel.playbackSettings.skipForwardOption == .defaultForward)
@@ -90,6 +94,7 @@ struct DataNukeTests {
         )
         let appModel = OpenCastAppModel(
             cacheController: cacheController,
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             downloads: DownloadStore(fileStore: fileStore),
             syncStatus: SyncStatusStore(
                 accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.noAccount])
@@ -136,6 +141,7 @@ struct DataNukeTests {
         let syncStatus = SyncStatusStore(accountStatusProvider: provider)
         let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
         let appModel = OpenCastAppModel(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             downloads: DownloadStore(fileStore: fileStore),
             syncStatus: syncStatus,
             allowsAutomaticFeedRefresh: false
@@ -163,8 +169,9 @@ struct DataNukeTests {
         let context = ModelContext(container)
         let feedURL = "https://example.com/race.xml"
         let feedService = HangingFeedService()
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
         let appModel = OpenCastAppModel(
-            library: LibraryStore(feedService: feedService),
+            library: LibraryStore(feedService: feedService, localCache: localCache),
             syncStatus: SyncStatusStore(
                 accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
             ),
@@ -173,7 +180,7 @@ struct DataNukeTests {
 
         context.insert(SubscriptionRecord(feedURL: feedURL, title: "Race Show"))
         try context.save()
-        appModel.library.load(modelContext: context)
+        await appModel.library.load(modelContext: context)
 
         let refreshTask = Task { @MainActor in
             await appModel.library.refresh(feedURL: feedURL, modelContext: context)
@@ -190,7 +197,7 @@ struct DataNukeTests {
         )
         await refreshTask.value
 
-        try expectAllTablesEmpty(context)
+        try await expectAllTablesEmpty(context, localCache: localCache, activeFeedURL: feedURL)
         #expect(appModel.library.episodes.isEmpty)
         #expect(appModel.library.refreshLogs.isEmpty)
     }
@@ -206,9 +213,10 @@ struct DataNukeTests {
         let fileStore = EpisodeDownloadFileStore(
             baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
         )
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
         let appModel = OpenCastAppModel(
             cacheController: cacheController,
-            library: LibraryStore(),
+            library: LibraryStore(localCache: localCache),
             downloads: DownloadStore(fileStore: fileStore),
             syncStatus: SyncStatusStore(
                 accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
@@ -219,7 +227,7 @@ struct DataNukeTests {
         try FileManager.default.removeItem(at: cacheController.artworkCacheDirectory)
         try Data("not a directory".utf8).write(to: cacheController.artworkCacheDirectory, options: .atomic)
 
-        appModel.library.load(modelContext: context)
+        await appModel.library.load(modelContext: context)
         appModel.downloads.load(modelContext: context)
         appModel.appearanceSettings.load(modelContext: context)
         _ = appModel.setAppearanceMode(.dark, modelContext: context)
@@ -233,7 +241,7 @@ struct DataNukeTests {
         }
 
         #expect(didFailCacheClearing)
-        try expectAllTablesEmpty(context)
+        try await expectAllTablesEmpty(context, localCache: localCache, activeFeedURL: seededFeedURL)
         #expect(appModel.library.subscriptions.isEmpty)
         #expect(appModel.library.episodes.isEmpty)
         #expect(appModel.library.progressRecords.isEmpty)
@@ -249,7 +257,7 @@ struct DataNukeTests {
         fileStore: EpisodeDownloadFileStore,
         context: ModelContext
     ) throws -> EpisodeCacheRecord {
-        let feedURL = "https://example.com/nuke.xml"
+        let feedURL = seededFeedURL
         let sourceAudioURL = URL(string: "https://example.com/nuke-episode.mp3")!
         let episode = EpisodeCacheRecord(
             episodeID: "nuke-episode",
@@ -300,6 +308,18 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<RefreshLogRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).isEmpty)
+    }
+
+    private func expectAllTablesEmpty(
+        _ context: ModelContext,
+        localCache: any LocalLibraryCacheStore,
+        activeFeedURL: String
+    ) async throws {
+        try expectAllTablesEmpty(context)
+        let cacheSnapshot = try await localCache.loadLibrary(activePodcastIDs: [activeFeedURL])
+        #expect(cacheSnapshot.episodes.isEmpty)
+        #expect(cacheSnapshot.podcastsByFeedURL.isEmpty)
+        #expect(cacheSnapshot.refreshLogs.isEmpty)
     }
 
     private func makeSnapshot(

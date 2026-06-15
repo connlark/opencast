@@ -1,11 +1,9 @@
-import SwiftData
 import SwiftUI
 
 struct EpisodeRowView: View {
     @Environment(OpenCastAppModel.self) private var appModel
-    @Environment(\.modelContext) private var modelContext
 
-    let episode: EpisodeCacheRecord
+    let episode: EpisodeListItemSnapshot
     var searchResult: EpisodeSearchResult?
 
     static func accessibilityIdentifier(for episodeID: String) -> String {
@@ -89,7 +87,7 @@ struct EpisodeRowView: View {
     }
 
     private func updateArtworkPreview(_ preview: ArtworkPreview) {
-        appModel.library.updateArtworkPreview(preview, for: episode, modelContext: modelContext)
+        appModel.library.updateArtworkPreview(preview, for: episode)
     }
 
     @ViewBuilder

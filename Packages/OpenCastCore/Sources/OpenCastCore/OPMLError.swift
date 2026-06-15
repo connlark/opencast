@@ -12,7 +12,7 @@ public enum OPMLError: LocalizedError, Sendable, Equatable {
         case .emptySubscriptionList:
             "This OPML file does not contain any usable podcast subscriptions."
         case .exportFailed:
-            "OpenCast could not create an OPML export file."
+            "opencast could not create an OPML export file."
         }
     }
 }

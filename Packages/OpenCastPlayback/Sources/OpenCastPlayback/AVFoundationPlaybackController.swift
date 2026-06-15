@@ -22,6 +22,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
     public private(set) var sleepTimerEndsAt: Date?
     public private(set) var skipBackwardInterval: TimeInterval = PlaybackSkipInterval.backward
     public private(set) var skipForwardInterval: TimeInterval = PlaybackSkipInterval.forward
+    public private(set) var playbackDiagnosticsText = ""
 
     @ObservationIgnored private let player = AVPlayer()
     @ObservationIgnored private let nowPlayingPublisher: NowPlayingInfoPublisher
@@ -36,6 +37,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
     @ObservationIgnored private var playerTimeControlStatusObservation: NSKeyValueObservation?
     @ObservationIgnored private var audioSessionInterruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var audioSessionRouteChangeObserver: NSObjectProtocol?
+    @ObservationIgnored private var audioSessionMediaServicesResetObserver: NSObjectProtocol?
     @ObservationIgnored private var currentVoiceBoostTap: VoiceBoostAudioTap?
     @ObservationIgnored private var voiceBoostTrackLoadTask: Task<Void, Never>?
     @ObservationIgnored private let voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics?
@@ -52,6 +54,10 @@ public final class AVFoundationPlaybackController: PlaybackController {
     @ObservationIgnored private var isPlaybackRequested = false
     @ObservationIgnored private var shouldResumeAfterInterruption = false
     @ObservationIgnored private var sleepTimerTask: Task<Void, Never>?
+    @ObservationIgnored private var playbackPositionProtection = PlaybackPositionProtection()
+    @ObservationIgnored private var playbackFailureRecoveryPolicy = PlaybackFailureRecoveryPolicy()
+    @ObservationIgnored private var isPlaybackDiagnosticsEnabled = false
+    @ObservationIgnored private var playbackDiagnosticsEvents: [String] = []
 
     public convenience init(
         voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics? = nil,
@@ -124,6 +130,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         voiceBoostTrackLoadTask?.cancel()
         voiceBoostTrackLoadTask = nil
         isPlaybackRequested = false
+        playbackFailureRecoveryPolicy.reset()
 
         let episodeDuration = finitePositive(episode.duration)
         let initialPosition = clampPlaybackPosition(startPosition, to: episodeDuration)
@@ -142,10 +149,11 @@ public final class AVFoundationPlaybackController: PlaybackController {
         observeCurrentItem(playerItem)
 
         if snapshot.position > 0 {
-            player.seek(to: CMTime(seconds: snapshot.position, preferredTimescale: 600))
+            seekPlayer(to: snapshot.position, mode: .restoredPosition)
         }
 
         snapshot.state = .paused
+        recordDiagnosticsEvent("loaded episode start=\(diagnosticsTime(snapshot.position)) url=\(audioURL.absoluteString)")
         publishPlaybackState()
     }
 
@@ -181,11 +189,32 @@ public final class AVFoundationPlaybackController: PlaybackController {
         remoteCommandController.setSkipIntervals(backward: backward, forward: forward)
     }
 
+    public func setPlaybackDiagnosticsEnabled(_ isEnabled: Bool) {
+        guard isPlaybackDiagnosticsEnabled != isEnabled else {
+            return
+        }
+
+        isPlaybackDiagnosticsEnabled = isEnabled
+        if isEnabled {
+            refreshPlaybackDiagnosticsText()
+        } else if !playbackDiagnosticsText.isEmpty {
+            playbackDiagnosticsText = ""
+        }
+    }
+
     public func play() {
+        play(source: "api")
+    }
+
+    private func play(source: String) {
         guard snapshot.currentEpisode != nil else {
             return
         }
 
+        if !isPlaybackRequested {
+            playbackFailureRecoveryPolicy.reset()
+        }
+        recordDiagnosticsEvent("play requested source=\(source)")
         isPlaybackRequested = true
         if needsCurrentItemRebuildForPlaybackRetry,
            !rebuildCurrentItemForPlaybackRetry()
@@ -204,10 +233,15 @@ public final class AVFoundationPlaybackController: PlaybackController {
     }
 
     public func pause() {
+        pause(reason: "api")
+    }
+
+    private func pause(reason: String) {
         isPlaybackRequested = false
         player.pause()
         snapshot.state = snapshot.currentEpisode == nil ? .idle : .paused
         markProgressBoundary()
+        recordDiagnosticsEvent("paused reason=\(reason) at \(diagnosticsTime(snapshot.position))")
         publishPlaybackState()
     }
 
@@ -226,6 +260,8 @@ public final class AVFoundationPlaybackController: PlaybackController {
         player.pause()
         player.replaceCurrentItem(with: nil)
         currentVoiceBoostTap = nil
+        playbackPositionProtection.clear()
+        recordDiagnosticsEvent("unloaded playback")
         replaceSnapshot(PlaybackSnapshot(rate: snapshot.rate, progressBoundaryID: snapshot.progressBoundaryID))
         nowPlayingPublisher.clear()
         remoteCommandController.updateAvailability(for: snapshot, resolvedDuration: nil)
@@ -233,11 +269,16 @@ public final class AVFoundationPlaybackController: PlaybackController {
     }
 
     public func togglePlayPause() {
+        togglePlayPause(source: "api")
+    }
+
+    private func togglePlayPause(source: String) {
+        recordDiagnosticsEvent("toggle play/pause source=\(source) state=\(snapshot.state.accessibilityDescription)")
         switch snapshot.state {
         case .playing, .buffering:
-            pause()
+            pause(reason: "toggle \(source)")
         default:
-            play()
+            play(source: "toggle \(source)")
         }
     }
 
@@ -248,9 +289,10 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
         let clamped = clampedPosition(position)
         currentVoiceBoostTap?.reset()
-        player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600))
+        seekPlayer(to: clamped)
         snapshot.position = clamped
         markProgressBoundary()
+        recordDiagnosticsEvent("seek requested position=\(diagnosticsTime(clamped))")
         publishPlaybackState()
     }
 
@@ -287,7 +329,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
                 return
             }
 
-            self?.pause()
+            self?.pause(reason: "sleep timer")
             self?.clearSleepTimer()
         }
     }
@@ -307,6 +349,13 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
                 let durationChanged = updateDuration(from: player.currentItem?.duration)
                 let newPosition = clampPlaybackPosition(time.seconds, to: resolvedDuration())
+                guard shouldAcceptObservedPosition(newPosition) else {
+                    if durationChanged {
+                        publishPlaybackState()
+                    }
+                    return
+                }
+
                 let positionChanged = snapshot.position != newPosition
                 if positionChanged {
                     snapshot.position = newPosition
@@ -336,13 +385,13 @@ public final class AVFoundationPlaybackController: PlaybackController {
     private func installRemoteCommands() {
         remoteCommandController.install(RemoteCommandHandlers(
             play: { [weak self] in
-                self?.play()
+                self?.play(source: "remote play command")
             },
             pause: { [weak self] in
-                self?.pause()
+                self?.pause(reason: "remote pause command")
             },
             togglePlayPause: { [weak self] in
-                self?.togglePlayPause()
+                self?.togglePlayPause(source: "remote toggle command")
             },
             skipForward: { [weak self] in
                 self?.skipForward()
@@ -388,6 +437,16 @@ public final class AVFoundationPlaybackController: PlaybackController {
                 self?.handleAudioSessionRouteChange(rawReason: rawReason)
             }
         }
+
+        audioSessionMediaServicesResetObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleAudioSessionMediaServicesWereReset()
+            }
+        }
         #endif
     }
 
@@ -399,6 +458,10 @@ public final class AVFoundationPlaybackController: PlaybackController {
         if let audioSessionRouteChangeObserver {
             NotificationCenter.default.removeObserver(audioSessionRouteChangeObserver)
             self.audioSessionRouteChangeObserver = nil
+        }
+        if let audioSessionMediaServicesResetObserver {
+            NotificationCenter.default.removeObserver(audioSessionMediaServicesResetObserver)
+            self.audioSessionMediaServicesResetObserver = nil
         }
     }
 
@@ -420,6 +483,17 @@ public final class AVFoundationPlaybackController: PlaybackController {
             break
         }
         #endif
+    }
+
+    private func handleAudioSessionMediaServicesWereReset() {
+        isAudioSessionActive = false
+        recordDiagnosticsEvent("audio session media services reset")
+
+        guard isPlaybackRequested, snapshot.currentEpisode != nil else {
+            return
+        }
+
+        play(source: "audio session media services reset")
     }
 
     private func handleAudioSessionInterruptionBegan() {
@@ -445,7 +519,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
             return
         }
 
-        play()
+        play(source: "audio session interruption ended")
     }
 
     private func handleAudioSessionRouteChange(rawReason: UInt?) {
@@ -511,6 +585,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         currentStreamingPlayerItem = nil
         currentStreamingFallbackURL = nil
         hasAttemptedStreamingCacheFallback = false
+        playbackPositionProtection.clear()
     }
 
     private func scheduleTrackBoundVoiceBoostTapInstall(for playerItem: AVPlayerItem, asset: AVURLAsset) {
@@ -684,7 +759,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
             snapshot.state = .playing
             publishPlaybackState()
         case .waitingToPlayAtSpecifiedRate:
-            transitionToBuffering()
+            transitionToBuffering(reason: "player waiting reason=\(player.reasonForWaitingToPlay?.rawValue ?? "nil")")
         case .paused:
             break
         @unknown default:
@@ -700,7 +775,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         switch playerItem.status {
         case .unknown:
             if isPlaybackRequested {
-                transitionToBuffering()
+                transitionToBuffering(reason: "item status unknown")
             }
         case .readyToPlay:
             if updateDuration(from: playerItem.duration) {
@@ -713,10 +788,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
                 publishPlaybackState()
             }
         case .failed:
-            if fallbackFromStreamingCacheIfNeeded(failedItem: playerItem) {
-                return
-            }
-            failPlayback(error: playerItem.error)
+            handleFailedCurrentItem(playerItem)
         @unknown default:
             failPlayback(message: "This episode could not be played.")
         }
@@ -731,7 +803,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
 
         if playerItem.isPlaybackBufferEmpty {
-            transitionToBuffering()
+            transitionToBuffering(reason: "item playback buffer empty")
         } else if playerItem.isPlaybackLikelyToKeepUp {
             requestPlaybackForReadyItem(playerItem)
         }
@@ -743,7 +815,8 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
 
         if isPlaybackRequested {
-            transitionToBuffering()
+            recordDiagnosticsEvent("playback stalled at \(diagnosticsTime(snapshot.position))")
+            transitionToBuffering(reason: "AVPlayerItemPlaybackStalled")
             player.playImmediately(atRate: snapshot.rate)
         }
     }
@@ -758,12 +831,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
         case .readyToPlay:
             requestPlaybackForReadyItem(playerItem)
         case .failed:
-            if fallbackFromStreamingCacheIfNeeded(failedItem: playerItem) {
-                return
-            }
-            failPlayback(error: playerItem.error)
+            handleFailedCurrentItem(playerItem)
         case .unknown:
-            transitionToBuffering()
+            transitionToBuffering(reason: "request playback for unknown item")
             player.rate = snapshot.rate
         @unknown default:
             failPlayback(message: "This episode could not be played.")
@@ -784,12 +854,18 @@ public final class AVFoundationPlaybackController: PlaybackController {
         @unknown default:
             snapshot.state = .buffering
         }
+        recordDiagnosticsEvent(
+            "requested ready item playback result=\(snapshot.state.accessibilityDescription) timeControlStatus=\(diagnosticsTimeControlStatus) waitingReason=\(player.reasonForWaitingToPlay?.rawValue ?? "nil")"
+        )
         publishPlaybackState()
     }
 
     private var needsCurrentItemRebuildForPlaybackRetry: Bool {
         guard snapshot.currentEpisode != nil else {
             return false
+        }
+        if case .failed = snapshot.state {
+            return true
         }
         guard let currentItem = player.currentItem else {
             return true
@@ -818,10 +894,11 @@ public final class AVFoundationPlaybackController: PlaybackController {
         observeCurrentItem(retryItem)
 
         if snapshot.position > 0 {
-            player.seek(to: CMTime(seconds: snapshot.position, preferredTimescale: 600))
+            seekPlayer(to: snapshot.position, mode: .restoredPosition)
         }
 
         snapshot.state = .loading
+        recordDiagnosticsEvent("rebuilt player item for retry at \(diagnosticsTime(snapshot.position))")
         publishPlaybackState()
         return true
     }
@@ -848,9 +925,10 @@ public final class AVFoundationPlaybackController: PlaybackController {
         observeCurrentItem(fallbackItem)
 
         if snapshot.position > 0 {
-            player.seek(to: CMTime(seconds: snapshot.position, preferredTimescale: 600))
+            seekPlayer(to: snapshot.position, mode: .restoredPosition)
         }
 
+        recordDiagnosticsEvent("falling back from streaming cache to direct AVPlayer item")
         if isPlaybackRequested {
             requestPlaybackForCurrentItem()
         } else {
@@ -860,16 +938,53 @@ public final class AVFoundationPlaybackController: PlaybackController {
         return true
     }
 
-    private func transitionToBuffering() {
+    private func handleFailedCurrentItem(_ playerItem: AVPlayerItem) {
+        if fallbackFromStreamingCacheIfNeeded(failedItem: playerItem) {
+            return
+        }
+        if recoverFromFailedCurrentItemIfNeeded(playerItem) {
+            return
+        }
+        failPlayback(error: playerItem.error, failedItem: playerItem)
+    }
+
+    private func transitionToBuffering(reason: String) {
         guard snapshot.currentEpisode != nil, snapshot.state != .buffering else {
             return
         }
 
         snapshot.state = .buffering
+        recordDiagnosticsEvent("buffering reason=\(reason)")
         publishPlaybackState()
     }
 
-    private func failPlayback(error: (any Error)?) {
+    private func recoverFromFailedCurrentItemIfNeeded(_ playerItem: AVPlayerItem) -> Bool {
+        guard player.currentItem === playerItem,
+              snapshot.currentEpisode != nil,
+              isPlaybackRequested,
+              playbackFailureRecoveryPolicy.shouldAttemptAutomaticRetry(
+                error: playerItem.error,
+                errorLog: playerItem.errorLog()
+              )
+        else {
+            return false
+        }
+
+        recordFailedItemDiagnostics(playerItem, error: playerItem.error, prefix: "transient failure")
+        recordDiagnosticsEvent(
+            "automatic transient playback retry attempt=\(playbackFailureRecoveryPolicy.automaticTransientFailureRetryCount) at \(diagnosticsTime(snapshot.position))"
+        )
+
+        guard rebuildCurrentItemForPlaybackRetry() else {
+            return true
+        }
+
+        requestPlaybackForCurrentItem()
+        return true
+    }
+
+    private func failPlayback(error: (any Error)?, failedItem: AVPlayerItem? = nil) {
+        recordFailedItemDiagnostics(failedItem, error: error, prefix: "terminal failure")
         let message = error?.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         if let message, !message.isEmpty {
             failPlayback(message: "This episode could not be played. \(message)")
@@ -881,9 +996,32 @@ public final class AVFoundationPlaybackController: PlaybackController {
     private func failPlayback(message: String) {
         isPlaybackRequested = false
         player.pause()
+        let playerPosition = clampPlaybackPosition(player.currentTime().seconds, to: resolvedDuration())
+        if playerPosition > snapshot.position {
+            snapshot.position = playerPosition
+        }
         snapshot.state = .failed(message)
         markProgressBoundary()
+        recordDiagnosticsEvent("playback failed: \(message)")
         publishPlaybackState()
+    }
+
+    private func recordFailedItemDiagnostics(
+        _ playerItem: AVPlayerItem?,
+        error: (any Error)?,
+        prefix: String
+    ) {
+        recordDiagnosticsEvent("\(prefix) error=\(AVFoundationPlaybackDiagnosticsFormatter.errorSummary(for: error))")
+        if let event = playerItem?.errorLog()?.events.last {
+            recordDiagnosticsEvent(
+                "\(prefix) errorLog=\(AVFoundationPlaybackDiagnosticsFormatter.errorLogSummary(for: event))"
+            )
+        }
+        if let event = playerItem?.accessLog()?.events.last {
+            recordDiagnosticsEvent(
+                "\(prefix) accessLog=\(AVFoundationPlaybackDiagnosticsFormatter.accessLogSummary(for: event))"
+            )
+        }
     }
 
     private func handleCurrentItemDidPlayToEnd() {
@@ -901,6 +1039,51 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
     private func clampedPosition(_ position: TimeInterval) -> TimeInterval {
         clampPlaybackPosition(position, to: resolvedDuration())
+    }
+
+    private enum SeekMode {
+        case userInitiated
+        case restoredPosition
+    }
+
+    private func seekPlayer(to position: TimeInterval, mode: SeekMode = .userInitiated) {
+        let clamped = clampedPosition(position)
+        let protectedSeekGeneration = playbackPositionProtection.startSeek(to: clamped)
+        let time = CMTime(seconds: clamped, preferredTimescale: 600)
+        let completion: @Sendable (Bool) -> Void = { [weak self] finished in
+            Task { @MainActor [weak self] in
+                self?.completeProtectedSeek(generation: protectedSeekGeneration, finished: finished)
+            }
+        }
+
+        switch mode {
+        case .userInitiated:
+            player.seek(to: time, completionHandler: completion)
+        case .restoredPosition:
+            player.seek(
+                to: time,
+                toleranceBefore: .zero,
+                toleranceAfter: .zero,
+                completionHandler: completion
+            )
+        }
+    }
+
+    private func completeProtectedSeek(generation: Int?, finished: Bool) {
+        guard let generation else {
+            return
+        }
+
+        playbackPositionProtection.completeSeek(generation: generation, finished: finished)
+        refreshPlaybackDiagnosticsText()
+    }
+
+    private func shouldAcceptObservedPosition(_ position: TimeInterval) -> Bool {
+        if case .failed = snapshot.state {
+            return false
+        }
+
+        return playbackPositionProtection.acceptsObservedPosition(position)
     }
 
     private func resolvedDuration() -> TimeInterval? {
@@ -947,6 +1130,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         setIfChanged(\.progressBoundaryID, to: snapshot.progressBoundaryID)
         setIfChanged(\.rate, to: snapshot.rate)
         setIfChanged(\.sleepTimerEndsAt, to: snapshot.sleepTimerEndsAt)
+        refreshPlaybackDiagnosticsText()
     }
 
     private func setIfChanged<Value: Equatable>(
@@ -986,14 +1170,82 @@ public final class AVFoundationPlaybackController: PlaybackController {
         remoteCommandController.updateAvailability(for: snapshot, resolvedDuration: duration)
     }
 
+    private func recordDiagnosticsEvent(_ event: String) {
+        let timestamp = Date.now.formatted(.dateTime.hour().minute().second())
+        playbackDiagnosticsEvents.append("[\(timestamp)] \(event)")
+        if playbackDiagnosticsEvents.count > 80 {
+            playbackDiagnosticsEvents.removeFirst(playbackDiagnosticsEvents.count - 80)
+        }
+    }
+
+    private func refreshPlaybackDiagnosticsText() {
+        guard isPlaybackDiagnosticsEnabled else {
+            if !playbackDiagnosticsText.isEmpty {
+                playbackDiagnosticsText = ""
+            }
+            return
+        }
+
+        let text = AVFoundationPlaybackDiagnosticsFormatter.text(
+            snapshot: snapshot,
+            player: player,
+            item: player.currentItem,
+            isPlaybackRequested: isPlaybackRequested,
+            isAudioSessionActive: isAudioSessionActive,
+            protectedPlaybackPosition: playbackPositionProtection.position,
+            automaticTransientFailureRetryCount: playbackFailureRecoveryPolicy.automaticTransientFailureRetryCount,
+            automaticTransientFailureRetryLimit: PlaybackFailureRecoveryPolicy.automaticTransientFailureRetryLimit,
+            streamingAudioCacheConfiguration: streamingAudioCacheConfiguration,
+            currentStreamingPlayerItem: currentStreamingPlayerItem,
+            currentStreamingFallbackURL: currentStreamingFallbackURL,
+            hasAttemptedStreamingCacheFallback: hasAttemptedStreamingCacheFallback,
+            events: playbackDiagnosticsEvents
+        )
+        if playbackDiagnosticsText != text {
+            playbackDiagnosticsText = text
+        }
+    }
+
+    private func diagnosticsTime(_ value: TimeInterval?) -> String {
+        AVFoundationPlaybackDiagnosticsFormatter.time(value)
+    }
+
+    private var diagnosticsTimeControlStatus: String {
+        AVFoundationPlaybackDiagnosticsFormatter.timeControlStatus(player.timeControlStatus)
+    }
+
     private func activateAudioSession() throws {
         #if os(iOS) || os(tvOS) || os(visionOS)
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio, policy: .longFormAudio)
-        try session.setActive(true)
-        isAudioSessionActive = true
+        guard !isAudioSessionActive else {
+            return
+        }
+
+        do {
+            try activateAudioSessionOnce(session)
+            isAudioSessionActive = true
+        } catch {
+            isAudioSessionActive = false
+            recordDiagnosticsEvent("audio session activation failed: \(error.localizedDescription)")
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            do {
+                try activateAudioSessionOnce(session)
+                isAudioSessionActive = true
+                recordDiagnosticsEvent("audio session activated after retry")
+            } catch {
+                recordDiagnosticsEvent("audio session activation retry failed: \(error.localizedDescription)")
+                throw error
+            }
+        }
         #endif
     }
+
+    #if os(iOS) || os(tvOS) || os(visionOS)
+    private func activateAudioSessionOnce(_ session: AVAudioSession) throws {
+        try session.setCategory(.playback, mode: .spokenAudio, policy: .longFormAudio)
+        try session.setActive(true)
+    }
+    #endif
 
     private func deactivateAudioSession() {
         #if os(iOS) || os(tvOS) || os(visionOS)

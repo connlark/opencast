@@ -12,9 +12,7 @@ struct EpisodeDetailView: View {
     @State private var showNotesShouldRender = false
     @State private var isConfirmingClearProgress = false
 
-    private static let autoplayTextContentDelay: Duration = .milliseconds(500)
-
-    private var episode: EpisodeCacheRecord? {
+    private var episode: EpisodeListItemSnapshot? {
         appModel.library.episode(with: episodeID)
     }
 
@@ -144,21 +142,14 @@ struct EpisodeDetailView: View {
                 return
             }
 
-            let didAutoplay = autoplayIfNeeded(episode)
-            if didAutoplay {
-                try? await Task.sleep(for: Self.autoplayTextContentDelay)
-                guard !Task.isCancelled, !appModel.isNowPlayingPresented else {
-                    return
-                }
-            }
             await updateTextContent(for: episode)
         }
     }
 
-    private func play(_ record: EpisodeCacheRecord) {
+    private func play(_ episode: EpisodeListItemSnapshot) {
         nowPlayingProbeMark("playepisode-tap")
         runPlaybackAction {
-            try appModel.playEpisode(record, modelContext: modelContext)
+            try appModel.playEpisode(episode, modelContext: modelContext)
         }
     }
 
@@ -167,11 +158,11 @@ struct EpisodeDetailView: View {
             return
         }
 
-        appModel.library.updateArtworkPreview(preview, for: episode, modelContext: modelContext)
+        appModel.library.updateArtworkPreview(preview, for: episode)
     }
 
-    private func markPlayed(_ record: EpisodeCacheRecord) {
-        appModel.markEpisodePlayed(record, modelContext: modelContext)
+    private func markPlayed(_ episode: EpisodeListItemSnapshot) {
+        appModel.markEpisodePlayed(episode, modelContext: modelContext)
     }
 
     private func confirmClearProgress() {
@@ -192,17 +183,6 @@ struct EpisodeDetailView: View {
         } catch {
             appModel.lastPlaybackError = error.localizedDescription
         }
-    }
-
-    private func autoplayIfNeeded(_ record: EpisodeCacheRecord?) -> Bool {
-        guard let record,
-              appModel.consumeEpisodeAutoplayOnOpen(episodeID: record.episodeID)
-        else {
-            return false
-        }
-
-        play(record)
-        return true
     }
 
     @ViewBuilder
@@ -227,47 +207,52 @@ struct EpisodeDetailView: View {
         }
     }
 
-    private func playDownloaded(_ record: EpisodeCacheRecord) {
+    private func playDownloaded(_ episode: EpisodeListItemSnapshot) {
         runPlaybackAction {
-            guard let downloadRecord = appModel.downloads.record(for: record.episodeID) else {
+            guard let downloadRecord = appModel.downloads.record(for: episode.episodeID) else {
                 throw EpisodeDownloadError.missingDownloadedFile
             }
 
             try appModel.playDownloadedEpisode(
-                record,
+                episode,
                 downloadRecord: downloadRecord,
                 modelContext: modelContext
             )
         }
     }
 
-    private func download(_ record: EpisodeCacheRecord) {
-        appModel.downloads.startDownload(for: record, modelContext: modelContext)
+    private func download(_ episode: EpisodeListItemSnapshot) {
+        appModel.downloads.startDownload(for: episode, modelContext: modelContext)
     }
 
-    private func cancelDownload(_ record: EpisodeCacheRecord) {
-        appModel.downloads.cancelDownload(episodeID: record.episodeID, modelContext: modelContext)
+    private func cancelDownload(_ episode: EpisodeListItemSnapshot) {
+        appModel.downloads.cancelDownload(episodeID: episode.episodeID, modelContext: modelContext)
     }
 
-    private func deleteDownload(_ record: EpisodeCacheRecord) {
-        guard let downloadRecord = appModel.downloads.record(for: record.episodeID) else {
+    private func deleteDownload(_ episode: EpisodeListItemSnapshot) {
+        guard let downloadRecord = appModel.downloads.record(for: episode.episodeID) else {
             return
         }
 
         appModel.downloads.deleteDownload(downloadRecord, modelContext: modelContext)
     }
 
-    private func updateTextContent(for episode: EpisodeCacheRecord?) async {
+    private func updateTextContent(for episode: EpisodeListItemSnapshot?) async {
         guard let episode else {
             applyTextContent(.empty)
             return
         }
 
-        let summaryHTML = episode.summary
-        let showNotesHTML = episode.showNotesHTML
+        // Show notes live only in the local cache store; fetch them lazily so
+        // list loads never carry them.
+        let detail = await appModel.library.episodeDetail(for: episode.episodeID)
+        guard !Task.isCancelled else {
+            return
+        }
+
         let textContent = await EpisodeTextContent.resolving(
-            summaryHTML: summaryHTML,
-            showNotesHTML: showNotesHTML
+            summaryHTML: episode.summary,
+            showNotesHTML: detail?.showNotesHTML
         )
         guard !Task.isCancelled else {
             return

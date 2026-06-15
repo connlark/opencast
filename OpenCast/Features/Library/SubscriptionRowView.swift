@@ -3,11 +3,10 @@ import SwiftUI
 
 struct SubscriptionRowView: View {
     @Environment(OpenCastAppModel.self) private var appModel
-    @Environment(\.modelContext) private var modelContext
 
     let subscription: SubscriptionRecord
-    let podcastCache: PodcastCacheRecord?
-    let latestRefreshLog: RefreshLogRecord?
+    let podcastCache: PodcastCacheSnapshot?
+    let latestRefreshLog: RefreshLogSnapshot?
     let isRefreshing: Bool
 
     private var refreshErrorMessage: String? {
@@ -73,6 +72,6 @@ struct SubscriptionRowView: View {
             return
         }
 
-        appModel.library.updateArtworkPreview(preview, for: podcastCache, modelContext: modelContext)
+        appModel.library.updateArtworkPreview(preview, for: podcastCache)
     }
 }

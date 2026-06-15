@@ -5,17 +5,18 @@ import Testing
 @MainActor
 @Suite("Playback settings store")
 struct PlaybackSettingsStoreTests {
-    @Test("Playback settings default to global Voice Boost with 30 back and 15 forward")
+    @Test("Playback settings default to per-episode Voice Boost on with 30 back and 15 forward")
     func defaultsApplyToPlayback() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let playback = PlaybackVoiceBoostControllerSpy()
         let store = PlaybackSettingsStore()
 
-        store.load(modelContext: context, playback: playback)
+        store.load(episodeID: "episode-1", podcastID: "podcast-1", modelContext: context, playback: playback)
 
-        #expect(store.voiceBoostMode == .globalOn)
+        #expect(store.voiceBoostMode == .perEpisode)
         #expect(store.isVoiceBoostEnabled == true)
+        #expect(store.canChangeCurrentEpisodeVoiceBoost)
         #expect(store.skipBackwardOption == .thirty)
         #expect(store.skipForwardOption == .fifteen)
         #expect(playback.appliedValues == [true])
@@ -65,13 +66,6 @@ struct PlaybackSettingsStoreTests {
         let store = PlaybackSettingsStore()
 
         store.load(episodeID: "episode-1", podcastID: "podcast-1", modelContext: context, playback: playback)
-        store.setVoiceBoostMode(
-            .perEpisode,
-            episodeID: "episode-1",
-            podcastID: "podcast-1",
-            modelContext: context,
-            playback: playback
-        )
         store.setVoiceBoostEnabled(
             false,
             forEpisodeID: "episode-1",
@@ -111,13 +105,6 @@ struct PlaybackSettingsStoreTests {
         let store = PlaybackSettingsStore()
 
         store.load(episodeID: "episode-1", podcastID: "podcast-1", modelContext: context, playback: playback)
-        store.setVoiceBoostMode(
-            .perEpisode,
-            episodeID: "episode-1",
-            podcastID: "podcast-1",
-            modelContext: context,
-            playback: playback
-        )
         store.setVoiceBoostEnabled(
             false,
             forEpisodeID: "episode-1",
@@ -141,7 +128,7 @@ struct PlaybackSettingsStoreTests {
         )
 
         #expect(store.isVoiceBoostEnabled == false)
-        #expect(playback.appliedValues == [true, true, false, true, false])
+        #expect(playback.appliedValues == [true, false, true, false])
     }
 
     @Test("Skip interval choices persist and apply to playback")

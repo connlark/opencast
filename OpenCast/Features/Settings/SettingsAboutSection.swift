@@ -15,7 +15,7 @@ struct SettingsAboutSection: View {
             Link(destination: OpenCastConstants.privacyPolicyURL) {
                 ExternalSettingsLinkRow(
                     title: "Privacy Policy",
-                    subtitle: "How OpenCast handles listening data",
+                    subtitle: "How opencast handles listening data",
                     systemImage: "hand.raised",
                     tint: .teal
                 )

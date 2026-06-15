@@ -8,13 +8,13 @@ struct SettingsDangerZoneSection: View {
     var body: some View {
         Section {
             Button(
-                "Nuke OpenCast Data",
+                "Nuke opencast Data",
                 systemImage: "trash",
                 role: .destructive,
                 action: confirmDataNuke
             )
             .confirmationDialog(
-                "Nuke all OpenCast data?",
+                "Nuke all opencast data?",
                 isPresented: $isConfirmingDataNuke,
                 titleVisibility: .visible
             ) {
@@ -26,7 +26,7 @@ struct SettingsDangerZoneSection: View {
         } header: {
             Text("Danger Zone")
         } footer: {
-            Text("The final delete checks iCloud account status again. If OpenCast cannot confirm that iCloud is available, no data is deleted.")
+            Text("The final delete checks iCloud account status again. If opencast cannot confirm that iCloud is available, no data is deleted.")
         }
     }
 

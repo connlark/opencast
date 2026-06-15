@@ -83,7 +83,7 @@ final class SyncStatusStore {
         await Task.yield()
 
         do {
-            lastRepairResult = try libraryStore.repairSyncDuplicates(modelContext: modelContext)
+            lastRepairResult = try await libraryStore.repairSyncDuplicates(modelContext: modelContext)
             lastRepairErrorMessage = nil
         } catch {
             lastRepairResult = nil

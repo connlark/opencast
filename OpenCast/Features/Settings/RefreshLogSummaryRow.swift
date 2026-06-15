@@ -2,7 +2,7 @@ import SwiftUI
 
 struct RefreshLogSummaryRow: View {
     let title: String
-    let log: RefreshLogRecord
+    let log: RefreshLogSnapshot
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {

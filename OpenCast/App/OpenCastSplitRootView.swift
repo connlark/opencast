@@ -21,7 +21,7 @@ struct OpenCastSplitRootView: View {
                 .buttonStyle(.plain)
                 .tag(section as AppSection?)
             }
-            .navigationTitle("OpenCast")
+            .navigationTitle("opencast")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Add", systemImage: "plus", action: onAdd)
@@ -43,7 +43,8 @@ struct OpenCastSplitRootView: View {
                         onAdd: onAdd,
                         onOpenEpisode: { episodeID in
                             selectRootRoute(.episodeDetail(id: episodeID))
-                        }
+                        },
+                        selectsEpisodeDetailOnPlay: true
                     )
                 case .settings:
                     ContentUnavailableView(
@@ -60,7 +61,10 @@ struct OpenCastSplitRootView: View {
                             onPresentDataNukeConfirmation: onPresentDataNukeConfirmation
                         )
                     } else if let selectedRoute {
-                        RouteDestinationView(route: selectedRoute) {
+                        RouteDestinationView(
+                            route: selectedRoute,
+                            selectsEpisodeDetailOnPlay: true
+                        ) {
                             invalidateSelectedRoute()
                         } onOpenEpisode: { episodeID in
                             pushEpisodeDetail(episodeID)
@@ -72,7 +76,10 @@ struct OpenCastSplitRootView: View {
                         )
                     }
                 }
-                .withOpenCastDestinations(onOpenEpisode: pushEpisodeDetail)
+                .withOpenCastDestinations(
+                    onOpenEpisode: pushEpisodeDetail,
+                    selectsEpisodeDetailOnPlay: true
+                )
             }
         }
         .onChange(of: selectedSection) { _, _ in

@@ -115,6 +115,7 @@
 				A10000000000000000000016 /* Sources */,
 				A1000000000000000000000F /* Frameworks */,
 				A10000000000000000000017 /* Resources */,
+				A1000000000000000000002E /* Copy App Store Screenshot Fixtures */,
 			);
 			buildRules = (
 			);
@@ -246,6 +247,46 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A1000000000000000000002E /* Copy App Store Screenshot Fixtures */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/OpenCast/AppStoreScreenshots/Artwork",
+				"$(SRCROOT)/OpenCast/AppStoreScreenshots/Artwork/app-store-frame-background.png",
+				"$(SRCROOT)/OpenCast/AppStoreScreenshots/Artwork/archive-hour.png",
+				"$(SRCROOT)/OpenCast/AppStoreScreenshots/Artwork/city-frequency.png",
+				"$(SRCROOT)/OpenCast/AppStoreScreenshots/Artwork/night-mode-notes.png",
+				"$(SRCROOT)/OpenCast/AppStoreScreenshots/Artwork/quiet-desk.png",
+				"$(SRCROOT)/OpenCast/AppStoreScreenshots/Artwork/release-window.png",
+				"$(SRCROOT)/OpenCast/AppStoreScreenshots/Artwork/signal-path.png",
+				"$(SRCROOT)/OpenCast/AppStoreScreenshots/Artwork/sound-lab-weekly.png",
+			);
+			name = "Copy App Store Screenshot Fixtures";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR)/app-store-frame-background.png",
+				"$(OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR)/archive-hour.png",
+				"$(OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR)/city-frequency.png",
+				"$(OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR)/night-mode-notes.png",
+				"$(OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR)/quiet-desk.png",
+				"$(OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR)/release-window.png",
+				"$(OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR)/signal-path.png",
+				"$(OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR)/sound-lab-weekly.png",
+				"$(DERIVED_FILE_DIR)/AppStoreScreenshotFixtures-$(OPENCAST_INCLUDE_APP_STORE_SCREENSHOT_FIXTURES).stamp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\n\ninclude_fixtures=\"${OPENCAST_INCLUDE_APP_STORE_SCREENSHOT_FIXTURES:-NO}\"\ndefault_destination_dir=\"${DERIVED_FILE_DIR}/AppStoreScreenshotFixturesDisabled\"\ndestination_dir=\"${OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR:-${default_destination_dir}}\"\nsource_dir=\"${SRCROOT}/OpenCast/AppStoreScreenshots/Artwork\"\nstamp_file=\"${DERIVED_FILE_DIR}/AppStoreScreenshotFixtures-${include_fixtures}.stamp\"\nfixture_names=\"\napp-store-frame-background.png\narchive-hour.png\ncity-frequency.png\nnight-mode-notes.png\nquiet-desk.png\nrelease-window.png\nsignal-path.png\nsound-lab-weekly.png\n\"\n\n/bin/mkdir -p \"${destination_dir}\"\n\nif [ \"${include_fixtures}\" != \"YES\" ]; then\n  for fixture_name in ${fixture_names}; do\n    /usr/bin/touch \"${destination_dir}/${fixture_name}\"\n  done\n  /usr/bin/touch \"${stamp_file}\"\n  exit 0\nfi\n\nif [ \"${destination_dir}\" = \"${default_destination_dir}\" ]; then\n  echo \"error: OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR must point at the app bundle when OPENCAST_INCLUDE_APP_STORE_SCREENSHOT_FIXTURES=YES.\" >&2\n  exit 1\nfi\n\nif [ ! -d \"${source_dir}\" ]; then\n  echo \"error: Missing App Store screenshot artwork fixtures at ${source_dir}\" >&2\n  exit 1\nfi\n\nfor fixture_name in ${fixture_names}; do\n  fixture=\"${source_dir}/${fixture_name}\"\n  if [ ! -f \"${fixture}\" ]; then\n    echo \"error: Missing App Store screenshot artwork fixture at ${fixture}\" >&2\n    exit 1\n  fi\n  /bin/cp \"${fixture}\" \"${destination_dir}/\"\ndone\n\n/usr/bin/touch \"${stamp_file}\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		A10000000000000000000016 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -288,6 +329,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -340,6 +382,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -349,6 +392,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -394,6 +438,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -405,17 +450,20 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OpenCast/Resources/OpenCast.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 101;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenCast/Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = opencast;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.2;
+				OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR = "$(DERIVED_FILE_DIR)/AppStoreScreenshotFixturesDisabled";
+				OPENCAST_INCLUDE_APP_STORE_SCREENSHOT_FIXTURES = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = com.connor.opencast;
 				PRODUCT_NAME = OpenCast;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -432,17 +480,20 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OpenCast/Resources/OpenCast.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 101;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenCast/Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = opencast;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.2;
+				OPENCAST_APP_STORE_SCREENSHOT_FIXTURE_OUTPUT_DIR = "$(DERIVED_FILE_DIR)/AppStoreScreenshotFixturesDisabled";
+				OPENCAST_INCLUDE_APP_STORE_SCREENSHOT_FIXTURES = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = com.connor.opencast;
 				PRODUCT_NAME = OpenCast;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -458,7 +509,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 101;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -481,7 +532,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 101;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -503,7 +554,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 101;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
@@ -525,7 +576,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 101;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;

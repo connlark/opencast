@@ -12,16 +12,17 @@ struct PodcastDetailView: View {
     let feedURL: String
     var onUnsubscribe: () -> Void = {}
     var onOpenEpisode: (String) -> Void = { _ in }
+    var selectsEpisodeDetailOnPlay = false
 
     private var subscription: SubscriptionRecord? {
         appModel.library.subscriptions.first { $0.feedURL == feedURL }
     }
 
-    private var podcastCache: PodcastCacheRecord? {
+    private var podcastCache: PodcastCacheSnapshot? {
         appModel.library.podcastCache(for: feedURL)
     }
 
-    private var episodes: [EpisodeCacheRecord] {
+    private var episodes: [EpisodeListItemSnapshot] {
         appModel.library.episodes(forPodcastID: feedURL)
     }
 
@@ -41,7 +42,7 @@ struct PodcastDetailView: View {
         appModel.library.isRefreshing(feedURL: feedURL)
     }
 
-    private var latestRefreshLog: RefreshLogRecord? {
+    private var latestRefreshLog: RefreshLogSnapshot? {
         appModel.library.latestRefreshLog(feedURL: feedURL)
     }
 
@@ -116,24 +117,21 @@ struct PodcastDetailView: View {
                                 ContentUnavailableView.search
                             } else {
                                 ForEach(searchSession.results) { result in
-                                    Button {
-                                        openEpisode(result.episode)
-                                    } label: {
-                                        EpisodeRowView(episode: result.episode, searchResult: result)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityIdentifier(EpisodeRowView.accessibilityIdentifier(for: result.episode.episodeID))
+                                    EpisodeRowButton(
+                                        episode: result.episode,
+                                        searchResult: result,
+                                        selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
+                                        onOpenEpisode: onOpenEpisode
+                                    )
                                 }
                             }
                         } else {
                             ForEach(podcastEpisodes) { episode in
-                                Button {
-                                    openEpisode(episode)
-                                } label: {
-                                    EpisodeRowView(episode: episode)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier(EpisodeRowView.accessibilityIdentifier(for: episode.episodeID))
+                                EpisodeRowButton(
+                                    episode: episode,
+                                    selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
+                                    onOpenEpisode: onOpenEpisode
+                                )
                             }
                         }
                     }
@@ -154,10 +152,13 @@ struct PodcastDetailView: View {
             EpisodeSearchScopePicker()
         }
         .task(id: searchTaskKey) {
+            let library = appModel.library
+            let podcastID = feedURL
             await searchSession.update(
                 episodes: podcastEpisodes,
                 query: searchQuery,
-                mode: searchMode
+                mode: searchMode,
+                showNotesProvider: { await library.showNotesHTMLByEpisodeID(forPodcastID: podcastID) }
             )
         }
         .toolbar {
@@ -195,14 +196,11 @@ struct PodcastDetailView: View {
     }
 
     private func unsubscribe() {
-        appModel.unsubscribe(feedURL: feedURL, modelContext: modelContext)
-        onUnsubscribe()
-        dismiss()
-    }
-
-    private func openEpisode(_ episode: EpisodeCacheRecord) {
-        appModel.requestEpisodeAutoplayOnOpenIfNotListening(episodeID: episode.episodeID)
-        onOpenEpisode(episode.episodeID)
+        Task {
+            await appModel.unsubscribe(feedURL: feedURL, modelContext: modelContext)
+            onUnsubscribe()
+            dismiss()
+        }
     }
 
     private func updatePodcastArtworkPreview(_ preview: ArtworkPreview) {
@@ -210,6 +208,6 @@ struct PodcastDetailView: View {
             return
         }
 
-        appModel.library.updateArtworkPreview(preview, for: podcastCache, modelContext: modelContext)
+        appModel.library.updateArtworkPreview(preview, for: podcastCache)
     }
 }

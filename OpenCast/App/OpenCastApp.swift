@@ -48,9 +48,13 @@ struct OpenCastApp: App {
                 voiceBoostTapDiagnostics: voiceBoostDiagnostics,
                 nowPlayingArtworkLoader: SharedNowPlayingArtworkLoader()
             )
+            let localLibraryCacheStore = Self.localLibraryCacheStore(
+                launchConfiguration: launchConfiguration
+            )
             _appModel = State(initialValue: OpenCastAppModel(
                 cacheController: cacheController,
                 httpClient: httpClient,
+                localLibraryCacheStore: localLibraryCacheStore,
                 playback: playback,
                 voiceBoostDiagnostics: voiceBoostDiagnostics,
                 exposesVoiceBoostDiagnosticsStatus: launchConfiguration.exposesVoiceBoostDiagnosticsStatus,
@@ -92,5 +96,24 @@ struct OpenCastApp: App {
         case .light:
             .light
         }
+    }
+
+    private static func localLibraryCacheStore(
+        launchConfiguration: OpenCastLaunchConfiguration
+    ) -> (any LocalLibraryCacheStore)? {
+        guard launchConfiguration.usesInMemoryStore else {
+            return nil
+        }
+
+        let cacheStore = SQLiteLocalLibraryCacheStore.inMemory()
+        #if DEBUG
+        if let delayMilliseconds = launchConfiguration.uiTestLibraryLoadDelayMilliseconds {
+            return UITestDelayedLocalLibraryCacheStore(
+                base: cacheStore,
+                loadDelay: .milliseconds(delayMilliseconds)
+            )
+        }
+        #endif
+        return cacheStore
     }
 }

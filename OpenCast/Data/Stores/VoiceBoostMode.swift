@@ -3,6 +3,8 @@ enum VoiceBoostMode: String, CaseIterable, Identifiable {
     case perEpisode
     case globalOff
 
+    static let defaultMode = VoiceBoostMode.perEpisode
+
     var id: String {
         rawValue
     }

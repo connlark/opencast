@@ -16,4 +16,19 @@ enum NowPlayingDragIntent {
     static func shouldPeelYieldToCardDismiss(translation: CGSize) -> Bool {
         translation.height > 20 && translation.height > abs(translation.width)
     }
+
+    static func shouldStartMiniPlayerDismiss(translation: CGSize) -> Bool {
+        guard translation.height > 0 else {
+            return false
+        }
+
+        return translation.height > abs(translation.width)
+    }
+
+    static func shouldCompleteMiniPlayerDismiss(
+        translation: CGSize,
+        predictedEndTranslation: CGSize
+    ) -> Bool {
+        translation.height > 34 || predictedEndTranslation.height > 80
+    }
 }

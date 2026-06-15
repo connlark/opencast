@@ -84,14 +84,11 @@ struct OpenCastModelTests {
             ]
         )
         let service = StubFeedService(responses: [feedURL: .success(snapshot)])
-        let store = LibraryStore(feedService: service)
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         try await store.subscribe(to: " \(feedURL) ", modelContext: context)
 
         let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
-        let podcasts = try context.fetch(FetchDescriptor<PodcastCacheRecord>())
-        let episodes = try context.fetch(FetchDescriptor<EpisodeCacheRecord>())
-            .sorted { $0.episodeID < $1.episodeID }
         let requestedURLs = await service.requestedURLStrings()
 
         #expect(requestedURLs == [feedURL])
@@ -101,23 +98,94 @@ struct OpenCastModelTests {
         #expect(subscriptions.first?.author == "Subscribed Author")
         #expect(subscriptions.first?.isArchived == false)
         #expect(subscriptions.first?.isVoiceBoostEnabled == true)
-        #expect(podcasts.count == 1)
-        #expect(podcasts.first?.feedURL == feedURL)
-        #expect(podcasts.first?.title == "Subscribed Show")
-        #expect(episodes.map(\.episodeID) == ["subscribe-episode-1", "subscribe-episode-2"])
+        #expect(store.podcastCacheByFeedURL.count == 1)
+        #expect(store.podcastCache(for: feedURL)?.feedURL == feedURL)
+        #expect(store.podcastCache(for: feedURL)?.title == "Subscribed Show")
         #expect(store.subscriptions.map(\.feedURL) == [feedURL])
         #expect(store.episodes.map(\.episodeID) == ["subscribe-episode-2", "subscribe-episode-1"])
         #expect(store.inboxEpisodes.map(\.episodeID) == ["subscribe-episode-2", "subscribe-episode-1"])
         #expect(store.state == .idle)
     }
 
-    @Test("Resume progress transitions from in-progress to played")
-    func progressTransitions() throws {
+    @Test("Subscribe cache write failure does not persist a subscription")
+    func subscribeCacheWriteFailureDoesNotPersistSubscription() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let feedURL = "https://example.com/subscribe-cache-failure.xml"
+        let service = StubFeedService(responses: [
+            feedURL: .success(
+                makeSnapshot(
+                    feedURL: feedURL,
+                    podcastTitle: "Cache Failure",
+                    episodeID: "cache-failure-episode",
+                    episodeTitle: "Cache Failure Episode"
+                )
+            )
+        ])
+        let store = LibraryStore(feedService: service, localCache: FailingUpsertCacheStore())
 
-        store.load(modelContext: context)
+        do {
+            try await store.subscribe(to: feedURL, modelContext: context)
+            Issue.record("Expected subscribe to fail when the local cache write fails.")
+        } catch {
+            #expect(error.localizedDescription == "Local cache upsert failed")
+        }
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.isEmpty)
+        #expect(store.subscriptions.isEmpty)
+        #expect(store.state == .failed("Local cache upsert failed"))
+    }
+
+    @Test("Refresh cache write failure does not advance subscription metadata")
+    func refreshCacheWriteFailureDoesNotAdvanceSubscriptionMetadata() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/refresh-cache-failure.xml"
+        let originalLastRefreshAt = Date(timeIntervalSince1970: 1_700_000_000)
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Original Show",
+                author: "Original Author",
+                artworkURL: "https://example.com/original-art.jpg",
+                lastRefreshAt: originalLastRefreshAt
+            )
+        )
+        try context.save()
+
+        let service = StubFeedService(responses: [
+            feedURL: .success(
+                makeSnapshot(
+                    feedURL: feedURL,
+                    podcastTitle: "Updated Show",
+                    episodeID: "refresh-cache-failure-episode",
+                    episodeTitle: "Refresh Cache Failure Episode",
+                    artworkURL: URL(string: "https://example.com/updated-art.jpg")
+                )
+            )
+        ])
+        let store = LibraryStore(feedService: service, localCache: FailingUpsertCacheStore())
+
+        await store.load(modelContext: context)
+        await store.refresh(feedURL: feedURL, modelContext: context)
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        let subscription = try #require(subscriptions.first)
+        #expect(subscriptions.count == 1)
+        #expect(subscription.title == "Original Show")
+        #expect(subscription.author == "Original Author")
+        #expect(subscription.artworkURL == "https://example.com/original-art.jpg")
+        #expect(subscription.lastRefreshAt == originalLastRefreshAt)
+    }
+
+    @Test("Resume progress transitions from in-progress to played")
+    func progressTransitions() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        await store.load(modelContext: context)
         store.updateProgress(
             episodeID: "episode-id",
             podcastID: Self.modelFixtureFeedURL,
@@ -140,10 +208,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Mark played writes played progress")
-    func markPlayedWritesPlayedProgress() throws {
+    func markPlayedWritesPlayedProgress() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let episode = EpisodeCacheRecord(
+        let episode = makeEpisodeListItem(
             episodeID: "manual-mark-played",
             podcastID: "https://example.com/manual-progress.xml",
             podcastTitle: "Manual Progress",
@@ -151,10 +219,8 @@ struct OpenCastModelTests {
             duration: 120,
             audioURL: "https://example.com/manual-mark-played.mp3"
         )
-        context.insert(episode)
-        try context.save()
-        let appModel = OpenCastAppModel()
-        appModel.library.load(modelContext: context)
+        let appModel = OpenCastAppModel(localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory())
+        await appModel.library.load(modelContext: context)
 
         #expect(appModel.markEpisodePlayed(episode, modelContext: context))
 
@@ -166,10 +232,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Mark played unloads current episode even when progress is already played")
-    func markPlayedUnloadsCurrentEpisodeEvenWhenProgressIsAlreadyPlayed() throws {
+    func markPlayedUnloadsCurrentEpisodeEvenWhenProgressIsAlreadyPlayed() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let episode = EpisodeCacheRecord(
+        let episode = makeEpisodeListItem(
             episodeID: "already-played-current",
             podcastID: "https://example.com/manual-progress.xml",
             podcastTitle: "Manual Progress",
@@ -177,7 +243,6 @@ struct OpenCastModelTests {
             duration: 120,
             audioURL: "https://example.com/already-played-current.mp3"
         )
-        context.insert(episode)
         context.insert(EpisodeProgressRecord(
             episodeID: episode.episodeID,
             podcastID: episode.podcastID,
@@ -187,8 +252,8 @@ struct OpenCastModelTests {
         ))
         context.insert(LocalPreferenceRecord(key: "playback.lastEpisodeID", value: episode.episodeID))
         try context.save()
-        let appModel = OpenCastAppModel()
-        appModel.library.load(modelContext: context)
+        let appModel = OpenCastAppModel(localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory())
+        await appModel.library.load(modelContext: context)
         try appModel.playback.load(appModel.library.domainEpisode(for: episode), startPosition: 0)
 
         let didSave = appModel.markEpisodePlayed(episode, modelContext: context)
@@ -204,10 +269,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Clear progress removes duplicate progress rows")
-    func clearProgressRemovesDuplicateProgressRows() throws {
+    func clearProgressRemovesDuplicateProgressRows() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let episode = EpisodeCacheRecord(
+        let episode = makeEpisodeListItem(
             episodeID: "manual-clear-progress",
             podcastID: "https://example.com/manual-progress.xml",
             podcastTitle: "Manual Progress",
@@ -215,7 +280,6 @@ struct OpenCastModelTests {
             duration: 120,
             audioURL: "https://example.com/manual-clear-progress.mp3"
         )
-        context.insert(episode)
         context.insert(EpisodeProgressRecord(
             episodeID: episode.episodeID,
             podcastID: episode.podcastID,
@@ -229,8 +293,8 @@ struct OpenCastModelTests {
             duration: 120
         ))
         try context.save()
-        let appModel = OpenCastAppModel()
-        appModel.library.load(modelContext: context)
+        let appModel = OpenCastAppModel(localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory())
+        await appModel.library.load(modelContext: context)
 
         #expect(appModel.clearEpisodeProgress(episode, modelContext: context))
 
@@ -240,13 +304,13 @@ struct OpenCastModelTests {
     }
 
     @Test("Resume and played state follow duration thresholds")
-    func resumeAndPlayedStateUsePositionThresholds() throws {
+    func resumeAndPlayedStateUsePositionThresholds() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let podcastID = "https://example.com/progress.xml"
 
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         store.updateProgress(
             episodeID: "at-start",
@@ -310,10 +374,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Duplicate progress updates are no-op saves")
-    func duplicateProgressUpdatesAreNoOpSaves() throws {
+    func duplicateProgressUpdatesAreNoOpSaves() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let updatedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let progress = EpisodeProgressRecord(
             episodeID: "duplicate-progress",
@@ -326,7 +390,7 @@ struct OpenCastModelTests {
 
         context.insert(progress)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         let didSave = store.updateProgress(
             episodeID: "duplicate-progress",
@@ -341,10 +405,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Progress position changes save only after one second")
-    func progressPositionChangesSaveOnlyAfterOneSecond() throws {
+    func progressPositionChangesSaveOnlyAfterOneSecond() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let updatedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let progress = EpisodeProgressRecord(
             episodeID: "position-threshold",
@@ -357,7 +421,7 @@ struct OpenCastModelTests {
 
         context.insert(progress)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         let subsecondSave = store.updateProgress(
             episodeID: "position-threshold",
@@ -381,10 +445,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Duration and played-state changes save progress")
-    func durationAndPlayedStateChangesSaveProgress() throws {
+    func durationAndPlayedStateChangesSaveProgress() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let durationProgress = EpisodeProgressRecord(
             episodeID: "duration-change",
             podcastID: "https://example.com/progress.xml",
@@ -403,7 +467,7 @@ struct OpenCastModelTests {
         context.insert(durationProgress)
         context.insert(playedProgress)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         let durationDidSave = store.updateProgress(
             episodeID: "duration-change",
@@ -427,16 +491,16 @@ struct OpenCastModelTests {
     }
 
     @Test("Progress updates do not reload subscription or episode state")
-    func progressUpdatesDoNotReloadSubscriptionOrEpisodeState() throws {
+    func progressUpdatesDoNotReloadSubscriptionOrEpisodeState() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let initialFeedURL = "https://example.com/initial.xml"
         let laterFeedURL = "https://example.com/later.xml"
 
         insertCachedFeed(feedURL: initialFeedURL, title: "Initial", episodeID: "initial-episode", in: context)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         insertCachedFeed(feedURL: laterFeedURL, title: "Later", episodeID: "later-episode", in: context)
         try context.save()
@@ -474,7 +538,8 @@ struct OpenCastModelTests {
                 )
             )
         ])
-        let store = LibraryStore(feedService: service)
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        let store = LibraryStore(feedService: service, localCache: localCache)
 
         insertCachedFeed(
             feedURL: feedURL,
@@ -485,14 +550,13 @@ struct OpenCastModelTests {
             in: context
         )
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refresh(feedURL: feedURL, modelContext: context)
 
-        let podcast = try #require(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).first)
-        let episode = try #require(try context.fetch(FetchDescriptor<EpisodeCacheRecord>()).first)
-        #expect(podcast.artworkPreview == preview)
-        #expect(episode.artworkPreview == preview)
+        let cached = try await localCache.loadLibrary(activePodcastIDs: [feedURL])
+        #expect(cached.podcastsByFeedURL[feedURL]?.artworkPreview == preview)
+        #expect(cached.episodes.first?.artworkPreview == preview)
         #expect(store.podcastCache(for: feedURL)?.artworkPreview == preview)
         #expect(store.episode(with: episodeID)?.artworkPreview == preview)
     }
@@ -517,7 +581,8 @@ struct OpenCastModelTests {
                 )
             )
         ])
-        let store = LibraryStore(feedService: service)
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        let store = LibraryStore(feedService: service, localCache: localCache)
 
         insertCachedFeed(
             feedURL: feedURL,
@@ -528,12 +593,13 @@ struct OpenCastModelTests {
             in: context
         )
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refresh(feedURL: feedURL, modelContext: context)
 
-        let podcast = try #require(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).first)
-        let episode = try #require(try context.fetch(FetchDescriptor<EpisodeCacheRecord>()).first)
+        let cached = try await localCache.loadLibrary(activePodcastIDs: [feedURL])
+        let podcast = try #require(cached.podcastsByFeedURL[feedURL])
+        let episode = try #require(cached.episodes.first)
         #expect(podcast.artworkURL == newArtworkURL.absoluteString)
         #expect(episode.artworkURL == newArtworkURL.absoluteString)
         #expect(podcast.artworkPreview == nil)
@@ -541,10 +607,11 @@ struct OpenCastModelTests {
     }
 
     @Test("Artwork preview persistence skips no-op saves")
-    func artworkPreviewPersistenceSkipsNoOpSaves() throws {
+    func artworkPreviewPersistenceSkipsNoOpSaves() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        let store = LibraryStore(localCache: localCache)
         let feedURL = "https://example.com/preview-noop.xml"
         let episodeID = "preview-noop-episode"
         let artworkURL = try #require(URL(string: "https://example.com/artwork/noop.png"))
@@ -554,17 +621,20 @@ struct OpenCastModelTests {
 
         insertCachedFeed(feedURL: feedURL, title: "Preview No-Op", episodeID: episodeID, artworkURL: artworkURL, in: context)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
         let episode = try #require(store.episode(with: episodeID))
 
-        let firstDidSave = store.updateArtworkPreview(firstPreview, for: episode, modelContext: context)
-        let duplicateDidSave = store.updateArtworkPreview(duplicatePreview, for: episode, modelContext: context)
-        let updatedDidSave = store.updateArtworkPreview(updatedPreview, for: episode, modelContext: context)
+        let firstDidSave = store.updateArtworkPreview(firstPreview, for: episode)
+        let duplicateDidSave = store.updateArtworkPreview(duplicatePreview, for: episode)
+        let updatedDidSave = store.updateArtworkPreview(updatedPreview, for: episode)
+        await store.waitForPendingCacheWrites()
 
         #expect(firstDidSave)
         #expect(!duplicateDidSave)
         #expect(updatedDidSave)
-        #expect(episode.artworkPreview == updatedPreview)
+        #expect(store.episode(with: episodeID)?.artworkPreview == updatedPreview)
+        let cached = try await localCache.loadLibrary(activePodcastIDs: [feedURL])
+        #expect(cached.episodes.first?.artworkPreview == updatedPreview)
     }
 
     @Test("Artwork preview persistence replaces stale schema with same source")
@@ -597,11 +667,11 @@ struct OpenCastModelTests {
     }
 
     @Test("Playback progress flush persists the current snapshot")
-    func playbackProgressFlushPersistsCurrentSnapshot() throws {
+    func playbackProgressFlushPersistsCurrentSnapshot() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let appModel = OpenCastAppModel()
-        let episode = EpisodeCacheRecord(
+        let appModel = OpenCastAppModel(localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory())
+        let episode = makeEpisodeListItem(
             episodeID: "episode-id",
             podcastID: Self.modelFixtureFeedURL,
             podcastTitle: "Model Fixture Podcast",
@@ -610,9 +680,7 @@ struct OpenCastModelTests {
             audioURL: "https://example.com/audio.mp3"
         )
 
-        context.insert(episode)
-        try context.save()
-        appModel.library.load(modelContext: context)
+        await appModel.library.load(modelContext: context)
 
         try appModel.playback.load(
             appModel.library.domainEpisode(for: episode),
@@ -636,11 +704,51 @@ struct OpenCastModelTests {
         appModel.playback.unload()
     }
 
-    @Test("Previous playback restores as paused mini-player content")
-    func previousPlaybackRestoresAsPausedMiniPlayerContent() throws {
+    @Test("Dismiss current playback saves progress unloads and clears restore key")
+    func dismissCurrentPlaybackSavesProgressUnloadsAndClearsRestoreKey() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let appModel = OpenCastAppModel()
+        let appModel = OpenCastAppModel(localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory())
+        let feedURL = "https://example.com/dismiss-current.xml"
+        let episodeID = "dismiss-current-episode"
+
+        insertCachedFeed(feedURL: feedURL, title: "Dismiss Current", episodeID: episodeID, in: context)
+        context.insert(LocalPreferenceRecord(key: "playback.lastEpisodeID", value: episodeID))
+        try context.save()
+
+        await appModel.library.load(modelContext: context)
+        let record = try #require(appModel.library.episode(with: episodeID))
+        try appModel.playback.load(
+            appModel.library.domainEpisode(for: record),
+            startPosition: 42
+        )
+        appModel.isNowPlayingPresented = true
+
+        #expect(appModel.dismissCurrentPlayback(modelContext: context))
+
+        let progress = try #require(appModel.library.progressRecords.first { $0.episodeID == episodeID })
+        let lastEpisodePreferences = try context.fetch(FetchDescriptor<LocalPreferenceRecord>(
+            predicate: #Predicate { record in
+                record.key == "playback.lastEpisodeID"
+            }
+        ))
+
+        #expect(progress.position == 42)
+        #expect(progress.isPlayed == false)
+        #expect(appModel.playback.currentEpisode == nil)
+        #expect(!appModel.isNowPlayingPresented)
+        #expect(lastEpisodePreferences.isEmpty)
+
+        appModel.restorePreviousPlaybackIfAvailable(modelContext: context)
+
+        #expect(appModel.playback.currentEpisode == nil)
+    }
+
+    @Test("Previous playback restores as paused mini-player content")
+    func previousPlaybackRestoresAsPausedMiniPlayerContent() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let appModel = OpenCastAppModel(localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory())
         let feedURL = "https://example.com/restore.xml"
         let episodeID = "restore-episode"
 
@@ -657,7 +765,7 @@ struct OpenCastModelTests {
         context.insert(LocalPreferenceRecord(key: "playback.lastEpisodeID", value: episodeID))
         try context.save()
 
-        appModel.library.load(modelContext: context)
+        await appModel.library.load(modelContext: context)
         appModel.restorePreviousPlaybackIfAvailable(modelContext: context)
 
         #expect(appModel.playback.currentEpisode?.id.rawValue == episodeID)
@@ -668,10 +776,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Completed previous playback does not restore mini-player content")
-    func completedPreviousPlaybackDoesNotRestoreMiniPlayerContent() throws {
+    func completedPreviousPlaybackDoesNotRestoreMiniPlayerContent() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let appModel = OpenCastAppModel()
+        let appModel = OpenCastAppModel(localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory())
         let feedURL = "https://example.com/completed-restore.xml"
         let episodeID = "completed-restore-episode"
 
@@ -688,54 +796,38 @@ struct OpenCastModelTests {
         context.insert(LocalPreferenceRecord(key: "playback.lastEpisodeID", value: episodeID))
         try context.save()
 
-        appModel.library.load(modelContext: context)
+        await appModel.library.load(modelContext: context)
         appModel.restorePreviousPlaybackIfAvailable(modelContext: context)
 
         #expect(appModel.playback.currentEpisode == nil)
     }
 
-    @Test("Episode autoplay open requests consume once")
-    func episodeAutoplayOpenRequestsConsumeOnce() {
-        let appModel = OpenCastAppModel()
-
-        appModel.requestEpisodeAutoplayOnOpen(episodeID: "matching-episode")
-
-        #expect(appModel.consumeEpisodeAutoplayOnOpen(episodeID: "matching-episode"))
-        #expect(!appModel.consumeEpisodeAutoplayOnOpen(episodeID: "matching-episode"))
-
-        appModel.requestEpisodeAutoplayOnOpen(episodeID: "mismatched-episode")
-
-        #expect(!appModel.consumeEpisodeAutoplayOnOpen(episodeID: "other-episode"))
-        #expect(!appModel.consumeEpisodeAutoplayOnOpen(episodeID: "mismatched-episode"))
-    }
-
     @Test("Unsubscribe deletes all per-feed records")
-    func unsubscribeDeletesAllPerFeedRecords() throws {
+    func unsubscribeDeletesAllPerFeedRecords() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let feedURL = "https://example.com/feed.xml"
 
         insertFeedRecords(feedURL: feedURL, title: "Example Show", episodeID: "example-episode", in: context)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
-        store.unsubscribe(feedURL: feedURL, modelContext: context)
+        await store.unsubscribe(feedURL: feedURL, modelContext: context)
 
         #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
-        #expect(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).isEmpty)
-        #expect(try context.fetch(FetchDescriptor<EpisodeCacheRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).isEmpty)
-        #expect(try context.fetch(FetchDescriptor<RefreshLogRecord>()).isEmpty)
         #expect(store.subscriptions.isEmpty)
         #expect(store.episodes.isEmpty)
+        #expect(store.podcastCache(for: feedURL) == nil)
+        #expect(store.refreshLogs.isEmpty)
     }
 
     @Test("Inactive feed caches stay out of library episode surfaces")
-    func inactiveFeedCachesStayHidden() throws {
+    func inactiveFeedCachesStayHidden() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let archivedFeedURL = "https://example.com/archived.xml"
         let archivedEpisodeID = "archived-episode"
         let unsubscribedFeedURL = "https://example.com/unsubscribed.xml"
@@ -780,7 +872,7 @@ struct OpenCastModelTests {
         )
         try context.save()
 
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         #expect(store.subscriptions.isEmpty)
         #expect(store.inboxEpisodes.isEmpty)
@@ -791,10 +883,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Inbox keeps completed episodes from active subscriptions")
-    func inboxKeepsCompletedEpisodesFromActiveSubscriptions() throws {
+    func inboxKeepsCompletedEpisodesFromActiveSubscriptions() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let activeFeedURL = "https://example.com/active.xml"
         let archivedFeedURL = "https://example.com/archived-inbox.xml"
         let unsubscribedFeedURL = "https://example.com/unsubscribed-inbox.xml"
@@ -862,7 +954,7 @@ struct OpenCastModelTests {
         )
         try context.save()
 
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         #expect(store.subscriptions.map(\.feedURL) == [activeFeedURL])
         #expect(store.episodes.map(\.episodeID).sorted() == ["active-played", "active-unplayed"])
@@ -870,10 +962,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Inbox cache keeps newest-first ordering")
-    func inboxCacheKeepsNewestFirstOrdering() throws {
+    func inboxCacheKeepsNewestFirstOrdering() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let feedURL = "https://example.com/ordered-inbox.xml"
 
         context.insert(SubscriptionRecord(feedURL: feedURL, title: "Ordered Show"))
@@ -914,7 +1006,7 @@ struct OpenCastModelTests {
         )
         try context.save()
 
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         #expect(store.inboxEpisodes.map(\.episodeID) == [
             "newer",
@@ -925,10 +1017,10 @@ struct OpenCastModelTests {
     }
 
     @Test("Position-only progress changes leave cached inbox episodes unchanged")
-    func positionOnlyProgressChangesLeaveCachedInboxEpisodesUnchanged() throws {
+    func positionOnlyProgressChangesLeaveCachedInboxEpisodesUnchanged() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let feedURL = "https://example.com/inbox-progress.xml"
         let episodeID = "inbox-progress-episode"
 
@@ -943,10 +1035,9 @@ struct OpenCastModelTests {
             )
         )
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
-        let initialInboxEpisodeIDs = store.inboxEpisodes.map(\.episodeID)
-        let initialInboxRecords = store.inboxEpisodes.map { ObjectIdentifier($0) }
+        let initialInboxEpisodes = store.inboxEpisodes
         let didSave = store.updateProgress(
             episodeID: episodeID,
             podcastID: feedURL,
@@ -957,24 +1048,22 @@ struct OpenCastModelTests {
 
         #expect(didSave)
         #expect(store.progressRecords.first { $0.episodeID == episodeID }?.position == 11)
-        #expect(store.inboxEpisodes.map(\.episodeID) == initialInboxEpisodeIDs)
-        #expect(store.inboxEpisodes.map { ObjectIdentifier($0) } == initialInboxRecords)
+        #expect(store.inboxEpisodes == initialInboxEpisodes)
     }
 
     @Test("Completing an episode leaves cached inbox episodes unchanged")
-    func completingEpisodeLeavesCachedInboxEpisodesUnchanged() throws {
+    func completingEpisodeLeavesCachedInboxEpisodesUnchanged() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let feedURL = "https://example.com/inbox-completed-progress.xml"
         let episodeID = "inbox-completed-progress-episode"
 
         insertCachedFeed(feedURL: feedURL, title: "Inbox Completed Progress", episodeID: episodeID, in: context)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
-        let initialInboxEpisodeIDs = store.inboxEpisodes.map(\.episodeID)
-        let initialInboxRecords = store.inboxEpisodes.map { ObjectIdentifier($0) }
+        let initialInboxEpisodes = store.inboxEpisodes
         let didSave = store.updateProgress(
             episodeID: episodeID,
             podcastID: feedURL,
@@ -985,31 +1074,29 @@ struct OpenCastModelTests {
 
         #expect(didSave)
         #expect(store.progressRecords.first { $0.episodeID == episodeID }?.isPlayed == true)
-        #expect(store.inboxEpisodes.map(\.episodeID) == initialInboxEpisodeIDs)
-        #expect(store.inboxEpisodes.map { ObjectIdentifier($0) } == initialInboxRecords)
+        #expect(store.inboxEpisodes == initialInboxEpisodes)
         #expect(store.progressSummary(for: store.inboxEpisodes[0]).isCompleted)
     }
 
     @Test("Unsubscribe leaves other feeds intact")
-    func unsubscribeLeavesOtherFeedsIntact() throws {
+    func unsubscribeLeavesOtherFeedsIntact() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let removedFeedURL = "https://example.com/removed.xml"
         let keptFeedURL = "https://example.com/kept.xml"
 
         insertFeedRecords(feedURL: removedFeedURL, title: "Removed Show", episodeID: "removed-episode", in: context)
         insertFeedRecords(feedURL: keptFeedURL, title: "Kept Show", episodeID: "kept-episode", in: context)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
-        store.unsubscribe(feedURL: removedFeedURL, modelContext: context)
+        await store.unsubscribe(feedURL: removedFeedURL, modelContext: context)
 
         #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).map(\.feedURL) == [keptFeedURL])
-        #expect(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).map(\.feedURL) == [keptFeedURL])
-        #expect(try context.fetch(FetchDescriptor<EpisodeCacheRecord>()).map(\.podcastID) == [keptFeedURL])
         #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).map(\.podcastID) == [keptFeedURL])
-        #expect(try context.fetch(FetchDescriptor<RefreshLogRecord>()).map(\.feedURL) == [keptFeedURL])
+        #expect(Array(store.podcastCacheByFeedURL.keys) == [keptFeedURL])
+        #expect(store.refreshLogs.map(\.feedURL) == [keptFeedURL])
         #expect(store.subscriptions.map(\.feedURL) == [keptFeedURL])
         #expect(store.episodes(forPodcastID: keptFeedURL).map(\.episodeID) == ["kept-episode"])
         #expect(store.episodes(forPodcastID: removedFeedURL).isEmpty)
@@ -1031,12 +1118,12 @@ struct OpenCastModelTests {
                 )
             )
         ])
-        let store = LibraryStore(feedService: service)
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         insertCachedFeed(feedURL: feedA, title: "A Old", episodeID: "a-old", in: context)
         insertCachedFeed(feedURL: feedB, title: "B Old", episodeID: "b-old", in: context)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refresh(feedURL: feedA, modelContext: context)
 
@@ -1076,13 +1163,13 @@ struct OpenCastModelTests {
                 )
             )
         ])
-        let store = LibraryStore(feedService: service)
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         insertCachedFeed(feedURL: feedA, title: "A Old", episodeID: "a-old", in: context)
         insertCachedFeed(feedURL: feedB, title: "B Old", episodeID: "b-old", in: context)
         insertCachedFeed(feedURL: archivedFeed, title: "Archived", episodeID: "archived-old", isArchived: true, in: context)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refreshAll(modelContext: context)
 
@@ -1124,12 +1211,12 @@ struct OpenCastModelTests {
                 nanoseconds: 250_000_000
             )
         ])
-        let store = LibraryStore(feedService: service)
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         insertCachedFeed(feedURL: feedA, title: "A Old", episodeID: "a-old", in: context)
         insertCachedFeed(feedURL: feedB, title: "B Old", episodeID: "b-old", in: context)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refreshAll(modelContext: context)
 
@@ -1155,7 +1242,7 @@ struct OpenCastModelTests {
                 )
             )
         ])
-        let store = LibraryStore(feedService: service)
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         insertCachedFeed(
             feedURL: feedURL,
@@ -1165,7 +1252,7 @@ struct OpenCastModelTests {
             in: context
         )
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refreshAllIfStale(modelContext: context, now: now)
 
@@ -1175,8 +1262,8 @@ struct OpenCastModelTests {
         #expect(store.state == .idle)
     }
 
-    @Test("Automatic foreground refresh pulls all feeds when one active subscription is stale")
-    func automaticForegroundRefreshPullsAllFeedsWhenOneActiveSubscriptionIsStale() async throws {
+    @Test("Automatic foreground refresh pulls only stale active subscriptions")
+    func automaticForegroundRefreshPullsOnlyStaleActiveSubscriptions() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1200,7 +1287,7 @@ struct OpenCastModelTests {
                 )
             )
         ])
-        let store = LibraryStore(feedService: service)
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         insertCachedFeed(
             feedURL: staleFeed,
@@ -1217,14 +1304,14 @@ struct OpenCastModelTests {
             in: context
         )
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refreshAllIfStale(modelContext: context, now: now)
 
         let requestedURLs = await service.requestedURLStrings()
-        #expect(Set(requestedURLs) == [staleFeed, freshFeed])
+        #expect(requestedURLs == [staleFeed])
         #expect(store.subscriptions.first { $0.feedURL == staleFeed }?.title == "Stale Updated")
-        #expect(store.subscriptions.first { $0.feedURL == freshFeed }?.title == "Companion Updated")
+        #expect(store.subscriptions.first { $0.feedURL == freshFeed }?.title == "Companion Old")
         #expect(store.state == .idle)
     }
 
@@ -1244,7 +1331,7 @@ struct OpenCastModelTests {
                 )
             )
         ])
-        let store = LibraryStore(feedService: service)
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         insertCachedFeed(
             feedURL: feedURL,
@@ -1262,7 +1349,7 @@ struct OpenCastModelTests {
             )
         )
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refreshAllIfStale(modelContext: context, now: now)
 
@@ -1289,12 +1376,12 @@ struct OpenCastModelTests {
             ),
             feedB: .failure("Feed B is unavailable")
         ])
-        let store = LibraryStore(feedService: service)
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         insertCachedFeed(feedURL: feedA, title: "A Old", episodeID: "a-old", in: context)
         insertCachedFeed(feedURL: feedB, title: "B Old", episodeID: "b-old", in: context)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refreshAll(modelContext: context)
 
@@ -1324,10 +1411,10 @@ struct OpenCastModelTests {
                 )
             )
         ])
-        let successStore = LibraryStore(feedService: successService)
+        let successStore = LibraryStore(feedService: successService, localCache: SQLiteLocalLibraryCacheStore.inMemory())
         insertCachedFeed(feedURL: successFeed, title: "Success Old", episodeID: "success-old", in: successContext)
         try successContext.save()
-        successStore.load(modelContext: successContext)
+        await successStore.load(modelContext: successContext)
 
         await successStore.refresh(feedURL: successFeed, modelContext: successContext)
 
@@ -1340,10 +1427,10 @@ struct OpenCastModelTests {
         let failureService = StubFeedService(responses: [
             failureFeed: .failure("Refresh failed")
         ])
-        let failureStore = LibraryStore(feedService: failureService)
+        let failureStore = LibraryStore(feedService: failureService, localCache: SQLiteLocalLibraryCacheStore.inMemory())
         insertCachedFeed(feedURL: failureFeed, title: "Failure Old", episodeID: "failure-old", in: failureContext)
         try failureContext.save()
-        failureStore.load(modelContext: failureContext)
+        await failureStore.load(modelContext: failureContext)
 
         await failureStore.refresh(feedURL: failureFeed, modelContext: failureContext)
 
@@ -1365,10 +1452,10 @@ struct OpenCastModelTests {
                 nanoseconds: 1_000_000_000
             )
         ])
-        let cancelledStore = LibraryStore(feedService: cancelledService)
+        let cancelledStore = LibraryStore(feedService: cancelledService, localCache: SQLiteLocalLibraryCacheStore.inMemory())
         insertCachedFeed(feedURL: cancelledFeed, title: "Cancelled Old", episodeID: "cancelled-old", in: cancelledContext)
         try cancelledContext.save()
-        cancelledStore.load(modelContext: cancelledContext)
+        await cancelledStore.load(modelContext: cancelledContext)
 
         let task = Task { @MainActor in
             await cancelledStore.refresh(feedURL: cancelledFeed, modelContext: cancelledContext)
@@ -1378,9 +1465,8 @@ struct OpenCastModelTests {
         task.cancel()
         await task.value
 
-        let cancellationLogs = try contextRefreshLogs(feedURL: cancelledFeed, in: cancelledContext)
         #expect(cancelledStore.refreshingFeedURLs.isEmpty)
-        #expect(cancellationLogs.isEmpty)
+        #expect(cancelledStore.refreshLogs.filter { $0.feedURL == cancelledFeed }.isEmpty)
         #expect(cancelledStore.state == .idle)
     }
 
@@ -1401,34 +1487,32 @@ struct OpenCastModelTests {
                 )
             )
         ])
-        let store = LibraryStore(feedService: service)
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        let store = LibraryStore(feedService: service, localCache: localCache)
 
-        insertCachedFeed(feedURL: feedURL, title: "Retention Old", episodeID: "retention-old", in: context)
-        for offset in 0..<55 {
-            let date = baseDate.addingTimeInterval(Double(offset))
-            context.insert(
-                RefreshLogRecord(
-                    refreshID: "old-\(offset)",
-                    feedURL: feedURL,
-                    startedAt: date,
-                    finishedAt: date
-                )
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Retention Old"))
+        try context.save()
+        let seededLogs = (0..<55).map { offset in
+            RefreshLogSnapshot(
+                refreshID: "old-\(offset)",
+                feedURL: feedURL,
+                startedAt: baseDate.addingTimeInterval(Double(offset)),
+                finishedAt: baseDate.addingTimeInterval(Double(offset))
             )
-        }
-        context.insert(
-            RefreshLogRecord(
+        } + [
+            RefreshLogSnapshot(
                 refreshID: "other-0",
                 feedURL: otherFeedURL,
                 startedAt: baseDate,
                 finishedAt: baseDate
             )
-        )
-        try context.save()
-        store.load(modelContext: context)
+        ]
+        try await localCache.importLegacyCache(podcasts: [], episodes: [], refreshLogs: seededLogs)
+        await store.load(modelContext: context)
 
         await store.refresh(feedURL: feedURL, modelContext: context)
 
-        let logs = try contextRefreshLogs(feedURL: feedURL, in: context)
+        let logs = store.refreshLogs.filter { $0.feedURL == feedURL }
         let retainedOldOffsets = Set(
             logs.compactMap { log -> Int? in
                 guard log.refreshID.hasPrefix("old-") else {
@@ -1437,7 +1521,7 @@ struct OpenCastModelTests {
                 return Int(log.refreshID.replacingOccurrences(of: "old-", with: ""))
             }
         )
-        let otherLogs = try contextRefreshLogs(feedURL: otherFeedURL, in: context)
+        let otherLogs = store.refreshLogs.filter { $0.feedURL == otherFeedURL }
         #expect(logs.count == LibraryStore.refreshLogRetentionLimit)
         #expect(retainedOldOffsets.contains(0) == false)
         #expect(retainedOldOffsets.contains(5) == false)
@@ -1476,7 +1560,8 @@ struct OpenCastModelTests {
                 )
             ]
         ])
-        let store = LibraryStore(feedService: service)
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        let store = LibraryStore(feedService: service, localCache: localCache)
 
         context.insert(
             SubscriptionRecord(
@@ -1485,32 +1570,30 @@ struct OpenCastModelTests {
             )
         )
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         await store.refresh(feedURL: feedURL, modelContext: context)
         await store.refresh(feedURL: feedURL, modelContext: context)
 
-        let episodeRecords = try context.fetch(FetchDescriptor<EpisodeCacheRecord>())
-            .filter { $0.episodeID == episodeID }
-        let podcastRecords = try context.fetch(FetchDescriptor<PodcastCacheRecord>())
-            .filter { $0.feedURL == feedURL }
-        #expect(episodeRecords.count == 1)
-        #expect(episodeRecords.first?.title == "Episode V2")
-        #expect(episodeRecords.first?.summary == "Second summary")
-        #expect(episodeRecords.first?.duration == 45)
+        let cached = try await localCache.loadLibrary(activePodcastIDs: [feedURL])
+        let episode = try #require(store.episode(with: episodeID))
+        #expect(cached.episodes.count == 1)
+        #expect(episode.title == "Episode V2")
+        #expect(episode.summary == "Second summary")
+        #expect(episode.duration == 45)
         #expect(store.subscriptions.first { $0.feedURL == feedURL }?.title == "Twice V2")
-        #expect(podcastRecords.count == 1)
-        #expect(podcastRecords.first?.title == "Twice V2")
+        #expect(cached.podcastsByFeedURL[feedURL]?.title == "Twice V2")
+        #expect(store.podcastCache(for: feedURL)?.title == "Twice V2")
         #expect(store.refreshLogs.filter { $0.feedURL == feedURL }.count == 2)
     }
 
     @Test("Duplicate subscriptions merge metadata into one canonical row")
-    func duplicateSubscriptionsMergeMetadata() throws {
+    func duplicateSubscriptionsMergeMetadata() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let oldRefresh = Date(timeIntervalSince1970: 1_700_000_000)
         let newRefresh = Date(timeIntervalSince1970: 1_700_000_100)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         context.insert(
             SubscriptionRecord(
@@ -1533,7 +1616,7 @@ struct OpenCastModelTests {
         )
         try context.save()
 
-        let result = try store.repairSyncDuplicates(modelContext: context)
+        let result = try await store.repairSyncDuplicates(modelContext: context)
         let records = try context.fetch(FetchDescriptor<SubscriptionRecord>())
 
         #expect(records.count == 1)
@@ -1550,12 +1633,12 @@ struct OpenCastModelTests {
     }
 
     @Test("Archived duplicate loses to active duplicate")
-    func archivedDuplicateLosesToActiveDuplicate() throws {
+    func archivedDuplicateLosesToActiveDuplicate() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let activeRefresh = Date(timeIntervalSince1970: 1_700_000_000)
         let archivedRefresh = Date(timeIntervalSince1970: 1_700_000_100)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         context.insert(
             SubscriptionRecord(
@@ -1575,7 +1658,7 @@ struct OpenCastModelTests {
         )
         try context.save()
 
-        let result = try store.repairSyncDuplicates(modelContext: context)
+        let result = try await store.repairSyncDuplicates(modelContext: context)
         let records = try context.fetch(FetchDescriptor<SubscriptionRecord>())
 
         #expect(records.count == 1)
@@ -1589,12 +1672,12 @@ struct OpenCastModelTests {
     }
 
     @Test("Duplicate progress rows merge according to played and latest rules")
-    func duplicateProgressRowsMergeByPlayedAndLatestRules() throws {
+    func duplicateProgressRowsMergeByPlayedAndLatestRules() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let oldUpdate = Date(timeIntervalSince1970: 1_700_000_000)
         let newUpdate = Date(timeIntervalSince1970: 1_700_000_100)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         context.insert(
             EpisodeProgressRecord(
@@ -1638,7 +1721,7 @@ struct OpenCastModelTests {
         )
         try context.save()
 
-        let result = try store.repairSyncDuplicates(modelContext: context)
+        let result = try await store.repairSyncDuplicates(modelContext: context)
         let records = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
         let playedRecord = records.first { $0.episodeID == "played-episode" }
         let latestRecord = records.first { $0.episodeID == "latest-episode" }
@@ -1659,11 +1742,11 @@ struct OpenCastModelTests {
     }
 
     @Test("Progress repair keeps delimiter-like logical keys distinct")
-    func progressRepairKeepsDelimiterLikeKeysDistinct() throws {
+    func progressRepairKeepsDelimiterLikeKeysDistinct() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let update = Date(timeIntervalSince1970: 1_700_000_000)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         context.insert(
             EpisodeProgressRecord(
@@ -1683,7 +1766,7 @@ struct OpenCastModelTests {
         )
         try context.save()
 
-        let result = try store.repairSyncDuplicates(modelContext: context)
+        let result = try await store.repairSyncDuplicates(modelContext: context)
         let records = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
 
         #expect(result.duplicateProgressRecordsFound == 0)
@@ -1693,11 +1776,11 @@ struct OpenCastModelTests {
     }
 
     @Test("Repair leaves unrelated records untouched")
-    func repairLeavesUnrelatedRecordsUntouched() throws {
+    func repairLeavesUnrelatedRecordsUntouched() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let update = Date(timeIntervalSince1970: 1_700_000_000)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         context.insert(
             SubscriptionRecord(
@@ -1733,7 +1816,7 @@ struct OpenCastModelTests {
         )
         try context.save()
 
-        let result = try store.repairSyncDuplicates(modelContext: context)
+        let result = try await store.repairSyncDuplicates(modelContext: context)
         let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
             .sorted { $0.feedURL < $1.feedURL }
         let progressRecords = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
@@ -1750,11 +1833,11 @@ struct OpenCastModelTests {
     }
 
     @Test("Repair result counts duplicate groups and deleted rows")
-    func repairResultCountsDuplicateGroupsAndDeletedRows() throws {
+    func repairResultCountsDuplicateGroupsAndDeletedRows() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let update = Date(timeIntervalSince1970: 1_700_000_000)
-        let store = LibraryStore()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
 
         context.insert(SubscriptionRecord(feedURL: "https://example.com/count.xml", title: "Count", lastRefreshAt: update))
         context.insert(SubscriptionRecord(feedURL: "https://example.com/count.xml/", title: "Count Copy", lastRefreshAt: update))
@@ -1777,7 +1860,7 @@ struct OpenCastModelTests {
         )
         try context.save()
 
-        let result = try store.repairSyncDuplicates(modelContext: context)
+        let result = try await store.repairSyncDuplicates(modelContext: context)
 
         #expect(result.duplicateSubscriptionRecordsFound == 2)
         #expect(result.subscriptionGroupsMerged == 1)
@@ -1820,6 +1903,46 @@ struct OpenCastModelTests {
         let callCount = await provider.callCount
         #expect(callCount == 1)
         #expect(store.accountStatus == .available)
+    }
+
+    @Test("Legacy cache rows import once into SQLite")
+    func legacyCacheRowsImportOnceIntoSQLite() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        let store = LibraryStore(localCache: localCache)
+        let feedURL = "https://example.com/legacy-import.xml"
+
+        insertFeedRecords(feedURL: feedURL, title: "Legacy Import", episodeID: "legacy-import-episode", in: context)
+        try context.save()
+
+        await store.load(modelContext: context)
+
+        #expect(store.episodes.map(\.episodeID) == ["legacy-import-episode"])
+        #expect(store.podcastCacheByFeedURL[feedURL]?.title == "Legacy Import")
+        #expect(store.refreshLogs.map(\.feedURL) == [feedURL])
+        #expect(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<EpisodeCacheRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<RefreshLogRecord>()).isEmpty)
+        #expect(try await localCache.hasCompletedLegacyImport())
+    }
+
+    @Test("Failed legacy import keeps SwiftData rows and retries")
+    func failedLegacyImportKeepsSwiftDataRowsAndRetries() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: FailingImportCacheStore())
+        let feedURL = "https://example.com/legacy-import-failure.xml"
+
+        insertFeedRecords(feedURL: feedURL, title: "Legacy Import Failure", episodeID: "legacy-import-failure-episode", in: context)
+        try context.save()
+
+        await store.load(modelContext: context)
+
+        #expect(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<EpisodeCacheRecord>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<RefreshLogRecord>()).count == 1)
+        #expect(store.lastErrorMessage != nil)
     }
 
     private func insertCachedFeed(
@@ -1866,6 +1989,30 @@ struct OpenCastModelTests {
             episode.storeArtworkPreviewIfChanged(artworkPreview)
         }
         context.insert(episode)
+    }
+
+    private func makeEpisodeListItem(
+        episodeID: String,
+        podcastID: String,
+        podcastTitle: String,
+        title: String,
+        duration: TimeInterval?,
+        audioURL: String?
+    ) -> EpisodeListItemSnapshot {
+        EpisodeListItemSnapshot(
+            episodeID: episodeID,
+            podcastID: podcastID,
+            podcastTitle: podcastTitle,
+            title: title,
+            summary: nil,
+            publishedAt: nil,
+            duration: duration,
+            audioURL: audioURL,
+            artworkURL: nil,
+            artworkPreview: nil,
+            guid: nil,
+            cachedAt: .now
+        )
     }
 
     private func makePreview(
@@ -1917,17 +2064,6 @@ struct OpenCastModelTests {
                 )
             ]
         )
-    }
-
-    private func contextRefreshLogs(feedURL: String, in context: ModelContext) throws -> [RefreshLogRecord] {
-        try context.fetch(FetchDescriptor<RefreshLogRecord>())
-            .filter { $0.feedURL == feedURL }
-            .sorted { lhs, rhs in
-                if lhs.startedAt != rhs.startedAt {
-                    return lhs.startedAt > rhs.startedAt
-                }
-                return lhs.refreshID < rhs.refreshID
-            }
     }
 
     private func insertFeedRecords(
@@ -2046,6 +2182,82 @@ private actor StubFeedService: FeedService {
 
         return requestedURLs.count >= count
     }
+}
+
+private struct FailingImportCacheStore: LocalLibraryCacheStore {
+    func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot {
+        .empty
+    }
+
+    func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot? {
+        nil
+    }
+
+    func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String] {
+        [:]
+    }
+
+    func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) async throws {}
+
+    func updateEpisodeArtworkPreview(_ preview: ArtworkPreview, episodeID: String, artworkURL: String?) async throws {}
+
+    func updatePodcastArtworkPreview(_ preview: ArtworkPreview, feedURL: String, artworkURL: String?) async throws {}
+
+    func insertRefreshLog(_ log: RefreshLogSnapshot, prunedTo retentionLimit: Int) async throws {}
+
+    func deleteCache(forPodcastID podcastID: String) async throws {}
+
+    func deleteAllLocalCache() async throws {}
+
+    func hasCompletedLegacyImport() async throws -> Bool {
+        false
+    }
+
+    func importLegacyCache(
+        podcasts: [PodcastCacheSnapshot],
+        episodes: [EpisodeDetailSnapshot],
+        refreshLogs: [RefreshLogSnapshot]
+    ) async throws {
+        throw StubFeedError(message: "Legacy import failed")
+    }
+}
+
+private struct FailingUpsertCacheStore: LocalLibraryCacheStore {
+    func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot {
+        .empty
+    }
+
+    func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot? {
+        nil
+    }
+
+    func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String] {
+        [:]
+    }
+
+    func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) async throws {
+        throw StubFeedError(message: "Local cache upsert failed")
+    }
+
+    func updateEpisodeArtworkPreview(_ preview: ArtworkPreview, episodeID: String, artworkURL: String?) async throws {}
+
+    func updatePodcastArtworkPreview(_ preview: ArtworkPreview, feedURL: String, artworkURL: String?) async throws {}
+
+    func insertRefreshLog(_ log: RefreshLogSnapshot, prunedTo retentionLimit: Int) async throws {}
+
+    func deleteCache(forPodcastID podcastID: String) async throws {}
+
+    func deleteAllLocalCache() async throws {}
+
+    func hasCompletedLegacyImport() async throws -> Bool {
+        true
+    }
+
+    func importLegacyCache(
+        podcasts: [PodcastCacheSnapshot],
+        episodes: [EpisodeDetailSnapshot],
+        refreshLogs: [RefreshLogSnapshot]
+    ) async throws {}
 }
 
 private struct StubCloudKitAccountStatusProvider: CloudKitAccountStatusProviding {

@@ -1,7 +1,7 @@
 import Foundation
 
 public struct OPMLExporter: Sendable {
-    public static let documentTitle = "OpenCast Subscriptions"
+    public static let documentTitle = "opencast Subscriptions"
     public static let defaultFilename = "\(documentTitle).opml"
 
     private static let timestampFormatter = OPMLTimestampFormatter()

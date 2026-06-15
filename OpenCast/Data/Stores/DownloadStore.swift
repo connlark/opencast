@@ -87,7 +87,7 @@ final class DownloadStore {
         try commit(episodeID: record.episodeID, modelContext: modelContext, resort: true)
     }
 
-    func startDownload(for episode: EpisodeCacheRecord, modelContext: ModelContext) {
+    func startDownload(for episode: EpisodeListItemSnapshot, modelContext: ModelContext) {
         do {
             guard let audioURLString = episode.audioURL,
                   let sourceURL = URL(string: audioURLString)
@@ -356,7 +356,7 @@ final class DownloadStore {
     }
 
     private func markSetupFailure(
-        episode: EpisodeCacheRecord,
+        episode: EpisodeListItemSnapshot,
         message: String,
         modelContext: ModelContext
     ) throws {
