@@ -25,8 +25,8 @@ struct OPMLParserTests {
             <?xml version="1.0" encoding="UTF-8"?>
             <opml version="2.0">
               <body>
-                <outline type="rss" text="War Nerd Radio \u{2014} Subscriber Feed" xmlUrl="http://exiledonline.com/45wn84klrz/feed.xml" />
-                <outline type="rss" text="The Seed Podcast" xmlUrl="http://feeds.example.com/seed/" />
+                <outline type="rss" text="War Nerd Radio \u{2014} Subscriber Feed" xmlUrl="http://feeds.example.com/war-nerd/feed.xml" />
+                <outline type="rss" text="The Seed Podcast" xmlUrl="http://podcast.example.com/seed/feed.xml" />
               </body>
             </opml>
             """.utf8
@@ -36,8 +36,8 @@ struct OPMLParserTests {
 
         #expect(references.map(\.title) == ["War Nerd Radio \u{2014} Subscriber Feed", "The Seed Podcast"])
         #expect(references.map(\.canonicalFeedURL) == [
-            "http://exiledonline.com/45wn84klrz/feed.xml",
-            "http://feeds.example.com/seed"
+            "http://feeds.example.com/war-nerd/feed.xml",
+            "http://podcast.example.com/seed/feed.xml"
         ])
     }
 
