@@ -1559,7 +1559,7 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     func testSeededNowPlayingAirPlayPickerCanOpen() throws {
         #if targetEnvironment(simulator)
-        throw XCTSkip("AirPlay route-picker presentation is a physical-device check; see docs/simulator-limitations.md.")
+        throw XCTSkip("AirPlay route-picker presentation is a physical-device check.")
         #else
         let app = makeSeededApp()
         app.launch()
@@ -1629,7 +1629,7 @@ final class OpenCastUITests: XCTestCase {
         forcesLightMode: Bool,
         screenshotName: String
     ) throws {
-        let pastedFeedURL = "https://feeds.example.com/seed.xml"
+        let pastedFeedURL = "https://podcast.example.com/seed/feed.xml"
         let app = makeSeededApp(
             forcesDarkMode: forcesDarkMode,
             forcesLightMode: forcesLightMode
