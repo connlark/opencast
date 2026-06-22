@@ -10,11 +10,15 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     @State private var hasPendingForegroundMaintenance = false
     @State private var deferredForegroundMaintenanceTask: Task<Void, Never>?
     @State private var foregroundMaintenanceTask: Task<Void, Never>?
+    @State private var foregroundSyncedDataRefreshTask: Task<Void, Never>?
 
     private static let postNowPlayingDismissMaintenanceDelay: TimeInterval = 0.75
+    private static let foregroundSyncedDataRefreshInterval: Duration = .seconds(60)
 
     let performInitialSetup: () async -> Void
     let persistPlaybackProgress: () async -> Void
+    let refreshImportedData: () async -> Void
+    let refreshSyncedUserData: () async -> Void
     let runVoiceBoostDeviceProbeIfActive: () async -> Void
 
     func body(content: Content) -> some View {
@@ -51,10 +55,13 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             deferredForegroundMaintenanceTask = nil
             foregroundMaintenanceTask?.cancel()
             foregroundMaintenanceTask = nil
+            foregroundSyncedDataRefreshTask?.cancel()
+            foregroundSyncedDataRefreshTask = nil
             hasPendingForegroundMaintenance = false
             flushProgressForLifecycleExitIfNeeded()
         case .active:
             hasFlushedProgressForLifecycleExit = false
+            startForegroundSyncedDataRefresh()
             runOrDeferForegroundMaintenance()
         @unknown default:
             break
@@ -117,6 +124,10 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         appModel.library.refreshProgressRecords(modelContext: modelContext)
         appModel.refreshCurrentVoiceBoostSetting(modelContext: modelContext)
         foregroundMaintenanceTask = Task {
+            await refreshImportedData()
+            guard !Task.isCancelled else {
+                return
+            }
             await appModel.refreshLibraryIfStale(modelContext: modelContext)
             guard !Task.isCancelled else {
                 return
@@ -129,12 +140,36 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             guard !Task.isCancelled else {
                 return
             }
+            await appModel.notificationSettings.refreshIfNeeded(
+                activePodcastIDs: appModel.library.activePodcastIDs,
+                modelContext: modelContext
+            )
+            guard !Task.isCancelled else {
+                return
+            }
             await runVoiceBoostDeviceProbeIfActive()
             guard !Task.isCancelled else {
                 return
             }
             nowPlayingProbeMark("foreground-maintenance-finished")
             foregroundMaintenanceTask = nil
+        }
+    }
+
+    private func startForegroundSyncedDataRefresh() {
+        foregroundSyncedDataRefreshTask?.cancel()
+        foregroundSyncedDataRefreshTask = Task {
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: Self.foregroundSyncedDataRefreshInterval)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    return
+                }
+
+                await refreshSyncedUserData()
+            }
         }
     }
 

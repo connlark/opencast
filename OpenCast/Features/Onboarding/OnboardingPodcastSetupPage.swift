@@ -7,6 +7,7 @@ struct OnboardingPodcastSetupPage: View {
     @Binding var feedURLString: String
 
     let focusedField: FocusState<OnboardingFocusedField?>.Binding
+    let subscriptions: [SubscriptionRecord]
     let activePodcastIDs: Set<String>
     let subscribingFeedURLString: String?
     let subscriptionErrorMessage: String?
@@ -24,7 +25,7 @@ struct OnboardingPodcastSetupPage: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                Text("Search by name, paste an RSS feed URL, or start with a sample show.")
+                Text(instructionText)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -56,11 +57,15 @@ struct OnboardingPodcastSetupPage: View {
                     )
                 }
 
-                OnboardingSamplePodcastsSection(
-                    activePodcastIDs: activePodcastIDs,
-                    subscribingFeedURLString: subscribingFeedURLString,
-                    onSubscribe: onSubscribeSample
-                )
+                if subscriptions.isEmpty {
+                    OnboardingSamplePodcastsSection(
+                        activePodcastIDs: activePodcastIDs,
+                        subscribingFeedURLString: subscribingFeedURLString,
+                        onSubscribe: onSubscribeSample
+                    )
+                } else {
+                    OnboardingSubscribedPodcastsSection(subscriptions: subscriptions)
+                }
 
                 if let clipboardErrorMessage {
                     Label(clipboardErrorMessage, systemImage: "doc.on.clipboard")
@@ -80,9 +85,16 @@ struct OnboardingPodcastSetupPage: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .scrollIndicators(.hidden)
+        .scrollContentBackground(.visible)
     }
 
     private var isSubscribing: Bool {
         subscribingFeedURLString != nil
+    }
+
+    private var instructionText: String {
+        subscriptions.isEmpty
+            ? "Search by name, paste an RSS feed URL, or start with a sample show."
+            : "Search by name, paste an RSS feed URL, or keep building from your imported library."
     }
 }

@@ -4,6 +4,9 @@ import SwiftUI
 struct SettingsDiagnosticsView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
+    @State private var subscriptionRecordCount: Int?
+    @State private var progressRecordCount: Int?
+    @State private var syncDetailsErrorMessage: String?
 
     var body: some View {
         Form {
@@ -70,10 +73,49 @@ struct SettingsDiagnosticsView: View {
                 } label: {
                     Label("CloudKit Container", systemImage: "shippingbox")
                 }
+
+                LabeledContent {
+                    Text(appModel.syncStatus.accountStatus.displayName)
+                } label: {
+                    Label("iCloud Account", systemImage: "icloud")
+                }
+
+                LabeledContent {
+                    Text(subscriptionRecordCount.map { "\($0)" } ?? "Not Loaded")
+                } label: {
+                    Label("Subscription Rows", systemImage: "books.vertical")
+                }
+
+                LabeledContent {
+                    Text(progressRecordCount.map { "\($0)" } ?? "Not Loaded")
+                } label: {
+                    Label("Progress Rows", systemImage: "waveform.path.ecg")
+                }
+
+                Button(
+                    "Refresh Sync Details",
+                    systemImage: "arrow.clockwise",
+                    action: refreshSyncDetails
+                )
+
+                if let syncDetailsErrorMessage {
+                    Text(syncDetailsErrorMessage)
+                        .foregroundStyle(.red)
+                }
             }
+
+            #if DEBUG || INTERNAL_NOTIFICATIONS_DIAGNOSTICS
+            NotificationSecurityDiagnosticsSection()
+            NotificationRegistrationDiagnosticsSection()
+            NotificationSubscriptionDiagnosticsSection()
+            NotificationRouteDiagnosticsSection()
+            #endif
         }
         .navigationTitle("Diagnostics")
         .contentMargins(.bottom, 72, for: .scrollContent)
+        .task {
+            await refreshSyncDetailsNow()
+        }
     }
 
     private func repairSyncDuplicates() {
@@ -82,6 +124,31 @@ struct SettingsDiagnosticsView: View {
                 modelContext: modelContext,
                 libraryStore: appModel.library
             )
+        }
+    }
+
+    private func refreshSyncDetails() {
+        Task {
+            await refreshSyncDetailsNow()
+        }
+    }
+
+    private func refreshSyncDetailsNow() async {
+        await appModel.syncStatus.refreshAccountStatus(force: true)
+        loadSyncRowCounts()
+    }
+
+    private func loadSyncRowCounts() {
+        do {
+            subscriptionRecordCount = try modelContext.fetch(
+                FetchDescriptor<SubscriptionRecord>()
+            ).count
+            progressRecordCount = try modelContext.fetch(
+                FetchDescriptor<EpisodeProgressRecord>()
+            ).count
+            syncDetailsErrorMessage = nil
+        } catch {
+            syncDetailsErrorMessage = error.localizedDescription
         }
     }
 }

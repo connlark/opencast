@@ -43,4 +43,18 @@ final class LocalPreferenceRecord {
         record.value = value
         record.updatedAt = .now
     }
+
+    static func deletePreferences(
+        forKey key: String,
+        modelContext: ModelContext
+    ) throws {
+        let descriptor = FetchDescriptor<LocalPreferenceRecord>(
+            predicate: #Predicate<LocalPreferenceRecord> { record in
+                record.key == key
+            }
+        )
+        for record in try modelContext.fetch(descriptor) {
+            modelContext.delete(record)
+        }
+    }
 }

@@ -1,0 +1,71 @@
+name = "your-notifications-worker"
+main = "build/index.js"
+compatibility_date = "2026-06-19"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+
+[triggers]
+# Enable only after your APNs, App Attest, D1, route, and abuse controls are ready.
+crons = []
+
+[build]
+command = "cargo install -q \"worker-build@^0.8\" && \"$HOME/.cargo/bin/worker-build\" --release"
+
+[vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "development"
+APNS_ENVIRONMENT = "development"
+ADMIN_TEST_ENDPOINTS_ENABLED = "false"
+DEBUG_ENDPOINTS_ENABLED = "false"
+PUBLIC_NOTIFICATIONS_ENABLED = "false"
+
+[[d1_databases]]
+binding = "APP_ATTEST_DB"
+database_name = "your-notifications-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[mtls_certificates]]
+binding = "APNS_CERT"
+certificate_id = "REPLACE_WITH_APNS_MTLS_CERTIFICATE_ID"
+
+[env.production]
+name = "your-notifications-worker-production"
+workers_dev = false
+
+[[env.production.routes]]
+pattern = "notifications.example.com"
+custom_domain = true
+
+[env.production.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+APNS_ENVIRONMENT = "production"
+ADMIN_TEST_ENDPOINTS_ENABLED = "false"
+DEBUG_ENDPOINTS_ENABLED = "false"
+PUBLIC_NOTIFICATIONS_ENABLED = "false"
+
+[env.production.triggers]
+# For example: ["*/15 * * * *"] after production readiness review.
+crons = []
+
+[[env.production.d1_databases]]
+binding = "APP_ATTEST_DB"
+database_name = "your-notifications-db-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.production.mtls_certificates]]
+binding = "APNS_CERT"
+certificate_id = "REPLACE_WITH_PRODUCTION_APNS_MTLS_CERTIFICATE_ID"

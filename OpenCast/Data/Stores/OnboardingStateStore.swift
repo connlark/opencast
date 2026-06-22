@@ -20,19 +20,8 @@ final class OnboardingStateStore {
                 forKey: Self.completedPreferenceKey,
                 modelContext: modelContext
             )?.value
-            let hasCompletedPreference = value == Self.completedPreferenceValue
-            let hasActiveSubscriptions = hasCompletedPreference
-                ? false
-                : try hasActiveSubscriptions(modelContext: modelContext)
-            isCompleted = hasCompletedPreference || hasActiveSubscriptions
+            isCompleted = value == Self.completedPreferenceValue
             lastErrorMessage = nil
-            if hasActiveSubscriptions && !hasCompletedPreference {
-                do {
-                    try persistCompletedPreference(modelContext: modelContext)
-                } catch {
-                    lastErrorMessage = "Unable to save onboarding state: \(error.localizedDescription)"
-                }
-            }
         } catch {
             isCompleted = false
             lastErrorMessage = "Unable to load onboarding state: \(error.localizedDescription)"
@@ -79,16 +68,6 @@ final class OnboardingStateStore {
             lastErrorMessage = "Unable to reset onboarding: \(error.localizedDescription)"
             return false
         }
-    }
-
-    private func hasActiveSubscriptions(modelContext: ModelContext) throws -> Bool {
-        var descriptor = FetchDescriptor<SubscriptionRecord>(
-            predicate: #Predicate<SubscriptionRecord> { record in
-                !record.isArchived
-            }
-        )
-        descriptor.fetchLimit = 1
-        return try !modelContext.fetch(descriptor).isEmpty
     }
 
     private func persistCompletedPreference(modelContext: ModelContext) throws {

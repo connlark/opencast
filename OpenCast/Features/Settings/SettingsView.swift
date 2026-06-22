@@ -17,6 +17,8 @@ struct SettingsView: View {
                 accountStatus: appModel.syncStatus.accountStatus
             )
 
+            SettingsNotificationsSection()
+
             SettingsAppearanceSection()
 
             SettingsPlaybackSection()

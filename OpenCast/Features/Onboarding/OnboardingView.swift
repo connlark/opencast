@@ -8,7 +8,7 @@ struct OnboardingView: View {
 
     let onCompleted: () -> Void
 
-    @State private var selectedPage = OnboardingPage.welcome
+    @State private var selectedPage: OnboardingPage
     @State private var selectedAddMode = AddPodcastMode.search
     @State private var feedURLString: String
     @State private var searchStore: PodcastSearchStore
@@ -16,6 +16,8 @@ struct OnboardingView: View {
     @State private var subscribingFeedURLString: String?
     @State private var clipboardErrorMessage: String?
     @State private var isSampleConfirmationPresented = false
+    @State private var importedNotificationFeedbackToken = 0
+    @State private var announcedImportedNotificationID: Int?
     @FocusState private var focusedField: OnboardingFocusedField?
 
     init(
@@ -23,6 +25,7 @@ struct OnboardingView: View {
         onCompleted: @escaping () -> Void
     ) {
         self.onCompleted = onCompleted
+        _selectedPage = State(initialValue: .welcome)
         _feedURLString = State(initialValue: OpenCastConstants.addPodcastInitialFeedURL)
         _searchStore = State(initialValue: PodcastSearchStore(directoryService: directoryService))
     }
@@ -42,6 +45,7 @@ struct OnboardingView: View {
                         selectedMode: $selectedAddMode,
                         feedURLString: $feedURLString,
                         focusedField: $focusedField,
+                        subscriptions: appModel.library.subscriptions,
                         activePodcastIDs: appModel.library.activePodcastIDs,
                         subscribingFeedURLString: subscribingFeedURLString,
                         subscriptionErrorMessage: subscriptionErrorMessage,
@@ -53,6 +57,11 @@ struct OnboardingView: View {
                         onSubscribeSample: subscribeToSuggestion
                     )
                     .tag(OnboardingPage.podcastSetup)
+
+                    OnboardingNotificationSetupPage(
+                        completionErrorMessage: subscriptionErrorMessage
+                    )
+                    .tag(OnboardingPage.notificationSetup)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
 
@@ -79,10 +88,38 @@ struct OnboardingView: View {
                     Text("opencast will add This American Life so you can get acquainted with podcasts before choosing more shows.")
                 }
             }
+            .background(.background)
             .navigationTitle("Setup")
             .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let notification = appModel.importedSubscriptionsNotification {
+                    ImportedSubscriptionsNotificationBanner(notification: notification)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 10)
+                        .padding(.bottom, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(1)
+                }
+            }
+            .animation(.bouncy, value: appModel.importedSubscriptionsNotification?.id)
         }
         .interactiveDismissDisabled(!appModel.onboardingState.isCompleted)
+        .sensoryFeedback(.success, trigger: importedNotificationFeedbackToken)
+        .onChange(of: appModel.onboardingState.isCompleted) { _, isCompleted in
+            if isCompleted {
+                onCompleted()
+            }
+        }
+        .onChange(of: appModel.importedSubscriptionsNotification?.id) { _, notificationID in
+            guard let notificationID,
+                  let notification = appModel.importedSubscriptionsNotification
+            else {
+                return
+            }
+
+            importedNotificationFeedbackToken += 1
+            announceImportedNotification(notification, id: notificationID)
+        }
         .onDisappear(perform: searchStore.cancelSearch)
         .accessibilityIdentifier("Onboarding")
     }
@@ -147,7 +184,7 @@ struct OnboardingView: View {
                 onboardingState: appModel.onboardingState,
                 modelContext: modelContext
             )
-            onCompleted()
+            completeResolvedOnboarding()
         } catch {
             subscriptionErrorMessage = error.localizedDescription
         }
@@ -236,10 +273,26 @@ struct OnboardingView: View {
                 onboardingState: appModel.onboardingState,
                 modelContext: modelContext
             )
-            onCompleted()
+            completeResolvedOnboarding()
         } catch is CancellationError {
         } catch {
             subscriptionErrorMessage = error.localizedDescription
         }
+    }
+
+    private func completeResolvedOnboarding() {
+        _ = appModel.notificationPromoBanner.markResolved(modelContext: modelContext)
+    }
+
+    private func announceImportedNotification(_ notification: ImportedSubscriptionsNotification, id: Int) {
+        guard announcedImportedNotificationID != id else {
+            return
+        }
+
+        announcedImportedNotificationID = id
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: "\(notification.title). \(notification.detail)"
+        )
     }
 }

@@ -253,6 +253,16 @@ enum OpenCastUITestSeedData {
         try context.save()
     }
 
+    static func seedNotificationPromoBannerResolved(in container: ModelContainer) throws {
+        let context = ModelContext(container)
+        try LocalPreferenceRecord.upsert(
+            key: NotificationPromoBannerStore.resolvedPreferenceKey,
+            value: "true",
+            modelContext: context
+        )
+        try context.save()
+    }
+
     private static func deterministicArtworkURL() throws -> URL? {
         switch ProcessInfo.processInfo.environment["OPENCAST_UI_TEST_ARTWORK_VARIANT"]?.lowercased() {
         case "placeholder", "none", "missing":

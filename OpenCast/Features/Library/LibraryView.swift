@@ -21,6 +21,7 @@ struct LibraryView: View {
             default:
                 if appModel.library.subscriptions.isEmpty {
                     LibraryEmptyStateView(
+                        syncActivity: appModel.syncStatus.libraryActivity,
                         isSubscribingSample: isSubscribingSample,
                         sampleSubscriptionErrorMessage: sampleSubscriptionErrorMessage,
                         onAdd: onAdd,

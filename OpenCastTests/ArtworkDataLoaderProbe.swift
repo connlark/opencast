@@ -68,7 +68,7 @@ actor ArtworkDataLoaderProbe {
                     return
                 }
 
-                await self.resumeRequestContinuation(id, returning: false)
+                self.resumeRequestContinuation(id, returning: false)
             }
             requestContinuations[id] = (count, continuation, timeoutTask)
         }

@@ -7,6 +7,7 @@ struct OpenCastSplitRootView: View {
     @State private var detailPath: [AppRoute] = []
     let isNowPlayingPresented: Bool
     let onAdd: () -> Void
+    let onOpenSettings: () -> Void
     let onPresentDataNukeConfirmation: () -> Void
     let onPresentNowPlaying: () -> Void
 
@@ -41,6 +42,7 @@ struct OpenCastSplitRootView: View {
                 case .inbox:
                     InboxView(
                         onAdd: onAdd,
+                        onOpenSettings: onOpenSettings,
                         onOpenEpisode: { episodeID in
                             selectRootRoute(.episodeDetail(id: episodeID))
                         },

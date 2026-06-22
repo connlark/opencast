@@ -9,6 +9,7 @@ struct EpisodeRowButton: View {
     let episode: EpisodeListItemSnapshot
     var searchResult: EpisodeSearchResult?
     var selectsEpisodeDetailOnPlay = false
+    var onSelect: () -> Void = {}
     let onOpenEpisode: (String) -> Void
 
     var body: some View {
@@ -28,6 +29,7 @@ struct EpisodeRowButton: View {
 
     private func openEpisode() {
         nowPlayingProbeMark("playepisode-tap")
+        onSelect()
         selectEpisodeDetailIfRequested()
         do {
             try appModel.playEpisode(episode, modelContext: modelContext)
@@ -38,6 +40,7 @@ struct EpisodeRowButton: View {
     }
 
     private func viewEpisodeDetails(_ episode: EpisodeListItemSnapshot) {
+        onSelect()
         onOpenEpisode(episode.episodeID)
     }
 
@@ -46,6 +49,6 @@ struct EpisodeRowButton: View {
             return
         }
 
-        viewEpisodeDetails(episode)
+        onOpenEpisode(episode.episodeID)
     }
 }

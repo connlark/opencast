@@ -50,6 +50,18 @@ check_parallelizable \
   "NO" \
   "OpenCastUITests"
 
+check_parallelizable \
+  "${repo_dir}/opencast.xcodeproj/xcshareddata/xcschemes/OpenCastNotificationsInternal.xcscheme" \
+  "${app_tests_blueprint_id}" \
+  "YES" \
+  "OpenCastTests"
+
+check_parallelizable \
+  "${repo_dir}/opencast.xcodeproj/xcshareddata/xcschemes/OpenCastNotificationsInternal.xcscheme" \
+  "${ui_tests_blueprint_id}" \
+  "NO" \
+  "OpenCastUITests"
+
 if [[ "${status}" -ne 0 ]]; then
   printf '\nXcode can rewrite autocreated test-plan scheme metadata. Re-add the missing parallelizable attribute before committing.\n'
 fi

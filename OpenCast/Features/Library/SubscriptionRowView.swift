@@ -5,9 +5,18 @@ struct SubscriptionRowView: View {
     @Environment(OpenCastAppModel.self) private var appModel
 
     let subscription: SubscriptionRecord
-    let podcastCache: PodcastCacheSnapshot?
-    let latestRefreshLog: RefreshLogSnapshot?
-    let isRefreshing: Bool
+
+    private var podcastCache: PodcastCacheSnapshot? {
+        appModel.library.podcastCache(for: subscription.feedURL)
+    }
+
+    private var latestRefreshLog: RefreshLogSnapshot? {
+        appModel.library.latestRefreshLogByFeedURL[subscription.feedURL]
+    }
+
+    private var isRefreshing: Bool {
+        appModel.library.isRefreshing(feedURL: subscription.feedURL)
+    }
 
     private var refreshErrorMessage: String? {
         guard let errorMessage = latestRefreshLog?.errorMessage,
@@ -68,7 +77,7 @@ struct SubscriptionRowView: View {
     }
 
     private func updateArtworkPreview(_ preview: ArtworkPreview) {
-        guard let podcastCache else {
+        guard let podcastCache = appModel.library.podcastCache(for: subscription.feedURL) else {
             return
         }
 
