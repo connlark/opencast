@@ -92,6 +92,11 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["LibriVox Community Podcast"], named: "LibriVox Community Podcast sample")
         attachSmokeScreenshot(named: "onboarding_podcast_setup_dark")
 
+        app.buttons["Continue"].tap()
+        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
+        assertExists(app.buttons["Enable Notifications"], named: "Enable Notifications onboarding action")
+        attachSmokeScreenshot(named: "onboarding_notification_setup_dark")
+
         app.buttons["Done"].tap()
         assertExists(app.buttons["Add This American Life"], named: "fallback sample confirmation action")
         assertExists(
@@ -124,14 +129,71 @@ final class OpenCastUITests: XCTestCase {
         app.buttons["Skip"].tap()
         assertExists(app.staticTexts["Find Podcasts"], named: "debug podcast setup")
         assertExists(app.textFields["Podcast or creator"], named: "debug onboarding podcast search field")
-        assertExists(app.staticTexts["This American Life"], named: "debug sample suggestion")
-        scrollUntilExists(app.staticTexts["LibriVox Community Podcast"], in: app, maxSwipes: 2)
-        assertExists(app.staticTexts["LibriVox Community Podcast"], named: "debug LibriVox sample suggestion")
+        assertExists(app.staticTexts["Your Podcasts"], named: "debug imported podcasts section")
+        assertExists(app.staticTexts["UI Test Show"], named: "debug existing subscription")
+        XCTAssertFalse(app.staticTexts["Sample Podcasts"].exists)
         attachSmokeScreenshot(named: "settings_debug_onboarding_podcast_setup_light")
+        app.buttons["Continue"].tap()
+        assertExists(app.staticTexts["Get New Episode Alerts"], named: "debug notification setup")
+        attachSmokeScreenshot(named: "settings_debug_onboarding_notification_setup_light")
         app.buttons["Done"].tap()
 
         openLibrary(in: app)
         assertExists(seededSubscriptionRow(in: app), named: "seeded subscription after debug onboarding")
+    }
+
+    @MainActor
+    func testFirstTimeOnboardingNotificationPageResolvesInboxPromo() throws {
+        let app = makeOnboardingApp(forcesDarkMode: false, seedsLibrary: true)
+        app.launch()
+
+        assertExists(app.staticTexts["Welcome to opencast!"], named: "clean onboarding welcome", timeout: 20)
+        assertExists(app.staticTexts["1 feed auto imported"], named: "iCloud auto-import notification", timeout: 10)
+        attachSmokeScreenshot(named: "onboarding_imported_subscription_notice_light")
+        app.buttons["Continue"].tap()
+        assertExists(app.buttons["Skip"], named: "Skip OPML onboarding action")
+        app.buttons["Skip"].tap()
+        assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
+        assertExists(app.staticTexts["Your Podcasts"], named: "imported podcasts onboarding section")
+        assertExists(app.staticTexts["UI Test Show"], named: "imported subscription row")
+        attachSmokeScreenshot(named: "onboarding_imported_podcast_setup_light")
+        app.buttons["Continue"].tap()
+        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
+        app.buttons["Done"].tap()
+
+        XCTAssertTrue(
+            app.staticTexts["Get New Episode Alerts"].waitForNonExistence(timeout: 10),
+            "Onboarding should dismiss after the final notification page."
+        )
+        openInbox(in: app)
+        XCTAssertFalse(app.buttons["Inbox Notification Promo Banner"].exists)
+    }
+
+    @MainActor
+    func testExistingUserNotificationPromoBannerDismissesAndOpensSettings() throws {
+        let dismissApp = makeSeededApp(forcesNotificationPromoBanner: true)
+        dismissApp.launch()
+
+        let dismissBanner = dismissApp.buttons["Inbox Notification Promo Banner"]
+        assertExists(dismissBanner, named: "notification promo banner")
+        dismissApp.buttons["Dismiss Notification Promo"].tap()
+        XCTAssertTrue(
+            dismissBanner.waitForNonExistence(timeout: 5),
+            "Notification promo banner should hide after dismissal."
+        )
+        openSettings(in: dismissApp)
+        openInbox(in: dismissApp)
+        XCTAssertFalse(dismissApp.buttons["Inbox Notification Promo Banner"].exists)
+        dismissApp.terminate()
+
+        let tapApp = makeSeededApp(forcesNotificationPromoBanner: true)
+        tapApp.launch()
+
+        let tapBanner = tapApp.buttons["Inbox Notification Promo Banner"]
+        assertExists(tapBanner, named: "notification promo banner for settings")
+        tapBanner.tap()
+        assertExists(tapApp.staticTexts["Settings"], named: "settings screen after notification promo tap")
+        XCTAssertFalse(tapApp.staticTexts["Get New Episode Alerts"].exists)
     }
 
     @MainActor
@@ -387,6 +449,40 @@ final class OpenCastUITests: XCTestCase {
 
         assertDoesNotExist(miniPlayer, named: "mini-player after swipe-down dismissal", timeout: 5)
         assertDoesNotExist(nowPlayingOverlay(in: app), named: "Now Playing overlay after mini-player dismissal")
+    }
+
+    @MainActor
+    func testSeededMiniPlayerPinsTabBarDuringInboxScroll() throws {
+        let app = makeSeededApp(extraFeedCount: 12)
+        app.launch()
+
+        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
+        app.tabBars.buttons["Inbox"].tap()
+
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+
+        assertNowPlayingOverlay(in: app)
+        dismissNowPlayingOverlay(in: app)
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        let tabBar = app.tabBars.firstMatch
+        assertExists(miniPlayer, named: "mini-player before Inbox scroll")
+        assertExists(tabBar, named: "tab bar before Inbox scroll")
+
+        let restingMiniPlayerFrame = miniPlayer.frame
+        let restingTabBarFrame = tabBar.frame
+        scrollUntilExists(seededExtraEpisodeRow(in: app, index: 8), in: app, maxSwipes: 4)
+
+        assertExists(miniPlayer, named: "mini-player after Inbox scroll")
+        assertExists(tabBar, named: "tab bar after Inbox scroll")
+        let scrolledMiniPlayerFrame = miniPlayer.frame
+        let scrolledTabBarFrame = tabBar.frame
+        XCTAssertLessThanOrEqual(abs(scrolledMiniPlayerFrame.midX - restingMiniPlayerFrame.midX), 4)
+        XCTAssertLessThanOrEqual(abs(scrolledMiniPlayerFrame.maxY - restingMiniPlayerFrame.maxY), 4)
+        XCTAssertLessThanOrEqual(abs(scrolledTabBarFrame.midX - restingTabBarFrame.midX), 4)
+        XCTAssertLessThanOrEqual(abs(scrolledTabBarFrame.maxY - restingTabBarFrame.maxY), 4)
     }
 
     @MainActor
@@ -1313,6 +1409,8 @@ final class OpenCastUITests: XCTestCase {
         app.buttons["Skip"].tap()
         assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
 
+        app.buttons["Continue"].tap()
+        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
         app.buttons["Done"].tap()
         let addThisAmericanLife = app.buttons["Add This American Life"]
         assertExists(addThisAmericanLife, named: "This American Life fallback confirmation", timeout: 10)
@@ -1348,6 +1446,8 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.buttons["RSS"], named: "onboarding RSS mode")
         assertExists(app.staticTexts["This American Life"], named: "This American Life sample suggestion")
 
+        app.buttons["Continue"].tap()
+        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
         app.buttons["Done"].tap()
         let addThisAmericanLife = app.buttons["Add This American Life"]
         assertExists(addThisAmericanLife, named: "This American Life fallback confirmation", timeout: 10)
@@ -1425,6 +1525,8 @@ final class OpenCastUITests: XCTestCase {
         app.buttons["Skip"].tap()
         assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
 
+        app.buttons["Continue"].tap()
+        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
         app.buttons["Done"].tap()
         let addThisAmericanLife = app.buttons["Add This American Life"]
         assertExists(addThisAmericanLife, named: "This American Life fallback confirmation", timeout: 10)
@@ -1559,7 +1661,7 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     func testSeededNowPlayingAirPlayPickerCanOpen() throws {
         #if targetEnvironment(simulator)
-        throw XCTSkip("AirPlay route-picker presentation is a physical-device check.")
+        throw XCTSkip("AirPlay route-picker presentation is a physical-device check; see docs/simulator-limitations.md.")
         #else
         let app = makeSeededApp()
         app.launch()
@@ -1629,7 +1731,7 @@ final class OpenCastUITests: XCTestCase {
         forcesLightMode: Bool,
         screenshotName: String
     ) throws {
-        let pastedFeedURL = "https://podcast.example.com/seed/feed.xml"
+        let pastedFeedURL = "https://example.com/feed.xml"
         let app = makeSeededApp(
             forcesDarkMode: forcesDarkMode,
             forcesLightMode: forcesLightMode
@@ -1665,7 +1767,8 @@ final class OpenCastUITests: XCTestCase {
         seedsLongShowNotes: Bool = false,
         extraFeedCount: Int = 0,
         artworkVariant: String? = nil,
-        preferredContentSizeCategoryName: String? = nil
+        preferredContentSizeCategoryName: String? = nil,
+        forcesNotificationPromoBanner: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -1721,6 +1824,10 @@ final class OpenCastUITests: XCTestCase {
                 preferredContentSizeCategoryName
             ]
         }
+        if forcesNotificationPromoBanner {
+            app.launchArguments.append("--opencast-force-notification-promo-banner")
+            app.launchEnvironment["OPENCAST_FORCE_NOTIFICATION_PROMO_BANNER"] = "1"
+        }
         return app
     }
 
@@ -1738,7 +1845,10 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    private func makeOnboardingApp(forcesDarkMode: Bool) -> XCUIApplication {
+    private func makeOnboardingApp(
+        forcesDarkMode: Bool,
+        seedsLibrary: Bool = false
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "--opencast-ui-testing",
@@ -1746,6 +1856,10 @@ final class OpenCastUITests: XCTestCase {
         ]
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
         app.launchEnvironment["OPENCAST_FORCE_ONBOARDING"] = "1"
+        if seedsLibrary {
+            app.launchArguments.append("--opencast-seed-ui-library")
+            app.launchEnvironment["OPENCAST_SEED_UI_LIBRARY"] = "1"
+        }
         if forcesDarkMode {
             app.launchArguments.append("--opencast-force-dark-mode")
             app.launchEnvironment["OPENCAST_FORCE_DARK_MODE"] = "1"
@@ -2119,8 +2233,7 @@ final class OpenCastUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let tabButton = app.tabBars.buttons["Library"]
-        if tabButton.waitForExistence(timeout: 2) {
+        if let tabButton = visibleTabButton("Library", in: app) {
             tabButton.tap()
             return
         }
@@ -2146,8 +2259,7 @@ final class OpenCastUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let tabButton = app.tabBars.buttons["Inbox"]
-        if tabButton.waitForExistence(timeout: 2) {
+        if let tabButton = visibleTabButton("Inbox", in: app) {
             tabButton.tap()
             return
         }
@@ -2165,6 +2277,24 @@ final class OpenCastUITests: XCTestCase {
         }
 
         XCTFail("Inbox navigation item should exist", file: file, line: line)
+    }
+
+    @MainActor
+    private func visibleTabButton(
+        _ title: String,
+        in app: XCUIApplication
+    ) -> XCUIElement? {
+        let tabButton = app.tabBars.buttons[title]
+        if tabButton.waitForExistence(timeout: 2) {
+            return tabButton
+        }
+
+        guard app.tabBars.firstMatch.waitForExistence(timeout: 1) else {
+            return nil
+        }
+
+        app.swipeDown()
+        return tabButton.waitForExistence(timeout: 2) ? tabButton : nil
     }
 
     @MainActor

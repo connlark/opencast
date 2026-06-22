@@ -91,22 +91,186 @@ struct EpisodeSearchTests {
                 episodes: episodes,
                 query: "soldering",
                 mode: .fullText,
-                debounceDuration: .milliseconds(200)
+                debounceDuration: .seconds(1)
+            )
+        }
+        defer {
+            searchTask.cancel()
+        }
+        let pendingKey = EpisodeSearchRequestKey(
+            episodes: episodes,
+            query: "soldering",
+            mode: .fullText
+        )
+
+        try await Task.sleep(for: .milliseconds(80))
+
+        #expect(resultIDs(session.results) == ["keyboard"])
+        #expect(resultIDs(session.displayedResults(for: pendingKey)) == ["keyboard"])
+        #expect(session.isSearching == false)
+
+        await searchTask.value
+
+        #expect(resultIDs(session.results) == ["soldering"])
+        #expect(resultIDs(session.displayedResults(for: pendingKey)) == ["soldering"])
+        #expect(session.isSearching == false)
+    }
+
+    @Test("Search session hides prior scope results while switched scope is pending")
+    func searchSessionHidesPriorScopeResultsWhileSwitchedScopeIsPending() async throws {
+        let episodes = [
+            makeEpisode(id: "title", title: "Robot Repairs"),
+            makeEpisode(id: "notes", title: "Archive")
+        ]
+        let session = EpisodeSearchSession()
+
+        await session.update(
+            episodes: episodes,
+            query: "robot",
+            mode: .episodes,
+            debounceDuration: .zero
+        )
+
+        let episodesKey = EpisodeSearchRequestKey(
+            episodes: episodes,
+            query: "robot",
+            mode: .episodes
+        )
+        let fullTextKey = EpisodeSearchRequestKey(
+            episodes: episodes,
+            query: "robot",
+            mode: .fullText
+        )
+
+        #expect(resultIDs(session.displayedResults(for: episodesKey)) == ["title"])
+
+        let showNotesProvider = PendingShowNotesProvider()
+        let searchTask = Task {
+            await session.update(
+                episodes: episodes,
+                query: "robot",
+                mode: .fullText,
+                showNotesProvider: { await showNotesProvider.value() },
+                loadingPresentationDelay: .seconds(5),
+                debounceDuration: .zero
             )
         }
         defer {
             searchTask.cancel()
         }
 
-        try await Task.sleep(for: .milliseconds(40))
+        await showNotesProvider.waitUntilStarted()
 
-        #expect(resultIDs(session.results) == ["keyboard"])
-        #expect(session.isSearching == false)
+        #expect(resultIDs(session.results) == ["title"])
+        #expect(session.displayedResults(for: fullTextKey).isEmpty)
 
+        await showNotesProvider.finish(returning: ["notes": "<p>Robot appendix.</p>"])
         await searchTask.value
 
-        #expect(resultIDs(session.results) == ["soldering"])
+        #expect(resultIDs(session.displayedResults(for: fullTextKey)) == ["title", "notes"])
         #expect(session.isSearching == false)
+        #expect(session.isLoadingVisible == false)
+    }
+
+    @Test("Search session shows loading immediately when scope changes")
+    func searchSessionShowsLoadingImmediatelyWhenScopeChanges() async throws {
+        let episodes = [
+            makeEpisode(id: "match", title: "Robot Repairs")
+        ]
+        let session = EpisodeSearchSession()
+
+        await session.update(
+            episodes: episodes,
+            query: "robot",
+            mode: .episodes,
+            debounceDuration: .zero
+        )
+
+        let showNotesProvider = PendingShowNotesProvider()
+        let searchTask = Task {
+            await session.update(
+                episodes: episodes,
+                query: "robot",
+                mode: .fullText,
+                showNotesProvider: { await showNotesProvider.value() },
+                loadingPresentationDelay: .seconds(30),
+                debounceDuration: .milliseconds(120)
+            )
+        }
+        defer {
+            searchTask.cancel()
+        }
+
+        try await waitUntil("scope switch loading presentation") {
+            session.isSearching && session.isLoadingVisible
+        }
+
+        #expect(session.isSearching == true)
+        #expect(session.isLoadingVisible == true)
+
+        await showNotesProvider.waitUntilStarted()
+        await showNotesProvider.finish(returning: [:])
+        await searchTask.value
+
+        #expect(session.isSearching == false)
+        #expect(session.isLoadingVisible == false)
+    }
+
+    @Test("Search session suppresses loading presentation for fast searches")
+    func searchSessionSuppressesLoadingPresentationForFastSearches() async {
+        let episodes = [
+            makeEpisode(id: "match", title: "Workbench", summary: "Keyboard membrane repair tips.")
+        ]
+        let session = EpisodeSearchSession()
+
+        await session.update(
+            episodes: episodes,
+            query: "keyboard",
+            mode: .fullText,
+            loadingPresentationDelay: .seconds(1),
+            debounceDuration: .zero
+        )
+
+        #expect(resultIDs(session.results) == ["match"])
+        #expect(session.isSearching == false)
+        #expect(session.isLoadingVisible == false)
+    }
+
+    @Test("Search session delays loading presentation for slow searches")
+    func searchSessionDelaysLoadingPresentationForSlowSearches() async throws {
+        let episodes = [
+            makeEpisode(id: "match", title: "Workbench", summary: "Keyboard membrane repair tips.")
+        ]
+        let session = EpisodeSearchSession()
+
+        let showNotesProvider = PendingShowNotesProvider()
+        let searchTask = Task {
+            await session.update(
+                episodes: episodes,
+                query: "keyboard",
+                mode: .fullText,
+                showNotesProvider: { await showNotesProvider.value() },
+                loadingPresentationDelay: .seconds(2),
+                debounceDuration: .zero
+            )
+        }
+
+        await showNotesProvider.waitUntilStarted()
+        #expect(session.isSearching == true)
+        #expect(session.isLoadingVisible == false)
+
+        try await waitUntil("delayed loading presentation", timeout: .seconds(3)) {
+            session.isLoadingVisible
+        }
+        #expect(session.isSearching == true)
+        #expect(session.isLoadingVisible == true)
+
+        await showNotesProvider.finish(returning: [:])
+        await searchTask.value
+
+        #expect(resultIDs(session.results) == ["match"])
+        #expect(session.isSearching == false)
+        #expect(session.isLoadingVisible == false)
     }
 
     @Test("Episodes mode matches visible fields with all query tokens")
@@ -314,6 +478,58 @@ struct EpisodeSearchTests {
             }
 
             return String(attributed[run.range].characters)
+        }
+    }
+
+    private func waitUntil(
+        _ description: String,
+        timeout: Duration = .seconds(2),
+        pollInterval: Duration = .milliseconds(20),
+        condition: () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if condition() {
+                return
+            }
+            try await Task.sleep(for: pollInterval)
+        }
+
+        throw WaitTimeoutError(description: description)
+    }
+
+    private struct WaitTimeoutError: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    private actor PendingShowNotesProvider {
+        private var hasStarted = false
+        private var startContinuation: CheckedContinuation<Void, Never>?
+        private var resultContinuation: CheckedContinuation<[String: String]?, Never>?
+
+        func value() async -> [String: String]? {
+            await withCheckedContinuation { continuation in
+                resultContinuation = continuation
+                hasStarted = true
+                startContinuation?.resume()
+                startContinuation = nil
+            }
+        }
+
+        func waitUntilStarted() async {
+            if hasStarted {
+                return
+            }
+
+            await withCheckedContinuation { continuation in
+                startContinuation = continuation
+            }
+        }
+
+        func finish(returning result: [String: String]?) {
+            resultContinuation?.resume(returning: result)
+            resultContinuation = nil
         }
     }
 }

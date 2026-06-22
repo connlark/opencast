@@ -72,6 +72,15 @@ final class LibraryStore {
         refreshLogs.count
     }
 
+    var feedURLStringsNeedingLocalCache: [String] {
+        subscriptions.compactMap { subscription in
+            let feedURL = subscription.feedURL
+            let hasPodcastCache = podcastCacheByFeedURL[feedURL] != nil
+            let hasEpisodeCache = !(episodeIndicesByPodcastID[feedURL]?.isEmpty ?? true)
+            return hasPodcastCache && hasEpisodeCache ? nil : feedURL
+        }
+    }
+
     func load(modelContext: ModelContext) async {
         state = .loading
         lastErrorMessage = nil
@@ -81,6 +90,68 @@ final class LibraryStore {
             state = .idle
         } catch {
             recordFailure(error)
+        }
+    }
+
+    func reloadPersistedData(modelContext: ModelContext) async throws {
+        do {
+            try await reloadFromStore(modelContext: modelContext)
+            if state == .loading {
+                state = .idle
+            }
+            lastErrorMessage = nil
+        } catch {
+            recordFailure(error)
+            throw error
+        }
+    }
+
+    func reloadSyncedUserData(modelContext: ModelContext) throws -> SyncedUserDataReloadResult {
+        do {
+            let previousActivePodcastIDs = activePodcastIDs
+            let previousSubscriptions = subscriptions
+            let previousProgressRecords = progressRecords
+            let fetchedSubscriptions = try modelContext.fetch(activeSubscriptionsDescriptor())
+            let fetchedActivePodcastIDs = Set(fetchedSubscriptions.map(\.feedURL))
+            let fetchedProgressRecords = sortedProgressRecords(
+                try modelContext.fetch(allProgressRecordsDescriptor())
+            )
+
+            let activePodcastIDsChanged = previousActivePodcastIDs != fetchedActivePodcastIDs
+            let activeSubscriptionRecordsChanged = !Self.subscriptionRecords(
+                previousSubscriptions,
+                match: fetchedSubscriptions
+            )
+            let progressRecordsChanged = !Self.progressRecords(
+                previousProgressRecords,
+                match: fetchedProgressRecords
+            )
+
+            if activeSubscriptionRecordsChanged {
+                subscriptions = fetchedSubscriptions
+            }
+            if activePodcastIDsChanged {
+                activePodcastIDs = fetchedActivePodcastIDs
+                episodes = episodes.filter { fetchedActivePodcastIDs.contains($0.podcastID) }
+                visibleEpisodeIDs = Set(episodes.map(\.episodeID))
+                rebuildEpisodeIndexes()
+            }
+            if progressRecordsChanged {
+                progressRecords = fetchedProgressRecords
+                rebuildProgressByEpisodeID()
+            }
+            if activeSubscriptionRecordsChanged || progressRecordsChanged {
+                lastErrorMessage = nil
+            }
+
+            return SyncedUserDataReloadResult(
+                activePodcastIDsChanged: activePodcastIDsChanged,
+                activeSubscriptionRecordsChanged: activeSubscriptionRecordsChanged,
+                progressRecordsChanged: progressRecordsChanged
+            )
+        } catch {
+            recordFailure(error)
+            throw error
         }
     }
 
@@ -209,6 +280,42 @@ final class LibraryStore {
         } catch {
             refreshingFeedURLs.removeAll()
             recordFailure(error)
+        }
+    }
+
+    @discardableResult
+    func refreshFeedsNeedingLocalCache(modelContext: ModelContext) async -> Bool {
+        guard state != .refreshing, refreshingFeedURLs.isEmpty else {
+            return false
+        }
+
+        let feedURLStrings = feedURLStringsNeedingLocalCache
+        guard !feedURLStrings.isEmpty else {
+            return false
+        }
+
+        let generation = writeGeneration
+        state = .refreshing
+        lastErrorMessage = nil
+        do {
+            try await refreshAll(
+                feedURLStrings: feedURLStrings,
+                generation: generation,
+                modelContext: modelContext
+            )
+            try await reloadFromStore(modelContext: modelContext)
+            state = .idle
+            refreshCompletedToken += 1
+            return true
+        } catch is CancellationError {
+            refreshingFeedURLs.removeAll()
+            try? await reloadFromStore(modelContext: modelContext)
+            state = .idle
+            return false
+        } catch {
+            refreshingFeedURLs.removeAll()
+            recordFailure(error)
+            return false
         }
     }
 
@@ -861,15 +968,10 @@ final class LibraryStore {
         // flight, and publishing a pre-await fetch would resurrect deleted
         // model objects. If the active set changed mid-load, the mutator's own
         // follow-up reload republishes a consistent episode list.
-        let fetchedSubscriptions = try modelContext.fetch(
-            FetchDescriptor<SubscriptionRecord>(
-                sortBy: [SortDescriptor(\.title)]
-            )
-        )
-        let activeSubscriptions = fetchedSubscriptions.filter { !$0.isArchived }
+        let activeSubscriptions = try modelContext.fetch(activeSubscriptionsDescriptor())
         subscriptions = activeSubscriptions
         activePodcastIDs = Set(activeSubscriptions.map(\.feedURL))
-        progressRecords = try modelContext.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        progressRecords = sortedProgressRecords(try modelContext.fetch(allProgressRecordsDescriptor()))
         rebuildProgressByEpisodeID()
         episodes = cacheSnapshot.episodes
         visibleEpisodeIDs = Set(cacheSnapshot.episodes.map(\.episodeID))
@@ -885,7 +987,17 @@ final class LibraryStore {
     }
 
     private func reloadProgressRecords(modelContext: ModelContext) throws {
-        progressRecords = try modelContext.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        let fetchedProgressRecords = sortedProgressRecords(
+            try modelContext.fetch(allProgressRecordsDescriptor())
+        )
+        guard !Self.progressRecords(
+            progressRecords,
+            match: fetchedProgressRecords
+        ) else {
+            return
+        }
+
+        progressRecords = fetchedProgressRecords
         rebuildProgressByEpisodeID()
     }
 
@@ -932,6 +1044,91 @@ final class LibraryStore {
                 record.episodeID == episodeID && record.podcastID == podcastID
             }
         )
+    }
+
+    private func activeSubscriptionsDescriptor() -> FetchDescriptor<SubscriptionRecord> {
+        FetchDescriptor<SubscriptionRecord>(
+            predicate: #Predicate { record in
+                !record.isArchived
+            },
+            sortBy: [
+                SortDescriptor(\.title),
+                SortDescriptor(\.feedURL)
+            ]
+        )
+    }
+
+    private func allProgressRecordsDescriptor() -> FetchDescriptor<EpisodeProgressRecord> {
+        FetchDescriptor<EpisodeProgressRecord>()
+    }
+
+    private func sortedProgressRecords(_ records: [EpisodeProgressRecord]) -> [EpisodeProgressRecord] {
+        records.sorted { lhs, rhs in
+            if lhs.podcastID != rhs.podcastID {
+                return lhs.podcastID < rhs.podcastID
+            }
+            if lhs.episodeID != rhs.episodeID {
+                return lhs.episodeID < rhs.episodeID
+            }
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt < rhs.updatedAt
+            }
+            if lhs.position != rhs.position {
+                return lhs.position < rhs.position
+            }
+            if lhs.duration != rhs.duration {
+                return (lhs.duration ?? 0) < (rhs.duration ?? 0)
+            }
+            return !lhs.isPlayed && rhs.isPlayed
+        }
+    }
+
+    private static func subscriptionRecords(
+        _ lhs: [SubscriptionRecord],
+        match rhs: [SubscriptionRecord]
+    ) -> Bool {
+        guard lhs.count == rhs.count else {
+            return false
+        }
+
+        for (lhsRecord, rhsRecord) in zip(lhs, rhs) {
+            guard lhsRecord.feedURL == rhsRecord.feedURL,
+                  lhsRecord.title == rhsRecord.title,
+                  lhsRecord.author == rhsRecord.author,
+                  lhsRecord.artworkURL == rhsRecord.artworkURL,
+                  lhsRecord.subscribedAt == rhsRecord.subscribedAt,
+                  lhsRecord.lastRefreshAt == rhsRecord.lastRefreshAt,
+                  lhsRecord.isArchived == rhsRecord.isArchived,
+                  lhsRecord.isVoiceBoostEnabled == rhsRecord.isVoiceBoostEnabled
+            else {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private static func progressRecords(
+        _ lhs: [EpisodeProgressRecord],
+        match rhs: [EpisodeProgressRecord]
+    ) -> Bool {
+        guard lhs.count == rhs.count else {
+            return false
+        }
+
+        for (lhsRecord, rhsRecord) in zip(lhs, rhs) {
+            guard lhsRecord.episodeID == rhsRecord.episodeID,
+                  lhsRecord.podcastID == rhsRecord.podcastID,
+                  lhsRecord.position == rhsRecord.position,
+                  lhsRecord.duration == rhsRecord.duration,
+                  lhsRecord.isPlayed == rhsRecord.isPlayed,
+                  lhsRecord.updatedAt == rhsRecord.updatedAt
+            else {
+                return false
+            }
+        }
+
+        return true
     }
 
     private func upsert(

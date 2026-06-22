@@ -15,6 +15,8 @@ final class OpenCastAppModel {
     let playback: AVFoundationPlaybackController
     let appearanceSettings: AppearanceSettingsStore
     let playbackSettings: PlaybackSettingsStore
+    let notificationSettings: NotificationSettingsStore
+    let notificationPromoBanner: NotificationPromoBannerStore
     let onboardingState: OnboardingStateStore
     let voiceBoostDiagnostics: VoiceBoostAudioTapDiagnostics?
     let exposesVoiceBoostDiagnosticsStatus: Bool
@@ -26,6 +28,7 @@ final class OpenCastAppModel {
     var isNowPlayingPresented = false
     var onboardingPresentationRequest = 0
     var lastPlaybackError: String?
+    var importedSubscriptionsNotification: ImportedSubscriptionsNotification?
     var replacesNowPlayingArtworkWithPlaybackDiagnostics = false {
         didSet {
             guard oldValue != replacesNowPlayingArtworkWithPlaybackDiagnostics else {
@@ -43,6 +46,7 @@ final class OpenCastAppModel {
     var lastVoiceBoostDeviceProbeApplicationState: String?
     #endif
     @ObservationIgnored private var hasRunVoiceBoostDeviceProbe = false
+    @ObservationIgnored private var importedSubscriptionsNotificationID = 0
 
     init(
         cacheController: OpenCastCacheController = OpenCastCacheController(),
@@ -53,6 +57,8 @@ final class OpenCastAppModel {
         playback: AVFoundationPlaybackController? = nil,
         appearanceSettings: AppearanceSettingsStore = AppearanceSettingsStore(),
         playbackSettings: PlaybackSettingsStore = PlaybackSettingsStore(),
+        notificationSettings: NotificationSettingsStore = NotificationSettingsStore(),
+        notificationPromoBanner: NotificationPromoBannerStore = NotificationPromoBannerStore(),
         onboardingState: OnboardingStateStore = OnboardingStateStore(),
         voiceBoostDiagnostics: VoiceBoostAudioTapDiagnostics? = nil,
         exposesVoiceBoostDiagnosticsStatus: Bool = false,
@@ -81,6 +87,8 @@ final class OpenCastAppModel {
         )
         self.appearanceSettings = appearanceSettings
         self.playbackSettings = playbackSettings
+        self.notificationSettings = notificationSettings
+        self.notificationPromoBanner = notificationPromoBanner
         self.onboardingState = onboardingState
         self.voiceBoostDiagnostics = voiceBoostDiagnostics
         self.exposesVoiceBoostDiagnosticsStatus = exposesVoiceBoostDiagnosticsStatus
@@ -224,6 +232,29 @@ final class OpenCastAppModel {
         onboardingPresentationRequest += 1
     }
 
+    @discardableResult
+    func presentImportedSubscriptionsNotification(feedCount: Int) -> ImportedSubscriptionsNotification? {
+        guard feedCount > 0 else {
+            return nil
+        }
+
+        importedSubscriptionsNotificationID += 1
+        let notification = ImportedSubscriptionsNotification(
+            id: importedSubscriptionsNotificationID,
+            feedCount: feedCount
+        )
+        importedSubscriptionsNotification = notification
+        return notification
+    }
+
+    func dismissImportedSubscriptionsNotification(id: Int) {
+        guard importedSubscriptionsNotification?.id == id else {
+            return
+        }
+
+        importedSubscriptionsNotification = nil
+    }
+
     func refreshLibraryIfStale(modelContext: ModelContext) async {
         guard allowsAutomaticFeedRefresh else {
             return
@@ -249,6 +280,7 @@ final class OpenCastAppModel {
                 throw DataNukeError.iCloudUnavailable(accountStatus)
             }
 
+            await notificationSettings.deleteInstallIfRegistered()
             library.prepareForDataNuke()
             try downloads.nukeAllDownloads(modelContext: modelContext)
             try deleteAllModelRows(modelContext: modelContext)
@@ -446,6 +478,8 @@ final class OpenCastAppModel {
         downloads.load(modelContext: modelContext)
         appearanceSettings.load(modelContext: modelContext)
         playbackSettings.load(modelContext: modelContext, playback: playback)
+        notificationSettings.resetAfterDataNuke()
+        notificationPromoBanner.resetAfterDataNuke()
         onboardingState.load(modelContext: modelContext)
         #if DEBUG
         try? FileManager.default.removeItem(at: VoiceBoostDeviceProbe.reportURL)

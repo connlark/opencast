@@ -137,6 +137,43 @@ struct OpenCastModelTests {
         #expect(store.state == .failed("Local cache upsert failed"))
     }
 
+    @Test("Imported subscriptions hydrate missing local feed cache")
+    func importedSubscriptionsHydrateMissingLocalFeedCache() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/imported-cache.xml"
+        let snapshot = makeSnapshot(
+            feedURL: feedURL,
+            podcastTitle: "Imported Cache",
+            episodeID: "imported-cache-episode",
+            episodeTitle: "Imported Cache Episode"
+        )
+        let service = StubFeedService(responses: [feedURL: .success(snapshot)])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Imported Cache",
+                lastRefreshAt: .now
+            )
+        )
+        try context.save()
+
+        await store.load(modelContext: context)
+        #expect(store.subscriptions.map(\.feedURL) == [feedURL])
+        #expect(store.inboxEpisodes.isEmpty)
+        #expect(store.feedURLStringsNeedingLocalCache == [feedURL])
+
+        let didHydrate = await store.refreshFeedsNeedingLocalCache(modelContext: context)
+        let requestedURLs = await service.requestedURLStrings()
+
+        #expect(didHydrate)
+        #expect(requestedURLs == [feedURL])
+        #expect(store.feedURLStringsNeedingLocalCache.isEmpty)
+        #expect(store.inboxEpisodes.map(\.episodeID) == ["imported-cache-episode"])
+    }
+
     @Test("Refresh cache write failure does not advance subscription metadata")
     func refreshCacheWriteFailureDoesNotAdvanceSubscriptionMetadata() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -1226,6 +1263,67 @@ struct OpenCastModelTests {
         #expect(store.state == .idle)
     }
 
+    @Test("Synced data reload updates imported progress without fetching feeds")
+    func syncedDataReloadUpdatesImportedProgressWithoutFetchingFeeds() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/synced-progress.xml"
+        let episodeID = "synced-progress-episode"
+        let service = StubFeedService(responses: [:])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        insertCachedFeed(feedURL: feedURL, title: "Synced Progress", episodeID: episodeID, in: context)
+        try context.save()
+        await store.load(modelContext: context)
+        #expect(store.progressRecords.isEmpty)
+
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: episodeID,
+                podcastID: feedURL,
+                position: 78,
+                duration: 120,
+                updatedAt: Date(timeIntervalSince1970: 1_700_000_100)
+            )
+        )
+        try context.save()
+
+        let result = try store.reloadSyncedUserData(modelContext: context)
+
+        #expect(result.progressRecordsChanged)
+        #expect(!result.shouldProcessImportedSubscriptions)
+        #expect(store.progressRecords.first?.position == 78)
+        #expect(await service.requestedURLStrings().isEmpty)
+    }
+
+    @Test("Synced data reload hides episodes for archived remote subscriptions")
+    func syncedDataReloadHidesEpisodesForArchivedRemoteSubscriptions() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/remote-archived.xml"
+        let episodeID = "remote-archived-episode"
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        insertCachedFeed(feedURL: feedURL, title: "Remote Archived", episodeID: episodeID, in: context)
+        try context.save()
+        await store.load(modelContext: context)
+        #expect(store.activePodcastIDs == [feedURL])
+        #expect(store.episodes.map(\.episodeID) == [episodeID])
+
+        let subscription = try #require(context.fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        subscription.isArchived = true
+        try context.save()
+
+        let result = try store.reloadSyncedUserData(modelContext: context)
+
+        #expect(result.activePodcastIDsChanged)
+        #expect(result.activeSubscriptionRecordsChanged)
+        #expect(store.activePodcastIDs.isEmpty)
+        #expect(store.subscriptions.isEmpty)
+        #expect(store.episodes.isEmpty)
+        #expect(store.visibleEpisodeIDs.isEmpty)
+    }
+
     @Test("Automatic foreground refresh skips fresh subscriptions")
     func automaticForegroundRefreshSkipsFreshSubscriptions() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -1903,6 +2001,51 @@ struct OpenCastModelTests {
         let callCount = await provider.callCount
         #expect(callCount == 1)
         #expect(store.accountStatus == .available)
+    }
+
+    @Test("Sync status store tracks library activity")
+    func syncStatusStoreTracksLibraryActivity() {
+        let store = SyncStatusStore(
+            accountStatusProvider: StubCloudKitAccountStatusProvider(status: .available)
+        )
+
+        store.beginLibraryActivity(.waitingForImports)
+        #expect(store.libraryActivity == .waitingForImports)
+        #expect(store.libraryActivity.showsProgress)
+
+        store.beginLibraryActivity(.reloading)
+        #expect(store.libraryActivity.showsProgress)
+
+        store.recordLibraryActivityFailure("CloudKit import failed.")
+        #expect(store.libraryActivity == .failed("CloudKit import failed."))
+        #expect(!store.libraryActivity.showsProgress)
+
+        store.finishLibraryActivity()
+        #expect(store.libraryActivity == .idle)
+    }
+
+    @Test("Sync status duplicate repair returns repair result")
+    func syncStatusDuplicateRepairReturnsRepairResult() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let libraryStore = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let syncStatus = SyncStatusStore(
+            accountStatusProvider: StubCloudKitAccountStatusProvider(status: .available)
+        )
+
+        context.insert(SubscriptionRecord(feedURL: "https://example.com/status.xml", title: "Status"))
+        context.insert(SubscriptionRecord(feedURL: "https://example.com/status.xml/", title: "Status Copy"))
+        try context.save()
+
+        let result = await syncStatus.repairDuplicates(
+            modelContext: context,
+            libraryStore: libraryStore
+        )
+
+        #expect(result?.duplicateSubscriptionRecordsFound == 1)
+        #expect(syncStatus.lastRepairResult?.duplicateSubscriptionRecordsFound == 1)
+        #expect(syncStatus.lastRepairErrorMessage == nil)
+        #expect(!syncStatus.isRepairingDuplicates)
     }
 
     @Test("Legacy cache rows import once into SQLite")

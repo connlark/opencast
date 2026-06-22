@@ -45,12 +45,7 @@ struct LibrarySubscriptionRowView: View {
     }
 
     private func subscriptionRow() -> some View {
-        SubscriptionRowView(
-            subscription: subscription,
-            podcastCache: appModel.library.podcastCache(for: subscription.feedURL),
-            latestRefreshLog: appModel.library.latestRefreshLogByFeedURL[subscription.feedURL],
-            isRefreshing: appModel.library.isRefreshing(feedURL: subscription.feedURL)
-        )
+        SubscriptionRowView(subscription: subscription)
     }
 
     private func openPodcast() {

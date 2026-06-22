@@ -25,6 +25,8 @@ struct OpenCastLaunchConfigurationTests {
         #expect(configuration.seedsAppStoreScreenshotData == false)
         #expect(configuration.seedsCompletedDownload == false)
         #expect(configuration.seedsEpisodeProgress == false)
+        #expect(configuration.forcesOnboarding == false)
+        #expect(configuration.seedsNotificationPromoBannerResolved == false)
         #expect(configuration.forcedAppearance == .system)
         #expect(configuration.uiTestLibraryLoadDelayMilliseconds == nil)
     }
@@ -52,6 +54,8 @@ struct OpenCastLaunchConfigurationTests {
         #expect(configuration.seedsAppStoreScreenshotData == false)
         #expect(configuration.seedsCompletedDownload == false)
         #expect(configuration.seedsEpisodeProgress == false)
+        #expect(configuration.forcesOnboarding == false)
+        #expect(configuration.seedsNotificationPromoBannerResolved == false)
         #expect(configuration.forcedAppearance == .system)
         #expect(configuration.uiTestLibraryLoadDelayMilliseconds == nil)
     }
@@ -76,6 +80,8 @@ struct OpenCastLaunchConfigurationTests {
         #expect(configuration.seedsAppStoreScreenshotData == false)
         #expect(configuration.seedsCompletedDownload == false)
         #expect(configuration.seedsEpisodeProgress == false)
+        #expect(configuration.forcesOnboarding == false)
+        #expect(configuration.seedsNotificationPromoBannerResolved == false)
         #expect(configuration.forcedAppearance == .system)
         #expect(configuration.uiTestLibraryLoadDelayMilliseconds == nil)
     }
@@ -101,6 +107,8 @@ struct OpenCastLaunchConfigurationTests {
         #expect(configuration.seedsAppStoreScreenshotData == true)
         #expect(configuration.seedsCompletedDownload == true)
         #expect(configuration.seedsEpisodeProgress == true)
+        #expect(configuration.forcesOnboarding == false)
+        #expect(configuration.seedsNotificationPromoBannerResolved == true)
         #expect(configuration.forcedAppearance == .light)
         #expect(configuration.uiTestLibraryLoadDelayMilliseconds == nil)
     }
@@ -142,5 +150,36 @@ struct OpenCastLaunchConfigurationTests {
 
         #expect(configuration.capturesVoiceBoostDiagnostics == true)
         #expect(configuration.exposesVoiceBoostDiagnosticsStatus == true)
+    }
+
+    @Test("UI-test notification promo can be forced visible")
+    func uiTestNotificationPromoCanBeForcedVisible() {
+        let configuration = OpenCastLaunchConfiguration.resolving(
+            arguments: [
+                "OpenCast",
+                "--opencast-ui-testing",
+                "--opencast-force-notification-promo-banner"
+            ],
+            environment: [:]
+        )
+
+        #expect(configuration.seedsOnboardingCompleted == true)
+        #expect(configuration.seedsNotificationPromoBannerResolved == false)
+    }
+
+    @Test("UI-test forced onboarding suppresses completed seeding")
+    func uiTestForcedOnboardingSuppressesCompletedSeeding() {
+        let configuration = OpenCastLaunchConfiguration.resolving(
+            arguments: [
+                "OpenCast",
+                "--opencast-ui-testing",
+                "--opencast-force-onboarding"
+            ],
+            environment: [:]
+        )
+
+        #expect(configuration.forcesOnboarding == true)
+        #expect(configuration.seedsOnboardingCompleted == false)
+        #expect(configuration.seedsNotificationPromoBannerResolved == false)
     }
 }

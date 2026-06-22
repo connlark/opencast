@@ -12,7 +12,10 @@ struct OpenCastLaunchConfiguration {
     var capturesVoiceBoostDiagnostics: Bool
     var exposesVoiceBoostDiagnosticsStatus: Bool
     var runsVoiceBoostDeviceProbe: Bool
+    var forcesOnboarding: Bool
     var seedsOnboardingCompleted: Bool
+    var seedsNotificationPromoBannerResolved: Bool
+    var schedulesNotificationLookFixture: Bool
     var uiTestLibraryLoadDelayMilliseconds: Int?
 
     static var current: OpenCastLaunchConfiguration {
@@ -48,6 +51,10 @@ struct OpenCastLaunchConfiguration {
             || environment["OPENCAST_RUN_VOICEBOOST_DEVICE_PROBE"] == "1"
         let shouldForceOnboarding = arguments.contains("--opencast-force-onboarding")
             || environment["OPENCAST_FORCE_ONBOARDING"] == "1"
+        let shouldForceNotificationPromoBanner = arguments.contains("--opencast-force-notification-promo-banner")
+            || environment["OPENCAST_FORCE_NOTIFICATION_PROMO_BANNER"] == "1"
+        let shouldScheduleNotificationLookFixture = arguments.contains("--opencast-schedule-notification-look-fixture")
+            || environment["OPENCAST_SCHEDULE_NOTIFICATION_LOOK_FIXTURE"] == "1"
         let uiTestLibraryLoadDelayMilliseconds = isUITesting
             ? Self.uiTestLibraryLoadDelayMilliseconds(environment: environment)
             : nil
@@ -77,7 +84,12 @@ struct OpenCastLaunchConfiguration {
             capturesVoiceBoostDiagnostics: capturesVoiceBoostDiagnostics,
             exposesVoiceBoostDiagnosticsStatus: exposesVoiceBoostDiagnosticsStatus,
             runsVoiceBoostDeviceProbe: runsVoiceBoostDeviceProbe,
+            forcesOnboarding: isUITesting && shouldForceOnboarding,
             seedsOnboardingCompleted: isUITesting && !shouldForceOnboarding,
+            seedsNotificationPromoBannerResolved: isUITesting
+                && !shouldForceOnboarding
+                && !shouldForceNotificationPromoBanner,
+            schedulesNotificationLookFixture: isUITesting && shouldScheduleNotificationLookFixture,
             uiTestLibraryLoadDelayMilliseconds: uiTestLibraryLoadDelayMilliseconds
         )
     }

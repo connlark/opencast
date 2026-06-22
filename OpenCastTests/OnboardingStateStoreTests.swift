@@ -34,8 +34,8 @@ struct OnboardingStateStoreTests {
         #expect(store.isCompleted)
     }
 
-    @Test("Active synced subscriptions suppress onboarding")
-    func activeSyncedSubscriptionsSuppressOnboarding() throws {
+    @Test("Active synced subscriptions still present onboarding")
+    func activeSyncedSubscriptionsStillPresentOnboarding() throws {
         let context = try makeContext()
         context.insert(SubscriptionRecord(feedURL: "https://example.com/feed.xml", title: "Existing Show"))
         try context.save()
@@ -43,12 +43,12 @@ struct OnboardingStateStoreTests {
 
         store.load(modelContext: context)
 
-        #expect(!store.shouldPresentOnboarding)
-        #expect(store.isCompleted)
+        #expect(store.shouldPresentOnboarding)
+        #expect(!store.isCompleted)
         #expect(try LocalPreferenceRecord.preference(
             forKey: OnboardingStateStore.completedPreferenceKey,
             modelContext: context
-        )?.value == "true")
+        ) == nil)
     }
 
     @Test("Archived synced subscriptions still present onboarding")

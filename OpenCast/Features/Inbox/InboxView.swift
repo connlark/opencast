@@ -11,6 +11,7 @@ struct InboxView: View {
     @State private var searchSession = EpisodeSearchSession()
 
     let onAdd: () -> Void
+    let onOpenSettings: () -> Void
     let onOpenEpisode: (String) -> Void
     var selectsEpisodeDetailOnPlay = false
 
@@ -18,48 +19,56 @@ struct InboxView: View {
         EpisodeSearch.isSearchActive(query: searchQuery)
     }
 
-    private var searchTaskKey: EpisodeSearchRequestKey {
-        EpisodeSearchRequestKey(
-            episodes: appModel.library.inboxEpisodes,
+    var body: some View {
+        let inboxEpisodes = appModel.library.inboxEpisodes
+        let searchTaskKey = EpisodeSearchRequestKey(
+            episodes: inboxEpisodes,
             query: searchQuery,
             mode: searchMode
         )
-    }
+        let searchResults = searchSession.displayedResults(for: searchTaskKey)
 
-    var body: some View {
         List {
-            if appModel.library.state == .loading && appModel.library.inboxEpisodes.isEmpty {
+            if shouldShowNotificationPromoBanner {
+                InboxNotificationPromoBanner(
+                    onOpen: openNotificationSettings,
+                    onDismiss: dismissNotificationPromo
+                )
+            }
+
+            if appModel.library.state == .loading && inboxEpisodes.isEmpty {
                 InboxLoadingStateView()
             } else if case .failed(let message) = appModel.library.state,
-                      appModel.library.inboxEpisodes.isEmpty {
+                      inboxEpisodes.isEmpty {
                 InboxFailedStateView(message: message)
-            } else if appModel.library.inboxEpisodes.isEmpty {
-                InboxEmptyStateView(onAdd: onAdd)
+            } else if inboxEpisodes.isEmpty {
+                InboxEmptyStateView(
+                    syncActivity: appModel.syncStatus.libraryActivity,
+                    onAdd: onAdd
+                )
             } else if hasSearchQuery {
-                if searchSession.isSearching {
-                    ProgressView("Searching")
-                } else if searchSession.results.isEmpty {
-                    ContentUnavailableView.search
-                } else {
-                    ForEach(searchSession.results) { result in
-                        EpisodeRowButton(
-                            episode: result.episode,
-                            searchResult: result,
-                            selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
-                            onOpenEpisode: onOpenEpisode
-                        )
-                    }
-                }
+                EpisodeSearchResultsContent(
+                    mode: searchMode,
+                    isLoadingVisible: searchSession.isLoadingVisible,
+                    isSearching: searchSession.isSearching,
+                    results: searchResults,
+                    fallbackEpisodes: inboxEpisodes,
+                    selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
+                    onSelect: dismissSearchKeyboard,
+                    onOpenEpisode: onOpenEpisode
+                )
             } else {
-                ForEach(appModel.library.inboxEpisodes) { episode in
+                ForEach(inboxEpisodes) { episode in
                     EpisodeRowButton(
                         episode: episode,
                         selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
+                        onSelect: dismissSearchKeyboard,
                         onOpenEpisode: onOpenEpisode
                     )
                 }
             }
         }
+        .scrollDismissesKeyboard(.immediately)
         .navigationTitle("Inbox")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -82,7 +91,7 @@ struct InboxView: View {
         .task(id: searchTaskKey) {
             let library = appModel.library
             await searchSession.update(
-                episodes: library.inboxEpisodes,
+                episodes: inboxEpisodes,
                 query: searchQuery,
                 mode: searchMode,
                 showNotesProvider: { await library.showNotesHTMLByEpisodeID() }
@@ -103,5 +112,28 @@ struct InboxView: View {
         searchQuery = ""
         searchMode = .episodes
         searchSession.clear()
+    }
+
+    private func dismissSearchKeyboard() {
+        KeyboardDismissal.dismiss()
+    }
+
+    private var shouldShowNotificationPromoBanner: Bool {
+        !hasSearchQuery
+            && appModel.onboardingState.isCompleted
+            && !appModel.notificationSettings.isEnabled
+            && !appModel.notificationPromoBanner.isResolved
+    }
+
+    private func openNotificationSettings() {
+        guard appModel.notificationPromoBanner.markResolved(modelContext: modelContext) else {
+            return
+        }
+
+        onOpenSettings()
+    }
+
+    private func dismissNotificationPromo() {
+        appModel.notificationPromoBanner.markResolved(modelContext: modelContext)
     }
 }

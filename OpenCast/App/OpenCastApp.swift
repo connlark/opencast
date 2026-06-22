@@ -5,6 +5,8 @@ import OpenCastPlayback
 
 @main
 struct OpenCastApp: App {
+    @UIApplicationDelegateAdaptor(OpenCastAppDelegate.self) private var appDelegate
+
     private let launchConfiguration: OpenCastLaunchConfiguration
     private let modelContainer: ModelContainer
     @State private var appModel: OpenCastAppModel
@@ -34,6 +36,12 @@ struct OpenCastApp: App {
             if launchConfiguration.seedsOnboardingCompleted {
                 try OpenCastUITestSeedData.seedOnboardingCompleted(in: modelContainer)
             }
+            if launchConfiguration.seedsNotificationPromoBannerResolved {
+                try OpenCastUITestSeedData.seedNotificationPromoBannerResolved(in: modelContainer)
+            }
+            if launchConfiguration.schedulesNotificationLookFixture {
+                UITestNotificationLookFixtureScheduler.schedule()
+            }
             let voiceBoostDiagnostics = launchConfiguration.capturesVoiceBoostDiagnostics
                 ? VoiceBoostAudioTapDiagnostics()
                 : nil
@@ -51,11 +59,13 @@ struct OpenCastApp: App {
             let localLibraryCacheStore = Self.localLibraryCacheStore(
                 launchConfiguration: launchConfiguration
             )
+            let onboardingState = OnboardingStateStore()
             _appModel = State(initialValue: OpenCastAppModel(
                 cacheController: cacheController,
                 httpClient: httpClient,
                 localLibraryCacheStore: localLibraryCacheStore,
                 playback: playback,
+                onboardingState: onboardingState,
                 voiceBoostDiagnostics: voiceBoostDiagnostics,
                 exposesVoiceBoostDiagnosticsStatus: launchConfiguration.exposesVoiceBoostDiagnosticsStatus,
                 runsVoiceBoostDeviceProbe: launchConfiguration.runsVoiceBoostDeviceProbe,

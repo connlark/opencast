@@ -735,8 +735,13 @@ struct AVFoundationVoiceBoostIntegrationTests {
     }
 
     private func firstRemotePodcastEpisode(environment: [String: String]) async throws -> Episode {
+        let feedURLString = try #require(
+            environment[remoteFeedURLOverrideKey],
+            "Set OPENCAST_VOICEBOOST_REMOTE_FEED_URL to run remote voice boost tests."
+        )
         let feedURL = try #require(
-            environment[remoteFeedURLOverrideKey].flatMap(URL.init(string:))
+            URL(string: feedURLString),
+            "OPENCAST_VOICEBOOST_REMOTE_FEED_URL must be an absolute URL."
         )
         let feed = try await DefaultFeedService().fetchFeed(at: feedURL)
         return try #require(feed.episodes.first { $0.audioURL != nil })

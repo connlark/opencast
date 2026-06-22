@@ -63,6 +63,7 @@ struct PodcastDetailView: View {
             query: searchQuery,
             mode: searchMode
         )
+        let searchResults = searchSession.displayedResults(for: searchTaskKey)
 
         Group {
             if let subscription {
@@ -111,31 +112,29 @@ struct PodcastDetailView: View {
                         if podcastEpisodes.isEmpty {
                             ContentUnavailableView("No Episodes", systemImage: "waveform")
                         } else if hasSearchQuery {
-                            if searchSession.isSearching {
-                                ProgressView("Searching")
-                            } else if searchSession.results.isEmpty {
-                                ContentUnavailableView.search
-                            } else {
-                                ForEach(searchSession.results) { result in
-                                    EpisodeRowButton(
-                                        episode: result.episode,
-                                        searchResult: result,
-                                        selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
-                                        onOpenEpisode: onOpenEpisode
-                                    )
-                                }
-                            }
+                            EpisodeSearchResultsContent(
+                                mode: searchMode,
+                                isLoadingVisible: searchSession.isLoadingVisible,
+                                isSearching: searchSession.isSearching,
+                                results: searchResults,
+                                fallbackEpisodes: podcastEpisodes,
+                                selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
+                                onSelect: dismissSearchKeyboard,
+                                onOpenEpisode: onOpenEpisode
+                            )
                         } else {
                             ForEach(podcastEpisodes) { episode in
                                 EpisodeRowButton(
                                     episode: episode,
                                     selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
+                                    onSelect: dismissSearchKeyboard,
                                     onOpenEpisode: onOpenEpisode
                                 )
                             }
                         }
                     }
                 }
+                .scrollDismissesKeyboard(.immediately)
                 .contentMargins(.bottom, 72, for: .scrollContent)
             } else {
                 ContentUnavailableView(
@@ -209,5 +208,9 @@ struct PodcastDetailView: View {
         }
 
         appModel.library.updateArtworkPreview(preview, for: podcastCache)
+    }
+
+    private func dismissSearchKeyboard() {
+        KeyboardDismissal.dismiss()
     }
 }

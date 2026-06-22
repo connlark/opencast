@@ -4,6 +4,7 @@ enum OnboardingPage: Int, CaseIterable, Identifiable {
     case welcome
     case importOPML
     case podcastSetup
+    case notificationSetup
 
     var id: Int {
         rawValue
@@ -24,6 +25,8 @@ enum OnboardingPage: Int, CaseIterable, Identifiable {
         case .importOPML:
             "Skip"
         case .podcastSetup:
+            "Continue"
+        case .notificationSetup:
             "Done"
         }
     }
@@ -35,6 +38,8 @@ enum OnboardingPage: Int, CaseIterable, Identifiable {
         case .importOPML:
             "forward"
         case .podcastSetup:
+            "chevron.right"
+        case .notificationSetup:
             "checkmark"
         }
     }

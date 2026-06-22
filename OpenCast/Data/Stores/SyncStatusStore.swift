@@ -7,6 +7,7 @@ final class SyncStatusStore {
     private static let accountStatusRefreshInterval: TimeInterval = 30
 
     private(set) var accountStatus: SyncAccountStatus = .notChecked
+    private(set) var libraryActivity: SyncLibraryActivity = .idle
     private(set) var isRepairingDuplicates = false
     private(set) var lastRepairResult: SyncRepairResult?
     private(set) var lastRepairErrorMessage: String?
@@ -70,9 +71,24 @@ final class SyncStatusStore {
         }
     }
 
-    func repairDuplicates(modelContext: ModelContext, libraryStore: LibraryStore) async {
+    func beginLibraryActivity(_ activity: SyncLibraryActivity) {
+        if libraryActivity != activity {
+            libraryActivity = activity
+        }
+    }
+
+    func finishLibraryActivity() {
+        beginLibraryActivity(.idle)
+    }
+
+    func recordLibraryActivityFailure(_ message: String) {
+        beginLibraryActivity(.failed(message))
+    }
+
+    @discardableResult
+    func repairDuplicates(modelContext: ModelContext, libraryStore: LibraryStore) async -> SyncRepairResult? {
         guard !isRepairingDuplicates else {
-            return
+            return lastRepairResult
         }
 
         isRepairingDuplicates = true
@@ -85,9 +101,11 @@ final class SyncStatusStore {
         do {
             lastRepairResult = try await libraryStore.repairSyncDuplicates(modelContext: modelContext)
             lastRepairErrorMessage = nil
+            return lastRepairResult
         } catch {
             lastRepairResult = nil
             lastRepairErrorMessage = error.localizedDescription
+            return nil
         }
     }
 
