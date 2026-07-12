@@ -9,6 +9,7 @@ nonisolated struct PodcastCacheSnapshot: Identifiable, Equatable, Sendable {
     let artworkURL: String?
     var artworkPreview: ArtworkPreview?
     let updatedAt: Date
+    var languageCode: String? = nil
 
     var id: String {
         feedURL

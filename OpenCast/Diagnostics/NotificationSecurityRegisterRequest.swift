@@ -1,6 +1,6 @@
 import Foundation
 
-struct NotificationSecurityRegisterRequest: Encodable {
+nonisolated struct NotificationSecurityRegisterRequest: Encodable, Sendable {
     let installID: String
     let keyID: String
     let challengeID: String

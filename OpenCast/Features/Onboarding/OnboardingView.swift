@@ -3,12 +3,15 @@ import SwiftData
 import SwiftUI
 
 struct OnboardingView: View {
+    private static let whisperModelInstallToastDuration: Duration = .seconds(4)
+
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
 
     let onCompleted: () -> Void
 
     @State private var selectedPage: OnboardingPage
+    private let pages = OnboardingPage.standard
     @State private var selectedAddMode = AddPodcastMode.search
     @State private var feedURLString: String
     @State private var searchStore: PodcastSearchStore
@@ -18,6 +21,8 @@ struct OnboardingView: View {
     @State private var isSampleConfirmationPresented = false
     @State private var importedNotificationFeedbackToken = 0
     @State private var announcedImportedNotificationID: Int?
+    @State private var isWhisperModelInstallToastPresented = false
+    @State private var whisperModelInstallToastFeedbackToken = 0
     @FocusState private var focusedField: OnboardingFocusedField?
 
     init(
@@ -34,44 +39,20 @@ struct OnboardingView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 TabView(selection: $selectedPage) {
-                    OnboardingWelcomePage()
-                        .tag(OnboardingPage.welcome)
-
-                    OnboardingOPMLImportPage()
-                        .tag(OnboardingPage.importOPML)
-
-                    OnboardingPodcastSetupPage(
-                        searchStore: searchStore,
-                        selectedMode: $selectedAddMode,
-                        feedURLString: $feedURLString,
-                        focusedField: $focusedField,
-                        subscriptions: appModel.library.subscriptions,
-                        activePodcastIDs: appModel.library.activePodcastIDs,
-                        subscribingFeedURLString: subscribingFeedURLString,
-                        subscriptionErrorMessage: subscriptionErrorMessage,
-                        clipboardErrorMessage: clipboardErrorMessage,
-                        canSubscribeToRawFeed: canSubscribeToRawFeed,
-                        onPaste: pasteFromClipboard,
-                        onSubscribeRawFeed: subscribeToRawFeed,
-                        onSubscribeSearchResult: subscribeToSearchResult,
-                        onSubscribeSample: subscribeToSuggestion
-                    )
-                    .tag(OnboardingPage.podcastSetup)
-
-                    OnboardingNotificationSetupPage(
-                        completionErrorMessage: subscriptionErrorMessage
-                    )
-                    .tag(OnboardingPage.notificationSetup)
+                    ForEach(pages) { page in
+                        pageView(for: page)
+                            .tag(page)
+                    }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
 
-                OnboardingPageIndicator(selectedPage: selectedPage)
+                OnboardingPageIndicator(pages: pages, selectedPage: selectedPage)
                     .padding(.top, 6)
                     .padding(.bottom, 4)
 
                 OnboardingControlsView(
                     page: selectedPage,
-                    canGoBack: selectedPage.previous != nil,
+                    canGoBack: selectedPage.previous(in: pages) != nil,
                     isPrimaryDisabled: isSubscribing && selectedPage == .podcastSetup,
                     onBack: goBack,
                     onPrimary: performPrimaryAction
@@ -92,24 +73,20 @@ struct OnboardingView: View {
             .navigationTitle("Setup")
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top, spacing: 0) {
-                if let notification = appModel.importedSubscriptionsNotification {
-                    ImportedSubscriptionsNotificationBanner(notification: notification)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 10)
-                        .padding(.bottom, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .zIndex(1)
+                if isWhisperModelInstallToastPresented || appModel.importedSubscriptionsNotification != nil {
+                    OnboardingTopToastStack(
+                        isWhisperModelInstallToastPresented: isWhisperModelInstallToastPresented,
+                        importedSubscriptionsNotification: appModel.importedSubscriptionsNotification
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
             .animation(.bouncy, value: appModel.importedSubscriptionsNotification?.id)
+            .animation(.bouncy, value: isWhisperModelInstallToastPresented)
         }
         .interactiveDismissDisabled(!appModel.onboardingState.isCompleted)
         .sensoryFeedback(.success, trigger: importedNotificationFeedbackToken)
-        .onChange(of: appModel.onboardingState.isCompleted) { _, isCompleted in
-            if isCompleted {
-                onCompleted()
-            }
-        }
+        .sensoryFeedback(.success, trigger: whisperModelInstallToastFeedbackToken)
         .onChange(of: appModel.importedSubscriptionsNotification?.id) { _, notificationID in
             guard let notificationID,
                   let notification = appModel.importedSubscriptionsNotification
@@ -120,8 +97,48 @@ struct OnboardingView: View {
             importedNotificationFeedbackToken += 1
             announceImportedNotification(notification, id: notificationID)
         }
-        .onDisappear(perform: searchStore.cancelSearch)
+        .task(id: whisperModelInstallToastFeedbackToken) {
+            await dismissWhisperModelInstallToastAfterDelay()
+        }
+        .onDisappear(perform: handleDisappear)
         .accessibilityIdentifier("Onboarding")
+    }
+
+    @ViewBuilder
+    private func pageView(for page: OnboardingPage) -> some View {
+        switch page {
+        case .welcome:
+            OnboardingWelcomePage()
+        case .importOPML:
+            OnboardingOPMLImportPage()
+        case .podcastSetup:
+            OnboardingPodcastSetupPage(
+                searchStore: searchStore,
+                selectedMode: $selectedAddMode,
+                feedURLString: $feedURLString,
+                focusedField: $focusedField,
+                subscriptions: appModel.library.subscriptions,
+                activePodcastIDs: appModel.library.activePodcastIDs,
+                subscribingFeedURLString: subscribingFeedURLString,
+                subscriptionErrorMessage: subscriptionErrorMessage,
+                clipboardErrorMessage: clipboardErrorMessage,
+                canSubscribeToRawFeed: canSubscribeToRawFeed,
+                onPaste: pasteFromClipboard,
+                onSubscribeRawFeed: subscribeToRawFeed,
+                onSubscribeSearchResult: subscribeToSearchResult,
+                onSubscribeSample: subscribeToSuggestion
+            )
+        case .transcriptionModelSetup:
+            OnboardingTranscriptionModelSetupPage(
+                selectedChoice: appModel.transcriptionModels.selectedChoice,
+                modelState: appModel.transcriptionModels.state,
+                onInstall: installTinyWhisperModel
+            )
+        case .notificationSetup:
+            OnboardingNotificationSetupPage(
+                completionErrorMessage: subscriptionErrorMessage
+            )
+        }
     }
 
     private var isSubscribing: Bool {
@@ -142,7 +159,7 @@ struct OnboardingView: View {
             return
         }
 
-        guard let previous = selectedPage.previous else {
+        guard let previous = selectedPage.previous(in: pages) else {
             return
         }
 
@@ -157,7 +174,7 @@ struct OnboardingView: View {
             return
         }
 
-        guard let next = selectedPage.next else {
+        guard let next = selectedPage.next(in: pages) else {
             finishOnboarding()
             return
         }
@@ -250,6 +267,54 @@ struct OnboardingView: View {
         }
     }
 
+    private func installTinyWhisperModel() {
+        if appModel.transcriptionModels.selectedChoice != .fastTinyEnglish {
+            guard appModel.setTranscriptionModelChoice(.fastTinyEnglish, modelContext: modelContext) else {
+                return
+            }
+        }
+
+        guard appModel.installTranscriptionModel() else {
+            return
+        }
+
+        presentWhisperModelInstallToast()
+
+        withAnimation(.bouncy) {
+            selectedPage = .notificationSetup
+        }
+    }
+
+    private func presentWhisperModelInstallToast() {
+        whisperModelInstallToastFeedbackToken += 1
+        isWhisperModelInstallToastPresented = true
+
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: WhisperModelInstallToast.accessibilityAnnouncement
+        )
+    }
+
+    private func dismissWhisperModelInstallToastAfterDelay() async {
+        guard isWhisperModelInstallToastPresented else {
+            return
+        }
+
+        do {
+            try await Task.sleep(for: Self.whisperModelInstallToastDuration)
+        } catch is CancellationError {
+            return
+        } catch {
+            return
+        }
+
+        guard !Task.isCancelled else {
+            return
+        }
+
+        isWhisperModelInstallToastPresented = false
+    }
+
     private func subscribeToFallbackAndComplete() {
         guard !isSubscribing else {
             return
@@ -281,7 +346,7 @@ struct OnboardingView: View {
     }
 
     private func completeResolvedOnboarding() {
-        _ = appModel.notificationPromoBanner.markResolved(modelContext: modelContext)
+        onCompleted()
     }
 
     private func announceImportedNotification(_ notification: ImportedSubscriptionsNotification, id: Int) {
@@ -294,5 +359,9 @@ struct OnboardingView: View {
             notification: .announcement,
             argument: "\(notification.title). \(notification.detail)"
         )
+    }
+
+    private func handleDisappear() {
+        searchStore.cancelSearch()
     }
 }

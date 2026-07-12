@@ -41,7 +41,8 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             author: channel.author.nilIfBlank,
             summary: channel.summary.nilIfBlank,
             websiteURL: channel.websiteURL,
-            artworkURL: channel.artworkURL
+            artworkURL: channel.artworkURL,
+            languageCode: RSSLanguageNormalizer.normalized(channel.language)
         )
 
         let episodes = items.compactMap { item -> Episode? in
@@ -154,6 +155,8 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             channel.websiteURL = URL(string: value)
         case "itunes:author", "author":
             channel.author = value
+        case "language":
+            channel.language = value
         case "url" where elementStack.contains("image"):
             channel.artworkURL = URL(string: value)
         default:
@@ -193,6 +196,7 @@ private struct ChannelAccumulator {
     var summary: String?
     var websiteURL: URL?
     var artworkURL: URL?
+    var language: String?
 }
 
 private struct ItemAccumulator {

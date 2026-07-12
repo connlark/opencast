@@ -1,0 +1,83 @@
+import Foundation
+import SwiftData
+
+@Model
+final class EpisodeAdAnalysisRecord {
+    var episodeID: String = ""
+    var podcastID: String = ""
+    var transcriptFingerprint: String = ""
+    var transcriptUpdatedAt: Date = Date.distantPast
+    var transcriptSegmentCount: Int = 0
+    var transcriptStateRawValue: String = EpisodeTranscriptState.completed.rawValue
+    var stateRawValue: String = EpisodeAdAnalysisState.queued.rawValue
+    var analysisRelativePath: String?
+    var model: String = ""
+    var policy: String = ""
+    var spanCount: Int = 0
+    var warningCount: Int = 0
+    var errorMessage: String?
+    var failureKindRawValue: String?
+    var createdAt: Date = Date.now
+    var updatedAt: Date = Date.now
+
+    init(
+        episodeID: String,
+        podcastID: String,
+        transcriptFingerprint: String = "",
+        transcriptUpdatedAt: Date = .distantPast,
+        transcriptSegmentCount: Int = 0,
+        transcriptState: EpisodeTranscriptState = .completed,
+        state: EpisodeAdAnalysisState = .queued,
+        analysisRelativePath: String? = nil,
+        model: String = "",
+        policy: String = "",
+        spanCount: Int = 0,
+        warningCount: Int = 0,
+        errorMessage: String? = nil,
+        createdAt: Date = Date.now,
+        updatedAt: Date = Date.now
+    ) {
+        self.episodeID = episodeID
+        self.podcastID = podcastID
+        self.transcriptFingerprint = transcriptFingerprint
+        self.transcriptUpdatedAt = transcriptUpdatedAt
+        self.transcriptSegmentCount = transcriptSegmentCount
+        transcriptStateRawValue = transcriptState.rawValue
+        stateRawValue = state.rawValue
+        self.analysisRelativePath = analysisRelativePath
+        self.model = model
+        self.policy = policy
+        self.spanCount = spanCount
+        self.warningCount = warningCount
+        self.errorMessage = errorMessage
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    var state: EpisodeAdAnalysisState {
+        get {
+            EpisodeAdAnalysisState(rawValue: stateRawValue) ?? .failed
+        }
+        set {
+            stateRawValue = newValue.rawValue
+        }
+    }
+
+    var transcriptState: EpisodeTranscriptState {
+        get {
+            EpisodeTranscriptState(rawValue: transcriptStateRawValue) ?? .interrupted
+        }
+        set {
+            transcriptStateRawValue = newValue.rawValue
+        }
+    }
+
+    var failureKind: EpisodeAdAnalysisFailureKind? {
+        get {
+            failureKindRawValue.flatMap(EpisodeAdAnalysisFailureKind.init(rawValue:))
+        }
+        set {
+            failureKindRawValue = newValue?.rawValue
+        }
+    }
+}

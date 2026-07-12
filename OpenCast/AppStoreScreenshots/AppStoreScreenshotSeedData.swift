@@ -73,6 +73,12 @@ enum AppStoreScreenshotSeedData {
             updatedAt: refreshedAt
         ))
 
+        try AppStoreScreenshotSeedTranscript.seed(
+            in: context,
+            audioURL: audioURL,
+            createdAt: refreshedAt
+        )
+
         try context.save()
     }
 

@@ -25,8 +25,6 @@ struct SettingsSyncSection: View {
             }
         } header: {
             Text("iCloud Sync")
-        } footer: {
-            Text("Your podcast list and listening progress stay private in your iCloud account when sync is available.")
         }
     }
 

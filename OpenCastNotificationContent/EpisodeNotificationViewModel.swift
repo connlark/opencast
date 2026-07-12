@@ -29,7 +29,7 @@ struct EpisodeNotificationViewModel {
             ?? legacyBody.durationText
         summaryText = Self.payloadSummaryText(payload?["episode_summary"], episodeTitle: resolvedEpisodeTitle)
             ?? Self.legacySummaryText(legacyBody.summarySource, episodeTitle: resolvedEpisodeTitle)
-        artworkImage = content.attachments.first.flatMap(Self.image)
+        artworkImage = Self.preferredArtworkAttachment(from: content.attachments).flatMap(Self.image)
     }
 
     var accessibilityLabel: String {
@@ -332,6 +332,12 @@ struct EpisodeNotificationViewModel {
 
     private static func titlesMatch(_ lhs: String, _ rhs: String) -> Bool {
         collapseWhitespace(lhs).lowercased() == collapseWhitespace(rhs).lowercased()
+    }
+
+    private static func preferredArtworkAttachment(
+        from attachments: [UNNotificationAttachment]
+    ) -> UNNotificationAttachment? {
+        attachments.first { $0.identifier == NotificationArtworkAttachmentIdentifier.episode } ?? attachments.first
     }
 
     private static func image(from attachment: UNNotificationAttachment) -> UIImage? {

@@ -1,22 +1,24 @@
 import SwiftData
 import SwiftUI
+import OpenCastPlayback
 
 struct NowPlayingView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
-    @State private var scrubPosition: TimeInterval = 0
-    @State private var isScrubbing = false
     @State private var playPauseFeedback = 0
     @State private var skipFeedback = 0
-    @State private var scrubFeedback = 0
-    @State private var scrubbingEpisodeID: String?
+    @State private var autoSkipFeedback = 0
     @State private var utilitySheet: PlayerUtilitySheet?
     @State private var isVoiceBoostEnabled = true
+    @State private var showsAutoSkipPill = false
+    @State private var displayedAutoSkipEventSequence = 0
 
     let bottomContentPadding: CGFloat
     let topContentPadding: CGFloat
+    let moreMenuTopPadding: CGFloat
     @Binding var isPeelInteractionActive: Bool
     @Binding var isContentScrolledToTop: Bool
     let isTrackingDismissDrag: Bool
@@ -26,10 +28,6 @@ struct NowPlayingView: View {
     let onDismiss: () -> Void
     let onOpenEpisode: () -> Void
     let onOpenPodcast: () -> Void
-
-    private var displayedPosition: TimeInterval {
-        isScrubbing ? scrubPosition : appModel.playback.position
-    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -49,10 +47,14 @@ struct NowPlayingView: View {
                                 size: artworkSize,
                                 voiceBoostEnabled: $isVoiceBoostEnabled,
                                 voiceBoostControlEnabled: appModel.playbackSettings.canChangeCurrentEpisodeVoiceBoost,
+                                adFreePassPresentation: appModel.currentAdFreePassPresentation,
+                                onAdFreePassAction: startAdFreePass,
+                                onAdFreePassBackgroundProbe: startAdFreePassBackgroundProbe,
                                 isPeelInteractionActive: $isPeelInteractionActive,
                                 prewarmsPeelRenderer: prewarmsPeelRenderer,
                                 prewarmsPeelSettingsPanel: prewarmsPeelSettingsPanel,
-                                allowsPeelStart: allowsPeelStart
+                                allowsPeelStart: allowsPeelStart,
+                                isCardDismissDragActive: isTrackingDismissDrag
                             )
                         }
 
@@ -66,6 +68,7 @@ struct NowPlayingView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             .buttonStyle(.plain)
+                            .disabled(!canOpenCurrentEpisode)
                             .accessibilityHint("Opens the episode description")
                             .accessibilityIdentifier("Now Playing Episode Title")
 
@@ -79,16 +82,21 @@ struct NowPlayingView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             .buttonStyle(.plain)
+                            .disabled(!canOpenCurrentPodcast)
                             .accessibilityHint("Opens the podcast feed")
                         }
                         .layoutPriority(0)
 
-                        NowPlayingProgressView(
-                            duration: appModel.playback.duration,
-                            displayedPosition: displayedPosition,
-                            scrubPosition: $scrubPosition,
-                            onEditingChanged: updateScrubbing
-                        )
+                        ZStack(alignment: .top) {
+                            NowPlayingProgressSection()
+                                .padding(.top, accessibilityReduceMotion ? 30 : 0)
+
+                            if showsAutoSkipPill {
+                                NowPlayingAutoSkipPill(onUndo: undoLastAutoSkip)
+                                    .transition(.opacity)
+                                    .offset(y: accessibilityReduceMotion ? 0 : -28)
+                            }
+                        }
                         .padding(.top, 4)
                         .layoutPriority(2)
 
@@ -108,6 +116,7 @@ struct NowPlayingView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.top, 2)
                             .accessibilityElement(children: .combine)
+                            .transition(.opacity)
                         }
 
                         NowPlayingTransportControls(
@@ -124,7 +133,6 @@ struct NowPlayingView: View {
 
                         NowPlayingUtilityControls(
                             rate: appModel.playback.rate,
-                            sleepTimerText: sleepTimerText,
                             onShowSpeed: { utilitySheet = .speed },
                             onShowSleepTimer: { utilitySheet = .sleep }
                         )
@@ -137,6 +145,10 @@ struct NowPlayingView: View {
                     .padding(.bottom, bottomContentPadding)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: proxy.size.height, alignment: .top)
+                    .animation(
+                        accessibilityReduceMotion ? nil : .easeOut(duration: 0.2),
+                        value: isPlaybackFailed
+                    )
                 } else {
                     ContentUnavailableView("Nothing Playing", systemImage: "play.circle")
                         .padding()
@@ -144,6 +156,43 @@ struct NowPlayingView: View {
             }
             .scrollIndicators(.hidden)
             .scrollDisabled(isTrackingDismissDrag)
+            .overlay(alignment: .topTrailing) {
+                if appModel.playback.currentEpisode != nil {
+                    NowPlayingMoreMenu(
+                        hasTranscript: hasCompletedTranscript,
+                        canShowDescription: canOpenCurrentEpisode,
+                        canShowShow: canOpenCurrentPodcast,
+                        onTranscriptAction: performTranscriptAction,
+                        onShowDescription: openEpisode,
+                        onShowShow: openPodcast
+                    )
+                    .padding(.top, moreMenuTopPadding)
+                    .padding(.trailing, 20)
+                    .opacity(isPeelInteractionActive ? 0 : 1)
+                    .allowsHitTesting(!isPeelInteractionActive)
+                    .animation(.easeOut(duration: 0.15), value: isPeelInteractionActive)
+                }
+            }
+            .overlay(alignment: .top) {
+                if let transcriptionRequest {
+                    NowPlayingTranscriptionToast(
+                        request: transcriptionRequest,
+                        onOpenTranscript: openTranscriptFromToast,
+                        onDismiss: dismissTranscriptionToast
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.top, moreMenuTopPadding + 48)
+                    .transition(
+                        accessibilityReduceMotion
+                            ? .opacity
+                            : .move(edge: .top).combined(with: .opacity)
+                    )
+                }
+            }
+            .animation(
+                accessibilityReduceMotion ? .easeOut(duration: 0.2) : .bouncy,
+                value: transcriptionRequest?.id
+            )
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 // At rest, a scroll view's top offset is the negative top inset.
                 geometry.contentOffset.y <= -geometry.contentInsets.top + 1
@@ -154,7 +203,7 @@ struct NowPlayingView: View {
             .foregroundStyle(.primary)
             .sensoryFeedback(.impact(flexibility: .soft), trigger: playPauseFeedback)
             .sensoryFeedback(.selection, trigger: skipFeedback)
-            .sensoryFeedback(.selection, trigger: scrubFeedback)
+            .sensoryFeedback(.impact(flexibility: .soft), trigger: autoSkipFeedback)
             .accessibilityAction(.escape) {
                 onDismiss()
             }
@@ -172,31 +221,42 @@ struct NowPlayingView: View {
                         .modelContext(modelContext)
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
+                case .transcript:
+                    NavigationStack {
+                        if let currentEpisodeID {
+                            EpisodeTranscriptView(episodeID: currentEpisodeID)
+                        } else {
+                            ContentUnavailableView("Nothing Playing", systemImage: "play.circle")
+                        }
+                    }
+                    .environment(appModel)
+                    .modelContext(modelContext)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
                 }
             }
             .onAppear {
-                scrubPosition = appModel.playback.position
-            }
-            .onChange(of: appModel.playback.position) { _, newPosition in
-                guard !isScrubbing else {
-                    return
-                }
-                scrubPosition = newPosition
+                showAutoSkipPillIfNeeded(for: appModel.playback.lastAutoSkipEvent)
             }
             .onChange(of: appModel.playbackSettings.isVoiceBoostEnabled) { _, _ in
                 syncVoiceBoostEnabledFromStore()
+            }
+            .onChange(of: appModel.playback.lastAutoSkipEvent) { _, event in
+                showAutoSkipPillIfNeeded(for: event)
             }
             .onChange(of: isVoiceBoostEnabled) { _, newValue in
                 applyVoiceBoostEnabled(newValue)
             }
             .onChange(of: currentEpisodeID) { _, _ in
-                // A scrub in flight when the episode changes must not keep displaying
-                // the old episode's drag position.
-                isScrubbing = false
-                scrubPosition = appModel.playback.position
+                showsAutoSkipPill = false
+                displayedAutoSkipEventSequence = 0
+                showAutoSkipPillIfNeeded(for: appModel.playback.lastAutoSkipEvent)
             }
             .task(id: currentEpisodeID) {
                 syncVoiceBoostEnabledFromStore()
+            }
+            .task(id: displayedAutoSkipEventSequence) {
+                await dismissAutoSkipPillAfterDelay()
             }
             // The alert API needs a Bool binding because the presented String is not Identifiable.
             .alert(
@@ -218,23 +278,18 @@ struct NowPlayingView: View {
         horizontalSizeClass == .regular ? 36 : 24
     }
 
-    private var sleepTimerText: String {
-        guard let endsAt = appModel.playback.sleepTimerEndsAt else {
-            return "Off"
-        }
-
-        let remaining = endsAt.timeIntervalSinceNow
-        if remaining <= 0 {
-            return "Off"
-        }
-
-        return "-\(remaining.formattedPlaybackDuration)"
-    }
-
     private var showsPauseButton: Bool {
         appModel.playback.state == .playing
             || appModel.playback.state == .buffering
             || appModel.playback.state == .loading
+    }
+
+    private var isPlaybackFailed: Bool {
+        if case .failed = appModel.playback.state {
+            true
+        } else {
+            false
+        }
     }
 
     private var currentPodcastID: String? {
@@ -243,6 +298,107 @@ struct NowPlayingView: View {
 
     private var currentEpisodeID: String? {
         appModel.playback.currentEpisode?.id.rawValue
+    }
+
+    private var canOpenCurrentEpisode: Bool {
+        guard let currentEpisodeID else {
+            return false
+        }
+        return appModel.library.episode(with: currentEpisodeID) != nil
+            || appModel.downloads.record(for: currentEpisodeID) != nil
+    }
+
+    private var canOpenCurrentPodcast: Bool {
+        guard let currentPodcastID else {
+            return false
+        }
+        return appModel.library.isActivelySubscribed(to: currentPodcastID)
+    }
+
+    private var hasCompletedTranscript: Bool {
+        guard let currentEpisodeID,
+              let record = appModel.transcriptions.record(for: currentEpisodeID)
+        else {
+            return false
+        }
+        return record.state == .completed && record.transcriptRelativePath != nil
+    }
+
+    private var transcriptionRequest: EpisodeTranscriptionRequest? {
+        guard appModel.transcriptionRequests.isPresented,
+              let request = appModel.transcriptionRequests.request,
+              request.episodeID == currentEpisodeID
+        else {
+            return nil
+        }
+        return request
+    }
+
+    private func performTranscriptAction() {
+        guard let currentEpisodeID else {
+            return
+        }
+        guard let record = appModel.transcriptions.record(for: currentEpisodeID),
+              record.state == .completed,
+              let relativePath = record.transcriptRelativePath
+        else {
+            appModel.requestTranscriptForCurrentEpisode(modelContext: modelContext)
+            return
+        }
+
+        Task {
+            do {
+                _ = try await appModel.transcriptions.loadDocument(for: currentEpisodeID)
+                guard canCompleteTranscriptAction(
+                    episodeID: currentEpisodeID,
+                    relativePath: relativePath
+                ) else {
+                    return
+                }
+                utilitySheet = .transcript
+            } catch {
+                guard canCompleteTranscriptAction(
+                    episodeID: currentEpisodeID,
+                    relativePath: relativePath
+                ) else {
+                    return
+                }
+                appModel.transcriptions.markTranscriptDocumentUnavailable(
+                    episodeID: currentEpisodeID,
+                    modelContext: modelContext
+                )
+                appModel.requestTranscriptForCurrentEpisode(modelContext: modelContext)
+            }
+        }
+    }
+
+    private func canCompleteTranscriptAction(
+        episodeID: String,
+        relativePath: String
+    ) -> Bool {
+        guard appModel.isNowPlayingPresented,
+              utilitySheet == nil,
+              currentEpisodeID == episodeID,
+              let record = appModel.transcriptions.record(for: episodeID)
+        else {
+            return false
+        }
+        return record.state == .completed && record.transcriptRelativePath == relativePath
+    }
+
+    private func dismissTranscriptionToast() {
+        guard let transcriptionRequest else {
+            return
+        }
+        appModel.dismissTranscriptionRequest(id: transcriptionRequest.id)
+    }
+
+    private func openTranscriptFromToast() {
+        guard transcriptionRequest?.phase == .completed else {
+            return
+        }
+        dismissTranscriptionToast()
+        performTranscriptAction()
     }
 
     private func artworkWidth(in proxy: GeometryProxy) -> CGFloat {
@@ -317,26 +473,6 @@ struct NowPlayingView: View {
         return 240
     }
 
-    private func updateScrubbing(_ editing: Bool) {
-        if editing {
-            scrubbingEpisodeID = currentEpisodeID
-            isScrubbing = true
-            scrubFeedback += 1
-        } else {
-            // A release after the episode changed mid-drag must not seek the new
-            // episode to a position chosen on the old episode's timeline.
-            guard scrubbingEpisodeID == currentEpisodeID else {
-                isScrubbing = false
-                scrubPosition = appModel.playback.position
-                return
-            }
-
-            let seekPosition = scrubPosition
-            isScrubbing = false
-            appModel.playback.seek(to: seekPosition)
-        }
-    }
-
     private func retryPlayback() {
         appModel.playback.play()
     }
@@ -354,6 +490,58 @@ struct NowPlayingView: View {
     private func skipForward() {
         skipFeedback += 1
         appModel.playback.skip(by: appModel.playbackSettings.skipForwardOption.seconds)
+    }
+
+    private func startAdFreePass() {
+        appModel.startOrContinueAdFreePassForCurrentEpisode(modelContext: modelContext)
+    }
+
+    private func startAdFreePassBackgroundProbe() {
+        #if DEBUG
+        AdFreePassBackgroundProbe.startFromUserAction()
+        #endif
+    }
+
+    private func undoLastAutoSkip() {
+        appModel.undoLastAutoSkip()
+        withAnimation(.easeOut(duration: 0.2)) {
+            showsAutoSkipPill = false
+        }
+    }
+
+    private func showAutoSkipPillIfNeeded(for event: PlaybackAutoSkipEvent?) {
+        guard let event, event.sequence > displayedAutoSkipEventSequence else {
+            return
+        }
+
+        displayedAutoSkipEventSequence = event.sequence
+        showAutoSkipPill()
+    }
+
+    private func showAutoSkipPill() {
+        autoSkipFeedback += 1
+        UIAccessibility.post(notification: .announcement, argument: "Skipped promo")
+        withAnimation(.easeOut(duration: 0.16)) {
+            showsAutoSkipPill = true
+        }
+    }
+
+    private func dismissAutoSkipPillAfterDelay() async {
+        guard displayedAutoSkipEventSequence > 0 else {
+            return
+        }
+
+        do {
+            try await Task.sleep(for: .milliseconds(2500))
+        } catch is CancellationError {
+            return
+        } catch {
+            return
+        }
+
+        withAnimation(.easeOut(duration: 0.2)) {
+            showsAutoSkipPill = false
+        }
     }
 
     private func openEpisode() {

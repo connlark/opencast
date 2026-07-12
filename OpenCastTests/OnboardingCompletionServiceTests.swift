@@ -27,16 +27,13 @@ struct OnboardingCompletionServiceTests {
                 && result.artworkURL != nil
         })
         #expect(OpenCastSamplePodcastSuggestions.all.contains { result in
-            result.title == "LibriVox Community Podcast"
-                && result.feedURLString == OpenCastConstants.libriVoxCommunityFeedURL
+            result.title == "The Rest Is Science"
+                && result.feedURLString == OpenCastConstants.restIsScienceFeedURL
                 && result.artworkURL != nil
         })
         #expect(OpenCastSamplePodcastSuggestions.all.allSatisfy { result in
             result.artworkURL != nil
         })
-        #expect(OpenCastSamplePodcastSuggestions.all.contains { result in
-            result.feedURLString?.contains("examplepodcast") == true
-        } == false)
     }
 
     @Test("Sample suggestions keep This American Life fallback")

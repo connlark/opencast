@@ -13,6 +13,16 @@ struct NotificationAuthorizationService {
         return await authorizationStatus()
     }
 
+    /// Quiet (never prompts) — decision 6: requested only at the first
+    /// background arm of an ad-free pass, never at launch or play.
+    @discardableResult
+    func requestProvisionalAuthorization() async throws -> UNAuthorizationStatus {
+        _ = try await UNUserNotificationCenter.current().requestAuthorization(
+            options: [.alert, .sound, .badge, .provisional]
+        )
+        return await authorizationStatus()
+    }
+
     nonisolated static func allowsRemoteRegistration(_ status: UNAuthorizationStatus) -> Bool {
         switch status {
         case .authorized, .provisional, .ephemeral:

@@ -7,13 +7,21 @@ struct EpisodeDetailView: View {
     @Environment(\.modelContext) private var modelContext
 
     let episodeID: String
-    @State private var episodeSummaryText: String?
-    @State private var showNotesPlainText: String?
-    @State private var showNotesShouldRender = false
+
+    @State private var showNotes: EpisodeShowNotesContent = .empty
+    @State private var transcriptSnippet: String?
     @State private var isConfirmingClearProgress = false
+    @State private var sheetDestination: SheetDestination?
 
     private var episode: EpisodeListItemSnapshot? {
-        appModel.library.episode(with: episodeID)
+        if let episode = appModel.library.episode(with: episodeID) {
+            return episode
+        }
+
+        guard let record = appModel.downloads.record(for: episodeID) else {
+            return nil
+        }
+        return DownloadListItem.make(record: record, library: appModel.library).episode
     }
 
     var body: some View {
@@ -23,103 +31,23 @@ struct EpisodeDetailView: View {
 
         Group {
             if let episode {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        HStack(alignment: .top, spacing: 16) {
-                            ArtworkPlaceholder(
-                                title: episode.podcastTitle,
-                                imageURL: episode.artworkURL,
-                                size: 96,
-                                cacheKind: .episode,
-                                preview: episode.artworkPreview,
-                                onPreviewResolved: updateArtworkPreview
-                            )
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(episode.title)
-                                    .font(.title2)
-                                Text(episode.podcastTitle)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                if let publishedAt = episode.publishedAt {
-                                    Text(publishedAt, format: .dateTime.month(.wide).day().year())
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let progressSummary {
-                                    progressStatus(progressSummary)
-                                }
-                            }
-                        }
-                        .accessibilityElement(children: .combine)
-
-                        Button {
-                            play(episode)
-                        } label: {
-                            Label("Play Episode", systemImage: "play.fill")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.glassProminent)
-                        .controlSize(.large)
-
-                        EpisodeDownloadControlsView(
-                            record: appModel.downloads.record(for: episode.episodeID),
-                            lastErrorMessage: appModel.downloads.lastErrorMessage(for: episode.episodeID),
-                            onDownload: { download(episode) },
-                            onCancel: { cancelDownload(episode) },
-                            onDelete: { deleteDownload(episode) },
-                            onPlayDownloaded: { playDownloaded(episode) }
-                        )
-
-                        if let summary = episodeSummaryText {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Summary")
-                                    .font(.headline)
-                                Text(summary)
-                                    .font(.body)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-
-                        if showNotesShouldRender, let showNotesPlainText {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Show Notes")
-                                    .font(.headline)
-
-                                Text(showNotesPlainText)
-                                    .font(.body)
-                                    .textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                    .padding()
-                    .padding(.bottom, 72)
-                }
+                content(episode: episode, progressSummary: progressSummary)
             } else {
                 ContentUnavailableView("Episode Not Found", systemImage: "questionmark.circle")
             }
         }
-        .navigationTitle("Episode")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let episode, let progressSummary {
                 ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        if !progressSummary.isCompleted {
-                            Button("Mark Played", systemImage: "checkmark.circle") {
-                                markPlayed(episode)
-                            }
-                        }
-
-                        if progressRecord != nil {
-                            Button("Clear Progress", systemImage: "arrow.counterclockwise", role: .destructive) {
-                                confirmClearProgress()
-                            }
-                        }
-                    } label: {
-                        Label("Episode Actions", systemImage: "ellipsis.circle")
-                    }
+                    EpisodeMoreMenu(
+                        episode: episode,
+                        isPlayed: progressSummary.isCompleted,
+                        hasProgressRecord: progressRecord != nil,
+                        onClearProgress: confirmClearProgress,
+                        onShowEpisodeInfo: showEpisodeInfo
+                    )
                 }
             }
         }
@@ -133,8 +61,12 @@ struct EpisodeDetailView: View {
         } message: {
             Text("Listening position for this episode will be removed. Downloads are unchanged.")
         }
+        .sheet(item: $sheetDestination) { destination in
+            SheetDestinationView(destination: destination, onDismiss: dismissSheet)
+        }
         .task(id: TextContentTaskKey(
             episodeID: episode?.episodeID,
+            transcriptUpdatedAt: episode.flatMap { appModel.transcriptions.record(for: $0.episodeID)?.updatedAt },
             isNowPlayingPresented: appModel.isNowPlayingPresented
         )) {
             let episode = episode
@@ -146,11 +78,139 @@ struct EpisodeDetailView: View {
         }
     }
 
+    private func content(
+        episode: EpisodeListItemSnapshot,
+        progressSummary: EpisodeProgressSummary?
+    ) -> some View {
+        let downloadRecord = appModel.downloads.record(for: episode.episodeID)
+        let transcription = appModel.transcriptions.jobState(
+            for: episode.episodeID,
+            downloadRecord: downloadRecord,
+            modelState: appModel.transcriptionModels.state,
+            requiresInstalledWhisperModel: !appModel.appleSpeechAssets.isTranscriberAvailable
+        )
+        let analysis = appModel.adAnalyses.jobState(
+            for: appModel.transcriptions.document(for: episode.episodeID),
+            transcriptState: appModel.transcriptions.record(for: episode.episodeID)?.state
+        )
+        let pipelineState = EpisodePipelineState.make(
+            episodeID: episode.episodeID,
+            queueStatus: appModel.adFreePass.queueStatus(for: episode.episodeID),
+            queueSnapshot: appModel.adFreePass.queueSnapshot,
+            downloadRecord: downloadRecord,
+            transcription: transcription,
+            analysis: analysis
+        )
+        let chips = EpisodeMetadataChips.make(
+            publishedAt: episode.publishedAt,
+            duration: episode.duration,
+            progress: progressSummary,
+            isDownloaded: downloadRecord?.state == .completed,
+            downloadedByteCount: downloadRecord?.bytesReceived
+        )
+
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                EpisodeHeroHeaderView(
+                    episode: episode,
+                    chips: chips,
+                    onPreviewResolved: updateArtworkPreview
+                )
+                .animation(.easeOut(duration: 0.2), value: progressSummary)
+
+                EpisodeActionBar(
+                    downloadRecord: downloadRecord,
+                    detectAdsState: appModel.detectAdsMenuState(for: episode),
+                    onPlay: { play(episode) },
+                    onDownload: { download(episode) },
+                    onResumeDownload: { resumeDownload(episode) },
+                    onCancelDownload: { cancelDownload(episode) },
+                    onDeleteDownload: { deleteDownload(episode) },
+                    onMakeAdFree: { makeAdFree(episode) }
+                )
+
+                if let pipelineState {
+                    EpisodePipelineCard(state: pipelineState) { action in
+                        perform(action, episode: episode)
+                    }
+                }
+
+                if case .completed(_, let isStale) = analysis {
+                    let zoneTiers = appModel.adAnalysisZoneTiers(for: episode, duration: episode.duration)
+                    EpisodeAdSpanTimelineView(
+                        duration: timelineDuration(episode: episode, zoneTiers: zoneTiers),
+                        zoneTiers: zoneTiers,
+                        isStale: isStale
+                    )
+                }
+
+                if case .completed(let record) = transcription, record.transcriptRelativePath != nil {
+                    EpisodeTranscriptEntryCard(episodeID: episode.episodeID, snippet: transcriptSnippet)
+                }
+
+                if !showNotes.isEmpty {
+                    EpisodeShowNotesView(blocks: showNotes.blocks)
+                }
+            }
+            .padding()
+            .animation(.smooth, value: pipelineState)
+        }
+        .background(alignment: .top) {
+            EpisodeArtworkGlowBackground(preview: episode.artworkPreview)
+        }
+        .contentMargins(.bottom, 72, for: .scrollContent)
+    }
+
     private func play(_ episode: EpisodeListItemSnapshot) {
         nowPlayingProbeMark("playepisode-tap")
         runPlaybackAction {
             try appModel.playEpisode(episode, modelContext: modelContext)
         }
+    }
+
+    private func makeAdFree(_ episode: EpisodeListItemSnapshot) {
+        appModel.startAdFreePass(for: episode, modelContext: modelContext)
+    }
+
+    private func perform(_ action: EpisodePipelineAction, episode: EpisodeListItemSnapshot) {
+        switch action {
+        case .cancelPass:
+            appModel.cancelAdFreePass(for: episode, modelContext: modelContext)
+        case .cancelDownload:
+            cancelDownload(episode)
+        case .cancelTranscription:
+            appModel.cancelEpisodeTranscription(episodeID: episode.episodeID, modelContext: modelContext)
+        case .downloadModel, .resumeQueue, .retryQueue:
+            appModel.adFreePass.resumePausedQueue()
+        case .resumeDownload:
+            resumeDownload(episode)
+        case .resumeTranscription, .retryTranscription:
+            transcribe(episode)
+        case .retryPass:
+            appModel.startAdFreePass(for: episode, modelContext: modelContext)
+        case .retryDownload:
+            download(episode)
+        case .retryAnalysis:
+            detectAds(episode)
+        case .removeFromQueue:
+            appModel.adFreePass.removePendingItem(episodeID: episode.episodeID, modelContext: modelContext)
+        }
+    }
+
+    private func transcribe(_ episode: EpisodeListItemSnapshot) {
+        guard let downloadRecord = appModel.downloads.record(for: episode.episodeID) else {
+            return
+        }
+
+        appModel.transcribeDownloadedEpisode(episode, downloadRecord: downloadRecord, modelContext: modelContext)
+    }
+
+    private func detectAds(_ episode: EpisodeListItemSnapshot) {
+        guard let document = appModel.transcriptions.document(for: episode.episodeID) else {
+            return
+        }
+
+        appModel.analyzeEpisodeTranscript(document, modelContext: modelContext)
     }
 
     private func updateArtworkPreview(_ preview: ArtworkPreview) {
@@ -159,10 +219,6 @@ struct EpisodeDetailView: View {
         }
 
         appModel.library.updateArtworkPreview(preview, for: episode)
-    }
-
-    private func markPlayed(_ episode: EpisodeListItemSnapshot) {
-        appModel.markEpisodePlayed(episode, modelContext: modelContext)
     }
 
     private func confirmClearProgress() {
@@ -177,47 +233,19 @@ struct EpisodeDetailView: View {
         appModel.clearEpisodeProgress(episode, modelContext: modelContext)
     }
 
+    private func showEpisodeInfo() {
+        sheetDestination = .episodeInfo(episodeID: episodeID)
+    }
+
+    private func dismissSheet() {
+        sheetDestination = nil
+    }
+
     private func runPlaybackAction(_ action: () throws -> Void) {
         do {
             try action()
         } catch {
             appModel.lastPlaybackError = error.localizedDescription
-        }
-    }
-
-    @ViewBuilder
-    private func progressStatus(_ progressSummary: EpisodeProgressSummary) -> some View {
-        if progressSummary.isCompleted {
-            Label("Completed", systemImage: "checkmark.circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } else if progressSummary.hasVisibleProgress {
-            VStack(alignment: .leading, spacing: 5) {
-                if progressSummary.duration != nil {
-                    EpisodeProgressBarView(fractionCompleted: progressSummary.fractionCompleted)
-                        .frame(width: 180)
-                }
-
-                Text(progressSummary.remainingText ?? "In progress")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(progressSummary.accessibilityDescription)
-        }
-    }
-
-    private func playDownloaded(_ episode: EpisodeListItemSnapshot) {
-        runPlaybackAction {
-            guard let downloadRecord = appModel.downloads.record(for: episode.episodeID) else {
-                throw EpisodeDownloadError.missingDownloadedFile
-            }
-
-            try appModel.playDownloadedEpisode(
-                episode,
-                downloadRecord: downloadRecord,
-                modelContext: modelContext
-            )
         }
     }
 
@@ -229,17 +257,33 @@ struct EpisodeDetailView: View {
         appModel.downloads.cancelDownload(episodeID: episode.episodeID, modelContext: modelContext)
     }
 
+    private func resumeDownload(_ episode: EpisodeListItemSnapshot) {
+        appModel.downloads.resumeDownload(episodeID: episode.episodeID, modelContext: modelContext)
+    }
+
     private func deleteDownload(_ episode: EpisodeListItemSnapshot) {
         guard let downloadRecord = appModel.downloads.record(for: episode.episodeID) else {
             return
         }
 
-        appModel.downloads.deleteDownload(downloadRecord, modelContext: modelContext)
+        appModel.deleteDownload(downloadRecord, modelContext: modelContext)
+    }
+
+    private func timelineDuration(
+        episode: EpisodeListItemSnapshot,
+        zoneTiers: EpisodeAdAnalysisZoneTiers
+    ) -> TimeInterval {
+        if let duration = episode.duration, duration > 0 {
+            return duration
+        }
+
+        return (zoneTiers.autoSkip + zoneTiers.displayOnly).map(\.endTime).max() ?? 0
     }
 
     private func updateTextContent(for episode: EpisodeListItemSnapshot?) async {
         guard let episode else {
-            applyTextContent(.empty)
+            showNotes = .empty
+            transcriptSnippet = nil
             return
         }
 
@@ -250,7 +294,7 @@ struct EpisodeDetailView: View {
             return
         }
 
-        let textContent = await EpisodeTextContent.resolving(
+        let resolved = await EpisodeShowNotesContent.resolving(
             summaryHTML: episode.summary,
             showNotesHTML: detail?.showNotesHTML
         )
@@ -258,17 +302,25 @@ struct EpisodeDetailView: View {
             return
         }
 
-        applyTextContent(textContent)
+        showNotes = resolved
+        transcriptSnippet = snippet(from: appModel.transcriptions.document(for: episode.episodeID))
     }
 
-    private func applyTextContent(_ textContent: EpisodeTextContent) {
-        episodeSummaryText = textContent.summary
-        showNotesPlainText = textContent.showNotesPlainText
-        showNotesShouldRender = textContent.showNotesShouldRender
+    private func snippet(from document: EpisodeTranscriptDocument?) -> String? {
+        guard let text = document?.text
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !text.isEmpty
+        else {
+            return nil
+        }
+
+        return String(text.prefix(220))
     }
 }
 
 private struct TextContentTaskKey: Equatable {
     let episodeID: String?
+    let transcriptUpdatedAt: Date?
     let isNowPlayingPresented: Bool
 }

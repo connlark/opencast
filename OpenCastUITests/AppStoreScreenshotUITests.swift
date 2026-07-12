@@ -10,6 +10,11 @@ final class AppStoreScreenshotUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    // Capture order differs from App Store order: the transcript is captured
+    // before playback starts (follow-along would scroll the sponsor badge out
+    // of the first screenful once the episode is the current one), and the
+    // notification is captured last so its banner cannot contaminate the
+    // other shots.
     @MainActor
     func testAppStoreScreenshotSet() throws {
         let app = makeAppStoreScreenshotApp()
@@ -18,36 +23,42 @@ final class AppStoreScreenshotUITests: XCTestCase {
         openLibrary(in: app)
         assertExists(app.staticTexts["Archive Hour"], named: "Archive Hour library row")
         assertExists(app.staticTexts["City Frequency"], named: "City Frequency library row")
-        attachAppStoreScreenshot(named: "app_store_01_library")
+        attachAppStoreScreenshot(named: "app_store_04_library")
 
         openInbox(in: app)
         assertExists(app.staticTexts["The Map Under the Morning Commute"], named: "filled inbox episode")
         let primaryEpisode = primaryEpisodeRow(in: app)
         assertExists(primaryEpisode, named: "primary inbox episode")
-        attachAppStoreScreenshot(named: "app_store_02_inbox")
+        attachAppStoreScreenshot(named: "app_store_07_inbox")
 
         openLibrary(in: app)
         let primaryPodcast = primarySubscriptionRow(in: app)
         scrollUntilHittable(primaryPodcast, in: app)
         primaryPodcast.tap()
         assertExists(app.staticTexts["Tracing the Bug That Only Appeared at Night"], named: "primary podcast episode")
-        attachAppStoreScreenshot(named: "app_store_03_podcast_detail")
+        attachAppStoreScreenshot(named: "app_store_05_podcast_detail")
+
+        openPrimaryEpisodeDetailFromContextMenu(in: app)
+        assertExists(adSpanTimelineCaption(in: app), named: "seeded ad-span timeline caption")
+        attachAppStoreScreenshot(named: "app_store_08_episode_detail")
+
+        openTranscriptFromEpisodeDetail(in: app)
+        assertExists(sponsorTranscriptRow(in: app), named: "Bottomless Mug sponsor transcript row", timeout: 10)
+        attachAppStoreScreenshot(named: "app_store_02_transcript")
 
         openInbox(in: app)
-        assertExists(primaryEpisode, named: "primary inbox episode")
+        assertExists(primaryEpisode, named: "primary inbox episode before playback")
         primaryEpisode.tap()
         assertNowPlayingOverlay(in: app)
         assertExists(playbackProgress(in: app), named: "Playback Progress control")
-        attachAppStoreScreenshot(named: "app_store_04_now_playing")
+        attachAppStoreScreenshot(named: "app_store_01_now_playing")
 
         peelNowPlayingArtwork(in: app)
         assertExists(nowPlayingSoundLab(in: app), named: "Now Playing Sound Lab panel")
-        attachAppStoreScreenshot(named: "app_store_05_sound_lab")
+        assertSeededSkipZonesMarked(in: app)
+        attachAppStoreScreenshot(named: "app_store_06_sound_lab")
 
-        openCurrentEpisodeDetailFromNowPlaying(in: app)
-        assertExists(app.buttons["Play Episode"], named: "Play Episode button")
-        assertExists(app.staticTexts["Summary"], named: "episode summary")
-        attachAppStoreScreenshot(named: "app_store_06_episode_detail")
+        try captureCompletionNotificationScreenshot(app: app)
     }
 
     @MainActor
@@ -65,10 +76,88 @@ final class AppStoreScreenshotUITests: XCTestCase {
         return app
     }
 
+    // The completion notification is the shot's subject, so this capture path
+    // must not use the banner-dismiss helper the app shots rely on.
+    @MainActor
+    private func captureCompletionNotificationScreenshot(app: XCUIApplication) throws {
+        let permissionMonitor = addUIInterruptionMonitor(withDescription: "Notification Permission") { alert in
+            for buttonTitle in ["Allow", "Allow Notifications"] {
+                let button = alert.buttons[buttonTitle]
+                if button.exists {
+                    button.tap()
+                    return true
+                }
+            }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(permissionMonitor) }
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 2)
+        settleSpringBoardNotificationSurface(in: springboard)
+        clearAllSpringBoardNotifications(in: springboard)
+
+        app.launchArguments.append("--opencast-schedule-app-store-adfreepass-notification")
+        app.launchEnvironment["OPENCAST_SCHEDULE_APP_STORE_ADFREEPASS_NOTIFICATION"] = "1"
+        app.launch()
+        app.tap()
+
+        let allowButton = springboard.buttons["Allow"]
+        if allowButton.waitForExistence(timeout: 5) {
+            allowButton.tap()
+        }
+
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 5)
+        settleSpringBoardNotificationSurface(in: springboard)
+        let notification = try waitForSpringBoardNotification(
+            containing: "ad breaks",
+            in: springboard,
+            timeout: 30
+        )
+        XCTAssertTrue(notification.exists, "Completion notification should be on SpringBoard for capture")
+        snapshot("app_store_03_notification", timeWaitingForIdle: 0)
+        attachScreenshot(named: "app_store_03_notification")
+    }
+
+    // Freshly created simulators post system notifications ("Ready for Apple
+    // Intelligence") that would share the shot with the fixture card. This
+    // runs before the fixture is scheduled, so it can safely swipe-clear
+    // every labeled notification cell it finds.
+    @MainActor
+    private func clearAllSpringBoardNotifications(in springboard: XCUIApplication) {
+        let cellPredicate = NSPredicate(
+            format: "(identifier == %@ OR identifier == %@) AND label != %@",
+            "ListCell",
+            "NotificationShortLookView",
+            ""
+        )
+        for _ in 0..<4 {
+            let cell = springboard.descendants(matching: .any).matching(cellPredicate).firstMatch
+            guard cell.waitForExistence(timeout: 1) else {
+                return
+            }
+
+            cell.swipeLeft()
+            let clearButton = springboard.buttons["Clear"].firstMatch
+            guard clearButton.waitForExistence(timeout: 2) else {
+                return
+            }
+            clearButton.tap()
+            Thread.sleep(forTimeInterval: 1)
+        }
+    }
+
     @MainActor
     private func attachAppStoreScreenshot(named name: String) {
         dismissSystemNotificationBanners()
         snapshot(name, timeWaitingForIdle: 0)
+        attachScreenshot(named: name)
+    }
+
+    @MainActor
+    private func attachScreenshot(named name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
@@ -87,6 +176,59 @@ final class AppStoreScreenshotUITests: XCTestCase {
         let end = appleIntelligenceBanner.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: -4))
         start.press(forDuration: 0.05, thenDragTo: end)
         _ = appleIntelligenceBanner.waitForNonExistence(timeout: 1)
+    }
+
+    @MainActor
+    private func openPrimaryEpisodeDetailFromContextMenu(in app: XCUIApplication) {
+        let row = primaryEpisodeRow(in: app)
+        assertExists(row, named: "primary episode row in podcast detail")
+        row.press(forDuration: 1.2)
+
+        let detailsAction = app.buttons["View Episode Details"].firstMatch
+        assertExists(detailsAction, named: "View Episode Details context action")
+        detailsAction.tap()
+        assertExists(app.buttons["Play Episode"], named: "episode detail Play button", timeout: 10)
+    }
+
+    @MainActor
+    private func openTranscriptFromEpisodeDetail(in app: XCUIApplication) {
+        let transcriptCard = app.descendants(matching: .any)
+            .matching(identifier: "Read Transcript")
+            .firstMatch
+        scrollUntilHittable(transcriptCard, in: app)
+        transcriptCard.tap()
+        assertExists(app.navigationBars["Transcript"], named: "Transcript screen", timeout: 10)
+    }
+
+    @MainActor
+    private func sponsorTranscriptRow(in app: XCUIApplication) -> XCUIElement {
+        let sponsor = "Bottomless Mug Coffee Co."
+        let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", sponsor, sponsor)
+        return app.descendants(matching: .any).matching(predicate).firstMatch
+    }
+
+    @MainActor
+    private func adSpanTimelineCaption(in app: XCUIApplication) -> XCUIElement {
+        let predicate = NSPredicate(format: "label CONTAINS %@", "4 ad segments")
+        return app.descendants(matching: .any).matching(predicate).firstMatch
+    }
+
+    // Fails the lane loudly if the seeded analysis did not wire up as exactly
+    // three auto-skip zones — the guard behind both the marked Now Playing
+    // timeline and this Sound Lab shot.
+    @MainActor
+    private func assertSeededSkipZonesMarked(in app: XCUIApplication) {
+        let control = app.descendants(matching: .any)["Skip Promos & Ads"].firstMatch
+        assertExists(control, named: "Skip Promos & Ads control")
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "3 zones marked."),
+            object: control
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: 5),
+            .completed,
+            "Skip Promos & Ads control should report \"3 zones marked.\" from the seeded analysis, got \(String(describing: control.value))"
+        )
     }
 
     @MainActor
@@ -118,34 +260,6 @@ final class AppStoreScreenshotUITests: XCTestCase {
     }
 
     @MainActor
-    private func openSection(
-        _ title: String,
-        in app: XCUIApplication,
-        file: StaticString,
-        line: UInt
-    ) {
-        let tabButton = app.tabBars.buttons[title]
-        if tabButton.waitForExistence(timeout: 1) {
-            tabButton.tap()
-            return
-        }
-
-        let sidebarButton = app.buttons[title]
-        if sidebarButton.waitForExistence(timeout: 1) {
-            sidebarButton.tap()
-            return
-        }
-
-        let sidebarCell = app.cells.containing(.staticText, identifier: title).element
-        if sidebarCell.waitForExistence(timeout: 1) {
-            sidebarCell.tap()
-            return
-        }
-
-        XCTFail("\(title) navigation item should exist", file: file, line: line)
-    }
-
-    @MainActor
     private func scrollUntilHittable(
         _ element: XCUIElement,
         in app: XCUIApplication,
@@ -170,27 +284,6 @@ final class AppStoreScreenshotUITests: XCTestCase {
     @MainActor
     private func assertNowPlayingOverlay(in app: XCUIApplication) {
         assertExists(nowPlayingOverlay(in: app), named: "Now Playing overlay")
-    }
-
-    @MainActor
-    private func openCurrentEpisodeDetailFromNowPlaying(in app: XCUIApplication) {
-        let overlay = nowPlayingOverlay(in: app)
-        assertExists(overlay, named: "Now Playing overlay before opening episode detail")
-        let titleButton = overlay.buttons["Now Playing Episode Title"].firstMatch
-        assertExists(titleButton, named: "Now Playing episode title button")
-        titleButton.tap()
-        assertExists(app.buttons["Play Episode"], named: "episode detail after tapping Now Playing title")
-    }
-
-    @MainActor
-    private func dismissNowPlayingOverlay(in app: XCUIApplication) {
-        let overlay = nowPlayingOverlay(in: app)
-        assertExists(overlay, named: "Now Playing overlay before dismissing")
-        let start = overlay.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08))
-        let end = overlay.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.92))
-        start.press(forDuration: 0.05, thenDragTo: end)
-        assertDoesNotExist(nowPlayingOverlay(in: app), named: "Now Playing overlay after dismissing")
-        assertExists(app.buttons["Open Now Playing"], named: "mini-player after dismissing Now Playing")
     }
 
     @MainActor

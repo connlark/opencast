@@ -47,6 +47,8 @@ struct SettingsPlaybackSection: View {
                 .pickerStyle(.menu)
             }
 
+            Toggle("Auto-Skip Promos & Ads", isOn: autoSkipBinding)
+
             if let message = appModel.playbackSettings.lastErrorMessage {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
@@ -78,6 +80,14 @@ struct SettingsPlaybackSection: View {
             appModel.playbackSettings.skipForwardOption
         } set: { option in
             _ = appModel.setSkipForwardOption(option, modelContext: modelContext)
+        }
+    }
+
+    private var autoSkipBinding: Binding<Bool> {
+        Binding {
+            appModel.playbackSettings.isAutoSkipPromosAndAdsEnabled
+        } set: { isEnabled in
+            _ = appModel.setAutoSkipPromosAndAdsEnabled(isEnabled, modelContext: modelContext)
         }
     }
 }

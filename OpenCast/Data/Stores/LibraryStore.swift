@@ -397,6 +397,34 @@ final class LibraryStore {
         lastErrorMessage = nil
     }
 
+    func isAdAutoDetectEnabled(forPodcastID podcastID: String) -> Bool {
+        subscriptions.first { $0.feedURL == podcastID }?.isAdAutoDetectEnabled ?? false
+    }
+
+    @discardableResult
+    func setAdAutoDetectEnabled(
+        _ isEnabled: Bool,
+        feedURL: String,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard let subscription = subscriptions.first(where: { $0.feedURL == feedURL }) else {
+            return false
+        }
+
+        let previousValue = subscription.isAdAutoDetectEnabled
+        subscription.isAdAutoDetectEnabled = isEnabled
+
+        do {
+            try modelContext.save()
+            lastErrorMessage = nil
+            return true
+        } catch {
+            subscription.isAdAutoDetectEnabled = previousValue
+            lastErrorMessage = "Unable to update ad detection for this show: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     func refreshProgressRecords(modelContext: ModelContext) {
         do {
             try reloadProgressRecords(modelContext: modelContext)
@@ -1099,7 +1127,8 @@ final class LibraryStore {
                   lhsRecord.subscribedAt == rhsRecord.subscribedAt,
                   lhsRecord.lastRefreshAt == rhsRecord.lastRefreshAt,
                   lhsRecord.isArchived == rhsRecord.isArchived,
-                  lhsRecord.isVoiceBoostEnabled == rhsRecord.isVoiceBoostEnabled
+                  lhsRecord.isVoiceBoostEnabled == rhsRecord.isVoiceBoostEnabled,
+                  lhsRecord.isAdAutoDetectEnabled == rhsRecord.isAdAutoDetectEnabled
             else {
                 return false
             }

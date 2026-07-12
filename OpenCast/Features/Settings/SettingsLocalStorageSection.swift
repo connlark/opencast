@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct SettingsLocalStorageSection: View {
+    @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.modelContext) private var modelContext
+
     let feedCacheSummary: String
     let artworkCacheSummary: String
     let cacheErrorMessage: String?
@@ -33,6 +36,8 @@ struct SettingsLocalStorageSection: View {
                 Label("Downloaded Episodes", systemImage: "arrow.down.circle")
             }
 
+            Toggle("Delete Downloads After Played", isOn: autoDeletePlayedDownloadsBinding)
+
             Button("Clear Automatic Caches", systemImage: "trash", role: .destructive, action: onClearCaches)
 
             if completedDownloadCount > 0 {
@@ -55,6 +60,14 @@ struct SettingsLocalStorageSection: View {
             }
         } header: {
             Text("Local Storage")
+        }
+    }
+
+    private var autoDeletePlayedDownloadsBinding: Binding<Bool> {
+        Binding {
+            appModel.downloads.autoDeletesPlayedDownloads
+        } set: { isEnabled in
+            appModel.downloads.setAutoDeletesPlayedDownloads(isEnabled, modelContext: modelContext)
         }
     }
 }

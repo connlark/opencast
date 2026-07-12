@@ -9,7 +9,8 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     private let stateLock = NSLock()
     private var contentHandler: ((UNNotificationContent) -> Void)?
     private var bestAttemptContent: UNMutableNotificationContent?
-    private var downloadTask: URLSessionDownloadTask?
+    private var downloadTasks: [URLSessionDownloadTask] = []
+    private var artworkAccumulator: ArtworkDownloadAccumulator?
     private var didDeliver = false
 
     override func didReceive(
@@ -23,19 +24,18 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
 
         storePending(content: content, contentHandler: contentHandler)
 
-        guard let artworkURL = Self.artworkURL(from: request.content.userInfo) else {
-            deliverPendingContent(attachment: nil)
+        let artworkRequests = Self.artworkRequests(from: request.content.userInfo)
+        guard !artworkRequests.isEmpty else {
+            deliverPendingContent(attachments: [])
             return
         }
 
-        fetchArtworkAttachment(from: artworkURL) { [weak self] attachment in
-            self?.deliverPendingContent(attachment: attachment)
-        }
+        fetchArtworkAttachments(for: artworkRequests)
     }
 
     override func serviceExtensionTimeWillExpire() {
-        cancelDownload()
-        deliverPendingContent(attachment: nil)
+        cancelDownloads()
+        deliverPendingContent(attachments: finishActiveArtworkDownloads())
     }
 
     private func storePending(
@@ -45,16 +45,36 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         stateLock.lock()
         self.contentHandler = contentHandler
         bestAttemptContent = content
+        artworkAccumulator = nil
         didDeliver = false
         stateLock.unlock()
     }
 
+    private func fetchArtworkAttachments(for artworkRequests: [ArtworkDownloadRequest]) {
+        let accumulator = ArtworkDownloadAccumulator(artworkRequests: artworkRequests)
+        guard storeArtworkAccumulator(accumulator) else {
+            return
+        }
+
+        for artworkRequest in artworkRequests {
+            fetchArtworkAttachment(for: artworkRequest) { [weak self] attachment in
+                guard let attachments = accumulator.complete(
+                    identifier: artworkRequest.identifier,
+                    attachment: attachment
+                ) else {
+                    return
+                }
+                self?.deliverPendingContent(attachments: attachments)
+            }
+        }
+    }
+
     private func fetchArtworkAttachment(
-        from url: URL,
+        for artworkRequest: ArtworkDownloadRequest,
         completion: @escaping @Sendable (UNNotificationAttachment?) -> Void
     ) {
         var request = URLRequest(
-            url: url,
+            url: artworkRequest.url,
             cachePolicy: .reloadIgnoringLocalCacheData,
             timeoutInterval: 20
         )
@@ -73,7 +93,12 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
                 return
             }
 
-            completion(self?.attachment(from: temporaryURL, response: httpResponse, sourceURL: url))
+            completion(self?.attachment(
+                from: temporaryURL,
+                response: httpResponse,
+                sourceURL: artworkRequest.url,
+                identifier: artworkRequest.identifier
+            ))
         }
         storeDownloadTask(task)
         task.resume()
@@ -82,14 +107,27 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     private func attachment(
         from temporaryURL: URL,
         response: URLResponse,
-        sourceURL: URL
+        sourceURL: URL,
+        identifier: String
     ) -> UNNotificationAttachment? {
         NotificationAttachmentFactory.attachment(
             from: temporaryURL,
             response: response,
             sourceURL: sourceURL,
+            identifier: identifier,
             maxArtworkBytes: Self.maxArtworkBytes
         )
+    }
+
+    private func storeArtworkAccumulator(_ accumulator: ArtworkDownloadAccumulator) -> Bool {
+        stateLock.lock()
+        guard !didDeliver else {
+            stateLock.unlock()
+            return false
+        }
+        artworkAccumulator = accumulator
+        stateLock.unlock()
+        return true
     }
 
     private func storeDownloadTask(_ task: URLSessionDownloadTask) {
@@ -99,41 +137,62 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             task.cancel()
             return
         }
-        downloadTask = task
+        downloadTasks.append(task)
         stateLock.unlock()
     }
 
-    private func cancelDownload() {
+    private func cancelDownloads() {
         stateLock.lock()
-        let task = downloadTask
-        downloadTask = nil
+        let tasks = downloadTasks
+        downloadTasks.removeAll()
         stateLock.unlock()
-        task?.cancel()
+        tasks.forEach { $0.cancel() }
     }
 
-    private func deliverPendingContent(attachment: UNNotificationAttachment?) {
+    private func finishActiveArtworkDownloads() -> [UNNotificationAttachment] {
+        stateLock.lock()
+        let accumulator = artworkAccumulator
+        stateLock.unlock()
+        return accumulator?.finish() ?? []
+    }
+
+    private func deliverPendingContent(attachments: [UNNotificationAttachment]) {
         stateLock.lock()
         guard !didDeliver, let content = bestAttemptContent else {
             stateLock.unlock()
             return
         }
 
-        if let attachment {
-            content.attachments = [attachment]
+        if !attachments.isEmpty {
+            content.attachments = attachments
         }
         didDeliver = true
         let handler = contentHandler
         contentHandler = nil
         bestAttemptContent = nil
-        let task = downloadTask
-        downloadTask = nil
+        artworkAccumulator = nil
+        let tasks = downloadTasks
+        downloadTasks.removeAll()
         stateLock.unlock()
 
-        task?.cancel()
+        tasks.forEach { $0.cancel() }
         handler?(content)
     }
 
-    private static func artworkURL(from userInfo: [AnyHashable: Any]) -> URL? {
-        NotificationPayload.artworkURL(from: userInfo)
+    private static func artworkRequests(from userInfo: [AnyHashable: Any]) -> [ArtworkDownloadRequest] {
+        var requests = [ArtworkDownloadRequest]()
+        if let artworkURL = NotificationPayload.artworkURL(from: userInfo) {
+            requests.append(ArtworkDownloadRequest(
+                url: artworkURL,
+                identifier: NotificationArtworkAttachmentIdentifier.podcast
+            ))
+        }
+        if let episodeArtworkURL = NotificationPayload.episodeArtworkURL(from: userInfo) {
+            requests.append(ArtworkDownloadRequest(
+                url: episodeArtworkURL,
+                identifier: NotificationArtworkAttachmentIdentifier.episode
+            ))
+        }
+        return requests
     }
 }

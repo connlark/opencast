@@ -5,7 +5,7 @@ struct OpenCastRootRoutingModifier: ViewModifier {
 
     @Binding var sheetDestination: SheetDestination?
 
-    let pruneSelectedRoute: () -> Void
+    let pruneNavigationPaths: () -> Void
     let presentNowPlaying: () -> Void
     let dismissNowPlaying: () -> Void
     let openExternalURL: (URL) -> Void
@@ -13,10 +13,10 @@ struct OpenCastRootRoutingModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onChange(of: appModel.library.activePodcastIDs) { _, _ in
-                pruneSelectedRoute()
+                pruneNavigationPaths()
             }
             .onChange(of: appModel.library.visibleEpisodeIDs) { _, _ in
-                pruneSelectedRoute()
+                pruneNavigationPaths()
             }
             .onChange(of: appModel.nowPlayingPresentationRequest) { _, _ in
                 presentNowPlaying()

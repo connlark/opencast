@@ -10,39 +10,48 @@ struct OnboardingRSSFeedSection: View {
     let onSubscribe: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("RSS Feed")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 14) {
+            Label {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Add an RSS feed")
+                        .font(.headline)
 
-            VStack(spacing: 10) {
-                urlInputField
-
-                Button(action: onSubscribe) {
-                    if isSubscribing {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Subscribing")
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                    } else {
-                        Label("Subscribe", systemImage: "plus")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                    }
+                    Text("Paste the public feed URL from any podcast website.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.glassProminent)
-                .disabled(!canSubscribe || isSubscribing)
-                .accessibilityIdentifier("Onboarding RSS Subscribe")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } icon: {
+                SymbolBadgeView(systemImage: "dot.radiowaves.right")
             }
+            .accessibilityElement(children: .combine)
 
-            Text("Use the public RSS feed URL from any podcast website.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            urlInputField
+
+            Button(action: onSubscribe) {
+                if isSubscribing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Subscribing")
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                } else {
+                    Label("Subscribe", systemImage: "plus")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                }
+            }
+            .buttonStyle(.glassProminent)
+            .controlSize(.large)
+            .disabled(!canSubscribe || isSubscribing)
+            .accessibilityIdentifier("Onboarding RSS Subscribe")
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
     }
 
     private var urlInputField: some View {

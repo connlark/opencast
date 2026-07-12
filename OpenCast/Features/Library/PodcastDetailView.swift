@@ -2,17 +2,17 @@ import SwiftUI
 
 struct PodcastDetailView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @State private var isConfirmingUnsubscribe = false
+    @State private var isConfirmingAdAutoDetect = false
     @State private var searchQuery = ""
     @State private var searchMode: EpisodeSearchMode = .episodes
     @State private var searchSession = EpisodeSearchSession()
 
     let feedURL: String
-    var onUnsubscribe: () -> Void = {}
     var onOpenEpisode: (String) -> Void = { _ in }
-    var selectsEpisodeDetailOnPlay = false
 
     private var subscription: SubscriptionRecord? {
         appModel.library.subscriptions.first { $0.feedURL == feedURL }
@@ -58,6 +58,7 @@ struct PodcastDetailView: View {
 
     var body: some View {
         let podcastEpisodes = episodes
+        let episodeIDs = podcastEpisodes.map(\.episodeID)
         let searchTaskKey = EpisodeSearchRequestKey(
             episodes: podcastEpisodes,
             query: searchQuery,
@@ -117,16 +118,19 @@ struct PodcastDetailView: View {
                                 isLoadingVisible: searchSession.isLoadingVisible,
                                 isSearching: searchSession.isSearching,
                                 results: searchResults,
-                                fallbackEpisodes: podcastEpisodes,
-                                selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
-                                onSelect: dismissSearchKeyboard,
-                                onOpenEpisode: onOpenEpisode
-                            )
+                                fallbackEpisodes: podcastEpisodes
+                            ) { episode, result in
+                                EpisodeRowButton(
+                                    episode: episode,
+                                    searchResult: result,
+                                    onSelect: dismissSearchKeyboard,
+                                    onOpenEpisode: onOpenEpisode
+                                )
+                            }
                         } else {
                             ForEach(podcastEpisodes) { episode in
                                 EpisodeRowButton(
                                     episode: episode,
-                                    selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
                                     onSelect: dismissSearchKeyboard,
                                     onOpenEpisode: onOpenEpisode
                                 )
@@ -136,6 +140,8 @@ struct PodcastDetailView: View {
                 }
                 .scrollDismissesKeyboard(.immediately)
                 .contentMargins(.bottom, 72, for: .scrollContent)
+                .animation(listAnimation, value: episodeIDs)
+                .animation(listAnimation, value: appModel.library.state)
             } else {
                 ContentUnavailableView(
                     "Podcast Not Found",
@@ -171,6 +177,12 @@ struct PodcastDetailView: View {
                         }
                         .disabled(isRefreshing)
 
+                        Toggle(
+                            "Automatically Detect Ads",
+                            systemImage: "megaphone",
+                            isOn: adAutoDetectBinding
+                        )
+
                         Button("Unsubscribe", systemImage: "trash", role: .destructive) {
                             isConfirmingUnsubscribe = true
                         }
@@ -192,12 +204,49 @@ struct PodcastDetailView: View {
         } message: {
             Text("Cached episodes, progress, refresh logs, and local downloads for this podcast will be removed.")
         }
+        .confirmationDialog(
+            "Automatically detect ads?",
+            isPresented: $isConfirmingAdAutoDetect,
+            titleVisibility: .visible
+        ) {
+            Button("Turn On") {
+                setAdAutoDetectEnabled(true)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Episodes of this show will be analyzed for ads when you play them.")
+        }
+    }
+
+    private var listAnimation: Animation? {
+        hasSearchQuery || reduceMotion ? nil : .default
+    }
+
+    private var adAutoDetectBinding: Binding<Bool> {
+        Binding(
+            get: { subscription?.isAdAutoDetectEnabled ?? false },
+            set: { isEnabled in
+                if isEnabled {
+                    // Enabling is a standing opt-in — confirm first.
+                    isConfirmingAdAutoDetect = true
+                } else {
+                    setAdAutoDetectEnabled(false)
+                }
+            }
+        )
+    }
+
+    private func setAdAutoDetectEnabled(_ isEnabled: Bool) {
+        appModel.library.setAdAutoDetectEnabled(
+            isEnabled,
+            feedURL: feedURL,
+            modelContext: modelContext
+        )
     }
 
     private func unsubscribe() {
         Task {
             await appModel.unsubscribe(feedURL: feedURL, modelContext: modelContext)
-            onUnsubscribe()
             dismiss()
         }
     }

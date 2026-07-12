@@ -5,18 +5,38 @@ struct OnboardingNotificationSetupPage: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Get New Episode Alerts")
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("New Episode Alerts")
                         .font(.largeTitle)
                         .bold()
 
-                    Text("opencast can watch your subscribed RSS feeds and send a push when a new episode appears.")
+                    Text("Get a push when a podcast you follow publishes a new episode. You can turn this on now or later from Settings.")
                         .font(.body)
                         .foregroundStyle(.secondary)
                 }
 
                 NotificationOptInView()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    OnboardingPitchRow(
+                        systemImage: "bell.badge.fill",
+                        title: "Only new episodes",
+                        message: "Alerts fire for podcasts you already follow."
+                    )
+
+                    OnboardingPitchRow(
+                        systemImage: "hand.raised.fill",
+                        title: "No promo noise",
+                        message: "Never marketing, promotions, or recommendations."
+                    )
+
+                    OnboardingPitchRow(
+                        systemImage: "lock.fill",
+                        title: "No account",
+                        message: "Works without email, Apple ID, or a listener profile."
+                    )
+                }
 
                 if let completionErrorMessage {
                     Label(completionErrorMessage, systemImage: "exclamationmark.triangle")
@@ -25,7 +45,7 @@ struct OnboardingNotificationSetupPage: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 24)
             .padding(.top, 18)
             .padding(.bottom, 24)
         }

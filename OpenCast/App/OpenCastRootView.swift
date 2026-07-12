@@ -10,15 +10,14 @@ struct OpenCastRootView: View {
     private static let importedSubscriptionsNotificationDuration: Duration = .seconds(5)
 
     @Environment(OpenCastAppModel.self) private var appModel
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab = AppSection.inbox
-    @State private var selectedSection: AppSection? = .inbox
-    @State private var selectedRoute: AppRoute?
     @State private var libraryNavigationPath: [AppRoute] = []
     @State private var inboxNavigationPath: [AppRoute] = []
+    @State private var downloadsNavigationPath: [AppRoute] = []
+    @State private var searchNavigationPath: [AppRoute] = []
     @State private var sheetDestination: SheetDestination?
     @State private var isNowPlayingPresented = false
     @State private var isInitialSetupComplete = false
@@ -27,24 +26,29 @@ struct OpenCastRootView: View {
     @State private var remoteStoreChangeReloadTask: Task<Void, Never>?
     @State private var emptyImportPollingTask: Task<Void, Never>?
     @State private var importedSubscriptionsNotificationDismissalTask: Task<Void, Never>?
+    @State private var hasStartedTranscriptionBenchmark = false
+    #if DEBUG
+    @State private var hasStartedTranscriptionProof = false
+    @State private var hasStartedAdFreePassBackgroundProbe = false
+    @State private var hasStartedAdFreePassAutoStart = false
+    @State private var hasStartedEpisodePanelTranscribeProbe = false
+    #endif
 
     var body: some View {
         OpenCastRootLayerView(
             isNowPlayingPresented: isNowPlayingPresented,
-            onPresentNowPlaying: presentNowPlaying,
             onDismissNowPlaying: dismissNowPlaying,
             onOpenCurrentEpisode: openCurrentEpisodeFromNowPlaying,
             onOpenCurrentPodcast: openCurrentPodcastFromNowPlaying
         ) {
-            OpenCastAdaptiveRootContentView(
+            OpenCastTabRootView(
                 selectedTab: $selectedTab,
-                selectedSection: $selectedSection,
-                selectedRoute: $selectedRoute,
                 libraryNavigationPath: $libraryNavigationPath,
                 inboxNavigationPath: $inboxNavigationPath,
+                downloadsNavigationPath: $downloadsNavigationPath,
+                searchNavigationPath: $searchNavigationPath,
                 isNowPlayingPresented: isNowPlayingPresented,
                 onAdd: presentAddPodcast,
-                onOpenSettings: openSettings,
                 onPresentDataNukeConfirmation: presentDataNukeConfirmation,
                 onPresentNowPlaying: presentNowPlaying
             )
@@ -62,7 +66,7 @@ struct OpenCastRootView: View {
         .modifier(
             OpenCastRootRoutingModifier(
                 sheetDestination: $sheetDestination,
-                pruneSelectedRoute: pruneSelectedRoute,
+                pruneNavigationPaths: pruneNavigationPaths,
                 presentNowPlaying: presentNowPlaying,
                 dismissNowPlaying: dismissNowPlaying,
                 openExternalURL: openExternalURL
@@ -85,6 +89,23 @@ struct OpenCastRootView: View {
         .task {
             await observeRemoteStoreChanges()
         }
+        .task {
+            await runTranscriptionBenchmarkIfRequested()
+        }
+        #if DEBUG
+        .task {
+            await runTranscriptionProofIfRequested()
+        }
+        .task {
+            runAdFreePassBackgroundProbeIfRequested()
+        }
+        .task {
+            await runAdFreePassAutoStartIfRequested()
+        }
+        .task {
+            await runEpisodePanelTranscribeProbeIfRequested()
+        }
+        #endif
     }
 
     private func presentNowPlaying() {
@@ -117,24 +138,16 @@ struct OpenCastRootView: View {
         sheetDestination = .onboarding
     }
 
-    private func openSettings() {
-        if horizontalSizeClass == .regular {
-            selectedSection = .settings
-            selectedRoute = nil
-        } else {
-            selectedTab = .settings
-        }
-    }
-
     private func performInitialSetup() async {
         let activePodcastIDsBeforeInitialLoad = appModel.library.activePodcastIDs
         appModel.syncStatus.beginLibraryActivity(.checkingAccount)
         await appModel.library.load(modelContext: modelContext)
         appModel.downloads.load(modelContext: modelContext)
+        appModel.loadLocalTranscriptionState(modelContext: modelContext)
         appModel.appearanceSettings.load(modelContext: modelContext)
+        appModel.recentSearches.load(modelContext: modelContext)
         appModel.playbackSettings.load(modelContext: modelContext, playback: appModel.playback)
         await appModel.notificationSettings.load(modelContext: modelContext)
-        appModel.notificationPromoBanner.load(modelContext: modelContext)
         let accountStatus = await appModel.syncStatus.refreshAccountStatus(force: true)
         let didRepairSyncDuplicates = await repairSyncDuplicatesAfterImportedData()
         if didRepairSyncDuplicates {
@@ -149,6 +162,8 @@ struct OpenCastRootView: View {
             updateLibrarySyncActivityAfterImportCheck(accountStatus: accountStatus)
         }
         appModel.restorePreviousPlaybackIfAvailable(modelContext: modelContext)
+        appModel.restoreAdFreePassQueue(modelContext: modelContext)
+        appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         isInitialSetupComplete = true
         await appModel.refreshLibraryIfStale(modelContext: modelContext)
         appModel.cacheController.pruneIfNeeded()
@@ -181,13 +196,8 @@ struct OpenCastRootView: View {
     }
 
     private func openRouteFromNowPlaying(_ route: AppRoute) {
-        if horizontalSizeClass == .regular {
-            selectedSection = .library
-            selectedRoute = route
-        } else {
-            selectedTab = .library
-            libraryNavigationPath = [route]
-        }
+        selectedTab = .library
+        libraryNavigationPath = [route]
     }
 
     private func consumeRemoteEpisodeNotificationRoutes() async {
@@ -203,6 +213,67 @@ struct OpenCastRootView: View {
             scheduleRemoteStoreChangeReload()
         }
     }
+
+    private func runTranscriptionBenchmarkIfRequested() async {
+        guard !hasStartedTranscriptionBenchmark else {
+            return
+        }
+
+        hasStartedTranscriptionBenchmark = true
+        await TranscriptionBenchmarkRunner.runIfRequested()
+    }
+
+    #if DEBUG
+    private func runTranscriptionProofIfRequested() async {
+        guard !hasStartedTranscriptionProof else {
+            return
+        }
+
+        hasStartedTranscriptionProof = true
+        await TranscriptionProofRunner.runIfRequested()
+    }
+
+    private func runAdFreePassBackgroundProbeIfRequested() {
+        guard !hasStartedAdFreePassBackgroundProbe else {
+            return
+        }
+
+        hasStartedAdFreePassBackgroundProbe = true
+        AdFreePassBackgroundProbe.runIfRequested()
+    }
+
+    private func runAdFreePassAutoStartIfRequested() async {
+        guard !hasStartedAdFreePassAutoStart else {
+            return
+        }
+        guard AdFreePassAutoStartProbe.isRequested else {
+            return
+        }
+
+        hasStartedAdFreePassAutoStart = true
+        await AdFreePassAutoStartProbe.startWhenReady(
+            appModel: appModel,
+            modelContext: modelContext,
+            isInitialSetupComplete: { isInitialSetupComplete }
+        )
+    }
+
+    private func runEpisodePanelTranscribeProbeIfRequested() async {
+        guard !hasStartedEpisodePanelTranscribeProbe else {
+            return
+        }
+        guard EpisodePanelTranscribeProbe.isRequested else {
+            return
+        }
+
+        hasStartedEpisodePanelTranscribeProbe = true
+        await EpisodePanelTranscribeProbe.startWhenReady(
+            appModel: appModel,
+            modelContext: modelContext,
+            isInitialSetupComplete: { isInitialSetupComplete }
+        )
+    }
+    #endif
 
     private func scheduleRemoteStoreChangeReload() {
         remoteStoreChangeReloadTask?.cancel()
@@ -468,13 +539,8 @@ struct OpenCastRootView: View {
     }
 
     private func routeToInbox() {
-        if horizontalSizeClass == .regular {
-            selectedSection = .inbox
-            selectedRoute = nil
-        } else {
-            selectedTab = .inbox
-            inboxNavigationPath.removeAll()
-        }
+        selectedTab = .inbox
+        inboxNavigationPath.removeAll()
     }
 
     private func openExternalURL(_ url: URL) {
@@ -527,29 +593,30 @@ struct OpenCastRootView: View {
         }
     }
 
-    private func pruneSelectedRoute() {
-        guard let selectedRoute else {
-            return
-        }
+    private func pruneNavigationPaths() {
+        libraryNavigationPath.removeAll(where: isRouteInvalid)
+        inboxNavigationPath.removeAll(where: isRouteInvalid)
+        downloadsNavigationPath.removeAll(where: isRouteInvalid)
+        searchNavigationPath.removeAll(where: isRouteInvalid)
+    }
 
-        switch selectedRoute {
+    private func isRouteInvalid(_ route: AppRoute) -> Bool {
+        switch route {
         case .podcastDetail(let feedURL):
-            if !appModel.library.isActivelySubscribed(to: feedURL) {
-                self.selectedRoute = nil
-            }
-        case .episodeDetail(let id):
-            if appModel.library.episode(with: id) == nil {
-                self.selectedRoute = nil
-            }
+            !appModel.library.isActivelySubscribed(to: feedURL)
+        case .episodeDetail(let id), .episodeTranscript(let id):
+            appModel.library.episode(with: id) == nil && appModel.downloads.record(for: id) == nil
+        case .adDetectionQueue:
+            false
         }
     }
 
     private func resetAfterDataNuke() {
         selectedTab = .inbox
-        selectedSection = .inbox
-        selectedRoute = nil
         libraryNavigationPath.removeAll()
         inboxNavigationPath.removeAll()
+        downloadsNavigationPath.removeAll()
+        searchNavigationPath.removeAll()
         sheetDestination = nil
         dismissNowPlaying()
         hasFlushedProgressForLifecycleExit = false

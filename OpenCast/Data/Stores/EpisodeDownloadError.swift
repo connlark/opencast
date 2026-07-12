@@ -7,6 +7,7 @@ enum EpisodeDownloadError: LocalizedError {
     case downloadNotComplete
     case interrupted
     case invalidHTTPStatus(Int)
+    case unsupportedContentEncoding
 
     var errorDescription: String? {
         switch self {
@@ -22,6 +23,8 @@ enum EpisodeDownloadError: LocalizedError {
             "Download was interrupted."
         case .invalidHTTPStatus(let statusCode):
             "The server returned HTTP \(statusCode)."
+        case .unsupportedContentEncoding:
+            "The server encoded the audio response in a form that cannot be resumed safely."
         }
     }
 }

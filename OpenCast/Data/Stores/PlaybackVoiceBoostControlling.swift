@@ -7,6 +7,7 @@ protocol PlaybackVoiceBoostControlling: AnyObject {
 
 protocol PlaybackSettingsControlling: PlaybackVoiceBoostControlling {
     func setSkipIntervals(backward: TimeInterval, forward: TimeInterval)
+    func setAutoSkipEnabled(_ isEnabled: Bool)
 }
 
 extension AVFoundationPlaybackController: PlaybackSettingsControlling {}

@@ -46,7 +46,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             SELECT feed_url, title, author, summary, website_url, artwork_url,
                    artwork_preview_version, artwork_preview_canonical_url_key,
                    artwork_preview_source_hash, artwork_preview_pixel_width,
-                   artwork_preview_pixel_height, artwork_preview_rgb_data, updated_at
+                   artwork_preview_pixel_height, artwork_preview_rgb_data, updated_at,
+                   language
             FROM podcast_cache
             """,
             operation: "podcast load",
@@ -163,15 +164,16 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
 
             try run(
                 """
-                INSERT INTO podcast_cache (feed_url, title, author, summary, website_url, artwork_url, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO podcast_cache (feed_url, title, author, summary, website_url, artwork_url, updated_at, language)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(feed_url) DO UPDATE SET
                     title = excluded.title,
                     author = excluded.author,
                     summary = excluded.summary,
                     website_url = excluded.website_url,
                     artwork_url = excluded.artwork_url,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    language = excluded.language
                 """,
                 operation: operation,
                 db: db
@@ -183,6 +185,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 try bind(podcast.websiteURL?.absoluteString, at: 5, statement: statement, db: db, operation: operation)
                 try bind(podcastArtworkURL, at: 6, statement: statement, db: db, operation: operation)
                 try bind(refreshedAt, at: 7, statement: statement, db: db, operation: operation)
+                try bind(podcast.languageCode, at: 8, statement: statement, db: db, operation: operation)
             }
 
             try run(
@@ -520,6 +523,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             try exec("PRAGMA synchronous = NORMAL", operation: "open", db: handle)
             try exec("PRAGMA busy_timeout = 5000", operation: "open", db: handle)
             try exec(Self.schemaSQL, operation: "schema creation", db: handle)
+            // Pre-language databases: CREATE TABLE IF NOT EXISTS leaves the
+            // existing schema untouched, so add the column when missing.
+            try? exec("ALTER TABLE podcast_cache ADD COLUMN language TEXT", operation: "schema migration", db: handle)
         } catch {
             sqlite3_close_v2(handle)
             throw error
@@ -543,7 +549,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
       artwork_preview_pixel_width INTEGER,
       artwork_preview_pixel_height INTEGER,
       artwork_preview_rgb_data BLOB,
-      updated_at REAL NOT NULL
+      updated_at REAL NOT NULL,
+      language TEXT
     );
 
     CREATE TABLE IF NOT EXISTS episode_cache (
@@ -651,7 +658,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 pixelHeight: columnInt(statement, 10),
                 rgbData: columnData(statement, 11)
             ),
-            updatedAt: columnDate(statement, 12) ?? .distantPast
+            updatedAt: columnDate(statement, 12) ?? .distantPast,
+            languageCode: columnText(statement, 13)
         )
     }
 

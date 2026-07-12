@@ -47,6 +47,7 @@ struct NowPlayingOverlayView: View {
                 NowPlayingView(
                     bottomContentPadding: proxy.safeAreaInsets.bottom + bottomContentPadding,
                     topContentPadding: topContentPadding(in: proxy),
+                    moreMenuTopPadding: moreMenuTopPadding(in: proxy),
                     isPeelInteractionActive: $isPeelInteractionActive,
                     isContentScrolledToTop: $isContentScrolledToTop,
                     isTrackingDismissDrag: isTrackingDismissDrag,
@@ -135,6 +136,13 @@ struct NowPlayingOverlayView: View {
         }
 
         return proxy.safeAreaInsets.top + (proxy.size.height < 720 ? 92 : 150)
+    }
+
+    private func moreMenuTopPadding(in proxy: GeometryProxy) -> CGFloat {
+        // proxy.safeAreaInsets is zeroed by this view's ignoresSafeArea, so
+        // the phone value is a fixed clearance below the status bar/Dynamic
+        // Island inside the card's blank top band.
+        horizontalSizeClass == .regular ? 18 : 62
     }
 
     private func presentationProgress(offset: CGFloat, in proxy: GeometryProxy) -> CGFloat {

@@ -4,6 +4,9 @@ struct NowPlayingPeelSettingsPanel: View {
     let revealProgress: CGFloat
     @Binding var voiceBoostEnabled: Bool
     let voiceBoostControlEnabled: Bool
+    let adFreePassPresentation: EpisodeAdFreePassPresentation
+    let onAdFreePassAction: () -> Void
+    let onAdFreePassBackgroundProbe: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -44,6 +47,19 @@ struct NowPlayingPeelSettingsPanel: View {
                         isEnabled: voiceBoostControlEnabled,
                         isOn: $voiceBoostEnabled
                     )
+
+                    NowPlayingPeelAdFreePassControl(
+                        presentation: adFreePassPresentation,
+                        onPrimaryAction: onAdFreePassAction
+                    )
+
+                    #if DEBUG
+                    if AdFreePassBackgroundProbe.isUserInterfaceEnabled {
+                        NowPlayingPeelAdFreePassBackgroundProbeControl(
+                            onRun: onAdFreePassBackgroundProbe
+                        )
+                    }
+                    #endif
                 }
                 .padding(.leading, protectedLeadingSpace)
                 .padding(.trailing, contentInset)

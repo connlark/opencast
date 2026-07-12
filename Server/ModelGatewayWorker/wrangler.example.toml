@@ -1,0 +1,54 @@
+name = "your-model-gateway-worker"
+main = "build/index.js"
+compatibility_date = "2026-07-09"
+workers_dev = true
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+
+[build]
+command = "cargo install -q \"worker-build@^0.8\" && \"$HOME/.cargo/bin/worker-build\" --release"
+
+[vars]
+MODEL_OBJECT_PREFIX = "opencast/models"
+PUBLIC_MODEL_GATEWAY_ENABLED = "false"
+
+[[r2_buckets]]
+binding = "MODEL_BUCKET"
+bucket_name = "your-model-bucket"
+
+[env.prod-staging]
+name = "your-model-gateway-worker-prod-staging"
+workers_dev = true
+
+[env.prod-staging.vars]
+MODEL_OBJECT_PREFIX = "opencast/models"
+PUBLIC_MODEL_GATEWAY_ENABLED = "false"
+
+[[env.prod-staging.r2_buckets]]
+binding = "MODEL_BUCKET"
+bucket_name = "your-model-bucket-prod-staging"
+
+[env.production]
+name = "your-model-gateway-worker-production"
+workers_dev = false
+
+[[env.production.routes]]
+pattern = "models.example.com"
+custom_domain = true
+
+[env.production.vars]
+MODEL_OBJECT_PREFIX = "opencast/models"
+PUBLIC_MODEL_GATEWAY_ENABLED = "false"
+
+[[env.production.r2_buckets]]
+binding = "MODEL_BUCKET"
+bucket_name = "your-model-bucket-production"

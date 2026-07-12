@@ -10,6 +10,8 @@ struct SheetDestinationView: View {
         switch destination {
         case .addPodcast:
             AddPodcastView(directoryService: appModel.podcastDirectoryService)
+        case .episodeInfo(let episodeID):
+            EpisodeInfoSheet(episodeID: episodeID)
         case .importOPMLFile(let url):
             OPMLFileImportView(url: url)
         case .nukeConfirmation:

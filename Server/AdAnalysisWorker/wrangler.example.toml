@@ -1,0 +1,93 @@
+name = "your-ad-analysis-worker"
+main = "build/index.js"
+compatibility_date = "2026-07-09"
+workers_dev = true
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+
+[build]
+command = "cargo install -q \"worker-build@^0.8\" && \"$HOME/.cargo/bin/worker-build\" --release"
+
+[vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "development"
+PUBLIC_AD_ANALYSIS_ENABLED = "false"
+AD_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
+
+[[d1_databases]]
+binding = "AD_ANALYSIS_DB"
+database_name = "your-ad-analysis-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "AD_ANALYSIS_USAGE_LIMITER"
+class_name = "AdAnalysisUsageLimiter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AdAnalysisUsageLimiter"]
+
+[env.prod-staging]
+name = "your-ad-analysis-worker-prod-staging"
+workers_dev = true
+
+[env.prod-staging.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+PUBLIC_AD_ANALYSIS_ENABLED = "false"
+AD_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
+
+[[env.prod-staging.d1_databases]]
+binding = "AD_ANALYSIS_DB"
+database_name = "your-ad-analysis-db-prod-staging"
+database_id = "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.prod-staging.durable_objects.bindings]]
+name = "AD_ANALYSIS_USAGE_LIMITER"
+class_name = "AdAnalysisUsageLimiter"
+
+[[env.prod-staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["AdAnalysisUsageLimiter"]
+
+[env.production]
+name = "your-ad-analysis-worker-production"
+workers_dev = false
+
+[[env.production.routes]]
+pattern = "ad-analysis.example.com"
+custom_domain = true
+
+[env.production.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+PUBLIC_AD_ANALYSIS_ENABLED = "false"
+AD_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
+
+[[env.production.d1_databases]]
+binding = "AD_ANALYSIS_DB"
+database_name = "your-ad-analysis-db-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.production.durable_objects.bindings]]
+name = "AD_ANALYSIS_USAGE_LIMITER"
+class_name = "AdAnalysisUsageLimiter"
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = ["AdAnalysisUsageLimiter"]

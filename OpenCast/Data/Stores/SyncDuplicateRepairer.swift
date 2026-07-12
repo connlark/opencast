@@ -52,6 +52,8 @@ enum SyncDuplicateRepairer {
         keep.author = bestOptionalText(in: sortedRecords, keyPath: \.author)
         keep.artworkURL = bestOptionalText(in: sortedRecords, keyPath: \.artworkURL)
         keep.isVoiceBoostEnabled = records.allSatisfy(\.isVoiceBoostEnabled)
+        // Auto-detect defaults off, so an explicit opt-in on any duplicate wins.
+        keep.isAdAutoDetectEnabled = records.contains(where: \.isAdAutoDetectEnabled)
 
         for record in records where record !== keep {
             modelContext.delete(record)

@@ -1,11 +1,12 @@
 import SwiftUI
 
 struct OnboardingPageIndicator: View {
+    let pages: [OnboardingPage]
     let selectedPage: OnboardingPage
 
     var body: some View {
         HStack(spacing: 10) {
-            ForEach(OnboardingPage.allCases) { page in
+            ForEach(pages) { page in
                 Circle()
                     .fill(page == selectedPage ? .primary : .secondary)
                     .frame(width: 8, height: 8)
@@ -13,6 +14,6 @@ struct OnboardingPageIndicator: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Onboarding page \(selectedPage.rawValue + 1) of \(OnboardingPage.allCases.count)")
+        .accessibilityLabel("Onboarding page \((pages.firstIndex(of: selectedPage) ?? 0) + 1) of \(pages.count)")
     }
 }

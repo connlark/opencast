@@ -1,6 +1,6 @@
 import Foundation
 
-struct NotificationSecurityHTTPError: Error, LocalizedError {
+nonisolated struct NotificationSecurityHTTPError: Error, LocalizedError, Sendable {
     let statusCode: Int
     let code: String
 
@@ -9,7 +9,6 @@ struct NotificationSecurityHTTPError: Error, LocalizedError {
     }
 
     var isRecoverableCredentialFailure: Bool {
-        statusCode == 401
-            && ["unknown_key", "invalid_app_id", "invalid_environment", "invalid_signature", "invalid_counter"].contains(code)
+        AppAttestRecoverableCredentialFailure.contains(statusCode: statusCode, code: code)
     }
 }

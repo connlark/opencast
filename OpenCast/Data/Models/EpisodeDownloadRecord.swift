@@ -11,6 +11,13 @@ final class EpisodeDownloadRecord {
     var bytesReceived: Int64 = 0
     var bytesExpected: Int64?
     var errorMessage: String?
+    var entityTag: String?
+    var lastModifiedHeader: String?
+    var episodeTitle: String?
+    var podcastTitle: String?
+    var artworkURLString: String?
+    var duration: TimeInterval?
+    var publishedAt: Date?
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
 
@@ -23,6 +30,13 @@ final class EpisodeDownloadRecord {
         bytesReceived: Int64 = 0,
         bytesExpected: Int64? = nil,
         errorMessage: String? = nil,
+        entityTag: String? = nil,
+        lastModifiedHeader: String? = nil,
+        episodeTitle: String? = nil,
+        podcastTitle: String? = nil,
+        artworkURLString: String? = nil,
+        duration: TimeInterval? = nil,
+        publishedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -34,6 +48,13 @@ final class EpisodeDownloadRecord {
         self.bytesReceived = bytesReceived
         self.bytesExpected = bytesExpected
         self.errorMessage = errorMessage
+        self.entityTag = entityTag
+        self.lastModifiedHeader = lastModifiedHeader
+        self.episodeTitle = episodeTitle
+        self.podcastTitle = podcastTitle
+        self.artworkURLString = artworkURLString
+        self.duration = duration
+        self.publishedAt = publishedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

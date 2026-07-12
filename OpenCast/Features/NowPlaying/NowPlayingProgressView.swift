@@ -1,8 +1,11 @@
+import OpenCastPlayback
 import SwiftUI
 
 struct NowPlayingProgressView: View {
     let duration: TimeInterval?
     let displayedPosition: TimeInterval
+    let zones: [PlaybackSkipZone]
+    var displayOnlyZones: [PlaybackSkipZone] = []
     @Binding var scrubPosition: TimeInterval
     let onEditingChanged: (Bool) -> Void
 
@@ -16,6 +19,14 @@ struct NowPlayingProgressView: View {
             .accessibilityLabel("Playback Progress")
             .accessibilityIdentifier("Playback Progress")
             .accessibilityValue(progressAccessibilityValue)
+
+            if !zones.isEmpty || !displayOnlyZones.isEmpty {
+                NowPlayingSkipZoneRail(
+                    duration: sliderUpperBound,
+                    zones: zones,
+                    displayOnlyZones: displayOnlyZones
+                )
+            }
 
             HStack {
                 Text(displayedPosition.formattedPlaybackDuration)

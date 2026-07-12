@@ -199,6 +199,19 @@ const ENABLED_DEVICES_FOR_FEED_SQL: &str = "SELECT devices.install_id, devices.d
            ) \
          ORDER BY devices.install_id";
 
+const ENABLED_DEVICE_COUNT_SQL: &str = "SELECT COUNT(*) AS count \
+         FROM devices \
+         WHERE install_id = ?1 \
+           AND apns_environment = ?2 \
+           AND bundle_id = ?3 \
+           AND notifications_enabled = 1";
+
+const DELETE_SUPERSEDED_DEVICES_SQL: &str = "DELETE FROM devices \
+         WHERE install_id = ?1 \
+           AND apns_environment = ?2 \
+           AND bundle_id = ?3 \
+           AND device_token_hash <> ?4";
+
 pub async fn insert_challenge(
     db: &D1Database,
     challenge_id: &str,
@@ -530,26 +543,15 @@ pub async fn upsert_device(db: &D1Database, device: DeviceUpsert<'_>) -> Result<
     .await?;
 
     let cleanup_args = [
-        D1Type::Text(""),
-        D1Type::Integer(0),
-        d1_i64(device.now),
         D1Type::Text(device.install_id),
         D1Type::Text(device.apns_environment),
         D1Type::Text(device.bundle_id),
         D1Type::Text(device.device_token_hash),
     ];
-    db.prepare(
-        "UPDATE devices \
-         SET device_token = ?1, notifications_enabled = ?2, last_seen_at = ?3 \
-         WHERE install_id = ?4 \
-           AND apns_environment = ?5 \
-           AND bundle_id = ?6 \
-           AND device_token_hash <> ?7 \
-           AND notifications_enabled = 1",
-    )
-    .bind_refs(&cleanup_args)?
-    .run()
-    .await?;
+    db.prepare(DELETE_SUPERSEDED_DEVICES_SQL)
+        .bind_refs(&cleanup_args)?
+        .run()
+        .await?;
 
     Ok(())
 }
@@ -599,10 +601,19 @@ pub async fn device_exists(
     Ok(row.map(|row| row.count).unwrap_or(0) > 0)
 }
 
-pub async fn device_count_for_install(db: &D1Database, install_id: &str) -> Result<i64> {
-    let args = [D1Type::Text(install_id)];
+pub async fn enabled_device_count_for_install(
+    db: &D1Database,
+    install_id: &str,
+    apns_environment: &str,
+    bundle_id: &str,
+) -> Result<i64> {
+    let args = [
+        D1Type::Text(install_id),
+        D1Type::Text(apns_environment),
+        D1Type::Text(bundle_id),
+    ];
     let row = db
-        .prepare("SELECT COUNT(*) AS count FROM devices WHERE install_id = ?1")
+        .prepare(ENABLED_DEVICE_COUNT_SQL)
         .bind_refs(&args)?
         .first::<CountRow>(None)
         .await?;
@@ -1276,6 +1287,7 @@ mod tests {
     const NOW: i64 = 1_780_000_000;
     const CURRENT_APNS_ENVIRONMENT: &str = "production";
     const OTHER_APNS_ENVIRONMENT: &str = "development";
+    const TEST_BUNDLE_ID: &str = "com.connor.opencast";
 
     fn setup_db() -> Connection {
         let db = Connection::open_in_memory().expect("open in-memory sqlite");
@@ -1284,6 +1296,8 @@ mod tests {
             "../migrations/0008_cleanup_superseded_device_tokens.sql"
         ))
         .expect("cleanup superseded devices");
+        db.execute_batch(include_str!("../migrations/0009_delete_dead_device_rows.sql"))
+            .expect("delete dead device rows");
         db
     }
 
@@ -1373,20 +1387,107 @@ mod tests {
         notifications_enabled: bool,
         last_seen_at: i64,
     ) {
+        insert_device_row(
+            db,
+            install_id,
+            &format!("token-{device_token_hash}"),
+            device_token_hash,
+            apns_environment,
+            TEST_BUNDLE_ID,
+            notifications_enabled,
+            last_seen_at,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_device_row(
+        db: &Connection,
+        install_id: &str,
+        device_token: &str,
+        device_token_hash: &str,
+        apns_environment: &str,
+        bundle_id: &str,
+        notifications_enabled: bool,
+        last_seen_at: i64,
+    ) {
         db.execute(
             "INSERT INTO devices \
              (install_id, key_id, device_token, device_token_hash, apns_environment, bundle_id, notifications_enabled, created_at, last_seen_at) \
-             VALUES (?1, 'key', ?2, ?3, ?4, 'com.connor.opencast', ?5, ?6, ?6)",
+             VALUES (?1, 'key', ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
             params![
                 install_id,
-                format!("token-{device_token_hash}"),
+                device_token,
                 device_token_hash,
                 apns_environment,
+                bundle_id,
                 i32::from(notifications_enabled),
                 last_seen_at
             ],
         )
         .expect("insert device");
+    }
+
+    fn insert_rotated_away_device(db: &Connection, install_id: &str, device_token_hash: &str) {
+        insert_device_row(
+            db,
+            install_id,
+            "",
+            device_token_hash,
+            CURRENT_APNS_ENVIRONMENT,
+            TEST_BUNDLE_ID,
+            false,
+            NOW - 100,
+        );
+    }
+
+    fn enabled_device_count(
+        db: &Connection,
+        install_id: &str,
+        apns_environment: &str,
+        bundle_id: &str,
+    ) -> i64 {
+        db.query_row(
+            ENABLED_DEVICE_COUNT_SQL,
+            params![install_id, apns_environment, bundle_id],
+            |row| row.get(0),
+        )
+        .expect("count enabled devices")
+    }
+
+    fn delete_superseded_devices(
+        db: &Connection,
+        install_id: &str,
+        apns_environment: &str,
+        bundle_id: &str,
+        device_token_hash: &str,
+    ) {
+        db.execute(
+            DELETE_SUPERSEDED_DEVICES_SQL,
+            params![install_id, apns_environment, bundle_id, device_token_hash],
+        )
+        .expect("delete superseded devices");
+    }
+
+    fn device_hashes_for_scope(
+        db: &Connection,
+        install_id: &str,
+        apns_environment: &str,
+        bundle_id: &str,
+    ) -> Vec<String> {
+        let mut statement = db
+            .prepare(
+                "SELECT device_token_hash FROM devices \
+                 WHERE install_id = ?1 AND apns_environment = ?2 AND bundle_id = ?3 \
+                 ORDER BY device_token_hash",
+            )
+            .expect("prepare device-hash query");
+        statement
+            .query_map(params![install_id, apns_environment, bundle_id], |row| {
+                row.get::<_, String>(0)
+            })
+            .expect("query device hashes")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read device hashes")
     }
 
     fn activate_feed(db: &Connection, feed_url: &str, install_id: &str) {
@@ -1762,6 +1863,144 @@ mod tests {
         assert_eq!(enabled_production, 1);
         assert_eq!(enabled_development, 1);
         assert_eq!(older_token, "");
+    }
+
+    #[test]
+    fn enabled_device_count_ignores_rotated_away_rows() {
+        let db = setup_db();
+        for index in 0..4 {
+            insert_rotated_away_device(&db, "install-a", &format!("dead-{index}"));
+        }
+        insert_device(&db, "install-a", "live-token", CURRENT_APNS_ENVIRONMENT, true);
+
+        let total_rows: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM devices WHERE install_id = 'install-a'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count device rows");
+
+        assert_eq!(total_rows, 5);
+        assert_eq!(
+            enabled_device_count(&db, "install-a", CURRENT_APNS_ENVIRONMENT, TEST_BUNDLE_ID),
+            1
+        );
+    }
+
+    #[test]
+    fn enabled_device_count_scopes_install_environment_and_bundle() {
+        let db = setup_db();
+        insert_device(&db, "install-a", "prod-token", CURRENT_APNS_ENVIRONMENT, true);
+        insert_device(&db, "install-a", "dev-token", OTHER_APNS_ENVIRONMENT, true);
+        insert_device(&db, "install-b", "other-install", CURRENT_APNS_ENVIRONMENT, true);
+        insert_device_row(
+            &db,
+            "install-a",
+            "token-other-bundle",
+            "other-bundle",
+            CURRENT_APNS_ENVIRONMENT,
+            "com.other.bundle",
+            true,
+            NOW - 25,
+        );
+
+        assert_eq!(
+            enabled_device_count(&db, "install-a", CURRENT_APNS_ENVIRONMENT, TEST_BUNDLE_ID),
+            1
+        );
+    }
+
+    #[test]
+    fn delete_superseded_devices_keeps_only_current_token_row() {
+        let db = setup_db();
+        insert_rotated_away_device(&db, "install-a", "dead-1");
+        insert_device_seen(
+            &db,
+            "install-a",
+            "previous-token",
+            CURRENT_APNS_ENVIRONMENT,
+            true,
+            NOW - 60,
+        );
+        insert_device(&db, "install-a", "dev-token", OTHER_APNS_ENVIRONMENT, true);
+        insert_device(&db, "install-b", "other-install", CURRENT_APNS_ENVIRONMENT, true);
+
+        insert_device_seen(
+            &db,
+            "install-a",
+            "current-token",
+            CURRENT_APNS_ENVIRONMENT,
+            true,
+            NOW,
+        );
+        delete_superseded_devices(
+            &db,
+            "install-a",
+            CURRENT_APNS_ENVIRONMENT,
+            TEST_BUNDLE_ID,
+            "current-token",
+        );
+
+        assert_eq!(
+            device_hashes_for_scope(&db, "install-a", CURRENT_APNS_ENVIRONMENT, TEST_BUNDLE_ID),
+            vec!["current-token"]
+        );
+        assert_eq!(
+            enabled_device_count(&db, "install-a", OTHER_APNS_ENVIRONMENT, TEST_BUNDLE_ID),
+            1
+        );
+        assert_eq!(
+            enabled_device_count(&db, "install-b", CURRENT_APNS_ENVIRONMENT, TEST_BUNDLE_ID),
+            1
+        );
+
+        insert_device_seen(
+            &db,
+            "install-a",
+            "next-token",
+            CURRENT_APNS_ENVIRONMENT,
+            true,
+            NOW + 10,
+        );
+        delete_superseded_devices(
+            &db,
+            "install-a",
+            CURRENT_APNS_ENVIRONMENT,
+            TEST_BUNDLE_ID,
+            "next-token",
+        );
+
+        assert_eq!(
+            device_hashes_for_scope(&db, "install-a", CURRENT_APNS_ENVIRONMENT, TEST_BUNDLE_ID),
+            vec!["next-token"]
+        );
+    }
+
+    #[test]
+    fn delete_dead_device_rows_migration_unbricks_install_and_is_idempotent() {
+        let db = setup_db();
+        for index in 0..4 {
+            insert_rotated_away_device(&db, "install-a", &format!("dead-{index}"));
+        }
+        insert_device(&db, "install-a", "live-token", CURRENT_APNS_ENVIRONMENT, true);
+        // Disabled row that still holds a raw token: outside the migration's
+        // blank-token predicate, so it must survive.
+        insert_device(&db, "install-b", "held-token", CURRENT_APNS_ENVIRONMENT, false);
+
+        db.execute_batch(include_str!("../migrations/0009_delete_dead_device_rows.sql"))
+            .expect("first delete");
+        db.execute_batch(include_str!("../migrations/0009_delete_dead_device_rows.sql"))
+            .expect("second delete");
+
+        assert_eq!(
+            device_hashes_for_scope(&db, "install-a", CURRENT_APNS_ENVIRONMENT, TEST_BUNDLE_ID),
+            vec!["live-token"]
+        );
+        assert_eq!(
+            device_hashes_for_scope(&db, "install-b", CURRENT_APNS_ENVIRONMENT, TEST_BUNDLE_ID),
+            vec!["held-token"]
+        );
     }
 
     #[test]

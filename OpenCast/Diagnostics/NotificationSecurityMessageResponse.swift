@@ -1,5 +1,5 @@
 import Foundation
 
-struct NotificationSecurityMessageResponse: Decodable {
+nonisolated struct NotificationSecurityMessageResponse: Decodable, Sendable {
     let message: String
 }

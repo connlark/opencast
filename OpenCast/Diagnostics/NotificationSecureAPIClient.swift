@@ -1,16 +1,19 @@
 import DeviceCheck
 import Foundation
 
-struct NotificationSecureAPIClient {
+nonisolated struct NotificationSecureAPIClient: Sendable {
     let apiClient: NotificationSecurityAPIClient
-    let appAttestService: DCAppAttestService
+    let secureClient: AppAttestSecureAPIClient
 
     init(
         apiClient: NotificationSecurityAPIClient = NotificationSecurityAPIClient(),
-        appAttestService: DCAppAttestService = .shared
+        appAttestService: any AppAttestServiceProtocol = DeviceCheckAppAttestService.shared
     ) {
         self.apiClient = apiClient
-        self.appAttestService = appAttestService
+        self.secureClient = AppAttestSecureAPIClient(
+            apiClient: apiClient.appAttestClient,
+            appAttestService: appAttestService
+        )
     }
 
     func sendJSONPayload<Payload: Encodable, ResponseBody: Decodable>(
@@ -20,12 +23,11 @@ struct NotificationSecureAPIClient {
         payload: Payload,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
-        let payloadString = try Self.encodedPayloadString(payload)
-        return try await sendRawPayload(
+        try await secureClient.sendJSONPayload(
             path: path,
             installID: installID,
             keyID: keyID,
-            payload: payloadString,
+            payload: payload,
             response: response
         )
     }
@@ -37,29 +39,16 @@ struct NotificationSecureAPIClient {
         payload: String,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
-        let clientDataHash = NotificationSecurityRequestBinding.clientDataHash(
-            method: "POST",
-            path: path,
-            payload: payload
-        )
-        let assertion = try await appAttestService.generateAssertion(
-            keyID,
-            clientDataHash: clientDataHash
-        )
-        return try await apiClient.sendAuthenticatedEnvelope(
+        try await secureClient.sendRawPayload(
             path: path,
             installID: installID,
             keyID: keyID,
             payload: payload,
-            assertion: assertion,
             response: response
         )
     }
 
     nonisolated static func encodedPayloadString<Payload: Encodable>(_ payload: Payload) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(payload)
-        return String(decoding: data, as: UTF8.self)
+        try AppAttestSecureAPIClient.encodedPayloadString(payload)
     }
 }

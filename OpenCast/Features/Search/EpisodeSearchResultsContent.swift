@@ -1,36 +1,23 @@
 import SwiftUI
 
-struct EpisodeSearchResultsContent: View {
+struct EpisodeSearchResultsContent<Row: View>: View {
     let mode: EpisodeSearchMode
     let isLoadingVisible: Bool
     let isSearching: Bool
     let results: [EpisodeSearchResult]
     let fallbackEpisodes: [EpisodeListItemSnapshot]
-    var selectsEpisodeDetailOnPlay = false
-    var onSelect: () -> Void = {}
-    let onOpenEpisode: (String) -> Void
+    @ViewBuilder let row: (EpisodeListItemSnapshot, EpisodeSearchResult?) -> Row
 
     var body: some View {
         if isLoadingVisible {
             EpisodeSearchLoadingView(mode: mode)
         } else if !results.isEmpty {
             ForEach(results) { result in
-                EpisodeRowButton(
-                    episode: result.episode,
-                    searchResult: result,
-                    selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
-                    onSelect: onSelect,
-                    onOpenEpisode: onOpenEpisode
-                )
+                row(result.episode, result)
             }
         } else if isSearching {
             ForEach(fallbackEpisodes) { episode in
-                EpisodeRowButton(
-                    episode: episode,
-                    selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay,
-                    onSelect: onSelect,
-                    onOpenEpisode: onOpenEpisode
-                )
+                row(episode, nil)
             }
         } else {
             ContentUnavailableView.search

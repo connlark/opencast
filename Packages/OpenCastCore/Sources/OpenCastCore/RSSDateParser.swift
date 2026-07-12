@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastDateParsing
 
 enum RSSDateParser {
     static func parse(_ value: String) -> Date? {
@@ -7,17 +8,22 @@ enum RSSDateParser {
             return nil
         }
 
-        return formatterCache.date(from: trimmed)
+        if let secondsSince1970 = parseInternetDate(trimmed) {
+            return Date(timeIntervalSince1970: TimeInterval(secondsSince1970))
+        }
+
+        return iso8601DateParser.date(from: trimmed)
     }
 
-    private static let formats = [
-        "EEE, d MMM yyyy HH:mm:ss Z",
-        "EEE, dd MMM yyyy HH:mm:ss Z",
-        "d MMM yyyy HH:mm:ss Z",
-        "dd MMM yyyy HH:mm:ss Z",
-        "EEE, d MMM yyyy HH:mm Z",
-        "EEE, dd MMM yyyy HH:mm Z"
-    ]
+    private static let iso8601DateParser = RSSISO8601DateParser()
 
-    private static let formatterCache = RSSDateFormatterCache(formats: formats)
+    private static func parseInternetDate(_ value: String) -> Int64? {
+        value.withCString { input in
+            var secondsSince1970: Int64 = 0
+            guard OpenCastParseInternetDate(input, &secondsSince1970) else {
+                return nil
+            }
+            return secondsSince1970
+        }
+    }
 }

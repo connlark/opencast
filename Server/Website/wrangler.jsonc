@@ -1,0 +1,27 @@
+{
+  "name": "opencast-website",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-07-01",
+  "assets": {
+    "directory": "./out",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page",
+    "run_worker_first": [
+      "/*",
+      "!/_next/*",
+      "!/screenshots/*",
+      "!/badges/*",
+      "!/favicon.ico",
+      "!/app-icon.png",
+      "!/icon.png",
+      "!/apple-icon.png"
+    ]
+  },
+  "observability": { "enabled": true },
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "opencast.mobile", "custom_domain": true },
+    { "pattern": "support.opencast.mobile", "custom_domain": true }
+  ]
+}

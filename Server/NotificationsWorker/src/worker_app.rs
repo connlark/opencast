@@ -621,11 +621,22 @@ async fn handle_register_device(
         Err(error) => return json_error(400, error.code()),
     };
 
-    if !storage::device_exists(db, &authenticated.install_id, &token.hash).await?
-        && storage::device_count_for_install(db, &authenticated.install_id).await?
-            >= MAX_DEVICES_PER_INSTALL
-    {
-        return json_error(429, "device_limit_exceeded");
+    if !storage::device_exists(db, &authenticated.install_id, &token.hash).await? {
+        let enabled_count = storage::enabled_device_count_for_install(
+            db,
+            &authenticated.install_id,
+            &payload.apns_environment,
+            &config.bundle_id,
+        )
+        .await?;
+        if enabled_count >= MAX_DEVICES_PER_INSTALL {
+            worker::console_warn!(
+                "device register rejected: device_limit_exceeded install={} enabled_devices={}",
+                authenticated.install_id,
+                enabled_count
+            );
+            return json_error(429, "device_limit_exceeded");
+        }
     }
 
     storage::upsert_device(
@@ -1496,7 +1507,8 @@ async fn send_episode_notifications(
                 episode_summary: episode.summary.as_deref(),
                 show_notes_html: episode.show_notes_html.as_deref(),
                 duration_seconds: episode.duration_seconds,
-                artwork_url: episode.artwork_url.as_deref().or(podcast_artwork_url),
+                podcast_artwork_url,
+                episode_artwork_url: episode.artwork_url.as_deref(),
                 feed_url,
                 episode_id: &episode.id,
             },

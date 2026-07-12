@@ -2,7 +2,9 @@ import Foundation
 import Observation
 import OpenCastCore
 import OpenCastPlayback
+import OpenCastTranscription
 import SwiftData
+import UserNotifications
 
 @Observable
 final class OpenCastAppModel {
@@ -12,11 +14,20 @@ final class OpenCastAppModel {
     let httpClient: any OpenCastHTTPClient
     let library: LibraryStore
     let downloads: DownloadStore
+    let transcriptionModels: TranscriptionModelStore
+    let appleSpeechAssets: AppleSpeechAssetStore
+    let transcriptions: EpisodeTranscriptionStore
+    let transcriptionRequests: EpisodeTranscriptionRequestCoordinator
+    let adAnalyses: EpisodeAdAnalysisStore
+    let adFreePass: EpisodeAdFreePassCoordinator
+    let adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession
+    let transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession
+    let transcriptImprovement: EpisodeTranscriptImprovementCoordinator
     let playback: AVFoundationPlaybackController
     let appearanceSettings: AppearanceSettingsStore
+    let recentSearches: RecentSearchesStore
     let playbackSettings: PlaybackSettingsStore
     let notificationSettings: NotificationSettingsStore
-    let notificationPromoBanner: NotificationPromoBannerStore
     let onboardingState: OnboardingStateStore
     let voiceBoostDiagnostics: VoiceBoostAudioTapDiagnostics?
     let exposesVoiceBoostDiagnosticsStatus: Bool
@@ -24,6 +35,11 @@ final class OpenCastAppModel {
     let podcastDirectoryService: any PodcastDirectoryService
     let syncStatus: SyncStatusStore
     let allowsAutomaticFeedRefresh: Bool
+    let adFreePassPresentationOverride: EpisodeAdFreePassPresentation?
+    let adFreePassNotificationCenter: any AdFreePassNotificationCenter
+    /// Tracked from the root lifecycle modifier; completion notifications are
+    /// suppressed at scheduling time while the scene is active.
+    var isSceneActive = true
     var nowPlayingPresentationRequest = 0
     var isNowPlayingPresented = false
     var onboardingPresentationRequest = 0
@@ -40,6 +56,9 @@ final class OpenCastAppModel {
     var isNukingData = false
     var lastDataNukeErrorMessage: String?
     var dataNukeCompletionID = 0
+    /// Sub-floor confidence zones for the current episode: rendered dimmed on
+    /// the timeline, never handed to `PlaybackAdSkipPolicy`.
+    private(set) var displayOnlySkipZones: [PlaybackSkipZone] = []
     #if DEBUG
     var lastVoiceBoostDeviceProbeResult: String?
     var lastVoiceBoostDeviceProbeReportStatus: String?
@@ -54,18 +73,27 @@ final class OpenCastAppModel {
         library: LibraryStore? = nil,
         localLibraryCacheStore: (any LocalLibraryCacheStore)? = nil,
         downloads: DownloadStore = DownloadStore(),
+        transcriptionModels: TranscriptionModelStore = TranscriptionModelStore(),
+        appleSpeechAssets: AppleSpeechAssetStore = AppleSpeechAssetStore(),
+        transcriptions: EpisodeTranscriptionStore = EpisodeTranscriptionStore(),
+        adAnalyses: EpisodeAdAnalysisStore = EpisodeAdAnalysisStore(),
+        adFreePass: EpisodeAdFreePassCoordinator = EpisodeAdFreePassCoordinator(),
+        adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession = EpisodeAdFreePassBackgroundSession(),
+        transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession = EpisodeTranscriptGenerationBackgroundSession(),
         playback: AVFoundationPlaybackController? = nil,
         appearanceSettings: AppearanceSettingsStore = AppearanceSettingsStore(),
+        recentSearches: RecentSearchesStore = RecentSearchesStore(),
         playbackSettings: PlaybackSettingsStore = PlaybackSettingsStore(),
         notificationSettings: NotificationSettingsStore = NotificationSettingsStore(),
-        notificationPromoBanner: NotificationPromoBannerStore = NotificationPromoBannerStore(),
         onboardingState: OnboardingStateStore = OnboardingStateStore(),
         voiceBoostDiagnostics: VoiceBoostAudioTapDiagnostics? = nil,
         exposesVoiceBoostDiagnosticsStatus: Bool = false,
         runsVoiceBoostDeviceProbe: Bool = false,
         podcastDirectoryService: (any PodcastDirectoryService)? = nil,
         syncStatus: SyncStatusStore = SyncStatusStore(),
-        allowsAutomaticFeedRefresh: Bool = true
+        allowsAutomaticFeedRefresh: Bool = true,
+        adFreePassPresentationOverride: EpisodeAdFreePassPresentation? = nil,
+        adFreePassNotificationCenter: (any AdFreePassNotificationCenter)? = nil
     ) {
         let resolvedHTTPClient = httpClient ?? URLSessionOpenCastHTTPClient(
             configuration: OpenCastURLSessionFactory.sharedConfiguration(
@@ -75,20 +103,39 @@ final class OpenCastAppModel {
 
         self.cacheController = cacheController
         self.httpClient = resolvedHTTPClient
-        self.library = library ?? LibraryStore(
+        let resolvedLibrary = library ?? LibraryStore(
             feedService: DefaultFeedService(httpClient: resolvedHTTPClient),
             localCache: localLibraryCacheStore ?? SQLiteLocalLibraryCacheStore(
                 databaseURL: SQLiteLocalLibraryCacheStore.defaultDatabaseURL()
             )
         )
+        self.library = resolvedLibrary
         self.downloads = downloads
+        self.transcriptionModels = transcriptionModels
+        self.appleSpeechAssets = appleSpeechAssets
+        self.transcriptions = transcriptions
+        self.transcriptionRequests = EpisodeTranscriptionRequestCoordinator(
+            library: resolvedLibrary,
+            downloads: downloads,
+            transcriptionModels: transcriptionModels,
+            appleSpeechAssets: appleSpeechAssets,
+            transcriptions: transcriptions
+        )
+        self.adAnalyses = adAnalyses
+        self.adFreePass = adFreePass
+        self.adFreePassBackgroundSession = adFreePassBackgroundSession
+        self.transcriptGenerationBackgroundSession = transcriptGenerationBackgroundSession
+        self.transcriptImprovement = EpisodeTranscriptImprovementCoordinator(
+            appleSpeechAssets: appleSpeechAssets,
+            transcriptions: transcriptions
+        )
         self.playback = playback ?? AVFoundationPlaybackController(
             nowPlayingArtworkLoader: SharedNowPlayingArtworkLoader()
         )
         self.appearanceSettings = appearanceSettings
+        self.recentSearches = recentSearches
         self.playbackSettings = playbackSettings
         self.notificationSettings = notificationSettings
-        self.notificationPromoBanner = notificationPromoBanner
         self.onboardingState = onboardingState
         self.voiceBoostDiagnostics = voiceBoostDiagnostics
         self.exposesVoiceBoostDiagnosticsStatus = exposesVoiceBoostDiagnosticsStatus
@@ -98,10 +145,75 @@ final class OpenCastAppModel {
         self.podcastDirectoryService = resolvedPodcastDirectoryService
         self.syncStatus = syncStatus
         self.allowsAutomaticFeedRefresh = allowsAutomaticFeedRefresh
+        self.adFreePassPresentationOverride = adFreePassPresentationOverride
+        self.adFreePassNotificationCenter = adFreePassNotificationCenter ?? UNUserNotificationCenter.current()
+        self.transcriptions.onEpisodeStateChanged = { [weak self] episodeID in
+            self?.refreshPlaybackSkipZonesIfCurrentEpisode(episodeID: episodeID)
+        }
+        self.adAnalyses.onEpisodeStateChanged = { [weak self] episodeID in
+            self?.refreshPlaybackSkipZonesIfCurrentEpisode(episodeID: episodeID)
+        }
+        self.adFreePass.onStageChange = { [weak self] stage, queueContext in
+            self?.adFreePassBackgroundSession.noteStage(stage, queueContext: queueContext)
+        }
+        self.adFreePass.onQueueTerminal = { [weak self] outcome in
+            guard let self else {
+                return
+            }
+            self.adFreePassBackgroundSession.noteQueueTerminal(outcome)
+            self.scheduleAdFreePassCompletionNotificationIfNeeded(terminal: outcome)
+        }
+        self.adFreePass.isBackgroundProtected = { [weak self] in
+            self?.adFreePassBackgroundSession.isProtectingBackgroundExecution ?? false
+        }
+        self.transcriptionRequests.onPhaseChange = { [weak self] phase in
+            self?.transcriptGenerationBackgroundSession.notePhase(phase)
+        }
+        transcriptGenerationBackgroundSession.installFraction = { [weak self] in
+            guard case .installing(let progress) = self?.transcriptionModels.state,
+                  progress.totalByteCount > 0
+            else {
+                return nil
+            }
+            return Double(progress.completedByteCount) / Double(progress.totalByteCount)
+        }
+        transcriptGenerationBackgroundSession.transcriptionProgress = { [weak self] in
+            guard let self,
+                  let episodeID = self.transcriptionRequests.request?.episodeID
+            else {
+                return nil
+            }
+            return self.transcriptions.progressByEpisodeID[episodeID]
+        }
     }
 
     func playEpisode(_ episode: EpisodeListItemSnapshot, modelContext: ModelContext) throws {
         try play(episode, source: .stream, modelContext: modelContext)
+    }
+
+    /// Starts an episode at an explicit position (e.g. a tapped transcript
+    /// line), preferring a completed download over streaming.
+    func playEpisode(
+        _ episode: EpisodeListItemSnapshot,
+        at startPosition: TimeInterval?,
+        presentsNowPlaying: Bool = true,
+        modelContext: ModelContext
+    ) throws {
+        let source: EpisodePlaybackSource
+        if let downloadRecord = downloads.record(for: episode.episodeID),
+           downloadRecord.state == .completed,
+           downloads.downloadedFileExists(for: downloadRecord) {
+            source = .downloaded(downloadRecord)
+        } else {
+            source = .stream
+        }
+        try play(
+            episode,
+            source: source,
+            startPosition: startPosition,
+            presentsNowPlaying: presentsNowPlaying,
+            modelContext: modelContext
+        )
     }
 
     func playDownloadedEpisode(
@@ -119,7 +231,519 @@ final class OpenCastAppModel {
             clearLastPlaybackEpisode(modelContext: modelContext)
         }
 
+        do {
+            try adAnalyses.deleteAnalyses(forPodcastID: feedURL, modelContext: modelContext)
+            try transcriptions.deleteTranscripts(forPodcastID: feedURL, modelContext: modelContext)
+        } catch {
+            lastPlaybackError = error.localizedDescription
+        }
         await library.unsubscribe(feedURL: feedURL, modelContext: modelContext, downloadStore: downloads)
+    }
+
+    func loadLocalTranscriptionState(modelContext: ModelContext) {
+        transcriptionModels.load(modelContext: modelContext)
+        transcriptions.load(modelContext: modelContext)
+        adAnalyses.load(modelContext: modelContext)
+        refreshPlaybackSkipZonesForCurrentEpisode()
+        Task { [appleSpeechAssets] in
+            await appleSpeechAssets.refresh()
+        }
+    }
+
+    @discardableResult
+    func setTranscriptionModelChoice(
+        _ choice: TranscriptionModelChoice,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard !transcriptions.hasActiveJob else {
+            transcriptionModels.fail("Finish or cancel the active transcript before changing the speech model.")
+            return false
+        }
+
+        return transcriptionModels.setSelectedChoice(choice, modelContext: modelContext)
+    }
+
+    @discardableResult
+    func installTranscriptionModel() -> Bool {
+        guard !transcriptions.hasActiveJob else {
+            transcriptionModels.fail("Finish or cancel the active transcript before installing the speech model.")
+            return false
+        }
+        return transcriptionModels.installPinnedModel()
+    }
+
+    func cancelTranscriptionModelInstall() {
+        transcriptionModels.cancelInstall()
+    }
+
+    func checkTranscriptionModel() {
+        transcriptionModels.checkRemoteManifest()
+    }
+
+    @discardableResult
+    func repairTranscriptionModel() -> Bool {
+        guard !transcriptions.hasActiveJob else {
+            transcriptionModels.fail("Finish or cancel the active transcript before repairing the speech model.")
+            return false
+        }
+        return transcriptionModels.repairPinnedModel()
+    }
+
+    func deleteTranscriptionModel() {
+        guard !transcriptions.hasActiveJob else {
+            transcriptionModels.fail("Finish or cancel the active transcript before deleting the speech model.")
+            return
+        }
+
+        Task {
+            await transcriptions.unloadRuntime()
+            transcriptionModels.deleteInstalledModel()
+        }
+    }
+
+    func transcribeDownloadedEpisode(
+        _ episode: EpisodeListItemSnapshot,
+        downloadRecord: EpisodeDownloadRecord,
+        modelContext: ModelContext
+    ) {
+        guard let localFileURL = downloads.localFileURL(for: downloadRecord),
+              downloads.downloadedFileExists(for: downloadRecord)
+        else {
+            try? downloads.markDownloadedFileMissing(downloadRecord, modelContext: modelContext)
+            return
+        }
+
+        Task {
+            await transcribeDownloadedEpisodeResolvingEngine(
+                episode,
+                downloadRecord: downloadRecord,
+                localFileURL: localFileURL,
+                modelContext: modelContext
+            )
+        }
+    }
+
+    func requestTranscriptForCurrentEpisode(modelContext: ModelContext) {
+        guard let episode = currentPlaybackEpisodeSnapshot else {
+            return
+        }
+        transcriptionRequests.start(
+            episode: episode,
+            modelContext: modelContext,
+            prepareBackgroundSession: { [weak self] in
+                self?.armTranscriptGenerationBackgroundSessionIfNeeded(episodeTitle: episode.title)
+            }
+        )
+    }
+
+    /// One system card at a time: an armed ad-free drain keeps its card and
+    /// the generate run stays foreground-lifecycle-managed instead of
+    /// competing for a second continued processing task.
+    private func armTranscriptGenerationBackgroundSessionIfNeeded(episodeTitle: String) {
+        guard !transcriptGenerationBackgroundSession.isArmed,
+              !adFreePassBackgroundSession.isArmed
+        else {
+            return
+        }
+
+        transcriptGenerationBackgroundSession.arm(episodeTitle: episodeTitle)
+    }
+
+    func dismissTranscriptionRequest(id: UUID) {
+        transcriptionRequests.dismiss(id: id)
+    }
+
+    private func transcribeDownloadedEpisodeResolvingEngine(
+        _ episode: EpisodeListItemSnapshot,
+        downloadRecord: EpisodeDownloadRecord,
+        localFileURL: URL,
+        modelContext: ModelContext
+    ) async {
+        // Generate-class entry points are Whisper-only; Apple Speech lives
+        // solely behind the transcript page's explicit "Improve Transcript".
+        let resolver = EpisodeTranscriptionPlanResolver(
+            transcriptionModels: transcriptionModels,
+            appleSpeechAssets: appleSpeechAssets,
+            prefersRevocationDurableEngine: true
+        )
+        do {
+            let plan = try await resolver.resolve(
+                requestedEngine: .productDefault,
+                podcastLanguageCode: podcastLanguageCode(forPodcastID: episode.podcastID)
+            )
+            transcriptions.startTranscription(
+                episode,
+                downloadRecord: downloadRecord,
+                localFileURL: localFileURL,
+                engine: plan.runEngine,
+                modelIdentity: plan.modelIdentity,
+                languageCode: plan.languageCode,
+                runLanguageCode: plan.runLanguageCode,
+                modelContext: modelContext
+            )
+        } catch {
+            transcriptions.load(modelContext: modelContext)
+            transcriptionModels.fail(error.localizedDescription)
+        }
+    }
+
+    func podcastLanguageCode(forPodcastID podcastID: String) -> String? {
+        library.podcastCache(for: podcastID)?.languageCode
+    }
+
+    func improveTranscriptWithAppleSpeech(episodeID: String, modelContext: ModelContext) {
+        guard let episode = library.episode(with: episodeID),
+              let downloadRecord = downloads.record(for: episodeID),
+              downloadRecord.state == .completed,
+              let localFileURL = downloads.localFileURL(for: downloadRecord),
+              downloads.downloadedFileExists(for: downloadRecord)
+        else {
+            return
+        }
+
+        transcriptImprovement.start(
+            episode: episode,
+            downloadRecord: downloadRecord,
+            localFileURL: localFileURL,
+            podcastLanguageCode: podcastLanguageCode(forPodcastID: episode.podcastID),
+            modelContext: modelContext
+        )
+    }
+
+    func cancelEpisodeTranscription(episodeID: String, modelContext: ModelContext) {
+        transcriptions.cancelTranscription(episodeID: episodeID, modelContext: modelContext)
+    }
+
+    func deleteEpisodeTranscript(episodeID: String, modelContext: ModelContext) {
+        adAnalyses.deleteAnalysis(episodeID: episodeID, modelContext: modelContext)
+        transcriptions.deleteTranscript(episodeID: episodeID, modelContext: modelContext)
+    }
+
+    func analyzeEpisodeTranscript(_ document: EpisodeTranscriptDocument, modelContext: ModelContext) {
+        adAnalyses.startAnalysis(
+            transcript: document,
+            transcriptState: transcriptions.record(for: document.episodeID)?.state,
+            modelContext: modelContext
+        )
+    }
+
+    func deleteEpisodeAdAnalysis(episodeID: String, modelContext: ModelContext) {
+        adAnalyses.deleteAnalysis(episodeID: episodeID, modelContext: modelContext)
+    }
+
+    var currentAdFreePassPresentation: EpisodeAdFreePassPresentation {
+        if let adFreePassPresentationOverride {
+            return adFreePassPresentationOverride
+        }
+
+        return adFreePass.presentation(
+            for: currentPlaybackEpisodeSnapshot,
+            downloads: downloads,
+            transcriptionModels: transcriptionModels,
+            appleSpeechAssets: appleSpeechAssets,
+            transcriptions: transcriptions,
+            adAnalyses: adAnalyses,
+            currentZoneCount: playback.skipZones.count
+        )
+    }
+
+    func startOrContinueAdFreePassForCurrentEpisode(
+        modelContext: ModelContext,
+        transcriptionEngine: AdFreePassTranscriptionEngine = .productDefault
+    ) {
+        guard let episode = currentPlaybackEpisodeSnapshot else {
+            return
+        }
+
+        startAdFreePass(for: episode, modelContext: modelContext, transcriptionEngine: transcriptionEngine)
+    }
+
+    func startAdFreePass(
+        for episode: EpisodeListItemSnapshot,
+        modelContext: ModelContext,
+        transcriptionEngine: AdFreePassTranscriptionEngine = .productDefault
+    ) {
+        adFreePass.enqueue(
+            episode: episode,
+            origin: .manual,
+            downloads: downloads,
+            transcriptionModels: transcriptionModels,
+            appleSpeechAssets: appleSpeechAssets,
+            transcriptions: transcriptions,
+            adAnalyses: adAnalyses,
+            modelContext: modelContext,
+            transcriptionEngine: transcriptionEngine,
+            podcastLanguageCode: podcastLanguageCode(forPodcastID: episode.podcastID),
+            prepareBackgroundSession: { [weak self] in
+                self?.armAdFreePassBackgroundSessionIfNeeded(episodeTitle: episode.title)
+            },
+            refreshSkipZones: { [weak self] in
+                self?.zoneCountAfterPass(for: episode) ?? 0
+            }
+        )
+    }
+
+    func cancelAdFreePass(for episode: EpisodeListItemSnapshot, modelContext: ModelContext) {
+        guard adFreePass.activeEpisodeID == episode.episodeID else {
+            adFreePass.removePendingItem(episodeID: episode.episodeID, modelContext: modelContext)
+            return
+        }
+
+        adFreePass.cancelActivePass()
+        if downloads.record(for: episode.episodeID)?.state == .downloading {
+            downloads.cancelDownload(episodeID: episode.episodeID, modelContext: modelContext)
+        }
+    }
+
+    func adAnalysisZoneTiers(
+        for episode: EpisodeListItemSnapshot,
+        duration: TimeInterval?
+    ) -> EpisodeAdAnalysisZoneTiers {
+        currentAdAnalysisZoneTiers(episodeID: episode.episodeID, duration: duration)
+    }
+
+    func armBackgroundContinuationForActiveQueue() {
+        guard adFreePass.queueState == .running,
+              !adFreePassBackgroundSession.isArmed,
+              let activeItem = adFreePass.activeItem
+        else {
+            return
+        }
+
+        armAdFreePassBackgroundSessionIfNeeded(episodeTitle: activeItem.episode.title)
+        adFreePass.republishCurrentStage()
+    }
+
+    func restoreAdFreePassQueue(modelContext: ModelContext) {
+        adFreePass.restorePersistedQueue(
+            resolveEpisode: { [library] episodeID in
+                library.episode(with: episodeID)
+            },
+            downloads: downloads,
+            transcriptionModels: transcriptionModels,
+            appleSpeechAssets: appleSpeechAssets,
+            transcriptions: transcriptions,
+            adAnalyses: adAnalyses,
+            modelContext: modelContext,
+            podcastLanguageCode: { [weak self] podcastID in
+                self?.podcastLanguageCode(forPodcastID: podcastID)
+            },
+            refreshSkipZones: { [weak self] episode in
+                self?.zoneCountAfterPass(for: episode) ?? 0
+            }
+        )
+    }
+
+    func resumeEnvironmentalAdFreePassIfNeeded(modelContext: ModelContext) {
+        adFreePass.handleForegroundReturn()
+        adFreePass.probeCapDeferredQueueIfAllowed(trigger: .sceneActivated)
+
+        if adFreePass.isQueuePausedForEnvironmentalInterrupt {
+            adFreePass.resumeQueueForEnvironmentalAutoResume()
+            return
+        }
+
+        guard adFreePass.activeEpisodeID == nil,
+              adFreePass.queueState == .idle,
+              adFreePass.queueItems.isEmpty,
+              let episode = currentPlaybackEpisodeSnapshot,
+              transcriptions.hasEnvironmentalInterruptionPending(for: episode.episodeID)
+        else {
+            return
+        }
+
+        startOrContinueAdFreePassForCurrentEpisode(modelContext: modelContext)
+    }
+
+    func detectAdsMenuState(for episode: EpisodeListItemSnapshot) -> EpisodeDetectAdsMenuState {
+        EpisodeDetectAdsMenuState(
+            queueStatus: adFreePass.queueStatus(for: episode.episodeID),
+            hasCurrentCompletedAnalysis: adFreePass.hasCurrentCompletedAnalysis(
+                for: episode.episodeID,
+                transcriptions: transcriptions,
+                adAnalyses: adAnalyses
+            )
+        )
+    }
+
+    func downloadMenuState(for episode: EpisodeListItemSnapshot) -> EpisodeDownloadMenuState {
+        guard let record = downloads.record(for: episode.episodeID) else {
+            return .available
+        }
+
+        switch record.state {
+        case .downloading:
+            return .downloading
+        case .completed:
+            return downloads.downloadedFileExists(for: record) ? .downloaded : .available
+        case .paused, .failed, .missing:
+            return .available
+        }
+    }
+
+    private func armAdFreePassBackgroundSessionIfNeeded(episodeTitle: String) {
+        guard !adFreePassBackgroundSession.isArmed else {
+            return
+        }
+
+        adFreePassBackgroundSession.arm(
+            episodeTitle: episodeTitle,
+            cancellationSource: adFreePass.cancellationSource
+        )
+        requestAdFreePassNotificationAuthorizationIfNeeded()
+    }
+
+    private func requestAdFreePassNotificationAuthorizationIfNeeded() {
+        Task { [adFreePassNotificationCenter] in
+            guard await adFreePassNotificationCenter.authorizationStatus() == .notDetermined else {
+                return
+            }
+            await adFreePassNotificationCenter.requestProvisionalAuthorization()
+        }
+    }
+
+    private func scheduleAdFreePassCompletionNotificationIfNeeded(terminal: AdFreePassQueueTerminalOutcome) {
+        let scheduler = AdFreePassCompletionNotificationScheduler(center: adFreePassNotificationCenter)
+        let outcomes = adFreePass.drainOutcomes
+        let isSceneActive = isSceneActive
+        Task {
+            await scheduler.scheduleIfNeeded(
+                terminal: terminal,
+                outcomes: outcomes,
+                isSceneActive: isSceneActive
+            )
+        }
+    }
+
+    private func zoneCountAfterPass(for episode: EpisodeListItemSnapshot) -> Int {
+        if isCurrentEpisode(episode) {
+            refreshPlaybackSkipZonesForCurrentEpisode()
+            return playback.skipZones.count
+        }
+
+        return currentAdAnalysisZoneTiers(
+            episodeID: episode.episodeID,
+            duration: episode.duration
+        ).autoSkip.count
+    }
+
+    func refreshPlaybackSkipZonesForCurrentEpisode() {
+        guard let episode = playback.currentEpisode else {
+            playback.setSkipZones([])
+            displayOnlySkipZones = []
+            return
+        }
+
+        let tiers = currentAdAnalysisZoneTiers(
+            episodeID: episode.id.rawValue,
+            duration: playback.duration ?? episode.duration
+        )
+        playback.setSkipZones(tiers.autoSkip)
+        displayOnlySkipZones = tiers.displayOnly
+    }
+
+    /// Pill undo: jump back to the start of the last auto-skipped zone with a
+    /// `.scrub`-landing seek so the zone plays through once and re-arms after
+    /// exit (existing `PlaybackAdSkipPolicy` disarm semantics).
+    func undoLastAutoSkip() {
+        guard let target = NowPlayingAutoSkipUndo.seekTarget(
+            for: playback.lastAutoSkipEvent,
+            zones: playback.skipZones
+        ) else {
+            return
+        }
+
+        playback.seek(to: target, intent: NowPlayingAutoSkipUndo.seekIntent)
+    }
+
+    func interruptActiveTranscriptionForLifecycleExit(modelContext: ModelContext) {
+        transcriptionRequests.prepareForLifecycleExit(modelContext: modelContext)
+    }
+
+    func configureBackgroundSessionExpirations(modelContext: ModelContext) {
+        adFreePassBackgroundSession.onExpiration = { [weak self] in
+            self?.interruptActiveTranscriptionForLifecycleExit(modelContext: modelContext)
+        }
+        transcriptGenerationBackgroundSession.onExpiration = { [weak self] in
+            self?.interruptActiveTranscriptionForLifecycleExit(modelContext: modelContext)
+        }
+    }
+
+    func deleteDownload(
+        _ record: EpisodeDownloadRecord,
+        modelContext: ModelContext
+    ) {
+        let localFileURL = downloads.localFileURL(for: record)
+        transcriptions.handleDownloadDeletion(record, localFileURL: localFileURL, modelContext: modelContext)
+        downloads.deleteDownload(record, modelContext: modelContext)
+    }
+
+    func deleteDownloads(
+        _ records: [EpisodeDownloadRecord],
+        modelContext: ModelContext
+    ) {
+        for record in records {
+            let localFileURL = downloads.localFileURL(for: record)
+            transcriptions.handleDownloadDeletion(
+                record,
+                localFileURL: localFileURL,
+                modelContext: modelContext
+            )
+        }
+        downloads.deleteDownloads(records, modelContext: modelContext)
+    }
+
+    func deleteAllDownloads(modelContext: ModelContext) {
+        transcriptions.handleAllDownloadsDeleted(modelContext: modelContext)
+        downloads.deleteAllDownloads(modelContext: modelContext)
+    }
+
+    func deleteCompletedDownloads(
+        forPodcastID podcastID: String,
+        modelContext: ModelContext
+    ) throws {
+        let completedRecords = downloads.records.filter {
+            $0.podcastID == podcastID && $0.state == .completed
+        }
+        for record in completedRecords {
+            let localFileURL = downloads.localFileURL(for: record)
+            transcriptions.handleDownloadDeletion(
+                record,
+                localFileURL: localFileURL,
+                modelContext: modelContext
+            )
+            try downloads.deleteDownloadThrowing(record, modelContext: modelContext)
+        }
+    }
+
+    func sweepPlayedDownloadsIfEnabled(modelContext: ModelContext) {
+        guard downloads.autoDeletesPlayedDownloads else {
+            return
+        }
+
+        deletePlayedDownloads(modelContext: modelContext)
+    }
+
+    func deletePlayedDownloads(modelContext: ModelContext) {
+        let eligibleRecords = downloads.records.filter { record in
+            guard record.state == .completed else {
+                return false
+            }
+            guard library.progressRecord(for: record.episodeID)?.isPlayed == true,
+                  playback.currentEpisode?.id.rawValue != record.episodeID,
+                  !transcriptions.isActivelyTranscribing(episodeID: record.episodeID)
+            else {
+                return false
+            }
+
+            switch adFreePass.queueStatus(for: record.episodeID) {
+            case .queued, .running, .capDeferred:
+                return false
+            case .notQueued, .completed, .failed:
+                return true
+            }
+        }
+        deleteDownloads(eligibleRecords, modelContext: modelContext)
     }
 
     func resolvedPlaybackEpisode(
@@ -196,6 +820,7 @@ final class OpenCastAppModel {
             let episode = try resolvedPlaybackEpisode(for: record, modelContext: modelContext)
             applyVoiceBoostSetting(for: episode, modelContext: modelContext)
             try playback.load(episode, startPosition: library.resumePosition(for: record.episodeID))
+            refreshPlaybackSkipZonesForCurrentEpisode()
             rememberLastPlaybackEpisode(record.episodeID, modelContext: modelContext)
         } catch {
             clearLastPlaybackEpisode(modelContext: modelContext)
@@ -213,6 +838,7 @@ final class OpenCastAppModel {
         playback.unload()
         clearLastPlaybackEpisode(modelContext: modelContext)
         isNowPlayingPresented = false
+        sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         return hadCurrentEpisode
     }
 
@@ -280,9 +906,13 @@ final class OpenCastAppModel {
                 throw DataNukeError.iCloudUnavailable(accountStatus)
             }
 
+            transcriptionRequests.resetForDataNuke()
             await notificationSettings.deleteInstallIfRegistered()
             library.prepareForDataNuke()
+            try await adAnalyses.nukeAllAnalyses(modelContext: modelContext)
+            try await transcriptions.nukeAllTranscripts(modelContext: modelContext)
             try downloads.nukeAllDownloads(modelContext: modelContext)
+            try transcriptionModels.deleteInstalledModelImmediately()
             try deleteAllModelRows(modelContext: modelContext)
             // Reset runtime state before any suspension so the UI never renders
             // the deleted-and-saved SwiftData records, even if a later step throws.
@@ -311,6 +941,7 @@ final class OpenCastAppModel {
             playback.unload()
             clearLastPlaybackEpisode(modelContext: modelContext)
         }
+        sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         return didSave
     }
 
@@ -402,6 +1033,18 @@ final class OpenCastAppModel {
         )
     }
 
+    @discardableResult
+    func setAutoSkipPromosAndAdsEnabled(
+        _ isEnabled: Bool,
+        modelContext: ModelContext
+    ) -> Bool {
+        playbackSettings.setAutoSkipPromosAndAdsEnabled(
+            isEnabled,
+            modelContext: modelContext,
+            playback: playback
+        )
+    }
+
     func runVoiceBoostDeviceProbeIfNeeded(modelContext: ModelContext) async {
         #if DEBUG
         guard runsVoiceBoostDeviceProbe, !hasRunVoiceBoostDeviceProbe else {
@@ -458,6 +1101,9 @@ final class OpenCastAppModel {
         try deleteAll(RefreshLogRecord.self, modelContext: modelContext)
         try deleteAll(LocalPreferenceRecord.self, modelContext: modelContext)
         try deleteAll(EpisodeDownloadRecord.self, modelContext: modelContext)
+        try deleteAll(EpisodeTranscriptRecord.self, modelContext: modelContext)
+        try deleteAll(EpisodeAdAnalysisRecord.self, modelContext: modelContext)
+        try deleteAll(AdFreePassQueueItemRecord.self, modelContext: modelContext)
         try modelContext.save()
     }
 
@@ -476,10 +1122,17 @@ final class OpenCastAppModel {
         lastPlaybackError = nil
         library.resetAfterDataNuke()
         downloads.load(modelContext: modelContext)
+        transcriptions.load(modelContext: modelContext)
+        adAnalyses.load(modelContext: modelContext)
+        adFreePass.reset()
+        adFreePassBackgroundSession.reset()
+        transcriptGenerationBackgroundSession.reset()
+        transcriptImprovement.resetForDataNuke()
+        transcriptionModels.resetAfterDataNuke()
         appearanceSettings.load(modelContext: modelContext)
+        recentSearches.load(modelContext: modelContext)
         playbackSettings.load(modelContext: modelContext, playback: playback)
         notificationSettings.resetAfterDataNuke()
-        notificationPromoBanner.resetAfterDataNuke()
         onboardingState.load(modelContext: modelContext)
         #if DEBUG
         try? FileManager.default.removeItem(at: VoiceBoostDeviceProbe.reportURL)
@@ -492,18 +1145,63 @@ final class OpenCastAppModel {
     private func play(
         _ snapshot: EpisodeListItemSnapshot,
         source: EpisodePlaybackSource,
+        startPosition: TimeInterval? = nil,
+        presentsNowPlaying: Bool = true,
         modelContext: ModelContext
     ) throws {
         flushPlaybackProgress(modelContext: modelContext)
         let episode = try resolvedPlaybackEpisode(for: snapshot, source: source, modelContext: modelContext)
         nowPlayingProbeMark("play-validated")
         applyVoiceBoostSetting(for: episode, modelContext: modelContext)
-        try playback.load(episode, startPosition: library.resumePosition(for: snapshot.episodeID))
+        try playback.load(
+            episode,
+            startPosition: startPosition ?? library.resumePosition(for: snapshot.episodeID)
+        )
+        sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
+        refreshPlaybackSkipZonesForCurrentEpisode()
         nowPlayingProbeMark("play-loaded")
         rememberLastPlaybackEpisode(snapshot.episodeID, modelContext: modelContext)
         playback.play()
         nowPlayingProbeMark("play-started")
-        requestNowPlayingPresentationAfterPrewarm(for: episode.id)
+        if presentsNowPlaying {
+            requestNowPlayingPresentationAfterPrewarm(for: episode.id)
+        }
+        autoDetectAdsOnPlayIfQualified(snapshot, modelContext: modelContext)
+    }
+
+    private func autoDetectAdsOnPlayIfQualified(
+        _ episode: EpisodeListItemSnapshot,
+        modelContext: ModelContext
+    ) {
+        let policy = AdAutoDetectPlayPolicy(
+            isAutoDetectEnabled: library.isAdAutoDetectEnabled(forPodcastID: episode.podcastID),
+            hasCurrentCompletedAnalysis: adFreePass.hasCurrentCompletedAnalysis(
+                for: episode.episodeID,
+                transcriptions: transcriptions,
+                adAnalyses: adAnalyses
+            ),
+            queueStatus: adFreePass.queueStatus(for: episode.episodeID)
+        )
+        guard policy.shouldEnqueue else {
+            return
+        }
+
+        // Auto passes never arm the background session (decision 1);
+        // continuation requires an explicit tap.
+        adFreePass.enqueue(
+            episode: episode,
+            origin: .auto,
+            downloads: downloads,
+            transcriptionModels: transcriptionModels,
+            appleSpeechAssets: appleSpeechAssets,
+            transcriptions: transcriptions,
+            adAnalyses: adAnalyses,
+            modelContext: modelContext,
+            podcastLanguageCode: podcastLanguageCode(forPodcastID: episode.podcastID),
+            refreshSkipZones: { [weak self] in
+                self?.zoneCountAfterPass(for: episode) ?? 0
+            }
+        )
     }
 
     private func applyVoiceBoostSetting(for episode: Episode, modelContext: ModelContext) {
@@ -513,6 +1211,41 @@ final class OpenCastAppModel {
             modelContext: modelContext,
             playback: playback
         )
+    }
+
+    private func refreshPlaybackSkipZonesIfCurrentEpisode(episodeID: String) {
+        guard playback.currentEpisode?.id.rawValue == episodeID else {
+            return
+        }
+
+        refreshPlaybackSkipZonesForCurrentEpisode()
+    }
+
+    private func currentAdAnalysisZoneTiers(
+        episodeID: String,
+        duration: TimeInterval?
+    ) -> EpisodeAdAnalysisZoneTiers {
+        guard adAnalyses.record(for: episodeID)?.state == .completed,
+              let transcriptDocument = transcriptions.document(for: episodeID),
+              let analysisDocument = adAnalyses.document(for: episodeID),
+              adAnalyses.isCurrentAnalysisDocument(analysisDocument, for: transcriptDocument)
+        else {
+            return .empty
+        }
+
+        return EpisodeAdAnalysisZoneMapper.zoneTiers(for: analysisDocument, duration: duration)
+    }
+
+    private var currentPlaybackEpisodeSnapshot: EpisodeListItemSnapshot? {
+        guard let episode = playback.currentEpisode else {
+            return nil
+        }
+
+        if let snapshot = library.episode(with: episode.id.rawValue) {
+            return snapshot
+        }
+
+        return EpisodeListItemSnapshot(episode: episode)
     }
 
     private func isCurrentEpisode(_ episode: EpisodeListItemSnapshot) -> Bool {

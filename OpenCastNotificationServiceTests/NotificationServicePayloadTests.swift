@@ -3,8 +3,8 @@ import Testing
 
 @Suite("Notification service payload helpers")
 struct NotificationServicePayloadTests {
-    @Test("Artwork URL accepts only episode HTTPS URLs")
-    func artworkURLAcceptsOnlyEpisodeHTTPSURLs() throws {
+    @Test("Artwork URLs accept episode HTTP and HTTPS URLs")
+    func artworkURLsAcceptEpisodeHTTPAndHTTPSURLs() throws {
         #expect(NotificationPayload.artworkURL(from: [
             "opencast": [
                 "kind": "episode",
@@ -17,7 +17,19 @@ struct NotificationServicePayloadTests {
                 "kind": "episode",
                 "artwork_url": "http://example.com/art.jpg",
             ],
-        ]) == nil)
+        ]) == URL(string: "http://example.com/art.jpg"))
+        #expect(NotificationPayload.episodeArtworkURL(from: [
+            "opencast": [
+                "kind": "episode",
+                "episode_artwork_url": "https://example.com/episode-art.jpg",
+            ],
+        ]) == URL(string: "https://example.com/episode-art.jpg"))
+        #expect(NotificationPayload.episodeArtworkURL(from: [
+            "opencast": [
+                "kind": "episode",
+                "episode_artwork_url": "http://example.com/episode-art.jpg",
+            ],
+        ]) == URL(string: "http://example.com/episode-art.jpg"))
         #expect(NotificationPayload.artworkURL(from: [
             "opencast": [
                 "kind": "diagnostic",
@@ -27,10 +39,29 @@ struct NotificationServicePayloadTests {
         #expect(NotificationPayload.artworkURL(from: [
             "opencast": [
                 "kind": "episode",
+                "artwork_url": "file:///tmp/art.jpg",
+            ],
+        ]) == nil)
+        #expect(NotificationPayload.episodeArtworkURL(from: [
+            "opencast": [
+                "kind": "episode",
+                "episode_artwork_url": "file:///tmp/episode-art.jpg",
+            ],
+        ]) == nil)
+        #expect(NotificationPayload.artworkURL(from: [
+            "opencast": [
+                "kind": "episode",
                 "artwork_url": "   ",
             ],
         ]) == nil)
+        #expect(NotificationPayload.episodeArtworkURL(from: [
+            "opencast": [
+                "kind": "episode",
+                "episode_artwork_url": "   ",
+            ],
+        ]) == nil)
         #expect(NotificationPayload.artworkURL(from: [:]) == nil)
+        #expect(NotificationPayload.episodeArtworkURL(from: [:]) == nil)
     }
 
     @Test("Image format prefers MIME type and falls back to extension")
@@ -75,6 +106,7 @@ struct NotificationServicePayloadTests {
             from: zeroByteURL,
             response: response,
             sourceURL: sourceURL,
+            identifier: NotificationArtworkAttachmentIdentifier.podcast,
             maxArtworkBytes: 10
         ) == nil)
 
@@ -83,6 +115,7 @@ struct NotificationServicePayloadTests {
             from: oversizedURL,
             response: response,
             sourceURL: sourceURL,
+            identifier: NotificationArtworkAttachmentIdentifier.podcast,
             maxArtworkBytes: 3
         ) == nil)
 
@@ -98,6 +131,7 @@ struct NotificationServicePayloadTests {
             from: unknownURL,
             response: unknownResponse,
             sourceURL: unknownSourceURL,
+            identifier: NotificationArtworkAttachmentIdentifier.podcast,
             maxArtworkBytes: 10
         ) == nil)
     }

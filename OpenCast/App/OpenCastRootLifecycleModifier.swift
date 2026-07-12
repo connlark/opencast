@@ -9,10 +9,12 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     @Binding var hasFlushedProgressForLifecycleExit: Bool
     @State private var hasPendingForegroundMaintenance = false
     @State private var deferredForegroundMaintenanceTask: Task<Void, Never>?
+    @State private var deferredTranscriptionInterruptionTask: Task<Void, Never>?
     @State private var foregroundMaintenanceTask: Task<Void, Never>?
     @State private var foregroundSyncedDataRefreshTask: Task<Void, Never>?
 
     private static let postNowPlayingDismissMaintenanceDelay: TimeInterval = 0.75
+    private static let inactiveTranscriptionInterruptionDelay: Duration = .seconds(2)
     private static let foregroundSyncedDataRefreshInterval: Duration = .seconds(60)
 
     let performInitialSetup: () async -> Void
@@ -24,6 +26,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .task {
+                appModel.configureBackgroundSessionExpirations(modelContext: modelContext)
                 await performInitialSetup()
             }
             .task(id: appModel.playback.currentEpisode?.id.rawValue) {
@@ -46,26 +49,61 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
                     appModel.lastPlaybackError = message
                 }
             }
+            .onChange(of: appModel.library.refreshCompletedToken) { _, _ in
+                appModel.adFreePass.probeCapDeferredQueueIfAllowed(trigger: .refreshCompleted)
+            }
     }
 
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        appModel.isSceneActive = newPhase == .active
+        let transcriptionInterruptionDecision = AdFreePassLifecycleInterruptionPolicy(
+            scenePhase: newPhase,
+            isProtectingBackgroundExecution: appModel.adFreePassBackgroundSession.isProtectingBackgroundExecution
+                || appModel.transcriptGenerationBackgroundSession.isProtectingBackgroundExecution
+        ).decision
+
         switch newPhase {
-        case .inactive, .background:
-            deferredForegroundMaintenanceTask?.cancel()
-            deferredForegroundMaintenanceTask = nil
-            foregroundMaintenanceTask?.cancel()
-            foregroundMaintenanceTask = nil
-            foregroundSyncedDataRefreshTask?.cancel()
-            foregroundSyncedDataRefreshTask = nil
-            hasPendingForegroundMaintenance = false
+        case .inactive:
+            cancelForegroundMaintenanceTasks()
+            if transcriptionInterruptionDecision == .scheduleDelayedInterrupt {
+                scheduleTranscriptionInterruptionIfInactivePersists()
+            }
+            flushProgressForLifecycleExitIfNeeded()
+        case .background:
+            cancelForegroundMaintenanceTasks()
+            deferredTranscriptionInterruptionTask?.cancel()
+            deferredTranscriptionInterruptionTask = nil
+            if transcriptionInterruptionDecision == .interruptNow {
+                interruptActiveTranscriptionForLifecycleExit()
+            }
             flushProgressForLifecycleExitIfNeeded()
         case .active:
+            deferredTranscriptionInterruptionTask?.cancel()
+            deferredTranscriptionInterruptionTask = nil
             hasFlushedProgressForLifecycleExit = false
+            appModel.resumeEnvironmentalAdFreePassIfNeeded(modelContext: modelContext)
             startForegroundSyncedDataRefresh()
             runOrDeferForegroundMaintenance()
         @unknown default:
             break
         }
+    }
+
+    private func scheduleTranscriptionInterruptionIfInactivePersists() {
+        deferredTranscriptionInterruptionTask?.cancel()
+        deferredTranscriptionInterruptionTask = Task {
+            try? await Task.sleep(for: Self.inactiveTranscriptionInterruptionDelay)
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            interruptActiveTranscriptionForLifecycleExit()
+        }
+    }
+
+    private func interruptActiveTranscriptionForLifecycleExit() {
+        appModel.interruptActiveTranscriptionForLifecycleExit(modelContext: modelContext)
     }
 
     private func handleNowPlayingPresentationChange(isPresented: Bool) {
@@ -99,11 +137,9 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         nowPlayingProbeMark("foreground-maintenance-after-dismiss-scheduled")
         deferredForegroundMaintenanceTask?.cancel()
         deferredForegroundMaintenanceTask = Task {
-            do {
-                try await Task.sleep(for: .seconds(Self.postNowPlayingDismissMaintenanceDelay))
-            } catch is CancellationError {
-                return
-            } catch {
+            try? await Task.sleep(for: .seconds(Self.postNowPlayingDismissMaintenanceDelay))
+
+            guard !Task.isCancelled else {
                 return
             }
 
@@ -123,6 +159,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         foregroundMaintenanceTask?.cancel()
         appModel.library.refreshProgressRecords(modelContext: modelContext)
         appModel.refreshCurrentVoiceBoostSetting(modelContext: modelContext)
+        appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         foregroundMaintenanceTask = Task {
             await refreshImportedData()
             guard !Task.isCancelled else {
@@ -160,17 +197,25 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         foregroundSyncedDataRefreshTask?.cancel()
         foregroundSyncedDataRefreshTask = Task {
             while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: Self.foregroundSyncedDataRefreshInterval)
-                } catch is CancellationError {
-                    return
-                } catch {
+                try? await Task.sleep(for: Self.foregroundSyncedDataRefreshInterval)
+
+                guard !Task.isCancelled else {
                     return
                 }
 
                 await refreshSyncedUserData()
             }
         }
+    }
+
+    private func cancelForegroundMaintenanceTasks() {
+        deferredForegroundMaintenanceTask?.cancel()
+        deferredForegroundMaintenanceTask = nil
+        foregroundMaintenanceTask?.cancel()
+        foregroundMaintenanceTask = nil
+        foregroundSyncedDataRefreshTask?.cancel()
+        foregroundSyncedDataRefreshTask = nil
+        hasPendingForegroundMaintenance = false
     }
 
     private func flushProgressForLifecycleExitIfNeeded() {

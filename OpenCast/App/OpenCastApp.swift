@@ -18,6 +18,11 @@ struct OpenCastApp: App {
             #if DEBUG
             NowPlayingFramePacingProbe.shared.enableIfRequested()
             #endif
+            #if DEBUG || INTERNAL_NOTIFICATIONS_DIAGNOSTICS
+            if launchConfiguration.resetsAdAnalysisAppAttestCredential {
+                try Self.deleteAdAnalysisAppAttestCredentials()
+            }
+            #endif
             modelContainer = try OpenCastModelContainerFactory.make(
                 inMemory: launchConfiguration.usesInMemoryStore
             )
@@ -25,7 +30,11 @@ struct OpenCastApp: App {
                 try OpenCastUITestSeedData.seed(
                     in: modelContainer,
                     includesCompletedDownload: launchConfiguration.seedsCompletedDownload,
-                    includesEpisodeProgress: launchConfiguration.seedsEpisodeProgress
+                    includesFailedDownload: launchConfiguration.seedsFailedDownload,
+                    includesEpisodeProgress: launchConfiguration.seedsEpisodeProgress,
+                    includesCompletedTranscript: launchConfiguration.seedsCompletedTranscript,
+                    includesCompletedAdAnalysis: launchConfiguration.seedsCompletedAdAnalysis,
+                    includesAdAnalysisSpanAtStart: launchConfiguration.seedsAdAnalysisSpanAtStart
                 )
             }
             #if DEBUG
@@ -36,12 +45,17 @@ struct OpenCastApp: App {
             if launchConfiguration.seedsOnboardingCompleted {
                 try OpenCastUITestSeedData.seedOnboardingCompleted(in: modelContainer)
             }
-            if launchConfiguration.seedsNotificationPromoBannerResolved {
-                try OpenCastUITestSeedData.seedNotificationPromoBannerResolved(in: modelContainer)
-            }
             if launchConfiguration.schedulesNotificationLookFixture {
                 UITestNotificationLookFixtureScheduler.schedule()
             }
+            if launchConfiguration.schedulesAdFreePassNotificationLookFixture {
+                UITestAdFreePassNotificationLookFixtureScheduler.schedule()
+            }
+            #if DEBUG
+            if launchConfiguration.schedulesAppStoreAdFreePassNotification {
+                AppStoreScreenshotNotificationFixture.schedule()
+            }
+            #endif
             let voiceBoostDiagnostics = launchConfiguration.capturesVoiceBoostDiagnostics
                 ? VoiceBoostAudioTapDiagnostics()
                 : nil
@@ -60,22 +74,67 @@ struct OpenCastApp: App {
                 launchConfiguration: launchConfiguration
             )
             let onboardingState = OnboardingStateStore()
+            let transcriptionModels = launchConfiguration.usesInMemoryStore
+                ? TranscriptionModelStore(
+                    installer: OpenCastUITestTranscriptionModelInstaller(
+                        isInstalled: launchConfiguration.seedsTranscriptionModelInstalled
+                    )
+                )
+                : TranscriptionModelStore()
+            let syncStatus = Self.syncStatusStore(launchConfiguration: launchConfiguration)
+            let appleSpeechAssets = Self.makeAppleSpeechAssetStore()
+            let transcriptions = Self.transcriptionStore(launchConfiguration: launchConfiguration)
             _appModel = State(initialValue: OpenCastAppModel(
                 cacheController: cacheController,
                 httpClient: httpClient,
                 localLibraryCacheStore: localLibraryCacheStore,
+                transcriptionModels: transcriptionModels,
+                appleSpeechAssets: appleSpeechAssets,
+                transcriptions: transcriptions,
                 playback: playback,
                 onboardingState: onboardingState,
                 voiceBoostDiagnostics: voiceBoostDiagnostics,
                 exposesVoiceBoostDiagnosticsStatus: launchConfiguration.exposesVoiceBoostDiagnosticsStatus,
                 runsVoiceBoostDeviceProbe: launchConfiguration.runsVoiceBoostDeviceProbe,
                 podcastDirectoryService: podcastDirectoryService,
-                allowsAutomaticFeedRefresh: !launchConfiguration.usesInMemoryStore
+                syncStatus: syncStatus,
+                allowsAutomaticFeedRefresh: !launchConfiguration.usesInMemoryStore,
+                adFreePassPresentationOverride: launchConfiguration.adFreePassPresentationOverride
             ))
         } catch {
             fatalError("Unable to create OpenCast model container: \(error)")
         }
     }
+
+    private static func makeAppleSpeechAssetStore() -> AppleSpeechAssetStore {
+        #if DEBUG
+        if let forcedProvider = DebugForcedAppleSpeechAssetProvider.requestedProvider {
+            return AppleSpeechAssetStore(provider: forcedProvider)
+        }
+        #endif
+        return AppleSpeechAssetStore()
+    }
+
+    private static func transcriptionStore(
+        launchConfiguration: OpenCastLaunchConfiguration
+    ) -> EpisodeTranscriptionStore {
+        #if DEBUG
+        if launchConfiguration.completesTranscriptRequestsForUITesting {
+            return EpisodeTranscriptionStore(
+                transcriber: OpenCastUITestCompletingEpisodeTranscriber()
+            )
+        }
+        #endif
+        return EpisodeTranscriptionStore()
+    }
+
+    #if DEBUG || INTERNAL_NOTIFICATIONS_DIAGNOSTICS
+    private static func deleteAdAnalysisAppAttestCredentials() throws {
+        for keychainService in AdAnalysisAppAttestKeychainServices.all {
+            try AppAttestKeychain(service: keychainService).deleteAll()
+        }
+    }
+    #endif
 
     var body: some Scene {
         WindowGroup {
@@ -125,5 +184,16 @@ struct OpenCastApp: App {
         }
         #endif
         return cacheStore
+    }
+
+    private static func syncStatusStore(launchConfiguration: OpenCastLaunchConfiguration) -> SyncStatusStore {
+        #if DEBUG
+        if let status = launchConfiguration.uiTestCloudKitAccountStatus {
+            return SyncStatusStore(
+                accountStatusProvider: OpenCastUITestCloudKitAccountStatusProvider(status: status)
+            )
+        }
+        #endif
+        return SyncStatusStore()
     }
 }

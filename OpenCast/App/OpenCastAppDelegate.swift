@@ -92,13 +92,9 @@ final class OpenCastAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
     }
 
     private func registerNotificationCategories() {
-        let episodeCategory = UNNotificationCategory(
-            identifier: OpenCastNotificationCategory.episode,
-            actions: [],
-            intentIdentifiers: [],
-            options: []
+        UNUserNotificationCenter.current().setNotificationCategories(
+            OpenCastNotificationCategory.registrationCategories()
         )
-        UNUserNotificationCenter.current().setNotificationCategories([episodeCategory])
     }
 
     nonisolated private static func episodeRoute(from notification: UNNotification) -> RemoteEpisodeNotificationRoute? {

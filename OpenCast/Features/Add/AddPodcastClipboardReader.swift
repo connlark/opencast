@@ -1,4 +1,3 @@
-import Foundation
 import UIKit
 
 enum AddPodcastClipboardReader {
@@ -13,20 +12,7 @@ enum AddPodcastClipboardReader {
     }
 
     nonisolated static func feedURLString(from rawValue: String?) -> String? {
-        guard let rawValue else {
-            return nil
-        }
-
-        let trimmedValue = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmedValue),
-              let scheme = url.scheme?.lowercased(),
-              (scheme == "http" || scheme == "https"),
-              url.host?.isEmpty == false
-        else {
-            return nil
-        }
-
-        return trimmedValue
+        PodcastFeedURLDetector.feedURLString(from: rawValue)
     }
 
     #if DEBUG

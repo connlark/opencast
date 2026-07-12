@@ -5,14 +5,6 @@ final class NotificationSecurityUITests: XCTestCase {
     private static let notificationFixtureFeedBaseURLKey = "OPENCAST_NOTIFICATION_FIXTURE_FEED_BASE_URL"
     private static let adminPollURLKey = "OPENCAST_NOTIFICATION_ADMIN_POLL_URL"
 
-    private struct NotificationLookFixtureTimeout: Error, CustomStringConvertible {
-        var label: String
-
-        var description: String {
-            "Notification look fixture containing \"\(label)\" did not appear on SpringBoard before the timeout."
-        }
-    }
-
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -134,7 +126,17 @@ final class NotificationSecurityUITests: XCTestCase {
         app.buttons["Skip"].tap()
         XCTAssertTrue(app.staticTexts["Find Podcasts"].waitForExistence(timeout: 10))
         app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Get New Episode Alerts"].waitForExistence(timeout: 10))
+        // The transcription step is conditional (decision 4): Apple-capable
+        // devices show the Apple setup page or no page at all; only
+        // Apple-unavailable devices show the Tiny Whisper page.
+        let notificationsPage = app.staticTexts["New Episode Alerts"]
+        if !notificationsPage.waitForExistence(timeout: 5) {
+            let transcriptionStepShown = app.staticTexts["On-Device Transcription"].waitForExistence(timeout: 5)
+                || app.staticTexts["Tiny Whisper Model"].waitForExistence(timeout: 5)
+            XCTAssertTrue(transcriptionStepShown, "Expected a transcription setup step before notifications")
+            app.buttons["Skip"].tap()
+        }
+        XCTAssertTrue(notificationsPage.waitForExistence(timeout: 10))
 
         app.buttons["Enable Notifications"].tap()
         app.tap()
@@ -180,7 +182,7 @@ final class NotificationSecurityUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 5)
         settleSpringBoardNotificationSurface(in: springboard)
         let notification = try waitForSpringBoardNotification(
-            containing: "A Paleontology Of The Future",
+            containing: "866: Very Nice",
             in: springboard,
             timeout: 30
         )
@@ -193,6 +195,60 @@ final class NotificationSecurityUITests: XCTestCase {
         XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 2))
         XCTAssertNotEqual(app.state, .runningForeground)
         attachScreen(named: "notification_look_expanded")
+    }
+
+    @MainActor
+    func testSimulatorAdFreePassCompletionNotificationLookFixtureScreenshots() throws {
+        let permissionMonitor = addUIInterruptionMonitor(withDescription: "Notification Permission") { alert in
+            for buttonTitle in ["Allow", "Allow Notifications"] {
+                let button = alert.buttons[buttonTitle]
+                if button.exists {
+                    button.tap()
+                    return true
+                }
+            }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(permissionMonitor) }
+
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "--opencast-ui-testing",
+            "--opencast-force-light-mode",
+            "--opencast-schedule-adfreepass-notification-look-fixture",
+        ]
+        app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
+        app.launchEnvironment["OPENCAST_FORCE_LIGHT_MODE"] = "1"
+        app.launchEnvironment["OPENCAST_SCHEDULE_ADFREEPASS_NOTIFICATION_LOOK_FIXTURE"] = "1"
+        app.launch()
+        app.tap()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allowButton = springboard.buttons["Allow"]
+        if allowButton.waitForExistence(timeout: 5) {
+            allowButton.tap()
+        }
+
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 5)
+        settleSpringBoardNotificationSurface(in: springboard)
+        let notification = try waitForSpringBoardNotification(
+            containing: "ad breaks",
+            in: springboard,
+            timeout: 30
+        )
+        XCTAssertTrue(notification.exists)
+        XCTAssertNotEqual(app.state, .runningForeground)
+        attachScreen(named: "adfreepass_notification_look_collapsed")
+
+        notification.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.2)
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertTrue(
+            staticText(containing: "couldn't be analyzed", in: springboard).waitForExistence(timeout: 5),
+            "Expanded ad-free-pass notification should render the failures body line."
+        )
+        XCTAssertNotEqual(app.state, .runningForeground)
+        attachScreen(named: "adfreepass_notification_look_expanded")
     }
 
     @MainActor
@@ -396,7 +452,7 @@ final class NotificationSecurityUITests: XCTestCase {
         }
 
         guard app.wait(for: .runningForeground, timeout: 240) else {
-            XCTFail("Tap the delivered Fresh Fixture Episode notification on the test iPad before the timeout.")
+            XCTFail("Tap the delivered Fresh Fixture Episode notification on the test device before the timeout.")
             return
         }
 
@@ -448,24 +504,7 @@ final class NotificationSecurityUITests: XCTestCase {
 
     @MainActor
     private func openSettings(in app: XCUIApplication) {
-        if let tabButton = visibleTabButton("Settings", in: app) {
-            tabButton.tap()
-            return
-        }
-
-        let sidebarButton = app.collectionViews["Sidebar"].buttons["Settings"].firstMatch
-        if sidebarButton.waitForExistence(timeout: 5) {
-            sidebarButton.tap()
-            return
-        }
-
-        let sidebarCell = app.cells.containing(.staticText, identifier: "Settings").element
-        if sidebarCell.waitForExistence(timeout: 5) {
-            sidebarCell.tap()
-            return
-        }
-
-        XCTFail("Settings navigation item should exist")
+        openSection("Settings", in: app)
     }
 
     @MainActor
@@ -521,42 +560,7 @@ final class NotificationSecurityUITests: XCTestCase {
 
     @MainActor
     private func openLibrary(in app: XCUIApplication) {
-        if let tabButton = visibleTabButton("Library", in: app) {
-            tabButton.tap()
-            return
-        }
-
-        let sidebarButton = app.buttons["Library"]
-        if sidebarButton.waitForExistence(timeout: 5) {
-            sidebarButton.tap()
-            return
-        }
-
-        let sidebarCell = app.cells.containing(.staticText, identifier: "Library").element
-        if sidebarCell.waitForExistence(timeout: 5) {
-            sidebarCell.tap()
-            return
-        }
-
-        XCTFail("Library navigation item should exist")
-    }
-
-    @MainActor
-    private func visibleTabButton(
-        _ title: String,
-        in app: XCUIApplication
-    ) -> XCUIElement? {
-        let tabButton = app.tabBars.buttons[title]
-        if tabButton.waitForExistence(timeout: 2) {
-            return tabButton
-        }
-
-        guard app.tabBars.firstMatch.waitForExistence(timeout: 1) else {
-            return nil
-        }
-
-        app.swipeDown()
-        return tabButton.waitForExistence(timeout: 2) ? tabButton : nil
+        openSection("Library", in: app)
     }
 
     @MainActor
@@ -705,44 +709,6 @@ final class NotificationSecurityUITests: XCTestCase {
     }
 
     @MainActor
-    private func waitForSpringBoardNotification(
-        containing label: String,
-        in springboard: XCUIApplication,
-        timeout: TimeInterval
-    ) throws -> XCUIElement {
-        let deadline = Date().addingTimeInterval(timeout)
-        var didOpenNotificationCenter = false
-        let notificationPredicate = NSPredicate(
-            format: "identifier == %@ AND (label CONTAINS %@ OR value CONTAINS %@)",
-            "NotificationShortLookView",
-            label,
-            label
-        )
-        let textPredicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", label, label)
-
-        while Date() < deadline {
-            let notification = springboard.descendants(matching: .any).matching(notificationPredicate).firstMatch
-            if notification.waitForExistence(timeout: 1) {
-                return notification
-            }
-
-            let text = springboard.descendants(matching: .any).matching(textPredicate).firstMatch
-            if text.waitForExistence(timeout: 1) {
-                return text
-            }
-
-            if !didOpenNotificationCenter {
-                openNotificationCenter(in: springboard)
-                didOpenNotificationCenter = true
-            } else {
-                Thread.sleep(forTimeInterval: 1)
-            }
-        }
-
-        throw NotificationLookFixtureTimeout(label: label)
-    }
-
-    @MainActor
     private func attachScreen(named name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
@@ -764,21 +730,6 @@ final class NotificationSecurityUITests: XCTestCase {
     @MainActor
     private func tapTopBannerCoordinate(in springboard: XCUIApplication) {
         springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.10)).tap()
-    }
-
-    @MainActor
-    private func openNotificationCenter(in springboard: XCUIApplication) {
-        let start = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01))
-        let end = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
-        start.press(forDuration: 0.1, thenDragTo: end)
-    }
-
-    @MainActor
-    private func settleSpringBoardNotificationSurface(in springboard: XCUIApplication) {
-        for _ in 0..<3 {
-            openNotificationCenter(in: springboard)
-            Thread.sleep(forTimeInterval: 1)
-        }
     }
 
     private static func notificationSyncFeedURLOrSkip() throws -> String {

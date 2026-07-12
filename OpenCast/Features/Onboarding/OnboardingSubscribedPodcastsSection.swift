@@ -7,8 +7,8 @@ struct OnboardingSubscribedPodcastsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Your Podcasts")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.headline)
+                .foregroundStyle(.primary)
 
             VStack(spacing: 0) {
                 ForEach(Array(subscriptions.enumerated()), id: \.element.persistentModelID) { index, subscription in
@@ -21,7 +21,7 @@ struct OnboardingSubscribedPodcastsSection: View {
                 }
             }
             .padding(12)
-            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            .glassEffect(.regular, in: .rect(cornerRadius: 18))
             .accessibilityIdentifier("Onboarding Subscribed Podcasts Section")
         }
     }

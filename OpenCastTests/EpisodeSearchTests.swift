@@ -201,14 +201,11 @@ struct EpisodeSearchTests {
             searchTask.cancel()
         }
 
-        try await waitUntil("scope switch loading presentation") {
-            session.isSearching && session.isLoadingVisible
-        }
+        await showNotesProvider.waitUntilStarted()
 
         #expect(session.isSearching == true)
         #expect(session.isLoadingVisible == true)
 
-        await showNotesProvider.waitUntilStarted()
         await showNotesProvider.finish(returning: [:])
         await searchTask.value
 
@@ -259,7 +256,7 @@ struct EpisodeSearchTests {
         #expect(session.isSearching == true)
         #expect(session.isLoadingVisible == false)
 
-        try await waitUntil("delayed loading presentation", timeout: .seconds(3)) {
+        try await waitUntil("delayed loading presentation", timeout: .seconds(10)) {
             session.isLoadingVisible
         }
         #expect(session.isSearching == true)

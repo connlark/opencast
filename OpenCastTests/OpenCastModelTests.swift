@@ -25,6 +25,7 @@ struct OpenCastModelTests {
         let fetched = try context.fetch(FetchDescriptor<SubscriptionRecord>())
         #expect(fetched.map(\.feedURL) == [Self.modelFixtureFeedURL])
         #expect(fetched.first?.isVoiceBoostEnabled == true)
+        #expect(fetched.first?.isAdAutoDetectEnabled == false)
     }
 
     @Test("Synced records use logical keys instead of unique attributes")
@@ -41,7 +42,41 @@ struct OpenCastModelTests {
 
         #expect(subscription.feedURL == progress.podcastID)
         #expect(subscription.isVoiceBoostEnabled == true)
+        #expect(subscription.isAdAutoDetectEnabled == false)
         #expect(progress.position == 42)
+    }
+
+    @Test("Playback episode snapshot converter preserves fallback fields")
+    func playbackEpisodeSnapshotConverterPreservesFallbackFields() throws {
+        let publishedAt = Date(timeIntervalSince1970: 1_775_000_000)
+        let cachedAt = Date(timeIntervalSince1970: 1_775_000_100)
+        let episode = Episode(
+            id: EpisodeID(rawValue: "fallback-episode"),
+            podcastID: PodcastID(rawValue: Self.modelFixtureFeedURL),
+            podcastTitle: "Fallback Show",
+            title: "Fallback Episode",
+            summary: "Playback-only summary",
+            publishedAt: publishedAt,
+            duration: 321,
+            audioURL: URL(string: "https://example.com/fallback.mp3"),
+            artworkURL: URL(string: "https://example.com/art.jpg"),
+            guid: "fallback-guid"
+        )
+
+        let snapshot = EpisodeListItemSnapshot(episode: episode, cachedAt: cachedAt)
+
+        #expect(snapshot.episodeID == "fallback-episode")
+        #expect(snapshot.podcastID == Self.modelFixtureFeedURL)
+        #expect(snapshot.podcastTitle == "Fallback Show")
+        #expect(snapshot.title == "Fallback Episode")
+        #expect(snapshot.summary == "Playback-only summary")
+        #expect(snapshot.publishedAt == publishedAt)
+        #expect(snapshot.duration == 321)
+        #expect(snapshot.audioURL == "https://example.com/fallback.mp3")
+        #expect(snapshot.artworkURL == "https://example.com/art.jpg")
+        #expect(snapshot.artworkPreview == nil)
+        #expect(snapshot.guid == "fallback-guid")
+        #expect(snapshot.cachedAt == cachedAt)
     }
 
     @Test("Subscribe inserts subscription podcast and episode cache rows")
@@ -214,6 +249,70 @@ struct OpenCastModelTests {
         #expect(subscription.author == "Original Author")
         #expect(subscription.artworkURL == "https://example.com/original-art.jpg")
         #expect(subscription.lastRefreshAt == originalLastRefreshAt)
+    }
+
+    @Test("Refresh preserves the per-show auto-detect opt-in")
+    func refreshPreservesAdAutoDetectOptIn() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/auto-detect-refresh.xml"
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Original Show",
+                lastRefreshAt: Date(timeIntervalSince1970: 1_700_000_000),
+                isAdAutoDetectEnabled: true
+            )
+        )
+        try context.save()
+
+        let service = StubFeedService(responses: [
+            feedURL: .success(
+                makeSnapshot(
+                    feedURL: feedURL,
+                    podcastTitle: "Updated Show",
+                    episodeID: "auto-detect-refresh-episode",
+                    episodeTitle: "Auto Detect Refresh Episode"
+                )
+            )
+        ])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        await store.load(modelContext: context)
+        await store.refresh(feedURL: feedURL, modelContext: context)
+
+        let subscription = try #require(context.fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(subscription.title == "Updated Show")
+        #expect(subscription.isAdAutoDetectEnabled == true)
+        #expect(store.isAdAutoDetectEnabled(forPodcastID: feedURL))
+    }
+
+    @Test("Auto-detect setter persists the flag and rejects unknown feeds")
+    func adAutoDetectSetterPersistsAndRejectsUnknownFeeds() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/auto-detect-setter.xml"
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Setter Show"))
+        try context.save()
+
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+
+        #expect(!store.isAdAutoDetectEnabled(forPodcastID: feedURL))
+        #expect(store.setAdAutoDetectEnabled(true, feedURL: feedURL, modelContext: context))
+        #expect(store.isAdAutoDetectEnabled(forPodcastID: feedURL))
+
+        // The write survives a fresh context (it was saved, not just staged).
+        let freshContext = ModelContext(container)
+        let persisted = try #require(freshContext.fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(persisted.isAdAutoDetectEnabled == true)
+
+        #expect(store.setAdAutoDetectEnabled(false, feedURL: feedURL, modelContext: context))
+        #expect(!store.isAdAutoDetectEnabled(forPodcastID: feedURL))
+
+        // An unsubscribed feed has nothing to toggle.
+        #expect(!store.setAdAutoDetectEnabled(true, feedURL: "https://example.com/unknown.xml", modelContext: context))
+        #expect(!store.isAdAutoDetectEnabled(forPodcastID: "https://example.com/unknown.xml"))
     }
 
     @Test("Resume progress transitions from in-progress to played")
@@ -1709,7 +1808,8 @@ struct OpenCastModelTests {
                 title: " ",
                 subscribedAt: newRefresh,
                 lastRefreshAt: newRefresh,
-                isVoiceBoostEnabled: false
+                isVoiceBoostEnabled: false,
+                isAdAutoDetectEnabled: true
             )
         )
         try context.save()
@@ -1724,6 +1824,7 @@ struct OpenCastModelTests {
         #expect(records.first?.artworkURL == "https://example.com/art.jpg")
         #expect(records.first?.lastRefreshAt == newRefresh)
         #expect(records.first?.isVoiceBoostEnabled == false)
+        #expect(records.first?.isAdAutoDetectEnabled == true)
         #expect(result.duplicateSubscriptionRecordsFound == 1)
         #expect(result.subscriptionGroupsMerged == 1)
         #expect(result.subscriptionRecordsDeleted == 1)

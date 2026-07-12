@@ -1,6 +1,7 @@
 import Foundation
 import OpenCastCore
 import OpenCastPlayback
+import OpenCastTranscription
 import SwiftData
 import Testing
 @testable import OpenCast
@@ -29,17 +30,29 @@ struct DataNukeTests {
         let fileStore = EpisodeDownloadFileStore(
             baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
         )
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory)
+        let adAnalysisFileStore = EpisodeAdAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
         let localCache = SQLiteLocalLibraryCacheStore.inMemory()
         let appModel = OpenCastAppModel(
             cacheController: cacheController,
             library: LibraryStore(localCache: localCache),
             downloads: DownloadStore(fileStore: fileStore),
+            transcriptions: EpisodeTranscriptionStore(fileStore: transcriptFileStore),
+            adAnalyses: EpisodeAdAnalysisStore(
+                client: UnusedEpisodeAdAnalysisClient(),
+                fileStore: adAnalysisFileStore
+            ),
             syncStatus: SyncStatusStore(
                 accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
             ),
             allowsAutomaticFeedRefresh: false
         )
-        let seededEpisode = try seedAllData(fileStore: fileStore, context: context)
+        let seededEpisode = try seedAllData(
+            fileStore: fileStore,
+            transcriptFileStore: transcriptFileStore,
+            adAnalysisFileStore: adAnalysisFileStore,
+            context: context
+        )
         try writeCacheFixture(in: cacheController.feedCacheDirectory, fileName: "feed.cache")
         try writeCacheFixture(in: cacheController.artworkCacheDirectory, fileName: "artwork.cache")
         try writeOrphanPartialDownload(fileStore: fileStore)
@@ -47,17 +60,26 @@ struct DataNukeTests {
         await appModel.library.load(modelContext: context)
         appModel.downloads.load(modelContext: context)
         appModel.appearanceSettings.load(modelContext: context)
+        appModel.recentSearches.load(modelContext: context)
         appModel.playbackSettings.load(modelContext: context, playback: appModel.playback)
         appModel.onboardingState.load(modelContext: context)
         _ = appModel.setAppearanceMode(.dark, modelContext: context)
         _ = appModel.setVoiceBoostMode(.globalOff, modelContext: context)
         _ = appModel.setSkipBackwardOption(.sixty, modelContext: context)
         _ = appModel.setSkipForwardOption(.five, modelContext: context)
+        appModel.recentSearches.record("Erase Me", modelContext: context)
         _ = appModel.onboardingState.markCompleted(modelContext: context)
         let episode = try #require(appModel.library.episode(with: seededEpisode.episodeID))
         try appModel.playback.load(appModel.library.domainEpisode(for: episode), startPosition: 42)
         appModel.lastPlaybackError = "Previous playback failure"
         appModel.isNowPlayingPresented = true
+        appModel.transcriptions.load(modelContext: context)
+        appModel.adAnalyses.load(modelContext: context)
+        #expect(appModel.recentSearches.queries == ["Erase Me"])
+        #expect(!appModel.transcriptions.records.isEmpty)
+        #expect(!appModel.adAnalyses.records.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: transcriptFileStore.transcriptsDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: adAnalysisFileStore.analysesDirectory.path))
 
         try await appModel.nukeAllData(modelContext: context)
 
@@ -65,10 +87,13 @@ struct DataNukeTests {
         #expect(appModel.library.subscriptions.isEmpty)
         #expect(appModel.library.episodes.isEmpty)
         #expect(appModel.downloads.records.isEmpty)
+        #expect(appModel.transcriptions.records.isEmpty)
+        #expect(appModel.adAnalyses.records.isEmpty)
         #expect(appModel.playback.currentEpisode == nil)
         #expect(appModel.lastPlaybackError == nil)
         #expect(!appModel.isNowPlayingPresented)
         #expect(appModel.appearanceSettings.mode == .system)
+        #expect(appModel.recentSearches.queries.isEmpty)
         #expect(appModel.playbackSettings.voiceBoostMode == .perEpisode)
         #expect(appModel.playbackSettings.isVoiceBoostEnabled)
         #expect(appModel.playbackSettings.skipBackwardOption == .defaultBackward)
@@ -79,6 +104,8 @@ struct DataNukeTests {
         #expect(try regularFiles(in: cacheController.feedCacheDirectory).isEmpty)
         #expect(try regularFiles(in: cacheController.artworkCacheDirectory).isEmpty)
         #expect(!FileManager.default.fileExists(atPath: fileStore.downloadsDirectory.path))
+        #expect(!FileManager.default.fileExists(atPath: transcriptFileStore.transcriptsDirectory.path))
+        #expect(!FileManager.default.fileExists(atPath: adAnalysisFileStore.analysesDirectory.path))
     }
 
     @Test("Unavailable iCloud aborts before deleting anything")
@@ -161,6 +188,30 @@ struct DataNukeTests {
         #expect(await provider.callCount == 2)
         #expect(syncStatus.accountStatus == .noAccount)
         #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).count == 1)
+    }
+
+    @Test("Nuke resets submitted ad-free pass background session")
+    func nukeResetsSubmittedAdFreePassBackgroundSession() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let scheduler = DataNukeAdFreePassScheduler()
+        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
+        let appModel = OpenCastAppModel(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            adFreePassBackgroundSession: session,
+            syncStatus: SyncStatusStore(
+                accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
+            ),
+            allowsAutomaticFeedRefresh: false
+        )
+
+        session.arm(episodeTitle: "Submitted Before Nuke")
+
+        try await appModel.nukeAllData(modelContext: context)
+        session.arm(episodeTitle: "Submitted After Nuke")
+
+        #expect(scheduler.cancelledIdentifiers.count == 3)
+        #expect(scheduler.submitCallCount == 2)
     }
 
     @Test("Refresh finishing after nuke cannot recreate cache rows")
@@ -255,6 +306,8 @@ struct DataNukeTests {
 
     private func seedAllData(
         fileStore: EpisodeDownloadFileStore,
+        transcriptFileStore: EpisodeTranscriptFileStore? = nil,
+        adAnalysisFileStore: EpisodeAdAnalysisFileStore? = nil,
         context: ModelContext
     ) throws -> EpisodeCacheRecord {
         let feedURL = seededFeedURL
@@ -296,6 +349,15 @@ struct DataNukeTests {
                 bytesExpected: 16
             )
         )
+        if let transcriptFileStore, let adAnalysisFileStore {
+            try seedTranscriptAndAdAnalysis(
+                episode: episode,
+                sourceAudioURL: sourceAudioURL,
+                transcriptFileStore: transcriptFileStore,
+                adAnalysisFileStore: adAnalysisFileStore,
+                context: context
+            )
+        }
         try context.save()
         return episode
     }
@@ -308,6 +370,138 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<RefreshLogRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<EpisodeTranscriptRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<EpisodeAdAnalysisRecord>()).isEmpty)
+    }
+
+    private func seedTranscriptAndAdAnalysis(
+        episode: EpisodeCacheRecord,
+        sourceAudioURL: URL,
+        transcriptFileStore: EpisodeTranscriptFileStore,
+        adAnalysisFileStore: EpisodeAdAnalysisFileStore,
+        context: ModelContext
+    ) throws {
+        let updatedAt = Date(timeIntervalSince1970: 1_780_000_000)
+        let segments = [
+            OpenCastTranscriptSegment(
+                id: 0,
+                start: 0,
+                end: 8,
+                text: "Welcome to the data nuke fixture.",
+                avgLogProbability: -0.1,
+                noSpeechProbability: 0.01
+            ),
+            OpenCastTranscriptSegment(
+                id: 1,
+                start: 8,
+                end: 16,
+                text: "This part is brought to you by Nuke Sponsor.",
+                avgLogProbability: -0.1,
+                noSpeechProbability: 0.01
+            )
+        ]
+        let transcriptDocument = EpisodeTranscriptDocument(
+            schemaVersion: 1,
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            sourceAudioURL: sourceAudioURL.absoluteString,
+            sourceFileByteCount: 16,
+            sourceFileSHA256: "nuke-audio-sha",
+            modelIdentifier: "model",
+            modelVersion: "v1",
+            modelTreeSHA256: "tree-sha",
+            languageCode: "en",
+            audioDuration: 16,
+            checkpoints: [],
+            segments: segments,
+            text: segments.map(\.text).joined(separator: " "),
+            timings: EpisodeTranscriptTimings(),
+            createdAt: updatedAt.addingTimeInterval(-10),
+            updatedAt: updatedAt
+        )
+        let transcriptFingerprint = transcriptFileStore.fingerprint(
+            sourceFileSHA256: transcriptDocument.sourceFileSHA256,
+            modelIdentifier: transcriptDocument.modelIdentifier,
+            modelVersion: transcriptDocument.modelVersion,
+            modelTreeSHA256: transcriptDocument.modelTreeSHA256
+        )
+        let transcriptRelativePath = transcriptFileStore.relativePath(
+            episodeID: transcriptDocument.episodeID,
+            fingerprint: transcriptFingerprint
+        )
+        try transcriptFileStore.write(transcriptDocument, relativePath: transcriptRelativePath)
+        context.insert(EpisodeTranscriptRecord(
+            episodeID: transcriptDocument.episodeID,
+            podcastID: transcriptDocument.podcastID,
+            sourceAudioURL: transcriptDocument.sourceAudioURL,
+            sourceFileByteCount: transcriptDocument.sourceFileByteCount,
+            sourceFileSHA256: transcriptDocument.sourceFileSHA256,
+            modelIdentifier: transcriptDocument.modelIdentifier,
+            modelVersion: transcriptDocument.modelVersion,
+            modelTreeSHA256: transcriptDocument.modelTreeSHA256,
+            languageCode: transcriptDocument.languageCode,
+            state: .completed,
+            audioDuration: transcriptDocument.audioDuration,
+            completedDuration: transcriptDocument.audioDuration,
+            checkpointCount: transcriptDocument.checkpoints.count,
+            transcriptRelativePath: transcriptRelativePath,
+            createdAt: transcriptDocument.createdAt,
+            updatedAt: transcriptDocument.updatedAt
+        ))
+
+        let analysisFingerprint = adAnalysisFileStore.transcriptFingerprint(for: transcriptDocument)
+        let analysisRelativePath = adAnalysisFileStore.relativePath(
+            episodeID: transcriptDocument.episodeID,
+            transcriptFingerprint: analysisFingerprint
+        )
+        let analysisDocument = EpisodeAdAnalysisDocument(
+            schemaVersion: 1,
+            episodeID: transcriptDocument.episodeID,
+            podcastID: transcriptDocument.podcastID,
+            requestID: "nuke-analysis",
+            transcriptFingerprint: analysisFingerprint,
+            transcriptUpdatedAt: transcriptDocument.updatedAt,
+            transcriptSegmentCount: transcriptDocument.segments.count,
+            model: "gemini-2.5-flash-lite",
+            policy: "ads_only",
+            spans: [
+                EpisodeAdAnalysisSpan(
+                    id: 0,
+                    kind: .hostReadAd,
+                    label: "Nuke Sponsor",
+                    startSegmentID: 1,
+                    endSegmentID: 1,
+                    startTime: 8,
+                    endTime: 16,
+                    confidence: 0.95,
+                    evidenceQuote: "brought to you"
+                )
+            ],
+            warnings: [],
+            usage: EpisodeAdAnalysisUsage(
+                promptTokenCount: 10,
+                candidatesTokenCount: 4,
+                totalTokenCount: 14
+            ),
+            createdAt: updatedAt,
+            updatedAt: updatedAt
+        )
+        try adAnalysisFileStore.write(analysisDocument, relativePath: analysisRelativePath)
+        context.insert(EpisodeAdAnalysisRecord(
+            episodeID: transcriptDocument.episodeID,
+            podcastID: transcriptDocument.podcastID,
+            transcriptFingerprint: analysisFingerprint,
+            transcriptUpdatedAt: transcriptDocument.updatedAt,
+            transcriptSegmentCount: transcriptDocument.segments.count,
+            state: .completed,
+            analysisRelativePath: analysisRelativePath,
+            model: analysisDocument.model,
+            policy: analysisDocument.policy,
+            spanCount: analysisDocument.spans.count,
+            warningCount: analysisDocument.warnings.count,
+            createdAt: updatedAt,
+            updatedAt: updatedAt
+        ))
     }
 
     private func expectAllTablesEmpty(
@@ -433,5 +627,32 @@ private actor HangingFeedService: FeedService {
         }
 
         return didRequest
+    }
+}
+
+private final class UnusedEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @unchecked Sendable {
+    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisAPIResponse {
+        throw EpisodeAdAnalysisError.clientDisabled
+    }
+}
+
+private final class DataNukeAdFreePassScheduler: AdFreePassContinuedTaskScheduling {
+    let supportsGPUResources = false
+    private(set) var submitCallCount = 0
+    private(set) var cancelledIdentifiers: [String] = []
+
+    func registerLaunchHandler(
+        identifier: String,
+        onLaunch: @escaping @MainActor @Sendable (any AdFreePassContinuedTaskHandle) -> Void
+    ) -> Bool {
+        true
+    }
+
+    func submit(identifier: String, title: String, subtitle: String, requiresGPU: Bool) throws {
+        submitCallCount += 1
+    }
+
+    func cancel(identifier: String) {
+        cancelledIdentifiers.append(identifier)
     }
 }

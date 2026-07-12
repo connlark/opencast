@@ -9,10 +9,21 @@ struct OnboardingPodcastSearchSection: View {
     let onSubscribe: (DirectoryPodcastResult) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Search")
-                .font(.headline)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 14) {
+            Label {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Search the directory")
+                        .font(.headline)
+
+                    Text("Find shows by title, creator, or network.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } icon: {
+                SymbolBadgeView(systemImage: "magnifyingglass")
+            }
+            .accessibilityElement(children: .combine)
 
             TextField("Podcast or creator", text: $store.query)
                 .textInputAutocapitalization(.never)
@@ -26,6 +37,9 @@ struct OnboardingPodcastSearchSection: View {
 
             searchStateContent
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
         .onDisappear {
             store.cancelSearch()
         }
@@ -47,17 +61,13 @@ struct OnboardingPodcastSearchSection: View {
                     .foregroundStyle(.secondary)
             }
             .font(.subheadline)
-            .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glassEffect(.regular, in: .rect(cornerRadius: 20))
         case .empty:
             ContentUnavailableView(
                 "No Results",
                 systemImage: "magnifyingglass",
                 description: Text("Try another search.")
             )
-            .padding(14)
-            .glassEffect(.regular, in: .rect(cornerRadius: 20))
         case .results(let results):
             VStack(spacing: 0) {
                 ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
@@ -80,8 +90,6 @@ struct OnboardingPodcastSearchSection: View {
                     }
                 }
             }
-            .padding(14)
-            .glassEffect(.regular, in: .rect(cornerRadius: 24))
         }
     }
 

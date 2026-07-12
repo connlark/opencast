@@ -26,6 +26,26 @@ extension XCTestCase {
     }
 
     @MainActor
+    func assertHittable(
+        _ element: XCUIElement,
+        named name: String,
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertExists(element, named: name, timeout: timeout, file: file, line: line)
+        let predicate = NSPredicate(format: "hittable == true")
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: timeout),
+            .completed,
+            "\(name) should be hittable",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
     func assertDoesNotExist(
         _ element: XCUIElement,
         named name: String,

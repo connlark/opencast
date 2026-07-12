@@ -26,6 +26,30 @@ struct RSSFeedParserTests {
         #expect(snapshot.episodes[1].audioURL?.absoluteString == "https://example.com/audio/example-002.mp3")
     }
 
+    @Test("Parses PDT item pubDate values")
+    func parsesPDTItemPubDateValues() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Security Now</title>
+                <item>
+                  <title>Named Zone Episode</title>
+                  <guid>named-zone-episode</guid>
+                  <pubDate>Tue, 30 Jun 2026 18:43:36 PDT</pubDate>
+                  <enclosure url="https://example.com/security-now.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(data: data, feedURL: URL(string: "https://example.com/sn.xml")!)
+
+        #expect(snapshot.episodes.first?.publishedAt?.timeIntervalSince1970 == 1_782_870_216)
+    }
+
     @Test("Parses fallback identity inputs when GUID and duration are missing")
     func parsesFallbackIdentityInputs() throws {
         let feedURL = URL(string: "https://example.com/fallbacks.xml")!
@@ -69,6 +93,84 @@ struct RSSFeedParserTests {
             try RSSFeedParser().parse(data: data, feedURL: URL(string: "https://example.com/empty.xml")!)
         }
     }
+
+    @Test(
+        "Parses channel language values",
+        arguments: [
+            ("de-DE", "de-DE"),
+            ("en-us", "en-us"),
+            ("fr", "fr"),
+            (" pt-BR ", "pt-BR"),
+            ("zh_Hans", "zh_Hans"),
+            ("Deutsch (Germany)", nil),
+            ("", nil),
+            ("x", nil),
+            ("en-", nil)
+        ] as [(String, String?)]
+    )
+    func parsesChannelLanguage(rawValue: String, expected: String?) throws {
+        let snapshot = try RSSFeedParser().parse(
+            data: languageFeedData(languageElement: "<language>\(rawValue)</language>"),
+            feedURL: URL(string: "https://example.com/lang.xml")!
+        )
+
+        #expect(snapshot.podcast.languageCode == expected)
+    }
+
+    @Test("Missing channel language parses as nil")
+    func missingChannelLanguageParsesAsNil() throws {
+        let fixture = try fixtureSnapshot()
+        #expect(fixture.podcast.languageCode == nil)
+
+        let inline = try RSSFeedParser().parse(
+            data: languageFeedData(languageElement: ""),
+            feedURL: URL(string: "https://example.com/lang.xml")!
+        )
+        #expect(inline.podcast.languageCode == nil)
+    }
+
+    @Test("Item-level language does not overwrite channel language")
+    func itemLanguageDoesNotOverwriteChannelLanguage() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Lang Feed</title>
+                <language>de-DE</language>
+                <item>
+                  <title>One</title>
+                  <guid>one</guid>
+                  <language>fr</language>
+                  <enclosure url="https://example.com/a.mp3" type="audio/mpeg" length="1"/>
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(data: data, feedURL: URL(string: "https://example.com/lang.xml")!)
+        #expect(snapshot.podcast.languageCode == "de-DE")
+    }
+}
+
+private func languageFeedData(languageElement: String) -> Data {
+    Data(
+        """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Lang Feed</title>
+            \(languageElement)
+            <item>
+              <title>One</title>
+              <guid>one</guid>
+              <enclosure url="https://example.com/a.mp3" type="audio/mpeg" length="1"/>
+            </item>
+          </channel>
+        </rss>
+        """.utf8
+    )
 }
 
 private func fixtureSnapshot() throws -> FeedSnapshot {

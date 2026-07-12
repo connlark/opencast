@@ -20,51 +20,54 @@ struct OnboardingPodcastSetupPage: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Find Podcasts")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Find Podcasts")
+                        .font(.largeTitle)
+                        .bold()
 
-                Text(instructionText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 20))
-
-                AddPodcastModePicker(selectedMode: $selectedMode)
-                    .padding(4)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 24))
-
-                switch selectedMode {
-                case .rss:
-                    OnboardingRSSFeedSection(
-                        feedURLString: $feedURLString,
-                        focusedField: focusedField,
-                        isSubscribing: isSubscribing,
-                        canSubscribe: canSubscribeToRawFeed,
-                        onPaste: onPaste,
-                        onSubscribe: onSubscribeRawFeed
-                    )
-                case .search:
-                    OnboardingPodcastSearchSection(
-                        store: searchStore,
-                        focusedField: focusedField,
-                        activePodcastIDs: activePodcastIDs,
-                        subscribingFeedURLString: subscribingFeedURLString,
-                        onSubscribe: onSubscribeSearchResult
-                    )
+                    Text(instructionText)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
                 }
 
-                if subscriptions.isEmpty {
-                    OnboardingSamplePodcastsSection(
-                        activePodcastIDs: activePodcastIDs,
-                        subscribingFeedURLString: subscribingFeedURLString,
-                        onSubscribe: onSubscribeSample
-                    )
-                } else {
-                    OnboardingSubscribedPodcastsSection(subscriptions: subscriptions)
+                GlassEffectContainer(spacing: 18) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        AddPodcastModePicker(selectedMode: $selectedMode)
+                            .padding(4)
+                            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+
+                        switch selectedMode {
+                        case .rss:
+                            OnboardingRSSFeedSection(
+                                feedURLString: $feedURLString,
+                                focusedField: focusedField,
+                                isSubscribing: isSubscribing,
+                                canSubscribe: canSubscribeToRawFeed,
+                                onPaste: onPaste,
+                                onSubscribe: onSubscribeRawFeed
+                            )
+                        case .search:
+                            OnboardingPodcastSearchSection(
+                                store: searchStore,
+                                focusedField: focusedField,
+                                activePodcastIDs: activePodcastIDs,
+                                subscribingFeedURLString: subscribingFeedURLString,
+                                onSubscribe: onSubscribeSearchResult
+                            )
+                        }
+
+                        if subscriptions.isEmpty {
+                            OnboardingSamplePodcastsSection(
+                                activePodcastIDs: activePodcastIDs,
+                                subscribingFeedURLString: subscribingFeedURLString,
+                                onSubscribe: onSubscribeSample
+                            )
+                        } else {
+                            OnboardingSubscribedPodcastsSection(subscriptions: subscriptions)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 if let clipboardErrorMessage {
@@ -79,8 +82,9 @@ struct OnboardingPodcastSetupPage: View {
                         .foregroundStyle(.red)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.top, 18)
             .padding(.bottom, 24)
         }
         .scrollDismissesKeyboard(.interactively)

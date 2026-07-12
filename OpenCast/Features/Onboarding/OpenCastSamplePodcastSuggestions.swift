@@ -12,12 +12,12 @@ enum OpenCastSamplePodcastSuggestions {
             collectionViewURL: URL(string: "https://www.thisamericanlife.org")
         ),
         DirectoryPodcastResult(
-            id: 203_970_211,
-            title: "LibriVox Community Podcast",
-            artistName: "LibriVox",
-            feedURL: URL(string: OpenCastConstants.libriVoxCommunityFeedURL),
-            artworkURL: URL(string: "https://is1-ssl.mzstatic.com/image/thumb/Podcasts2/v4/64/bd/65/64bd652c-180e-8687-77d6-bacec4854cf4/mza_7042823672686999515.jpg/600x600bb.jpg"),
-            collectionViewURL: URL(string: "https://wiki.librivox.org/index.php/Librivox_Community_Podcast")
+            id: 1_853_007_888,
+            title: "The Rest Is Science",
+            artistName: "Goalhanger",
+            feedURL: URL(string: OpenCastConstants.restIsScienceFeedURL),
+            artworkURL: URL(string: "https://is1-ssl.mzstatic.com/image/thumb/Podcasts211/v4/10/e6/4d/10e64d1a-6747-2500-6add-ca04616d5686/mza_1900430593839428227.jpg/600x600bb.jpg"),
+            collectionViewURL: URL(string: "https://podcasts.apple.com/us/podcast/the-rest-is-science/id1853007888?uo=4")
         )
     ]
 }

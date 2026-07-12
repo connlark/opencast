@@ -11,6 +11,8 @@ typealias VoiceBoostAudioTapFactory = (
 
 @Observable
 public final class AVFoundationPlaybackController: PlaybackController {
+    private static let autoSkipSettleTolerance: TimeInterval = 0.05
+
     public private(set) var snapshot = PlaybackSnapshot()
     public private(set) var currentEpisode: Episode?
     public private(set) var state: PlaybackState = .idle
@@ -20,6 +22,8 @@ public final class AVFoundationPlaybackController: PlaybackController {
     public private(set) var progressBoundaryID = 0
     public private(set) var rate: Float = 1
     public private(set) var sleepTimerEndsAt: Date?
+    public private(set) var skipZones: [PlaybackSkipZone] = []
+    public private(set) var lastAutoSkipEvent: PlaybackAutoSkipEvent?
     public private(set) var skipBackwardInterval: TimeInterval = PlaybackSkipInterval.backward
     public private(set) var skipForwardInterval: TimeInterval = PlaybackSkipInterval.forward
     public private(set) var playbackDiagnosticsText = ""
@@ -55,7 +59,10 @@ public final class AVFoundationPlaybackController: PlaybackController {
     @ObservationIgnored private var shouldResumeAfterInterruption = false
     @ObservationIgnored private var sleepTimerTask: Task<Void, Never>?
     @ObservationIgnored private var playbackPositionProtection = PlaybackPositionProtection()
+    @ObservationIgnored private var playbackAdSkipPolicy = PlaybackAdSkipPolicy()
     @ObservationIgnored private var playbackFailureRecoveryPolicy = PlaybackFailureRecoveryPolicy()
+    @ObservationIgnored private var autoSkipEventSequence = 0
+    @ObservationIgnored private var pendingAutoSkipTarget: TimeInterval?
     @ObservationIgnored private var isPlaybackDiagnosticsEnabled = false
     @ObservationIgnored private var playbackDiagnosticsEvents: [String] = []
 
@@ -131,6 +138,10 @@ public final class AVFoundationPlaybackController: PlaybackController {
         voiceBoostTrackLoadTask = nil
         isPlaybackRequested = false
         playbackFailureRecoveryPolicy.reset()
+        playbackAdSkipPolicy.setZones([])
+        autoSkipEventSequence = 0
+        lastAutoSkipEvent = nil
+        pendingAutoSkipTarget = nil
 
         let episodeDuration = finitePositive(episode.duration)
         let initialPosition = clampPlaybackPosition(startPosition, to: episodeDuration)
@@ -153,6 +164,13 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
 
         snapshot.state = .paused
+        if snapshot.position == 0 {
+            evaluateAutoSkip(
+                previousPosition: -Double.ulpOfOne,
+                position: 0,
+                cause: .playStart
+            )
+        }
         recordDiagnosticsEvent("loaded episode start=\(diagnosticsTime(snapshot.position)) url=\(audioURL.absoluteString)")
         publishPlaybackState()
     }
@@ -187,6 +205,40 @@ public final class AVFoundationPlaybackController: PlaybackController {
         skipBackwardInterval = backward
         skipForwardInterval = forward
         remoteCommandController.setSkipIntervals(backward: backward, forward: forward)
+    }
+
+    public func setSkipZones(_ zones: [PlaybackSkipZone]) {
+        playbackAdSkipPolicy.setZones(zones)
+        snapshot.skipZones = playbackAdSkipPolicy.zones
+        syncObservableState()
+
+        guard snapshot.currentEpisode != nil else {
+            return
+        }
+
+        let cause: PlaybackAdSkipPolicy.EvaluationCause = if snapshot.position == 0 {
+            .playStart
+        } else {
+            .seekLanding(.restore)
+        }
+        evaluateAutoSkip(
+            previousPosition: snapshot.position == 0 ? -Double.ulpOfOne : nil,
+            position: snapshot.position,
+            cause: cause
+        )
+    }
+
+    public func setAutoSkipEnabled(_ isEnabled: Bool) {
+        playbackAdSkipPolicy.setEnabled(isEnabled)
+        guard isEnabled, snapshot.currentEpisode != nil else {
+            return
+        }
+
+        evaluateAutoSkip(
+            previousPosition: nil,
+            position: snapshot.position,
+            cause: .seekLanding(.restore)
+        )
     }
 
     public func setPlaybackDiagnosticsEnabled(_ isEnabled: Bool) {
@@ -261,6 +313,10 @@ public final class AVFoundationPlaybackController: PlaybackController {
         player.replaceCurrentItem(with: nil)
         currentVoiceBoostTap = nil
         playbackPositionProtection.clear()
+        playbackAdSkipPolicy.setZones([])
+        autoSkipEventSequence = 0
+        lastAutoSkipEvent = nil
+        pendingAutoSkipTarget = nil
         recordDiagnosticsEvent("unloaded playback")
         replaceSnapshot(PlaybackSnapshot(rate: snapshot.rate, progressBoundaryID: snapshot.progressBoundaryID))
         nowPlayingPublisher.clear()
@@ -283,21 +339,25 @@ public final class AVFoundationPlaybackController: PlaybackController {
     }
 
     public func seek(to position: TimeInterval) {
+        seek(to: position, intent: .scrub)
+    }
+
+    public func seek(to position: TimeInterval, intent: PlaybackSeekIntent) {
         guard snapshot.currentEpisode != nil, position.isFinite else {
             return
         }
 
         let clamped = clampedPosition(position)
         currentVoiceBoostTap?.reset()
-        seekPlayer(to: clamped)
+        seekPlayer(to: clamped, mode: .userInitiated(intent))
         snapshot.position = clamped
         markProgressBoundary()
-        recordDiagnosticsEvent("seek requested position=\(diagnosticsTime(clamped))")
+        recordDiagnosticsEvent("seek requested position=\(diagnosticsTime(clamped)) intent=\(intent)")
         publishPlaybackState()
     }
 
     public func skip(by interval: TimeInterval) {
-        seek(to: snapshot.position + interval)
+        seek(to: snapshot.position + interval, intent: .skipButton)
     }
 
     public func setRate(_ rate: Float) {
@@ -347,6 +407,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
                     return
                 }
 
+                let previousPosition = snapshot.position
                 let durationChanged = updateDuration(from: player.currentItem?.duration)
                 let newPosition = clampPlaybackPosition(time.seconds, to: resolvedDuration())
                 guard shouldAcceptObservedPosition(newPosition) else {
@@ -359,6 +420,14 @@ public final class AVFoundationPlaybackController: PlaybackController {
                 let positionChanged = snapshot.position != newPosition
                 if positionChanged {
                     snapshot.position = newPosition
+                }
+
+                if evaluateAutoSkip(
+                    previousPosition: previousPosition,
+                    position: newPosition,
+                    cause: .acceptedTick
+                ) {
+                    return
                 }
 
                 guard durationChanged || positionChanged else {
@@ -400,7 +469,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
                 self?.skipBackward()
             },
             seek: { [weak self] position in
-                self?.seek(to: position)
+                self?.seek(to: position, intent: .scrub)
             }
         ))
     }
@@ -1042,22 +1111,45 @@ public final class AVFoundationPlaybackController: PlaybackController {
     }
 
     private enum SeekMode {
-        case userInitiated
+        case userInitiated(PlaybackSeekIntent)
         case restoredPosition
+        case autoSkip
+
+        var intent: PlaybackSeekIntent {
+            switch self {
+            case .userInitiated(let intent):
+                intent
+            case .restoredPosition:
+                .restore
+            case .autoSkip:
+                .autoSkip
+            }
+        }
     }
 
-    private func seekPlayer(to position: TimeInterval, mode: SeekMode = .userInitiated) {
+    private func seekPlayer(to position: TimeInterval, mode: SeekMode = .userInitiated(.scrub)) {
         let clamped = clampedPosition(position)
+        switch mode {
+        case .autoSkip:
+            pendingAutoSkipTarget = clamped
+        case .userInitiated, .restoredPosition:
+            pendingAutoSkipTarget = nil
+        }
         let protectedSeekGeneration = playbackPositionProtection.startSeek(to: clamped)
         let time = CMTime(seconds: clamped, preferredTimescale: 600)
         let completion: @Sendable (Bool) -> Void = { [weak self] finished in
             Task { @MainActor [weak self] in
-                self?.completeProtectedSeek(generation: protectedSeekGeneration, finished: finished)
+                self?.completeProtectedSeek(
+                    generation: protectedSeekGeneration,
+                    finished: finished,
+                    position: clamped,
+                    intent: mode.intent
+                )
             }
         }
 
         switch mode {
-        case .userInitiated:
+        case .userInitiated, .autoSkip:
             player.seek(to: time, completionHandler: completion)
         case .restoredPosition:
             player.seek(
@@ -1069,18 +1161,76 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
     }
 
-    private func completeProtectedSeek(generation: Int?, finished: Bool) {
+    private func completeProtectedSeek(
+        generation: Int?,
+        finished: Bool,
+        position: TimeInterval,
+        intent: PlaybackSeekIntent
+    ) {
         guard let generation else {
             return
         }
 
         playbackPositionProtection.completeSeek(generation: generation, finished: finished)
+        if finished {
+            evaluateAutoSkip(
+                previousPosition: nil,
+                position: position,
+                cause: .seekLanding(intent)
+            )
+        }
         refreshPlaybackDiagnosticsText()
+    }
+
+    @discardableResult
+    private func evaluateAutoSkip(
+        previousPosition: TimeInterval?,
+        position: TimeInterval,
+        cause: PlaybackAdSkipPolicy.EvaluationCause
+    ) -> Bool {
+        guard let command = playbackAdSkipPolicy.evaluate(
+            previousPosition: previousPosition,
+            position: position,
+            duration: resolvedDuration(),
+            cause: cause
+        ) else {
+            return false
+        }
+
+        performAutoSkip(command, from: position)
+        return true
+    }
+
+    private func performAutoSkip(_ command: PlaybackAdSkipPolicy.Command, from position: TimeInterval) {
+        guard snapshot.currentEpisode != nil else {
+            return
+        }
+
+        switch command {
+        case .skip(let target, let zoneID):
+            currentVoiceBoostTap?.reset()
+            autoSkipEventSequence += 1
+            lastAutoSkipEvent = PlaybackAutoSkipEvent(zoneID: zoneID, sequence: autoSkipEventSequence)
+            seekPlayer(to: target, mode: .autoSkip)
+            snapshot.position = target
+            markProgressBoundary()
+            recordDiagnosticsEvent(
+                "auto-skip zone=\(zoneID) from=\(diagnosticsTime(position)) to=\(diagnosticsTime(target))"
+            )
+            publishPlaybackState()
+        }
     }
 
     private func shouldAcceptObservedPosition(_ position: TimeInterval) -> Bool {
         if case .failed = snapshot.state {
             return false
+        }
+
+        if let pendingAutoSkipTarget {
+            guard position + Self.autoSkipSettleTolerance >= pendingAutoSkipTarget else {
+                return false
+            }
+            self.pendingAutoSkipTarget = nil
         }
 
         return playbackPositionProtection.acceptsObservedPosition(position)
@@ -1130,6 +1280,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         setIfChanged(\.progressBoundaryID, to: snapshot.progressBoundaryID)
         setIfChanged(\.rate, to: snapshot.rate)
         setIfChanged(\.sleepTimerEndsAt, to: snapshot.sleepTimerEndsAt)
+        setIfChanged(\.skipZones, to: snapshot.skipZones)
         refreshPlaybackDiagnosticsText()
     }
 

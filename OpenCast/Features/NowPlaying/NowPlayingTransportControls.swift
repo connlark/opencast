@@ -49,6 +49,7 @@ struct NowPlayingTransportControls: View {
                             .contentTransition(.symbolEffect(.replace))
                             .frame(width: resolvedPlayIconSize, height: resolvedPlayIconSize)
                             .offset(x: showsPauseButton ? 0 : playIconOpticalOffset)
+                            .animation(.easeOut(duration: 0.2), value: showsPauseButton)
                     }
                     .labelStyle(.iconOnly)
                     .frame(width: resolvedPlayButtonSize, height: resolvedPlayButtonSize)

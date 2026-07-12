@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct NowPlayingUtilityControls: View {
+    @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let rate: Float
-    let sleepTimerText: String
     let onShowSpeed: () -> Void
     let onShowSleepTimer: () -> Void
 
@@ -47,5 +47,22 @@ struct NowPlayingUtilityControls: View {
         )
         .accessibilityLabel("Sleep Timer")
         .accessibilityValue(sleepTimerText)
+    }
+
+    private var sleepTimerText: String {
+        guard let endsAt = appModel.playback.sleepTimerEndsAt else {
+            return "Off"
+        }
+
+        // The countdown derives from wall-clock; this deliberate read of the
+        // 1 Hz position is what re-evaluates just this control each second
+        // while a timer is active.
+        _ = appModel.playback.position
+        let remaining = endsAt.timeIntervalSinceNow
+        if remaining <= 0 {
+            return "Off"
+        }
+
+        return "-\(remaining.formattedPlaybackDuration)"
     }
 }

@@ -5,7 +5,7 @@ nonisolated struct NotificationBackendConfiguration: Sendable {
     let apnsEnvironment: String
     let keychainService: String
 
-    static let current: Self = {
+    nonisolated static let current: Self = {
         #if INTERNAL_NOTIFICATIONS_DIAGNOSTICS
         prodStaging
         #elseif DEBUG
@@ -15,19 +15,19 @@ nonisolated struct NotificationBackendConfiguration: Sendable {
         #endif
     }()
 
-    private static let development = Self(
+    nonisolated private static let development = Self(
         workerBaseURL: URL(string: "https://notifications.example.com/development")!,
         apnsEnvironment: "development",
         keychainService: "com.connor.opencast.notification-security.development"
     )
 
-    private static let prodStaging = Self(
+    nonisolated private static let prodStaging = Self(
         workerBaseURL: URL(string: "https://notifications.example.com/prod-staging")!,
         apnsEnvironment: "production",
         keychainService: "com.connor.opencast.notification-security.prod-staging"
     )
 
-    private static let production = Self(
+    nonisolated private static let production = Self(
         workerBaseURL: URL(string: "https://notifications.example.com")!,
         apnsEnvironment: "production",
         keychainService: "com.connor.opencast.notification-security.production"

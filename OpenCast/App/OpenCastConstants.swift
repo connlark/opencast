@@ -2,7 +2,7 @@ import Foundation
 
 enum OpenCastConstants {
     static let thisAmericanLifeFeedURL = "https://www.thisamericanlife.org/podcast/rss.xml"
-    static let libriVoxCommunityFeedURL = "https://feeds.feedburner.com/LibrivoxCommunityPodcast"
+    static let restIsScienceFeedURL = "https://feeds.megaphone.fm/GLT6907573392"
 
     static var addPodcastInitialFeedURL: String {
         let environment = ProcessInfo.processInfo.environment

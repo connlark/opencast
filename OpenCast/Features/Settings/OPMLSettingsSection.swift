@@ -44,8 +44,6 @@ struct OPMLSettingsSection: View {
             }
         } header: {
             Text("Import & Export")
-        } footer: {
-            Text(OPMLImportCopy.subscriptionsOnlyFooter)
         }
         .fileImporter(
             isPresented: $importFlow.isShowingImporter,

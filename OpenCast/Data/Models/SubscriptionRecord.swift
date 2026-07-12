@@ -11,6 +11,7 @@ final class SubscriptionRecord {
     var lastRefreshAt: Date?
     var isArchived: Bool = false
     var isVoiceBoostEnabled: Bool = true
+    var isAdAutoDetectEnabled: Bool = false
 
     init(
         feedURL: String,
@@ -20,7 +21,8 @@ final class SubscriptionRecord {
         subscribedAt: Date = Date(),
         lastRefreshAt: Date? = nil,
         isArchived: Bool = false,
-        isVoiceBoostEnabled: Bool = true
+        isVoiceBoostEnabled: Bool = true,
+        isAdAutoDetectEnabled: Bool = false
     ) {
         self.feedURL = feedURL
         self.title = title
@@ -30,5 +32,6 @@ final class SubscriptionRecord {
         self.lastRefreshAt = lastRefreshAt
         self.isArchived = isArchived
         self.isVoiceBoostEnabled = isVoiceBoostEnabled
+        self.isAdAutoDetectEnabled = isAdAutoDetectEnabled
     }
 }

@@ -695,17 +695,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "opencast-notifications-worker"
+name = "opencast-app-attest-core"
 version = "0.1.0"
 dependencies = [
  "base64",
  "byteorder",
- "futures-util",
  "getrandom",
  "hex",
  "minicbor",
  "p256",
  "p384",
+ "sha2",
+ "x509-parser",
+]
+
+[[package]]
+name = "opencast-notifications-worker"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "futures-util",
+ "hex",
+ "minicbor",
+ "opencast-app-attest-core",
  "quick-xml",
  "rusqlite",
  "serde",
@@ -714,7 +726,6 @@ dependencies = [
  "url",
  "worker",
  "worker-macros",
- "x509-parser",
 ]
 
 [[package]]

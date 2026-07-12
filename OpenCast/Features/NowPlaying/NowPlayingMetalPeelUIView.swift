@@ -10,6 +10,8 @@ final class NowPlayingMetalPeelUIView: UIView {
     private var lastFallbackReportedProgress: CGFloat?
     private var lastFallbackProgress: CGFloat = 0
     private var rendererArtworkReady = false
+    private var motionGate = NowPlayingPeelMotionGate()
+    private var wasCardDismissDragActive = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -36,6 +38,7 @@ final class NowPlayingMetalPeelUIView: UIView {
         progress: CGFloat,
         touchY: CGFloat,
         isInteracting: Bool,
+        isCardDismissDragActive: Bool,
         settleTarget: CGFloat,
         settleVelocity: CGFloat,
         settleRequestID: Int,
@@ -46,33 +49,64 @@ final class NowPlayingMetalPeelUIView: UIView {
         renderer?.onProgressChanged = onProgressChanged
         renderer?.setReduceMotion(reduceMotion)
 
+        let cardDismissDragEnded = wasCardDismissDragActive && !isCardDismissDragActive
+        wasCardDismissDragActive = isCardDismissDragActive
+
         if reduceMotion {
-            renderer?.stopSettling()
-            renderer?.setInteractiveProgress(progress, touchY: touchY)
-            updateFallbackImage(progress: progress)
-            if renderer == nil {
-                reportFallbackProgress(progress, onProgressChanged: onProgressChanged)
+            // Under Reduce Motion, card-dismiss dragging should not keep ambient Metal motion alive.
+            guard motionGate.shouldApply(
+                progress: progress,
+                touchY: touchY,
+                reduceMotion: reduceMotion,
+                isPeelDragActive: isInteracting,
+                isCardDismissDragActive: false
+            ) else {
+                return
             }
+
+            applyInteractiveFrame(progress: progress, touchY: touchY, onProgressChanged: onProgressChanged)
             return
         }
 
         if settleRequestID != lastSettleRequestID {
             lastSettleRequestID = settleRequestID
-            renderer?.settle(to: settleTarget, initialVelocity: settleVelocity, touchY: touchY)
-            updateFallbackImage(progress: settleTarget)
-            if renderer == nil {
-                reportFallbackProgress(settleTarget, onProgressChanged: onProgressChanged)
-            }
+            applySettle(
+                to: settleTarget,
+                velocity: settleVelocity,
+                touchY: touchY,
+                reduceMotion: reduceMotion,
+                onProgressChanged: onProgressChanged
+            )
             return
         }
 
-        if isInteracting || renderer?.isSettling != true {
-            renderer?.setInteractiveProgress(progress, touchY: touchY)
-            updateFallbackImage(progress: progress)
-            if renderer == nil {
-                reportFallbackProgress(progress, onProgressChanged: onProgressChanged)
-            }
+        // An in-flight settle gets to recanonicalize the curl before dismiss-breeze updates resume.
+        if !isInteracting && renderer?.isSettling == true {
+            return
         }
+
+        if cardDismissDragEnded && !isInteracting {
+            applySettle(
+                to: progress,
+                velocity: 0,
+                touchY: touchY,
+                reduceMotion: reduceMotion,
+                onProgressChanged: onProgressChanged
+            )
+            return
+        }
+
+        guard motionGate.shouldApply(
+            progress: progress,
+            touchY: touchY,
+            reduceMotion: reduceMotion,
+            isPeelDragActive: isInteracting,
+            isCardDismissDragActive: isCardDismissDragActive
+        ) else {
+            return
+        }
+
+        applyInteractiveFrame(progress: progress, touchY: touchY, onProgressChanged: onProgressChanged)
     }
 
     func stopRendering() {
@@ -147,6 +181,33 @@ final class NowPlayingMetalPeelUIView: UIView {
 
         rendererArtworkReady = isReady
         updateFallbackImage(progress: lastFallbackProgress)
+    }
+
+    private func applyInteractiveFrame(
+        progress: CGFloat,
+        touchY: CGFloat,
+        onProgressChanged: @escaping @MainActor (CGFloat) -> Void
+    ) {
+        renderer?.setInteractiveProgress(progress, touchY: touchY)
+        updateFallbackImage(progress: progress)
+        if renderer == nil {
+            reportFallbackProgress(progress, onProgressChanged: onProgressChanged)
+        }
+    }
+
+    private func applySettle(
+        to target: CGFloat,
+        velocity: CGFloat,
+        touchY: CGFloat,
+        reduceMotion: Bool,
+        onProgressChanged: @escaping @MainActor (CGFloat) -> Void
+    ) {
+        motionGate.recordSettle(target: target, touchY: touchY, reduceMotion: reduceMotion)
+        renderer?.settle(to: target, initialVelocity: velocity, touchY: touchY)
+        updateFallbackImage(progress: target)
+        if renderer == nil {
+            reportFallbackProgress(target, onProgressChanged: onProgressChanged)
+        }
     }
 
     private func reportFallbackProgress(

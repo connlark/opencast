@@ -36,7 +36,7 @@ struct OnboardingWelcomePage: View {
                     OnboardingPitchRow(
                         systemImage: "shippingbox",
                         title: "Tiny install",
-                        message: "Built to stay around 3 MB."
+                        message: "Built to stay around 10 MB."
                     )
                 }
             }

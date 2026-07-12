@@ -1,5 +1,5 @@
 import Foundation
 
-struct NotificationSecurityErrorResponse: Decodable {
+nonisolated struct NotificationSecurityErrorResponse: Decodable, Sendable {
     let error: String
 }

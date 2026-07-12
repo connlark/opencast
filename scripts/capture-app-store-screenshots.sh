@@ -8,8 +8,10 @@ timestamp="$(date +%Y%m%d-%H%M%S)"
 run_dir="${artifact_root}/${timestamp}"
 test_identifier="OpenCastUITests/AppStoreScreenshotUITests/testAppStoreScreenshotSet"
 
-iphone_destination="${IPHONE_DESTINATION:-platform=iOS Simulator,name=iPhone 17 Pro Max}"
-ipad_destination="${IPAD_DESTINATION:-platform=iOS Simulator,name=iPad Pro 13-inch (M4)}"
+# OS-pinned: bare names resolve ambiguously (and to iOS 27) once a newer
+# runtime is installed; this repo's lanes are iOS 26 only.
+iphone_destination="${IPHONE_DESTINATION:-platform=iOS Simulator,name=iPhone 17 Pro Max,OS=26.5}"
+ipad_destination="${IPAD_DESTINATION:-platform=iOS Simulator,name=iPad Pro 13-inch (M4),OS=26.5}"
 capture_ipad="${CAPTURE_IPAD:-1}"
 
 mkdir -p "${run_dir}"
@@ -23,9 +25,11 @@ run_capture() {
 
   rm -rf "${result_bundle}" "${attachments_dir}" "${screenshots_dir}"
 
+  # The shared OpenCast scheme skips the screenshot test (a scheme skip wins
+  # over -only-testing); the dedicated screenshot scheme runs it.
   xcodebuild \
     -project "${repo_dir}/opencast.xcodeproj" \
-    -scheme OpenCast \
+    -scheme OpenCastAppStoreScreenshots \
     -destination "${destination}" \
     -only-testing:"${test_identifier}" \
     -resultBundlePath "${result_bundle}" \

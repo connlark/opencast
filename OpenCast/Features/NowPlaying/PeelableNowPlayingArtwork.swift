@@ -10,10 +10,14 @@ struct PeelableNowPlayingArtwork: View {
     let size: CGFloat
     @Binding var voiceBoostEnabled: Bool
     let voiceBoostControlEnabled: Bool
+    let adFreePassPresentation: EpisodeAdFreePassPresentation
+    let onAdFreePassAction: () -> Void
+    let onAdFreePassBackgroundProbe: () -> Void
     @Binding var isPeelInteractionActive: Bool
     let prewarmsPeelRenderer: Bool
     let prewarmsPeelSettingsPanel: Bool
     let allowsPeelStart: Bool
+    let isCardDismissDragActive: Bool
 
     @State private var interactionState = NowPlayingPeelInteractionState.closed
     @State private var peelProgress: CGFloat = 0
@@ -36,7 +40,10 @@ struct PeelableNowPlayingArtwork: View {
                 NowPlayingPeelSettingsPanel(
                     revealProgress: peelProgress,
                     voiceBoostEnabled: $voiceBoostEnabled,
-                    voiceBoostControlEnabled: voiceBoostControlEnabled
+                    voiceBoostControlEnabled: voiceBoostControlEnabled,
+                    adFreePassPresentation: adFreePassPresentation,
+                    onAdFreePassAction: onAdFreePassAction,
+                    onAdFreePassBackgroundProbe: onAdFreePassBackgroundProbe
                 )
                     .frame(width: size, height: size)
                     .opacity(shouldRenderSettingsPanel ? panelOpacity : 0)
@@ -53,6 +60,7 @@ struct PeelableNowPlayingArtwork: View {
                         progress: peelProgress,
                         touchY: touchY,
                         isInteracting: isTrackingPeel,
+                        isCardDismissDragActive: isCardDismissDragActive,
                         settleTarget: settleTarget,
                         settleVelocity: settleVelocity,
                         settleRequestID: settleRequestID,

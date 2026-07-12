@@ -1,10 +1,11 @@
 import Foundation
 
-struct NotificationSecurityAPIClient {
+nonisolated struct NotificationSecurityAPIClient: Sendable {
     private static let registerPurpose = "register"
 
     let baseURL: URL
     let session: URLSession
+    let appAttestClient: AppAttestAPIClient
 
     init(
         baseURL: URL = NotificationBackendConfiguration.current.workerBaseURL,
@@ -12,6 +13,13 @@ struct NotificationSecurityAPIClient {
     ) {
         self.baseURL = baseURL
         self.session = session
+        self.appAttestClient = AppAttestAPIClient(
+            configuration: AppAttestClientConfiguration(
+                baseURL: baseURL,
+                keychainService: NotificationBackendConfiguration.current.keychainService
+            ),
+            transport: session
+        )
     }
 
     func requestChallenge(installID: String) async throws -> NotificationSecurityChallengeResponse {

@@ -1,0 +1,21 @@
+[package]
+name = "opencast-app-attest-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+byteorder = "1.5"
+getrandom = { version = "0.2", features = ["js"] }
+hex = "0.4"
+minicbor = "0.25"
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"] }
+p384 = { version = "0.13.1", default-features = false, features = ["ecdsa"] }
+sha2 = "0.10"
+x509-parser = "0.18"
+
+[profile.release]
+lto = true
+strip = "debuginfo"
+codegen-units = 1

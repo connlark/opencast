@@ -100,7 +100,8 @@ pub struct EpisodeNotification<'a> {
     pub episode_summary: Option<&'a str>,
     pub show_notes_html: Option<&'a str>,
     pub duration_seconds: Option<i64>,
-    pub artwork_url: Option<&'a str>,
+    pub podcast_artwork_url: Option<&'a str>,
+    pub episode_artwork_url: Option<&'a str>,
     pub feed_url: &'a str,
     pub episode_id: &'a str,
 }
@@ -180,7 +181,23 @@ pub fn episode_push_request(
         .duration_seconds
         .and_then(format_duration_for_notification);
     let body = notification_body(summary.as_deref());
-    let artwork_url = notification.artwork_url.and_then(normalized_custom_value);
+    let podcast_artwork_url = notification
+        .podcast_artwork_url
+        .and_then(normalized_custom_value);
+    let episode_artwork_url = notification
+        .episode_artwork_url
+        .and_then(normalized_custom_value);
+    let artwork_url = podcast_artwork_url
+        .clone()
+        .or_else(|| episode_artwork_url.clone());
+    let episode_artwork_url = match (episode_artwork_url, podcast_artwork_url.as_deref()) {
+        (Some(episode_artwork_url), Some(podcast_artwork_url))
+            if episode_artwork_url != podcast_artwork_url =>
+        {
+            Some(episode_artwork_url)
+        }
+        _ => None,
+    };
     let mut payload = EpisodePayload {
         aps: Aps {
             alert: Alert {
@@ -204,6 +221,7 @@ pub fn episode_push_request(
             episode_duration_seconds: notification.duration_seconds.filter(|value| *value > 0),
             episode_duration_text: duration_text,
             artwork_url,
+            episode_artwork_url,
         },
     };
 
@@ -225,6 +243,10 @@ pub fn episode_push_request(
     }
     if body.len() > MAX_APNS_PAYLOAD_BYTES {
         payload.aps.alert.body = "New episode available".to_string();
+        body = episode_payload_body(&payload)?;
+    }
+    if body.len() > MAX_APNS_PAYLOAD_BYTES {
+        payload.opencast.episode_artwork_url = None;
         body = episode_payload_body(&payload)?;
     }
     if body.len() > MAX_APNS_PAYLOAD_BYTES {
@@ -263,9 +285,18 @@ fn push_request(
 fn normalized_alert_text(value: Option<&str>, fallback: &'static str) -> String {
     let value = value.unwrap_or(fallback).trim();
     if value.is_empty() {
+        return fallback.to_string();
+    }
+    // Titles arrive as the parser's verbatim text, which preserves named
+    // entities it doesn't predefine (`&rsquo;`, `&mdash;`, `&nbsp;`, …). Unlike
+    // the summary, the title is not run through the HTML cleaner, so decode the
+    // entities here — otherwise raw entity codes ship in the alert title.
+    let decoded = decode_html_entities_until_stable(value);
+    let decoded = decoded.trim();
+    if decoded.is_empty() {
         fallback.to_string()
     } else {
-        truncated_chars(value, 180)
+        truncated_chars(decoded, 180)
     }
 }
 
@@ -634,6 +665,8 @@ struct EpisodeOpenCastPayload {
     episode_duration_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     artwork_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    episode_artwork_url: Option<String>,
 }
 
 #[cfg(test)]
@@ -754,7 +787,8 @@ mod tests {
                 episode_summary: Some("<p>Summary &amp; context.</p>"),
                 show_notes_html: None,
                 duration_seconds: Some(2_640),
-                artwork_url: Some("https://example.com/artwork.jpg"),
+                podcast_artwork_url: Some("https://example.com/show-artwork.jpg"),
+                episode_artwork_url: Some("https://example.com/episode-artwork.jpg"),
                 feed_url: "https://example.com/feed.xml",
                 episode_id: "episode-id",
             },
@@ -785,8 +819,121 @@ mod tests {
         assert_eq!(payload["opencast"]["episode_duration_text"], "44 MIN");
         assert_eq!(
             payload["opencast"]["artwork_url"],
-            "https://example.com/artwork.jpg"
+            "https://example.com/show-artwork.jpg"
         );
+        assert_eq!(
+            payload["opencast"]["episode_artwork_url"],
+            "https://example.com/episode-artwork.jpg"
+        );
+    }
+
+    #[test]
+    fn episode_push_request_preserves_http_artwork_url() {
+        let request = episode_push_request(
+            DEVICE_TOKEN,
+            "com.connor.opencast",
+            ApnsEnvironment::Development,
+            EpisodeNotification {
+                podcast_title: "Example Subscriber Show",
+                episode_title: "Example Subscriber Episode",
+                episode_summary: Some("Synthetic subscriber-feed notification fixture."),
+                show_notes_html: None,
+                duration_seconds: Some(3_309),
+                podcast_artwork_url: None,
+                episode_artwork_url: Some(
+                    "http://feeds.example.com/subscriber/artwork.png",
+                ),
+                feed_url: "http://feeds.example.com/subscriber/feed.xml",
+                episode_id: "example-subscriber-episode",
+            },
+        )
+        .expect("request should build");
+
+        let payload = json_payload(&request);
+        assert_eq!(
+            payload["opencast"]["artwork_url"],
+            "http://feeds.example.com/subscriber/artwork.png"
+        );
+        assert!(payload["opencast"].get("episode_artwork_url").is_none());
+    }
+
+    #[test]
+    fn episode_push_request_uses_tal_style_show_art_for_compact_and_episode_art_for_expanded() {
+        const FEED: &str = r#"<?xml version="1.0"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+<channel>
+<title>This American Life</title>
+<itunes:image href="https://assets.thisamericanlife.org/show-art.jpg"/>
+<item>
+<title>866: Very Nice</title>
+<guid>tal-866</guid>
+<pubDate>Fri, 19 Jun 2026 12:00:00 GMT</pubDate>
+<itunes:duration>59:12</itunes:duration>
+<itunes:image href="https://assets.thisamericanlife.org/episodes/866-art.jpg"/>
+<enclosure url="https://example.com/tal-866.mp3" type="audio/mpeg" length="1"/>
+<description>Stories from people trying very hard to be nice.</description>
+</item>
+</channel>
+</rss>"#;
+        let feed = crate::rss::parse_rss(FEED, "https://feeds.thisamericanlife.org/talpodcast")
+            .expect("TAL-style feed should parse");
+        let episode = &feed.episodes[0];
+
+        let request = episode_push_request(
+            DEVICE_TOKEN,
+            "com.connor.opencast",
+            ApnsEnvironment::Development,
+            EpisodeNotification {
+                podcast_title: &feed.title,
+                episode_title: &episode.title,
+                episode_summary: episode.summary.as_deref(),
+                show_notes_html: episode.show_notes_html.as_deref(),
+                duration_seconds: episode.duration_seconds,
+                podcast_artwork_url: feed.artwork_url.as_deref(),
+                episode_artwork_url: episode.artwork_url.as_deref(),
+                feed_url: "https://feeds.thisamericanlife.org/talpodcast",
+                episode_id: &episode.id,
+            },
+        )
+        .expect("request should build");
+
+        let payload = json_payload(&request);
+        assert_eq!(
+            payload["opencast"]["artwork_url"],
+            "https://assets.thisamericanlife.org/show-art.jpg"
+        );
+        assert_eq!(
+            payload["opencast"]["episode_artwork_url"],
+            "https://assets.thisamericanlife.org/episodes/866-art.jpg"
+        );
+    }
+
+    #[test]
+    fn episode_push_request_omits_expanded_artwork_when_it_matches_show_art() {
+        let request = episode_push_request(
+            DEVICE_TOKEN,
+            "com.connor.opencast",
+            ApnsEnvironment::Development,
+            EpisodeNotification {
+                podcast_title: "Podcast Title",
+                episode_title: "Episode Title",
+                episode_summary: Some("A useful summary."),
+                show_notes_html: None,
+                duration_seconds: None,
+                podcast_artwork_url: Some("https://example.com/shared-art.jpg"),
+                episode_artwork_url: Some("https://example.com/shared-art.jpg"),
+                feed_url: "https://example.com/feed.xml",
+                episode_id: "episode-id",
+            },
+        )
+        .expect("request should build");
+
+        let payload = json_payload(&request);
+        assert_eq!(
+            payload["opencast"]["artwork_url"],
+            "https://example.com/shared-art.jpg"
+        );
+        assert!(payload["opencast"].get("episode_artwork_url").is_none());
     }
 
     #[test]
@@ -801,7 +948,8 @@ mod tests {
                 episode_summary: Some(" Episode Title "),
                 show_notes_html: Some("<article><p>Full notes for notification.</p></article>"),
                 duration_seconds: None,
-                artwork_url: None,
+                podcast_artwork_url: None,
+                episode_artwork_url: None,
                 feed_url: "https://example.com/feed.xml",
                 episode_id: "episode-id",
             },
@@ -831,7 +979,8 @@ mod tests {
                 episode_summary: Some("We spend the hour looking at deep time and future fossils."),
                 show_notes_html: None,
                 duration_seconds: Some(3_960),
-                artwork_url: None,
+                podcast_artwork_url: None,
+                episode_artwork_url: None,
                 feed_url: "https://example.com/feed.xml",
                 episode_id: "episode-id",
             },
@@ -882,7 +1031,8 @@ mod tests {
                 episode_summary: Some("&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;"),
                 show_notes_html: None,
                 duration_seconds: None,
-                artwork_url: None,
+                podcast_artwork_url: None,
+                episode_artwork_url: None,
                 feed_url: "https://example.com/feed.xml",
                 episode_id: "episode-id",
             },
@@ -900,6 +1050,92 @@ mod tests {
         assert!(!alert_body.contains('>'));
         assert!(!summary.contains('<'));
         assert!(!summary.contains('>'));
+    }
+
+    #[test]
+    fn synthetic_episode_summary_payload_is_clean_prose() {
+        // End-to-end: escaped-HTML RSS -> parse_rss (GeneralRef reassembly) ->
+        // episode_push_request (cleaner) -> the delivered summary is prose. This
+        // drives the parser so it fails if the GeneralRef handling regresses,
+        // not just the cleaner.
+        const FEED: &str = r#"<?xml version="1.0"?><rss version="2.0"><channel>
+<title>Example Signal</title><item><title>Episode 42: Market Signals</title>
+<guid>example-signal-42</guid>
+<enclosure url="https://example.com/556.mp3" type="audio/mpeg" length="1"/>
+<description>&lt;html&gt;&lt;p&gt;A host returns for a conversation with two guests about their new book &lt;strong&gt;&lt;a href="https://example.com" target="_blank"&gt;Market Signals&lt;/a&gt;&lt;/strong&gt;. Plus we talk orbital systems, long-term forecasts, and more.&lt;/p&gt;&lt;/html&gt;</description>
+</item></channel></rss>"#;
+        let feed = crate::rss::parse_rss(FEED, "https://feeds.example.com/html-description.xml")
+            .expect("feed should parse");
+        let episode = &feed.episodes[0];
+
+        let request = episode_push_request(
+            DEVICE_TOKEN,
+            "com.connor.opencast",
+            ApnsEnvironment::Development,
+            EpisodeNotification {
+                podcast_title: "Example Signal",
+                episode_title: &episode.title,
+                episode_summary: episode.summary.as_deref(),
+                show_notes_html: episode.show_notes_html.as_deref(),
+                duration_seconds: episode.duration_seconds,
+                podcast_artwork_url: None,
+                episode_artwork_url: episode.artwork_url.as_deref(),
+                feed_url: "https://feeds.example.com/html-description.xml",
+                episode_id: &episode.id,
+            },
+        )
+        .expect("request builds");
+
+        let summary = json_payload(&request)["opencast"]["episode_summary"]
+            .as_str()
+            .expect("summary should be a string")
+            .to_string();
+        assert!(
+            summary.starts_with("A host returns for a conversation"),
+            "got: {summary:?}"
+        );
+        assert!(summary.contains("Market Signals"));
+        for debris in ["htmlp", "stronga", "/pp", "href="] {
+            assert!(
+                !summary.contains(debris),
+                "summary contains {debris:?}: {summary}"
+            );
+        }
+    }
+
+    #[test]
+    fn named_entity_title_decodes_in_alert_text() {
+        // Titles preserve named entities verbatim from the parser; the alert path
+        // must decode them so the user never sees raw "&rsquo;"/"&mdash;"/"&nbsp;".
+        let request = episode_push_request(
+            DEVICE_TOKEN,
+            "com.connor.opencast",
+            ApnsEnvironment::Development,
+            EpisodeNotification {
+                podcast_title: "Ben &amp; Jerry&rsquo;s Show",
+                episode_title: "It&rsquo;s a Trap &mdash; Part&nbsp;2",
+                episode_summary: Some("A genuinely distinct summary about the episode topic."),
+                show_notes_html: None,
+                duration_seconds: None,
+                podcast_artwork_url: None,
+                episode_artwork_url: None,
+                feed_url: "https://example.com/feed.xml",
+                episode_id: "ep-entity-title",
+            },
+        )
+        .expect("request builds");
+
+        let payload = json_payload(&request);
+        let podcast_title = payload["opencast"]["podcast_title"].as_str().unwrap();
+        let subtitle = payload["aps"]["alert"]["subtitle"].as_str().unwrap();
+        assert_eq!(podcast_title, "Ben & Jerry's Show");
+        assert_eq!(subtitle, "It's a Trap - Part 2");
+        for raw in ["&rsquo;", "&mdash;", "&nbsp;", "&amp;"] {
+            assert!(
+                !podcast_title.contains(raw) && !subtitle.contains(raw),
+                "raw entity {raw:?} leaked into alert text"
+            );
+        }
     }
 
     #[test]
@@ -1026,7 +1262,8 @@ mod tests {
                 episode_summary: Some(&episode_summary),
                 show_notes_html: None,
                 duration_seconds: Some(3_600),
-                artwork_url: Some(&artwork_url),
+                podcast_artwork_url: Some(&artwork_url),
+                episode_artwork_url: Some(&artwork_url),
                 feed_url: "https://example.com/feed.xml",
                 episode_id: "episode-id",
             },
@@ -1035,6 +1272,40 @@ mod tests {
 
         assert!(request.body.len() <= MAX_APNS_PAYLOAD_BYTES);
         assert!(std::str::from_utf8(request.body.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn episode_push_request_drops_expanded_artwork_before_compact_artwork_when_payload_is_tight() {
+        let long_title = "😀".repeat(180);
+        let compact_artwork_url = format!("https://example.com/show/{}", "a".repeat(480));
+        let expanded_artwork_url = format!("https://example.com/episode/{}", "b".repeat(477));
+        let feed_url = format!("https://example.com/feed/{}", "c".repeat(470));
+        let episode_id = "😀".repeat(80);
+        let request = episode_push_request(
+            DEVICE_TOKEN,
+            "com.connor.opencast",
+            ApnsEnvironment::Development,
+            EpisodeNotification {
+                podcast_title: &long_title,
+                episode_title: &long_title,
+                episode_summary: None,
+                show_notes_html: None,
+                duration_seconds: None,
+                podcast_artwork_url: Some(&compact_artwork_url),
+                episode_artwork_url: Some(&expanded_artwork_url),
+                feed_url: &feed_url,
+                episode_id: &episode_id,
+            },
+        )
+        .expect("request should fit after dropping expanded artwork");
+
+        let payload = json_payload(&request);
+        assert!(request.body.len() <= MAX_APNS_PAYLOAD_BYTES);
+        assert!(payload["opencast"].get("episode_artwork_url").is_none());
+        assert_eq!(
+            payload["opencast"]["artwork_url"],
+            truncated_utf8(&compact_artwork_url, MAX_CUSTOM_VALUE_BYTES)
+        );
     }
 
     #[test]
@@ -1052,7 +1323,8 @@ mod tests {
                 episode_summary: Some(&long_summary),
                 show_notes_html: None,
                 duration_seconds: Some(3_600),
-                artwork_url: Some(&long_url),
+                podcast_artwork_url: Some(&long_url),
+                episode_artwork_url: Some(&long_url),
                 feed_url: &long_url,
                 episode_id: "episode-id",
             },

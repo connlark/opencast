@@ -13,7 +13,16 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "OpenCastCore"
+            name: "OpenCastDateParsing",
+            exclude: [
+                "LICENSE-curl.txt",
+                "UPSTREAM.md"
+            ],
+            publicHeadersPath: "include"
+        ),
+        .target(
+            name: "OpenCastCore",
+            dependencies: ["OpenCastDateParsing"]
         ),
         .testTarget(
             name: "OpenCastCoreTests",

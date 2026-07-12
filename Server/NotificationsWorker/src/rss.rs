@@ -2,6 +2,8 @@ use crate::feed_identity;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
+mod xml_text;
+
 const MIN_RSS_YEAR: i32 = 1900;
 const MAX_RSS_YEAR: i32 = 9_999;
 const MAX_FEED_TITLE_CHARS: usize = 512;
@@ -68,6 +70,9 @@ struct ItemAccumulator {
 pub fn parse_rss(xml: &str, canonical_feed_url: &str) -> Result<ParsedFeed, RSSParseError> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
+    // A lone `&` in text (e.g. literal "Q&A") otherwise yields `IllFormed`,
+    // which the loop maps to `InvalidXML`, dropping the whole feed.
+    reader.config_mut().allow_dangling_amp = true;
 
     let mut channel = ChannelAccumulator::default();
     let mut current_item: Option<ItemAccumulator> = None;
@@ -96,15 +101,11 @@ pub fn parse_rss(xml: &str, canonical_feed_url: &str) -> Result<ParsedFeed, RSSP
                 let name = normalized_name(element.name().as_ref());
                 apply_start_element(&name, &element, &mut channel, &mut current_item, &reader);
             }
-            Ok(Event::Text(text)) => {
-                if let Ok(value) = text.decode() {
-                    text_buffer.push_str(&value);
-                }
-            }
-            Ok(Event::CData(text)) => {
-                if let Ok(value) = text.decode() {
-                    text_buffer.push_str(&value);
-                }
+            // quick-xml 0.38 splits text at entity references, surfacing `&lt;`,
+            // `&amp;`, `&#60;`, … as `GeneralRef`; route all text-bearing events
+            // through one decoder so escaped HTML is reassembled, not dropped.
+            Ok(event @ (Event::Text(_) | Event::CData(_) | Event::GeneralRef(_))) => {
+                xml_text::push_event_text(&mut text_buffer, &event);
             }
             Ok(Event::End(element)) => {
                 let name = normalized_name(element.name().as_ref());
@@ -569,6 +570,48 @@ mod tests {
             feed.episodes[0].audio_url.as_deref(),
             Some("https://example.com/audio/example-001.mp3")
         );
+    }
+
+    #[test]
+    fn parses_escaped_html_description_into_real_markup() {
+        const FEED: &str = r#"<?xml version="1.0"?><rss version="2.0"><channel>
+<title>Example Signal</title><item><title>Episode 42: Market Signals</title>
+<guid>example-signal-42</guid>
+<enclosure url="https://example.com/556.mp3" type="audio/mpeg" length="1"/>
+<description>&lt;html&gt;&lt;p&gt;A host returns for a conversation about &lt;strong&gt;&lt;a href="https://example.com"&gt;Market Signals&lt;/a&gt;&lt;/strong&gt;. AT&amp;T notes.&lt;/p&gt;&lt;/html&gt;</description>
+</item></channel></rss>"#;
+        let feed = parse_rss(FEED, "https://feeds.example.com/html-description.xml").unwrap();
+        let summary = feed.episodes[0].summary.as_deref().unwrap();
+        assert_eq!(
+            summary,
+            "<html><p>A host returns for a conversation about <strong><a href=\"https://example.com\">Market Signals</a></strong>. AT&T notes.</p></html>"
+        );
+        for debris in ["htmlp", "stronga", "/pp"] {
+            assert!(
+                !summary.contains(debris),
+                "summary still contains {debris:?}: {summary}"
+            );
+        }
+    }
+
+    #[test]
+    fn tolerates_bare_ampersand_instead_of_dropping_feed() {
+        // Without `allow_dangling_amp`, a lone `&` (common in titles and tracking
+        // URLs) makes quick-xml return IllFormed, which parse_rss maps to
+        // InvalidXML — dropping the entire feed. This guards that config line.
+        const FEED: &str = r#"<?xml version="1.0"?><rss version="2.0"><channel>
+<title>Bare Amp</title><item><title>Q&A and R&D</title>
+<guid>bare-amp-1</guid>
+<enclosure url="https://example.com/1.mp3" type="audio/mpeg" length="1"/>
+<description>Host &amp; co discuss R&D, see https://ex.com/?a=1&b=2</description>
+</item></channel></rss>"#;
+        let feed = parse_rss(FEED, "https://example.com/feed.xml")
+            .expect("a bare `&` must not drop the whole feed");
+        assert_eq!(feed.episodes.len(), 1);
+        assert_eq!(feed.episodes[0].title, "Q&A and R&D");
+        let summary = feed.episodes[0].summary.as_deref().unwrap();
+        assert!(summary.contains("R&D"), "got: {summary}");
+        assert!(summary.contains("?a=1&b=2"), "got: {summary}");
     }
 
     #[test]

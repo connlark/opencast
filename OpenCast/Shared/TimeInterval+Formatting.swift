@@ -1,7 +1,7 @@
 import Foundation
 
 extension TimeInterval {
-    var formattedPlaybackDuration: String {
+    nonisolated var formattedPlaybackDuration: String {
         guard isFinite else {
             return "0:00"
         }

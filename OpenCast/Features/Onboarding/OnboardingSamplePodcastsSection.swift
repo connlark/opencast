@@ -9,8 +9,8 @@ struct OnboardingSamplePodcastsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Sample Podcasts")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.headline)
+                .foregroundStyle(.primary)
 
             VStack(spacing: 0) {
                 ForEach(Array(OpenCastSamplePodcastSuggestions.all.enumerated()), id: \.element.id) { index, result in
@@ -29,7 +29,7 @@ struct OnboardingSamplePodcastsSection: View {
                 }
             }
             .padding(12)
-            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            .glassEffect(.regular, in: .rect(cornerRadius: 18))
         }
     }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-struct NotificationSecurityChallengeResponse: Decodable {
+nonisolated struct NotificationSecurityChallengeResponse: Decodable, Sendable {
     let challengeID: String
     let challenge: String
 

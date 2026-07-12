@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastTranscription
 import SwiftData
 import UIKit
 
@@ -9,11 +10,17 @@ enum OpenCastUITestSeedData {
     static let episodeTitle = "Deterministic UI Episode"
     static let completedEpisodeID = "ui-test-episode-completed"
     static let completedEpisodeTitle = "Completed UI Episode"
+    private static let liveAdAnalysisTranscriptPathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_TRANSCRIPT_PATH"
+    private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
 
     static func seed(
         in container: ModelContainer,
         includesCompletedDownload: Bool = false,
-        includesEpisodeProgress: Bool = false
+        includesFailedDownload: Bool = false,
+        includesEpisodeProgress: Bool = false,
+        includesCompletedTranscript: Bool = false,
+        includesCompletedAdAnalysis: Bool = false,
+        includesAdAnalysisSpanAtStart: Bool = false
     ) throws {
         let context = ModelContext(container)
         let publishedAt = Date(timeIntervalSince1970: 1_777_776_000)
@@ -146,7 +153,10 @@ enum OpenCastUITestSeedData {
             let sourceURL = URL(string: audioURL)!
             let relativePath = fileStore.relativePath(episodeID: episodeID, sourceAudioURL: sourceURL)
             let fileURL = fileStore.fileURL(relativePath: relativePath)
-            let data = Data("OpenCast UI test downloaded audio".utf8)
+            let completedAudioSourceURL = FileManager.default.fileExists(atPath: sourceURL.path)
+                ? sourceURL
+                : try writeDeterministicAudio()
+            let data = try Data(contentsOf: completedAudioSourceURL)
             try fileStore.prepareDownloadsDirectory()
             try data.write(to: fileURL, options: .atomic)
             context.insert(
@@ -164,7 +174,470 @@ enum OpenCastUITestSeedData {
             )
         }
 
+        if includesFailedDownload, !includesCompletedDownload {
+            // Seeding `.downloading` is useless here: `DownloadStore.reconcile`
+            // flips in-flight records to `.failed` on load anyway.
+            context.insert(
+                EpisodeDownloadRecord(
+                    episodeID: episodeID,
+                    podcastID: feedURL,
+                    sourceAudioURL: audioURL,
+                    state: .failed,
+                    bytesReceived: 24_000,
+                    bytesExpected: 96_000,
+                    errorMessage: "The network connection was lost.",
+                    createdAt: refreshedAt,
+                    updatedAt: refreshedAt
+                )
+            )
+        }
+
+        try seedLiveAdAnalysisIfRequested(
+            context: context,
+            audioURL: audioURL,
+            artworkURL: artworkURL,
+            artworkPreview: artworkPreview,
+            createdAt: refreshedAt
+        )
+
+        let shouldSeedStaleAdAnalysis = ProcessInfo.processInfo.environment["OPENCAST_SEED_STALE_AD_ANALYSIS"] == "1"
+        let shouldSeedOutdatedPolicyAdAnalysis = ProcessInfo.processInfo.environment[
+            "OPENCAST_SEED_OUTDATED_POLICY_AD_ANALYSIS"
+        ] == "1"
+        let shouldSeedLowConfidenceAdAnalysis = ProcessInfo.processInfo.environment[
+            "OPENCAST_SEED_LOW_CONFIDENCE_AD_ANALYSIS"
+        ] == "1"
+        let shouldSeedAdAnalysisSpanAtStart = includesAdAnalysisSpanAtStart
+            || ProcessInfo.processInfo.environment["OPENCAST_SEED_AD_ANALYSIS_SPAN_AT_START"] == "1"
+        let shouldSeedCompletedAdAnalysis = includesCompletedAdAnalysis
+            || ProcessInfo.processInfo.environment["OPENCAST_SEED_COMPLETED_AD_ANALYSIS"] == "1"
+            || shouldSeedStaleAdAnalysis
+            || shouldSeedOutdatedPolicyAdAnalysis
+            || shouldSeedLowConfidenceAdAnalysis
+            || shouldSeedAdAnalysisSpanAtStart
+        if includesCompletedTranscript
+            || shouldSeedCompletedAdAnalysis
+            || ProcessInfo.processInfo.environment["OPENCAST_SEED_COMPLETED_TRANSCRIPT"] == "1" {
+            let transcriptDocument = try seedCompletedTranscript(
+                episodeID: episodeID,
+                podcastID: feedURL,
+                sourceAudioURL: audioURL,
+                context: context,
+                createdAt: refreshedAt
+            )
+            if shouldSeedCompletedAdAnalysis {
+                try seedCompletedAdAnalysis(
+                    transcript: transcriptDocument,
+                    context: context,
+                    createdAt: refreshedAt,
+                    isStale: shouldSeedStaleAdAnalysis,
+                    startsAtBeginning: shouldSeedAdAnalysisSpanAtStart,
+                    hasOutdatedPolicy: shouldSeedOutdatedPolicyAdAnalysis,
+                    hasLowConfidenceSpan: shouldSeedLowConfidenceAdAnalysis
+                )
+            }
+        }
+
         try context.save()
+    }
+
+    private static func seedCompletedTranscript(
+        episodeID: String,
+        podcastID: String,
+        sourceAudioURL: String,
+        context: ModelContext,
+        createdAt: Date
+    ) throws -> EpisodeTranscriptDocument {
+        let modelSummary = OpenCastWhisperModelInstalledSummary(
+            modelIdentifier: OpenCastWhisperModel.largeV3.rawValue,
+            version: OpenCastWhisperModel.largeV3.defaultRemoteVersion,
+            totalByteCount: 629_482_970,
+            treeSHA256: "20a910bd8ea9f94a3e4438780f6e2f0aa3bbcd3fc1f8e99fccb2d64b68935603"
+        )
+        let fileStore = EpisodeTranscriptFileStore()
+        let sourceSHA = "ui-test-source-sha"
+        let fingerprint = fileStore.fingerprint(
+            sourceFileSHA256: sourceSHA,
+            modelIdentifier: modelSummary.modelIdentifier,
+            modelVersion: modelSummary.version,
+            modelTreeSHA256: modelSummary.treeSHA256
+        )
+        let relativePath = fileStore.relativePath(episodeID: episodeID, fingerprint: fingerprint)
+        let segments = [
+            OpenCastTranscriptSegment(
+                id: 0,
+                start: 0,
+                end: 4,
+                text: "Welcome to a deterministic transcript.",
+                avgLogProbability: -0.1,
+                noSpeechProbability: 0.01,
+                words: [
+                    OpenCastTranscriptWord(start: 0, end: 0.6, text: "Welcome"),
+                    OpenCastTranscriptWord(start: 0.7, end: 0.9, text: "to"),
+                    OpenCastTranscriptWord(start: 1.0, end: 1.1, text: "a"),
+                    OpenCastTranscriptWord(start: 1.2, end: 2.4, text: "deterministic"),
+                    OpenCastTranscriptWord(start: 2.6, end: 3.6, text: "transcript.")
+                ]
+            ),
+            OpenCastTranscriptSegment(
+                id: 1,
+                start: 4,
+                end: 9,
+                text: "This row is brought to you by Seed Sponsor.",
+                avgLogProbability: -0.1,
+                noSpeechProbability: 0.01
+            )
+        ]
+        let document = EpisodeTranscriptDocument(
+            schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
+            episodeID: episodeID,
+            podcastID: podcastID,
+            sourceAudioURL: sourceAudioURL,
+            sourceFileByteCount: 128,
+            sourceFileSHA256: sourceSHA,
+            modelIdentifier: modelSummary.modelIdentifier,
+            modelVersion: modelSummary.version,
+            modelTreeSHA256: modelSummary.treeSHA256,
+            languageCode: "en",
+            audioDuration: 9,
+            checkpoints: [],
+            segments: segments,
+            text: segments.map(\.text).joined(separator: " "),
+            timings: EpisodeTranscriptTimings(),
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        try fileStore.write(document, relativePath: relativePath)
+        context.insert(EpisodeTranscriptRecord(
+            episodeID: episodeID,
+            podcastID: podcastID,
+            sourceAudioURL: sourceAudioURL,
+            sourceFileByteCount: 128,
+            sourceFileSHA256: sourceSHA,
+            modelIdentifier: modelSummary.modelIdentifier,
+            modelVersion: modelSummary.version,
+            modelTreeSHA256: modelSummary.treeSHA256,
+            languageCode: "en",
+            state: .completed,
+            audioDuration: 9,
+            completedDuration: 9,
+            checkpointCount: 0,
+            transcriptRelativePath: relativePath,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        ))
+        return document
+    }
+
+    private static func seedCompletedAdAnalysis(
+        transcript: EpisodeTranscriptDocument,
+        context: ModelContext,
+        createdAt: Date,
+        isStale: Bool = false,
+        startsAtBeginning: Bool = false,
+        hasOutdatedPolicy: Bool = false,
+        hasLowConfidenceSpan: Bool = false
+    ) throws {
+        let fileStore = EpisodeAdAnalysisFileStore()
+        let currentFingerprint = fileStore.transcriptFingerprint(for: transcript)
+        let fingerprint = isStale ? "stale-\(currentFingerprint)" : currentFingerprint
+        let relativePath = fileStore.relativePath(
+            episodeID: transcript.episodeID,
+            transcriptFingerprint: fingerprint
+        )
+        // Seeds must carry the current policy or the staleness gate silently
+        // kills their zones; the outdated-policy variant exercises exactly that.
+        let policy = hasOutdatedPolicy ? "ads_only" : EpisodeAdAnalysisContract.expectedPolicy
+        // The low-confidence variant sits below the 0.8 auto-skip floor:
+        // rendered dimmed, never auto-skipped.
+        let confidence = hasLowConfidenceSpan ? 0.5 : 0.92
+        let span = startsAtBeginning
+            ? EpisodeAdAnalysisSpan(
+                id: 0,
+                kind: .hostReadAd,
+                label: "Opening Sponsor",
+                startSegmentID: 0,
+                endSegmentID: 0,
+                startTime: 0,
+                endTime: 4,
+                confidence: confidence,
+                evidenceQuote: "Welcome"
+            )
+            : EpisodeAdAnalysisSpan(
+                id: 0,
+                kind: .hostReadAd,
+                label: "Seed Sponsor",
+                startSegmentID: 1,
+                endSegmentID: 1,
+                startTime: 4,
+                endTime: 9,
+                confidence: confidence,
+                evidenceQuote: "brought to you"
+            )
+        // The second low-confidence span sits mid-timeline so the dimmed
+        // display-only rendering is legible in screenshots (the 4-9s zone
+        // hides behind the playhead thumb on a ~5-minute bar).
+        let spans = hasLowConfidenceSpan
+            ? [
+                span,
+                EpisodeAdAnalysisSpan(
+                    id: 1,
+                    kind: .insertedAd,
+                    label: "Possible promo",
+                    startSegmentID: 1,
+                    endSegmentID: 1,
+                    startTime: 100,
+                    endTime: 160,
+                    confidence: 0.55,
+                    evidenceQuote: "maybe a promo"
+                )
+            ]
+            : [span]
+        let document = EpisodeAdAnalysisDocument(
+            schemaVersion: 1,
+            episodeID: transcript.episodeID,
+            podcastID: transcript.podcastID,
+            requestID: "ui-test-ad-analysis",
+            transcriptFingerprint: fingerprint,
+            transcriptUpdatedAt: transcript.updatedAt,
+            transcriptSegmentCount: transcript.segments.count,
+            model: "gemini-3.5-flash",
+            policy: policy,
+            spans: spans,
+            warnings: [],
+            usage: EpisodeAdAnalysisUsage(
+                promptTokenCount: 42,
+                candidatesTokenCount: 12,
+                totalTokenCount: 54
+            ),
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        try fileStore.write(document, relativePath: relativePath)
+        context.insert(EpisodeAdAnalysisRecord(
+            episodeID: transcript.episodeID,
+            podcastID: transcript.podcastID,
+            transcriptFingerprint: fingerprint,
+            transcriptUpdatedAt: transcript.updatedAt,
+            transcriptSegmentCount: transcript.segments.count,
+            state: .completed,
+            analysisRelativePath: relativePath,
+            model: document.model,
+            policy: document.policy,
+            spanCount: document.spans.count,
+            warningCount: document.warnings.count,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        ))
+    }
+
+    private static func seedLiveAdAnalysisIfRequested(
+        context: ModelContext,
+        audioURL: String,
+        artworkURL: String?,
+        artworkPreview: ArtworkPreview?,
+        createdAt: Date
+    ) throws {
+        let environment = ProcessInfo.processInfo.environment
+        let transcriptPath = environment[liveAdAnalysisTranscriptPathEnvironmentKey]
+        let responsePath = environment[liveAdAnalysisResponsePathEnvironmentKey]
+        guard transcriptPath != nil || responsePath != nil else {
+            return
+        }
+        guard let transcriptPath, let responsePath else {
+            throw NSError(
+                domain: "OpenCastUITestSeedData",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Live ad-analysis UI seed requires transcript and response artifact paths."
+                ]
+            )
+        }
+
+        let transcript = try decodeLiveTranscript(from: URL(fileURLWithPath: transcriptPath))
+        let response = try decodeLiveAdAnalysisResponse(from: URL(fileURLWithPath: responsePath))
+        let podcastTitle = "The Audio Illusion"
+        let episodeTitle = "The Audio Illusion That Proves We Don't Experience Reality"
+        let publishedAt = Date(timeIntervalSince1970: 1_777_777_100)
+
+        context.insert(
+            SubscriptionRecord(
+                feedURL: transcript.podcastID,
+                title: podcastTitle,
+                author: "Goalhanger",
+                artworkURL: artworkURL,
+                lastRefreshAt: createdAt
+            )
+        )
+
+        let podcast = PodcastCacheRecord(
+            feedURL: transcript.podcastID,
+            title: podcastTitle,
+            author: "Goalhanger",
+            summary: "Live ad-analysis fixture seeded from saved Worker verification artifacts.",
+            websiteURL: "https://www.goalhanger.com",
+            artworkURL: artworkURL,
+            updatedAt: createdAt
+        )
+        if let artworkPreview {
+            podcast.storeArtworkPreviewIfChanged(artworkPreview)
+        }
+        context.insert(podcast)
+
+        let episode = EpisodeCacheRecord(
+            episodeID: transcript.episodeID,
+            podcastID: transcript.podcastID,
+            podcastTitle: podcastTitle,
+            title: episodeTitle,
+            summary: "Saved live transcript and Worker ad-analysis result.",
+            showNotesHTML: "<p>Saved live transcript and Worker ad-analysis result.</p>",
+            publishedAt: publishedAt,
+            duration: transcript.audioDuration,
+            audioURL: audioURL,
+            artworkURL: artworkURL,
+            guid: transcript.episodeID,
+            cachedAt: createdAt
+        )
+        if let artworkPreview {
+            episode.storeArtworkPreviewIfChanged(artworkPreview)
+        }
+        context.insert(episode)
+
+        let transcriptFileStore = EpisodeTranscriptFileStore()
+        let transcriptFingerprint = transcriptFileStore.fingerprint(
+            sourceFileSHA256: transcript.sourceFileSHA256,
+            modelIdentifier: transcript.modelIdentifier,
+            modelVersion: transcript.modelVersion,
+            modelTreeSHA256: transcript.modelTreeSHA256
+        )
+        let transcriptRelativePath = transcriptFileStore.relativePath(
+            episodeID: transcript.episodeID,
+            fingerprint: transcriptFingerprint
+        )
+        try transcriptFileStore.write(transcript, relativePath: transcriptRelativePath)
+        context.insert(
+            EpisodeTranscriptRecord(
+                episodeID: transcript.episodeID,
+                podcastID: transcript.podcastID,
+                sourceAudioURL: transcript.sourceAudioURL,
+                sourceFileByteCount: transcript.sourceFileByteCount,
+                sourceFileSHA256: transcript.sourceFileSHA256,
+                modelIdentifier: transcript.modelIdentifier,
+                modelVersion: transcript.modelVersion,
+                modelTreeSHA256: transcript.modelTreeSHA256,
+                languageCode: transcript.languageCode,
+                state: .completed,
+                audioDuration: transcript.audioDuration,
+                completedDuration: transcript.audioDuration,
+                checkpointCount: transcript.checkpoints.count,
+                transcriptRelativePath: transcriptRelativePath,
+                createdAt: transcript.createdAt,
+                updatedAt: transcript.updatedAt
+            )
+        )
+
+        try seedLiveAdAnalysis(
+            response: response,
+            transcript: transcript,
+            context: context,
+            createdAt: createdAt
+        )
+    }
+
+    private static func seedLiveAdAnalysis(
+        response: EpisodeAdAnalysisAPIResponse,
+        transcript: EpisodeTranscriptDocument,
+        context: ModelContext,
+        createdAt: Date
+    ) throws {
+        let fileStore = EpisodeAdAnalysisFileStore()
+        let fingerprint = fileStore.transcriptFingerprint(for: transcript)
+        let relativePath = fileStore.relativePath(
+            episodeID: transcript.episodeID,
+            transcriptFingerprint: fingerprint
+        )
+        let spans = response.spans.enumerated().map { index, span in
+            EpisodeAdAnalysisSpan(
+                id: index,
+                kind: span.kind,
+                label: span.label,
+                startSegmentID: span.startSegmentID,
+                endSegmentID: span.endSegmentID,
+                startTime: span.startTime,
+                endTime: span.endTime,
+                confidence: span.confidence,
+                evidenceQuote: span.evidenceQuote
+            )
+        }
+        let usage = response.usage.map {
+            EpisodeAdAnalysisUsage(
+                promptTokenCount: $0.promptTokenCount,
+                candidatesTokenCount: $0.candidatesTokenCount,
+                totalTokenCount: $0.totalTokenCount
+            )
+        }
+        let document = EpisodeAdAnalysisDocument(
+            schemaVersion: response.schemaVersion,
+            episodeID: transcript.episodeID,
+            podcastID: transcript.podcastID,
+            requestID: response.requestID,
+            transcriptFingerprint: fingerprint,
+            transcriptUpdatedAt: transcript.updatedAt,
+            transcriptSegmentCount: transcript.segments.count,
+            model: response.model,
+            policy: response.policy,
+            spans: spans,
+            warnings: response.warnings,
+            usage: usage,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+
+        try fileStore.write(document, relativePath: relativePath)
+        context.insert(
+            EpisodeAdAnalysisRecord(
+                episodeID: transcript.episodeID,
+                podcastID: transcript.podcastID,
+                transcriptFingerprint: fingerprint,
+                transcriptUpdatedAt: transcript.updatedAt,
+                transcriptSegmentCount: transcript.segments.count,
+                state: .completed,
+                analysisRelativePath: relativePath,
+                model: document.model,
+                policy: document.policy,
+                spanCount: document.spans.count,
+                warningCount: document.warnings.count,
+                createdAt: createdAt,
+                updatedAt: createdAt
+            )
+        )
+    }
+
+    private static func decodeLiveTranscript(from url: URL) throws -> EpisodeTranscriptDocument {
+        let data = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(EpisodeTranscriptDocument.self, from: data)
+    }
+
+    private static func decodeLiveAdAnalysisResponse(from url: URL) throws -> EpisodeAdAnalysisAPIResponse {
+        let data = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        if let response = try? decoder.decode(EpisodeAdAnalysisAPIResponse.self, from: data) {
+            return response
+        }
+
+        guard let rawValue = String(data: data, encoding: .utf8) else {
+            return try decoder.decode(EpisodeAdAnalysisAPIResponse.self, from: data)
+        }
+        let body = rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(
+                of: #"\n(?:HTTP_STATUS:)?\d{3}$"#,
+                with: "",
+                options: .regularExpression
+            )
+        return try decoder.decode(EpisodeAdAnalysisAPIResponse.self, from: Data(body.utf8))
     }
 
     private static func seedExtraFeeds(
@@ -247,16 +720,6 @@ enum OpenCastUITestSeedData {
         let context = ModelContext(container)
         try LocalPreferenceRecord.upsert(
             key: OnboardingStateStore.completedPreferenceKey,
-            value: "true",
-            modelContext: context
-        )
-        try context.save()
-    }
-
-    static func seedNotificationPromoBannerResolved(in container: ModelContainer) throws {
-        let context = ModelContext(container)
-        try LocalPreferenceRecord.upsert(
-            key: NotificationPromoBannerStore.resolvedPreferenceKey,
             value: "true",
             modelContext: context
         )

@@ -1,9 +1,9 @@
-import SwiftUI
-
 enum AppSection: String, CaseIterable, Identifiable {
     case library
     case inbox
+    case downloads
     case settings
+    case search
 
     var id: String {
         rawValue
@@ -15,8 +15,12 @@ enum AppSection: String, CaseIterable, Identifiable {
             "Library"
         case .inbox:
             "Inbox"
+        case .downloads:
+            "Downloads"
         case .settings:
             "Settings"
+        case .search:
+            "Search"
         }
     }
 
@@ -26,12 +30,12 @@ enum AppSection: String, CaseIterable, Identifiable {
             "books.vertical"
         case .inbox:
             "tray"
+        case .downloads:
+            "arrow.down.circle"
         case .settings:
             "gearshape"
+        case .search:
+            "magnifyingglass"
         }
-    }
-
-    var label: some View {
-        Label(title, systemImage: systemImage)
     }
 }

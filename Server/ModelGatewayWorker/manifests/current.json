@@ -1,0 +1,320 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-01T00:00:00Z",
+  "models": [
+    {
+      "model_id": "openai_whisper-large-v3-v20240930_626MB",
+      "version": "20240930_626MB-v1",
+      "model_folder": "model",
+      "tokenizer_folder": "tokenizer",
+      "total_byte_count": 629482970,
+      "tree_sha256": "20a910bd8ea9f94a3e4438780f6e2f0aa3bbcd3fc1f8e99fccb2d64b68935603",
+      "files": [
+        {
+          "path": "model/AudioEncoder.mlmodelc/analytics/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/AudioEncoder.mlmodelc/analytics/coremldata.bin",
+          "byte_count": 243,
+          "sha256": "56793886ab1adb9ca8a4e335efbe8af6640f40d958ab2d29c3ad2d7d6f712e95",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/AudioEncoder.mlmodelc/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/AudioEncoder.mlmodelc/coremldata.bin",
+          "byte_count": 348,
+          "sha256": "ffa9eb76e8e9d9be75a4d527e5249e61d67fd43081c5aa110fd24efa6c8c5ea3",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/AudioEncoder.mlmodelc/metadata.json",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/AudioEncoder.mlmodelc/metadata.json",
+          "byte_count": 1922,
+          "sha256": "a87a3375afe79e88e27af30247e234e706b98679dedfd1b021a74f7ee108c669",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "model/AudioEncoder.mlmodelc/model.mil",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/AudioEncoder.mlmodelc/model.mil",
+          "byte_count": 934263,
+          "sha256": "3cec2580fb07b12a88087f0e1586c6ba2982980eb36499561e1ffca2b0950442",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/AudioEncoder.mlmodelc/weights/weight.bin",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/AudioEncoder.mlmodelc/weights/weight.bin",
+          "byte_count": 421968768,
+          "sha256": "e4740fa28ed65907af754af893dfce98473fafb84dd8d718ad346985fe7678c1",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/analytics/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/MelSpectrogram.mlmodelc/analytics/coremldata.bin",
+          "byte_count": 243,
+          "sha256": "c5be419f8622083ac7046306400643539f0e7577c843448c36defc090d41e7ce",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/MelSpectrogram.mlmodelc/coremldata.bin",
+          "byte_count": 329,
+          "sha256": "2bfc12cffc2e45e039c7a18f384f09adffb72c182fcd93f9413d405d1a6c1130",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/metadata.json",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/MelSpectrogram.mlmodelc/metadata.json",
+          "byte_count": 1850,
+          "sha256": "2bc552e09a6f124d9e6c178dd1a6979e010206acb26308b2224887c9dcbeb35f",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/model.mil",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/MelSpectrogram.mlmodelc/model.mil",
+          "byte_count": 10143,
+          "sha256": "c270b95b5f81d7f7d0b8a3e8f991d4e5812a37cad29349868a35b91f3a6a4463",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/weights/weight.bin",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/MelSpectrogram.mlmodelc/weights/weight.bin",
+          "byte_count": 373376,
+          "sha256": "009d9fb8f6b589accfa08cebf1c712ef07c3405229ce3cfb3a57ee033c9d8a49",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/analytics/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/TextDecoder.mlmodelc/analytics/coremldata.bin",
+          "byte_count": 243,
+          "sha256": "3913b8c9716b284a917cf3744f4d415f2a05e2b910594a14c6cc10092284d3f8",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/TextDecoder.mlmodelc/coremldata.bin",
+          "byte_count": 633,
+          "sha256": "3faabaf66930e66956d8291d0ff485fb382496e30a91a7185548b9b898ce90a9",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/metadata.json",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/TextDecoder.mlmodelc/metadata.json",
+          "byte_count": 4924,
+          "sha256": "994f6030d7b1a8be999940444c3cf5d6a57d40ddd4423cf1d1fc93520aa1b052",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/model.mil",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/TextDecoder.mlmodelc/model.mil",
+          "byte_count": 217177,
+          "sha256": "dbe833be9e64348c95b7fa598d0ae4309a91aedce4e82fa500a714b0e4b5d754",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/weights/weight.bin",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/TextDecoder.mlmodelc/weights/weight.bin",
+          "byte_count": 203199860,
+          "sha256": "d69700903d518ada33170ab77faaaf464496fb9ff65752c6d5a6109aa2fb02db",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/config.json",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/config.json",
+          "byte_count": 1149,
+          "sha256": "f01d83dd891791d6f12421c05d3ed8ebbe70866f10d6c9a7a7e80b558ce5a0f1",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "model/generation_config.json",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/model/generation_config.json",
+          "byte_count": 2767,
+          "sha256": "7fbb053a023be11fbeccd8421811610308143daa93d9617c52aab4a0fa1491c6",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "tokenizer/config.json",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/tokenizer/config.json",
+          "byte_count": 1272,
+          "sha256": "ad0e8d1e46f4d01f7861a21509e5d0f977d6cc1f367a370603c92541d819807b",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "tokenizer/tokenizer.json",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/tokenizer/tokenizer.json",
+          "byte_count": 2480617,
+          "sha256": "6d8cbd7cd0d8d5815e478dac67b85a26bbe77c1f5e0c6d76d1ce2abc0e5f21ca",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "tokenizer/tokenizer_config.json",
+          "url_path": "/v1/models/assets/openai_whisper-large-v3-v20240930_626MB/20240930_626MB-v1/tokenizer/tokenizer_config.json",
+          "byte_count": 282843,
+          "sha256": "844b642c73a91359722f47b35705f7174686df33d252695d8572cf9ac03a6389",
+          "content_type": "application/json; charset=utf-8"
+        }
+      ]
+    },
+    {
+      "model_id": "openai_whisper-tiny.en",
+      "version": "20260701_75MB-v1",
+      "model_folder": "model",
+      "tokenizer_folder": "tokenizer",
+      "total_byte_count": 79031562,
+      "tree_sha256": "60d71f9ac2b832f227001406a991fbacdaf7df1f69b91225ec04cdc3f1066acb",
+      "files": [
+        {
+          "path": "model/AudioEncoder.mlmodelc/analytics/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/AudioEncoder.mlmodelc/analytics/coremldata.bin",
+          "byte_count": 243,
+          "sha256": "eaaaa6671a96a359a0bbd5e97885246dcc17f7435b6ffad8d871bb940964500b",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/AudioEncoder.mlmodelc/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/AudioEncoder.mlmodelc/coremldata.bin",
+          "byte_count": 347,
+          "sha256": "325b182d0a4266730a81795ae6b7a787b5111dd091500fc0c04dedf610015d46",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/AudioEncoder.mlmodelc/metadata.json",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/AudioEncoder.mlmodelc/metadata.json",
+          "byte_count": 1807,
+          "sha256": "c0468bfcd4c940e479812dc35db6c9bb380c1a9da1786471c0b916e1ee784ff0",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "model/AudioEncoder.mlmodelc/model.mil",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/AudioEncoder.mlmodelc/model.mil",
+          "byte_count": 308780,
+          "sha256": "6423991df85b6811ef08a935c86ab4f0cc0a7a072fe24913f3bcfab2c5bebd84",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/AudioEncoder.mlmodelc/model.mlmodel",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/AudioEncoder.mlmodelc/model.mlmodel",
+          "byte_count": 54965,
+          "sha256": "030d64a3ddd296d6f709691a66a870aab7ee9f19e5fe07e8086245fb85302802",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/AudioEncoder.mlmodelc/weights/weight.bin",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/AudioEncoder.mlmodelc/weights/weight.bin",
+          "byte_count": 16422784,
+          "sha256": "f3706dac8d9d4bec269d3cee10fa4eda39b4240a46091c8323c1731a8c6d59c2",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/analytics/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/MelSpectrogram.mlmodelc/analytics/coremldata.bin",
+          "byte_count": 243,
+          "sha256": "160d9737169d22dc01a899e1c6a0a9c44d0637d41f0dedb2a0b7c1422c4035d2",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/MelSpectrogram.mlmodelc/coremldata.bin",
+          "byte_count": 328,
+          "sha256": "cb3b3f51b080f58b12a6888a5e8ad57419be9e4c6843b96a7577f171b300e660",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/metadata.json",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/MelSpectrogram.mlmodelc/metadata.json",
+          "byte_count": 1848,
+          "sha256": "d92e196c14b4d03167a8ded97d9f925617ff302942588aa460257eb0c58de35b",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/model.mil",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/MelSpectrogram.mlmodelc/model.mil",
+          "byte_count": 10132,
+          "sha256": "5fe83a96c41965219d39734aa3248bd4956d2427705539fba2d406aa4eeb4862",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/MelSpectrogram.mlmodelc/weights/weight.bin",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/MelSpectrogram.mlmodelc/weights/weight.bin",
+          "byte_count": 354080,
+          "sha256": "801024dbc7a89c677be1f8b285de3409e35f7d1786c9c8d9d0d6842ac57a1c83",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/analytics/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/TextDecoder.mlmodelc/analytics/coremldata.bin",
+          "byte_count": 243,
+          "sha256": "edb99a30ccee8e157fbec80dc3dce49349ba0982391b327d753e10ccab0a01c3",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/coremldata.bin",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/TextDecoder.mlmodelc/coremldata.bin",
+          "byte_count": 633,
+          "sha256": "65c043a081845d190918b4c7d244f94a55df1a15fae796abedc1f414995542c6",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/metadata.json",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/TextDecoder.mlmodelc/metadata.json",
+          "byte_count": 4754,
+          "sha256": "41dccfd0fe75a8f333abf74a1b0ab5ca007a589e5cb50fa34ec6033936763b58",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/model.mil",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/TextDecoder.mlmodelc/model.mil",
+          "byte_count": 135272,
+          "sha256": "0faaeee40f86f6e4bc69b81c7142bc9ca8af7859a597ee0a22eb3df8ad30ab65",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/model.mlmodel",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/TextDecoder.mlmodelc/model.mlmodel",
+          "byte_count": 108558,
+          "sha256": "5c3e91bc036014426708e2ceb0e35cb1bbbf34e8121d2070d2b174a7957581d0",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/TextDecoder.mlmodelc/weights/weight.bin",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/TextDecoder.mlmodelc/weights/weight.bin",
+          "byte_count": 59215664,
+          "sha256": "763f915f0126093fc2c506572b3ab0fad134c04cfc2221333ccc7d73552c9252",
+          "content_type": "application/octet-stream"
+        },
+        {
+          "path": "model/config.json",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/config.json",
+          "byte_count": 1454,
+          "sha256": "4d7b75a6f18d3cd9a4f936cdc16d9e5d855c0acbca21d6a11fbac602a422b6a8",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "model/generation_config.json",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/model/generation_config.json",
+          "byte_count": 1006,
+          "sha256": "aea4069565b5adaec331005991a1d8613192687aa4cedf2e9dd91b126991df5a",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "tokenizer/config.json",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/tokenizer/config.json",
+          "byte_count": 1937,
+          "sha256": "b5366317df280f79e6cc366f259f379674f81a8721d458acf2e00680ccb10b1d",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "tokenizer/tokenizer.json",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/tokenizer/tokenizer.json",
+          "byte_count": 2405679,
+          "sha256": "5eb60cec1e77aeeb6869a2bb5a8e01a84c3fe5d072d75369343021fe6f5310d0",
+          "content_type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "tokenizer/tokenizer_config.json",
+          "url_path": "/v1/models/assets/openai_whisper-tiny.en/20260701_75MB-v1/tokenizer/tokenizer_config.json",
+          "byte_count": 805,
+          "sha256": "14f84bdf4b9ecdbd4738ddc81c17a1baedfc02bb93c6e049c951e15a1b40b70d",
+          "content_type": "application/json; charset=utf-8"
+        }
+      ]
+    }
+  ]
+}

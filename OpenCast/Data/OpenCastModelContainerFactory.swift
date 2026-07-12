@@ -4,28 +4,42 @@ import SwiftData
 enum OpenCastModelContainerFactory {
     static let cloudKitContainerIdentifier = "iCloud.com.connor.opencast"
 
-    static func make(inMemory: Bool = false) throws -> ModelContainer {
-        let syncedSchema = Schema([
+    static var syncedSchema: Schema {
+        Schema([
             SubscriptionRecord.self,
             EpisodeProgressRecord.self
         ])
-        let localSchema = Schema([
+    }
+
+    static var localSchema: Schema {
+        Schema([
             PodcastCacheRecord.self,
             EpisodeCacheRecord.self,
             RefreshLogRecord.self,
             LocalPreferenceRecord.self,
-            EpisodeDownloadRecord.self
+            EpisodeDownloadRecord.self,
+            EpisodeTranscriptRecord.self,
+            EpisodeAdAnalysisRecord.self,
+            AdFreePassQueueItemRecord.self
         ])
-        let fullSchema = Schema([
+    }
+
+    static var fullSchema: Schema {
+        Schema([
             SubscriptionRecord.self,
             EpisodeProgressRecord.self,
             PodcastCacheRecord.self,
             EpisodeCacheRecord.self,
             RefreshLogRecord.self,
             LocalPreferenceRecord.self,
-            EpisodeDownloadRecord.self
+            EpisodeDownloadRecord.self,
+            EpisodeTranscriptRecord.self,
+            EpisodeAdAnalysisRecord.self,
+            AdFreePassQueueItemRecord.self
         ])
+    }
 
+    static func make(inMemory: Bool = false) throws -> ModelContainer {
         let syncedCloudKitDatabase: ModelConfiguration.CloudKitDatabase = inMemory
             ? .none
             : .private(cloudKitContainerIdentifier)

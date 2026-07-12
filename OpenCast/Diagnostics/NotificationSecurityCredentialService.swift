@@ -2,16 +2,16 @@ import CryptoKit
 import DeviceCheck
 import Foundation
 
-struct NotificationSecurityCredentialService {
+nonisolated struct NotificationSecurityCredentialService: Sendable {
     private static let diagnosticPayload = "hello world"
 
-    private let appAttestService: DCAppAttestService
+    private let appAttestService: any AppAttestServiceProtocol
     private let apiClient: NotificationSecurityAPIClient
     private let keychain: NotificationSecurityKeychain
     private let secureClient: NotificationSecureAPIClient
 
     init(
-        appAttestService: DCAppAttestService = .shared,
+        appAttestService: any AppAttestServiceProtocol = DeviceCheckAppAttestService.shared,
         apiClient: NotificationSecurityAPIClient = NotificationSecurityAPIClient(),
         keychain: NotificationSecurityKeychain = NotificationSecurityKeychain()
     ) {
@@ -53,6 +53,8 @@ struct NotificationSecurityCredentialService {
                     secureMessage: secureMessage,
                     detail: "Used registered App Attest key."
                 )
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 return try await registerFreshKey(
                     installID: installID,
@@ -94,38 +96,23 @@ struct NotificationSecurityCredentialService {
 
     func withFreshCredentialOnRecoverableFailure<T>(
         validateWithSecureHello: Bool = false,
-        operation: (NotificationSecurityCredential) async throws -> T
+        operation: @Sendable (NotificationSecurityCredential) async throws -> T
     ) async throws -> T {
-        do {
-            let credential = try await ensureRegisteredCredential(
-                validateWithSecureHello: validateWithSecureHello
-            )
-            return try await operation(credential)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error where Self.isRecoverableLocalCredentialFailure(error) {
-            try deleteCachedAppAttestKey()
-            let credential = try await ensureRegisteredCredential(
-                validateWithSecureHello: validateWithSecureHello
-            )
-            return try await operation(credential)
-        } catch let error as NotificationSecurityHTTPError where error.isRecoverableCredentialFailure {
-            try deleteCachedAppAttestKey()
-            let credential = try await ensureRegisteredCredential(
-                validateWithSecureHello: validateWithSecureHello
-            )
-            return try await operation(credential)
-        }
+        try await AppAttestCredentialRecovery.withFreshCredentialOnRecoverableFailure(
+            ensureCredential: {
+                try await ensureRegisteredCredential(validateWithSecureHello: validateWithSecureHello)
+            },
+            deleteCachedAppAttestKey: deleteCachedAppAttestKey,
+            isRecoverableServerCredentialFailure: { error in
+                (error as? NotificationSecurityHTTPError)?.isRecoverableCredentialFailure == true
+                    || (error as? AppAttestHTTPError)?.isRecoverableCredentialFailure == true
+            },
+            operation: operation
+        )
     }
 
     nonisolated static func isRecoverableLocalCredentialFailure(_ error: any Error) -> Bool {
-        let nsError = error as NSError
-        guard nsError.domain == DCError.errorDomain else {
-            return false
-        }
-
-        return nsError.code == DCError.Code.invalidInput.rawValue
-            || nsError.code == DCError.Code.invalidKey.rawValue
+        AppAttestCredentialService.isRecoverableLocalCredentialFailure(error)
     }
 
     private func registerFreshKey(

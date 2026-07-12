@@ -3,23 +3,50 @@ import SwiftUI
 
 struct LibraryView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @State private var sampleSubscriptionErrorMessage: String?
     @State private var isSubscribingSample = false
 
-    let usesNavigationLinks: Bool
     let onAdd: () -> Void
-    let onOpenPodcast: (String) -> Void
 
     var body: some View {
-        List {
-            switch appModel.library.state {
-            case .loading where appModel.library.subscriptions.isEmpty:
+        content
+            .animation(reduceMotion ? nil : .default, value: appModel.library.state)
+            .animation(
+                reduceMotion ? nil : .default,
+                value: appModel.library.subscriptions.map(\.feedURL)
+            )
+            .navigationTitle("Library")
+            .refreshable {
+                await appModel.library.refreshAll(modelContext: modelContext)
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Add", systemImage: "plus", action: onAdd)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch appModel.library.state {
+        case .loading where appModel.library.subscriptions.isEmpty:
+            List {
                 ProgressView()
-            case .failed(let message) where appModel.library.subscriptions.isEmpty:
-                ContentUnavailableView("Library Unavailable", systemImage: "exclamationmark.triangle", description: Text(message))
-            default:
-                if appModel.library.subscriptions.isEmpty {
+            }
+        case .failed(let message) where appModel.library.subscriptions.isEmpty:
+            List {
+                ContentUnavailableView(
+                    "Library Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(message)
+                )
+            }
+        default:
+            if appModel.library.subscriptions.isEmpty {
+                List {
                     LibraryEmptyStateView(
                         syncActivity: appModel.syncStatus.libraryActivity,
                         isSubscribingSample: isSubscribingSample,
@@ -27,25 +54,36 @@ struct LibraryView: View {
                         onAdd: onAdd,
                         onSubscribeSample: subscribeToSample
                     )
-                } else {
-                    ForEach(appModel.library.subscriptions) { subscription in
-                        LibrarySubscriptionRowView(
-                            subscription: subscription,
-                            usesNavigationLinks: usesNavigationLinks,
-                            onOpenPodcast: onOpenPodcast
-                        )
-                    }
+                }
+            } else if horizontalSizeClass == .regular {
+                subscriptionGrid
+            } else {
+                List {
+                    subscriptionRows
                 }
             }
         }
-        .navigationTitle("Library")
-        .refreshable {
-            await appModel.library.refreshAll(modelContext: modelContext)
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Add", systemImage: "plus", action: onAdd)
+    }
+
+    private var subscriptionGrid: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 16)],
+                spacing: 24
+            ) {
+                ForEach(appModel.library.subscriptions) { subscription in
+                    LibrarySubscriptionTileView(subscription: subscription)
+                }
             }
+            .padding(.vertical, 8)
+        }
+        .contentMargins(.horizontal, 24, for: .scrollContent)
+        .contentMargins(.bottom, 72, for: .scrollContent)
+    }
+
+    private var subscriptionRows: some View {
+        ForEach(appModel.library.subscriptions) { subscription in
+            LibrarySubscriptionRowView(subscription: subscription)
         }
     }
 

@@ -5,6 +5,7 @@ import SwiftData
 @Observable
 final class PlaybackSettingsStore {
     static let voiceBoostModePreferenceKey = "playback.voiceBoost.mode"
+    static let autoSkipPromosAndAdsPreferenceKey = "playback.autoSkipPromosAndAds"
     private static let voiceBoostEpisodeKeyPrefix = "playback.voiceBoost.episode."
     private static let skipBackwardIntervalKey = "playback.skip.backward"
     private static let skipForwardIntervalKey = "playback.skip.forward"
@@ -15,6 +16,7 @@ final class PlaybackSettingsStore {
     private(set) var currentPodcastID: String?
     private(set) var skipBackwardOption = PlaybackSkipIntervalOption.defaultBackward
     private(set) var skipForwardOption = PlaybackSkipIntervalOption.defaultForward
+    private(set) var isAutoSkipPromosAndAdsEnabled = true
     private(set) var lastErrorMessage: String?
 
     var canChangeCurrentEpisodeVoiceBoost: Bool {
@@ -42,6 +44,10 @@ final class PlaybackSettingsStore {
                 defaultOption: .defaultForward,
                 modelContext: modelContext
             )
+            isAutoSkipPromosAndAdsEnabled = try booleanPreference(
+                key: Self.autoSkipPromosAndAdsPreferenceKey,
+                modelContext: modelContext
+            ) ?? true
             isVoiceBoostEnabled = try resolvedVoiceBoostEnabled(
                 episodeID: episodeID,
                 modelContext: modelContext
@@ -51,6 +57,7 @@ final class PlaybackSettingsStore {
             voiceBoostMode = .defaultMode
             skipBackwardOption = .defaultBackward
             skipForwardOption = .defaultForward
+            isAutoSkipPromosAndAdsEnabled = true
             isVoiceBoostEnabled = true
             lastErrorMessage = "Unable to load playback settings: \(error.localizedDescription)"
         }
@@ -136,6 +143,37 @@ final class PlaybackSettingsStore {
             isVoiceBoostEnabled = previousValue
             applyVoiceBoost(to: playback)
             lastErrorMessage = "Unable to update Voice Boost for this episode: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    @discardableResult
+    func setAutoSkipPromosAndAdsEnabled(
+        _ isEnabled: Bool,
+        modelContext: ModelContext,
+        playback: any PlaybackSettingsControlling
+    ) -> Bool {
+        guard isAutoSkipPromosAndAdsEnabled != isEnabled else {
+            return true
+        }
+
+        let previousValue = isAutoSkipPromosAndAdsEnabled
+        isAutoSkipPromosAndAdsEnabled = isEnabled
+        applyAutoSkip(to: playback)
+
+        do {
+            try LocalPreferenceRecord.upsert(
+                key: Self.autoSkipPromosAndAdsPreferenceKey,
+                value: isEnabled.description,
+                modelContext: modelContext
+            )
+            try modelContext.save()
+            lastErrorMessage = nil
+            return true
+        } catch {
+            isAutoSkipPromosAndAdsEnabled = previousValue
+            applyAutoSkip(to: playback)
+            lastErrorMessage = "Unable to update auto-skip: \(error.localizedDescription)"
             return false
         }
     }
@@ -266,6 +304,7 @@ final class PlaybackSettingsStore {
     private func apply(to playback: any PlaybackSettingsControlling) {
         applyVoiceBoost(to: playback)
         applySkipIntervals(to: playback)
+        applyAutoSkip(to: playback)
     }
 
     private func applyVoiceBoost(to playback: any PlaybackSettingsControlling) {
@@ -277,6 +316,10 @@ final class PlaybackSettingsStore {
             backward: skipBackwardOption.seconds,
             forward: skipForwardOption.seconds
         )
+    }
+
+    private func applyAutoSkip(to playback: any PlaybackSettingsControlling) {
+        playback.setAutoSkipEnabled(isAutoSkipPromosAndAdsEnabled)
     }
 
     private func booleanPreference(

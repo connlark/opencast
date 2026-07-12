@@ -1,5 +1,7 @@
 pub mod apns;
-pub mod app_attest;
+pub use opencast_app_attest_core::app_attest;
+#[cfg(target_arch = "wasm32")]
+pub use opencast_app_attest_core::random;
 #[cfg(any(target_arch = "wasm32", test))]
 mod d1_changes;
 pub mod feed_admission;
@@ -9,8 +11,6 @@ pub mod feed_identity;
 pub mod route;
 pub mod rss;
 
-#[cfg(target_arch = "wasm32")]
-mod random;
 #[cfg(any(target_arch = "wasm32", test))]
 mod storage;
 #[cfg(any(target_arch = "wasm32", test))]

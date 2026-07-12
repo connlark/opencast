@@ -1,0 +1,264 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+
+@theme inline {
+  --font-sans:
+    var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@layer base {
+  [data-theme="dark"] {
+    --background: oklch(0.115 0.014 281);
+    --surface: oklch(0.19 0.014 281);
+    --surface-secondary: oklch(0.225 0.016 281);
+    --surface-tertiary: oklch(0.265 0.018 281);
+    --default: oklch(0.255 0.014 281);
+    --muted: oklch(0.72 0.018 281);
+    --accent: oklch(0.69 0.19 278);
+    --accent-foreground: oklch(0.99 0.005 281);
+    --border: oklch(0.31 0.018 281);
+    --separator: oklch(0.255 0.015 281);
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  background-color: var(--background);
+  color: var(--foreground);
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+section {
+  scroll-margin-top: 96px;
+}
+
+.ambient-orb {
+  background: radial-gradient(
+    closest-side,
+    color-mix(in oklab, var(--accent) 22%, transparent),
+    transparent 72%
+  );
+  filter: blur(52px);
+}
+
+@layer components {
+  .site-header__shell {
+    position: relative;
+    background: color-mix(in oklab, var(--surface) 84%, transparent);
+    box-shadow:
+      0 18px 55px rgba(0, 0, 0, 0.34),
+      0 4px 14px rgba(0, 0, 0, 0.2),
+      inset 0 1px rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(22px) saturate(1.25);
+    transition:
+      border-color 180ms var(--ease-out),
+      background-color 180ms var(--ease-out),
+      box-shadow 180ms var(--ease-out);
+  }
+
+  .site-header__shell::after {
+    position: absolute;
+    right: 16%;
+    bottom: -1px;
+    left: 16%;
+    height: 1px;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--accent) 48%, transparent),
+      transparent
+    );
+    content: "";
+    opacity: 0.7;
+    pointer-events: none;
+  }
+
+  .site-brand {
+    color: var(--foreground);
+    text-decoration: none;
+  }
+
+  .site-brand__icon {
+    box-shadow:
+      0 8px 26px color-mix(in oklab, var(--accent) 20%, transparent),
+      inset 0 1px rgba(255, 255, 255, 0.08);
+    transition:
+      transform 260ms var(--ease-out-quart),
+      border-color 160ms var(--ease-out),
+      box-shadow 160ms var(--ease-out);
+  }
+
+  .site-brand:hover .site-brand__icon,
+  .site-brand:focus-visible .site-brand__icon {
+    border-color: color-mix(in oklab, var(--accent) 56%, var(--border));
+    box-shadow:
+      0 10px 32px color-mix(in oklab, var(--accent) 34%, transparent),
+      inset 0 1px rgba(255, 255, 255, 0.12);
+    transform: translateY(-1px) scale(1.045) rotate(-2deg);
+  }
+
+  .site-brand[data-active] .site-brand__icon {
+    border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+  }
+
+  .site-nav__rail {
+    box-shadow:
+      inset 0 1px rgba(255, 255, 255, 0.04),
+      inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  }
+
+  .site-nav__item {
+    color: var(--muted);
+    transition:
+      color 140ms var(--ease-out),
+      transform 220ms var(--ease-out-quart);
+  }
+
+  .site-nav__item::after {
+    position: absolute;
+    bottom: 3px;
+    left: 50%;
+    width: 3px;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent);
+    content: "";
+    opacity: 0;
+    transform: translateX(-50%) scale(0.5);
+    transition:
+      opacity 140ms var(--ease-out),
+      transform 180ms var(--ease-out-quart);
+  }
+
+  .site-nav__item:hover,
+  .site-nav__item:focus-visible {
+    color: var(--foreground);
+    transform: translateY(-1px);
+  }
+
+  .site-nav__item svg {
+    color: color-mix(in oklab, var(--muted) 78%, var(--accent));
+    transition:
+      color 140ms var(--ease-out),
+      transform 220ms var(--ease-out-quart);
+  }
+
+  .site-nav__item:hover svg,
+  .site-nav__item:focus-visible svg,
+  .site-nav__item[data-active] svg {
+    color: var(--accent-soft-foreground);
+    transform: translateY(-1px) scale(1.06);
+  }
+
+  .site-nav__item[data-active] {
+    --button-bg: var(--accent-soft);
+    --button-bg-hover: var(--accent-soft-hover);
+    --button-bg-pressed: var(--accent-soft-hover);
+    --button-fg: var(--foreground);
+
+    color: var(--foreground);
+  }
+
+  .site-nav__item[data-active]::after {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+
+  .site-nav__cta {
+    box-shadow:
+      0 8px 22px color-mix(in oklab, var(--accent) 24%, transparent),
+      inset 0 1px rgba(255, 255, 255, 0.13);
+  }
+
+  .site-nav__cta svg {
+    transition: transform 220ms var(--ease-out-quart);
+  }
+
+  .site-nav__cta:hover svg,
+  .site-nav__cta:focus-visible svg {
+    transform: translate(2px, -2px);
+  }
+
+  .site-mobile-trigger {
+    border: 1px solid var(--border);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.05);
+  }
+
+  .site-nav-drawer {
+    background:
+      radial-gradient(
+        circle at 100% 0%,
+        color-mix(in oklab, var(--accent) 16%, transparent),
+        transparent 36%
+      ),
+      var(--overlay);
+  }
+
+  .site-mobile-nav__item {
+    --button-bg: transparent;
+    --button-bg-hover: var(--default-soft);
+    --button-bg-pressed: var(--default-soft-hover);
+    --button-fg: var(--foreground);
+
+    border: 1px solid transparent;
+    transition:
+      border-color 140ms var(--ease-out),
+      background-color 140ms var(--ease-out),
+      transform 220ms var(--ease-out-quart);
+  }
+
+  .site-mobile-nav__item:hover,
+  .site-mobile-nav__item:focus-visible {
+    border-color: var(--border);
+    transform: translateX(2px);
+  }
+
+  .site-mobile-nav__item[data-active] {
+    --button-bg: var(--accent-soft);
+    --button-bg-hover: var(--accent-soft-hover);
+    --button-bg-pressed: var(--accent-soft-hover);
+
+    border-color: color-mix(in oklab, var(--accent) 32%, var(--border));
+  }
+
+  .site-mobile-nav__icon {
+    transition:
+      color 140ms var(--ease-out),
+      background-color 140ms var(--ease-out),
+      transform 220ms var(--ease-out-quart);
+  }
+
+  .site-mobile-nav__item:hover .site-mobile-nav__icon,
+  .site-mobile-nav__item:focus-visible .site-mobile-nav__icon,
+  .site-mobile-nav__item[data-active] .site-mobile-nav__icon {
+    background: var(--accent-soft);
+    color: var(--accent-soft-foreground);
+    transform: scale(1.04);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

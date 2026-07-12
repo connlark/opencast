@@ -39,7 +39,7 @@ enum HTMLPlainText {
         return normalizeLayout(in: text)
     }
 
-    nonisolated private static func decodeEntities(in value: String) -> String {
+    nonisolated static func decodeEntities(in value: String) -> String {
         var decoded = value
         for _ in 0..<3 {
             let next = decodeEntitiesOnce(in: decoded)

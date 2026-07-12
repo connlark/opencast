@@ -4,9 +4,20 @@ import XCTest
 final class OpenCastUITests: XCTestCase {
     // Keep these in sync with OpenCastUITestSeedData episode/feed IDs and the row identifier helpers.
     private static let seededEpisodeRowIdentifier = "episode-row-ui-test-episode-1"
+    private static let seededDownloadSelectionRowIdentifier = "download-selection-row-ui-test-episode-1"
     private static let seededCompletedEpisodeRowIdentifier = "episode-row-ui-test-episode-completed"
+    private static let liveAdAnalysisEpisodeRowIdentifier = "episode-row-audio-illusion-that-proves-we-dont-experience-reality"
     private static let seededSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-feed.xml"
     private static let seedVoiceBoostModeEnvironmentKey = "OPENCAST_SEED_VOICE_BOOST_MODE"
+    private static let adAnalysisClientTokenEnvironmentKey = "OPENCAST_AD_ANALYSIS_CLIENT_TOKEN"
+    private static let adAnalysisBaseURLEnvironmentKey = "OPENCAST_AD_ANALYSIS_BASE_URL"
+    private static let localAdAnalysisClientTokenFilePath = "/private/tmp/opencast-ad-analysis-client-token"
+    private static let physicalAppAttestAdAnalysisProbeEnvironmentKey = "OPENCAST_RUN_PHYSICAL_APP_ATTEST_AD_ANALYSIS_UI_TESTS"
+    private static let physicalAppAttestAdAnalysisProbeFilePath = "/tmp/opencast-run-physical-app-attest-ad-analysis-ui-tests"
+    private static let liveAdAnalysisTranscriptPathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_TRANSCRIPT_PATH"
+    private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
+    private static let adFreePassPresentationOverrideEnvironmentKey = "OPENCAST_UI_TEST_AD_FREE_PASS_STAGE"
+    private static let seedAdAnalysisSpanAtStartEnvironmentKey = "OPENCAST_SEED_AD_ANALYSIS_SPAN_AT_START"
     private static let perEpisodeVoiceBoostModeValue = "perEpisode"
     private static let playEpisodeTraceArmingSecondsEnvironmentKey = "OPENCAST_PLAY_EPISODE_TRACE_ARMING_SECONDS"
     private static let seededPeelTraceArmingSecondsEnvironmentKey = "OPENCAST_SEEDED_PEEL_TRACE_ARMING_SECONDS"
@@ -33,12 +44,36 @@ final class OpenCastUITests: XCTestCase {
         let inboxTab = app.tabBars.buttons["Inbox"]
         XCTAssertTrue(inboxTab.exists)
         XCTAssertTrue(inboxTab.isSelected)
+        XCTAssertTrue(app.tabBars.buttons["Downloads"].exists)
         XCTAssertTrue(app.tabBars.buttons["Settings"].exists)
+        XCTAssertTrue(app.tabBars.buttons["Search"].exists)
+    }
+
+    @MainActor
+    func testSearchTabFindsSeededEpisodeAndRecordsRecentQuery() throws {
+        let app = makeSeededApp(forcesDarkMode: false, forcesLightMode: true)
+        app.launch()
+
+        openSection("Search", in: app)
+        let searchField = app.searchFields.firstMatch
+        assertExists(searchField, named: "Search tab field")
+        searchField.tap()
+        searchField.typeText("Deterministic UI Episode\n")
+
+        assertExists(seededEpisodeRow(in: app), named: "seeded episode search result", timeout: 20)
+
+        searchField.tap()
+        let clearButton = searchField.buttons["Clear text"].firstMatch
+        assertExists(clearButton, named: "Search clear button")
+        clearButton.tap()
+        assertExists(app.staticTexts["Recently Searched"], named: "recent searches section")
+        assertExists(app.buttons["Deterministic UI Episode"], named: "recorded recent search")
     }
 
     @MainActor
     func testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty() throws {
         let app = makeCompletedOnboardingApp(libraryLoadDelayMilliseconds: 6_000)
+        app.launchEnvironment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS"] = "noAccount"
         app.launch()
 
         let inboxTab = app.tabBars.buttons["Inbox"]
@@ -88,12 +123,22 @@ final class OpenCastUITests: XCTestCase {
         app.textFields["Podcast or creator"].typeText("history\n")
         assertExists(app.staticTexts["Find Podcasts"], named: "onboarding stays visible after keyboard search submit")
         XCTAssertFalse(app.buttons["Add This American Life"].exists)
-        scrollUntilExists(app.staticTexts["LibriVox Community Podcast"], in: app, maxSwipes: 2)
-        assertExists(app.staticTexts["LibriVox Community Podcast"], named: "LibriVox Community Podcast sample")
+        scrollUntilExists(app.staticTexts["The Rest Is Science"], in: app, maxSwipes: 2)
+        assertExists(app.staticTexts["The Rest Is Science"], named: "The Rest Is Science sample")
         attachSmokeScreenshot(named: "onboarding_podcast_setup_dark")
 
         app.buttons["Continue"].tap()
-        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
+        assertExists(app.staticTexts["Tiny Whisper Model"], named: "Tiny Whisper onboarding screen")
+        let installTinyModelButton = app.buttons["Install Tiny Model"]
+        assertExists(installTinyModelButton, named: "Install Tiny Model onboarding action")
+        XCTAssertTrue(installTinyModelButton.isHittable, "Install Tiny Model should be visible without scrolling")
+        attachSmokeScreenshot(named: "onboarding_tiny_whisper_setup_dark")
+        installTinyModelButton.tap()
+        assertExists(
+            app.descendants(matching: .any)["Tiny Whisper Install Toast"],
+            named: "Tiny Whisper install toast"
+        )
+        assertExists(app.staticTexts["New Episode Alerts"], named: "notification onboarding screen")
         assertExists(app.buttons["Enable Notifications"], named: "Enable Notifications onboarding action")
         attachSmokeScreenshot(named: "onboarding_notification_setup_dark")
 
@@ -134,7 +179,9 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Sample Podcasts"].exists)
         attachSmokeScreenshot(named: "settings_debug_onboarding_podcast_setup_light")
         app.buttons["Continue"].tap()
-        assertExists(app.staticTexts["Get New Episode Alerts"], named: "debug notification setup")
+        assertExists(app.staticTexts["Tiny Whisper Model"], named: "debug Tiny Whisper setup")
+        app.buttons["Skip"].tap()
+        assertExists(app.staticTexts["New Episode Alerts"], named: "debug notification setup")
         attachSmokeScreenshot(named: "settings_debug_onboarding_notification_setup_light")
         app.buttons["Done"].tap()
 
@@ -143,7 +190,7 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testFirstTimeOnboardingNotificationPageResolvesInboxPromo() throws {
+    func testFirstTimeOnboardingNotificationPageDismissesOnboarding() throws {
         let app = makeOnboardingApp(forcesDarkMode: false, seedsLibrary: true)
         app.launch()
 
@@ -158,42 +205,64 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["UI Test Show"], named: "imported subscription row")
         attachSmokeScreenshot(named: "onboarding_imported_podcast_setup_light")
         app.buttons["Continue"].tap()
-        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
+        assertExists(app.staticTexts["Tiny Whisper Model"], named: "Tiny Whisper onboarding screen")
+        let installTinyModelButton = app.buttons["Install Tiny Model"]
+        assertExists(installTinyModelButton, named: "Install Tiny Model onboarding action")
+        XCTAssertTrue(installTinyModelButton.isHittable, "Install Tiny Model should be visible without scrolling")
+        installTinyModelButton.tap()
+        assertExists(
+            app.descendants(matching: .any)["Tiny Whisper Install Toast"],
+            named: "Tiny Whisper install toast"
+        )
+        assertExists(app.staticTexts["New Episode Alerts"], named: "notification onboarding screen")
         app.buttons["Done"].tap()
 
         XCTAssertTrue(
-            app.staticTexts["Get New Episode Alerts"].waitForNonExistence(timeout: 10),
+            app.staticTexts["New Episode Alerts"].waitForNonExistence(timeout: 10),
             "Onboarding should dismiss after the final notification page."
         )
         openInbox(in: app)
-        XCTAssertFalse(app.buttons["Inbox Notification Promo Banner"].exists)
+        XCTAssertFalse(app.staticTexts["New Episode Alerts"].exists)
     }
 
     @MainActor
-    func testExistingUserNotificationPromoBannerDismissesAndOpensSettings() throws {
-        let dismissApp = makeSeededApp(forcesNotificationPromoBanner: true)
-        dismissApp.launch()
+    func testForcedAppleSpeechDiagnosticsSectionScreenshots() throws {
+        // Simulators render the Apple diagnostics surface through the DEBUG
+        // fake-assets provider for screenshot + copy evidence, dark and light.
+        for forcesDarkMode in [true, false] {
+            let app = makeSeededApp(forcesDarkMode: forcesDarkMode, forcesLightMode: !forcesDarkMode)
+            app.launchArguments.append("--opencast-apple-speech-fake-assets=installed")
+            app.launchEnvironment["OPENCAST_APPLE_SPEECH_FAKE_ASSETS"] = "installed"
+            app.launch()
 
-        let dismissBanner = dismissApp.buttons["Inbox Notification Promo Banner"]
-        assertExists(dismissBanner, named: "notification promo banner")
-        dismissApp.buttons["Dismiss Notification Promo"].tap()
-        XCTAssertTrue(
-            dismissBanner.waitForNonExistence(timeout: 5),
-            "Notification promo banner should hide after dismissal."
-        )
-        openSettings(in: dismissApp)
-        openInbox(in: dismissApp)
-        XCTAssertFalse(dismissApp.buttons["Inbox Notification Promo Banner"].exists)
-        dismissApp.terminate()
+            openSettings(in: app)
+            scrollUntilExists(app.staticTexts["Transcription"], in: app)
+            assertExists(app.staticTexts["Transcription"], named: "Whisper transcription settings section")
+            XCTAssertTrue(
+                app.buttons["Install Fast Model"].exists || app.buttons["Check Model"].exists,
+                "Expected main Settings to expose Whisper model management."
+            )
+            XCTAssertFalse(app.buttons["Check Speech Assets"].exists)
+            XCTAssertFalse(app.buttons["Fast"].exists)
+            XCTAssertFalse(app.buttons["Accurate"].exists)
+            attachSmokeScreenshot(named: forcesDarkMode ? "settings_whisper_transcription_dark" : "settings_whisper_transcription_light")
 
-        let tapApp = makeSeededApp(forcesNotificationPromoBanner: true)
-        tapApp.launch()
-
-        let tapBanner = tapApp.buttons["Inbox Notification Promo Banner"]
-        assertExists(tapBanner, named: "notification promo banner for settings")
-        tapBanner.tap()
-        assertExists(tapApp.staticTexts["Settings"], named: "settings screen after notification promo tap")
-        XCTAssertFalse(tapApp.staticTexts["Get New Episode Alerts"].exists)
+            let diagnosticsLink = app.buttons["Diagnostics"].firstMatch
+            scrollUntilHittable(diagnosticsLink, in: app)
+            diagnosticsLink.tap()
+            scrollUntilExists(app.staticTexts["Apple Speech Assets"], in: app)
+            assertExists(app.staticTexts["Apple Speech Assets"], named: "Apple speech diagnostics section")
+            let installedStatus = elementContaining(label: "Installed", in: app)
+            scrollUntilExists(installedStatus, in: app)
+            assertExists(installedStatus, named: "Apple speech installed status")
+            assertExists(app.buttons["Check Speech Assets"], named: "Check Speech Assets action")
+            scrollUntilExists(app.staticTexts["Whisper Model"], in: app)
+            assertExists(app.staticTexts["Whisper Model"], named: "Whisper model diagnostics")
+            assertExists(app.buttons["Fast"], named: "Fast picker in Diagnostics")
+            assertExists(app.buttons["Accurate"], named: "Accurate picker in Diagnostics")
+            attachSmokeScreenshot(named: forcesDarkMode ? "diagnostics_transcription_dark" : "diagnostics_transcription_light")
+            app.terminate()
+        }
     }
 
     @MainActor
@@ -215,7 +284,7 @@ final class OpenCastUITests: XCTestCase {
 
         openCurrentEpisodeDetailFromNowPlaying(in: app)
         XCTAssertTrue(app.buttons["Play Episode"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Summary"].exists)
+        XCTAssertTrue(app.staticTexts["Show Notes"].exists)
     }
 
     @MainActor
@@ -336,12 +405,12 @@ final class OpenCastUITests: XCTestCase {
 
         let firstRow = seededEpisodeRow(in: app)
         assertExists(firstRow, named: "first seeded inbox episode with varied preview")
-        let firstPixelSummary = try artworkPreviewPixelSummary(from: firstRow.screenshot())
+        let firstPixelSummary = try dominantArtworkPreviewPixelSummary(for: firstRow)
         XCTAssertGreaterThan(firstPixelSummary.previewPixels, firstPixelSummary.placeholderPixels * 8)
 
         let deeperRow = seededExtraEpisodeRow(in: app, index: 24)
-        scrollUntilExists(deeperRow, in: app, maxSwipes: 10)
-        let deeperPixelSummary = try artworkPreviewPixelSummary(from: deeperRow.screenshot())
+        scrollUntilVisible(deeperRow, in: app, maxSwipes: 10)
+        let deeperPixelSummary = try dominantArtworkPreviewPixelSummary(for: app)
         XCTAssertGreaterThan(deeperPixelSummary.previewPixels, deeperPixelSummary.placeholderPixels * 8)
         attachSmokeScreenshot(named: "inbox_many_varied_artwork_previews")
     }
@@ -429,30 +498,7 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testSeededMiniPlayerSwipeDownPausesAndDismisses() throws {
-        let app = makeSeededApp()
-        app.launch()
-
-        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
-        app.tabBars.buttons["Inbox"].tap()
-
-        let inboxEpisode = seededEpisodeRow(in: app)
-        assertExists(inboxEpisode, named: "seeded inbox episode")
-        inboxEpisode.tap()
-
-        assertNowPlayingOverlay(in: app)
-        dismissNowPlayingOverlay(in: app)
-
-        let miniPlayer = app.buttons["Open Now Playing"]
-        assertExists(miniPlayer, named: "mini-player before swipe-down dismissal")
-        dragDismissMiniPlayer(miniPlayer)
-
-        assertDoesNotExist(miniPlayer, named: "mini-player after swipe-down dismissal", timeout: 5)
-        assertDoesNotExist(nowPlayingOverlay(in: app), named: "Now Playing overlay after mini-player dismissal")
-    }
-
-    @MainActor
-    func testSeededMiniPlayerPinsTabBarDuringInboxScroll() throws {
+    func testSeededMiniPlayerTabAccessorySurvivesInboxScrollAndExpands() throws {
         let app = makeSeededApp(extraFeedCount: 12)
         app.launch()
 
@@ -470,19 +516,18 @@ final class OpenCastUITests: XCTestCase {
         let tabBar = app.tabBars.firstMatch
         assertExists(miniPlayer, named: "mini-player before Inbox scroll")
         assertExists(tabBar, named: "tab bar before Inbox scroll")
+        XCTAssertTrue(miniPlayer.isHittable)
 
-        let restingMiniPlayerFrame = miniPlayer.frame
-        let restingTabBarFrame = tabBar.frame
         scrollUntilExists(seededExtraEpisodeRow(in: app, index: 8), in: app, maxSwipes: 4)
 
         assertExists(miniPlayer, named: "mini-player after Inbox scroll")
         assertExists(tabBar, named: "tab bar after Inbox scroll")
-        let scrolledMiniPlayerFrame = miniPlayer.frame
-        let scrolledTabBarFrame = tabBar.frame
-        XCTAssertLessThanOrEqual(abs(scrolledMiniPlayerFrame.midX - restingMiniPlayerFrame.midX), 4)
-        XCTAssertLessThanOrEqual(abs(scrolledMiniPlayerFrame.maxY - restingMiniPlayerFrame.maxY), 4)
-        XCTAssertLessThanOrEqual(abs(scrolledTabBarFrame.midX - restingTabBarFrame.midX), 4)
-        XCTAssertLessThanOrEqual(abs(scrolledTabBarFrame.maxY - restingTabBarFrame.maxY), 4)
+        XCTAssertTrue(miniPlayer.isHittable)
+        attachSmokeScreenshot(named: "mini_player_tab_accessory_inbox_scrolled")
+
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        assertExists(playbackProgress(in: app), named: "Playback Progress control")
     }
 
     @MainActor
@@ -684,6 +729,253 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededPodcastAutoDetectToggleConfirmsAndEnables() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+
+        let actionsButton = app.buttons["Podcast Actions"]
+        assertExists(actionsButton, named: "podcast actions menu")
+        actionsButton.tap()
+
+        let toggle = app.buttons["Automatically Detect Ads"]
+        assertExists(toggle, named: "Automatically Detect Ads toggle")
+        attachSmokeScreenshot(named: "podcast_actions_auto_detect_toggle")
+        toggle.tap()
+
+        // Enabling routes through the standing-opt-in confirmation with the
+        // play-trigger contract copy; disabling below is immediate.
+        let confirmButton = app.sheets.buttons["Turn On"].firstMatch
+        assertExists(confirmButton, named: "auto-detect confirmation action")
+        assertExists(
+            elementContaining(label: "analyzed for ads when you play them", in: app),
+            named: "auto-detect confirmation contract copy"
+        )
+        attachSmokeScreenshot(named: "podcast_auto_detect_confirmation")
+        confirmButton.tap()
+
+        actionsButton.tap()
+        assertExists(toggle, named: "Automatically Detect Ads toggle after enabling")
+        toggle.tap()
+        assertDoesNotExist(app.sheets.firstMatch, named: "confirmation dialog after disabling")
+    }
+
+    @MainActor
+    func testSeededAutoDetectPlayTriggerEnqueuesAutoPass() throws {
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true,
+            seedsEpisodeProgress: true
+        )
+        app.launch()
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+
+        let actionsButton = app.buttons["Podcast Actions"]
+        assertExists(actionsButton, named: "podcast actions menu")
+        actionsButton.tap()
+        let toggle = app.buttons["Automatically Detect Ads"]
+        assertExists(toggle, named: "Automatically Detect Ads toggle")
+        toggle.tap()
+        let confirmButton = app.sheets.buttons["Turn On"].firstMatch
+        assertExists(confirmButton, named: "auto-detect confirmation action")
+        confirmButton.tap()
+
+        // Playing the unanalyzed episode of the opted-in show enqueues an
+        // auto pass; playing the analyzed one enqueues nothing. The queue's
+        // run log in the app container is the proof artifact — this test is
+        // the deterministic driver for it (step6/runs/stage-d).
+        let unanalyzedRow = seededCompletedEpisodeRow(in: app)
+        assertExists(unanalyzedRow, named: "unanalyzed seeded episode row")
+        unanalyzedRow.tap()
+        assertNowPlayingOverlay(in: app)
+        dismissNowPlayingOverlay(in: app)
+
+        let analyzedRow = seededEpisodeRow(in: app)
+        assertExists(analyzedRow, named: "analyzed seeded episode row")
+        analyzedRow.tap()
+        assertNowPlayingOverlay(in: app)
+        dismissNowPlayingOverlay(in: app)
+    }
+
+    @MainActor
+    func testSeededAdDetectionIndicatorOpensQueueScreenWithConsentAffordance() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        let indicator = app.buttons["Ad Detection Queue Indicator"]
+        assertDoesNotExist(indicator, named: "indicator while the queue is idle")
+
+        let episodeRow = seededEpisodeRow(in: app)
+        assertExists(episodeRow, named: "seeded inbox episode row")
+        episodeRow.press(forDuration: 1.2)
+        let detectAction = app.buttons["Detect Ads"].firstMatch
+        assertExists(detectAction, named: "Detect Ads context action")
+        detectAction.tap()
+
+        // On the simulator the pass deterministically pauses at whisper model
+        // consent (Apple transcriber unavailable), a stable paused state.
+        assertExists(indicator, named: "indicator after enqueue", timeout: 10)
+        attachSmokeScreenshot(named: "adqueue_indicator_paused_consent")
+        indicator.tap()
+
+        assertExists(app.navigationBars["Ad Detection"], named: "queue screen title")
+        let consentButton = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Download Model")
+        ).firstMatch
+        assertExists(consentButton, named: "model consent affordance", timeout: 10)
+        assertDoesNotExist(
+            app.buttons["Continue in Background"],
+            named: "Continue in Background while paused for consent"
+        )
+        attachSmokeScreenshot(named: "adqueue_screen_consent")
+    }
+
+    @MainActor
+    func testSeededAdDetectionQueueCapDeferredShowsBannerAndRetry() throws {
+        let app = makeSeededApp(seedsCompletedTranscript: true)
+        app.launchEnvironment["OPENCAST_ADANALYSIS_FORCE_CAP"] = "1"
+        // DEBUG bearer auth so the simulator's missing App Attest doesn't
+        // fail the pass before the forced cap rejection fires (no network
+        // happens — the force hook throws first).
+        app.launchEnvironment["OPENCAST_AD_ANALYSIS_CLIENT_TOKEN"] = "ui-test-forced-cap"
+        app.launch()
+
+        let episodeRow = seededEpisodeRow(in: app)
+        assertExists(episodeRow, named: "seeded inbox episode row")
+        episodeRow.press(forDuration: 1.2)
+        let detectAction = app.buttons["Detect Ads"].firstMatch
+        assertExists(detectAction, named: "Detect Ads context action")
+        detectAction.tap()
+
+        // Transcript reuse goes straight to analysis; the forced 429 cap
+        // rejection pauses the queue in capDeferred.
+        let indicator = app.buttons["Ad Detection Queue Indicator"]
+        assertExists(indicator, named: "indicator after cap deferral", timeout: 10)
+        indicator.tap()
+
+        assertExists(app.navigationBars["Ad Detection"], named: "queue screen title")
+        assertExists(
+            elementContaining(label: "Daily detection limit reached", in: app),
+            named: "cap deferral banner",
+            timeout: 10
+        )
+        assertExists(app.buttons["Retry"], named: "cap deferral Retry affordance")
+        assertDoesNotExist(
+            app.buttons["Continue in Background"],
+            named: "Continue in Background while cap-deferred"
+        )
+        attachSmokeScreenshot(named: "adqueue_screen_cap_deferred")
+    }
+
+    @MainActor
+    func testOptInSlowWorkerAdDetectionQueueRunningTwoEpisodes() throws {
+        // Requires the slow local analysis server (never responds) so the
+        // analyzing stage stays live: OPENCAST_UI_SLOW_AD_ANALYSIS_URL points
+        // at it (e.g. http://127.0.0.1:8977).
+        let slowBaseURL = try requireEnvironmentValue(
+            "OPENCAST_UI_SLOW_AD_ANALYSIS_URL",
+            skipMessage: "Set OPENCAST_UI_SLOW_AD_ANALYSIS_URL to a stalling local worker to run the live queue smoke."
+        )
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsEpisodeProgress: true
+        )
+        app.launchEnvironment["OPENCAST_AD_ANALYSIS_BASE_URL"] = slowBaseURL
+        app.launchEnvironment["OPENCAST_AD_ANALYSIS_CLIENT_TOKEN"] = "ui-test-slow-worker"
+        app.launch()
+
+        // Opt the show into auto-detect from its detail menu.
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+        app.buttons["Podcast Actions"].tap()
+        let toggle = app.buttons["Automatically Detect Ads"]
+        assertExists(toggle, named: "Automatically Detect Ads toggle")
+        toggle.tap()
+        let confirmButton = app.sheets.buttons["Turn On"].firstMatch
+        assertExists(confirmButton, named: "auto-detect confirmation action")
+        confirmButton.tap()
+
+        // Play the transcript-seeded episode: its auto pass reuses the
+        // transcript and hangs in the live analyzing stage on the stalled
+        // worker. Then play the second episode so it queues behind it.
+        let analyzedSeedRow = seededEpisodeRow(in: app)
+        assertExists(analyzedSeedRow, named: "transcript-seeded episode row")
+        analyzedSeedRow.tap()
+        assertNowPlayingOverlay(in: app)
+        dismissNowPlayingOverlay(in: app)
+
+        let secondRow = seededCompletedEpisodeRow(in: app)
+        assertExists(secondRow, named: "second seeded episode row")
+        secondRow.tap()
+        assertNowPlayingOverlay(in: app)
+        dismissNowPlayingOverlay(in: app)
+
+        openInbox(in: app)
+        let indicator = app.buttons["Ad Detection Queue Indicator"]
+        assertExists(indicator, named: "running queue indicator", timeout: 10)
+        attachSmokeScreenshot(named: "adqueue_indicator_running")
+        indicator.tap()
+
+        assertExists(app.navigationBars["Ad Detection"], named: "queue screen title")
+        assertExists(
+            elementContaining(label: "Analyzing promos and ads", in: app),
+            named: "live analyzing stage text",
+            timeout: 10
+        )
+        assertExists(
+            elementContaining(label: "Queued — 1 ahead", in: app),
+            named: "second episode queue position"
+        )
+        // Play-triggered auto passes never arm, so the explicit
+        // continue-in-background affordance is offered.
+        assertExists(
+            app.buttons["Continue in Background"],
+            named: "Continue in Background while running un-armed"
+        )
+        attachSmokeScreenshot(named: "adqueue_screen_running_two_episodes")
+    }
+
+    @MainActor
+    func testSeededAdDetectionQueueShowsFinishedFailures() throws {
+        let app = makeSeededApp(seedsBadAudioURL: true)
+        app.launch()
+
+        let episodeRow = seededEpisodeRow(in: app)
+        assertExists(episodeRow, named: "seeded inbox episode row")
+        episodeRow.press(forDuration: 1.2)
+        let detectAction = app.buttons["Detect Ads"].firstMatch
+        assertExists(detectAction, named: "Detect Ads context action")
+        detectAction.tap()
+
+        // The bad audio URL fails the download immediately; the drain ends
+        // and the indicator shows its brief finished state (failure-tinted).
+        let indicator = app.buttons["Ad Detection Queue Indicator"]
+        assertExists(indicator, named: "finished indicator", timeout: 10)
+        attachSmokeScreenshot(named: "adqueue_indicator_finished_tinted")
+        indicator.tap()
+
+        assertExists(app.navigationBars["Ad Detection"], named: "queue screen title")
+        assertExists(app.staticTexts["Finished"], named: "finished section header", timeout: 10)
+        assertExists(
+            app.descendants(matching: .any)
+                .matching(identifier: "ad-detection-queue-row-ui-test-episode-1")
+                .firstMatch,
+            named: "failed episode outcome row"
+        )
+        attachSmokeScreenshot(named: "adqueue_screen_finished_failure")
+    }
+
+    @MainActor
     func testSeededCompactLibraryEpisodeBackReturnsToPodcast() throws {
         let app = makeSeededApp()
         app.launch()
@@ -704,79 +996,6 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["Episodes"], named: "podcast detail after dismissing Now Playing")
         assertExists(seededEpisodeRow(in: app), named: "podcast episode row after playing episode")
         attachSmokeScreenshot(named: "compact_podcast_detail_after_episode_play")
-    }
-
-    @MainActor
-    func testSeededSplitLibraryEpisodeTapSelectsDetailBehindNowPlaying() throws {
-        let app = makeSeededApp()
-        app.launch()
-
-        if app.tabBars.buttons["Library"].waitForExistence(timeout: 3) {
-            throw XCTSkip("Split navigation requires a regular-width destination.")
-        }
-
-        openLibrary(in: app)
-        let libraryPodcast = seededSubscriptionRow(in: app)
-        assertExists(libraryPodcast, named: "seeded split library podcast")
-        libraryPodcast.tap()
-
-        assertExists(app.staticTexts["Episodes"], named: "split podcast detail episodes section")
-        let podcastEpisode = seededEpisodeRow(in: app)
-        assertExists(podcastEpisode, named: "split podcast detail seeded episode")
-        podcastEpisode.tap()
-
-        assertNowPlayingOverlay(in: app)
-        dragDismissNowPlayingOverlay(in: app)
-        assertExists(app.buttons["Open Now Playing"], named: "split mini-player after playing library episode")
-        assertExists(app.buttons["Play Episode"], named: "split episode detail after dismissing Now Playing")
-        attachSmokeScreenshot(named: "split_podcast_episode_detail_after_play")
-    }
-
-    @MainActor
-    func testSeededSplitEpisodeTapSelectsDetailBehindNowPlaying() throws {
-        let app = makeSeededApp()
-        app.launch()
-
-        if app.tabBars.buttons["Library"].waitForExistence(timeout: 3) {
-            throw XCTSkip("Split navigation requires a regular-width destination.")
-        }
-
-        let inboxEpisode = seededEpisodeRow(in: app)
-        assertExists(inboxEpisode, named: "split inbox episode")
-        inboxEpisode.tap()
-
-        assertNowPlayingOverlay(in: app)
-        dragDismissNowPlayingOverlay(in: app)
-        assertExists(app.buttons["Open Now Playing"], named: "split mini-player after first tap")
-        assertExists(app.buttons["Play Episode"], named: "split episode detail after first tap")
-        assertExists(
-            app.staticTexts["A deterministic episode seeded for UI tests."],
-            named: "split episode detail description"
-        )
-        attachSmokeScreenshot(named: "split_episode_detail_after_first_tap")
-    }
-
-    @MainActor
-    func testSeededSplitLibraryEpisodeContextMenuOpensEpisodeDetail() throws {
-        let app = makeSeededApp()
-        app.launch()
-
-        if app.tabBars.buttons["Library"].waitForExistence(timeout: 3) {
-            throw XCTSkip("Split navigation requires a regular-width destination.")
-        }
-
-        openLibrary(in: app)
-        let libraryPodcast = seededSubscriptionRow(in: app)
-        assertExists(libraryPodcast, named: "seeded split library podcast")
-        libraryPodcast.tap()
-
-        let podcastEpisode = seededEpisodeRow(in: app)
-        openEpisodeDetailFromContextMenu(
-            podcastEpisode,
-            in: app,
-            named: "split podcast episode"
-        )
-        assertExists(app.staticTexts["Summary"], named: "split episode detail summary heading")
     }
 
     @MainActor
@@ -942,6 +1161,335 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededNowPlayingAdFreePassControlStateScreenshots() throws {
+        let variants: [(stage: String, buttonLabel: String, statusFragment: String)] = [
+            ("idle", "Skip Promos & Ads", "Ready to mark"),
+            ("consent", "Download Model", "Speech model needed"),
+            ("downloading", "Working", "Downloading episode"),
+            ("installing", "Working", "Downloading speech model"),
+            ("checking", "Working", "Checking speech model"),
+            ("model-busy", "Skip Promos & Ads", "Speech model is not ready"),
+            ("transcribing", "Working", "Transcribing"),
+            ("analyzing", "Working", "Analyzing promos"),
+            ("completed", "Reanalyze", "2 zones marked"),
+            ("outdated", "Skip Promos & Ads", "Outdated — run again"),
+            ("interrupted", "Resume", "Transcript interrupted"),
+            ("failed", "Retry", "Daily promo/ad analysis limit reached"),
+            ("unavailable", "Skip Promos & Ads", "No episode playing")
+        ]
+
+        for variant in variants {
+            captureAdFreePassControlScreenshot(
+                stage: variant.stage,
+                buttonLabel: variant.buttonLabel,
+                statusFragment: variant.statusFragment,
+                screenshotName: "ad_free_pass_\(variant.stage)"
+            )
+        }
+    }
+
+    @MainActor
+    func testSeededLandscapeNowPlayingAdFreePassControlLayoutScreenshots() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+        }
+
+        let variants: [(stage: String, buttonLabel: String, statusFragment: String)] = [
+            ("consent", "Download Model", "Speech model needed"),
+            ("installing", "Working", "Downloading speech model"),
+            ("transcribing", "Working", "Transcribing"),
+            ("failed", "Retry", "Daily promo/ad analysis limit reached")
+        ]
+
+        for variant in variants {
+            captureAdFreePassControlScreenshot(
+                stage: variant.stage,
+                buttonLabel: variant.buttonLabel,
+                statusFragment: variant.statusFragment,
+                screenshotName: "ad_free_pass_landscape_\(variant.stage)"
+            )
+        }
+    }
+
+    @MainActor
+    func testSeededAutoSkipPromosAndAdsShowsPillAndJumpsAcrossZone() throws {
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true
+        )
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+        assertExists(autoSkipPill(in: app), named: "auto-skip feedback pill", timeout: 8)
+        let elapsed = waitForPlaybackElapsed(progress, atLeast: 8.8, timeout: 8)
+
+        XCTAssertLessThan(
+            elapsed,
+            15,
+            "Seeded auto-skip should jump to the 4-9s zone end early, not merely arrive by normal playback."
+        )
+        attachSmokeScreenshot(named: "seeded_auto_skip_pill_and_position_jump")
+    }
+
+    @MainActor
+    func testSeededSpanAtStartAutoSkipStartsAtZoneEnd() throws {
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsAdAnalysisSpanAtStart: true
+        )
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+        let elapsed = waitForPlaybackElapsed(progress, atLeast: 3.8, timeout: 3.5)
+
+        XCTAssertLessThan(
+            elapsed,
+            8,
+            "Span-at-start seed should begin at the 0-4s zone end before ordinary playback could advance far beyond it."
+        )
+        attachSmokeScreenshot(named: "seeded_span_at_start_auto_skip")
+    }
+
+    @MainActor
+    func testSeededAutoSkipToggleOffLeavesZonesVisibleAndSkippingInert() throws {
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true
+        )
+        app.launch()
+
+        openSettings(in: app)
+        let autoSkipToggle = autoSkipSettingsToggle(in: app)
+        scrollUntilHittable(autoSkipToggle, in: app)
+        assertToggle(autoSkipToggle, isOn: true)
+        tapToggle(autoSkipToggle, to: false)
+
+        openSeededNowPlaying(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+        let elapsedInZone = waitForPlaybackElapsed(progress, in: 4.2..<8.8, timeout: 8)
+
+        assertDoesNotExist(autoSkipPill(in: app), named: "auto-skip feedback pill while disabled", timeout: 1)
+        XCTAssertLessThan(elapsedInZone, 8.8)
+        attachSmokeScreenshot(named: "seeded_auto_skip_disabled_passes_through_zone")
+    }
+
+    @MainActor
+    func testSeededStaleAdAnalysisSkipsNothingAndOffersRerun() throws {
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsStaleAdAnalysis: true
+        )
+        app.launchEnvironment[Self.adAnalysisClientTokenEnvironmentKey] = ""
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+        _ = waitForPlaybackElapsed(progress, in: 4.2..<8.8, timeout: 8)
+        assertDoesNotExist(autoSkipPill(in: app), named: "auto-skip feedback pill for stale analysis", timeout: 1)
+
+        peelNowPlayingArtwork(in: app)
+        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
+        let passButton = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
+        assertExists(passButton, named: "stale-analysis pass re-run button")
+        XCTAssertTrue(passButton.label.contains("Skip Promos & Ads"))
+        assertExists(
+            elementContaining(label: "Outdated — run again", in: app),
+            named: "stale-analysis re-run status"
+        )
+        attachSmokeScreenshot(named: "seeded_stale_ad_analysis_offers_rerun")
+    }
+
+    @MainActor
+    func testSeededAutoSkipPillTapUndoesSkipAndZonePlaysThrough() throws {
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true
+        )
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+        let pill = autoSkipPill(in: app)
+        assertExists(pill, named: "auto-skip feedback pill", timeout: 8)
+        // The pill is a button wrapping a label; both carry the identifier, so
+        // tap the button element specifically.
+        app.buttons["Skipped promo"].firstMatch.tap()
+
+        // The undo seek lands at the zone start (4s) with .scrub intent: the
+        // zone must play through once instead of re-skipping.
+        let elapsedInZone = waitForPlaybackElapsed(progress, in: 4.2..<8.8, timeout: 6)
+        XCTAssertLessThan(elapsedInZone, 8.8, "Undo should land back inside the 4-9s zone.")
+        assertDoesNotExist(pill, named: "auto-skip pill after undo (no re-skip)", timeout: 1)
+        _ = waitForPlaybackElapsed(progress, atLeast: 9.2, timeout: 8)
+        attachSmokeScreenshot(named: "seeded_auto_skip_pill_undo_plays_through")
+    }
+
+    @MainActor
+    func testSeededOutdatedPolicyAnalysisSkipsNothingAndOffersRerun() throws {
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsOutdatedPolicyAdAnalysis: true
+        )
+        app.launchEnvironment[Self.adAnalysisClientTokenEnvironmentKey] = ""
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+        _ = waitForPlaybackElapsed(progress, in: 4.2..<8.8, timeout: 8)
+        assertDoesNotExist(
+            autoSkipPill(in: app),
+            named: "auto-skip feedback pill for outdated-policy analysis",
+            timeout: 1
+        )
+
+        peelNowPlayingArtwork(in: app)
+        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
+        assertExists(
+            elementContaining(label: "Outdated — run again", in: app),
+            named: "outdated-policy re-run status"
+        )
+        attachSmokeScreenshot(named: "seeded_outdated_policy_ad_analysis_offers_rerun")
+    }
+
+    @MainActor
+    func testSeededLowConfidenceAnalysisRendersDimmedZoneWithoutAutoSkip() throws {
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsLowConfidenceAdAnalysis: true
+        )
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+
+        // The sub-floor spans are display-only: playback passes straight
+        // through 4-9s with no pill and no jump.
+        let elapsedInZone = waitForPlaybackElapsed(progress, in: 4.2..<8.8, timeout: 8)
+        XCTAssertLessThan(elapsedInZone, 8.8)
+        assertDoesNotExist(
+            autoSkipPill(in: app),
+            named: "auto-skip feedback pill for display-only zone",
+            timeout: 1
+        )
+        // Screenshot once the thumb has cleared the first zone so both dimmed
+        // zones (4-9s and 100-160s) are visible on the bar.
+        _ = waitForPlaybackElapsed(progress, atLeast: 10, timeout: 6)
+        attachSmokeScreenshot(named: "seeded_low_confidence_dimmed_zone_no_auto_skip")
+    }
+
+    /// Step-4 Stage-F proof leg: drives the REAL app container (no seeding) on
+    /// a simulator that already holds the bugged-pod episode with a completed
+    /// live `promo_ad_breaks_v2` analysis. Verifies the intro-pod auto-skip on
+    /// the actual bug-report audio and the pill-tap undo returning into the
+    /// pod. Opt-in because it depends on that pre-arranged container state.
+    @MainActor
+    func testOptInRealLibraryBugEpisodeAutoSkipAndPillUndoProof() throws {
+        guard optionalEnvironmentValue("OPENCAST_RUN_STEP4_BUG_EPISODE_UNDO_PROOF") == "1" else {
+            throw XCTSkip("Set OPENCAST_RUN_STEP4_BUG_EPISODE_UNDO_PROOF=1 with the bugged-pod episode prepared in the real simulator container.")
+        }
+
+        let app = XCUIApplication()
+        app.launch()
+
+        // Load a different episode first: while the bugged episode is the
+        // live player session, lifecycle flushes re-persist its position and
+        // defeat Clear Progress.
+        let otherRow = app.buttons.matching(
+            NSPredicate(
+                format: "label CONTAINS %@ AND identifier BEGINSWITH %@",
+                "This American Life",
+                "episode-row"
+            )
+        ).firstMatch
+        assertExists(otherRow, named: "decoy episode row", timeout: 10)
+        otherRow.tap()
+        let nowPlayingCard = app.scrollViews["Now Playing"].firstMatch
+        assertExists(nowPlayingCard, named: "Now Playing for decoy episode", timeout: 10)
+        nowPlayingCard.swipeDown(velocity: .fast)
+        RunLoop.current.run(until: Date.now.addingTimeInterval(1.0))
+
+        let episodeRow = app.buttons.matching(
+            NSPredicate(
+                format: "label CONTAINS %@ AND identifier BEGINSWITH %@",
+                "TAFS World Cup episode",
+                "episode-row"
+            )
+        ).firstMatch
+        assertExists(episodeRow, named: "bugged-pod episode row", timeout: 10)
+        // A plain row tap starts playback; the context menu reaches the detail
+        // view without touching the saved position.
+        episodeRow.press(forDuration: 1.0)
+        let viewDetails = app.buttons["View Episode Details"].firstMatch
+        assertExists(viewDetails, named: "View Episode Details menu item", timeout: 5)
+        viewDetails.tap()
+
+        // Reset progress so playback starts ahead of the intro pod (0:51-2:21).
+        let actionsButton = app.buttons["Episode Actions"].firstMatch
+        assertExists(actionsButton, named: "Episode Actions menu", timeout: 8)
+        actionsButton.tap()
+        attachSmokeScreenshot(named: "step4_bug_episode_actions_menu")
+        let clearProgress = app.descendants(matching: .any)["Clear Progress"].firstMatch
+        if clearProgress.waitForExistence(timeout: 3) {
+            clearProgress.tap()
+            // The menu action opens a confirmation dialog whose destructive
+            // "Clear Progress" button performs the actual reset.
+            let confirmClear = app.buttons["Clear Progress"].firstMatch
+            assertExists(confirmClear, named: "Clear Progress confirmation", timeout: 5)
+            confirmClear.tap()
+            RunLoop.current.run(until: Date.now.addingTimeInterval(1.0))
+        } else {
+            XCTFail("Clear Progress menu item not found; cannot start ahead of the intro pod.")
+        }
+
+        // With the decoy episode holding the live session, the cleared
+        // progress sticks; Play Episode loads the bugged episode from 0:00.
+        let playButton = app.buttons["Play Episode"].firstMatch
+        assertExists(playButton, named: "Play Episode button", timeout: 8)
+        let dismissDeadline = Date.now.addingTimeInterval(6)
+        while !playButton.isHittable, Date.now < dismissDeadline {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)).tap()
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.5))
+        }
+        playButton.tap()
+
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control", timeout: 10)
+        let startElapsed = waitForPlaybackElapsed(progress, in: 0..<45, timeout: 8)
+        XCTAssertLessThan(startElapsed, 45, "Playback must start ahead of the intro pod.")
+
+        // The intro pod starts at ~0:51; the auto-skip jumps to ~2:21. Tap
+        // the pill immediately — it auto-dismisses 2.5s after appearing.
+        let pill = app.buttons["Skipped promo"].firstMatch
+        assertExists(pill, named: "auto-skip pill on the intro pod", timeout: 75)
+        pill.tap()
+        attachSmokeScreenshot(named: "step4_bug_episode_intro_auto_skip_pill_tapped")
+        // Undo returns into the pod and plays through without re-skipping.
+        // This device's live analysis marks the intro pod at ~0:50-2:10, so
+        // anything under 2:00 is unambiguously "back inside".
+        let backInside = waitForPlaybackElapsed(progress, in: 49..<120, timeout: 8)
+        attachSmokeScreenshot(named: "step4_bug_episode_pill_undo_back_inside_pod")
+        XCTAssertLessThan(backInside, 120)
+        assertDoesNotExist(pill, named: "pill after undo (no immediate re-skip)", timeout: 1)
+        let playingThrough = waitForPlaybackElapsed(progress, atLeast: backInside + 6, timeout: 15)
+        XCTAssertLessThan(
+            playingThrough,
+            125,
+            "Playback should continue inside the disarmed pod instead of re-skipping."
+        )
+        attachSmokeScreenshot(named: "step4_bug_episode_pill_undo_playthrough")
+    }
+
+    @MainActor
     func testSeededNowPlayingArtworkPeelDragDoesNotDismissOrMoveCard() throws {
         let app = makeSeededApp()
         app.launch()
@@ -1009,6 +1557,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["Episodes"], named: "podcast detail episodes section")
         assertExists(seededEpisodeRow(in: app), named: "podcast detail seeded episode")
         attachSmokeScreenshot(named: "podcast_detail")
+        assertCompactCardPlateIsInset(named: "podcast detail compact card plate")
 
         tapBackButton(in: app)
         assertExists(libraryPodcast, named: "Library root after podcast detail")
@@ -1022,7 +1571,7 @@ final class OpenCastUITests: XCTestCase {
         openCurrentEpisodeDetailFromNowPlaying(in: app)
         let playEpisodeButton = app.buttons["Play Episode"]
         assertExists(playEpisodeButton, named: "Play Episode button")
-        assertExists(app.staticTexts["Summary"], named: "episode summary heading")
+        assertExists(app.staticTexts["Show Notes"], named: "episode show notes heading")
         attachSmokeScreenshot(named: "episode_detail")
 
         app.buttons["Open Now Playing"].tap()
@@ -1038,11 +1587,13 @@ final class OpenCastUITests: XCTestCase {
         assertExists(inboxEpisodeAfterPlayback, named: "Inbox root after playback")
         assertMiniPlayerDoesNotCover(inboxEpisodeAfterPlayback, named: "seeded inbox episode", in: app)
         attachSmokeScreenshot(named: "inbox_compact")
+        assertCompactCardPlateIsInset(named: "Inbox compact card plate")
 
         openLibrary(in: app)
         assertExists(libraryPodcast, named: "seeded library podcast with mini-player")
         assertMiniPlayerDoesNotCover(libraryPodcast, named: "seeded library podcast", in: app)
         attachSmokeScreenshot(named: "library_compact")
+        assertCompactCardPlateIsInset(named: "Library compact card plate")
 
         app.buttons["Open Now Playing"].tap()
         assertNowPlayingOverlay(in: app)
@@ -1068,6 +1619,7 @@ final class OpenCastUITests: XCTestCase {
 
         let diagnosticsLink = app.buttons["Diagnostics"]
         scrollUntilHittable(diagnosticsLink, in: app)
+        scrollUntilMiniPlayerDoesNotCover(diagnosticsLink, in: app)
         assertMiniPlayerDoesNotCover(diagnosticsLink, named: "Diagnostics row", in: app)
         diagnosticsLink.tap()
 
@@ -1096,9 +1648,15 @@ final class OpenCastUITests: XCTestCase {
         assertNowPlayingOverlay(in: app)
         openCurrentEpisodeDetailFromNowPlaying(in: app)
         assertExists(app.buttons["Play Episode"], named: "Play Episode button")
-        assertExists(app.buttons["Play Downloaded"], named: "Play Downloaded button")
-        assertExists(app.buttons["Delete Download"], named: "Delete Download button")
+        let downloadedButton = app.buttons["Downloaded"]
+        assertExists(downloadedButton, named: "Downloaded button")
+        assertExists(elementContaining(label: "Downloaded", in: app), named: "downloaded metadata chip")
         attachSmokeScreenshot(named: "episode_detail_completed_download")
+
+        downloadedButton.tap()
+        assertExists(app.buttons["Delete Download"], named: "Delete Download menu action")
+        attachSmokeScreenshot(named: "episode_detail_downloaded_menu")
+        dismissContextualMenu(in: app)
 
         app.tabBars.buttons["Settings"].tap()
         let deleteAllDownloadsButton = app.buttons["Delete All Downloads"]
@@ -1106,6 +1664,471 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["Downloaded Episodes"], named: "Downloaded Episodes row")
         assertExists(deleteAllDownloadsButton, named: "Delete All Downloads button")
         attachSmokeScreenshot(named: "settings_downloads")
+    }
+
+    @MainActor
+    func testSeededDownloadsTabLocalPlaybackAndEditSelection() throws {
+        let app = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true,
+            seedsCompletedDownload: true
+        )
+        app.launch()
+
+        let downloadsTab = app.tabBars.buttons["Downloads"]
+        assertHittable(downloadsTab, named: "Downloads tab")
+        downloadsTab.tap()
+
+        assertExists(app.navigationBars["Downloads"], named: "Downloads navigation bar")
+        assertExists(app.staticTexts["Downloaded Episodes"], named: "Downloads storage summary")
+        assertExists(app.staticTexts["Downloaded"], named: "Downloaded section")
+
+        let byPodcast = app.buttons["By Podcast"]
+        assertHittable(byPodcast, named: "By Podcast disclosure")
+        byPodcast.tap()
+        assertExists(
+            app.descendants(matching: .any)["download-podcast-https://example.com/ui-test-feed.xml"],
+            named: "downloaded podcast breakdown"
+        )
+
+        let downloadedRowButton = app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
+        scrollUntilHittable(downloadedRowButton, in: app)
+        assertHittable(downloadedRowButton, named: "downloaded episode playback row")
+        downloadedRowButton.tap()
+
+        assertNowPlayingOverlay(in: app)
+        XCTAssertFalse(app.alerts["Playback Failed"].waitForExistence(timeout: 2))
+        dismissNowPlayingOverlay(in: app)
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertExists(miniPlayer, named: "mini-player after local playback")
+
+        let editButton = app.navigationBars["Downloads"].buttons["Edit"]
+        assertHittable(editButton, named: "Downloads Edit button")
+        editButton.tap()
+
+        assertDoesNotExist(
+            app.descendants(matching: .any)
+                .matching(identifier: Self.seededEpisodeRowIdentifier)
+                .firstMatch,
+            named: "download playback row while editing",
+            timeout: 5
+        )
+        let selectionRow = app.descendants(matching: .any)
+            .matching(identifier: Self.seededDownloadSelectionRowIdentifier)
+            .firstMatch
+        scrollUntilHittable(selectionRow, in: app)
+        assertHittable(selectionRow, named: "download selection row")
+        selectionRow.tap()
+
+        assertExists(miniPlayer, named: "mini-player after selecting a download")
+
+        let deleteSelected = app.buttons["Delete Selected (1)"]
+        assertMiniPlayerDoesNotCover(
+            deleteSelected,
+            named: "Delete Selected edit action",
+            in: app
+        )
+        attachSmokeScreenshot(named: "downloads_edit_selection_with_mini_player")
+
+        deleteSelected.tap()
+        let confirmDeleteSelected = app.buttons["Delete Selected"]
+        assertHittable(confirmDeleteSelected, named: "Delete Selected confirmation")
+        confirmDeleteSelected.tap()
+
+        assertExists(app.staticTexts["No Downloads"], named: "Downloads empty state after bulk deletion")
+        assertDoesNotExist(
+            app.navigationBars["Downloads"].buttons["Done"],
+            named: "Done button after deleting the final completed download",
+            timeout: 5
+        )
+    }
+
+    @MainActor
+    func testSeededTranscriptAndSpeechModelSmoke() throws {
+        let app = makeSeededApp(
+            seedsCompletedDownload: true,
+            seedsTranscriptionModel: true,
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true
+        )
+        app.launch()
+
+        openSettings(in: app)
+        scrollUntilExists(app.staticTexts["Transcription"], in: app)
+        assertExists(app.staticTexts["Transcription"], named: "Transcription settings section")
+        // The Fast/Accurate model picker left the product path (decision 5);
+        // whisper management in main Settings is tiny-pinned.
+        XCTAssertFalse(app.buttons["Fast"].exists, "Fast/Accurate picker must be out of the product path")
+        XCTAssertFalse(app.buttons["Accurate"].exists, "Fast/Accurate picker must be out of the product path")
+        let installedStatus = elementContaining(label: "Installed", in: app)
+        scrollUntilExists(installedStatus, in: app)
+        assertExists(installedStatus, named: "installed speech model status")
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+        assertNowPlayingOverlay(in: app)
+
+        let moreMenuButton = app.buttons["More Actions"]
+        assertExists(moreMenuButton, named: "now playing more actions menu")
+        moreMenuButton.tap()
+        let showTranscriptItem = app.buttons["Show Transcript"]
+        assertExists(showTranscriptItem, named: "Show Transcript action")
+        showTranscriptItem.tap()
+        assertExists(app.staticTexts["Transcript"], named: "transcript sheet title")
+        assertExists(app.buttons["Welcome to a deterministic transcript."], named: "transcript sheet line")
+        attachSmokeScreenshot(named: "now_playing_transcript_sheet")
+        dismissTranscriptSheetAndWaitForNowPlaying(in: app)
+
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
+
+        let readTranscriptButton = app.buttons["Read Transcript"]
+        scrollUntilHittable(readTranscriptButton, in: app)
+        assertExists(readTranscriptButton, named: "Read Transcript button")
+        attachSmokeScreenshot(named: "episode_detail_transcript_entry")
+        readTranscriptButton.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "Transcript route title")
+        assertExists(app.buttons["Welcome to a deterministic transcript."], named: "seeded transcript line")
+        let annotatedSponsorRow = app.buttons.matching(NSPredicate(
+            format: "label == %@ AND value CONTAINS %@",
+            "This row is brought to you by Seed Sponsor.",
+            "Sponsor segment, Seed Sponsor"
+        )).firstMatch
+        assertExists(annotatedSponsorRow, named: "seeded sponsor transcript line with promo/ad span")
+        attachSmokeScreenshot(named: "episode_transcript_seeded")
+
+        app.buttons["Search Transcript"].tap()
+        let searchField = app.textFields["Search Transcript"]
+        assertExists(searchField, named: "transcript search field")
+        searchField.tap()
+        searchField.typeText("deterministic")
+        assertExists(app.staticTexts["1 of 1"], named: "transcript search match count")
+        attachSmokeScreenshot(named: "episode_transcript_search")
+        app.buttons["Close Search"].tap()
+        assertDoesNotExist(searchField, named: "transcript search field after close", timeout: 2)
+
+        openTranscriptOptionsMenu(in: app)
+        assertDoesNotExist(app.buttons["Analyze Promos & Ads"], named: "Analyze action without ad-analysis token", timeout: 1)
+        assertDoesNotExist(app.buttons["Reanalyze Promos & Ads"], named: "Reanalyze action without ad-analysis token", timeout: 1)
+        assertDoesNotExist(app.buttons["Retry Promo/Ad Analysis"], named: "Retry action without ad-analysis token", timeout: 1)
+        assertExists(app.buttons["Delete Promo/Ad Analysis"], named: "Delete saved promo/ad analysis")
+        dismissTranscriptOptionsMenu(in: app)
+    }
+
+    @MainActor
+    func testSeededNowPlayingMoreMenuOpensTranscriptSheet() throws {
+        let app = makeSeededApp(
+            seedsTranscriptionModel: true,
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true
+        )
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+        assertNowPlayingOverlay(in: app)
+
+        let moreMenuButton = app.buttons["More Actions"]
+        assertExists(moreMenuButton, named: "now playing more actions menu")
+        moreMenuButton.tap()
+        let showTranscriptItem = app.buttons["Show Transcript"]
+        assertExists(showTranscriptItem, named: "Show Transcript action")
+        showTranscriptItem.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "transcript sheet title")
+        assertExists(app.buttons["Welcome to a deterministic transcript."], named: "transcript sheet line")
+        attachSmokeScreenshot(named: "now_playing_transcript_sheet_standalone")
+        dismissTranscriptSheetAndWaitForNowPlaying(in: app)
+    }
+
+    @MainActor
+    func testOnDemandTranscriptRequestToastOpensCompletedTranscript() throws {
+        let app = makeSeededApp(
+            seedsCompletedDownload: true,
+            completesTranscriptRequests: true
+        )
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+        assertNowPlayingOverlay(in: app)
+
+        app.buttons["More Actions"].tap()
+        let generateTranscript = app.buttons["Generate Transcript"]
+        assertHittable(generateTranscript, named: "Generate Transcript action")
+        generateTranscript.tap()
+
+        let toast = app.descendants(matching: .any)["Transcription Progress Toast"]
+        assertExists(toast, named: "transcription request toast")
+        let readyButton = toast.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@",
+            "Transcript ready"
+        )).firstMatch
+        assertHittable(readyButton, named: "Transcript ready action", timeout: 10)
+        assertHittable(toast.buttons["Dismiss"], named: "separate transcript toast dismiss action")
+        readyButton.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "transcript sheet title")
+        assertExists(app.buttons["Search Transcript"], named: "transcript search action")
+        assertExists(app.buttons["Transcript Options"], named: "transcript options action")
+        assertExists(
+            app.buttons["Deterministic UI request transcript."],
+            named: "generated transcript line"
+        )
+    }
+
+    @MainActor
+    func testOptInLiveWorkerAdAnalysisTranscriptScreenshot() throws {
+        let transcriptPath = try requireArtifactPath(
+            environmentKey: Self.liveAdAnalysisTranscriptPathEnvironmentKey
+        )
+        let responsePath = try requireArtifactPath(
+            environmentKey: Self.liveAdAnalysisResponsePathEnvironmentKey
+        )
+        let app = makeSeededApp(seedsTranscriptionModel: true)
+        app.launchEnvironment[Self.liveAdAnalysisTranscriptPathEnvironmentKey] = transcriptPath
+        app.launchEnvironment[Self.liveAdAnalysisResponsePathEnvironmentKey] = responsePath
+        app.launch()
+
+        openInbox(in: app)
+        let liveEpisode = liveAdAnalysisEpisodeRow(in: app)
+        scrollUntilExists(liveEpisode, in: app, maxSwipes: 3)
+        openEpisodeDetailFromContextMenu(
+            liveEpisode,
+            in: app,
+            named: "live Worker ad-analysis episode"
+        )
+
+        let viewTranscriptButton = app.buttons["Read Transcript"]
+        scrollUntilHittable(viewTranscriptButton, in: app)
+        viewTranscriptButton.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "Transcript route title")
+        openTranscriptOptionsMenu(in: app)
+        assertDoesNotExist(app.buttons["Analyze Promos & Ads"], named: "Analyze action without ad-analysis token", timeout: 1)
+        assertDoesNotExist(app.buttons["Reanalyze Promos & Ads"], named: "Reanalyze action without ad-analysis token", timeout: 1)
+        assertExists(app.buttons["Delete Promo/Ad Analysis"], named: "Delete saved live Worker promo/ad analysis")
+        dismissTranscriptOptionsMenu(in: app)
+
+        let cancerResearchRow = app.buttons.matching(NSPredicate(
+            format: "label == %@ AND value CONTAINS %@",
+            "This episode is brought to you by Cancer Research UK.",
+            "Sponsor segment"
+        )).firstMatch
+        scrollUntilVisible(cancerResearchRow, in: app, maxSwipes: 12)
+        assertExists(cancerResearchRow, named: "live Worker transcript ad row with promo/ad span")
+        attachSmokeScreenshot(named: "episode_transcript_live_worker_ad_analysis")
+    }
+
+    @MainActor
+    func testOptInDebugBearerAdAnalysisRoundTripsAgainstDevWorker() throws {
+        let clientToken = try requireEnvironmentValue(
+            Self.adAnalysisClientTokenEnvironmentKey,
+            skipMessage: "Set \(Self.adAnalysisClientTokenEnvironmentKey) to run the live dev Worker ad-analysis Debug bearer smoke."
+        )
+        let app = makeSeededApp(
+            seedsTranscriptionModel: true,
+            seedsCompletedTranscript: true
+        )
+        app.launchEnvironment[Self.adAnalysisClientTokenEnvironmentKey] = clientToken
+        if let baseURL = optionalEnvironmentValue(Self.adAnalysisBaseURLEnvironmentKey) {
+            app.launchEnvironment[Self.adAnalysisBaseURLEnvironmentKey] = baseURL
+        }
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+        assertNowPlayingOverlay(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
+
+        let viewTranscriptButton = app.buttons["Read Transcript"]
+        scrollUntilHittable(viewTranscriptButton, in: app)
+        viewTranscriptButton.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "Transcript route title")
+        assertExists(app.buttons["This row is brought to you by Seed Sponsor."], named: "seeded sponsor transcript line")
+        openTranscriptOptionsMenu(in: app)
+        let analyzeButton = app.buttons["Analyze Promos & Ads"]
+        assertExists(analyzeButton, named: "Analyze Promos & Ads menu action")
+        analyzeButton.tap()
+
+        assertExists(app.staticTexts["Analyzing Promos & Ads"], named: "live dev Worker analysis progress", timeout: 10)
+        XCTAssertTrue(
+            app.staticTexts["Analyzing Promos & Ads"].waitForNonExistence(timeout: 120),
+            "Live dev Worker analysis should finish within two minutes."
+        )
+        openTranscriptOptionsMenu(in: app)
+        assertDoesNotExist(app.buttons["Retry Promo/Ad Analysis"], named: "Retry action after successful analysis", timeout: 1)
+        assertExists(app.buttons["Delete Promo/Ad Analysis"], named: "Delete live dev Worker promo/ad analysis")
+        dismissTranscriptOptionsMenu(in: app)
+        attachSmokeScreenshot(named: "episode_transcript_live_dev_worker_ad_analysis")
+    }
+
+    @MainActor
+    func testOptInPhysicalAppAttestAdAnalysisRoundTripsAgainstDevWorker() throws {
+        #if !OPENCAST_RUN_PHYSICAL_APP_ATTEST_AD_ANALYSIS_UI_TESTS
+        let shouldRunProbe =
+            ProcessInfo.processInfo.environment[Self.physicalAppAttestAdAnalysisProbeEnvironmentKey] == "1"
+            || FileManager.default.fileExists(atPath: Self.physicalAppAttestAdAnalysisProbeFilePath)
+        guard shouldRunProbe else {
+            throw XCTSkip("Set \(Self.physicalAppAttestAdAnalysisProbeEnvironmentKey)=1, create \(Self.physicalAppAttestAdAnalysisProbeFilePath), or build with -DOPENCAST_RUN_PHYSICAL_APP_ATTEST_AD_ANALYSIS_UI_TESTS to run the physical-device App Attest ad-analysis smoke.")
+        }
+        #endif
+
+        let app = makeSeededApp(
+            seedsTranscriptionModel: true,
+            seedsCompletedTranscript: true
+        )
+        app.launchEnvironment[Self.adAnalysisClientTokenEnvironmentKey] = ""
+        app.launchEnvironment["OPENCAST_RESET_AD_ANALYSIS_APP_ATTEST_CREDENTIAL"] = "1"
+        if let baseURL = optionalEnvironmentValue(Self.adAnalysisBaseURLEnvironmentKey) {
+            app.launchEnvironment[Self.adAnalysisBaseURLEnvironmentKey] = baseURL
+        }
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+        assertNowPlayingOverlay(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
+
+        let viewTranscriptButton = app.buttons["Read Transcript"]
+        scrollUntilHittable(viewTranscriptButton, in: app)
+        viewTranscriptButton.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "Transcript route title")
+        assertExists(app.buttons["This row is brought to you by Seed Sponsor."], named: "seeded sponsor transcript line")
+        openTranscriptOptionsMenu(in: app)
+        let analyzeButton = app.buttons["Analyze Promos & Ads"]
+        assertExists(analyzeButton, named: "Analyze Promos & Ads menu action")
+        analyzeButton.tap()
+
+        assertExists(app.staticTexts["Analyzing Promos & Ads"], named: "physical App Attest analysis progress", timeout: 10)
+        XCTAssertTrue(
+            app.staticTexts["Analyzing Promos & Ads"].waitForNonExistence(timeout: 120),
+            "Physical App Attest analysis should finish within two minutes."
+        )
+        openTranscriptOptionsMenu(in: app)
+        let firstDeleteButton = app.buttons["Delete Promo/Ad Analysis"]
+        assertExists(firstDeleteButton, named: "Delete physical App Attest promo/ad analysis")
+        dismissTranscriptOptionsMenu(in: app)
+        attachSmokeScreenshot(named: "episode_transcript_physical_app_attest_dev_worker_ad_analysis")
+
+        openTranscriptOptionsMenu(in: app)
+        firstDeleteButton.tap()
+        openTranscriptOptionsMenu(in: app)
+        let cachedKeyAnalyzeButton = app.buttons["Analyze Promos & Ads"]
+        assertExists(cachedKeyAnalyzeButton, named: "Analyze action after deleting first analysis")
+        cachedKeyAnalyzeButton.tap()
+
+        _ = app.staticTexts["Analyzing Promos & Ads"].waitForExistence(timeout: 2)
+        XCTAssertTrue(
+            app.staticTexts["Analyzing Promos & Ads"].waitForNonExistence(timeout: 120),
+            "Cached-key analysis should finish within two minutes."
+        )
+        openTranscriptOptionsMenu(in: app)
+        assertExists(app.buttons["Delete Promo/Ad Analysis"], named: "Delete physical App Attest cached-key ad analysis")
+        dismissTranscriptOptionsMenu(in: app)
+        attachSmokeScreenshot(named: "episode_transcript_physical_app_attest_dev_worker_ad_analysis_cached_key")
+    }
+
+    @MainActor
+    func testSeededStaleAdAnalysisDoesNotAnnotateTranscriptRows() throws {
+        let app = makeSeededApp(
+            seedsCompletedDownload: true,
+            seedsTranscriptionModel: true,
+            seedsCompletedTranscript: true,
+            seedsStaleAdAnalysis: true
+        )
+        app.launchEnvironment[Self.adAnalysisClientTokenEnvironmentKey] = ""
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+        assertNowPlayingOverlay(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
+
+        let viewTranscriptButton = app.buttons["Read Transcript"]
+        scrollUntilHittable(viewTranscriptButton, in: app)
+        viewTranscriptButton.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "Transcript route title")
+        assertExists(app.staticTexts["Outdated — run again"], named: "stale promo/ad analysis banner")
+        let sponsorRow = app.buttons["This row is brought to you by Seed Sponsor."]
+        assertExists(sponsorRow, named: "seeded sponsor transcript line")
+        XCTAssertFalse(
+            ((sponsorRow.value as? String) ?? "").contains("Sponsor segment"),
+            "A stale analysis must not annotate transcript rows"
+        )
+        attachSmokeScreenshot(named: "episode_transcript_stale_ad_analysis_no_badges")
+
+        openTranscriptOptionsMenu(in: app)
+        assertDoesNotExist(app.buttons["Analyze Promos & Ads"], named: "Analyze action without ad-analysis token", timeout: 1)
+        assertDoesNotExist(app.buttons["Reanalyze Promos & Ads"], named: "Reanalyze action without ad-analysis token", timeout: 1)
+        let deleteAnalysisButton = app.buttons["Delete Promo/Ad Analysis"]
+        assertExists(deleteAnalysisButton, named: "Delete stale promo/ad analysis")
+
+        deleteAnalysisButton.tap()
+
+        XCTAssertTrue(
+            app.staticTexts["Outdated — run again"].waitForNonExistence(timeout: 5),
+            "The stale banner should clear after deleting the analysis."
+        )
+        openTranscriptOptionsMenu(in: app)
+        let unavailableAnalyzeItem = app.buttons["Analyze Promos & Ads"]
+        assertExists(unavailableAnalyzeItem, named: "Analyze action after deleting stale analysis")
+        XCTAssertFalse(
+            unavailableAnalyzeItem.isEnabled,
+            "Analyze must stay disabled without App Attest support"
+        )
+        assertDoesNotExist(app.buttons["Delete Promo/Ad Analysis"], named: "Delete action after deleting stale analysis", timeout: 1)
+        dismissTranscriptOptionsMenu(in: app)
+        assertExists(app.buttons["This row is brought to you by Seed Sponsor."], named: "transcript line after deleting stale promo/ad analysis")
+    }
+
+    @MainActor
+    func testSeededTranscriptWithoutAdAnalysisTokenHidesAnalyzeControls() throws {
+        let app = makeSeededApp(
+            seedsCompletedDownload: true,
+            seedsTranscriptionModel: true,
+            seedsCompletedTranscript: true
+        )
+        app.launchEnvironment[Self.adAnalysisClientTokenEnvironmentKey] = ""
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+        assertNowPlayingOverlay(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
+
+        let viewTranscriptButton = app.buttons["Read Transcript"]
+        scrollUntilHittable(viewTranscriptButton, in: app)
+        viewTranscriptButton.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "Transcript route title")
+        openTranscriptOptionsMenu(in: app)
+        let analyzeItem = app.buttons["Analyze Promos & Ads"]
+        assertExists(analyzeItem, named: "Analyze action in transcript menu")
+        XCTAssertFalse(
+            analyzeItem.isEnabled,
+            "Analyze must be disabled without an ad-analysis token"
+        )
+        assertDoesNotExist(app.buttons["Reanalyze Promos & Ads"], named: "Reanalyze action without ad-analysis token", timeout: 1)
+        dismissTranscriptOptionsMenu(in: app)
     }
 
     @MainActor
@@ -1137,6 +2160,92 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededEpisodeDetailRedesignScreenshotMatrix() throws {
+        let darkApp = makeSeededApp(
+            seedsCompletedDownload: true,
+            seedsTranscriptionModel: true,
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true
+        )
+        darkApp.launch()
+        openSeededEpisodeDetail(in: darkApp)
+        assertExists(darkApp.buttons["Play Episode"], named: "Play Episode button")
+        assertExists(darkApp.buttons["Downloaded"], named: "Downloaded action button")
+        assertExists(
+            elementContaining(label: "ad segment", in: darkApp),
+            named: "ad-span timeline caption"
+        )
+        assertExists(darkApp.buttons["Read Transcript"], named: "transcript entry card")
+        attachSmokeScreenshot(named: "episode_detail_full_pipeline_dark")
+
+        let scrollStart = darkApp.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+        let scrollEnd = darkApp.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+        scrollStart.press(forDuration: 0.05, thenDragTo: scrollEnd)
+        assertExists(darkApp.staticTexts["Show Notes"], named: "show notes heading after scroll")
+        attachSmokeScreenshot(named: "episode_detail_show_notes_dark")
+        darkApp.terminate()
+
+        let lightApp = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true,
+            seedsCompletedDownload: true,
+            seedsTranscriptionModel: true,
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true
+        )
+        lightApp.launch()
+        openSeededEpisodeDetail(in: lightApp)
+        assertExists(lightApp.buttons["Play Episode"], named: "Play Episode button (light)")
+        attachSmokeScreenshot(named: "episode_detail_full_pipeline_light")
+        lightApp.terminate()
+
+        let longNotesApp = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true,
+            seedsEpisodeProgress: true,
+            seedsLongShowNotes: true
+        )
+        longNotesApp.launch()
+        openSeededEpisodeDetail(in: longNotesApp)
+        assertExists(longNotesApp.buttons["Play Episode"], named: "Play Episode button (long notes)")
+        for _ in 0..<4 {
+            let start = longNotesApp.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+            let end = longNotesApp.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
+        attachSmokeScreenshot(named: "episode_detail_long_show_notes_bottom_light")
+    }
+
+    @MainActor
+    func testEpisodeDetailSupportsAccessibilityDynamicType() throws {
+        let app = makeSeededApp(
+            preferredContentSizeCategoryName: "UICTContentSizeCategoryAccessibilityXXXL"
+        )
+        app.launch()
+        openSeededEpisodeDetail(in: app)
+
+        assertExists(app.buttons["Play Episode"], named: "Play Episode button at AX size")
+        assertExists(app.buttons["Download"], named: "Download button at AX size")
+        assertExists(app.buttons["Make Ad-Free"], named: "Make Ad-Free button at AX size")
+        attachSmokeScreenshot(named: "episode_detail_dynamic_type_ax")
+    }
+
+    @MainActor
+    func testSeededFailedDownloadShowsPipelineCardRetry() throws {
+        let app = makeSeededApp(seedsFailedDownload: true)
+        app.launch()
+        openSeededEpisodeDetail(in: app)
+
+        assertExists(app.staticTexts["Download didn't finish"], named: "failed download pipeline card title")
+        assertExists(
+            elementContaining(label: "The download couldn't finish.", in: app),
+            named: "failed download friendly message"
+        )
+        assertExists(app.buttons["Retry"], named: "pipeline card Retry action")
+        attachSmokeScreenshot(named: "episode_detail_failed_download")
+    }
+
+    @MainActor
     func testEpisodeActionsMarkPlayedAndClearProgress() throws {
         let progressApp = makeSeededApp(seedsEpisodeProgress: true)
         progressApp.launch()
@@ -1159,8 +2268,8 @@ final class OpenCastUITests: XCTestCase {
         assertExists(markPlayedButton, named: "Mark Played action")
         markPlayedButton.tap()
         assertExists(
-            elementContaining(label: "Completed", in: markPlayedApp),
-            named: "Completed status after Mark Played",
+            elementContaining(label: "Played", in: markPlayedApp),
+            named: "Played chip after Mark Played",
             timeout: 10
         )
     }
@@ -1284,11 +2393,11 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testOptInLibriVoxRemoteFeedCanPlayFromAppUI() throws {
+    func testOptInRestIsScienceRemoteFeedCanPlayFromAppUI() throws {
         let shouldRunRemoteProbe = ProcessInfo.processInfo.environment["OPENCAST_RUN_REMOTE_VOICEBOOST_UI_TESTS"] == "1"
             || FileManager.default.fileExists(atPath: "/tmp/opencast-run-remote-voiceboost-ui-tests")
         guard shouldRunRemoteProbe else {
-            throw XCTSkip("Set OPENCAST_RUN_REMOTE_VOICEBOOST_UI_TESTS=1 or create /tmp/opencast-run-remote-voiceboost-ui-tests to run the live LibriVox UI playback probe.")
+            throw XCTSkip("Set OPENCAST_RUN_REMOTE_VOICEBOOST_UI_TESTS=1 or create /tmp/opencast-run-remote-voiceboost-ui-tests to run the live The Rest Is Science playback probe.")
         }
 
         let app = XCUIApplication()
@@ -1298,7 +2407,7 @@ final class OpenCastUITests: XCTestCase {
         ]
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
         app.launchEnvironment["OPENCAST_FORCE_DARK_MODE"] = "1"
-        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = "https://feeds.feedburner.com/LibrivoxCommunityPodcast"
+        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = "https://feeds.megaphone.fm/GLT6907573392"
         app.launchEnvironment["OPENCAST_CAPTURE_VOICEBOOST_DIAGNOSTICS"] = "1"
         app.launch()
 
@@ -1306,11 +2415,11 @@ final class OpenCastUITests: XCTestCase {
         tapAddPodcastButton(in: app)
         app.buttons["Subscribe"].tap()
 
-        assertExists(app.staticTexts["Librivox Community Podcast - LibriVox"], named: "LibriVox subscription", timeout: 30)
+        assertExists(app.staticTexts["The Rest Is Science - Goalhanger"], named: "The Rest Is Science subscription", timeout: 30)
         openInbox(in: app)
 
-        let firstEpisode = libriVoxFirstEpisode(in: app)
-        assertExists(firstEpisode, named: "LibriVox inbox episode", timeout: 30)
+        let firstEpisode = restIsScienceFirstEpisode(in: app)
+        assertExists(firstEpisode, named: "The Rest Is Science inbox episode", timeout: 30)
         firstEpisode.tap()
 
         assertNowPlayingOverlay(in: app)
@@ -1410,7 +2519,9 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
 
         app.buttons["Continue"].tap()
-        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
+        assertExists(app.staticTexts["Tiny Whisper Model"], named: "Tiny Whisper onboarding screen")
+        app.buttons["Skip"].tap()
+        assertExists(app.staticTexts["New Episode Alerts"], named: "notification onboarding screen")
         app.buttons["Done"].tap()
         let addThisAmericanLife = app.buttons["Add This American Life"]
         assertExists(addThisAmericanLife, named: "This American Life fallback confirmation", timeout: 10)
@@ -1447,7 +2558,9 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["This American Life"], named: "This American Life sample suggestion")
 
         app.buttons["Continue"].tap()
-        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
+        assertExists(app.staticTexts["Tiny Whisper Model"], named: "Tiny Whisper onboarding screen")
+        app.buttons["Skip"].tap()
+        assertExists(app.staticTexts["New Episode Alerts"], named: "notification onboarding screen")
         app.buttons["Done"].tap()
         let addThisAmericanLife = app.buttons["Add This American Life"]
         assertExists(addThisAmericanLife, named: "This American Life fallback confirmation", timeout: 10)
@@ -1526,7 +2639,9 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
 
         app.buttons["Continue"].tap()
-        assertExists(app.staticTexts["Get New Episode Alerts"], named: "notification onboarding screen")
+        assertExists(app.staticTexts["Tiny Whisper Model"], named: "Tiny Whisper onboarding screen")
+        app.buttons["Skip"].tap()
+        assertExists(app.staticTexts["New Episode Alerts"], named: "notification onboarding screen")
         app.buttons["Done"].tap()
         let addThisAmericanLife = app.buttons["Add This American Life"]
         assertExists(addThisAmericanLife, named: "This American Life fallback confirmation", timeout: 10)
@@ -1578,11 +2693,11 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testOptInLibriVoxNowPlayingArtworkPeelScreenshot() throws {
+    func testOptInRestIsScienceNowPlayingArtworkPeelScreenshot() throws {
         let shouldRunRemotePeelProbe = ProcessInfo.processInfo.environment["OPENCAST_RUN_REMOTE_PEEL_UI_TESTS"] == "1"
             || FileManager.default.fileExists(atPath: "/tmp/opencast-run-remote-peel-ui-tests")
         guard shouldRunRemotePeelProbe else {
-            throw XCTSkip("Set OPENCAST_RUN_REMOTE_PEEL_UI_TESTS=1 or create /tmp/opencast-run-remote-peel-ui-tests to run the live LibriVox peel visual probe.")
+            throw XCTSkip("Set OPENCAST_RUN_REMOTE_PEEL_UI_TESTS=1 or create /tmp/opencast-run-remote-peel-ui-tests to run the live The Rest Is Science peel visual probe.")
         }
 
         let app = XCUIApplication()
@@ -1592,18 +2707,18 @@ final class OpenCastUITests: XCTestCase {
         ]
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
         app.launchEnvironment["OPENCAST_FORCE_LIGHT_MODE"] = "1"
-        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = "https://feeds.feedburner.com/LibrivoxCommunityPodcast"
+        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = "https://feeds.megaphone.fm/GLT6907573392"
         app.launch()
 
         openLibrary(in: app)
         tapAddPodcastButton(in: app)
         app.buttons["Subscribe"].tap()
 
-        assertExists(app.staticTexts["Librivox Community Podcast - LibriVox"], named: "LibriVox subscription", timeout: 30)
+        assertExists(app.staticTexts["The Rest Is Science - Goalhanger"], named: "The Rest Is Science subscription", timeout: 30)
         openInbox(in: app)
 
-        let firstEpisode = libriVoxFirstEpisode(in: app)
-        assertExists(firstEpisode, named: "LibriVox inbox episode", timeout: 30)
+        let firstEpisode = restIsScienceFirstEpisode(in: app)
+        assertExists(firstEpisode, named: "The Rest Is Science inbox episode", timeout: 30)
         waitForExternalTraceIfRequested(environmentKey: Self.remotePeelTraceArmingSecondsEnvironmentKey)
         firstEpisode.tap()
 
@@ -1759,6 +2874,15 @@ final class OpenCastUITests: XCTestCase {
         forcesDarkMode: Bool = true,
         forcesLightMode: Bool = false,
         seedsCompletedDownload: Bool = false,
+        seedsFailedDownload: Bool = false,
+        seedsTranscriptionModel: Bool = false,
+        seedsCompletedTranscript: Bool = false,
+        completesTranscriptRequests: Bool = false,
+        seedsCompletedAdAnalysis: Bool = false,
+        seedsAdAnalysisSpanAtStart: Bool = false,
+        seedsStaleAdAnalysis: Bool = false,
+        seedsOutdatedPolicyAdAnalysis: Bool = false,
+        seedsLowConfidenceAdAnalysis: Bool = false,
         seedsBadAudioURL: Bool = false,
         seedsEpisodeProgress: Bool = false,
         seedsArtworkPreview: Bool = false,
@@ -1767,8 +2891,7 @@ final class OpenCastUITests: XCTestCase {
         seedsLongShowNotes: Bool = false,
         extraFeedCount: Int = 0,
         artworkVariant: String? = nil,
-        preferredContentSizeCategoryName: String? = nil,
-        forcesNotificationPromoBanner: Bool = false
+        preferredContentSizeCategoryName: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -1792,6 +2915,41 @@ final class OpenCastUITests: XCTestCase {
         if seedsCompletedDownload {
             app.launchArguments.append("--opencast-seed-completed-download")
             app.launchEnvironment["OPENCAST_SEED_COMPLETED_DOWNLOAD"] = "1"
+        }
+        if seedsFailedDownload {
+            app.launchArguments.append("--opencast-seed-failed-download")
+            app.launchEnvironment["OPENCAST_SEED_FAILED_DOWNLOAD"] = "1"
+        }
+        if seedsTranscriptionModel {
+            app.launchArguments.append("--opencast-seed-transcription-model")
+            app.launchEnvironment["OPENCAST_SEED_TRANSCRIPTION_MODEL"] = "1"
+        }
+        if seedsCompletedTranscript {
+            app.launchArguments.append("--opencast-seed-completed-transcript")
+            app.launchEnvironment["OPENCAST_SEED_COMPLETED_TRANSCRIPT"] = "1"
+        }
+        if completesTranscriptRequests {
+            app.launchArguments.append("--opencast-complete-transcript-requests")
+            app.launchEnvironment["OPENCAST_UI_TEST_COMPLETE_TRANSCRIPT_REQUESTS"] = "1"
+            app.launchArguments.append("--opencast-apple-speech-fake-assets=installed")
+            app.launchEnvironment["OPENCAST_APPLE_SPEECH_FAKE_ASSETS"] = "installed"
+        }
+        if seedsCompletedAdAnalysis {
+            app.launchArguments.append("--opencast-seed-completed-ad-analysis")
+            app.launchEnvironment["OPENCAST_SEED_COMPLETED_AD_ANALYSIS"] = "1"
+        }
+        if seedsAdAnalysisSpanAtStart {
+            app.launchArguments.append("--opencast-seed-ad-analysis-span-at-start")
+            app.launchEnvironment[Self.seedAdAnalysisSpanAtStartEnvironmentKey] = "1"
+        }
+        if seedsStaleAdAnalysis {
+            app.launchEnvironment["OPENCAST_SEED_STALE_AD_ANALYSIS"] = "1"
+        }
+        if seedsOutdatedPolicyAdAnalysis {
+            app.launchEnvironment["OPENCAST_SEED_OUTDATED_POLICY_AD_ANALYSIS"] = "1"
+        }
+        if seedsLowConfidenceAdAnalysis {
+            app.launchEnvironment["OPENCAST_SEED_LOW_CONFIDENCE_AD_ANALYSIS"] = "1"
         }
         if seedsEpisodeProgress {
             app.launchArguments.append("--opencast-seed-episode-progress")
@@ -1823,10 +2981,6 @@ final class OpenCastUITests: XCTestCase {
                 "-UIPreferredContentSizeCategoryName",
                 preferredContentSizeCategoryName
             ]
-        }
-        if forcesNotificationPromoBanner {
-            app.launchArguments.append("--opencast-force-notification-promo-banner")
-            app.launchEnvironment["OPENCAST_FORCE_NOTIFICATION_PROMO_BANNER"] = "1"
         }
         return app
     }
@@ -1934,6 +3088,142 @@ final class OpenCastUITests: XCTestCase {
         )
     }
 
+    @MainActor
+    private func dominantArtworkPreviewPixelSummary(
+        for element: XCUIElement,
+        timeout: TimeInterval = 8
+    ) throws -> ArtworkPreviewPixelSummary {
+        let deadline = Date.now.addingTimeInterval(timeout)
+        var latestSummary: ArtworkPreviewPixelSummary?
+
+        while Date.now < deadline {
+            let summary = try artworkPreviewPixelSummary(from: element.screenshot())
+            latestSummary = summary
+            if summary.previewPixels > summary.placeholderPixels * 8 {
+                return summary
+            }
+
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.25))
+        }
+
+        if let latestSummary {
+            return latestSummary
+        }
+
+        return try artworkPreviewPixelSummary(from: element.screenshot())
+    }
+
+    @MainActor
+    private func assertCompactCardPlateIsInset(
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let extents = compactCardPlateExtents(from: XCUIScreen.main.screenshot()) else {
+            XCTFail("Could not detect \(name).", file: file, line: line)
+            return
+        }
+
+        let minimumMargin = max(20, Int(Double(extents.imageWidth) * 0.02))
+        XCTAssertGreaterThanOrEqual(
+            extents.leftMargin,
+            minimumMargin,
+            "\(name) should keep the compact List/card leading inset.",
+            file: file,
+            line: line
+        )
+        XCTAssertGreaterThanOrEqual(
+            extents.rightMargin,
+            minimumMargin,
+            "\(name) should keep the compact List/card trailing inset.",
+            file: file,
+            line: line
+        )
+        XCTAssertLessThan(
+            Double(extents.plateWidth) / Double(extents.imageWidth),
+            0.97,
+            "\(name) should not render as a full-width compact plate.",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func compactCardPlateExtents(
+        from screenshot: XCUIScreenshot
+    ) -> (imageWidth: Int, plateWidth: Int, leftMargin: Int, rightMargin: Int)? {
+        guard let image = UIImage(data: screenshot.pngRepresentation),
+              let cgImage = image.cgImage
+        else {
+            return nil
+        }
+
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
+            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        )
+
+        let didDraw = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: bitmapInfo.rawValue
+            ) else {
+                return false
+            }
+
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard didDraw else {
+            return nil
+        }
+
+        let scanStartY = Int(Double(height) * 0.18)
+        let scanEndY = Int(Double(height) * 0.55)
+        let darkPixelThreshold = max(8, Int(Double(scanEndY - scanStartY) * 0.12))
+        var detectedColumns: [Int] = []
+
+        for x in 0..<width {
+            var darkPixelCount = 0
+            for y in scanStartY..<scanEndY {
+                let offset = (y * width + x) * bytesPerPixel
+                let red = pixels[offset]
+                let green = pixels[offset + 1]
+                let blue = pixels[offset + 2]
+                let luminance = (Int(red) + Int(green) + Int(blue)) / 3
+                let channelSpread = Int(max(red, green, blue)) - Int(min(red, green, blue))
+
+                if luminance >= 18, luminance <= 72, channelSpread <= 24 {
+                    darkPixelCount += 1
+                }
+            }
+
+            if darkPixelCount >= darkPixelThreshold {
+                detectedColumns.append(x)
+            }
+        }
+
+        guard let left = detectedColumns.min(), let right = detectedColumns.max() else {
+            return nil
+        }
+
+        return (
+            imageWidth: width,
+            plateWidth: right - left + 1,
+            leftMargin: left,
+            rightMargin: width - right - 1
+        )
+    }
+
     private struct ArtworkPreviewPixelSummary {
         let previewPixels: Int
         let placeholderPixels: Int
@@ -1942,6 +3232,11 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     private func seededEpisodeRow(in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
+    }
+
+    @MainActor
+    private func liveAdAnalysisEpisodeRow(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: Self.liveAdAnalysisEpisodeRowIdentifier).firstMatch
     }
 
     @MainActor
@@ -1955,8 +3250,65 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func openTranscriptOptionsMenu(in app: XCUIApplication) {
+        let menuButton = app.buttons["Transcript Options"]
+        assertExists(menuButton, named: "Transcript Options menu button")
+        menuButton.tap()
+    }
+
+    @MainActor
+    private func dismissTranscriptOptionsMenu(in app: XCUIApplication) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+    }
+
+    private func dismissContextualMenu(in app: XCUIApplication) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+    }
+
+    @MainActor
     private func seededSubscriptionRow(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: Self.seededSubscriptionRowIdentifier).firstMatch
+    }
+
+    private func requireArtifactPath(environmentKey: String) throws -> String {
+        guard let path = optionalEnvironmentValue(environmentKey)
+        else {
+            throw XCTSkip("Set \(environmentKey) to run the saved live Worker ad-analysis transcript screenshot smoke.")
+        }
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("Saved live Worker ad-analysis artifact is missing at \(path).")
+        }
+        return path
+    }
+
+    private func requireEnvironmentValue(_ environmentKey: String, skipMessage: String) throws -> String {
+        guard let value = optionalEnvironmentValue(environmentKey) else {
+            throw XCTSkip(skipMessage)
+        }
+        return value
+    }
+
+    private func optionalEnvironmentValue(_ environmentKey: String) -> String? {
+        let environment = ProcessInfo.processInfo.environment
+        let environmentValues = [
+            environment[environmentKey],
+            environment["TEST_RUNNER_\(environmentKey)"]
+        ]
+        if let value = environmentValues
+            .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty }) {
+            return value
+        }
+
+        guard environmentKey == Self.adAnalysisClientTokenEnvironmentKey,
+              FileManager.default.fileExists(atPath: Self.localAdAnalysisClientTokenFilePath),
+              let fileValue = try? String(contentsOfFile: Self.localAdAnalysisClientTokenFilePath, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !fileValue.isEmpty
+        else {
+            return nil
+        }
+        return fileValue
     }
 
     @MainActor
@@ -1970,13 +3322,48 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func dismissTranscriptSheetAndWaitForNowPlaying(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let transcriptNavigationBar = app.navigationBars["Transcript"]
+        assertExists(
+            transcriptNavigationBar,
+            named: "transcript sheet navigation bar",
+            file: file,
+            line: line
+        )
+        let dismissalStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.07))
+        let dismissalEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78))
+        dismissalStart.press(forDuration: 0.05, thenDragTo: dismissalEnd)
+        assertDoesNotExist(
+            transcriptNavigationBar,
+            named: "transcript sheet after dismissal",
+            timeout: 10,
+            file: file,
+            line: line
+        )
+        assertNowPlayingOverlay(in: app)
+
+        let titleButton = nowPlayingOverlay(in: app).buttons["Now Playing Episode Title"].firstMatch
+        assertHittable(
+            titleButton,
+            named: "Now Playing episode title after transcript sheet dismissal",
+            timeout: 10,
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
     private func openCurrentEpisodeDetailFromNowPlaying(in app: XCUIApplication) {
         let overlay = nowPlayingOverlay(in: app)
         assertExists(overlay, named: "Now Playing overlay before opening episode detail")
         let titleButton = overlay.buttons["Now Playing Episode Title"].firstMatch
-        assertExists(titleButton, named: "Now Playing episode title button")
+        assertHittable(titleButton, named: "Now Playing episode title button")
         titleButton.tap()
-        assertExists(app.buttons["Play Episode"], named: "episode detail after tapping Now Playing title")
+        assertExists(app.buttons["Play Episode"], named: "episode detail after tapping Now Playing title", timeout: 10)
     }
 
     @MainActor
@@ -1992,6 +3379,19 @@ final class OpenCastUITests: XCTestCase {
 
         let detailsAction = app.buttons["View Episode Details"]
         assertExists(detailsAction, named: "\(name) details context action", file: file, line: line)
+        // The shared row menu carries the step-6 actions on every surface.
+        assertExists(
+            app.buttons["Detect Ads"].firstMatch,
+            named: "\(name) Detect Ads context action",
+            file: file,
+            line: line
+        )
+        assertExists(
+            app.buttons["Download"].firstMatch,
+            named: "\(name) Download context action",
+            file: file,
+            line: line
+        )
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = "\(name) context preview"
         attachment.lifetime = .keepAlways
@@ -2129,13 +3529,6 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    private func dragDismissMiniPlayer(_ miniPlayer: XCUIElement) {
-        let start = miniPlayer.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-        let end = start.withOffset(CGVector(dx: 0, dy: 110))
-        start.press(forDuration: 0.05, thenDragTo: end)
-    }
-
-    @MainActor
     private func dragDismissNowPlayingOverlayFromArtwork(in app: XCUIApplication) {
         let artwork = nowPlayingArtwork(in: app)
         assertExists(artwork, named: "Now Playing artwork before dismissal")
@@ -2192,8 +3585,161 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func assertAdFreePassControlSitsInProtectedPanelSpace(
+        _ element: XCUIElement,
+        panel: XCUIElement,
+        stage: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(
+            panel.frame.contains(element.frame),
+            "\(stage) ad-free pass control should stay inside the peel panel",
+            file: file,
+            line: line
+        )
+        XCTAssertGreaterThanOrEqual(
+            element.frame.minX,
+            panel.frame.minX + (panel.frame.width * 0.34),
+            "\(stage) ad-free pass control should stay in the protected trailing panel space",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func captureAdFreePassControlScreenshot(
+        stage: String,
+        buttonLabel: String,
+        statusFragment: String,
+        screenshotName: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let app = makeSeededApp()
+        app.launchEnvironment[Self.adFreePassPresentationOverrideEnvironmentKey] = stage
+        app.launch()
+
+        openSeededNowPlayingSoundLab(in: app)
+        let panel = nowPlayingPeelSettingsPanel(in: app)
+        let passButton = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
+        let status = elementContaining(label: statusFragment, in: app)
+
+        assertExists(passButton, named: "\(stage) ad-free pass button", file: file, line: line)
+        XCTAssertTrue(passButton.label.contains(buttonLabel), file: file, line: line)
+        XCTAssertTrue(
+            ((passButton.value as? String) ?? "").contains(statusFragment),
+            "\(stage) ad-free pass button should expose its status as an accessibility value",
+            file: file,
+            line: line
+        )
+        assertExists(status, named: "\(stage) ad-free pass status", file: file, line: line)
+        assertAdFreePassControlSitsInProtectedPanelSpace(passButton, panel: panel, stage: stage, file: file, line: line)
+        assertAdFreePassControlSitsInProtectedPanelSpace(status, panel: panel, stage: "\(stage) status", file: file, line: line)
+        attachSmokeScreenshot(named: screenshotName)
+
+        app.terminate()
+    }
+
+    @MainActor
     private func playbackProgress(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["Playback Progress"]
+    }
+
+    @MainActor
+    private func autoSkipPill(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["Skipped promo"]
+    }
+
+    @MainActor
+    private func autoSkipSettingsToggle(in app: XCUIApplication) -> XCUIElement {
+        app.switches["Auto-Skip Promos & Ads"].firstMatch
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitForPlaybackElapsed(
+        _ progress: XCUIElement,
+        atLeast minimumElapsed: TimeInterval,
+        timeout: TimeInterval,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> TimeInterval {
+        waitForPlaybackElapsed(
+            progress,
+            matching: { $0 >= minimumElapsed },
+            timeout: timeout,
+            failureDescription: "Expected Playback Progress elapsed time >= \(minimumElapsed)s",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitForPlaybackElapsed(
+        _ progress: XCUIElement,
+        in range: Range<TimeInterval>,
+        timeout: TimeInterval,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> TimeInterval {
+        waitForPlaybackElapsed(
+            progress,
+            matching: { range.contains($0) },
+            timeout: timeout,
+            failureDescription: "Expected Playback Progress elapsed time in \(range.lowerBound)..<\(range.upperBound)s",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func waitForPlaybackElapsed(
+        _ progress: XCUIElement,
+        matching predicate: (TimeInterval) -> Bool,
+        timeout: TimeInterval,
+        failureDescription: String,
+        file: StaticString,
+        line: UInt
+    ) -> TimeInterval {
+        let deadline = Date.now.addingTimeInterval(timeout)
+        var lastElapsed: TimeInterval?
+        var lastValue = progress.value as? String ?? "nil"
+
+        while Date.now < deadline {
+            lastValue = progress.value as? String ?? "nil"
+            if let elapsed = playbackElapsedSeconds(from: lastValue) {
+                lastElapsed = elapsed
+                if predicate(elapsed) {
+                    return elapsed
+                }
+            }
+            RunLoop.current.run(until: Date.now.addingTimeInterval(0.2))
+        }
+
+        XCTFail(
+            "\(failureDescription), got elapsed=\(lastElapsed.map(String.init(describing:)) ?? "nil") value=\(lastValue)",
+            file: file,
+            line: line
+        )
+        return lastElapsed ?? 0
+    }
+
+    private func playbackElapsedSeconds(from accessibilityValue: String) -> TimeInterval? {
+        guard let elapsedText = accessibilityValue.components(separatedBy: " elapsed").first else {
+            return nil
+        }
+
+        let parts = elapsedText.split(separator: ":").compactMap { TimeInterval(String($0)) }
+        switch parts.count {
+        case 2:
+            return parts[0] * 60 + parts[1]
+        case 3:
+            return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        default:
+            return nil
+        }
     }
 
     /// Reads the frame-pacing probe summaries the app publishes through the
@@ -2233,24 +3779,7 @@ final class OpenCastUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        if let tabButton = visibleTabButton("Library", in: app) {
-            tabButton.tap()
-            return
-        }
-
-        let sidebarButton = app.buttons["Library"]
-        if sidebarButton.waitForExistence(timeout: 2) {
-            sidebarButton.tap()
-            return
-        }
-
-        let sidebarCell = app.cells.containing(.staticText, identifier: "Library").element
-        if sidebarCell.waitForExistence(timeout: 2) {
-            sidebarCell.tap()
-            return
-        }
-
-        XCTFail("Library navigation item should exist", file: file, line: line)
+        openSection("Library", in: app, file: file, line: line)
     }
 
     @MainActor
@@ -2259,42 +3788,7 @@ final class OpenCastUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        if let tabButton = visibleTabButton("Inbox", in: app) {
-            tabButton.tap()
-            return
-        }
-
-        let sidebarButton = app.buttons["Inbox"]
-        if sidebarButton.waitForExistence(timeout: 2) {
-            sidebarButton.tap()
-            return
-        }
-
-        let sidebarCell = app.cells.containing(.staticText, identifier: "Inbox").element
-        if sidebarCell.waitForExistence(timeout: 2) {
-            sidebarCell.tap()
-            return
-        }
-
-        XCTFail("Inbox navigation item should exist", file: file, line: line)
-    }
-
-    @MainActor
-    private func visibleTabButton(
-        _ title: String,
-        in app: XCUIApplication
-    ) -> XCUIElement? {
-        let tabButton = app.tabBars.buttons[title]
-        if tabButton.waitForExistence(timeout: 2) {
-            return tabButton
-        }
-
-        guard app.tabBars.firstMatch.waitForExistence(timeout: 1) else {
-            return nil
-        }
-
-        app.swipeDown()
-        return tabButton.waitForExistence(timeout: 2) ? tabButton : nil
+        openSection("Inbox", in: app, file: file, line: line)
     }
 
     @MainActor
@@ -2374,13 +3868,13 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    private func libriVoxFirstEpisode(in app: XCUIApplication) -> XCUIElement {
-        let button = app.buttons.containing(.staticText, identifier: "LibriVox Community Podcast").firstMatch
+    private func restIsScienceFirstEpisode(in app: XCUIApplication) -> XCUIElement {
+        let button = app.buttons.containing(.staticText, identifier: "The Rest Is Science").firstMatch
         if button.waitForExistence(timeout: 2) {
             return button
         }
 
-        return app.cells.containing(.staticText, identifier: "LibriVox Community Podcast").element
+        return app.cells.containing(.staticText, identifier: "The Rest Is Science").element
     }
 
     @MainActor
@@ -2399,25 +3893,7 @@ final class OpenCastUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let tabButton = app.tabBars.buttons["Settings"]
-        if tabButton.waitForExistence(timeout: 2) {
-            tabButton.tap()
-            return
-        }
-
-        let sidebarButton = app.buttons["Settings"]
-        if sidebarButton.waitForExistence(timeout: 2) {
-            sidebarButton.tap()
-            return
-        }
-
-        let sidebarCell = app.cells.containing(.staticText, identifier: "Settings").element
-        if sidebarCell.waitForExistence(timeout: 2) {
-            sidebarCell.tap()
-            return
-        }
-
-        XCTFail("Settings navigation item should exist", file: file, line: line)
+        openSection("Settings", in: app, file: file, line: line)
     }
 
     @MainActor
@@ -2605,6 +4081,27 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func scrollUntilVisible(
+        _ element: XCUIElement,
+        in app: XCUIApplication,
+        maxSwipes: Int = 6,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for _ in 0..<maxSwipes where !isVisible(element, in: app) {
+            app.swipeUp()
+        }
+
+        XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(isVisible(element, in: app), file: file, line: line)
+    }
+
+    @MainActor
+    private func isVisible(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        element.exists && !element.frame.isEmpty && app.frame.intersects(element.frame)
+    }
+
+    @MainActor
     private func scrollUntilMiniPlayerDoesNotCover(
         _ element: XCUIElement,
         in app: XCUIApplication,
@@ -2612,7 +4109,13 @@ final class OpenCastUITests: XCTestCase {
     ) {
         let miniPlayer = app.buttons["Open Now Playing"]
         for _ in 0..<maxSwipes where element.exists && miniPlayer.exists && element.frame.intersects(miniPlayer.frame) {
-            app.swipeUp()
+            let overlap = max(element.frame.maxY - miniPlayer.frame.minY, 0)
+            let dragDistance = min(max(overlap + 12, 36), app.frame.height * 0.2)
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+            start.press(
+                forDuration: 0.05,
+                thenDragTo: start.withOffset(CGVector(dx: 0, dy: -dragDistance))
+            )
         }
     }
 

@@ -21,8 +21,6 @@ struct OPMLFileImportView: View {
                         state: importFlow.state,
                         importAction: importSubscriptions
                     )
-                } footer: {
-                    Text(OPMLImportCopy.subscriptionsOnlyFooter)
                 }
             }
             .navigationTitle("Import Subscriptions")

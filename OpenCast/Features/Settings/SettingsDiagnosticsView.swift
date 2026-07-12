@@ -10,6 +10,13 @@ struct SettingsDiagnosticsView: View {
 
     var body: some View {
         Form {
+            SettingsAppleSpeechSection()
+
+            SettingsTranscriptionModelSection(
+                includesModelPicker: true,
+                sectionTitle: "Whisper Model"
+            )
+
             Section {
                 Button(
                     "Repair Sync Duplicates",

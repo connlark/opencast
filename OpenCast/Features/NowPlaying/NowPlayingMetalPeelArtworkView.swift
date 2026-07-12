@@ -5,6 +5,7 @@ struct NowPlayingMetalPeelArtworkView: UIViewRepresentable {
     let progress: CGFloat
     let touchY: CGFloat
     let isInteracting: Bool
+    let isCardDismissDragActive: Bool
     let settleTarget: CGFloat
     let settleVelocity: CGFloat
     let settleRequestID: Int
@@ -18,6 +19,7 @@ struct NowPlayingMetalPeelArtworkView: UIViewRepresentable {
             progress: progress,
             touchY: touchY,
             isInteracting: isInteracting,
+            isCardDismissDragActive: isCardDismissDragActive,
             settleTarget: settleTarget,
             settleVelocity: settleVelocity,
             settleRequestID: settleRequestID,
@@ -33,6 +35,7 @@ struct NowPlayingMetalPeelArtworkView: UIViewRepresentable {
             progress: progress,
             touchY: touchY,
             isInteracting: isInteracting,
+            isCardDismissDragActive: isCardDismissDragActive,
             settleTarget: settleTarget,
             settleVelocity: settleVelocity,
             settleRequestID: settleRequestID,

@@ -25,8 +25,6 @@ struct SettingsDangerZoneSection: View {
             }
         } header: {
             Text("Danger Zone")
-        } footer: {
-            Text("The final delete checks iCloud account status again. If opencast cannot confirm that iCloud is available, no data is deleted.")
         }
     }
 

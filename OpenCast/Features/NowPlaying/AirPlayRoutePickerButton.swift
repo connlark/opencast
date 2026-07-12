@@ -2,7 +2,7 @@ import AVFoundation
 import SwiftUI
 
 struct AirPlayRoutePickerButton: View {
-    @State private var routeName = Self.currentRouteName()
+    @State private var routeName = "Route"
 
     var body: some View {
         PlayerUtilityButtonLabel(title: "AirPlay", value: routeName, systemImage: "airplayaudio")
@@ -14,18 +14,24 @@ struct AirPlayRoutePickerButton: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .task {
-                refreshRouteName()
+                await refreshRouteName()
                 for await _ in NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification) {
-                    refreshRouteName()
+                    await refreshRouteName()
                 }
             }
     }
 
-    private func refreshRouteName() {
-        routeName = Self.currentRouteName()
+    private func refreshRouteName() async {
+        let currentRouteName = await Self.currentRouteName()
+        guard !Task.isCancelled, routeName != currentRouteName else {
+            return
+        }
+
+        routeName = currentRouteName
     }
 
-    private static func currentRouteName() -> String {
+    @concurrent
+    private static func currentRouteName() async -> String {
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
         return outputs
             .map(\.portName)

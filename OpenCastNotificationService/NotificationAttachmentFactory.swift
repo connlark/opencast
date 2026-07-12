@@ -6,6 +6,7 @@ enum NotificationAttachmentFactory {
         from temporaryURL: URL,
         response: URLResponse,
         sourceURL: URL,
+        identifier: String,
         maxArtworkBytes: Int
     ) -> UNNotificationAttachment? {
         guard let fileSize = try? temporaryURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
@@ -23,7 +24,7 @@ enum NotificationAttachmentFactory {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try FileManager.default.moveItem(at: temporaryURL, to: localURL)
             return try UNNotificationAttachment(
-                identifier: "episode-artwork",
+                identifier: identifier,
                 url: localURL,
                 options: [UNNotificationAttachmentOptionsTypeHintKey: imageFormat.typeIdentifier]
             )

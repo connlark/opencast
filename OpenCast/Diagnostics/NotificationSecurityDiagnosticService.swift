@@ -1,16 +1,15 @@
 #if DEBUG || INTERNAL_NOTIFICATIONS_DIAGNOSTICS
-import DeviceCheck
 import Foundation
 
 struct NotificationSecurityDiagnosticService {
     private static let diagnosticPayload = "hello world"
 
-    private let appAttestService: DCAppAttestService
+    private let appAttestService: any AppAttestServiceProtocol
     private let apiClient: NotificationSecurityAPIClient
     private let credentialService: NotificationSecurityCredentialService
 
     init(
-        appAttestService: DCAppAttestService = .shared,
+        appAttestService: any AppAttestServiceProtocol = DeviceCheckAppAttestService.shared,
         apiClient: NotificationSecurityAPIClient = NotificationSecurityAPIClient(),
         keychain: NotificationSecurityKeychain = NotificationSecurityKeychain()
     ) {

@@ -12,6 +12,7 @@ struct EpisodeProgressBarView: View {
                 Capsule()
                     .fill(.tint)
                     .frame(width: proxy.size.width * CGFloat(fractionCompleted.clamped01))
+                    .animation(.easeOut(duration: 0.2), value: fractionCompleted)
             }
         }
         .frame(height: 4)

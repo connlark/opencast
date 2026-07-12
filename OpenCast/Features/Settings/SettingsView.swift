@@ -6,6 +6,8 @@ struct SettingsView: View {
 
     let onPresentDataNukeConfirmation: () -> Void
 
+    private static var compactMiniPlayerScrollMargin: CGFloat { 132 }
+
     @State private var isConfirmingClearCaches = false
     @State private var isConfirmingDeleteAllDownloads = false
     @State private var isRunningVoiceBoostDeviceProbe = false
@@ -49,6 +51,8 @@ struct SettingsView: View {
                 onDeleteAllDownloads: confirmDeleteAllDownloads
             )
 
+            SettingsTranscriptionModelSection()
+
             OPMLSettingsSection()
 
             SettingsDangerZoneSection(
@@ -60,7 +64,7 @@ struct SettingsView: View {
             SettingsAboutSection()
         }
         .navigationTitle("Settings")
-        .contentMargins(.bottom, 72, for: .scrollContent)
+        .contentMargins(.bottom, Self.compactMiniPlayerScrollMargin, for: .scrollContent)
         .task {
             await refreshSyncStatus()
             appModel.cacheController.refreshSummaries()
@@ -117,7 +121,7 @@ struct SettingsView: View {
     }
 
     private func deleteAllDownloads() {
-        appModel.downloads.deleteAllDownloads(modelContext: modelContext)
+        appModel.deleteAllDownloads(modelContext: modelContext)
     }
 
     #if DEBUG

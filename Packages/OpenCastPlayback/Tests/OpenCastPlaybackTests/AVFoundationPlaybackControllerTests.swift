@@ -173,6 +173,44 @@ struct AVFoundationPlaybackControllerTests {
         #expect(acceptsSettledZeroPosition)
     }
 
+    @Test
+    func autoSkipJumpsPastZoneAndPublishesEvent() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 5
+        )
+        let controller = AVFoundationPlaybackController()
+        let episode = Episode(
+            id: EpisodeID(rawValue: "auto-skip-fixture"),
+            podcastID: PodcastID(rawValue: "podcast"),
+            podcastTitle: "Podcast",
+            title: "Auto Skip Fixture",
+            duration: 5,
+            audioURL: fixtureURL
+        )
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+
+        try controller.load(episode)
+        controller.setSkipZones([
+            PlaybackSkipZone(id: 7, startTime: 0.5, endTime: 2)
+        ])
+        controller.play()
+
+        let event = try await waitForAutoSkipEvent(in: controller)
+
+        #expect(event == PlaybackAutoSkipEvent(zoneID: 7, sequence: 1))
+        #expect(controller.snapshot.position >= 2)
+    }
+
     private func waitForTerminalPlaybackState(
         in controller: AVFoundationPlaybackController
     ) async throws -> PlaybackState {
@@ -199,5 +237,18 @@ struct AVFoundationPlaybackControllerTests {
             try await Task.sleep(for: .milliseconds(50))
         }
         return controller.snapshot.state
+    }
+
+    private func waitForAutoSkipEvent(
+        in controller: AVFoundationPlaybackController
+    ) async throws -> PlaybackAutoSkipEvent? {
+        let deadline = Date.now.addingTimeInterval(8)
+        while Date.now < deadline {
+            if let event = controller.lastAutoSkipEvent {
+                return event
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return controller.lastAutoSkipEvent
     }
 }

@@ -83,6 +83,7 @@ struct EpisodeRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
         .padding(.vertical, 8)
+        .animation(.easeOut(duration: 0.2), value: progressSummary)
         .accessibilityValue(progressSummary.accessibilityDescription)
     }
 
@@ -90,20 +91,14 @@ struct EpisodeRowView: View {
         appModel.library.updateArtworkPreview(preview, for: episode)
     }
 
-    @ViewBuilder
     private func statusIcon(for progressSummary: EpisodeProgressSummary) -> some View {
-        if progressSummary.isCompleted {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.title2)
-                .foregroundStyle(.green)
-                .frame(width: 34, height: 34)
-                .accessibilityHidden(true)
-        } else {
-            Image(systemName: "play.circle")
-                .font(.title2)
-                .foregroundStyle(.tint)
-                .frame(width: 34, height: 34)
-                .accessibilityHidden(true)
-        }
+        Image(systemName: progressSummary.isCompleted ? "checkmark.circle.fill" : "play.circle")
+            .font(.title2)
+            .foregroundStyle(
+                progressSummary.isCompleted ? AnyShapeStyle(.green) : AnyShapeStyle(.tint)
+            )
+            .frame(width: 34, height: 34)
+            .contentTransition(.symbolEffect(.replace))
+            .accessibilityHidden(true)
     }
 }

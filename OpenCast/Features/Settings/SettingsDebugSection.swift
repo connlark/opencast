@@ -17,6 +17,15 @@ struct SettingsDebugSection: View {
                 Label("Run Onboarding", systemImage: "sparkles.rectangle.stack")
             }
 
+            #if DEBUG
+            if AdFreePassBackgroundProbe.isUserInterfaceEnabled {
+                Button(action: runAdFreePassBackgroundProbe) {
+                    Label("Ad-Free BG Probe", systemImage: "timer")
+                }
+                .accessibilityIdentifier("Settings Ad-Free Pass Background Probe")
+            }
+            #endif
+
             Toggle(isOn: $appModel.replacesNowPlayingArtworkWithPlaybackDiagnostics) {
                 Label("Playback Debug Artwork", systemImage: "terminal")
             }
@@ -28,4 +37,10 @@ struct SettingsDebugSection: View {
     private func runOnboarding() {
         appModel.requestOnboardingPresentation()
     }
+
+    #if DEBUG
+    private func runAdFreePassBackgroundProbe() {
+        AdFreePassBackgroundProbe.startFromUserAction()
+    }
+    #endif
 }

@@ -169,14 +169,42 @@ struct EpisodeNotificationViewModelTests {
         #expect(viewModel.artworkImage != nil)
     }
 
-    private static func pngAttachment() throws -> UNNotificationAttachment {
+    @Test("Episode artwork attachment is preferred over compact artwork")
+    func episodeArtworkAttachmentIsPreferredOverCompactArtwork() throws {
+        let content = UNMutableNotificationContent()
+        content.attachments = [
+            try Self.pngAttachment(
+                identifier: NotificationArtworkAttachmentIdentifier.podcast,
+                base64EncodedPNG: Self.onePixelPNG
+            ),
+            try Self.pngAttachment(
+                identifier: NotificationArtworkAttachmentIdentifier.episode,
+                base64EncodedPNG: Self.twoPixelPNG
+            ),
+        ]
+
+        let image = try #require(EpisodeNotificationViewModel(content: content).artworkImage)
+
+        #expect(image.size.width == 2)
+        #expect(image.size.height == 1)
+    }
+
+    private static let onePixelPNG =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+    private static let twoPixelPNG =
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGNgYPj/H4QBDfsD/Yde1YcAAAAASUVORK5CYII="
+
+    private static func pngAttachment(
+        identifier: String = "artwork",
+        base64EncodedPNG: String = onePixelPNG
+    ) throws -> UNNotificationAttachment {
         let pngData = try #require(Data(base64Encoded:
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+            base64EncodedPNG
         ))
         let directory = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appending(path: "artwork.png")
         try pngData.write(to: url)
-        return try UNNotificationAttachment(identifier: "artwork", url: url)
+        return try UNNotificationAttachment(identifier: identifier, url: url)
     }
 }

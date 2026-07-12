@@ -9,14 +9,26 @@ struct NotificationOptInView: View {
     var body: some View {
         let settings = appModel.notificationSettings
 
-        VStack(alignment: .leading, spacing: 18) {
-            Label(statusTitle, systemImage: statusSystemImage)
-                .font(.headline)
-                .foregroundStyle(statusColor)
+        VStack(alignment: .leading, spacing: 14) {
+            Label {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(statusTitle)
+                        .font(.headline)
 
-            Text(statusMessage)
-                .font(.body)
-                .foregroundStyle(.secondary)
+                    Text(statusMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } icon: {
+                SymbolBadgeView(
+                    systemImage: statusSystemImage,
+                    color: settings.isPermissionDenied ? .orange : .red,
+                    isShowingProgress: settings.isWorking,
+                    fillOpacity: settings.isPermissionDenied ? 0.18 : 0.14
+                )
+            }
+            .accessibilityElement(children: .combine)
 
             Button(action: enableNotifications) {
                 HStack(spacing: 10) {
@@ -31,6 +43,7 @@ struct NotificationOptInView: View {
                 .frame(maxWidth: .infinity, minHeight: 48)
             }
             .buttonStyle(.glassProminent)
+            .controlSize(.large)
             .disabled(settings.isWorking || settings.isEnabled)
             .accessibilityIdentifier("Enable Notifications")
 
@@ -44,33 +57,10 @@ struct NotificationOptInView: View {
                     .font(.subheadline)
                     .foregroundStyle(.orange)
             }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-
-                Text("opencast only sends notifications when a new episode is available from a podcast you follow. Never any marketing, promotions, or recommendations.")
-                    .font(.subheadline)
-                    //.italic()
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Privacy")
-                    .font(.headline)
-
-                Text("Notifications work without an account.")
-
-                Text("When enabled, opencast sends a random install ID and App Attest proof, your APNs token and environment, app version and build, and your enabled RSS feed URL list.")
-
-                Text("The server does *not* store an account, email, Apple ID, raw IP address, listening history, raw feed XML, show notes, or audio URLs.")
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
         }
         .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
         .task {
             await appModel.notificationSettings.refreshIfNeeded(
                 activePodcastIDs: appModel.library.activePodcastIDs,
@@ -96,12 +86,12 @@ struct NotificationOptInView: View {
             return "Setting up notification registration and syncing your current subscriptions."
         }
         if settings.isEnabled {
-            return settings.statusText
+            return "Alerts are active for your followed podcasts."
         }
         if settings.isPermissionDenied {
             return "Allow notifications in Settings to receive new episode alerts."
         }
-        return "Enable alerts now, or skip this and turn them on later in Settings."
+        return "Turn on alerts now, or skip and enable them later from Settings."
     }
 
     private var statusSystemImage: String {
@@ -113,10 +103,6 @@ struct NotificationOptInView: View {
             return "bell.badge.fill"
         }
         return "bell"
-    }
-
-    private var statusColor: Color {
-        appModel.notificationSettings.isPermissionDenied ? .orange : .primary
     }
 
     private var primaryActionTitle: String {

@@ -9,6 +9,7 @@ public struct PlaybackSnapshot: Equatable, Sendable {
     public var rate: Float
     public var sleepTimerEndsAt: Date?
     public var progressBoundaryID: Int
+    public var skipZones: [PlaybackSkipZone]
 
     public init(
         state: PlaybackState = .idle,
@@ -17,7 +18,8 @@ public struct PlaybackSnapshot: Equatable, Sendable {
         duration: TimeInterval? = nil,
         rate: Float = 1,
         sleepTimerEndsAt: Date? = nil,
-        progressBoundaryID: Int = 0
+        progressBoundaryID: Int = 0,
+        skipZones: [PlaybackSkipZone] = []
     ) {
         self.state = state
         self.currentEpisode = currentEpisode
@@ -26,6 +28,7 @@ public struct PlaybackSnapshot: Equatable, Sendable {
         self.rate = rate
         self.sleepTimerEndsAt = sleepTimerEndsAt
         self.progressBoundaryID = progressBoundaryID
+        self.skipZones = skipZones
     }
 
     public nonisolated var normalizedProgress: Double {

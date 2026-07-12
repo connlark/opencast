@@ -9,27 +9,40 @@ struct OnboardingOPMLImportPage: View {
     @State private var importFlow = OPMLImportFlow()
 
     var body: some View {
-        Form {
-            Section {
-                Text("Already have subscriptions in another podcast app?")
-                    .font(.headline)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Import Subscriptions")
+                        .font(.largeTitle)
+                        .bold()
 
-                Text("Import an OPML file to subscribe to those RSS feeds here. You can also skip this and add shows later.")
-                    .foregroundStyle(.secondary)
+                    Text("Already have shows in another podcast app? Bring over an OPML file now, or skip and add podcasts later.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
 
-                OnboardingApplePodcastsShortcutDisclosure()
-
-                OPMLImportStateView(
+                OnboardingOPMLImportActionCard(
                     state: importFlow.state,
-                    importButtonTitle: "Import OPML",
                     importAction: importFlow.showImporter
                 )
-            } header: {
-                Text("Import Subscriptions")
-            } footer: {
-                Text(OPMLImportCopy.subscriptionsOnlyFooter)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    OnboardingApplePodcastsShortcutDisclosure()
+
+                    OnboardingPitchRow(
+                        systemImage: "list.bullet.clipboard",
+                        title: "Subscriptions only",
+                        message: "Progress, downloads, queues, refresh logs, and caches stay on this device."
+                    )
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.top, 18)
+            .padding(.bottom, 24)
         }
+        .scrollIndicators(.hidden)
+        .scrollContentBackground(.visible)
         .fileImporter(
             isPresented: $importFlow.isShowingImporter,
             allowedContentTypes: OPMLFileDocument.readableContentTypes,

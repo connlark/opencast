@@ -19,10 +19,12 @@ struct PlaybackSettingsStoreTests {
         #expect(store.canChangeCurrentEpisodeVoiceBoost)
         #expect(store.skipBackwardOption == .thirty)
         #expect(store.skipForwardOption == .fifteen)
+        #expect(store.isAutoSkipPromosAndAdsEnabled)
         #expect(playback.appliedValues == [true])
         #expect(playback.appliedSkipIntervals.count == 1)
         #expect(playback.appliedSkipIntervals.first?.backward == 30)
         #expect(playback.appliedSkipIntervals.first?.forward == 15)
+        #expect(playback.appliedAutoSkipValues == [true])
     }
 
     @Test("Global Voice Boost off persists and overrides the current episode")
@@ -154,5 +156,25 @@ struct PlaybackSettingsStoreTests {
         #expect(reloadedStore.skipForwardOption == .ten)
         #expect(reloadedPlayback.appliedSkipIntervals.first?.backward == 60)
         #expect(reloadedPlayback.appliedSkipIntervals.first?.forward == 10)
+    }
+
+    @Test("Auto-skip promos and ads defaults on, persists, and applies to playback")
+    func autoSkipPromosAndAdsPersistsAndApplies() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+
+        store.load(modelContext: context, playback: playback)
+        store.setAutoSkipPromosAndAdsEnabled(false, modelContext: context, playback: playback)
+
+        let reloadedPlayback = PlaybackVoiceBoostControllerSpy()
+        let reloadedStore = PlaybackSettingsStore()
+        reloadedStore.load(modelContext: context, playback: reloadedPlayback)
+
+        #expect(store.isAutoSkipPromosAndAdsEnabled == false)
+        #expect(playback.appliedAutoSkipValues == [true, false])
+        #expect(reloadedStore.isAutoSkipPromosAndAdsEnabled == false)
+        #expect(reloadedPlayback.appliedAutoSkipValues == [false])
     }
 }

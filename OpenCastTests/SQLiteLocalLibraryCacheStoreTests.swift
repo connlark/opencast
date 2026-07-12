@@ -46,6 +46,32 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(podcast.updatedAt == refreshedAt)
     }
 
+    @Test("Podcast language round-trips through the cache")
+    func podcastLanguageRoundTripsThroughCache() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        let snapshot = makeFeedSnapshot(
+            languageCode: "de-DE",
+            episodes: [
+                makeEpisode(id: "ep-lang", title: "Lang Episode", publishedAt: Date(timeIntervalSince1970: 1_700_000_100))
+            ]
+        )
+
+        try await store.upsertCache(from: snapshot, refreshedAt: Date(timeIntervalSince1970: 1_700_000_500))
+
+        let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
+        #expect(library.podcastsByFeedURL[Self.feedURL]?.languageCode == "de-DE")
+
+        let clearedSnapshot = makeFeedSnapshot(
+            languageCode: nil,
+            episodes: [
+                makeEpisode(id: "ep-lang", title: "Lang Episode", publishedAt: Date(timeIntervalSince1970: 1_700_000_100))
+            ]
+        )
+        try await store.upsertCache(from: clearedSnapshot, refreshedAt: Date(timeIntervalSince1970: 1_700_000_600))
+        let reloaded = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
+        #expect(reloaded.podcastsByFeedURL[Self.feedURL]?.languageCode == nil)
+    }
+
     @Test("Second upsert updates metadata, dedupes by episode ID, and keeps missing episodes")
     func secondUpsertUpdatesWithoutStaleDeletion() async throws {
         let store = SQLiteLocalLibraryCacheStore.inMemory()
@@ -384,6 +410,7 @@ struct SQLiteLocalLibraryCacheStoreTests {
         title: String = "Cached Show",
         summary: String? = "Cached summary",
         artworkURL: String? = "https://example.com/podcast-art.png",
+        languageCode: String? = nil,
         episodes: [Episode]
     ) -> FeedSnapshot {
         FeedSnapshot(
@@ -394,7 +421,8 @@ struct SQLiteLocalLibraryCacheStoreTests {
                 author: "Cached Author",
                 summary: summary,
                 websiteURL: URL(string: "https://example.com/show"),
-                artworkURL: artworkURL.flatMap { URL(string: $0) }
+                artworkURL: artworkURL.flatMap { URL(string: $0) },
+                languageCode: languageCode
             ),
             episodes: episodes,
             fetchedAt: Date(timeIntervalSince1970: 1_700_000_000)
