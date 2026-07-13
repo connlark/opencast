@@ -348,6 +348,89 @@ open class AudioProcessor: NSObject, AudioProcessing {
         startTime: Double? = 0,
         endTime: Double? = nil
     ) throws -> [Float] {
+        var result: [Float] = []
+        try decodeAudioChunks(
+            fromPath: audioFilePath,
+            channelMode: channelMode,
+            startTime: startTime,
+            endTime: endTime,
+            prepare: { expectedCapacity in
+                // OpenCast fork (whisper-perf E2): reserve the full 16 kHz
+                // output up front so per-chunk appends don't
+                // reallocate-and-copy the accumulated episode.
+                if let expectedCapacity {
+                    result.reserveCapacity(expectedCapacity + 1)
+                }
+            },
+            handleChunk: { buffer in
+                // OpenCast fork (whisper-perf E2): copy straight from the
+                // chunk buffer into the final array — no intermediate
+                // per-chunk [Float] and no 1,024-frame temporaries.
+                if let channelData = buffer.floatChannelData {
+                    result.append(contentsOf: UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength)))
+                }
+            }
+        )
+        return result
+    }
+
+    /// OpenCast fork (whisper-perf G2): the same sequential decode+resample
+    /// pass as `loadAudioAsFloatArray`, but the canonical 16 kHz mono
+    /// Float32 samples (host byte order) spill to `destinationURL` instead
+    /// of staying resident. Returns the spilled sample count. Cancellation
+    /// is checked between chunks; on throw the partial file is the caller's
+    /// to delete.
+    public static func spillAudioToPCMFile(
+        fromPath audioFilePath: String,
+        channelMode: ChannelMode = .sumChannels(nil),
+        startTime: Double? = 0,
+        endTime: Double? = nil,
+        to destinationURL: URL
+    ) throws -> Int {
+        guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
+            throw WhisperError.loadAudioFailed("Unable to create PCM spill file at \(destinationURL.path)")
+        }
+        let handle = try FileHandle(forWritingTo: destinationURL)
+        defer { try? handle.close() }
+
+        var sampleCount = 0
+        try decodeAudioChunks(
+            fromPath: audioFilePath,
+            channelMode: channelMode,
+            startTime: startTime,
+            endTime: endTime,
+            prepare: { _ in },
+            handleChunk: { buffer in
+                try Task.checkCancellation()
+                guard let channelData = buffer.floatChannelData else { return }
+                let frameCount = Int(buffer.frameLength)
+                guard frameCount > 0 else { return }
+                // No-copy view of the chunk; the buffer outlives the write.
+                let chunkData = Data(
+                    bytesNoCopy: UnsafeMutableRawPointer(channelData[0]),
+                    count: frameCount * MemoryLayout<Float>.stride,
+                    deallocator: .none
+                )
+                try handle.write(contentsOf: chunkData)
+                sampleCount += frameCount
+            }
+        )
+        return sampleCount
+    }
+
+    /// OpenCast fork (whisper-perf G2): one sequential decode+resample chunk
+    /// loop shared by the in-memory loader and the PCM spill writer, so both
+    /// produce identical samples by construction. `prepare` receives the
+    /// expected total sample count when it is representable (nil for corrupt
+    /// durations — a corrupt duration must not trap).
+    private static func decodeAudioChunks(
+        fromPath audioFilePath: String,
+        channelMode: ChannelMode,
+        startTime: Double?,
+        endTime: Double?,
+        prepare: (_ expectedSampleCount: Int?) throws -> Void,
+        handleChunk: (AVAudioPCMBuffer) throws -> Void
+    ) throws {
         guard FileManager.default.fileExists(atPath: audioFilePath) else {
             throw WhisperError.loadAudioFailed("Resource path does not exist \(audioFilePath)")
         }
@@ -360,20 +443,18 @@ open class AudioProcessor: NSObject, AudioProcessing {
         let start = startTime ?? 0
         let end = min(endTime ?? inputDuration, inputDuration)
 
+        let expectedSampleCount = (end - start) * Double(WhisperKit.sampleRate)
+        if expectedSampleCount.isFinite, expectedSampleCount > 0,
+           let capacity = Int(exactly: expectedSampleCount.rounded(.up)) {
+            try prepare(capacity)
+        } else {
+            try prepare(nil)
+        }
+
         // Load 10m of audio at a time to reduce peak memory while converting
         // Particularly impactful for large audio files
         let chunkDuration: Double = 60 * 10
         var currentTime = start
-        var result: [Float] = []
-
-        // OpenCast fork (whisper-perf E2): reserve the full 16 kHz output up
-        // front so per-chunk appends don't reallocate-and-copy the
-        // accumulated episode. Guarded: a corrupt duration must not trap.
-        let expectedSampleCount = (end - start) * Double(WhisperKit.sampleRate)
-        if expectedSampleCount.isFinite, expectedSampleCount > 0,
-           let capacity = Int(exactly: expectedSampleCount.rounded(.up)) {
-            result.reserveCapacity(capacity + 1)
-        }
 
         while currentTime < end {
             let chunkEnd = min(currentTime + chunkDuration, end)
@@ -385,19 +466,11 @@ open class AudioProcessor: NSObject, AudioProcessing {
                     startTime: currentTime,
                     endTime: chunkEnd
                 )
-
-                // OpenCast fork (whisper-perf E2): copy straight from the
-                // chunk buffer into the final array — no intermediate
-                // per-chunk [Float] and no 1,024-frame temporaries.
-                if let channelData = buffer.floatChannelData {
-                    result.append(contentsOf: UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength)))
-                }
+                try handleChunk(buffer)
             }
 
             currentTime = chunkEnd
         }
-
-        return result
     }
 
     public static func loadAudio(at audioPaths: [String], channelMode: ChannelMode = .sumChannels(nil)) async -> [Result<[Float], Swift.Error>] {

@@ -24,6 +24,22 @@ final class WhisperKitTranscriptionRuntime: @unchecked Sendable, OpenCastTranscr
         )
     }
 
+    func transcribe(
+        audioSource: any AudioSampleSource,
+        decodeOptions: DecodingOptions,
+        callback: TranscriptionCallback?,
+        windowCallback: WindowStartCallback?,
+        segmentCallback: SegmentDiscoveryCallback?
+    ) async throws -> [TranscriptionResult] {
+        try await runtime.transcribe(
+            audioSource: audioSource,
+            decodeOptions: decodeOptions,
+            callback: callback,
+            windowCallback: windowCallback,
+            segmentCallback: segmentCallback
+        )
+    }
+
     func unloadModels() async {
         await runtime.unloadModels()
     }

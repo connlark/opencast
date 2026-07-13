@@ -180,6 +180,13 @@ public struct DecodingOptions: Codable, Sendable {
     public var noSpeechThreshold: Float?
     public var concurrentWorkerCount: Int
     public var chunkingStrategy: ChunkingStrategy?
+    /// OpenCast fork (whisper-perf F): base seed for deterministic fallback
+    /// sampling, derived from stable inputs (the source audio hash). When
+    /// set, temperature > 0 retries sample from a generator seeded by
+    /// (base, window seek, attempt index) so full-episode transcripts
+    /// reproduce bit-identically across runs and across cancel/resume.
+    /// Temperature-zero decoding never draws randomness either way.
+    public var deterministicFallbackBaseSeed: UInt64?
 
     public init(
         verbose: Bool = false,
@@ -208,7 +215,8 @@ public struct DecodingOptions: Codable, Sendable {
         firstTokenLogProbThreshold: Float? = -1.5,
         noSpeechThreshold: Float? = 0.6,
         concurrentWorkerCount: Int? = nil,
-        chunkingStrategy: ChunkingStrategy? = nil
+        chunkingStrategy: ChunkingStrategy? = nil,
+        deterministicFallbackBaseSeed: UInt64? = nil
     ) {
         self.verbose = verbose
         self.task = task
@@ -243,5 +251,6 @@ public struct DecodingOptions: Codable, Sendable {
         self.concurrentWorkerCount = concurrentWorkerCount ?? 4
         #endif
         self.chunkingStrategy = chunkingStrategy
+        self.deterministicFallbackBaseSeed = deterministicFallbackBaseSeed
     }
 }

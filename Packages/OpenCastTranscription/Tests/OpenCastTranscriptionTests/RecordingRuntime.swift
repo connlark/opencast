@@ -28,6 +28,22 @@ actor RecordingRuntime: OpenCastTranscriptionRuntime {
     }
 
     func transcribe(
+        audioSource: any AudioSampleSource,
+        decodeOptions: DecodingOptions,
+        callback: TranscriptionCallback?,
+        windowCallback: WindowStartCallback?,
+        segmentCallback: SegmentDiscoveryCallback?
+    ) async throws -> [TranscriptionResult] {
+        try await transcribe(
+            audioArray: [],
+            decodeOptions: decodeOptions,
+            callback: callback,
+            windowCallback: windowCallback,
+            segmentCallback: segmentCallback
+        )
+    }
+
+    func transcribe(
         audioArray: [Float],
         decodeOptions: DecodingOptions,
         callback: TranscriptionCallback?,

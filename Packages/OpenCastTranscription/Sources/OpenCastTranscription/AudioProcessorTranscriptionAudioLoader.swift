@@ -10,6 +10,20 @@ struct AudioProcessorTranscriptionAudioLoader: OpenCastTranscriptionAudioLoading
         )
     }
 
+    func spillSamples(
+        from audioFileURL: URL,
+        clipStart: TimeInterval,
+        clipDuration: TimeInterval?,
+        to destination: URL
+    ) async throws -> Int {
+        try await Self.spill(
+            from: audioFileURL,
+            clipStart: clipStart,
+            clipDuration: clipDuration,
+            to: destination
+        )
+    }
+
     @concurrent
     private nonisolated static func loadSamples(
         from audioFileURL: URL,
@@ -26,5 +40,25 @@ struct AudioProcessorTranscriptionAudioLoader: OpenCastTranscriptionAudioLoading
         )
         try Task.checkCancellation()
         return samples
+    }
+
+    @concurrent
+    private nonisolated static func spill(
+        from audioFileURL: URL,
+        clipStart: TimeInterval,
+        clipDuration: TimeInterval?,
+        to destination: URL
+    ) async throws -> Int {
+        try Task.checkCancellation()
+        let endTime = clipDuration.map { clipStart + $0 }
+        let sampleCount = try AudioProcessor.spillAudioToPCMFile(
+            fromPath: audioFileURL.path,
+            channelMode: .sumChannels(nil),
+            startTime: clipStart,
+            endTime: endTime,
+            to: destination
+        )
+        try Task.checkCancellation()
+        return sampleCount
     }
 }

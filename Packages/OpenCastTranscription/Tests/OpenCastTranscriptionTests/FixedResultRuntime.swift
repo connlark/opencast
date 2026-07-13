@@ -15,5 +15,15 @@ struct FixedResultRuntime: OpenCastTranscriptionRuntime {
         [result]
     }
 
+    func transcribe(
+        audioSource: any AudioSampleSource,
+        decodeOptions: DecodingOptions,
+        callback: TranscriptionCallback?,
+        windowCallback: WindowStartCallback?,
+        segmentCallback: SegmentDiscoveryCallback?
+    ) async throws -> [TranscriptionResult] {
+        [result]
+    }
+
     func unloadModels() async {}
 }

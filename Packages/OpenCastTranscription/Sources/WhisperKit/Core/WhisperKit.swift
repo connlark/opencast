@@ -805,6 +805,40 @@ open class WhisperKit {
         return transcribeResults
     }
 
+    /// OpenCast fork (whisper-perf G2): transcribe from a bounded-memory
+    /// sample source (e.g. a spilled PCM file). VAD chunking needs the full
+    /// sample array and is not supported on this path — callers that want
+    /// `chunkingStrategy: .vad` keep using `transcribe(audioArray:)`.
+    open func transcribe(
+        audioSource: any AudioSampleSource,
+        decodeOptions: DecodingOptions? = nil,
+        callback: TranscriptionCallback? = nil,
+        windowCallback: WindowStartCallback? = nil,
+        segmentCallback: SegmentDiscoveryCallback? = nil
+    ) async throws -> [TranscriptionResult] {
+        guard decodeOptions?.chunkingStrategy != .vad else {
+            throw WhisperError.transcriptionFailed("chunkingStrategy .vad requires transcribe(audioArray:)")
+        }
+
+        let transcribeResults = try await runTranscribeTask(
+            audioSource: audioSource,
+            decodeOptions: decodeOptions,
+            callback: callback,
+            windowCallback: windowCallback,
+            segmentCallback: segmentCallback ?? self.segmentDiscoveryCallback
+        )
+
+        if let decodeOptions, decodeOptions.verbose {
+            Logging.info("Total Transcription Results: \(transcribeResults.count)")
+            for (i, transcribeTaskResult) in transcribeResults.enumerated() {
+                Logging.debug("[Result \(i)]")
+                transcribeTaskResult.logSegments()
+            }
+        }
+
+        return transcribeResults
+    }
+
     /// Setup the `TranscribeTask` used for decoding. Subclasses may override to provide custom behavior.
     open func setupTranscribeTask(
         currentTimings: TranscriptionTimings,
@@ -833,6 +867,26 @@ open class WhisperKit {
     /// - Throws: An error if the transcription fails or if the tokenizer is unavailable.
     open func runTranscribeTask(
         audioArray: [Float],
+        decodeOptions: DecodingOptions? = nil,
+        callback: TranscriptionCallback? = nil,
+        windowCallback: WindowStartCallback? = nil,
+        segmentCallback: SegmentDiscoveryCallback? = nil
+    ) async throws -> [TranscriptionResult] {
+        // OpenCast fork (whisper-perf G2): shares the source-based task run;
+        // the array source performs the identical window copy.
+        try await runTranscribeTask(
+            audioSource: ArrayAudioSampleSource(samples: audioArray),
+            decodeOptions: decodeOptions,
+            callback: callback,
+            windowCallback: windowCallback,
+            segmentCallback: segmentCallback
+        )
+    }
+
+    /// OpenCast fork (whisper-perf G2): runs the transcription task over a
+    /// bounded-memory sample source.
+    open func runTranscribeTask(
+        audioSource: any AudioSampleSource,
         decodeOptions: DecodingOptions? = nil,
         callback: TranscriptionCallback? = nil,
         windowCallback: WindowStartCallback? = nil,
@@ -870,7 +924,7 @@ open class WhisperKit {
             transcribeTask.windowStartCallback = windowCallback
 
             let transcribeTaskResult = try await transcribeTask.run(
-                audioArray: audioArray,
+                audioSource: audioSource,
                 decodeOptions: decodeOptions,
                 callback: callback
             )

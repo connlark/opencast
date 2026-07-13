@@ -142,6 +142,108 @@ open class TimestampRulesFilter: LogitsFiltering {
     }
 
     private func sumOfProbabilityOverTimestampsIsAboveAnyOtherToken(logits: MLMultiArray, timeTokenBegin: Int) -> Bool {
+        // OpenCast fork (whisper-perf D2): certify-or-fallback. The upstream
+        // full-vocabulary log-softmax normalizer cancels algebraically in
+        //   logsumexp(logprobs[T...]) > max(logprobs[..<T])
+        // so raw-logit reductions give the same decision — except within a
+        // few Float16 ULP of the boundary, where the two rounding pipelines
+        // can disagree (and on +inf/NaN, where their semantics differ). The
+        // fast path therefore certifies its answer only when the margin
+        // |lse(T) − max(text)| clears a conservative scale-aware epsilon
+        // (32 ULP16; worst observed disagreement is ~0.4 ULP16) and the
+        // tensor holds no +inf/NaN and no magnitude ≥ 512. Anything
+        // uncertified runs the original log-softmax pipeline unchanged.
+        // Decision equivalence is gated by
+        // TimestampFilterDecisionEquivalenceTests.
+        if let certified = certifiedRawLogitDecision(logits: logits, timeTokenBegin: timeTokenBegin) {
+            return certified
+        }
+        return upstreamLogSoftmaxDecision(logits: logits, timeTokenBegin: timeTokenBegin)
+    }
+
+    private func certifiedRawLogitDecision(logits: MLMultiArray, timeTokenBegin: Int) -> Bool? {
+        let timeTokenBeginOffset = logits.linearOffset(for: [0, 0, timeTokenBegin])
+        let totalCount = logits.count
+        let timeTokenCount = totalCount - timeTokenBeginOffset
+        guard timeTokenCount > 0, timeTokenBeginOffset > 0 else { return nil }
+
+        let basePointer = logits.dataPointer
+
+        // Any +inf or NaN anywhere → uncertifiable (-inf is fine; suppressed
+        // ranges are the common case). Bit test: exponent all-ones and not
+        // exactly the -inf pattern.
+        var anyUncertifiable = false
+        let bits = basePointer.assumingMemoryBound(to: UInt16.self)
+        var index = 0
+        let expMask = SIMD16<UInt16>(repeating: 0x7C00)
+        let negInfPattern = SIMD16<UInt16>(repeating: 0xFC00)
+        var flagged = SIMD16<UInt16>.zero
+        let one = SIMD16<UInt16>(repeating: 1)
+        while index + 16 <= totalCount {
+            let vector = UnsafeRawPointer(bits + index).loadUnaligned(as: SIMD16<UInt16>.self)
+            let special = (vector & expMask) .== expMask
+            let isNegInf = vector .== negInfPattern
+            flagged |= one.replacing(with: SIMD16<UInt16>.zero, where: .!(special .& .!isNegInf))
+            index += 16
+        }
+        anyUncertifiable = flagged.max() != 0
+        while index < totalCount, !anyUncertifiable {
+            let value = bits[index]
+            if (value & 0x7C00) == 0x7C00, value != 0xFC00 { anyUncertifiable = true }
+            index += 1
+        }
+        if anyUncertifiable { return nil }
+
+        func rawReduction(_ function: BNNS.ReductionFunction, offset: Int, count: Int) -> FloatType? {
+            guard let input = BNNSNDArrayDescriptor(
+                data: UnsafeMutableRawBufferPointer(
+                    start: basePointer.advanced(by: offset * MemoryLayout<FloatType>.stride),
+                    count: count * MemoryLayout<FloatType>.stride
+                ),
+                scalarType: FloatType.self,
+                shape: .vector(count, stride: 1)
+            ) else { return nil }
+            let output = BNNSNDArrayDescriptor.allocateUninitialized(
+                scalarType: FloatType.self,
+                shape: .vector(1, stride: 1)
+            )
+            defer { output.deallocate() }
+            do {
+                try BNNS.applyReduction(function, input: input, output: output, weights: nil)
+            } catch {
+                return nil
+            }
+            return output.makeArray(of: FloatType.self)?.first
+        }
+
+        guard let maxText16 = rawReduction(.max, offset: 0, count: timeTokenBeginOffset),
+              let lseTime16 = rawReduction(.logSumExp, offset: timeTokenBeginOffset, count: timeTokenCount)
+        else { return nil }
+
+        let maxText = Float(maxText16)
+        let lseTime = Float(lseTime16)
+        guard maxText.isFinite, lseTime.isFinite,
+              abs(maxText) < 512, abs(lseTime) < 512 else { return nil }
+
+        // Scale-aware epsilon: one Float16 ULP at the largest magnitude the
+        // upstream pipeline's intermediates can reach, times a 32x guard.
+        func ulp16(atMagnitude magnitude: Float) -> Float {
+            let clamped = max(magnitude, 6.1035156e-5)
+            return exp2f(floorf(log2f(clamped)) - 10)
+        }
+        let logVocab = logf(Float(totalCount))
+        let logTime = logf(Float(timeTokenCount))
+        let scale = max(
+            max(abs(lseTime - max(maxText, lseTime)) + logVocab + logTime,
+                abs(maxText - max(maxText, lseTime)) + logVocab),
+            max(abs(lseTime), max(abs(maxText), 1))
+        )
+        let epsilon = 32 * ulp16(atMagnitude: scale)
+        let margin = lseTime - maxText
+        return abs(margin) > epsilon ? margin > 0 : nil
+    }
+
+    private func upstreamLogSoftmaxDecision(logits: MLMultiArray, timeTokenBegin: Int) -> Bool {
         let timeTokenBeginOffset = logits.linearOffset(for: [0, 0, timeTokenBegin])
 
         let logprobsInputPointer = UnsafeMutableRawBufferPointer(

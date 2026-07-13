@@ -118,6 +118,11 @@ public struct TranscriptionUtilities {
             prewarmLoadTime: validResults.map { $0.timings.prewarmLoadTime }.max() ?? 0,
             encoderLoadTime: validResults.map { $0.timings.encoderLoadTime }.max() ?? 0,
             decoderLoadTime: validResults.map { $0.timings.decoderLoadTime }.max() ?? 0,
+            // OpenCast fork (whisper-perf E3): carry the specialization
+            // splits through the merge — they always exported 0, hiding
+            // load-side attribution for compilation-hint experiments.
+            encoderSpecializationTime: validResults.map { $0.timings.encoderSpecializationTime }.max() ?? 0,
+            decoderSpecializationTime: validResults.map { $0.timings.decoderSpecializationTime }.max() ?? 0,
             tokenizerLoadTime: validResults.map { $0.timings.tokenizerLoadTime }.max() ?? 0,
             audioLoading: validResults.map { $0.timings.audioLoading }.reduce(0, +),
             audioProcessing: validResults.map { $0.timings.audioProcessing }.reduce(0, +),

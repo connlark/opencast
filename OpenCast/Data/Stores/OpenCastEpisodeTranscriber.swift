@@ -4,9 +4,14 @@ import OpenCastTranscription
 struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
     let injectedService: OpenCastTranscriptionService?
     private let currentServiceTracker = CurrentTranscriptionServiceTracker()
+    private let retention: TranscriptionServiceRetention
 
-    init(service: OpenCastTranscriptionService? = nil) {
+    init(
+        service: OpenCastTranscriptionService? = nil,
+        retention: TranscriptionServiceRetention = TranscriptionServiceRetention()
+    ) {
         injectedService = service
+        self.retention = retention
     }
 
     func transcribe(
@@ -14,15 +19,19 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
     ) -> AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                var serviceToken: UUID?
+                var preparedStream: PreparedTranscriptionStream?
                 do {
-                    let preparedStream = try await makeTranscriptionStream(for: request)
-                    serviceToken = preparedStream.serviceToken
-                    try await forward(preparedStream.stream, to: continuation)
-                    await unload(serviceToken)
+                    let prepared = try await makeTranscriptionStream(for: request)
+                    preparedStream = prepared
+                    try await forward(prepared.stream, to: continuation)
+                    await retainOrUnload(prepared)
                     continuation.finish()
                 } catch {
-                    await unload(serviceToken)
+                    // A failed or cancelled attempt never leaves a runtime
+                    // behind — the cpuOnly recovery rung and any later drain
+                    // item start from a fresh load.
+                    retention.invalidate(reason: "run-failed")
+                    await unload(preparedStream?.serviceToken)
                     continuation.finish(throwing: error)
                 }
             }
@@ -34,6 +43,7 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
     }
 
     func unload() async {
+        retention.invalidate(reason: "hard-unload")
         if let injectedService {
             await injectedService.unload()
         } else {
@@ -41,15 +51,52 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
         }
     }
 
+    func releaseRunResources() async {
+        // Post-success cleanup: the stream task has already retained or
+        // unloaded its own service; anything still tracked here was never
+        // handed to retention.
+        if let injectedService {
+            await injectedService.unload()
+        } else {
+            await currentServiceTracker.unloadCurrentService()
+        }
+    }
+
+    func beginDrainRetention() {
+        retention.beginDrain()
+    }
+
+    func endDrainRetention() async {
+        await retention.endDrain()
+    }
+
+    private func retainOrUnload(_ prepared: PreparedTranscriptionStream) async {
+        if let key = prepared.retentionKey,
+           let service = prepared.whisperService,
+           retention.retain(service, key: key) {
+            currentServiceTracker.clear(prepared.serviceToken)
+            AdFreePassBackgroundRunLog.record(
+                "compute retained runtime profile=\(key.computeProfile.logDescription) model=\(key.modelIdentifier)"
+            )
+            return
+        }
+        await unload(prepared.serviceToken)
+    }
+
     private func makeTranscriptionStream(
         for request: EpisodeTranscriptionRunRequest
     ) async throws -> PreparedTranscriptionStream {
         switch request.engine {
         case .whisper:
-            let service = try makeWhisperService(for: request)
+            let (service, retentionKey) = try makeWhisperService(for: request)
             let serviceToken = track(service)
             let stream = await service.transcribe(longFormRequest(from: request))
-            return PreparedTranscriptionStream(stream: stream, serviceToken: serviceToken)
+            return PreparedTranscriptionStream(
+                stream: stream,
+                serviceToken: serviceToken,
+                whisperService: service,
+                retentionKey: retentionKey
+            )
         case .appleSpeech:
             let service = AppleSpeechTranscriptionService(
                 requiresInstalledAssets: true,
@@ -62,9 +109,11 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
         }
     }
 
-    private func makeWhisperService(for request: EpisodeTranscriptionRunRequest) throws -> OpenCastTranscriptionService {
+    private func makeWhisperService(
+        for request: EpisodeTranscriptionRunRequest
+    ) throws -> (service: OpenCastTranscriptionService, retentionKey: TranscriptionServiceRetention.Key?) {
         if let injectedService {
-            return injectedService
+            return (injectedService, nil)
         }
 
         guard let model = OpenCastWhisperModel(rawValue: request.modelIdentifier) else {
@@ -72,14 +121,26 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
         }
 
         let computeProfile = Self.computeProfileForNewService(requestedProfile: request.computeProfile)
+        let retentionKey = TranscriptionServiceRetention.Key(
+            modelIdentifier: request.modelIdentifier,
+            modelVersion: request.modelVersion,
+            modelTreeSHA256: request.modelTreeSHA256,
+            computeProfile: computeProfile
+        )
+        if let retainedService = retention.checkout(retentionKey) as? OpenCastTranscriptionService {
+            AdFreePassBackgroundRunLog.record("compute reusing retained runtime profile=\(computeProfile.logDescription)")
+            return (retainedService, retentionKey)
+        }
+
         AdFreePassBackgroundRunLog.record("compute selected profile=\(computeProfile.logDescription)")
-        return OpenCastTranscriptionService(
+        let service = OpenCastTranscriptionService(
             modelLocator: DownloadedWhisperModelLocator(
                 model: model,
                 version: request.modelVersion
             ),
             computeProfile: computeProfile
         )
+        return (service, retentionKey)
     }
 
     private func longFormRequest(from request: EpisodeTranscriptionRunRequest) -> OpenCastLongFormTranscriptionRequest {
@@ -201,6 +262,20 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
     private struct PreparedTranscriptionStream {
         var stream: AsyncThrowingStream<OpenCastLongFormTranscriptionEvent, Error>
         var serviceToken: UUID?
+        var whisperService: OpenCastTranscriptionService?
+        var retentionKey: TranscriptionServiceRetention.Key?
+
+        init(
+            stream: AsyncThrowingStream<OpenCastLongFormTranscriptionEvent, Error>,
+            serviceToken: UUID?,
+            whisperService: OpenCastTranscriptionService? = nil,
+            retentionKey: TranscriptionServiceRetention.Key? = nil
+        ) {
+            self.stream = stream
+            self.serviceToken = serviceToken
+            self.whisperService = whisperService
+            self.retentionKey = retentionKey
+        }
     }
 }
 
@@ -229,6 +304,19 @@ private final class CurrentTranscriptionServiceTracker: @unchecked Sendable {
         }
 
         await service.unload()
+        lock.withLock {
+            if currentService?.token == token {
+                currentService = nil
+            }
+        }
+    }
+
+    /// Stops tracking without unloading — the service moved into drain
+    /// retention and stays loaded.
+    func clear(_ token: UUID?) {
+        guard let token else {
+            return
+        }
         lock.withLock {
             if currentService?.token == token {
                 currentService = nil

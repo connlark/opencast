@@ -3,6 +3,7 @@ import Foundation
 enum TranscriptionFailureClassification: Equatable {
     case cancelled
     case environmentalCompute
+    case environmentalStorage
     case failed
 }
 
@@ -20,6 +21,13 @@ struct TranscriptionFailureClassifier {
             return .cancelled
         }
 
+        // Whisper-perf G2: the audio spill makes disk headroom a runtime
+        // dependency; exhaustion is environmental in any scene state — the
+        // episode must interrupt (resumable), not fail terminally.
+        if isStorageExhaustion(nsError) {
+            return .environmentalStorage
+        }
+
         guard environment.isConstrained,
               isComputeDomain(nsError.domain)
         else {
@@ -27,6 +35,20 @@ struct TranscriptionFailureClassifier {
         }
 
         return .environmentalCompute
+    }
+
+    private static func isStorageExhaustion(_ error: NSError) -> Bool {
+        switch (error.domain, error.code) {
+        case (NSCocoaErrorDomain, CocoaError.Code.fileWriteOutOfSpace.rawValue),
+             (NSPOSIXErrorDomain, Int(POSIXErrorCode.ENOSPC.rawValue)):
+            return true
+        default:
+            break
+        }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+            return isStorageExhaustion(underlying)
+        }
+        return false
     }
 
     private static func isCancellation(_ error: NSError) -> Bool {

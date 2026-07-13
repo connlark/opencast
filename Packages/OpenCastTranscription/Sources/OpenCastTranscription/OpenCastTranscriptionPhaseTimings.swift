@@ -3,9 +3,6 @@ import Foundation
 
 /// WhisperKit per-phase totals and run counts exported for benchmark and
 /// proof results. Not part of the persisted transcript document schema.
-///
-/// Specialization times are intentionally omitted: `mergeTranscriptionResults`
-/// does not carry them, so they would always export as zero.
 public struct OpenCastTranscriptionPhaseTimings: Codable, Sendable, Equatable {
     public var inputAudioSeconds: TimeInterval
     public var timeToFirstToken: TimeInterval?
@@ -13,6 +10,8 @@ public struct OpenCastTranscriptionPhaseTimings: Codable, Sendable, Equatable {
     public var prewarmLoadTime: TimeInterval
     public var encoderLoadTime: TimeInterval
     public var decoderLoadTime: TimeInterval
+    public var encoderSpecializationTime: TimeInterval?
+    public var decoderSpecializationTime: TimeInterval?
     public var tokenizerLoadTime: TimeInterval
     public var audioLoading: TimeInterval
     public var audioProcessing: TimeInterval
@@ -52,6 +51,8 @@ public struct OpenCastTranscriptionPhaseTimings: Codable, Sendable, Equatable {
         prewarmLoadTime = timings.prewarmLoadTime
         encoderLoadTime = timings.encoderLoadTime
         decoderLoadTime = timings.decoderLoadTime
+        encoderSpecializationTime = timings.encoderSpecializationTime
+        decoderSpecializationTime = timings.decoderSpecializationTime
         tokenizerLoadTime = timings.tokenizerLoadTime
         audioLoading = timings.audioLoading
         audioProcessing = timings.audioProcessing

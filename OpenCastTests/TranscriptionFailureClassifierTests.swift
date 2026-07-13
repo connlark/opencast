@@ -53,6 +53,36 @@ struct TranscriptionFailureClassifierTests {
         #expect(classify(domain: "example.unknown", environment: background) == .failed)
     }
 
+    @Test("Disk exhaustion is an environmental storage interrupt in any scene state")
+    func diskExhaustionClassifiesAsEnvironmentalStorage() {
+        let background = EpisodeTranscriptionFailureEnvironment(
+            sceneState: .background,
+            isProtectedDataAvailable: true
+        )
+
+        // The spill's FileHandle.write throws NSFileWriteOutOfSpaceError with
+        // an underlying POSIX ENOSPC; both shapes must classify, and the
+        // classification must not depend on a constrained environment.
+        let outOfSpace = NSError(
+            domain: NSCocoaErrorDomain,
+            code: CocoaError.Code.fileWriteOutOfSpace.rawValue
+        )
+        let posixFull = NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(POSIXErrorCode.ENOSPC.rawValue)
+        )
+        let wrapped = NSError(
+            domain: "WhisperKit.WhisperError",
+            code: 5,
+            userInfo: [NSUnderlyingErrorKey: posixFull]
+        )
+
+        #expect(TranscriptionFailureClassifier.classify(outOfSpace, environment: background) == .environmentalStorage)
+        #expect(TranscriptionFailureClassifier.classify(outOfSpace, environment: .foreground) == .environmentalStorage)
+        #expect(TranscriptionFailureClassifier.classify(posixFull, environment: background) == .environmentalStorage)
+        #expect(TranscriptionFailureClassifier.classify(wrapped, environment: .foreground) == .environmentalStorage)
+    }
+
     private func classify(
         domain: String,
         environment: EpisodeTranscriptionFailureEnvironment

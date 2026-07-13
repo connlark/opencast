@@ -61,6 +61,23 @@ open class TranscribeTask {
         decodeOptions: DecodingOptions? = nil,
         callback: TranscriptionCallback? = nil
     ) async throws -> TranscriptionResult {
+        // OpenCast fork (whisper-perf G2): the array path routes through the
+        // source-based loop; ArrayAudioSampleSource performs the identical
+        // padOrTrimAudio window copy.
+        try await run(
+            audioSource: ArrayAudioSampleSource(samples: audioArray),
+            decodeOptions: decodeOptions,
+            callback: callback
+        )
+    }
+
+    /// OpenCast fork (whisper-perf G2): decode from a bounded-memory sample
+    /// source (e.g. a spilled PCM file) instead of a resident `[Float]`.
+    public func run(
+        audioSource: any AudioSampleSource,
+        decodeOptions: DecodingOptions? = nil,
+        callback: TranscriptionCallback? = nil
+    ) async throws -> TranscriptionResult {
         let interval = Logging.beginSignpost("TranscribeAudio", signposter: Logging.TranscribeTask.signposter)
         defer { Logging.endSignpost("TranscribeAudio", interval: interval, signposter: Logging.TranscribeTask.signposter) }
 
@@ -72,7 +89,7 @@ open class TranscribeTask {
 
         var detectedLanguage: String?
 
-        let contentFrames = audioArray.count
+        let contentFrames = audioSource.sampleCount
 
         // MARK: Init decoder inputs
 
@@ -130,10 +147,10 @@ open class TranscribeTask {
                 Logging.debug("Decoding Window Size: \(segmentSize) (\(Logging.formatTimestamp(timeOffsetEnd - timeOffset))s)")
 
                 let audioProcessingStart = Date()
-                // OpenCast fork: copy the window directly from the full audio
-                // array instead of allocating an intermediate [Float] slice
-                // (up to 480,000 Floats per window).
-                guard let audioSamples = audioProcessor.padOrTrim(fromArray: audioArray, startAt: seek, availableLength: segmentSize, toLength: windowSamples) else {
+                // OpenCast fork: copy the window directly from the source
+                // (array or spilled PCM file) instead of allocating an
+                // intermediate [Float] slice (up to 480,000 Floats per window).
+                guard let audioSamples = try audioSource.windowSamples(startAt: seek, availableLength: segmentSize, toLength: windowSamples) else {
                     throw WhisperError.transcriptionFailed("Audio samples are nil")
                 }
                 await windowPreprocess(for: audioSamples, seek: windowSeek, segmentSize: segmentSize)
@@ -186,6 +203,7 @@ open class TranscribeTask {
                     decodingOptions: options,
                     decoderInputs: &decoderInputs,
                     detectedLanguage: &detectedLanguage,
+                    windowSeek: windowSeek,
                     callback: decodingCallback
                 )
 
@@ -330,11 +348,23 @@ open class TranscribeTask {
 
     // MARK: - Decode with Fallback Logic
 
+    /// OpenCast fork (whisper-perf F): per-attempt seed from stable inputs
+    /// only — (base seed from the audio hash, absolute window seek in
+    /// samples, attempt index). Seek-keyed derivation makes a resumed window
+    /// sample identically to the uninterrupted run.
+    public static func deterministicFallbackSeed(base: UInt64, windowSeek: Int, attempt: Int) -> UInt64 {
+        var generator = SplitMix64RandomNumberGenerator(state: base ^ UInt64(bitPattern: Int64(windowSeek)))
+        _ = generator.next()
+        generator.state ^= UInt64(attempt)
+        return generator.next()
+    }
+
     private func decodeWithFallback(
         encoderSegment encoderOutput: any AudioEncoderOutputType,
         decodingOptions options: DecodingOptions,
         decoderInputs: inout any DecodingInputsType,
         detectedLanguage: inout String?,
+        windowSeek: Int,
         callback: TranscriptionCallback? = nil
     ) async throws -> DecodingResult {
         let interval = Logging.beginSignpost("Decode", signposter: Logging.TranscribeTask.signposter)
@@ -351,7 +381,10 @@ open class TranscribeTask {
             Logging.info("Decoding Temperature: \(temp)")
             let decodeWithFallbackStart = Date()
 
-            let tokenSampler = GreedyTokenSampler(temperature: temp, eotToken: tokenizer.specialTokens.endToken, decodingOptions: options)
+            let fallbackSeed = options.deterministicFallbackBaseSeed.map {
+                Self.deterministicFallbackSeed(base: $0, windowSeek: windowSeek, attempt: i)
+            }
+            let tokenSampler = GreedyTokenSampler(temperature: temp, eotToken: tokenizer.specialTokens.endToken, decodingOptions: options, fallbackSeed: fallbackSeed)
 
             var currentDecodingOptions = options
             // For a multilingual model, if language is not passed and detectLanguage is true, detect language and set in options

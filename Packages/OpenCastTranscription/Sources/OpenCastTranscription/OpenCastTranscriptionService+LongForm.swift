@@ -42,19 +42,30 @@ extension OpenCastTranscriptionService {
         let clock = ContinuousClock()
         let pipelineStart = clock.now
 
+        // Whisper-perf G2: the episode's canonical PCM spills to a temp file
+        // and windows are served from it, so peak memory no longer scales
+        // with episode length. The file is removed on completion,
+        // cancellation, and error alike.
         let audioLoadStart = clock.now
-        let samples = try await audioLoader.samples(
+        let spillURL = Self.makeAudioSpillFileURL()
+        defer { try? FileManager.default.removeItem(at: spillURL) }
+        let sampleCount = try await audioLoader.spillSamples(
             from: request.audioFileURL,
             clipStart: 0,
-            clipDuration: nil
+            clipDuration: nil,
+            to: spillURL
         )
         let audioLoading = audioLoadStart.duration(to: clock.now).timeInterval
         try Task.checkCancellation()
-        guard !samples.isEmpty else {
+        guard sampleCount > 0 else {
             throw OpenCastTranscriptionError.emptyAudioClip(clipStart: 0, clipDuration: 0)
         }
+        // Open the reader immediately: the held descriptor keeps the samples
+        // readable even if the caches directory is purged during the model
+        // load (unlink-with-open-fd), closing the skeptic-found gap.
+        let audioSource = try PCMFileAudioSampleSource(fileURL: spillURL, expectedSampleCount: sampleCount)
 
-        let audioDuration = Double(samples.count) / Double(WhisperKit.sampleRate)
+        let audioDuration = Double(sampleCount) / Double(WhisperKit.sampleRate)
         guard audioDuration.isFinite, audioDuration > 0 else {
             throw OpenCastTranscriptionError.invalidAudioDuration(audioDuration)
         }
@@ -73,7 +84,8 @@ extension OpenCastTranscriptionService {
             languageCode: request.languageCode,
             audioDuration: audioDuration,
             resumeStart: resumeStart,
-            clipEnd: request.clipEnd
+            clipEnd: request.clipEnd,
+            sourceFileSHA256: request.sourceFileSHA256
         )
         let emitter = OpenCastLongFormTranscriptionEventEmitter(
             continuation: continuation,
@@ -90,7 +102,7 @@ extension OpenCastTranscriptionService {
         // signal supplies currentWindowIndex and cancellation propagates through
         // task cancellation inside the decode loop.
         let transcriptions = try await runtime.transcribe(
-            audioArray: samples,
+            audioSource: audioSource,
             decodeOptions: decodeOptions,
             callback: nil,
             windowCallback: { windowIndex in
@@ -132,6 +144,42 @@ extension OpenCastTranscriptionService {
         continuation.yield(.finished(result))
     }
 
+    /// Whisper-perf G2: spill files live under Caches (purgeable, never
+    /// backed up), one per in-flight long-form run. Normal removal happens in
+    /// `performLongFormTranscribe`'s defer; files orphaned by a process kill
+    /// are swept here once they are a day old (concurrent service instances
+    /// may hold younger live spills, so age-gate rather than clearing).
+    static func makeAudioSpillFileURL() -> URL {
+        let directory = audioSpillDirectory()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        sweepStaleAudioSpillFiles(in: directory)
+        return directory.appending(path: "\(UUID().uuidString).pcm")
+    }
+
+    static func audioSpillDirectory() -> URL {
+        URL.cachesDirectory.appending(
+            path: "OpenCastTranscription/AudioSpill",
+            directoryHint: .isDirectory
+        )
+    }
+
+    private static func sweepStaleAudioSpillFiles(in directory: URL) {
+        let fileManager = FileManager.default
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else {
+            return
+        }
+        let cutoff = Date.now.addingTimeInterval(-24 * 60 * 60)
+        for file in contents {
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < cutoff {
+                try? fileManager.removeItem(at: file)
+            }
+        }
+    }
+
     /// Run-manifest snapshot of the actual long-form decode options, so
     /// benchmark artifacts pin the decode configuration they measured.
     public static func longFormDecodeOptionsSummary(
@@ -168,6 +216,7 @@ extension OpenCastTranscriptionService {
         summary["noSpeechThreshold"] = options.noSpeechThreshold.map { String($0) } ?? "nil"
         summary["concurrentWorkerCount"] = String(options.concurrentWorkerCount)
         summary["chunkingStrategy"] = options.chunkingStrategy.map { String(describing: $0) } ?? "nil"
+        summary["deterministicFallbackBaseSeed"] = options.deterministicFallbackBaseSeed.map { String($0) } ?? "nil"
         return summary
     }
 
@@ -175,7 +224,8 @@ extension OpenCastTranscriptionService {
         languageCode: String,
         audioDuration: TimeInterval,
         resumeStart: TimeInterval,
-        clipEnd: TimeInterval? = nil
+        clipEnd: TimeInterval? = nil,
+        sourceFileSHA256: String? = nil
     ) -> DecodingOptions {
         DecodingOptions(
             verbose: false,
@@ -187,9 +237,20 @@ extension OpenCastTranscriptionService {
             withoutTimestamps: false,
             wordTimestamps: false,
             concurrentWorkerCount: 1,
-            chunkingStrategy: nil
+            chunkingStrategy: nil,
+            deterministicFallbackBaseSeed: sourceFileSHA256.flatMap(Self.deterministicFallbackBaseSeed)
         )
         .withClipTimestamps(start: resumeStart, end: min(clipEnd ?? audioDuration, audioDuration))
+    }
+
+    /// Whisper-perf F: base seed from the leading 16 hex digits of the
+    /// source audio SHA-256 — stable across runs and cancel/resume.
+    static func deterministicFallbackBaseSeed(from sourceFileSHA256: String) -> UInt64? {
+        let prefix = sourceFileSHA256.prefix(16)
+        guard prefix.count == 16 else {
+            return nil
+        }
+        return UInt64(prefix, radix: 16)
     }
 }
 

@@ -401,6 +401,16 @@ final class EpisodeTranscriptionStore {
         await transcriber.unload()
     }
 
+    /// Drain-scoped model retention (whisper-perf E1) — forwarded from the
+    /// ad-free-pass queue coordinator around one queue drain.
+    func beginModelRetentionDrain() {
+        transcriber.beginDrainRetention()
+    }
+
+    func endModelRetentionDrain() async {
+        await transcriber.endDrainRetention()
+    }
+
     private func cancelActiveJobAndWait(preservesPartial: Bool) async {
         guard let activeTask else {
             return
@@ -455,7 +465,7 @@ final class EpisodeTranscriptionStore {
                     computeProfile: computeProfile,
                     workingRelativePath: &workingRelativePath
                 )
-                await transcriber.unload()
+                await transcriber.releaseRunResources()
                 guard ownsActiveRun(episodeID: episode.episodeID, runID: runID) else {
                     return
                 }
@@ -663,6 +673,13 @@ final class EpisodeTranscriptionStore {
                 attemptedComputeProfile: attemptedComputeProfile,
                 modelContext: modelContext
             )
+        case .environmentalStorage:
+            return handleEnvironmentalStorageFailure(
+                episodeID: episodeID,
+                relativePath: relativePath,
+                error: error,
+                modelContext: modelContext
+            )
         case .failed:
             markFailed(
                 episodeID: episodeID,
@@ -670,6 +687,35 @@ final class EpisodeTranscriptionStore {
                 error: error,
                 modelContext: modelContext
             )
+            return .finish
+        }
+    }
+
+    /// Whisper-perf G2: disk exhaustion during the audio spill. A lower
+    /// compute rung cannot free storage, so skip the retry ladder and
+    /// interrupt (resumable) directly.
+    private func handleEnvironmentalStorageFailure(
+        episodeID: String,
+        relativePath: String?,
+        error: any Error,
+        modelContext: ModelContext
+    ) -> TranscriptionFailureAction {
+        do {
+            guard let record = try fetchStoredRecord(episodeID: episodeID, modelContext: modelContext) else {
+                return .finish
+            }
+            recordFailureDiagnostics(error: error, record: record)
+            AdFreePassBackgroundRunLog.record(
+                "transcription environmental storage failure action=interrupted episodeID=\(episodeID) completed=\(record.completedDuration.backgroundLogSeconds) checkpoints=\(record.checkpointCount)"
+            )
+            markInterruptedAfterEnvironmentalFailure(
+                record: record,
+                relativePath: relativePath,
+                modelContext: modelContext
+            )
+            return .finish
+        } catch {
+            recordFailure(error, episodeID: episodeID)
             return .finish
         }
     }

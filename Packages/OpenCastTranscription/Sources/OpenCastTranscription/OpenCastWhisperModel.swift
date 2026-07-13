@@ -18,7 +18,7 @@ public enum OpenCastWhisperModel: String, CaseIterable, Sendable {
     public var defaultRemoteVersion: String {
         switch self {
         case .tinyEnglish:
-            "20260701_75MB-v1"
+            "20260712_49MB-v3-w8"
         case .largeV3:
             "20240930_626MB-v1"
         }

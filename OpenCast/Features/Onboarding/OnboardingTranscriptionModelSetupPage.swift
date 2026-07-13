@@ -15,7 +15,7 @@ struct OnboardingTranscriptionModelSetupPage: View {
                         .font(.largeTitle)
                         .bold()
 
-                    Text("Install the tiny English speech model now so transcripts and promo/ad tools are ready later. It is about 75 MB and stays on this device.")
+                    Text("Install the tiny English speech model now so transcripts and promo/ad tools are ready later. It is about 50 MB and stays on this device.")
                         .font(.body)
                         .foregroundStyle(.secondary)
                 }

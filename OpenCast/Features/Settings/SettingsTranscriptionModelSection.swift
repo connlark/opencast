@@ -219,7 +219,7 @@ struct SettingsTranscriptionModelSection: View {
     private var installConfirmationMessage: String {
         switch selectedChoice {
         case .fastTinyEnglish:
-            "The tiny English model is about 75 MB and keeps transcription fastest."
+            "The tiny English model is about 50 MB and keeps transcription fastest."
         case .accurateLargeV3:
             "The large-v3 model is about 600 MB and improves transcript accuracy."
         }

@@ -25,7 +25,7 @@ struct OpenCastTranscriptionResourceTests {
     func supportedModelIdentitiesAreRemoteModels() {
         #expect(OpenCastWhisperModel.allCases.contains(.tinyEnglish))
         #expect(OpenCastWhisperModel.allCases.contains(.largeV3))
-        #expect(OpenCastWhisperModel.tinyEnglish.defaultRemoteVersion == "20260701_75MB-v1")
+        #expect(OpenCastWhisperModel.tinyEnglish.defaultRemoteVersion == "20260712_49MB-v3-w8")
         #expect(OpenCastWhisperModel.largeV3.defaultRemoteVersion == "20240930_626MB-v1")
     }
 

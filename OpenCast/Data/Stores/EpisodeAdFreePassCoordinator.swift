@@ -584,6 +584,18 @@ final class EpisodeAdFreePassCoordinator {
     }
 
     private func drainQueue() async {
+        // Whisper-perf E1: retain the loaded runtime across items within
+        // this drain only (items 2..n skip the ~4.4 s model load when the
+        // model + compute profile match). Ended on every drain exit path;
+        // failures, profile changes, and memory warnings drop it earlier.
+        let retentionStore = entries.first?.deps.transcriptions
+        retentionStore?.beginModelRetentionDrain()
+        defer {
+            if let retentionStore {
+                Task { await retentionStore.endModelRetentionDrain() }
+            }
+        }
+
         while !entries.isEmpty {
             let entry = entries.removeFirst()
             activeItem = entry.item

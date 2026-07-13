@@ -17,6 +17,8 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
     static let episodeTitleEnvironmentKey = "OPENCAST_BENCHMARK_EPISODE_TITLE"
     static let modelArgument = "--opencast-benchmark-model"
     static let modelEnvironmentKey = "OPENCAST_BENCHMARK_MODEL"
+    static let modelVersionArgument = "--opencast-benchmark-model-version"
+    static let modelVersionEnvironmentKey = "OPENCAST_BENCHMARK_MODEL_VERSION"
     static let computeArgument = "--opencast-benchmark-compute"
     static let computeEnvironmentKey = "OPENCAST_BENCHMARK_COMPUTE"
     static let clipStartArgument = "--opencast-benchmark-clip-start"
@@ -37,6 +39,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
     var feedURL: URL
     var preferredEpisodeTitle: String?
     var model: OpenCastWhisperModel
+    var modelVersion: String?
     var computeProfile: OpenCastTranscriptionComputeProfile
     var clipStart: TimeInterval?
     var clipEnd: TimeInterval?
@@ -51,6 +54,17 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         let processInfo = ProcessInfo.processInfo
         let arguments = processInfo.arguments
         let environment = processInfo.environment
+
+        // Whisper-perf I3: opt-in decoder microbench replaces the normal
+        // benchmark for this launch (measure-only spike; no product path).
+        if StatefulSpikeDecoderProbe.isRequested {
+            await StatefulSpikeDecoderProbe.run(
+                runLabel: argumentValue(from: arguments, flag: runLabelArgument) ?? environment[runLabelEnvironmentKey],
+                commit: environment[commitEnvironmentKey]
+            )
+            return
+        }
+
         let isRequested = arguments.contains(requestArgument)
             || environment[requestEnvironmentKey] == "1"
         guard isRequested else {
@@ -65,6 +79,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
             feedURL: value(feedURLArgument, feedURLEnvironmentKey).flatMap(URL.init(string:)) ?? defaultFeedURL,
             preferredEpisodeTitle: value(episodeTitleArgument, episodeTitleEnvironmentKey),
             model: value(modelArgument, modelEnvironmentKey).flatMap(OpenCastWhisperModel.init(commandLineValue:)) ?? .tinyEnglish,
+            modelVersion: value(modelVersionArgument, modelVersionEnvironmentKey),
             computeProfile: value(computeArgument, computeEnvironmentKey).flatMap(OpenCastTranscriptionComputeProfile.init(rawValue:)) ?? .backgroundSafe,
             clipStart: value(clipStartArgument, clipStartEnvironmentKey).flatMap(TimeInterval.init),
             clipEnd: value(clipEndArgument, clipEndEnvironmentKey).flatMap(TimeInterval.init),
@@ -102,7 +117,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         report.appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         report.appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         report.modelIdentifier = model.rawValue
-        report.modelVersion = model.defaultRemoteVersion
+        report.modelVersion = modelVersion ?? model.defaultRemoteVersion
         report.computeProfile = computeProfile.logDescription
         report.clipStart = clipStart
         report.clipEnd = clipEnd
@@ -120,7 +135,11 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
             report.episodeID = episode.id.rawValue
             report.sourceAudioURL = audioURL.absoluteString
 
-            let modelSummary = try await Self.modelSummary(model: model, installsIfNeeded: installsModelIfNeeded)
+            let modelSummary = try await Self.modelSummary(
+                model: model,
+                version: modelVersion,
+                installsIfNeeded: installsModelIfNeeded
+            )
             report.modelIdentifier = modelSummary.modelIdentifier
             report.modelVersion = modelSummary.version
             report.modelTreeSHA256 = modelSummary.treeSHA256
@@ -145,7 +164,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
                 modelTreeSHA256: modelSummary.treeSHA256
             )
             let service = OpenCastTranscriptionService(
-                modelLocator: DownloadedWhisperModelLocator(model: model),
+                modelLocator: DownloadedWhisperModelLocator(model: model, version: modelVersion),
                 computeProfile: computeProfile
             )
 
@@ -273,13 +292,15 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
 
     private static func modelSummary(
         model: OpenCastWhisperModel,
+        version: String?,
         installsIfNeeded: Bool
     ) async throws -> OpenCastWhisperModelInstalledSummary {
+        let resolvedVersion = version ?? model.defaultRemoteVersion
         let installStore = OpenCastWhisperModelInstallStore()
         do {
             return try installStore.installedSummary(
                 modelIdentifier: model.rawValue,
-                version: model.defaultRemoteVersion
+                version: resolvedVersion
             )
         } catch let error as OpenCastTranscriptionError {
             guard case .modelNotInstalled = error, installsIfNeeded else {
@@ -287,10 +308,10 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
             }
         }
 
-        _ = try await OpenCastWhisperModelInstaller().install(model: model)
+        _ = try await OpenCastWhisperModelInstaller().install(model: model, version: version)
         return try installStore.installedSummary(
             modelIdentifier: model.rawValue,
-            version: model.defaultRemoteVersion
+            version: resolvedVersion
         )
     }
 
