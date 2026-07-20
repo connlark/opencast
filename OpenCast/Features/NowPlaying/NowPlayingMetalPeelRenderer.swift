@@ -29,6 +29,8 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
     private var reduceMotion = false
     private var targetProgress: Float = 0
     private var pendingSettleVelocity: Float?
+    private var pendingInteractiveInput: (progress: Float, touchY: Float)?
+    private var interactiveDisplayLink: CADisplayLink?
     private var displayLink: CADisplayLink?
     private var lastTimestamp: CFTimeInterval?
     private var lastProgressReportTimestamp: CFTimeInterval?
@@ -82,6 +84,7 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
     }
 
     isolated deinit {
+        interactiveDisplayLink?.invalidate()
         displayLink?.invalidate()
         textureTask?.cancel()
     }
@@ -105,9 +108,7 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
                 return
             }
 
-            Task { @MainActor [weak self, loadedTexture] in
-                self?.finishArtworkTexture(loadedTexture.texture, requestID: requestID)
-            }
+            self?.finishArtworkTexture(loadedTexture.texture, requestID: requestID)
         }
     }
 
@@ -116,6 +117,10 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
         from cgImage: CGImage,
         device: MTLDevice
     ) async -> NowPlayingMetalPeelLoadedTexture {
+        guard !Task.isCancelled else {
+            return NowPlayingMetalPeelLoadedTexture(texture: nil)
+        }
+
         let imageSize = CGSize(width: CGFloat(cgImage.width), height: CGFloat(cgImage.height))
         let canvasSize = NowPlayingArtworkCanvas.squareSize(for: imageSize)
         let width = Int(canvasSize.width)
@@ -154,6 +159,10 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
             cgImage,
             in: NowPlayingArtworkCanvas.aspectFitRect(imageSize: imageSize, canvasSize: canvasSize)
         )
+
+        guard !Task.isCancelled else {
+            return NowPlayingMetalPeelLoadedTexture(texture: nil)
+        }
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm_srgb,
@@ -208,24 +217,25 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
 
     func setInteractiveProgress(_ progress: CGFloat, touchY: CGFloat) {
         stopSettling()
-        currentTouchY = Float(touchY.clamped01)
-        targetProgress = Float(progress.clamped01)
-        simulation.step(
-            input: NowPlayingPeelSimulationInput(
-                progress: Float(progress.clamped01),
-                touchY: currentTouchY,
-                targetProgress: targetProgress,
-                normalizedVelocity: 0,
-                isInteracting: true,
-                reduceMotion: reduceMotion
-            ),
-            deltaTime: 1 / 120
+        pendingInteractiveInput = (
+            progress: Float(progress.clamped01),
+            touchY: Float(touchY.clamped01)
         )
-        render()
+
+        guard interactiveDisplayLink == nil else {
+            return
+        }
+
+        let displayLink = CADisplayLink(target: self, selector: #selector(stepInteractive))
+        displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
+        displayLink.add(to: .main, forMode: .common)
+        interactiveDisplayLink = displayLink
     }
 
     func settle(to targetProgress: CGFloat, initialVelocity: CGFloat, touchY: CGFloat) {
         stopSettling()
+        applyPendingInteractiveFrame()
+        stopInteractiveUpdates()
         self.targetProgress = Float(targetProgress.clamped01)
         currentTouchY = Float(touchY.clamped01)
         pendingSettleVelocity = Float(initialVelocity.clamped(to: -8...8))
@@ -248,6 +258,7 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
 
     func stopRendering() {
         stopSettling()
+        stopInteractiveUpdates()
         textureTask?.cancel()
         textureTask = nil
         textureRequestID += 1
@@ -345,6 +356,43 @@ final class NowPlayingMetalPeelRenderer: NSObject, MTKViewDelegate {
             }
             return device.makeBuffer(bytes: baseAddress, length: bytes.count, options: .storageModeShared)
         }
+    }
+
+    @objc private func stepInteractive(_ displayLink: CADisplayLink) {
+        guard pendingInteractiveInput != nil else {
+            stopInteractiveUpdates()
+            return
+        }
+
+        applyPendingInteractiveFrame()
+    }
+
+    private func applyPendingInteractiveFrame() {
+        guard let pendingInteractiveInput else {
+            return
+        }
+
+        self.pendingInteractiveInput = nil
+        currentTouchY = pendingInteractiveInput.touchY
+        targetProgress = pendingInteractiveInput.progress
+        simulation.step(
+            input: NowPlayingPeelSimulationInput(
+                progress: pendingInteractiveInput.progress,
+                touchY: currentTouchY,
+                targetProgress: targetProgress,
+                normalizedVelocity: 0,
+                isInteracting: true,
+                reduceMotion: reduceMotion
+            ),
+            deltaTime: 1 / 120
+        )
+        render()
+    }
+
+    private func stopInteractiveUpdates() {
+        interactiveDisplayLink?.invalidate()
+        interactiveDisplayLink = nil
+        pendingInteractiveInput = nil
     }
 
     @objc private func stepSettle(_ displayLink: CADisplayLink) {

@@ -1505,7 +1505,7 @@ private final class AdFreePassAnalysisClient: EpisodeAdAnalysisClient, @unchecke
         self.failingRequestIndexes = failingRequestIndexes
     }
 
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisAPIResponse {
+    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
         requestCount += 1
         if let error {
             throw error
@@ -1514,7 +1514,7 @@ private final class AdFreePassAnalysisClient: EpisodeAdAnalysisClient, @unchecke
             throw EpisodeAdAnalysisHTTPError(statusCode: 500, code: "internal", detail: "probe failure")
         }
 
-        return EpisodeAdAnalysisAPIResponse(
+        return .completed(EpisodeAdAnalysisAPIResponse(
             schemaVersion: 1,
             requestID: request.requestID,
             model: "gemini-3.5-flash",
@@ -1533,6 +1533,10 @@ private final class AdFreePassAnalysisClient: EpisodeAdAnalysisClient, @unchecke
             ],
             warnings: [],
             usage: nil
-        )
+        ))
+    }
+
+    func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
+        throw EpisodeAdAnalysisError.clientDisabled
     }
 }

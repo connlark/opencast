@@ -1,22 +1,35 @@
 #!/usr/bin/env node
 // Pulls the latest framed App Store screenshots (iPhone set) from the
-// fastlane output into public/screenshots/ so every deploy ships the
-// current marketing set. Fails the deploy when the fastlane output is
-// missing or site.ts references a file that did not sync; set
-// SKIP_SCREENSHOT_SYNC=1 to deploy with the committed copies instead.
-import { copyFileSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+// fastlane output, resizes them to the 232px rendered width plus a 2x Retina
+// variant, and commits browser-ready AVIF/WebP assets with a PNG fallback.
+// Set SKIP_SCREENSHOT_SYNC=1 to deploy with the committed optimized copies.
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import sharp from "sharp";
 
 const websiteDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoDir = path.resolve(websiteDir, "..", "..");
 const sourceDir = path.join(repoDir, "fastlane", "screenshots", "en-US");
 const destinationDir = path.join(websiteDir, "public", "screenshots");
+const manifestPath = path.join(websiteDir, "src", "lib", "screenshots.generated.ts");
 const devicePrefix = "iPhone 17 Pro Max-";
-const framedPattern = /^app_store_.+_framed\.png$/;
+const renderedWidths = [232, 464];
+const retinaWidth = renderedWidths.at(-1);
 
 if (process.env.SKIP_SCREENSHOT_SYNC === "1") {
-  console.warn("sync-screenshots: SKIP_SCREENSHOT_SYNC=1 — deploying committed screenshot copies.");
+  console.warn(
+    "sync-screenshots: SKIP_SCREENSHOT_SYNC=1 — deploying committed optimized screenshots."
+  );
   process.exit(0);
 }
 
@@ -24,51 +37,127 @@ if (!existsSync(sourceDir)) {
   console.error(
     `sync-screenshots: ${sourceDir} does not exist.\n` +
       "Generate the set with `bundle exec fastlane ios app_store_screenshots`, " +
-      "or set SKIP_SCREENSHOT_SYNC=1 to deploy the committed copies."
+      "or set SKIP_SCREENSHOT_SYNC=1 to deploy with the committed optimized copies."
   );
   process.exit(1);
 }
 
-const framedSources = readdirSync(sourceDir)
-  .filter((name) => name.startsWith(devicePrefix) && framedPattern.test(name.slice(devicePrefix.length)))
-  .sort();
+const siteSource = readFileSync(path.join(websiteDir, "src", "lib", "site.ts"), "utf8");
+const referenced = [
+  ...siteSource.matchAll(/screenshot\(\s*"([\w.-]+)"/g),
+].map((match) => match[1]);
 
-if (framedSources.length === 0) {
+if (referenced.length === 0) {
   console.error(
-    `sync-screenshots: no "${devicePrefix}app_store_*_framed.png" files under ${sourceDir}.\n` +
-      "Generate the set with `bundle exec fastlane ios app_store_screenshots`, " +
-      "or set SKIP_SCREENSHOT_SYNC=1 to deploy the committed copies."
+    "sync-screenshots: site.ts does not contain any screenshot(\"...\") references."
   );
   process.exit(1);
 }
 
-const synced = new Set();
-for (const source of framedSources) {
-  const basename = source.slice(devicePrefix.length);
-  copyFileSync(path.join(sourceDir, source), path.join(destinationDir, basename));
-  synced.add(basename);
+const sourceNames = new Set(readdirSync(sourceDir));
+const missing = referenced.filter(
+  (id) => !sourceNames.has(`${devicePrefix}${id}.png`)
+);
+if (missing.length > 0) {
+  console.error(
+    `sync-screenshots: missing fastlane screenshots: ${missing.join(", ")}.\n` +
+      `Expected ${devicePrefix}<site.ts screenshot id>.png under ${sourceDir}.`
+  );
+  process.exit(1);
+}
+
+mkdirSync(destinationDir, { recursive: true });
+
+function hashedName(id, width, format, data) {
+  const hash = createHash("sha256").update(data).digest("hex").slice(0, 10);
+  return `${id}.${hash}.w${width}.${format}`;
+}
+
+async function encode(sourcePath, width, format) {
+  const image = sharp(sourcePath).resize({
+    width,
+    fit: "inside",
+    kernel: sharp.kernel.lanczos3,
+    withoutEnlargement: true,
+  });
+
+  if (format === "avif") {
+    return image
+      .avif({ quality: 68, effort: 6, chromaSubsampling: "4:4:4" })
+      .toBuffer({ resolveWithObject: true });
+  }
+  if (format === "webp") {
+    return image
+      .webp({ quality: 84, effort: 6, smartSubsample: true })
+      .toBuffer({ resolveWithObject: true });
+  }
+  return image
+    .png({ compressionLevel: 9, adaptiveFiltering: true })
+    .toBuffer({ resolveWithObject: true });
+}
+
+const expectedFiles = new Set();
+const manifest = {};
+let sourceBytes = 0;
+let generatedBytes = 0;
+
+for (const id of referenced) {
+  const sourcePath = path.join(sourceDir, `${devicePrefix}${id}.png`);
+  sourceBytes += statSync(sourcePath).size;
+
+  const variants = [];
+  for (const format of ["avif", "webp"]) {
+    for (const width of renderedWidths) {
+      variants.push({ format, width, ...(await encode(sourcePath, width, format)) });
+    }
+  }
+  variants.push({
+    format: "png",
+    width: retinaWidth,
+    ...(await encode(sourcePath, retinaWidth, "png")),
+  });
+
+  for (const variant of variants) {
+    variant.name = hashedName(id, variant.width, variant.format, variant.data);
+    expectedFiles.add(variant.name);
+    generatedBytes += variant.data.length;
+    writeFileSync(path.join(destinationDir, variant.name), variant.data);
+  }
+
+  const srcSet = (format) =>
+    variants
+      .filter((variant) => variant.format === format)
+      .map((variant) => `/screenshots/${variant.name} ${variant.info.width}w`)
+      .join(", ");
+  const fallback = variants.find((variant) => variant.format === "png");
+
+  manifest[id] = {
+    src: `/screenshots/${fallback.name}`,
+    avifSrcSet: srcSet("avif"),
+    webpSrcSet: srcSet("webp"),
+    width: fallback.info.width,
+    height: fallback.info.height,
+  };
 }
 
 const pruned = readdirSync(destinationDir).filter(
-  (name) => framedPattern.test(name) && !synced.has(name)
+  (name) => !expectedFiles.has(name)
 );
 for (const stale of pruned) {
   rmSync(path.join(destinationDir, stale));
 }
 
-const siteSource = readFileSync(path.join(websiteDir, "src", "lib", "site.ts"), "utf8");
-const referenced = [...siteSource.matchAll(/\/screenshots\/([\w.-]+\.png)/g)].map((match) => match[1]);
-const missing = referenced.filter((name) => !existsSync(path.join(destinationDir, name)));
-if (missing.length > 0) {
-  console.error(
-    `sync-screenshots: site.ts references screenshots that did not sync: ${missing.join(", ")}.\n` +
-      `Synced from ${sourceDir}: ${[...synced].join(", ")}`
-  );
-  process.exit(1);
-}
+writeFileSync(
+  manifestPath,
+  `// Generated by scripts/sync-screenshots.mjs. Do not edit by hand.\n` +
+    `export const screenshotAssets = ${JSON.stringify(manifest, null, 2)} as const;\n`
+);
 
+const reduction = ((1 - generatedBytes / sourceBytes) * 100).toFixed(1);
 console.log(
-  `sync-screenshots: synced ${synced.size} framed screenshots` +
+  `sync-screenshots: optimized ${referenced.length} framed screenshots ` +
+    `from ${sourceBytes.toLocaleString()} to ${generatedBytes.toLocaleString()} bytes ` +
+    `(${reduction}% smaller), wrote ${expectedFiles.size} responsive assets` +
     (pruned.length > 0 ? `, pruned ${pruned.length} stale (${pruned.join(", ")})` : "") +
-    `; site.ts references ${referenced.length} of them.`
+    "."
 );

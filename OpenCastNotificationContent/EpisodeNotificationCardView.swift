@@ -10,8 +10,8 @@ struct EpisodeNotificationCardView: View {
     @ScaledMetric(relativeTo: .body) private var topRowSpacing: CGFloat = 18
     @ScaledMetric(relativeTo: .subheadline) private var metadataFontSize: CGFloat = 13
     @ScaledMetric(relativeTo: .title3) private var episodeTitleFontSize: CGFloat = 21
-    @ScaledMetric(relativeTo: .body) private var scaledSummaryTopSpacing: CGFloat = 52
-    @ScaledMetric(relativeTo: .body) private var summaryFontSize: CGFloat = 19
+    @ScaledMetric(relativeTo: .body) private var scaledSummaryTopSpacing: CGFloat = 32
+    @ScaledMetric(relativeTo: .body) private var summaryFontSize: CGFloat = 16
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -48,7 +48,7 @@ struct EpisodeNotificationCardView: View {
                 Text(summaryText)
                     .font(.system(size: summaryFontSize, weight: .regular))
                     .foregroundStyle(.secondary)
-                    .lineLimit(5)
+                    .lineLimit(6)
                     .padding(.top, summaryTopSpacing)
             }
         }
@@ -61,7 +61,7 @@ struct EpisodeNotificationCardView: View {
     }
 
     private var summaryTopSpacing: CGFloat {
-        min(scaledSummaryTopSpacing, 52)
+        min(scaledSummaryTopSpacing, 32)
     }
 }
 

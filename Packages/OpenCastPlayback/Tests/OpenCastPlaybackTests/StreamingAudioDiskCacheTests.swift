@@ -154,7 +154,7 @@ struct StreamingAudioDiskCacheTests {
         let removedURL = URL(string: "https://example.com/removed.mp3")!
         let keptURL = URL(string: "https://example.com/kept.mp3")!
         let cache = StreamingAudioDiskCache(directory: directory)
-        let maintenance = StreamingAudioCacheMaintenance(directory: directory)
+        let maintenance = StreamingAudioCacheMaintenance(cache: cache)
 
         try await cache.store(
             response(data: Data([1, 2]), range: 0..<2, contentLength: 4),
@@ -189,7 +189,9 @@ struct StreamingAudioDiskCacheTests {
         try Data("{".utf8).write(to: corruptDirectory.appending(path: "manifest.json"), options: .atomic)
         try Data([1, 2, 3]).write(to: corruptDirectory.appending(path: "audio.data"), options: .atomic)
 
-        let maintenance = StreamingAudioCacheMaintenance(directory: directory)
+        let maintenance = StreamingAudioCacheMaintenance(
+            cache: StreamingAudioDiskCache(directory: directory)
+        )
 
         try await maintenance.remove(podcastID: "missing")
         let summary = try await maintenance.summary()

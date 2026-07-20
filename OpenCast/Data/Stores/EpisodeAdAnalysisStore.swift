@@ -12,6 +12,10 @@ final class EpisodeAdAnalysisStore {
     @ObservationIgnored private let client: any EpisodeAdAnalysisClient
     @ObservationIgnored private let fileStore: EpisodeAdAnalysisFileStore
     @ObservationIgnored private let analysisUnavailableMessage: String?
+    @ObservationIgnored private let pollingTimeout: Duration
+    @ObservationIgnored private let resumeTTL: TimeInterval
+    @ObservationIgnored private let resumeInitialPollAfter: TimeInterval
+    @ObservationIgnored private let pollingSleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private var activeTask: Task<Void, Never>?
     @ObservationIgnored private var activeEpisodeID: String?
     @ObservationIgnored private var activeRunID: UUID?
@@ -29,16 +33,32 @@ final class EpisodeAdAnalysisStore {
         )
         self.fileStore = fileStore
         analysisUnavailableMessage = configuration.analysisUnavailableMessage
+        pollingTimeout = .seconds(1_800)
+        resumeTTL = 3_600
+        resumeInitialPollAfter = 1
+        pollingSleep = { duration in
+            try await Task.sleep(for: duration)
+        }
     }
 
     init(
         client: any EpisodeAdAnalysisClient,
         fileStore: EpisodeAdAnalysisFileStore = EpisodeAdAnalysisFileStore(),
-        analysisUnavailableMessage: String? = nil
+        analysisUnavailableMessage: String? = nil,
+        pollingTimeout: Duration = .seconds(1_800),
+        resumeTTL: TimeInterval = 3_600,
+        resumeInitialPollAfter: TimeInterval = 1,
+        pollingSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
+            try await Task.sleep(for: duration)
+        }
     ) {
         self.client = client
         self.fileStore = fileStore
         self.analysisUnavailableMessage = analysisUnavailableMessage
+        self.pollingTimeout = pollingTimeout
+        self.resumeTTL = resumeTTL
+        self.resumeInitialPollAfter = resumeInitialPollAfter
+        self.pollingSleep = pollingSleep
     }
 
     deinit {
@@ -61,12 +81,19 @@ final class EpisodeAdAnalysisStore {
         try await stateChanges.wait(after: sequence)
     }
 
+    func cancelActiveJob() {
+        activeTask?.cancel()
+    }
+
     func load(modelContext: ModelContext) {
         do {
-            try reconcile(modelContext: modelContext)
+            let resumeContext = try reconcile(modelContext: modelContext)
             try reload(modelContext: modelContext)
             lastErrorMessage = nil
             lastErrorEpisodeID = nil
+            if let resumeContext {
+                startResumingAnalysis(resumeContext, modelContext: modelContext)
+            }
         } catch {
             recordFailure(error)
         }
@@ -106,14 +133,16 @@ final class EpisodeAdAnalysisStore {
         for transcriptDocument: EpisodeTranscriptDocument
     ) -> Bool {
         let segments = normalizedSegments(for: transcriptDocument)
-        return analysisDocument.policy == EpisodeAdAnalysisContract.expectedPolicy
-            && analysisDocument.transcriptFingerprint == fileStore.transcriptFingerprint(
-                for: transcriptDocument,
-                segments: segments
-            )
-            && analysisDocument.transcriptUpdatedAt == transcriptDocument.updatedAt
-            && analysisDocument.transcriptSegmentCount == segments.count
-            && analysisDocument.transcriptState == .completed
+        let fingerprint = fileStore.transcriptFingerprint(
+            for: transcriptDocument,
+            segments: segments
+        )
+        return isCurrentAnalysisDocument(
+            analysisDocument,
+            for: transcriptDocument,
+            transcriptFingerprint: fingerprint,
+            transcriptSegmentCount: segments.count
+        )
     }
 
     func jobState(
@@ -126,28 +155,98 @@ final class EpisodeAdAnalysisStore {
         guard transcriptState == .completed else {
             return .unavailable(EpisodeAdAnalysisError.transcriptNotCompleted.localizedDescription)
         }
-        guard !normalizedSegments(for: document).isEmpty else {
+        let segments = normalizedSegments(for: document)
+        guard !segments.isEmpty else {
             return .unavailable("Transcript has no segments.")
         }
 
+        return jobState(for: document, segments: segments)
+    }
+
+    func episodeDetailState(
+        for document: EpisodeTranscriptDocument?,
+        transcriptState: EpisodeTranscriptState?,
+        analysisDocument: EpisodeAdAnalysisDocument?
+    ) -> (jobState: EpisodeAdAnalysisJobState, hasCurrentCompletedAnalysis: Bool) {
+        guard let document else {
+            return (.unavailable("Transcript unavailable."), false)
+        }
+        guard transcriptState == .completed else {
+            return (
+                .unavailable(EpisodeAdAnalysisError.transcriptNotCompleted.localizedDescription),
+                false
+            )
+        }
+
+        let segments = normalizedSegments(for: document)
+        guard !segments.isEmpty else {
+            return (.unavailable("Transcript has no segments."), false)
+        }
+
+        let fingerprint = fileStore.transcriptFingerprint(for: document, segments: segments)
+        let state = jobState(
+            for: document,
+            segments: segments,
+            transcriptFingerprint: fingerprint
+        )
+        let hasCurrentCompletedAnalysis = analysisDocument.map {
+            isCurrentAnalysisDocument(
+                $0,
+                for: document,
+                transcriptFingerprint: fingerprint,
+                transcriptSegmentCount: segments.count
+            )
+        } ?? false
+        return (state, hasCurrentCompletedAnalysis)
+    }
+
+    private func jobState(
+        for document: EpisodeTranscriptDocument,
+        segments: [OpenCastTranscriptSegment],
+        transcriptFingerprint: String? = nil
+    ) -> EpisodeAdAnalysisJobState {
         if activeEpisodeID == document.episodeID && activeTask != nil {
             return .running
         }
 
         guard let record = record(for: document.episodeID) else {
+            if activeTask != nil {
+                return .running
+            }
             if let analysisUnavailableMessage {
                 return .unavailable(analysisUnavailableMessage)
             }
             return .ready
         }
 
-        let isStale = !isUsableCurrentRecord(record, for: document)
         switch record.state {
         case .queued, .running:
             return .running
         case .completed:
+            let fingerprint = transcriptFingerprint
+                ?? fileStore.transcriptFingerprint(for: document, segments: segments)
+            let isStale = !isUsableCurrentRecord(
+                record,
+                for: document,
+                transcriptFingerprint: fingerprint,
+                transcriptSegmentCount: segments.count
+            )
+            if isStale && activeTask != nil {
+                return .running
+            }
             return .completed(record, isStale: isStale)
         case .failed:
+            if activeTask != nil {
+                return .running
+            }
+            let fingerprint = transcriptFingerprint
+                ?? fileStore.transcriptFingerprint(for: document, segments: segments)
+            let isStale = !isUsableCurrentRecord(
+                record,
+                for: document,
+                transcriptFingerprint: fingerprint,
+                transcriptSegmentCount: segments.count
+            )
             return .failed(record, isStale: isStale)
         }
     }
@@ -311,7 +410,28 @@ final class EpisodeAdAnalysisStore {
                 fingerprint: fingerprint,
                 requestID: UUID().uuidString
             )
-            let response = try await client.analyze(request)
+            let submitOutcome = try await client.analyze(request)
+            let response: EpisodeAdAnalysisAPIResponse
+            switch submitOutcome {
+            case .completed(let completedResponse):
+                response = completedResponse
+            case .accepted(let jobID, let pollAfter):
+                guard jobID == fingerprint else {
+                    throw Self.jobIDMismatchError()
+                }
+                try persistAcceptedJob(
+                    episodeID: document.episodeID,
+                    fingerprint: fingerprint,
+                    modelContext: modelContext
+                )
+                response = try await pollUntilCompleted(
+                    jobID: jobID,
+                    initialPollAfter: pollAfter,
+                    resubmit: { [client] in
+                        try await client.analyze(request)
+                    }
+                )
+            }
             try Task.checkCancellation()
             guard ownsActiveRun(episodeID: document.episodeID, runID: runID) else {
                 throw CancellationError()
@@ -323,24 +443,14 @@ final class EpisodeAdAnalysisStore {
                 fingerprint: fingerprint,
                 transcriptSegmentCount: segments.count
             )
-            guard let record = try fetchStoredRecord(
+            try completeAnalysis(
                 episodeID: document.episodeID,
+                fingerprint: fingerprint,
+                relativePath: relativePath,
+                document: analysisDocument,
+                response: response,
                 modelContext: modelContext
-            ) else {
-                throw CancellationError()
-            }
-            try fileStore.write(analysisDocument, relativePath: relativePath)
-
-            record.state = .completed
-            record.analysisRelativePath = relativePath
-            record.model = response.model
-            record.policy = response.policy
-            record.spanCount = response.spans.count
-            record.warningCount = response.warnings.count
-            record.errorMessage = nil
-            record.failureKind = nil
-            record.updatedAt = .now
-            try commit(episodeID: document.episodeID, modelContext: modelContext, resort: true)
+            )
             clearFailure(episodeID: document.episodeID)
         } catch is CancellationError {
             return
@@ -352,6 +462,202 @@ final class EpisodeAdAnalysisStore {
                 modelContext: modelContext
             )
         }
+    }
+
+    private func startResumingAnalysis(
+        _ context: EpisodeAdAnalysisResumeContext,
+        modelContext: ModelContext
+    ) {
+        guard activeTask == nil else {
+            return
+        }
+
+        let runID = UUID()
+        activeEpisodeID = context.episodeID
+        activeRunID = runID
+        activeTask = Task {
+            await runResumedAnalysis(
+                runID: runID,
+                context: context,
+                modelContext: modelContext
+            )
+        }
+    }
+
+    private func runResumedAnalysis(
+        runID: UUID,
+        context: EpisodeAdAnalysisResumeContext,
+        modelContext: ModelContext
+    ) async {
+        defer {
+            if ownsActiveRun(episodeID: context.episodeID, runID: runID) {
+                activeTask = nil
+                activeEpisodeID = nil
+                activeRunID = nil
+                stateChanges.notify()
+            }
+        }
+
+        do {
+            let response = try await pollUntilCompleted(
+                jobID: context.transcriptFingerprint,
+                initialPollAfter: resumeInitialPollAfter,
+                resubmit: nil
+            )
+            try Task.checkCancellation()
+            guard ownsActiveRun(episodeID: context.episodeID, runID: runID) else {
+                throw CancellationError()
+            }
+
+            let document = makeDocument(
+                episodeID: context.episodeID,
+                podcastID: context.podcastID,
+                transcriptUpdatedAt: context.transcriptUpdatedAt,
+                response: response,
+                fingerprint: context.transcriptFingerprint,
+                transcriptSegmentCount: context.transcriptSegmentCount
+            )
+            try completeAnalysis(
+                episodeID: context.episodeID,
+                fingerprint: context.transcriptFingerprint,
+                relativePath: context.analysisRelativePath,
+                document: document,
+                response: response,
+                modelContext: modelContext
+            )
+            clearFailure(episodeID: context.episodeID)
+        } catch is CancellationError {
+            return
+        } catch {
+            markFailed(
+                episodeID: context.episodeID,
+                relativePath: context.analysisRelativePath,
+                error: error,
+                modelContext: modelContext
+            )
+        }
+    }
+
+    private func persistAcceptedJob(
+        episodeID: String,
+        fingerprint: String,
+        modelContext: ModelContext
+    ) throws {
+        guard let record = try fetchStoredRecord(
+            episodeID: episodeID,
+            modelContext: modelContext
+        ), record.state == .running,
+           record.transcriptFingerprint == fingerprint
+        else {
+            throw CancellationError()
+        }
+
+        record.jobAcceptedAt = .now
+        record.updatedAt = .now
+        try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
+    }
+
+    private func pollUntilCompleted(
+        jobID: String,
+        initialPollAfter: TimeInterval,
+        resubmit: (@Sendable () async throws -> EpisodeAdAnalysisSubmitOutcome)?
+    ) async throws -> EpisodeAdAnalysisAPIResponse {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: pollingTimeout)
+        var activeJobID = jobID
+        var pollAfter = Self.clampedPollAfter(initialPollAfter)
+        var didResubmit = false
+        var consecutiveURLErrors = 0
+
+        while true {
+            try Task.checkCancellation()
+            let now = clock.now
+            guard now < deadline else {
+                throw EpisodeAdAnalysisError.analysisTimedOut
+            }
+
+            let remaining = now.duration(to: deadline)
+            let delay = min(Duration.seconds(pollAfter), remaining)
+            if delay > .zero {
+                try await pollingSleep(delay)
+            }
+            try Task.checkCancellation()
+            guard clock.now < deadline else {
+                throw EpisodeAdAnalysisError.analysisTimedOut
+            }
+
+            do {
+                switch try await client.pollJob(id: activeJobID) {
+                case .running(let nextPollAfter):
+                    consecutiveURLErrors = 0
+                    pollAfter = Self.clampedPollAfter(nextPollAfter)
+                case .completed(let response):
+                    return response
+                }
+            } catch let error as URLError {
+                consecutiveURLErrors += 1
+                guard consecutiveURLErrors <= 3 else {
+                    throw error
+                }
+            } catch let error as EpisodeAdAnalysisHTTPError
+                where error.isTransientJobFailure && !didResubmit && resubmit != nil
+            {
+                didResubmit = true
+                consecutiveURLErrors = 0
+                guard let resubmit else {
+                    throw error
+                }
+                switch try await resubmit() {
+                case .completed(let response):
+                    return response
+                case .accepted(let resubmittedJobID, let nextPollAfter):
+                    guard resubmittedJobID == jobID else {
+                        throw Self.jobIDMismatchError()
+                    }
+                    activeJobID = resubmittedJobID
+                    pollAfter = Self.clampedPollAfter(nextPollAfter)
+                }
+            }
+        }
+    }
+
+    private func completeAnalysis(
+        episodeID: String,
+        fingerprint: String,
+        relativePath: String,
+        document: EpisodeAdAnalysisDocument,
+        response: EpisodeAdAnalysisAPIResponse,
+        modelContext: ModelContext
+    ) throws {
+        guard let record = try fetchStoredRecord(
+            episodeID: episodeID,
+            modelContext: modelContext
+        ), record.state == .running,
+           record.transcriptFingerprint == fingerprint
+        else {
+            throw CancellationError()
+        }
+
+        try fileStore.write(document, relativePath: relativePath)
+        record.state = .completed
+        record.analysisRelativePath = relativePath
+        record.model = response.model
+        record.policy = response.policy
+        record.spanCount = response.spans.count
+        record.warningCount = response.warnings.count
+        record.errorMessage = nil
+        record.failureKind = nil
+        record.jobAcceptedAt = nil
+        record.updatedAt = .now
+        try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
+    }
+
+    private static func clampedPollAfter(_ value: TimeInterval) -> TimeInterval {
+        min(max(value, 0), 120)
+    }
+
+    private static func jobIDMismatchError() -> EpisodeAdAnalysisHTTPError {
+        EpisodeAdAnalysisHTTPError(statusCode: -1, code: "job_id_mismatch", detail: nil)
     }
 
     private func makeRequest(
@@ -367,6 +673,7 @@ final class EpisodeAdAnalysisStore {
             podcastID: document.podcastID,
             episodeTitle: nil,
             podcastTitle: nil,
+            asyncSupported: true,
             transcript: EpisodeAdAnalysisAPITranscriptMetadata(
                 languageCode: document.languageCode,
                 audioDuration: document.audioDuration,
@@ -395,13 +702,31 @@ final class EpisodeAdAnalysisStore {
         fingerprint: String,
         transcriptSegmentCount: Int
     ) -> EpisodeAdAnalysisDocument {
-        EpisodeAdAnalysisDocument(
-            schemaVersion: EpisodeAdAnalysisContract.schemaVersion,
+        makeDocument(
             episodeID: document.episodeID,
             podcastID: document.podcastID,
+            transcriptUpdatedAt: document.updatedAt,
+            response: response,
+            fingerprint: fingerprint,
+            transcriptSegmentCount: transcriptSegmentCount
+        )
+    }
+
+    private func makeDocument(
+        episodeID: String,
+        podcastID: String,
+        transcriptUpdatedAt: Date,
+        response: EpisodeAdAnalysisAPIResponse,
+        fingerprint: String,
+        transcriptSegmentCount: Int
+    ) -> EpisodeAdAnalysisDocument {
+        EpisodeAdAnalysisDocument(
+            schemaVersion: EpisodeAdAnalysisContract.schemaVersion,
+            episodeID: episodeID,
+            podcastID: podcastID,
             requestID: response.requestID,
             transcriptFingerprint: fingerprint,
-            transcriptUpdatedAt: document.updatedAt,
+            transcriptUpdatedAt: transcriptUpdatedAt,
             transcriptSegmentCount: transcriptSegmentCount,
             transcriptState: .completed,
             model: response.model,
@@ -434,21 +759,32 @@ final class EpisodeAdAnalysisStore {
 
     private func isUsableCurrentRecord(
         _ record: EpisodeAdAnalysisRecord,
-        for document: EpisodeTranscriptDocument
+        for document: EpisodeTranscriptDocument,
+        transcriptFingerprint: String,
+        transcriptSegmentCount: Int
     ) -> Bool {
-        let segments = normalizedSegments(for: document)
         // A completed record from a pre-`promo_ad_breaks_v2` policy is
         // outdated even when its transcript still matches: the old contract's
         // cue-fragment spans must never render or skip again.
         return (record.state != .completed || record.policy == EpisodeAdAnalysisContract.expectedPolicy)
-            && record.transcriptFingerprint == fileStore.transcriptFingerprint(
-                for: document,
-                segments: segments
-            )
+            && record.transcriptFingerprint == transcriptFingerprint
             && record.transcriptUpdatedAt == document.updatedAt
-            && record.transcriptSegmentCount == segments.count
+            && record.transcriptSegmentCount == transcriptSegmentCount
             && record.transcriptState == .completed
             && fileStore.documentExists(relativePath: record.analysisRelativePath)
+    }
+
+    private func isCurrentAnalysisDocument(
+        _ analysisDocument: EpisodeAdAnalysisDocument,
+        for transcriptDocument: EpisodeTranscriptDocument,
+        transcriptFingerprint: String,
+        transcriptSegmentCount: Int
+    ) -> Bool {
+        analysisDocument.policy == EpisodeAdAnalysisContract.expectedPolicy
+            && analysisDocument.transcriptFingerprint == transcriptFingerprint
+            && analysisDocument.transcriptUpdatedAt == transcriptDocument.updatedAt
+            && analysisDocument.transcriptSegmentCount == transcriptSegmentCount
+            && analysisDocument.transcriptState == .completed
     }
 
     private func normalizedSegments(for document: EpisodeTranscriptDocument) -> [OpenCastTranscriptSegment] {
@@ -502,6 +838,7 @@ final class EpisodeAdAnalysisStore {
         record.warningCount = warningCount
         record.errorMessage = errorMessage
         record.failureKind = nil
+        record.jobAcceptedAt = nil
         record.updatedAt = .now
         return record
     }
@@ -520,6 +857,7 @@ final class EpisodeAdAnalysisStore {
             record.state = .failed
             record.errorMessage = error.localizedDescription
             record.failureKind = Self.failureKind(for: error)
+            record.jobAcceptedAt = nil
             record.analysisRelativePath = relativePath ?? record.analysisRelativePath
             record.updatedAt = .now
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
@@ -533,32 +871,61 @@ final class EpisodeAdAnalysisStore {
         (error as? EpisodeAdAnalysisHTTPError)?.isCapExceeded == true ? .capExceeded : .generic
     }
 
-    private func reconcile(modelContext: ModelContext) throws {
+    private func reconcile(modelContext: ModelContext) throws -> EpisodeAdAnalysisResumeContext? {
         let fetchedRecords = try fetchRecords(modelContext: modelContext)
+        let now = Date.now
         var changed = false
+        var resumeContext: EpisodeAdAnalysisResumeContext?
         for record in fetchedRecords {
             switch record.state {
-            case .queued, .running:
+            case .running:
+                if resumeContext == nil,
+                   let jobAcceptedAt = record.jobAcceptedAt,
+                   now.timeIntervalSince(jobAcceptedAt) <= resumeTTL,
+                   let context = EpisodeAdAnalysisResumeContext(record: record)
+                {
+                    resumeContext = context
+                    continue
+                }
                 record.state = .failed
                 record.errorMessage = "Promo/ad analysis was interrupted."
-                record.updatedAt = .now
+                record.failureKind = .generic
+                record.jobAcceptedAt = nil
+                record.updatedAt = now
+                changed = true
+            case .queued:
+                record.state = .failed
+                record.errorMessage = "Promo/ad analysis was interrupted."
+                record.failureKind = .generic
+                record.jobAcceptedAt = nil
+                record.updatedAt = now
                 changed = true
             case .completed:
                 guard fileStore.documentExists(relativePath: record.analysisRelativePath) else {
                     record.state = .failed
                     record.errorMessage = "Promo/ad analysis document is missing."
-                    record.updatedAt = .now
+                    record.failureKind = .generic
+                    record.jobAcceptedAt = nil
+                    record.updatedAt = now
                     changed = true
                     continue
                 }
+                if record.jobAcceptedAt != nil {
+                    record.jobAcceptedAt = nil
+                    changed = true
+                }
             case .failed:
-                break
+                if record.jobAcceptedAt != nil {
+                    record.jobAcceptedAt = nil
+                    changed = true
+                }
             }
         }
 
         if changed {
             try modelContext.save()
         }
+        return resumeContext
     }
 
     private func commit(

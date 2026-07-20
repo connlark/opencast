@@ -1,8 +1,11 @@
+#[cfg(target_arch = "wasm32")]
+mod analysis;
 pub mod auth;
 pub mod challenge_limits;
 #[cfg(any(target_arch = "wasm32", test))]
 mod d1_changes;
 pub mod gemini;
+pub mod job;
 pub mod prompt;
 pub mod retry;
 pub mod route;
@@ -12,6 +15,9 @@ pub mod types;
 pub mod usage;
 pub mod validation;
 pub mod windowing;
+
+#[cfg(target_arch = "wasm32")]
+mod job_do;
 
 #[cfg(target_arch = "wasm32")]
 mod worker_app;

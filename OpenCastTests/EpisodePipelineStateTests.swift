@@ -333,6 +333,18 @@ struct EpisodePipelineStateTests {
         #expect(state?.action == .resumeTranscription)
     }
 
+    @Test("An interrupted Apple transcript offers Retry with restart copy")
+    func interruptedAppleTranscript() {
+        let state = makeState(transcription: .interrupted(transcriptRecord(
+            state: .interrupted,
+            modelIdentifier: "apple-speech-transcriber.en_US"
+        )))
+
+        #expect(state?.title == EpisodePipelineState.transcriptPausedTitle)
+        #expect(state?.footnote == EpisodePipelineState.appleSpeechRestartFootnote)
+        #expect(state?.action == .retryTranscription)
+    }
+
     // MARK: - Solo analysis
 
     @Test("A running analysis shows without a cancel action")
@@ -453,11 +465,15 @@ struct EpisodePipelineStateTests {
         )
     }
 
-    private func transcriptRecord(state: EpisodeTranscriptState) -> EpisodeTranscriptRecord {
+    private func transcriptRecord(
+        state: EpisodeTranscriptState,
+        modelIdentifier: String = ""
+    ) -> EpisodeTranscriptRecord {
         EpisodeTranscriptRecord(
             episodeID: episodeID,
             podcastID: "podcast",
             sourceAudioURL: "https://example.com/audio.mp3",
+            modelIdentifier: modelIdentifier,
             state: state
         )
     }

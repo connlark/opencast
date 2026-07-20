@@ -1,0 +1,40 @@
+{
+  "rules": [
+    {
+      "id": "scratch-raw-one-day",
+      "enabled": true,
+      "conditions": { "prefix": "raw/" },
+      "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+    },
+    {
+      "id": "scratch-uploads-one-day",
+      "enabled": true,
+      "conditions": { "prefix": "uploads/" },
+      "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+    },
+    {
+      "id": "scratch-chunks-one-day",
+      "enabled": true,
+      "conditions": { "prefix": "chunks/" },
+      "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+    },
+    {
+      "id": "scratch-responses-one-day",
+      "enabled": true,
+      "conditions": { "prefix": "responses/" },
+      "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+    },
+    {
+      "id": "results-seven-days",
+      "enabled": true,
+      "conditions": { "prefix": "results/" },
+      "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 604800 } }
+    },
+    {
+      "id": "abort-multipart-one-day",
+      "enabled": true,
+      "conditions": { "prefix": "" },
+      "abortMultipartUploadsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+    }
+  ]
+}

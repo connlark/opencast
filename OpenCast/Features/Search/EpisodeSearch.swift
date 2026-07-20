@@ -473,6 +473,8 @@ enum EpisodeSearch {
 
         var startIndex = cleanText.index(cleanText.startIndex, offsetBy: startOffset)
         var endIndex = cleanText.index(cleanText.startIndex, offsetBy: endOffset)
+        let windowStart = startIndex
+        let windowEnd = endIndex
         if startIndex > cleanText.startIndex,
            let boundary = cleanText[startIndex...].firstIndex(where: \.isWhitespace) {
             startIndex = cleanText.index(after: boundary)
@@ -480,6 +482,10 @@ enum EpisodeSearch {
         if endIndex < cleanText.endIndex,
            let boundary = cleanText[..<endIndex].lastIndex(where: \.isWhitespace) {
             endIndex = boundary
+        }
+        if startIndex >= endIndex {
+            startIndex = windowStart
+            endIndex = windowEnd
         }
 
         let prefix = startIndex > cleanText.startIndex ? "... " : ""

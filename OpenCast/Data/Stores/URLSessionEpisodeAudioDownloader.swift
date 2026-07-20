@@ -58,7 +58,8 @@ struct URLSessionEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sen
         let resumeOffset = ifRangeValidator == nil ? 0 : requestedResumeOffset
         var request = URLRequest(url: sourceURL)
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue(OpenCastMediaRequestProfile.acceptEncoding, forHTTPHeaderField: "Accept-Encoding")
+        request.setValue(OpenCastMediaRequestProfile.userAgent, forHTTPHeaderField: "User-Agent")
         if resumeOffset > 0 {
             request.setValue("bytes=\(resumeOffset)-", forHTTPHeaderField: "Range")
             request.setValue(ifRangeValidator, forHTTPHeaderField: "If-Range")

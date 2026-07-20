@@ -577,7 +577,7 @@ mod tests {
         const FEED: &str = r#"<?xml version="1.0"?><rss version="2.0"><channel>
 <title>Example Signal</title><item><title>Episode 42: Market Signals</title>
 <guid>example-signal-42</guid>
-<enclosure url="https://example.com/556.mp3" type="audio/mpeg" length="1"/>
+<enclosure url="https://example.com/42.mp3" type="audio/mpeg" length="1"/>
 <description>&lt;html&gt;&lt;p&gt;A host returns for a conversation about &lt;strong&gt;&lt;a href="https://example.com"&gt;Market Signals&lt;/a&gt;&lt;/strong&gt;. AT&amp;T notes.&lt;/p&gt;&lt;/html&gt;</description>
 </item></channel></rss>"#;
         let feed = parse_rss(FEED, "https://feeds.example.com/html-description.xml").unwrap();

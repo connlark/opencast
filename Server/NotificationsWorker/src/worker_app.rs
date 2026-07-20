@@ -8,7 +8,7 @@ use crate::{
         append_limited_feed_body_chunk, feed_content_length_exceeds, feed_response_disposition,
         same_origin, FeedResponseDisposition, MAX_FEED_BODY_BYTES,
     },
-    feed_identity, random, route, rss, storage,
+    feed_identity, notification_retry, poll_scheduling, random, route, rss, storage,
     subscription_admission::{
         feed_admission_error, subscription_count_error, FeedAdmissionStatus,
         MAX_EXPECTED_PUBLIC_ROLLOUT_INSTALLS_PER_DAY, MAX_GLOBAL_NEW_FEED_ADMISSIONS_PER_DAY,
@@ -55,7 +55,7 @@ const MAX_CHALLENGES_PER_SOURCE_PER_HOUR: i64 = 300;
 const MAX_GLOBAL_CHALLENGES_PER_HOUR: i64 = 10_000;
 const MAX_APP_ATTEST_KEYS_PER_INSTALL_PER_DAY: i64 = 10;
 const MAX_DEVICES_PER_INSTALL: i64 = 5;
-const FEED_POLL_INTERVAL_SECONDS: i64 = 15 * 60;
+const FEED_POLL_INTERVAL_SECONDS: i64 = poll_scheduling::HOT_INTERVAL_SECONDS;
 const MAX_FEEDS_PER_SCHEDULED_RUN: i64 = 50;
 const MAX_FEEDS_PER_MANUAL_POLL: usize = 10;
 const MAX_FEED_REDIRECTS: usize = 5;
@@ -298,6 +298,7 @@ struct EpisodeSendCounts {
     attempted: usize,
     apns_200: usize,
     deduped: usize,
+    retryable_failures: usize,
 }
 
 struct ApnsSendResult {
@@ -384,7 +385,19 @@ pub async fn handle_scheduled(env: Env) -> Result<()> {
         config.apns_environment.as_str(),
     )
     .await?;
-    let _ = poll_feeds(feeds, &env, &db, &config, now).await?;
+    if feeds.len() == MAX_FEEDS_PER_SCHEDULED_RUN as usize {
+        worker::console_warn!(
+            "scheduled drain saturated: due feeds hit MAX_FEEDS_PER_SCHEDULED_RUN={}",
+            MAX_FEEDS_PER_SCHEDULED_RUN
+        );
+    }
+    let summary = poll_feeds(feeds, &env, &db, &config, now).await?;
+    worker::console_log!(
+        "scheduled poll: polled={} changed={} sends={}",
+        summary.feeds_polled,
+        summary.feeds_changed,
+        summary.notifications_attempted
+    );
     storage::prune_challenges_before(&db, now.saturating_sub(CHALLENGE_RETENTION_SECONDS))
         .await
         .ok();
@@ -778,7 +791,10 @@ async fn handle_debug_send_test_push(
     )
     .await?;
 
-    if should_disable_device(send_result.apns_status, send_result.apns_error.as_deref()) {
+    if notification_retry::should_disable_device(
+        send_result.apns_status,
+        send_result.apns_error.as_deref(),
+    ) {
         storage::disable_device(
             db,
             &authenticated.install_id,
@@ -1089,6 +1105,13 @@ async fn admit_new_feed(
     let feed =
         rss::parse_rss(&fetched.body, &admitted.canonical_url).map_err(|error| error.code())?;
     let latest = feed.episodes.first();
+    let publish_cadence_seconds = feed_publish_cadence_seconds(&feed);
+    let latest_episode_published_at = latest.and_then(|episode| episode.published_at);
+    let poll_interval_seconds = poll_scheduling::poll_interval_seconds(
+        publish_cadence_seconds,
+        latest_episode_published_at,
+        now,
+    );
 
     storage::upsert_feed_baseline(
         db,
@@ -1101,8 +1124,9 @@ async fn admit_new_feed(
             last_modified: fetched.last_modified.as_deref(),
             latest_episode_id: latest.map(|episode| episode.id.as_str()),
             latest_episode_title: latest.map(|episode| episode.title.as_str()),
-            latest_episode_published_at: latest.and_then(|episode| episode.published_at),
-            poll_interval_seconds: FEED_POLL_INTERVAL_SECONDS,
+            latest_episode_published_at,
+            poll_interval_seconds,
+            publish_cadence_seconds,
             now,
         },
     )
@@ -1186,10 +1210,16 @@ async fn poll_one_feed(
     .await
     {
         Ok(FeedFetchOutcome::NotModified { status }) => {
+            let poll_interval_seconds = poll_scheduling::poll_interval_seconds(
+                feed.publish_cadence_seconds,
+                feed.latest_episode_published_at,
+                now,
+            );
             storage::update_feed_poll_not_modified(
                 db,
                 &feed.feed_url,
-                now.saturating_add(feed.poll_interval_seconds),
+                now.saturating_add(poll_interval_seconds),
+                poll_interval_seconds,
                 now,
             )
             .await
@@ -1277,6 +1307,29 @@ async fn poll_one_feed(
             } else {
                 EpisodeSendCounts::default()
             };
+            let publish_cadence_seconds = feed_publish_cadence_seconds(&parsed);
+            let poll_interval_seconds = poll_scheduling::poll_interval_seconds(
+                publish_cadence_seconds,
+                latest.published_at,
+                now,
+            );
+            let completion = notification_retry::feed_poll_completion(
+                notification_retry::FeedPollCompletionInput {
+                    previous_etag: feed.etag.as_deref(),
+                    previous_last_modified: feed.last_modified.as_deref(),
+                    previous_episode_id: feed.latest_episode_id.as_deref(),
+                    previous_episode_title: feed.latest_episode_title.as_deref(),
+                    previous_episode_published_at: feed.latest_episode_published_at,
+                    fetched_etag: fetched.etag.as_deref(),
+                    fetched_last_modified: fetched.last_modified.as_deref(),
+                    fetched_episode_id: &latest.id,
+                    fetched_episode_title: &latest.title,
+                    fetched_episode_published_at: latest.published_at,
+                    computed_poll_interval_seconds: poll_interval_seconds,
+                    retryable_failures: sends.retryable_failures,
+                    now,
+                },
+            );
 
             storage::update_feed_poll_success(
                 db,
@@ -1284,13 +1337,15 @@ async fn poll_one_feed(
                     feed_url: &feed.feed_url,
                     title: Some(&parsed.title),
                     website_url: parsed.website_url.as_deref(),
-                    etag: fetched.etag.as_deref(),
-                    last_modified: fetched.last_modified.as_deref(),
-                    latest_episode_id: Some(&latest.id),
-                    latest_episode_title: Some(&latest.title),
-                    latest_episode_published_at: latest.published_at,
+                    etag: completion.etag,
+                    last_modified: completion.last_modified,
+                    latest_episode_id: completion.latest_episode_id,
+                    latest_episode_title: completion.latest_episode_title,
+                    latest_episode_published_at: completion.latest_episode_published_at,
                     http_status: i32::from(fetched.status),
-                    next_poll_at: now.saturating_add(feed.poll_interval_seconds),
+                    next_poll_at: completion.next_poll_at,
+                    poll_interval_seconds,
+                    publish_cadence_seconds,
                     now,
                 },
             )
@@ -1450,6 +1505,15 @@ fn latest_polled_episode(
         .ok_or(rss::RSSParseError::EmptyFeed.code())
 }
 
+fn feed_publish_cadence_seconds(parsed: &rss::ParsedFeed) -> Option<i64> {
+    let mut published_at: Vec<i64> = parsed
+        .episodes
+        .iter()
+        .filter_map(|episode| episode.published_at)
+        .collect();
+    poll_scheduling::publish_cadence_seconds(&mut published_at)
+}
+
 async fn read_feed_body(response: &mut Response) -> std::result::Result<String, FeedFetchError> {
     let content_length = response
         .headers()
@@ -1566,10 +1630,17 @@ async fn send_episode_notifications(
         )
         .await?;
 
-        if should_disable_device(result.apns_status, result.apns_error.as_deref()) {
+        if notification_retry::should_disable_device(
+            result.apns_status,
+            result.apns_error.as_deref(),
+        ) {
             storage::disable_device(db, &device.install_id, &device.device_token_hash, now).await?;
         }
-        if retryable_apns_failure(result.apns_status, result.apns_error.as_deref()) {
+        if notification_retry::retryable_apns_failure(
+            result.apns_status,
+            result.apns_error.as_deref(),
+        ) {
+            counts.retryable_failures += 1;
             storage::delete_episode_notification_send(db, &send_id).await?;
         }
     }
@@ -2109,23 +2180,6 @@ async fn record_feed_admission_attempt(
     .await
 }
 
-fn should_disable_device(apns_status: Option<u16>, apns_error: Option<&str>) -> bool {
-    apns_status == Some(410)
-        || matches!(
-            (apns_status, apns_error),
-            (
-                Some(400),
-                Some("BadDeviceToken" | "Unregistered" | "DeviceTokenNotForTopic")
-            )
-        )
-}
-
-fn retryable_apns_failure(apns_status: Option<u16>, apns_error: Option<&str>) -> bool {
-    matches!(apns_status, Some(429 | 500 | 503))
-        || apns_status.is_none()
-        || apns_error == Some("fetch_failed")
-}
-
 async fn record_secure_attempt(
     db: &worker::D1Database,
     install_id: &str,
@@ -2277,23 +2331,6 @@ mod tests {
         assert!(!episode_should_notify_subscription(&episode, 1_782_036_569));
     }
 
-    #[test]
-    fn retryable_apns_failure_classifies_transient_outcomes() {
-        assert!(retryable_apns_failure(Some(429), Some("TooManyRequests")));
-        assert!(retryable_apns_failure(
-            Some(500),
-            Some("InternalServerError")
-        ));
-        assert!(retryable_apns_failure(
-            Some(503),
-            Some("ServiceUnavailable")
-        ));
-        assert!(retryable_apns_failure(None, Some("fetch_failed")));
-        assert!(!retryable_apns_failure(Some(200), None));
-        assert!(!retryable_apns_failure(Some(410), Some("Unregistered")));
-        assert!(!retryable_apns_failure(Some(400), Some("BadDeviceToken")));
-    }
-
     fn feed_poll_row_with_latest(
         latest_episode_id: Option<&str>,
         latest_episode_title: Option<&str>,
@@ -2310,7 +2347,7 @@ mod tests {
             latest_episode_published_at,
             baseline_established_at,
             consecutive_failures: 0,
-            poll_interval_seconds: 900,
+            publish_cadence_seconds: None,
         }
     }
 

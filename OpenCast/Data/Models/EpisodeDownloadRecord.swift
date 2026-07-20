@@ -13,6 +13,10 @@ final class EpisodeDownloadRecord {
     var errorMessage: String?
     var entityTag: String?
     var lastModifiedHeader: String?
+    /// SHA-256 of the completed assembled file; empty until a download
+    /// completes and cleared whenever the file is re-downloaded or fails.
+    /// Header validators never substitute for this hash.
+    var sourceFileSHA256: String = ""
     var episodeTitle: String?
     var podcastTitle: String?
     var artworkURLString: String?

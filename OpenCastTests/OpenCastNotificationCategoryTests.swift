@@ -4,18 +4,19 @@ import Testing
 @MainActor
 @Suite("Notification category registration")
 struct OpenCastNotificationCategoryTests {
-    @Test("Both categories land in the single replacement registration set")
-    func registrationSetCarriesBothCategories() {
+    @Test("All categories land in the single replacement registration set")
+    func registrationSetCarriesAllCategories() {
         let identifiers = OpenCastNotificationCategory.registrationCategories()
             .map(\.identifier)
             .sorted()
 
-        #expect(identifiers == ["OPENCAST_AD_FREE_PASS", "OPENCAST_EPISODE"])
+        #expect(identifiers == ["OPENCAST_AD_FREE_PASS", "OPENCAST_EPISODE", "OPENCAST_TRANSCRIPTION"])
     }
 
     @Test("Category raw values stay pinned to the wire strings")
     func rawValuesStayPinned() {
         #expect(OpenCastNotificationCategory.episode == "OPENCAST_EPISODE")
         #expect(OpenCastNotificationCategory.adFreePass == "OPENCAST_AD_FREE_PASS")
+        #expect(OpenCastNotificationCategory.transcription == "OPENCAST_TRANSCRIPTION")
     }
 }

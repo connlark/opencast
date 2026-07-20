@@ -1,6 +1,6 @@
 import Foundation
 
-struct EpisodeAdAnalysisHTTPError: LocalizedError, Equatable {
+struct EpisodeAdAnalysisHTTPError: LocalizedError, Sendable, Equatable {
     /// Worker cap-rejection codes (`Server/AdAnalysisWorker`): all three defer
     /// the queue identically (decision 9). Classification is status + code —
     /// never the user-facing message string.
@@ -9,6 +9,10 @@ struct EpisodeAdAnalysisHTTPError: LocalizedError, Equatable {
         "daily_input_token_cap_exceeded",
         "global_capacity_exhausted"
     ]
+    static let transientJobFailureCodes: Set<String> = [
+        "job_failed_transient",
+        "job_not_found"
+    ]
 
     var statusCode: Int
     var code: String
@@ -16,6 +20,10 @@ struct EpisodeAdAnalysisHTTPError: LocalizedError, Equatable {
 
     var isCapExceeded: Bool {
         statusCode == 429 && Self.capExceededCodes.contains(code)
+    }
+
+    var isTransientJobFailure: Bool {
+        Self.transientJobFailureCodes.contains(code)
     }
 
     var errorDescription: String? {

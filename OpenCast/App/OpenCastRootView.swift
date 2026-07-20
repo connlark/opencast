@@ -27,6 +27,7 @@ struct OpenCastRootView: View {
     @State private var emptyImportPollingTask: Task<Void, Never>?
     @State private var importedSubscriptionsNotificationDismissalTask: Task<Void, Never>?
     @State private var hasStartedTranscriptionBenchmark = false
+    @State private var hasStartedUITestAutoPlay = false
     #if DEBUG
     @State private var hasStartedTranscriptionProof = false
     @State private var hasStartedAdFreePassBackgroundProbe = false
@@ -87,10 +88,19 @@ struct OpenCastRootView: View {
             await consumeRemoteEpisodeNotificationRoutes()
         }
         .task {
+            // Launch-scoped gate resolution (pass 2 decision 10): episode-menu
+            // remote surfaces appear on fresh launch without visiting
+            // Settings; later Settings mounts re-use the cached resolution.
+            await appModel.remoteTranscriptionPurchases.prepare()
+        }
+        .task {
             await observeRemoteStoreChanges()
         }
         .task {
             await runTranscriptionBenchmarkIfRequested()
+        }
+        .task {
+            await runUITestAutoPlayIfRequested()
         }
         #if DEBUG
         .task {
@@ -145,6 +155,7 @@ struct OpenCastRootView: View {
         appModel.downloads.load(modelContext: modelContext)
         appModel.loadLocalTranscriptionState(modelContext: modelContext)
         appModel.appearanceSettings.load(modelContext: modelContext)
+        appModel.podcastEpisodeListSettings.load(modelContext: modelContext)
         appModel.recentSearches.load(modelContext: modelContext)
         appModel.playbackSettings.load(modelContext: modelContext, playback: appModel.playback)
         await appModel.notificationSettings.load(modelContext: modelContext)
@@ -221,6 +232,22 @@ struct OpenCastRootView: View {
 
         hasStartedTranscriptionBenchmark = true
         await TranscriptionBenchmarkRunner.runIfRequested()
+    }
+
+    private func runUITestAutoPlayIfRequested() async {
+        guard !hasStartedUITestAutoPlay else {
+            return
+        }
+        guard UITestAutoPlayProbe.isRequested else {
+            return
+        }
+
+        hasStartedUITestAutoPlay = true
+        await UITestAutoPlayProbe.startWhenReady(
+            appModel: appModel,
+            modelContext: modelContext,
+            isInitialSetupComplete: { isInitialSetupComplete }
+        )
     }
 
     #if DEBUG
@@ -427,6 +454,10 @@ struct OpenCastRootView: View {
         }
 
         emptyImportPollingTask = Task {
+            defer {
+                emptyImportPollingTask = nil
+            }
+
             for _ in 0..<Self.emptyImportPollAttempts {
                 do {
                     try await Task.sleep(for: Self.emptyImportPollInterval)
@@ -444,7 +475,6 @@ struct OpenCastRootView: View {
 
                 await refreshImportedData(startsEmptyImportPolling: false)
                 guard appModel.library.activePodcastIDs.isEmpty else {
-                    emptyImportPollingTask = nil
                     return
                 }
             }
@@ -452,12 +482,10 @@ struct OpenCastRootView: View {
             guard appModel.syncStatus.libraryActivity == .waitingForImports,
                   appModel.library.activePodcastIDs.isEmpty
             else {
-                emptyImportPollingTask = nil
                 return
             }
 
             appModel.syncStatus.finishLibraryActivity()
-            emptyImportPollingTask = nil
         }
     }
 
@@ -618,6 +646,7 @@ struct OpenCastRootView: View {
         downloadsNavigationPath.removeAll()
         searchNavigationPath.removeAll()
         sheetDestination = nil
+        presentOnboardingIfNeeded()
         dismissNowPlaying()
         hasFlushedProgressForLifecycleExit = false
     }

@@ -78,6 +78,8 @@ struct EpisodeTranscriptionStoreTests {
             transcriber: fakeTranscriber,
             fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
         )
+        var idleTimerChanges: [Bool] = []
+        store.setIdleTimerDisabled = { idleTimerChanges.append($0) }
         let episode = makeEpisode(episodeID: "transcript-apple-speech")
         let record = completedDownloadRecord(episode: episode)
         let appleIdentity = EpisodeTranscriptionModelIdentity(
@@ -107,6 +109,7 @@ struct EpisodeTranscriptionStoreTests {
         #expect(fakeTranscriber.lastRequest?.languageCode == "en-US")
         #expect(transcriptRecord.modelIdentifier == appleIdentity.modelIdentifier)
         #expect(document.modelIdentifier == appleIdentity.modelIdentifier)
+        #expect(idleTimerChanges == [true, false])
 
         let tinySummary = OpenCastWhisperModelInstalledSummary(
             modelIdentifier: OpenCastWhisperModel.tinyEnglish.rawValue,
@@ -126,6 +129,108 @@ struct EpisodeTranscriptionStoreTests {
         } else {
             Issue.record("Expected ready for a different requested transcription identity, got \(state)")
         }
+    }
+
+    @Test("Interrupted Apple run notifies once and restores the idle timer")
+    func interruptedAppleRunNotifiesAndRestoresIdleTimer() async throws {
+        let harness = try makeAppleRunHarness(
+            episodeID: "apple-interrupted",
+            stream: { _ in neverFinishingStream() }
+        )
+        var interruptionEvents: [String] = []
+        var idleTimerChanges: [Bool] = []
+        harness.store.onAppleSpeechRunInterrupted = { episodeID, restored in
+            interruptionEvents.append("\(episodeID):\(restored)")
+        }
+        harness.store.setIdleTimerDisabled = { idleTimerChanges.append($0) }
+
+        harness.store.startTranscription(
+            harness.episode,
+            downloadRecord: harness.downloadRecord,
+            localFileURL: harness.audioURL,
+            engine: .appleSpeech,
+            modelIdentity: appleImproveIdentity(),
+            languageCode: "en-US",
+            modelContext: harness.context
+        )
+        #expect(await waitUntil {
+            harness.store.record(for: harness.episode.episodeID)?.state == .running
+        })
+
+        harness.store.interruptActiveJob(modelContext: harness.context)
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        #expect(harness.store.record(for: harness.episode.episodeID)?.state == .interrupted)
+        #expect(interruptionEvents == ["\(harness.episode.episodeID):false"])
+        #expect(idleTimerChanges == [true, false])
+    }
+
+    @Test("Cancelling an Apple run does not notify and restores the idle timer")
+    func cancelledAppleRunDoesNotNotify() async throws {
+        let harness = try makeAppleRunHarness(
+            episodeID: "apple-cancelled",
+            stream: { _ in neverFinishingStream() }
+        )
+        var interruptionEvents: [String] = []
+        var idleTimerChanges: [Bool] = []
+        harness.store.onAppleSpeechRunInterrupted = { episodeID, restored in
+            interruptionEvents.append("\(episodeID):\(restored)")
+        }
+        harness.store.setIdleTimerDisabled = { idleTimerChanges.append($0) }
+
+        harness.store.startTranscription(
+            harness.episode,
+            downloadRecord: harness.downloadRecord,
+            localFileURL: harness.audioURL,
+            engine: .appleSpeech,
+            modelIdentity: appleImproveIdentity(),
+            languageCode: "en-US",
+            modelContext: harness.context
+        )
+        #expect(await waitUntil {
+            harness.store.record(for: harness.episode.episodeID)?.state == .running
+        })
+
+        harness.store.cancelTranscription(
+            episodeID: harness.episode.episodeID,
+            modelContext: harness.context
+        )
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        #expect(harness.store.record(for: harness.episode.episodeID)?.state == .cancelled)
+        #expect(interruptionEvents.isEmpty)
+        #expect(idleTimerChanges == [true, false])
+    }
+
+    @Test("Failed Apple run does not notify and restores the idle timer")
+    func failedAppleRunDoesNotNotify() async throws {
+        let harness = try makeAppleRunHarness(
+            episodeID: "apple-failed",
+            stream: { _ in failingStream(message: "Apple failure") }
+        )
+        var interruptionEvents: [String] = []
+        var idleTimerChanges: [Bool] = []
+        harness.store.onAppleSpeechRunInterrupted = { episodeID, restored in
+            interruptionEvents.append("\(episodeID):\(restored)")
+        }
+        harness.store.setIdleTimerDisabled = { idleTimerChanges.append($0) }
+
+        harness.store.startTranscription(
+            harness.episode,
+            downloadRecord: harness.downloadRecord,
+            localFileURL: harness.audioURL,
+            engine: .appleSpeech,
+            modelIdentity: appleImproveIdentity(),
+            languageCode: "en-US",
+            modelContext: harness.context
+        )
+
+        #expect(await waitUntil {
+            harness.store.record(for: harness.episode.episodeID)?.state == .failed
+                && !harness.store.hasActiveJob
+        })
+        #expect(interruptionEvents.isEmpty)
+        #expect(idleTimerChanges == [true, false])
     }
 
     @Test("Clamps tiny transcript segment overlaps")
@@ -741,6 +846,10 @@ struct EpisodeTranscriptionStoreTests {
             fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory),
             failureEnvironment: { .foreground }
         )
+        var interruptionEvents: [String] = []
+        store.onAppleSpeechRunInterrupted = { episodeID, restored in
+            interruptionEvents.append("\(episodeID):\(restored)")
+        }
         let episode = makeEpisode(episodeID: "expiration-coreml-race")
         let record = completedDownloadRecord(episode: episode)
 
@@ -766,6 +875,7 @@ struct EpisodeTranscriptionStoreTests {
         #expect(transcriptRecord.completedDuration == 12)
         #expect(transcriptRecord.errorMessage == nil)
         #expect(store.lastErrorMessage(for: episode.episodeID) == nil)
+        #expect(interruptionEvents.isEmpty)
     }
 
     @Test("Persists word timings with current schema version through checkpoint and final")
@@ -874,12 +984,173 @@ struct EpisodeTranscriptionStoreTests {
         #expect(document.segments.first?.words == nil)
     }
 
+    @Test("Reads v2 documents and infers engine provenance from the model identifier")
+    func readsV2DocumentsAndInfersEngineProvenance() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        let relativePath = fileStore.relativePath(episodeID: "v2-episode", fingerprint: "v2")
+        let fileURL = fileStore.fileURL(relativePath: relativePath)
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        func v2JSON(modelIdentifier: String) -> Data {
+            Data("""
+            {
+              "schemaVersion": 2,
+              "episodeID": "v2-episode",
+              "podcastID": "https://example.com/feed.xml",
+              "sourceAudioURL": "https://example.com/v2.mp3",
+              "sourceFileByteCount": 10,
+              "sourceFileSHA256": "abc",
+              "modelIdentifier": "\(modelIdentifier)",
+              "modelVersion": "1",
+              "modelTreeSHA256": "def",
+              "languageCode": "en",
+              "audioDuration": 60,
+              "checkpoints": [],
+              "segments": [],
+              "text": "",
+              "timings": {
+                "modelLoading": 0,
+                "audioLoading": 0,
+                "transcription": 0,
+                "fullPipeline": 0,
+                "realTimeFactor": 0,
+                "decodingFallbackCount": 0,
+                "decodingFallback": 0,
+                "decodingWindowCount": 0
+              },
+              "createdAt": "2026-01-01T00:00:00Z",
+              "updatedAt": "2026-01-01T00:00:00Z"
+            }
+            """.utf8)
+        }
+
+        try v2JSON(modelIdentifier: "openai_whisper-tiny.en").write(to: fileURL, options: .atomic)
+        let whisperDocument = try fileStore.read(relativePath: relativePath)
+        #expect(whisperDocument.schemaVersion == 2)
+        #expect(whisperDocument.transcriptionEngine == nil)
+        #expect(whisperDocument.resolvedEngineProvenance == .localWhisper)
+        #expect(whisperDocument.resolvedSourceMatchMode == nil)
+
+        try v2JSON(modelIdentifier: "apple-speech-transcriber.en-US").write(to: fileURL, options: .atomic)
+        let appleDocument = try fileStore.read(relativePath: relativePath)
+        #expect(appleDocument.resolvedEngineProvenance == .appleSpeech)
+    }
+
+    @Test("Round-trips schema 3 remote provenance fields")
+    func roundTripsSchema3RemoteProvenance() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        let relativePath = fileStore.relativePath(episodeID: "remote-episode", fingerprint: "remote")
+        var document = EpisodeTranscriptDocument(
+            schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
+            episodeID: "remote-episode",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: "https://example.com/remote.mp3",
+            sourceFileByteCount: 10,
+            sourceFileSHA256: "abc",
+            modelIdentifier: "remote-whisper-large-v3-turbo",
+            modelVersion: "serving-contract-1",
+            modelTreeSHA256: "",
+            languageCode: "en",
+            audioDuration: 60,
+            checkpoints: [],
+            segments: [],
+            text: "",
+            timings: EpisodeTranscriptTimings(),
+            createdAt: .now,
+            updatedAt: .now
+        )
+        document.transcriptionEngine = EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue
+        document.providerModelIdentifier = "@cf/openai/whisper-large-v3-turbo"
+        document.remoteServingContractVersion = "1"
+        document.remotePipelineVersion = "pass0"
+        document.remoteRequestSettingsSHA256 = "aa"
+        document.remoteChunkManifestSHA256 = "bb"
+        document.normalizedTranscriptSHA256 = "cc"
+        document.remoteJobProvenanceToken = "job-token"
+        document.remoteSourceMatchMode = EpisodeRemoteTranscriptSourceMatchMode.serverDeviceHashMatch.rawValue
+        try fileStore.write(document, relativePath: relativePath)
+
+        let decoded = try fileStore.read(relativePath: relativePath)
+        #expect(decoded.schemaVersion == 3)
+        #expect(decoded.resolvedEngineProvenance == .remoteWhisper)
+        #expect(decoded.providerModelIdentifier == "@cf/openai/whisper-large-v3-turbo")
+        #expect(decoded.providerModelRevision == nil)
+        #expect(decoded.remoteChunkManifestSHA256 == "bb")
+        #expect(decoded.normalizedTranscriptSHA256 == "cc")
+        #expect(decoded.resolvedSourceMatchMode == .serverDeviceHashMatch)
+        #expect(decoded.modelTreeSHA256.isEmpty)
+    }
+
+    @Test("Remote fingerprint is domain-separated and contract-sensitive")
+    func remoteFingerprintIsDomainSeparatedAndContractSensitive() throws {
+        let fileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let localFingerprint = fileStore.fingerprint(
+            sourceFileSHA256: "abc",
+            modelIdentifier: "m",
+            modelVersion: "v",
+            modelTreeSHA256: "t"
+        )
+        let remoteFingerprint = fileStore.remoteFingerprint(
+            sourceFileSHA256: "abc",
+            provider: "cloudflare-workers-ai",
+            providerModelIdentifier: "@cf/openai/whisper-large-v3-turbo",
+            servingContractVersion: "1",
+            pipelineVersion: "pass0"
+        )
+        let bumpedContractFingerprint = fileStore.remoteFingerprint(
+            sourceFileSHA256: "abc",
+            provider: "cloudflare-workers-ai",
+            providerModelIdentifier: "@cf/openai/whisper-large-v3-turbo",
+            servingContractVersion: "2",
+            pipelineVersion: "pass0"
+        )
+        #expect(localFingerprint != remoteFingerprint)
+        #expect(remoteFingerprint != bumpedContractFingerprint)
+        #expect(remoteFingerprint == fileStore.remoteFingerprint(
+            sourceFileSHA256: "abc",
+            provider: "cloudflare-workers-ai",
+            providerModelIdentifier: "@cf/openai/whisper-large-v3-turbo",
+            servingContractVersion: "1",
+            pipelineVersion: "pass0"
+        ))
+    }
+
+    @Test("Record engine provenance distinguishes local, Apple Speech, and remote")
+    func recordEngineProvenance() {
+        let record = EpisodeTranscriptRecord(
+            episodeID: "e",
+            podcastID: "p",
+            sourceAudioURL: "https://example.com/a.mp3"
+        )
+        record.modelIdentifier = "openai_whisper-tiny.en"
+        #expect(record.engineProvenance == .localWhisper)
+        #expect(!record.isAppleSpeechTranscript)
+        #expect(!record.isRemoteTranscript)
+
+        record.modelIdentifier = "apple-speech-transcriber.en-US"
+        #expect(record.engineProvenance == .appleSpeech)
+        #expect(record.isAppleSpeechTranscript)
+
+        record.transcriptionEngineRawValue = EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue
+        #expect(record.engineProvenance == .remoteWhisper)
+        #expect(record.isRemoteTranscript)
+        #expect(!record.isAppleSpeechTranscript)
+    }
+
     @Test("Interrupted improve run restores the prior completed transcript")
     func interruptedImproveRunRestoresPriorCompletedTranscript() async throws {
         let harness = try await makeImproveHarness(
             episodeID: "improve-interrupt",
             secondAttemptStream: { _ in neverFinishingStream() }
         )
+        var interruptionEvents: [String] = []
+        harness.store.onAppleSpeechRunInterrupted = { episodeID, restored in
+            interruptionEvents.append("\(episodeID):\(restored)")
+        }
 
         harness.store.interruptActiveJob(modelContext: harness.context)
 
@@ -894,6 +1165,7 @@ struct EpisodeTranscriptionStoreTests {
         let document = try #require(harness.store.document(for: harness.episode.episodeID))
         #expect(document.modelIdentifier == harness.priorModelIdentifier)
         #expect(harness.store.lastErrorMessage(for: harness.episode.episodeID) == nil)
+        #expect(interruptionEvents == ["\(harness.episode.episodeID):true"])
     }
 
     @Test("Cancelled improve run restores the prior completed transcript")
@@ -1022,6 +1294,35 @@ struct EpisodeTranscriptionStoreTests {
         _ = await waitUntil { transcriber.requests.count == 2 }
 
         return (context, episode, store, fileStore, priorModelIdentifier, priorRelativePath)
+    }
+
+    private func makeAppleRunHarness(
+        episodeID: String,
+        stream: @escaping @MainActor (EpisodeTranscriptionRunRequest) -> AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error>
+    ) throws -> (
+        context: ModelContext,
+        episode: EpisodeListItemSnapshot,
+        downloadRecord: EpisodeDownloadRecord,
+        audioURL: URL,
+        store: EpisodeTranscriptionStore
+    ) {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let audioURL = try writeAudioPlaceholder(
+            in: temporaryDirectory,
+            contents: "Apple Speech audio \(episodeID)"
+        )
+        let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
+            stream(request)
+        }
+        let store = EpisodeTranscriptionStore(
+            transcriber: transcriber,
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory),
+            failureEnvironment: { .foreground }
+        )
+        let episode = makeEpisode(episodeID: episodeID)
+        return (context, episode, completedDownloadRecord(episode: episode), audioURL, store)
     }
 
     private func modelSummary() -> OpenCastWhisperModelInstalledSummary {

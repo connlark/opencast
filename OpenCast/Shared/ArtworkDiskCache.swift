@@ -17,7 +17,7 @@ actor ArtworkDiskCache {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
 
-    func cachedEntry(for url: URL, now: Date = .now) throws -> ArtworkDiskCacheEntry? {
+    func cachedEntry(for url: URL, now _: Date = .now) throws -> ArtworkDiskCacheEntry? {
         try prepareDirectory()
         let key = cacheKey(for: url)
         let dataURL = dataURL(forKey: key)
@@ -31,9 +31,10 @@ actor ArtworkDiskCache {
         do {
             let data = try Data(contentsOf: dataURL)
             var metadata = try readMetadata(at: metadataURL)
-            metadata.byteCount = data.count
-            metadata.lastAccess = now
-            try writeMetadata(metadata, to: metadataURL)
+            if metadata.byteCount != data.count {
+                metadata.byteCount = data.count
+                try writeMetadata(metadata, to: metadataURL)
+            }
             return ArtworkDiskCacheEntry(data: data, metadata: metadata)
         } catch {
             removeCachedFiles(forKey: key)

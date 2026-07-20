@@ -29,21 +29,28 @@ struct OpenCastModelTests {
     }
 
     @Test("Synced records use logical keys instead of unique attributes")
-    func syncedRecordsUseLogicalKeys() {
-        let subscription = SubscriptionRecord(
-            feedURL: Self.modelFixtureFeedURL,
-            title: "Model Fixture Podcast"
-        )
-        let progress = EpisodeProgressRecord(
-            episodeID: "episode-id",
-            podcastID: subscription.feedURL,
-            position: 42
-        )
+    func syncedRecordsUseLogicalKeys() throws {
+        let schema = OpenCastModelContainerFactory.syncedSchema
+        let syncedEntities = [
+            try #require(schema.entity(for: SubscriptionRecord.self)),
+            try #require(schema.entity(for: EpisodeProgressRecord.self))
+        ]
 
-        #expect(subscription.feedURL == progress.podcastID)
-        #expect(subscription.isVoiceBoostEnabled == true)
-        #expect(subscription.isAdAutoDetectEnabled == false)
-        #expect(progress.position == 42)
+        for entity in syncedEntities {
+            let uniqueAttributeNames = entity.attributes
+                .filter(\.isUnique)
+                .map(\.name)
+                .sorted()
+
+            #expect(
+                uniqueAttributeNames.isEmpty,
+                "\(entity.name) has unique attributes: \(uniqueAttributeNames.joined(separator: ", "))"
+            )
+            #expect(
+                entity.uniquenessConstraints.isEmpty,
+                "\(entity.name) has uniqueness constraints: \(entity.uniquenessConstraints)"
+            )
+        }
     }
 
     @Test("Playback episode snapshot converter preserves fallback fields")
@@ -205,6 +212,7 @@ struct OpenCastModelTests {
 
         #expect(didHydrate)
         #expect(requestedURLs == [feedURL])
+        #expect(store.refreshCompletedToken == 0)
         #expect(store.feedURLStringsNeedingLocalCache.isEmpty)
         #expect(store.inboxEpisodes.map(\.episodeID) == ["imported-cache-episode"])
     }

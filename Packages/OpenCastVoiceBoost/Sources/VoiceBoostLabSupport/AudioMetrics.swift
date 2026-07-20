@@ -9,6 +9,11 @@ struct AudioMetrics: Codable {
     var ungatedIntegratedLUFS: Double?
     var momentaryLUFS: Summary
     var shortTermLUFS: Summary
+    /// Integrated LUFS over the trailing window only (up to 15 s, at most
+    /// half the fixture), so short fixtures can be read past the
+    /// convergence ramp instead of chasing whole-file numbers.
+    var steadyStateTailLUFS: Double?
+    var steadyStateTailSeconds: Double?
     var truePeakDBTP: Double?
     var samplePeakDBFS: Double?
     var rmsDBFS: Double?
@@ -37,10 +42,12 @@ struct AudioMetrics: Codable {
         let samplePeak = VoiceBoostTruePeakAnalyzer.samplePeakDBFS(audio.samples)
         let truePeak = VoiceBoostTruePeakAnalyzer.truePeakDBTP(
             audio.samples,
-            channelCount: audio.channelCount
+            channelCount: audio.channelCount,
+            sampleRate: audio.sampleRate
         )
         let rms = rmsDBFS(audio.samples)
         let crest = finiteOrNil(samplePeak - (rms ?? samplePeak))
+        let tail = steadyStateTail(audio: audio)
         let autoGain = timeline.map(\.autoGainDB)
         let compressor = timeline.map(\.compressorReductionDB)
         let limiter = timeline.map(\.limiterReductionDB)
@@ -53,6 +60,8 @@ struct AudioMetrics: Codable {
             ungatedIntegratedLUFS: finiteOrNil(analysis.ungatedIntegratedLUFS),
             momentaryLUFS: Summary(values: analysis.momentaryLUFS),
             shortTermLUFS: Summary(values: analysis.shortTermLUFS),
+            steadyStateTailLUFS: tail?.lufs,
+            steadyStateTailSeconds: tail?.seconds,
             truePeakDBTP: finiteOrNil(truePeak),
             samplePeakDBFS: finiteOrNil(samplePeak),
             rmsDBFS: rms,
@@ -68,6 +77,26 @@ struct AudioMetrics: Codable {
             maxLimiterReductionDB: limiter.max(),
             p95LimiterReductionDB: percentile(limiter, 0.95)
         )
+    }
+
+    private static func steadyStateTail(audio: WAVAudio) -> (lufs: Double, seconds: Double)? {
+        let tailSeconds = min(15, audio.duration / 2)
+        // The gated integrated measure needs a few momentary blocks to say
+        // anything; below that the tail is the ramp itself.
+        guard tailSeconds >= 1 else {
+            return nil
+        }
+
+        let tailSamples = Int(tailSeconds * audio.sampleRate) * audio.channelCount
+        let analysis = VoiceBoostLoudnessAnalyzer.analyzeInterleavedFloat32(
+            Array(audio.samples.suffix(tailSamples)),
+            sampleRate: audio.sampleRate,
+            channelCount: audio.channelCount
+        )
+        guard let lufs = finiteOrNil(analysis.integratedLUFS) else {
+            return nil
+        }
+        return (lufs, tailSeconds)
     }
 
     private static func rmsDBFS(_ samples: [Float]) -> Double? {

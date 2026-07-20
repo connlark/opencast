@@ -9,6 +9,7 @@ struct EpisodeTranscriptContentView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
 
     let episodeID: String
     let document: EpisodeTranscriptDocument
@@ -21,9 +22,9 @@ struct EpisodeTranscriptContentView: View {
 
     @State private var activeSegmentID: Int?
     @State private var activeKaraokeLayout: TranscriptKaraokeLayout?
+    @State private var karaokeSpokenUpperBound: String.Index?
     @State private var tapPin: TranscriptTapPin?
     @State private var isFollowing = true
-    @State private var interpolator: TranscriptPositionInterpolator?
     @State private var scrollPosition = ScrollPosition(idType: Int.self)
     @State private var searchQuery = ""
     @State private var isSearchInFlight = false
@@ -45,7 +46,7 @@ struct EpisodeTranscriptContentView: View {
                         adSpanLabel: adSpanBySegmentID[segment.id]?.label,
                         isAdSpanStart: adSpanBySegmentID[segment.id]?.startSegmentID == segment.id,
                         searchHighlightRanges: highlightRangesBySegmentID[segment.id],
-                        karaokeInterpolator: karaokeInterpolator(for: segment),
+                        karaokeSpokenUpperBound: segment.id == activeSegmentID ? karaokeSpokenUpperBound : nil,
                         karaokeLayout: segment.id == activeSegmentID ? activeKaraokeLayout : nil,
                         action: { playFrom(segment) }
                     )
@@ -66,6 +67,9 @@ struct EpisodeTranscriptContentView: View {
         }
         .task(id: documentKey) {
             await seedInitialScroll()
+        }
+        .task(id: mediaClockTaskID) {
+            await consumeMediaClock()
         }
         .task(id: searchTaskIdentifier) {
             await applySearchAfterDebounce()
@@ -137,14 +141,17 @@ struct EpisodeTranscriptContentView: View {
         isCurrentEpisode && !isFollowing && !isSearchPresented
     }
 
-    private func karaokeInterpolator(for segment: OpenCastTranscriptSegment) -> TranscriptPositionInterpolator? {
-        guard segment.id == activeSegmentID,
-              segment.words != nil,
-              appModel.playback.state == .playing
-        else {
-            return nil
-        }
-        return interpolator
+    /// Restarting on identity changes tears the media-clock stream down for
+    /// dismissals, document reloads, current-episode flips, and backgrounding
+    /// via the `.task(id:)` cancellation, which removes the player observer.
+    /// On return to the foreground the stream's prime sample reconciles
+    /// immediately; the 1 Hz observer keeps segments current meanwhile.
+    private var mediaClockTaskID: String {
+        "\(documentKey)|\(isCurrentEpisode)|\(scenePhase == .active)"
+    }
+
+    private var isKaraokeCapable: Bool {
+        document.segments.contains { $0.words != nil }
     }
 
     // MARK: - Document lifecycle
@@ -152,11 +159,11 @@ struct EpisodeTranscriptContentView: View {
     private func resetForDocumentChange() {
         tapPin = nil
         activeKaraokeLayout = nil
+        karaokeSpokenUpperBound = nil
         clearSearchResults()
     }
 
     private func seedInitialScroll() async {
-        syncPlaybackTick(force: true)
         guard isCurrentEpisode,
               let index = timeline.segmentIndex(at: appModel.playback.position)
         else {
@@ -164,7 +171,8 @@ struct EpisodeTranscriptContentView: View {
         }
 
         let segment = timeline.segments[index]
-        setActiveSegment(segment, animated: false, scrolls: false)
+        setActiveSegment(segment, index: index, animated: false, scrolls: false)
+        applySpokenUpperBound(at: appModel.playback.position)
         scrollPosition.scrollTo(id: segment.id, anchor: .center)
         // Lazy rows estimate heights on the first pass; re-center once real
         // layout has settled.
@@ -178,75 +186,86 @@ struct EpisodeTranscriptContentView: View {
     // MARK: - Follow-along
 
     private func handlePositionTick() {
-        syncPlaybackTick()
-        updateActiveSegment()
+        reconcile(position: appModel.playback.position)
     }
 
     private func handlePlaybackStateChange() {
-        syncPlaybackTick(force: true)
+        reconcile(position: appModel.playback.position)
     }
 
     private func handleProgressBoundaryChange() {
-        syncPlaybackTick(force: true)
-        updateActiveSegment(animated: false)
+        reconcile(position: appModel.playback.position, animated: false)
     }
 
-    /// Reseeds the interpolator only when it has drifted from the reported
-    /// position (or on seeks/state changes via `force`); a steady 1 Hz tick
-    /// stream that matches the interpolation leaves state untouched, so the
-    /// screen does no per-tick re-rendering while following along.
-    private func syncPlaybackTick(force: Bool = false) {
-        let playback = appModel.playback
-        let isPlaying = playback.state == .playing
-        let rate = Double(playback.rate)
-        if !force,
-           let interpolator,
-           interpolator.isPlaying == isPlaying,
-           interpolator.rate == rate,
-           abs(interpolator.estimatedTime(at: .now) - playback.position) < 0.35 {
+    private func consumeMediaClock() async {
+        guard isCurrentEpisode, isKaraokeCapable, scenePhase == .active else {
             return
         }
-        interpolator = TranscriptPositionInterpolator(
-            basePosition: playback.position,
-            baseDate: .now,
-            rate: rate,
-            isPlaying: isPlaying
-        )
+        for await sample in appModel.playback.mediaClockSamples() {
+            reconcile(position: sample.position)
+        }
     }
 
-    private func updateActiveSegment(animated: Bool = true) {
+    /// The single idempotent reconciliation both the media clock and the 1 Hz
+    /// observer converge on: resolve the complete highlight state for the
+    /// given media position, publishing only what actually changed. Every
+    /// sample is a wake-up, never an event to count, so dropped, coalesced,
+    /// or duplicated callbacks and seeks in either direction self-heal here.
+    private func reconcile(position: TimeInterval, animated: Bool = true) {
         guard isCurrentEpisode else {
             tapPin = nil
-            setActiveSegment(nil)
+            setActiveSegment(nil, index: nil)
             return
         }
 
-        let position = appModel.playback.position
         let computedIndex = timeline.segmentIndex(at: position)
 
         if let tapPin {
             guard tapPin.shouldRelease(computedSegmentIndex: computedIndex, position: position) else {
-                setActiveSegment(tapPin.segment, animated: animated, scrolls: false)
+                setActiveSegment(tapPin.segment, index: tapPin.segmentIndex, animated: animated, scrolls: false)
+                applySpokenUpperBound(at: position.clamped(to: tapPin.segment.start...tapPin.segment.end))
                 return
             }
             self.tapPin = nil
         }
 
         let segment = computedIndex.map { timeline.segments[$0] }
-        guard segment?.id != activeSegmentID else {
-            return
+        if segment?.id != activeSegmentID {
+            setActiveSegment(segment, index: computedIndex, animated: animated)
         }
-        setActiveSegment(segment, animated: animated)
+        applySpokenUpperBound(at: position)
+    }
+
+    private func applySpokenUpperBound(at position: TimeInterval) {
+        let frame = TranscriptKaraokeReducer.frame(
+            at: position,
+            timeline: timeline,
+            activeLayout: activeKaraokeLayout
+        )
+        let newBound = frame.segmentID == activeSegmentID ? frame.spokenUpperBound : nil
+        if karaokeSpokenUpperBound != newBound {
+            karaokeSpokenUpperBound = newBound
+        }
     }
 
     private func setActiveSegment(
         _ segment: OpenCastTranscriptSegment?,
+        index: Int?,
         animated: Bool = true,
         scrolls: Bool = true
     ) {
         if activeSegmentID != segment?.id {
             activeSegmentID = segment?.id
-            activeKaraokeLayout = segment.flatMap(TranscriptKaraokeLayout.init)
+            // The stored bound indexes the previous layout's text; nil it in
+            // the same pass the layout is replaced so a stale index can never
+            // slice the new text.
+            karaokeSpokenUpperBound = nil
+            if let segment {
+                let handoff = index.map(timeline.handoff(afterSegmentAt:)) ?? .infinity
+                activeKaraokeLayout = TranscriptKaraokeLayout(segment: segment, handoff: handoff)
+            } else {
+                activeKaraokeLayout = nil
+            }
         }
         guard scrolls, isFollowing, !isSearchPresented, let segment else {
             return
@@ -273,20 +292,19 @@ struct EpisodeTranscriptContentView: View {
 
     private func resumeFollowing() {
         isFollowing = true
-        updateActiveSegment()
+        reconcile(position: appModel.playback.position)
         if let activeSegmentID {
             scrollToSegment(activeSegmentID, animated: true)
         }
     }
 
     private func handleCurrentEpisodeChange() {
-        syncPlaybackTick(force: true)
         if isCurrentEpisode {
             isFollowing = true
-            updateActiveSegment()
+            reconcile(position: appModel.playback.position)
         } else {
             tapPin = nil
-            setActiveSegment(nil)
+            setActiveSegment(nil, index: nil)
         }
     }
 
@@ -294,7 +312,8 @@ struct EpisodeTranscriptContentView: View {
 
     private func playFrom(_ segment: OpenCastTranscriptSegment) {
         if isCurrentEpisode {
-            if let segmentIndex = timeline.segmentIndex(at: segment.start) {
+            let segmentIndex = timeline.segmentIndex(at: segment.start)
+            if let segmentIndex {
                 tapPin = TranscriptTapPin(segment: segment, segmentIndex: segmentIndex)
             }
             appModel.playback.seek(to: segment.start, intent: .scrub)
@@ -302,7 +321,7 @@ struct EpisodeTranscriptContentView: View {
                 appModel.playback.play()
             }
             isFollowing = true
-            setActiveSegment(segment, animated: true)
+            setActiveSegment(segment, index: segmentIndex, animated: true)
         } else {
             playEpisode(at: segment.start)
         }

@@ -8,12 +8,17 @@ struct EpisodeRowButton: View {
 
     let episode: EpisodeListItemSnapshot
     var searchResult: EpisodeSearchResult?
+    var showsLocalStatusBadges = false
     var onSelect: () -> Void = {}
     let onOpenEpisode: (String) -> Void
 
     var body: some View {
         Button(action: openEpisode) {
-            EpisodeRowView(episode: episode, searchResult: searchResult)
+            EpisodeRowView(
+                episode: episode,
+                searchResult: searchResult,
+                showsLocalStatusBadges: showsLocalStatusBadges
+            )
         }
         .buttonStyle(.plain)
         .modifier(

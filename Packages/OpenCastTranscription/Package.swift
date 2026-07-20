@@ -50,6 +50,10 @@ let package = Package(
                 "WhisperKit",
                 "OpenCastTranscription"
             ],
+            // No `resources:` here on purpose: a test-target resource bundle
+            // generates a test-local `Bundle.module` that shadows the main
+            // module's and breaks the resource-bundle tests. Test fixtures
+            // (Fixtures/) load via #filePath instead.
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]

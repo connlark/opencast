@@ -34,6 +34,7 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         installID: String,
         keyID: String,
         payload: String,
+        timeout: TimeInterval? = nil,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
         let clientDataHash = AppAttestRequestBinding.clientDataHash(
@@ -51,6 +52,7 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
             keyID: keyID,
             payload: payload,
             assertion: assertion,
+            timeout: timeout,
             response: response
         )
     }

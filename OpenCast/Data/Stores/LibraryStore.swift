@@ -19,7 +19,7 @@ final class LibraryStore {
     private(set) var state: State = .idle
     private(set) var subscriptions: [SubscriptionRecord] = []
     private(set) var episodes: [EpisodeListItemSnapshot] = []
-    private(set) var progressRecords: [EpisodeProgressRecord] = []
+    @ObservationIgnored private(set) var progressRecords: [EpisodeProgressRecord] = []
     private(set) var refreshLogs: [RefreshLogSnapshot] = []
     private(set) var refreshingFeedURLs: Set<String> = []
     private(set) var activePodcastIDs: Set<String> = []
@@ -36,9 +36,10 @@ final class LibraryStore {
     @ObservationIgnored private var reloadGeneration = 0
     @ObservationIgnored private var episodeIndexByID: [String: Int] = [:]
     @ObservationIgnored private var episodeIndicesByPodcastID: [String: [Int]] = [:]
-    // Observable (not @ObservationIgnored): progressSummary reads only this
-    // dictionary, so rows must establish their progress dependency through it.
-    private var progressByEpisodeID: [String: EpisodeProgressRecord] = [:]
+    // Existing rows observe their SwiftData model directly. This revision is
+    // reserved for index membership changes and out-of-band store reloads.
+    private var progressIndexRevision = 0
+    @ObservationIgnored private var progressByEpisodeID: [String: EpisodeProgressRecord] = [:]
     @ObservationIgnored private var pendingCacheWriteTask: Task<Void, Never>?
 
     init(
@@ -113,9 +114,7 @@ final class LibraryStore {
             let previousProgressRecords = progressRecords
             let fetchedSubscriptions = try modelContext.fetch(activeSubscriptionsDescriptor())
             let fetchedActivePodcastIDs = Set(fetchedSubscriptions.map(\.feedURL))
-            let fetchedProgressRecords = sortedProgressRecords(
-                try modelContext.fetch(allProgressRecordsDescriptor())
-            )
+            let fetchedProgressRecords = try modelContext.fetch(allProgressRecordsDescriptor())
 
             let activePodcastIDsChanged = previousActivePodcastIDs != fetchedActivePodcastIDs
             let activeSubscriptionRecordsChanged = !Self.subscriptionRecords(
@@ -305,7 +304,6 @@ final class LibraryStore {
             )
             try await reloadFromStore(modelContext: modelContext)
             state = .idle
-            refreshCompletedToken += 1
             return true
         } catch is CancellationError {
             refreshingFeedURLs.removeAll()
@@ -468,6 +466,7 @@ final class LibraryStore {
         episodeIndexByID.removeAll()
         episodeIndicesByPodcastID.removeAll()
         progressByEpisodeID.removeAll()
+        progressIndexRevision &+= 1
         lastErrorMessage = nil
     }
 
@@ -555,7 +554,8 @@ final class LibraryStore {
     }
 
     func progressRecord(for episodeID: String) -> EpisodeProgressRecord? {
-        progressByEpisodeID[episodeID]
+        _ = progressIndexRevision
+        return progressByEpisodeID[episodeID]
     }
 
     func progressSummary(for episode: EpisodeListItemSnapshot) -> EpisodeProgressSummary {
@@ -633,6 +633,72 @@ final class LibraryStore {
     }
 
     @discardableResult
+    func markAllPlayed(forPodcastID podcastID: String, modelContext: ModelContext) -> Bool {
+        let podcastEpisodes = episodes(forPodcastID: podcastID)
+        guard !podcastEpisodes.isEmpty else {
+            return false
+        }
+
+        do {
+            let targetPodcastID = podcastID
+            let storedRecords = try modelContext.fetch(
+                FetchDescriptor<EpisodeProgressRecord>(
+                    predicate: #Predicate { record in
+                        record.podcastID == targetPodcastID
+                    }
+                )
+            )
+            let latestRecordByEpisodeID = Self.latestProgressRecordsByEpisodeID(storedRecords)
+
+            let updatedAt = Date.now
+            var hasChanges = false
+            for episode in podcastEpisodes {
+                let duration = sanitizedDuration(episode.duration)
+                let position = duration ?? 0
+                if let record = latestRecordByEpisodeID[episode.episodeID] {
+                    guard Self.hasMeaningfulProgressChange(
+                        record,
+                        position: position,
+                        duration: duration,
+                        isPlayed: true
+                    ) else {
+                        continue
+                    }
+                    record.position = position
+                    record.duration = duration
+                    record.isPlayed = true
+                    record.updatedAt = updatedAt
+                } else {
+                    modelContext.insert(
+                        EpisodeProgressRecord(
+                            episodeID: episode.episodeID,
+                            podcastID: podcastID,
+                            position: position,
+                            duration: duration,
+                            isPlayed: true,
+                            updatedAt: updatedAt
+                        )
+                    )
+                }
+                hasChanges = true
+            }
+
+            guard hasChanges else {
+                return false
+            }
+
+            try modelContext.save()
+            progressRecords = try modelContext.fetch(allProgressRecordsDescriptor())
+            rebuildProgressByEpisodeID()
+            lastErrorMessage = nil
+            return true
+        } catch {
+            recordFailure(error)
+            return false
+        }
+    }
+
+    @discardableResult
     func updateArtworkPreview(
         _ preview: ArtworkPreview,
         for episode: EpisodeListItemSnapshot
@@ -692,6 +758,7 @@ final class LibraryStore {
         refreshObservableProgress: Bool = true
     ) -> Bool {
         do {
+            let updatedRecord: EpisodeProgressRecord
             if let existing = try progressRecord(
                 episodeID: episodeID,
                 podcastID: podcastID,
@@ -710,21 +777,22 @@ final class LibraryStore {
                 existing.duration = duration
                 existing.isPlayed = isPlayed
                 existing.updatedAt = .now
+                updatedRecord = existing
             } else {
-                modelContext.insert(
-                    EpisodeProgressRecord(
-                        episodeID: episodeID,
-                        podcastID: podcastID,
-                        position: position,
-                        duration: duration,
-                        isPlayed: isPlayed
-                    )
+                let record = EpisodeProgressRecord(
+                    episodeID: episodeID,
+                    podcastID: podcastID,
+                    position: position,
+                    duration: duration,
+                    isPlayed: isPlayed
                 )
+                modelContext.insert(record)
+                updatedRecord = record
             }
 
             try modelContext.save()
             if refreshObservableProgress {
-                try reloadProgressRecords(modelContext: modelContext)
+                updateProgressSnapshot(with: updatedRecord)
             }
             return true
         } catch {
@@ -999,7 +1067,7 @@ final class LibraryStore {
         let activeSubscriptions = try modelContext.fetch(activeSubscriptionsDescriptor())
         subscriptions = activeSubscriptions
         activePodcastIDs = Set(activeSubscriptions.map(\.feedURL))
-        progressRecords = sortedProgressRecords(try modelContext.fetch(allProgressRecordsDescriptor()))
+        progressRecords = try modelContext.fetch(allProgressRecordsDescriptor())
         rebuildProgressByEpisodeID()
         episodes = cacheSnapshot.episodes
         visibleEpisodeIDs = Set(cacheSnapshot.episodes.map(\.episodeID))
@@ -1015,9 +1083,7 @@ final class LibraryStore {
     }
 
     private func reloadProgressRecords(modelContext: ModelContext) throws {
-        let fetchedProgressRecords = sortedProgressRecords(
-            try modelContext.fetch(allProgressRecordsDescriptor())
-        )
+        let fetchedProgressRecords = try modelContext.fetch(allProgressRecordsDescriptor())
         guard !Self.progressRecords(
             progressRecords,
             match: fetchedProgressRecords
@@ -1070,7 +1136,12 @@ final class LibraryStore {
         FetchDescriptor<EpisodeProgressRecord>(
             predicate: #Predicate { record in
                 record.episodeID == episodeID && record.podcastID == podcastID
-            }
+            },
+            sortBy: [
+                SortDescriptor(\.updatedAt, order: .reverse),
+                SortDescriptor(\.position, order: .reverse),
+                SortDescriptor(\.duration, order: .reverse)
+            ]
         )
     }
 
@@ -1087,28 +1158,108 @@ final class LibraryStore {
     }
 
     private func allProgressRecordsDescriptor() -> FetchDescriptor<EpisodeProgressRecord> {
-        FetchDescriptor<EpisodeProgressRecord>()
+        FetchDescriptor<EpisodeProgressRecord>(
+            sortBy: [
+                SortDescriptor(\.podcastID),
+                SortDescriptor(\.episodeID),
+                SortDescriptor(\.updatedAt),
+                SortDescriptor(\.position),
+                SortDescriptor(\.duration)
+            ]
+        )
     }
 
-    private func sortedProgressRecords(_ records: [EpisodeProgressRecord]) -> [EpisodeProgressRecord] {
-        records.sorted { lhs, rhs in
-            if lhs.podcastID != rhs.podcastID {
-                return lhs.podcastID < rhs.podcastID
-            }
-            if lhs.episodeID != rhs.episodeID {
-                return lhs.episodeID < rhs.episodeID
-            }
-            if lhs.updatedAt != rhs.updatedAt {
-                return lhs.updatedAt < rhs.updatedAt
-            }
-            if lhs.position != rhs.position {
-                return lhs.position < rhs.position
-            }
-            if lhs.duration != rhs.duration {
-                return (lhs.duration ?? 0) < (rhs.duration ?? 0)
-            }
-            return !lhs.isPlayed && rhs.isPlayed
+    private func updateProgressSnapshot(with record: EpisodeProgressRecord) {
+        if let existingIndex = progressRecords.firstIndex(where: { $0 === record }) {
+            progressRecords.remove(at: existingIndex)
         }
+        insertProgressRecordInOrder(record)
+
+        let indexedRecord = progressByEpisodeID[record.episodeID]
+        progressByEpisodeID[record.episodeID] = record
+        if indexedRecord !== record {
+            progressIndexRevision &+= 1
+        }
+    }
+
+    private func insertProgressRecordInOrder(_ record: EpisodeProgressRecord) {
+        var lowerBound = progressRecords.startIndex
+        var upperBound = progressRecords.endIndex
+        while lowerBound < upperBound {
+            let middle = lowerBound + (upperBound - lowerBound) / 2
+            if Self.progressRecordPrecedesInStore(progressRecords[middle], record) {
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle
+            }
+        }
+        progressRecords.insert(record, at: lowerBound)
+    }
+
+    private static func progressRecordPrecedesInStore(
+        _ lhs: EpisodeProgressRecord,
+        _ rhs: EpisodeProgressRecord
+    ) -> Bool {
+        if lhs.podcastID != rhs.podcastID {
+            return lhs.podcastID < rhs.podcastID
+        }
+        if lhs.episodeID != rhs.episodeID {
+            return lhs.episodeID < rhs.episodeID
+        }
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt < rhs.updatedAt
+        }
+        if lhs.position != rhs.position {
+            return lhs.position < rhs.position
+        }
+        switch (lhs.duration, rhs.duration) {
+        case (nil, nil):
+            return false
+        case (nil, .some):
+            return true
+        case (.some, nil):
+            return false
+        case let (lhsDuration?, rhsDuration?):
+            return lhsDuration < rhsDuration
+        }
+    }
+
+    private static func progressRecordPrecedesForIndex(
+        _ lhs: EpisodeProgressRecord,
+        _ rhs: EpisodeProgressRecord
+    ) -> Bool {
+        if lhs.podcastID != rhs.podcastID {
+            return lhs.podcastID < rhs.podcastID
+        }
+        if lhs.episodeID != rhs.episodeID {
+            return lhs.episodeID < rhs.episodeID
+        }
+        if lhs.position != rhs.position {
+            return lhs.position < rhs.position
+        }
+        if lhs.duration != rhs.duration {
+            return (lhs.duration ?? 0) < (rhs.duration ?? 0)
+        }
+        return !lhs.isPlayed && rhs.isPlayed
+    }
+
+    private static func latestProgressRecordsByEpisodeID(
+        _ progressRecords: [EpisodeProgressRecord]
+    ) -> [String: EpisodeProgressRecord] {
+        var latestRecordByEpisodeID: [String: EpisodeProgressRecord] = [:]
+        latestRecordByEpisodeID.reserveCapacity(progressRecords.count)
+        for record in progressRecords {
+            if let existing = latestRecordByEpisodeID[record.episodeID] {
+                guard record.updatedAt > existing.updatedAt || (
+                    record.updatedAt == existing.updatedAt
+                        && progressRecordPrecedesForIndex(record, existing)
+                ) else {
+                    continue
+                }
+            }
+            latestRecordByEpisodeID[record.episodeID] = record
+        }
+        return latestRecordByEpisodeID
     }
 
     private static func subscriptionRecords(
@@ -1303,15 +1454,8 @@ final class LibraryStore {
     }
 
     private func rebuildProgressByEpisodeID() {
-        var progressByID: [String: EpisodeProgressRecord] = [:]
-        progressByID.reserveCapacity(progressRecords.count)
-        for record in progressRecords {
-            if let existing = progressByID[record.episodeID], existing.updatedAt >= record.updatedAt {
-                continue
-            }
-            progressByID[record.episodeID] = record
-        }
-        progressByEpisodeID = progressByID
+        progressByEpisodeID = Self.latestProgressRecordsByEpisodeID(progressRecords)
+        progressIndexRevision &+= 1
     }
 
     private func rebuildLatestRefreshLogByFeedURL() {

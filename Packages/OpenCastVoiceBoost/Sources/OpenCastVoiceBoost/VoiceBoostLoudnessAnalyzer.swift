@@ -1,6 +1,12 @@
 import Foundation
 
 public enum VoiceBoostLoudnessAnalyzer {
+    /// Sub-blocks per momentary (400 ms) and short-term (3 s) window on the
+    /// 100 ms analysis grid. Matches the realtime engine's geometry so both
+    /// measure identical gating blocks on the same fixture.
+    private static let momentarySubBlocks = 4
+    private static let shortTermSubBlocks = 30
+
     public static func analyzeInterleavedFloat32(
         _ buffer: [Float],
         sampleRate: Double,
@@ -15,20 +21,13 @@ public enum VoiceBoostLoudnessAnalyzer {
             sampleRate: sampleRate,
             channelCount: channelCount
         )
-        let momentaryEnergies = windowEnergies(
+        let subBlocks = subBlockEnergies(
             weighted,
             sampleRate: sampleRate,
-            channelCount: channelCount,
-            windowSeconds: 0.400,
-            stepSeconds: 0.100
+            channelCount: channelCount
         )
-        let shortTermEnergies = windowEnergies(
-            weighted,
-            sampleRate: sampleRate,
-            channelCount: channelCount,
-            windowSeconds: 3.0,
-            stepSeconds: 0.100
-        )
+        let momentaryEnergies = slidingWindowMeans(subBlocks, windowSubBlocks: momentarySubBlocks)
+        let shortTermEnergies = slidingWindowMeans(subBlocks, windowSubBlocks: shortTermSubBlocks)
 
         let momentary = momentaryEnergies.map(VoiceBoostLevel.loudness(meanSquare:))
         let shortTerm = shortTermEnergies.map(VoiceBoostLevel.loudness(meanSquare:))
@@ -91,36 +90,53 @@ public enum VoiceBoostLoudnessAnalyzer {
         return weighted
     }
 
-    private static func windowEnergies(
+    /// Channel-summed mean-square energy per 100 ms sub-block
+    /// (`ceil(0.1 * sampleRate)` frames); a trailing partial sub-block is
+    /// discarded, mirroring the gating-block rule in EBU Tech 3341.
+    private static func subBlockEnergies(
         _ weighted: [Double],
         sampleRate: Double,
-        channelCount: Int,
-        windowSeconds: Double,
-        stepSeconds: Double
+        channelCount: Int
     ) -> [Double] {
         let frameCount = weighted.count / channelCount
-        let windowFrames = max(1, Int((windowSeconds * sampleRate).rounded()))
-        let stepFrames = max(1, Int((stepSeconds * sampleRate).rounded()))
-        guard frameCount >= windowFrames else {
-            return []
-        }
+        let subBlockFrames = max(1, Int((0.1 * sampleRate).rounded(.up)))
+        let subBlockCount = frameCount / subBlockFrames
+        var energies = [Double]()
+        energies.reserveCapacity(subBlockCount)
 
-        var energies: [Double] = []
-        var startFrame = 0
-
-        while startFrame + windowFrames <= frameCount {
+        for subBlock in 0..<subBlockCount {
             var sumSquares = 0.0
-            for frame in startFrame..<(startFrame + windowFrames) {
+            let startFrame = subBlock * subBlockFrames
+            for frame in startFrame..<(startFrame + subBlockFrames) {
                 for channel in 0..<channelCount {
                     let sample = weighted[frame * channelCount + channel]
                     sumSquares += sample * sample
                 }
             }
-            energies.append(sumSquares / Double(windowFrames))
-            startFrame += stepFrames
+            energies.append(sumSquares / Double(subBlockFrames))
         }
 
         return energies
+    }
+
+    private static func slidingWindowMeans(
+        _ subBlocks: [Double],
+        windowSubBlocks: Int
+    ) -> [Double] {
+        guard subBlocks.count >= windowSubBlocks else {
+            return []
+        }
+
+        var means = [Double]()
+        means.reserveCapacity(subBlocks.count - windowSubBlocks + 1)
+        for start in 0...(subBlocks.count - windowSubBlocks) {
+            var sum = 0.0
+            for offset in 0..<windowSubBlocks {
+                sum += subBlocks[start + offset]
+            }
+            means.append(sum / Double(windowSubBlocks))
+        }
+        return means
     }
 }
 

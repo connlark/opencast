@@ -3,6 +3,8 @@ import SwiftUI
 struct OpenCastTabRootView: View {
     @Environment(OpenCastAppModel.self) private var appModel
 
+    @State private var isSearchPresented = false
+
     @Binding var selectedTab: AppSection
     @Binding var libraryNavigationPath: [AppRoute]
     @Binding var inboxNavigationPath: [AppRoute]
@@ -76,6 +78,7 @@ struct OpenCastTabRootView: View {
                 NavigationStack(path: $searchNavigationPath) {
                     SearchView(
                         directoryService: appModel.podcastDirectoryService,
+                        isSearchPresented: $isSearchPresented,
                         onOpenEpisode: { episodeID in
                             searchNavigationPath.append(.episodeDetail(id: episodeID))
                         },
@@ -103,6 +106,9 @@ struct OpenCastTabRootView: View {
         }
         .sensoryFeedback(.success, trigger: appModel.library.subscriptionAddedToken)
         .sensoryFeedback(.success, trigger: appModel.library.refreshCompletedToken)
+        .onChange(of: selectedTab, initial: true) { _, selectedTab in
+            isSearchPresented = selectedTab == .search
+        }
     }
 
     private var tabBarMinimizeBehavior: TabBarMinimizeBehavior {

@@ -9,8 +9,15 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
     let onViewDetails: (EpisodeListItemSnapshot) -> Void
 
     func body(content: Content) -> some View {
+        let isPlayed = appModel.library.progressRecord(for: episode.episodeID)?.isPlayed == true
+
         content.contextMenu {
             Button("View Episode Details", systemImage: "info.circle", action: viewDetails)
+            Button(
+                isPlayed ? "Mark Unplayed" : "Mark Played",
+                systemImage: isPlayed ? "arrow.uturn.backward.circle" : "checkmark.circle",
+                action: togglePlayed
+            )
             downloadButton
             detectAdsButton
         } preview: {
@@ -39,6 +46,10 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
 
     private func download() {
         appModel.downloads.startDownload(for: episode, modelContext: modelContext)
+    }
+
+    private func togglePlayed() {
+        appModel.toggleEpisodePlayed(episode, modelContext: modelContext)
     }
 
     private func detectAds() {

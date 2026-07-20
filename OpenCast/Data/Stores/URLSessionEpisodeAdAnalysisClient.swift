@@ -4,6 +4,11 @@ import Foundation
 nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     private static let analyzePath = "/v1/ad-analysis/transcript"
 
+    /// Single-window requests remain synchronous. Multi-window requests return
+    /// a job promptly, so this only needs to cover one model call plus retries.
+    static let analyzeTimeout: TimeInterval = 90
+    static let pollTimeout: TimeInterval = 30
+
     let configuration: AdAnalysisBackendConfiguration
     let transport: any EpisodeAdAnalysisHTTPTransport
     private let appAttestService: any AppAttestServiceProtocol
@@ -45,7 +50,7 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
         }
     }
 
-    func analyze(_ requestBody: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisAPIResponse {
+    func analyze(_ requestBody: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
         guard configuration.isEnabled else {
             throw EpisodeAdAnalysisError.clientDisabled
         }
@@ -63,36 +68,93 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
         }
         #endif
 
-        switch configuration.authentication {
+        let outcome = switch configuration.authentication {
         #if DEBUG
         case .bearer(let clientToken):
-            return try await analyzeWithBearer(requestBody, clientToken: clientToken)
+            try await sendWithBearer(
+                path: Self.analyzePath,
+                payload: requestBody,
+                timeout: Self.analyzeTimeout,
+                clientToken: clientToken,
+                response: EpisodeAdAnalysisSubmitOutcome.self
+            )
         #endif
         case .appAttest:
-            return try await analyzeWithAppAttest(requestBody)
+            try await sendWithAppAttest(
+                path: Self.analyzePath,
+                payload: requestBody,
+                timeout: Self.analyzeTimeout,
+                response: EpisodeAdAnalysisSubmitOutcome.self
+            )
+        }
+
+        if case .accepted(let jobID, _) = outcome,
+           jobID != requestBody.transcript.fingerprint
+        {
+            throw EpisodeAdAnalysisHTTPError(
+                statusCode: -1,
+                code: "job_id_mismatch",
+                detail: nil
+            )
+        }
+        return outcome
+    }
+
+    func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
+        guard configuration.isEnabled else {
+            throw EpisodeAdAnalysisError.clientDisabled
+        }
+
+        let path = Self.jobPath(id)
+        let requestBody = EpisodeAdAnalysisJobPollRequest(jobID: id)
+        return switch configuration.authentication {
+        #if DEBUG
+        case .bearer(let clientToken):
+            try await sendWithBearer(
+                path: path,
+                payload: requestBody,
+                timeout: Self.pollTimeout,
+                clientToken: clientToken,
+                response: EpisodeAdAnalysisJobPollOutcome.self
+            )
+        #endif
+        case .appAttest:
+            try await sendWithAppAttest(
+                path: path,
+                payload: requestBody,
+                timeout: Self.pollTimeout,
+                response: EpisodeAdAnalysisJobPollOutcome.self
+            )
         }
     }
 
     #if DEBUG
-    private func analyzeWithBearer(
-        _ requestBody: EpisodeAdAnalysisAPIRequest,
-        clientToken: String
-    ) async throws -> EpisodeAdAnalysisAPIResponse {
-        var request = URLRequest(url: configuration.workerBaseURL.appending(path: Self.analyzePath))
+    private func sendWithBearer<Payload: Encodable & Sendable, Response: Decodable & Sendable>(
+        path: String,
+        payload: Payload,
+        timeout: TimeInterval,
+        clientToken: String,
+        response: Response.Type
+    ) async throws -> Response {
+        var request = URLRequest(url: configuration.workerBaseURL.appending(path: path))
         request.httpMethod = "POST"
+        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue("application/json", forHTTPHeaderField: "accept")
         request.setValue("Bearer \(clientToken)", forHTTPHeaderField: "authorization")
-        request.httpBody = try EpisodeAdAnalysisJSONCoding.encoder().encode(requestBody)
+        request.httpBody = try EpisodeAdAnalysisJSONCoding.encoder().encode(payload)
 
         let (data, urlResponse) = try await transport.data(for: request)
-        return try decodeResponse(data: data, urlResponse: urlResponse)
+        return try decodeResponse(data: data, urlResponse: urlResponse, response: response)
     }
     #endif
 
-    private func analyzeWithAppAttest(
-        _ requestBody: EpisodeAdAnalysisAPIRequest
-    ) async throws -> EpisodeAdAnalysisAPIResponse {
+    private func sendWithAppAttest<Payload: Encodable & Sendable, Response: Decodable & Sendable>(
+        path: String,
+        payload requestBody: Payload,
+        timeout: TimeInterval,
+        response: Response.Type
+    ) async throws -> Response {
         guard appAttestService.isSupported else {
             throw EpisodeAdAnalysisError.appAttestUnavailable
         }
@@ -106,11 +168,12 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
             return try await appAttestCredentialService.withFreshCredentialOnRecoverableFailure { credential in
                 let payload = try EpisodeAdAnalysisJSONCoding.canonicalPayloadString(requestBody)
                 return try await appAttestSecureClient.sendRawPayload(
-                    path: Self.analyzePath,
+                    path: path,
                     installID: credential.installID,
                     keyID: credential.keyID,
                     payload: payload,
-                    response: EpisodeAdAnalysisAPIResponse.self
+                    timeout: timeout,
+                    response: response
                 )
             }
         } catch let error as AppAttestHTTPError {
@@ -131,7 +194,15 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     }
     #endif
 
-    private func decodeResponse(data: Data, urlResponse: URLResponse) throws -> EpisodeAdAnalysisAPIResponse {
+    private static func jobPath(_ id: String) -> String {
+        "/v1/ad-analysis/jobs/\(id)"
+    }
+
+    private func decodeResponse<Response: Decodable>(
+        data: Data,
+        urlResponse: URLResponse,
+        response: Response.Type
+    ) throws -> Response {
         guard let httpResponse = urlResponse as? HTTPURLResponse else {
             throw EpisodeAdAnalysisHTTPError(statusCode: -1, code: "invalid_response", detail: nil)
         }
@@ -146,9 +217,6 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
             )
         }
 
-        return try EpisodeAdAnalysisJSONCoding.decoder().decode(
-            EpisodeAdAnalysisAPIResponse.self,
-            from: data
-        )
+        return try EpisodeAdAnalysisJSONCoding.decoder().decode(response, from: data)
     }
 }

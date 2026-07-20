@@ -51,13 +51,18 @@ enum LabProcessor {
                     autoGainDB: metrics.currentAutoGainDB,
                     compressorReductionDB: metrics.currentCompressorReductionDB,
                     limiterReductionDB: metrics.currentLimiterReductionDB,
+                    maximumLimiterReductionDB: metrics.maximumLimiterReductionDB,
+                    latencyFrames: metrics.latencyFrames,
+                    safetyClampCount: metrics.safetyClampCount,
                     inputTruePeakDBTP: VoiceBoostTruePeakAnalyzer.truePeakDBTP(
                         inputBlock,
-                        channelCount: audio.channelCount
+                        channelCount: audio.channelCount,
+                        sampleRate: audio.sampleRate
                     ),
                     outputTruePeakDBTP: VoiceBoostTruePeakAnalyzer.truePeakDBTP(
                         outputBlock,
-                        channelCount: audio.channelCount
+                        channelCount: audio.channelCount,
+                        sampleRate: audio.sampleRate
                     )
                 )
             )

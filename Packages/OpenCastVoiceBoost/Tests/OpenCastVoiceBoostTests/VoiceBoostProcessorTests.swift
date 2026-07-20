@@ -87,8 +87,8 @@ struct VoiceBoostProcessorTests {
         #expect((processor.metrics.outputTruePeakDBTP ?? 0) <= -1.4)
     }
 
-    @Test("Disabled processor is near dry-identical")
-    func disabledProcessorIsDryIdentical() {
+    @Test("Disabled processor is dry-identical after the lookahead delay")
+    func disabledProcessorIsDelayedDryIdentical() {
         var buffer = VoiceBoostFixtureGenerator.speechLike(
             amplitude: 0.2,
             sampleRate: 48_000,
@@ -108,7 +108,10 @@ struct VoiceBoostProcessorTests {
             channelCount: 2
         )
 
-        #expect(VoiceBoostFixtureGenerator.maximumDelta(buffer, original) < 0.000_001)
+        let latencySamples = processor.metrics.latencyFrames * 2
+        let delayedOutput = Array(buffer[latencySamples...])
+        let delayedInput = Array(original[..<(original.count - latencySamples)])
+        #expect(VoiceBoostFixtureGenerator.maximumDelta(delayedOutput, delayedInput) < 0.000_001)
     }
 
     @Test("Enable and disable changes ramp without a discontinuity spike")
@@ -176,6 +179,89 @@ struct VoiceBoostProcessorTests {
         #expect(offTransitionStep < max(0.04, originalMaximumStep * 8))
         #expect(onTransitionStep < max(0.04, originalMaximumStep * 8))
         #expect(buffer.allSatisfy { $0.isFinite })
+    }
+
+    @Test("Compression re-enables from unity gain")
+    func compressionReenablesFromUnityGain() {
+        let sampleRate = 48_000.0
+        var configuration = VoiceBoostConfiguration(
+            maximumPositiveGainDB: 0,
+            maximumNegativeGainDB: 0,
+            usesAdaptiveGain: false,
+            usesEqualization: false
+        )
+        let processor = VoiceBoostProcessor(
+            sampleRate: sampleRate,
+            channelCount: 1,
+            configuration: configuration
+        )
+        var initial = [Float](repeating: 0.5, count: 4_800)
+        initial.withUnsafeMutableBufferPointer { pointer in
+            processor.processInterleavedFloat32(pointer, frameCount: pointer.count)
+        }
+
+        configuration.usesCompression = false
+        processor.update(configuration: configuration)
+        var disabled = [Float](repeating: 0.5, count: 1_024)
+        disabled.withUnsafeMutableBufferPointer { pointer in
+            processor.processInterleavedFloat32(pointer, frameCount: pointer.count)
+        }
+
+        configuration.usesCompression = true
+        processor.update(configuration: configuration)
+        var reenabled = [Float](repeating: 0.5, count: 1_024)
+        reenabled.withUnsafeMutableBufferPointer { pointer in
+            processor.processInterleavedFloat32(pointer, frameCount: pointer.count)
+        }
+
+        #expect(processor.metrics.currentCompressorReductionDB > 0)
+        #expect(abs(Double(reenabled[0] - disabled[disabled.count - 1])) < 0.000_001)
+        #expect((reenabled.min() ?? 0.5) < 0.49)
+    }
+
+    @Test("Output loudness uses the channel-sum convention")
+    func outputLoudnessUsesChannelSum() {
+        let sampleRate = 48_000.0
+        var mono = VoiceBoostFixtureGenerator.sine(
+            frequency: 1_000,
+            amplitude: 0.1,
+            sampleRate: sampleRate,
+            duration: 1,
+            channelCount: 1
+        )
+        var stereo = VoiceBoostFixtureGenerator.sine(
+            frequency: 1_000,
+            amplitude: 0.1,
+            sampleRate: sampleRate,
+            duration: 1,
+            channelCount: 2
+        )
+        let configuration = VoiceBoostConfiguration(isEnabled: false)
+        let monoProcessor = VoiceBoostProcessor(
+            sampleRate: sampleRate,
+            channelCount: 1,
+            configuration: configuration
+        )
+        let stereoProcessor = VoiceBoostProcessor(
+            sampleRate: sampleRate,
+            channelCount: 2,
+            configuration: configuration
+        )
+
+        VoiceBoostFixtureGenerator.processInBlocks(
+            &mono,
+            processor: monoProcessor,
+            channelCount: 1
+        )
+        VoiceBoostFixtureGenerator.processInBlocks(
+            &stereo,
+            processor: stereoProcessor,
+            channelCount: 2
+        )
+
+        let monoLUFS = monoProcessor.metrics.estimatedOutputLUFS ?? -.infinity
+        let stereoLUFS = stereoProcessor.metrics.estimatedOutputLUFS ?? -.infinity
+        #expect(abs((stereoLUFS - monoLUFS) - 10 * log10(2)) < 0.000_001)
     }
 
     @Test("Already-normalized speech-like fixture changes minimally")

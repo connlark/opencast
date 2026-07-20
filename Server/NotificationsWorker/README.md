@@ -4,7 +4,7 @@ Self-hostable Cloudflare Worker code for OpenCast episode notifications. The
 Worker is implemented in Rust with `workers-rs`; Yarn is the command surface for
 Wrangler.
 
-This public copy is a template. It does not include Connor's deployed Worker
+This public copy is a template. It does not include the private deployed Worker
 names, routes, D1 database IDs, APNs credentials, Cloudflare account resources,
 device tokens, production proof data, or private admin endpoints.
 

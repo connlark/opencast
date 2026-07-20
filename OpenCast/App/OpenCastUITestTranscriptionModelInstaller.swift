@@ -1,10 +1,21 @@
+import Foundation
 import OpenCastTranscription
 
-struct OpenCastUITestTranscriptionModelInstaller: TranscriptionModelInstalling {
-    let isInstalled: Bool
+/// UI-test installer. `install` must durably flip the installed flag: after
+/// the store reports `.installed`, the plan resolver independently re-checks
+/// `installedSummary(model:version:)`, and a fake that still throws there
+/// sends the request coordinator's resolve/ensure loop into a main-actor
+/// spin that hangs the app.
+final class OpenCastUITestTranscriptionModelInstaller: TranscriptionModelInstalling, @unchecked Sendable {
+    private let lock = NSLock()
+    private var installed: Bool
+
+    init(isInstalled: Bool) {
+        installed = isInstalled
+    }
 
     func installedSummary(model: OpenCastWhisperModel, version: String) throws -> OpenCastWhisperModelInstalledSummary {
-        guard isInstalled else {
+        guard lock.withLock({ installed }) else {
             throw OpenCastTranscriptionError.modelNotInstalled(
                 modelIdentifier: model.rawValue,
                 version: version
@@ -29,10 +40,12 @@ struct OpenCastUITestTranscriptionModelInstaller: TranscriptionModelInstalling {
         version: String,
         progress: OpenCastWhisperModelInstallProgressHandler?
     ) async throws -> OpenCastWhisperModelInstalledSummary {
-        summary(for: model)
+        lock.withLock { installed = true }
+        return summary(for: model)
     }
 
     func deleteInstalledModel(model: OpenCastWhisperModel, version: String) throws {
+        lock.withLock { installed = false }
     }
 
     private func summary(for model: OpenCastWhisperModel) -> OpenCastWhisperModelInstalledSummary {

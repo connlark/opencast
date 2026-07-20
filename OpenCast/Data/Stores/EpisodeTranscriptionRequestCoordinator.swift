@@ -10,6 +10,7 @@ final class EpisodeTranscriptionRequestCoordinator {
     private let library: LibraryStore
     private let downloads: DownloadStore
     private let transcriptionModels: TranscriptionModelStore
+    private let transcriptionEngineSettings: TranscriptionEngineSettingsStore
     private let appleSpeechAssets: AppleSpeechAssetStore
     private let transcriptions: EpisodeTranscriptionStore
     @ObservationIgnored private var requestTask: Task<Void, Never>?
@@ -20,12 +21,14 @@ final class EpisodeTranscriptionRequestCoordinator {
         library: LibraryStore,
         downloads: DownloadStore,
         transcriptionModels: TranscriptionModelStore,
+        transcriptionEngineSettings: TranscriptionEngineSettingsStore,
         appleSpeechAssets: AppleSpeechAssetStore,
         transcriptions: EpisodeTranscriptionStore
     ) {
         self.library = library
         self.downloads = downloads
         self.transcriptionModels = transcriptionModels
+        self.transcriptionEngineSettings = transcriptionEngineSettings
         self.appleSpeechAssets = appleSpeechAssets
         self.transcriptions = transcriptions
     }
@@ -107,11 +110,9 @@ final class EpisodeTranscriptionRequestCoordinator {
             )
             try ensureCurrentRequest(id: requestID)
 
-            let finishedEngine: EpisodeTranscriptionEngine
             if let activeEngine = transcriptions.activeEngine(for: episode.episodeID) {
                 // An ad-free pass may already be transcribing this episode,
                 // possibly with Apple Speech; attach instead of competing.
-                finishedEngine = activeEngine
                 updatePhase(
                     activeEngine == .appleSpeech ? .transcribingAppleSpeech : .transcribingWhisper,
                     requestID: requestID
@@ -135,8 +136,10 @@ final class EpisodeTranscriptionRequestCoordinator {
                     modelContext: modelContext
                 )
                 try ensureCurrentRequest(id: requestID)
-                finishedEngine = plan.runEngine
-                updatePhase(.transcribingWhisper, requestID: requestID)
+                updatePhase(
+                    plan.runEngine == .appleSpeech ? .transcribingAppleSpeech : .transcribingWhisper,
+                    requestID: requestID
+                )
                 guard let localFileURL = downloads.localFileURL(for: downloadRecord),
                       downloads.downloadedFileExists(for: downloadRecord)
                 else {
@@ -175,11 +178,6 @@ final class EpisodeTranscriptionRequestCoordinator {
                 )
                 updatePhase(.completed, requestID: requestID)
             case .interrupted:
-                guard finishedEngine == .whisper else {
-                    throw EpisodeTranscriptionRequestError.operationFailed(
-                        "Apple Speech transcription was interrupted before it completed."
-                    )
-                }
                 updateInterruptedPhase(
                     episodeID: episode.episodeID,
                     requestID: requestID
@@ -256,22 +254,23 @@ final class EpisodeTranscriptionRequestCoordinator {
         }
     }
 
-    /// Generate is Whisper-only: revocation-durable tiny resolution keeps the
-    /// honest podcast `languageCode` while surviving continued-processing
-    /// revocations through window checkpoints. Apple Speech lives solely
-    /// behind the transcript page's explicit "Improve Transcript" flow.
+    /// Fresh Generate runs follow the global preference. A resumable Whisper
+    /// record stays on Whisper even when Apple Speech is preferred so the
+    /// explicit Resume action preserves its checkpoint.
     private func resolvePlan(
         for episode: EpisodeListItemSnapshot,
         requestID: UUID,
         modelContext: ModelContext
     ) async throws -> EpisodeTranscriptionPlan {
+        var didEnsureTinyModel = false
         while true {
             try ensureCurrentRequest(id: requestID)
             updatePhase(.preparingWhisper, requestID: requestID)
             let resolver = EpisodeTranscriptionPlanResolver(
                 transcriptionModels: transcriptionModels,
                 appleSpeechAssets: appleSpeechAssets,
-                prefersRevocationDurableEngine: true
+                prefersRevocationDurableEngine: !transcriptionEngineSettings.prefersAppleSpeech
+                    || transcriptions.hasResumableWhisperCheckpoint(for: episode.episodeID)
             )
 
             do {
@@ -283,7 +282,17 @@ final class EpisodeTranscriptionRequestCoordinator {
                 return plan
             } catch EpisodeTranscriptionError.missingSpeechModel {
                 try ensureCurrentRequest(id: requestID)
+                // One ensure round is the legitimate install path. If the
+                // store then reports installed but resolution still cannot
+                // see the model, retrying cannot converge — and this loop
+                // never suspends, so spinning would hang the main actor.
+                guard !didEnsureTinyModel else {
+                    throw EpisodeTranscriptionRequestError.operationFailed(
+                        "The Whisper model install did not produce a usable model."
+                    )
+                }
                 try await ensureTinyWhisperModel(requestID: requestID, modelContext: modelContext)
+                didEnsureTinyModel = true
             }
         }
     }

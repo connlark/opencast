@@ -6,6 +6,21 @@ use crate::types::{AdAnalysisRequest, POLICY_NAME};
 /// trigger in production (step-4 research §3).
 pub const GEMINI_MAX_OUTPUT_TOKENS: u32 = 16_384;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeminiGenerationOptions {
+    pub max_output_tokens: u32,
+    pub thinking_budget: Option<u32>,
+}
+
+impl Default for GeminiGenerationOptions {
+    fn default() -> Self {
+        Self {
+            max_output_tokens: GEMINI_MAX_OUTPUT_TOKENS,
+            thinking_budget: None,
+        }
+    }
+}
+
 pub const RESPONSE_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
@@ -40,7 +55,7 @@ pub const RESPONSE_SCHEMA: &str = r#"{
 
 // The live-tested `breaks_v2` contract (step-4 Stage A) plus exactly one
 // addition: the explicit empty-valid final rule. The eval runner at
-// notes/plans/ad-detection/step4/eval/contract.py must stay byte-identical.
+// Keep this policy text byte-identical to any external evaluation harness.
 pub fn build_prompt(request: &AdAnalysisRequest) -> String {
     let mut text = String::new();
     text.push_str(
@@ -85,9 +100,25 @@ pub fn build_prompt(request: &AdAnalysisRequest) -> String {
     text
 }
 
-pub fn gemini_request_payload(request: &AdAnalysisRequest) -> serde_json::Value {
+pub fn gemini_request_payload(
+    request: &AdAnalysisRequest,
+    options: GeminiGenerationOptions,
+) -> serde_json::Value {
     let schema: serde_json::Value =
         serde_json::from_str(RESPONSE_SCHEMA).expect("response schema is valid JSON");
+    let mut generation_config = json!({
+        "temperature": 0,
+        "topP": 0.95,
+        "maxOutputTokens": options.max_output_tokens,
+        "responseMimeType": "application/json",
+        "responseJsonSchema": schema
+    });
+    if let Some(thinking_budget) = options.thinking_budget {
+        generation_config["thinkingConfig"] = json!({
+            "thinkingBudget": thinking_budget
+        });
+    }
+
     json!({
         "contents": [
             {
@@ -97,13 +128,7 @@ pub fn gemini_request_payload(request: &AdAnalysisRequest) -> serde_json::Value 
                 ]
             }
         ],
-        "generationConfig": {
-            "temperature": 0,
-            "topP": 0.95,
-            "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
-            "responseMimeType": "application/json",
-            "responseJsonSchema": schema
-        }
+        "generationConfig": generation_config
     })
 }
 

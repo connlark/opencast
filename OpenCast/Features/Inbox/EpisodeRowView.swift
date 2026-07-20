@@ -5,6 +5,7 @@ struct EpisodeRowView: View {
 
     let episode: EpisodeListItemSnapshot
     var searchResult: EpisodeSearchResult?
+    var showsLocalStatusBadges = false
 
     static func accessibilityIdentifier(for episodeID: String) -> String {
         "episode-row-\(episodeID)"
@@ -49,6 +50,9 @@ struct EpisodeRowView: View {
                     }
                     if let duration = episode.duration {
                         Text(duration.formattedPlaybackDuration)
+                    }
+                    if showsLocalStatusBadges {
+                        EpisodeLocalStatusBadgesView(episodeID: episode.episodeID)
                     }
                 }
                 .font(.caption)

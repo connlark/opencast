@@ -7,6 +7,9 @@ struct TimelinePoint: Codable {
     var autoGainDB: Double
     var compressorReductionDB: Double
     var limiterReductionDB: Double
+    var maximumLimiterReductionDB: Double
+    var latencyFrames: Int
+    var safetyClampCount: Int
     var inputTruePeakDBTP: Double?
     var outputTruePeakDBTP: Double?
 }
@@ -14,7 +17,7 @@ struct TimelinePoint: Codable {
 extension Array where Element == TimelinePoint {
     func csvString() -> String {
         var lines = [
-            "timeSeconds,inputLUFS,outputLUFS,autoGainDB,compressorReductionDB,limiterReductionDB,inputTruePeakDBTP,outputTruePeakDBTP"
+            "timeSeconds,inputLUFS,outputLUFS,autoGainDB,compressorReductionDB,limiterReductionDB,maximumLimiterReductionDB,latencyFrames,safetyClampCount,inputTruePeakDBTP,outputTruePeakDBTP"
         ]
 
         lines += map { point in
@@ -25,6 +28,9 @@ extension Array where Element == TimelinePoint {
                 point.autoGainDB.csvField,
                 point.compressorReductionDB.csvField,
                 point.limiterReductionDB.csvField,
+                point.maximumLimiterReductionDB.csvField,
+                String(point.latencyFrames),
+                String(point.safetyClampCount),
                 point.inputTruePeakDBTP.csvField,
                 point.outputTruePeakDBTP.csvField
             ].joined(separator: ",")

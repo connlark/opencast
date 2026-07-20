@@ -8,8 +8,8 @@ import Testing
 @MainActor
 @Suite("Episode transcription requests", .serialized)
 struct EpisodeTranscriptionRequestCoordinatorTests {
-    @Test("Generate resolves Whisper even with Apple Speech assets installed")
-    func generateResolvesWhisperWithAppleSpeechAssetsInstalled() async throws {
+    @Test("Generate resolves Whisper while Apple Speech preference is off")
+    func generateResolvesWhisperWhilePreferenceIsOff() async throws {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
             completedStream(for: request)
         }
@@ -28,6 +28,114 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         #expect(OpenCastWhisperModel.allCases.contains { $0.rawValue == record.modelIdentifier })
         #expect(harness.transcriptions.document(for: harness.episode.episodeID) != nil)
         #expect(phases == [.downloading, .preparingWhisper, .transcribingWhisper, .completed])
+    }
+
+    @Test("Generate installs the Whisper model on demand and completes")
+    func generateInstallsWhisperModelOnDemand() async throws {
+        let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
+            completedStream(for: request)
+        }
+        // Mirrors the UI-test launch environment: no model installed at
+        // start, install happens through the on-demand consent path.
+        let models = TranscriptionModelStore(
+            installer: OpenCastUITestTranscriptionModelInstaller(isInstalled: false)
+        )
+        models.loadLocalStatus()
+        let harness = try makeHarness(
+            transcriber: transcriber,
+            prefersAppleSpeech: false,
+            transcriptionModels: models
+        )
+        var phases: [EpisodeTranscriptionRequestPhase] = []
+        harness.coordinator.onPhaseChange = { phases.append($0) }
+
+        harness.coordinator.start(
+            episode: harness.episode,
+            modelContext: harness.context
+        )
+
+        #expect(await waitUntil { harness.coordinator.request?.phase == .completed })
+        #expect(transcriber.requests.map(\.engine) == [.whisper])
+        #expect(phases.contains(.preparingWhisper))
+        #expect(models.canStartTranscription)
+    }
+
+    @Test("Model install that never becomes resolvable fails instead of spinning")
+    func unresolvableModelInstallFailsInsteadOfSpinning() async throws {
+        let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
+            completedStream(for: request)
+        }
+        // install() reports success (the store flips to .installed from the
+        // returned summary) but plan resolution can never see the model —
+        // the coordinator must surface a failure, not spin the main actor.
+        let models = TranscriptionModelStore(installer: NeverResolvableModelInstaller())
+        models.loadLocalStatus()
+        let harness = try makeHarness(
+            transcriber: transcriber,
+            prefersAppleSpeech: false,
+            transcriptionModels: models
+        )
+
+        harness.coordinator.start(
+            episode: harness.episode,
+            modelContext: harness.context
+        )
+
+        #expect(await waitUntil {
+            if case .failed = harness.coordinator.request?.phase {
+                return true
+            }
+            return false
+        })
+        #expect(transcriber.requests.isEmpty)
+    }
+
+    @Test("Apple Speech preference resolves Apple and reports the Apple phase")
+    func appleSpeechPreferenceResolvesAppleAndReportsPhase() async throws {
+        let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
+            completedStream(for: request)
+        }
+        let harness = try makeHarness(
+            transcriber: transcriber,
+            prefersAppleSpeech: true
+        )
+        var phases: [EpisodeTranscriptionRequestPhase] = []
+        harness.coordinator.onPhaseChange = { phases.append($0) }
+
+        harness.coordinator.start(
+            episode: harness.episode,
+            modelContext: harness.context
+        )
+
+        #expect(await waitUntil { harness.coordinator.request?.phase == .completed })
+        #expect(transcriber.requests.map(\.engine) == [.appleSpeech])
+        #expect(phases == [.downloading, .preparingWhisper, .transcribingAppleSpeech, .completed])
+    }
+
+    @Test("Interrupted Apple Speech request reports non-resumable interruption")
+    func interruptedAppleSpeechRequestIsNotResumable() async throws {
+        let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
+            hangingProgressStream()
+        }
+        let harness = try makeHarness(
+            transcriber: transcriber,
+            prefersAppleSpeech: true
+        )
+
+        harness.coordinator.start(
+            episode: harness.episode,
+            modelContext: harness.context
+        )
+        #expect(await waitUntil {
+            harness.coordinator.request?.phase == .transcribingAppleSpeech
+        })
+
+        harness.coordinator.prepareForLifecycleExit(modelContext: harness.context)
+
+        #expect(await waitUntil { harness.coordinator.request?.phase == .interrupted })
+        #expect(harness.coordinator.request?.canResumeFromCheckpoint == false)
+        #expect(transcriber.requests.map(\.engine) == [.appleSpeech])
+        #expect(harness.transcriptions.record(for: harness.episode.episodeID)?.state == .interrupted)
     }
 
     @Test("Hard Whisper failure is terminal and a later request can retry")
@@ -107,6 +215,8 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         #expect(harness.transcriptions.document(for: harness.episode.episodeID) != nil)
         #expect(harness.coordinator.request?.canResumeFromCheckpoint == true)
         #expect(transcriber.requests.count == 1)
+
+        #expect(harness.engineSettings.setPrefersAppleSpeech(true, modelContext: harness.context))
 
         harness.coordinator.start(
             episode: harness.episode,
@@ -331,6 +441,22 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         episode: EpisodeListItemSnapshot,
         transcriptFiles: EpisodeTranscriptFileStore,
         transcriptions: EpisodeTranscriptionStore,
+        engineSettings: TranscriptionEngineSettingsStore,
+        coordinator: EpisodeTranscriptionRequestCoordinator
+    ) {
+        try makeHarness(transcriber: transcriber, prefersAppleSpeech: false)
+    }
+
+    private func makeHarness(
+        transcriber: EpisodeTranscriptionRequestTestTranscriber,
+        prefersAppleSpeech: Bool,
+        transcriptionModels: TranscriptionModelStore? = nil
+    ) throws -> (
+        context: ModelContext,
+        episode: EpisodeListItemSnapshot,
+        transcriptFiles: EpisodeTranscriptFileStore,
+        transcriptions: EpisodeTranscriptionStore,
+        engineSettings: TranscriptionEngineSettingsStore,
         coordinator: EpisodeTranscriptionRequestCoordinator
     ) {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -365,14 +491,19 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
             transcriber: transcriber,
             fileStore: transcriptFiles
         )
+        let engineSettings = TranscriptionEngineSettingsStore()
+        if prefersAppleSpeech {
+            #expect(engineSettings.setPrefersAppleSpeech(true, modelContext: context))
+        }
         let coordinator = EpisodeTranscriptionRequestCoordinator(
             library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             downloads: downloads,
-            transcriptionModels: installedTranscriptionModelStore(),
+            transcriptionModels: transcriptionModels ?? installedTranscriptionModelStore(),
+            transcriptionEngineSettings: engineSettings,
             appleSpeechAssets: installedAppleSpeechAssetStore(),
             transcriptions: transcriptions
         )
-        return (context, episode, transcriptFiles, transcriptions, coordinator)
+        return (context, episode, transcriptFiles, transcriptions, engineSettings, coordinator)
     }
 
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
@@ -398,6 +529,53 @@ private func installedTranscriptionModelStore() -> TranscriptionModelStore {
 @MainActor
 private func installedAppleSpeechAssetStore() -> AppleSpeechAssetStore {
     AppleSpeechAssetStore(provider: FakeAppleSpeechAssetProvider())
+}
+
+/// `install` succeeds (so the store reports `.installed` from the returned
+/// summary) while `installedSummary` keeps throwing — the disk/state
+/// disagreement shape behind the resolve/ensure spin guard.
+private struct NeverResolvableModelInstaller: TranscriptionModelInstalling {
+    func installedSummary(model: OpenCastWhisperModel, version: String) throws -> OpenCastWhisperModelInstalledSummary {
+        throw OpenCastTranscriptionError.modelNotInstalled(
+            modelIdentifier: model.rawValue,
+            version: version
+        )
+    }
+
+    func fetchManifest() async throws -> RemoteWhisperModelManifest {
+        RemoteWhisperModelManifest(
+            schemaVersion: 1,
+            generatedAt: "2026-06-29T00:00:00Z",
+            models: OpenCastWhisperModel.allCases.map { model in
+                RemoteWhisperModel(
+                    modelID: model.rawValue,
+                    version: model.defaultRemoteVersion,
+                    modelFolder: "model",
+                    tokenizerFolder: "tokenizer",
+                    totalByteCount: 1000,
+                    treeSHA256: String(repeating: "c", count: 64),
+                    files: []
+                )
+            }
+        )
+    }
+
+    func install(
+        manifest: RemoteWhisperModelManifest,
+        model: OpenCastWhisperModel,
+        version: String,
+        progress: OpenCastWhisperModelInstallProgressHandler?
+    ) async throws -> OpenCastWhisperModelInstalledSummary {
+        OpenCastWhisperModelInstalledSummary(
+            modelIdentifier: model.rawValue,
+            version: model.defaultRemoteVersion,
+            totalByteCount: 1000,
+            treeSHA256: String(repeating: "c", count: 64)
+        )
+    }
+
+    func deleteInstalledModel(model: OpenCastWhisperModel, version: String) throws {
+    }
 }
 
 private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {

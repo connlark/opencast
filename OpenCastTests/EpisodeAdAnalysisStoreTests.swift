@@ -32,6 +32,8 @@ struct EpisodeAdAnalysisStoreTests {
         #expect(document.transcriptSegmentCount == transcript.segments.count)
         #expect(document.transcriptState == .completed)
         #expect(request.transcript.state == "completed")
+        #expect(request.asyncSupported == true)
+        #expect(encodedRequest.contains(#""async_supported":true"#))
         #expect(request.segments.map(\.text) == transcript.segments.map(\.text))
         #expect(encodedRequest.contains(transcript.segments[1].text))
         #expect(encodedRequest.contains(request.transcript.fingerprint))
@@ -894,7 +896,11 @@ struct EpisodeAdAnalysisStoreTests {
             transport: transport
         )
 
-        let response = try await client.analyze(makeAPIRequest(requestID: "client-success"))
+        let outcome = try await client.analyze(makeAPIRequest(requestID: "client-success"))
+        guard case .completed(let response) = outcome else {
+            Issue.record("Expected a synchronous response.")
+            return
+        }
 
         let capturedRequest = try #require(transport.lastRequest)
         let capturedBody = try #require(capturedRequest.httpBody)
@@ -904,10 +910,78 @@ struct EpisodeAdAnalysisStoreTests {
         )
         #expect(capturedRequest.url?.absoluteString == "https://worker.example/v1/ad-analysis/transcript")
         #expect(capturedRequest.value(forHTTPHeaderField: "authorization") == "Bearer test-token")
+        #expect(capturedRequest.timeoutInterval == URLSessionEpisodeAdAnalysisClient.analyzeTimeout)
         #expect(decodedRequest.requestID == "client-success")
         #expect(decodedRequest.transcript.state == "completed")
         #expect(response.spans.first?.kind == .insertedAd)
         #expect(response.usage?.totalTokenCount == 168)
+    }
+
+    @Test("URLSession bearer client decodes accepted submit and running poll")
+    func urlSessionBearerClientDecodesAcceptedSubmitAndRunningPoll() async throws {
+        let acceptedTransport = FakeEpisodeAdAnalysisHTTPTransport(
+            statusCode: 202,
+            body: Data(#"{"job_id":"fingerprint","state":"running","poll_after_seconds":15}"#.utf8)
+        )
+        let acceptedClient = URLSessionEpisodeAdAnalysisClient(
+            configuration: AdAnalysisBackendConfiguration(
+                workerBaseURL: URL(string: "https://worker.example")!,
+                authentication: .bearer(clientToken: "test-token"),
+                isEnabled: true
+            ),
+            transport: acceptedTransport
+        )
+
+        let submitOutcome = try await acceptedClient.analyze(makeAPIRequest(requestID: "client-accepted"))
+
+        #expect(submitOutcome == .accepted(jobID: "fingerprint", pollAfter: 15))
+        #expect(acceptedTransport.lastRequest?.timeoutInterval == URLSessionEpisodeAdAnalysisClient.analyzeTimeout)
+
+        let pollTransport = FakeEpisodeAdAnalysisHTTPTransport(
+            statusCode: 202,
+            body: Data(#"{"job_id":"fingerprint","state":"running","poll_after_seconds":10}"#.utf8)
+        )
+        let pollClient = URLSessionEpisodeAdAnalysisClient(
+            configuration: AdAnalysisBackendConfiguration(
+                workerBaseURL: URL(string: "https://worker.example")!,
+                authentication: .bearer(clientToken: "test-token"),
+                isEnabled: true
+            ),
+            transport: pollTransport
+        )
+
+        let pollOutcome = try await pollClient.pollJob(id: "fingerprint")
+        let pollRequest = try #require(pollTransport.lastRequest)
+        let pollBody = try #require(pollRequest.httpBody)
+        let decodedPollBody = try JSONDecoder().decode(EpisodeAdAnalysisJobPollRequest.self, from: pollBody)
+        #expect(pollOutcome == .running(pollAfter: 10))
+        #expect(pollRequest.url?.path == "/v1/ad-analysis/jobs/fingerprint")
+        #expect(pollRequest.timeoutInterval == URLSessionEpisodeAdAnalysisClient.pollTimeout)
+        #expect(decodedPollBody == EpisodeAdAnalysisJobPollRequest(jobID: "fingerprint"))
+    }
+
+    @Test("URLSession client rejects accepted job ID mismatch")
+    func urlSessionClientRejectsAcceptedJobIDMismatch() async {
+        let transport = FakeEpisodeAdAnalysisHTTPTransport(
+            statusCode: 202,
+            body: Data(#"{"job_id":"different-fingerprint","state":"running"}"#.utf8)
+        )
+        let client = URLSessionEpisodeAdAnalysisClient(
+            configuration: AdAnalysisBackendConfiguration(
+                workerBaseURL: URL(string: "https://worker.example")!,
+                authentication: .bearer(clientToken: "test-token"),
+                isEnabled: true
+            ),
+            transport: transport
+        )
+
+        await #expect(throws: EpisodeAdAnalysisHTTPError(
+            statusCode: -1,
+            code: "job_id_mismatch",
+            detail: nil
+        )) {
+            try await client.analyze(makeAPIRequest(requestID: "client-mismatch"))
+        }
     }
 
     @Test("URLSession client decodes structured HTTP errors")
@@ -990,7 +1064,11 @@ struct EpisodeAdAnalysisStoreTests {
             appAttestService: appAttestService
         )
 
-        let response = try await client.analyze(request)
+        let outcome = try await client.analyze(request)
+        guard case .completed(let response) = outcome else {
+            Issue.record("Expected a synchronous response.")
+            return
+        }
         let payload = try EpisodeAdAnalysisJSONCoding.canonicalPayloadString(request)
         let clientDataHash = AppAttestRequestBinding.clientDataHash(
             method: "POST",
@@ -999,6 +1077,10 @@ struct EpisodeAdAnalysisStoreTests {
         )
 
         #expect(response.requestID == "client-app-attest")
+        #expect(transport.analyzeRequestTimeouts == [
+            URLSessionEpisodeAdAnalysisClient.analyzeTimeout,
+            URLSessionEpisodeAdAnalysisClient.analyzeTimeout
+        ])
         #expect(transport.requestPaths == [
             "/v1/app-attest/challenge",
             "/v1/app-attest/register",
@@ -1021,6 +1103,54 @@ struct EpisodeAdAnalysisStoreTests {
             Data("assertion-fake-key-1".utf8).base64EncodedString(),
             Data("assertion-fake-key-2".utf8).base64EncodedString()
         ])
+    }
+
+    @Test("URLSession App Attest client binds accepted submit and dynamic poll path")
+    func urlSessionAppAttestClientBindsAcceptedSubmitAndDynamicPollPath() async throws {
+        let keychainService = "com.connor.opencast.tests.ad-analysis-poll-security.\(UUID().uuidString)"
+        let keychain = AppAttestKeychain(service: keychainService)
+        try? keychain.deleteAll()
+        defer {
+            try? keychain.deleteAll()
+        }
+        let transport = AppAttestRoutingHTTPTransport(
+            analyzeResponses: [.accepted(jobID: "fingerprint")],
+            pollResponses: [.running(jobID: "fingerprint")]
+        )
+        let appAttestService = FakeAppAttestService(isSupported: true)
+        let client = URLSessionEpisodeAdAnalysisClient(
+            configuration: AdAnalysisBackendConfiguration(
+                workerBaseURL: URL(string: "https://worker.example")!,
+                authentication: .appAttest(keychainService: keychainService),
+                isEnabled: true
+            ),
+            transport: transport,
+            appAttestService: appAttestService
+        )
+
+        let submitOutcome = try await client.analyze(makeAPIRequest(requestID: "app-attest-accepted"))
+        let pollOutcome = try await client.pollJob(id: "fingerprint")
+        let pollRequest = EpisodeAdAnalysisJobPollRequest(jobID: "fingerprint")
+        let pollPayload = try EpisodeAdAnalysisJSONCoding.canonicalPayloadString(pollRequest)
+        let pollPath = "/v1/ad-analysis/jobs/fingerprint"
+        let pollHash = AppAttestRequestBinding.clientDataHash(
+            method: "POST",
+            path: pollPath,
+            payload: pollPayload
+        )
+
+        #expect(submitOutcome == .accepted(jobID: "fingerprint", pollAfter: 15))
+        #expect(pollOutcome == .running(pollAfter: 10))
+        #expect(transport.requestPaths == [
+            "/v1/app-attest/challenge",
+            "/v1/app-attest/register",
+            "/v1/ad-analysis/transcript",
+            pollPath
+        ])
+        #expect(transport.analyzeRequestTimeouts == [URLSessionEpisodeAdAnalysisClient.analyzeTimeout])
+        #expect(transport.pollRequestTimeouts == [URLSessionEpisodeAdAnalysisClient.pollTimeout])
+        #expect(transport.pollEnvelopes.map(\.payload) == [pollPayload])
+        #expect(appAttestService.assertionClientDataHashes.last == AppAttestRequestBinding.hexString(pollHash))
     }
 
     @Test("URLSession client enforces disabled and unsupported App Attest gates")
@@ -1068,6 +1198,23 @@ struct EpisodeAdAnalysisStoreTests {
         )
         #expect(AppAttestRequestBinding.sha256Hex(Data(payload.utf8)) == "042cec13b4b71be3ec9b90671fe300c555507b7a04162fb248f4aa8ade69ee4a")
         #expect(AppAttestRequestBinding.hexString(hash) == "e207f0dc7a4a4820ecf959aa727b7c0ecea7aa9d4e8eda2da8dfde45c472eec5")
+    }
+
+    @Test("Canonical poll payload hash matches Worker binding fixture")
+    func canonicalPollPayloadHashMatchesWorkerBindingFixture() throws {
+        let jobID = "fingerprint-123"
+        let payload = try EpisodeAdAnalysisJSONCoding.canonicalPayloadString(
+            EpisodeAdAnalysisJobPollRequest(jobID: jobID)
+        )
+        let hash = AppAttestRequestBinding.clientDataHash(
+            method: "POST",
+            path: "/v1/ad-analysis/jobs/\(jobID)",
+            payload: payload
+        )
+
+        #expect(payload == #"{"job_id":"fingerprint-123"}"#)
+        #expect(AppAttestRequestBinding.sha256Hex(Data(payload.utf8)) == "90da49444d4246a08405079cd75a63c2649a45850ceb8de7e00e2a78eb29a471")
+        #expect(AppAttestRequestBinding.hexString(hash) == "c079e99784a3722a3b90e2523920fcca7c99a429ec3ad37e192acc8a87458d0a")
     }
 
     private func makeAPIRequest(requestID: String) -> EpisodeAdAnalysisAPIRequest {
@@ -1240,12 +1387,12 @@ private final class ThrowingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @u
         self.error = error
     }
 
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisAPIResponse {
+    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
         if let error {
             throw error
         }
 
-        return EpisodeAdAnalysisAPIResponse(
+        return .completed(EpisodeAdAnalysisAPIResponse(
             schemaVersion: 1,
             requestID: request.requestID,
             model: "gemini-3.5-flash",
@@ -1253,16 +1400,20 @@ private final class ThrowingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @u
             spans: [],
             warnings: [],
             usage: nil
-        )
+        ))
+    }
+
+    func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
+        throw EpisodeAdAnalysisError.clientDisabled
     }
 }
 
 private final class FakeEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @unchecked Sendable {
     var lastRequest: EpisodeAdAnalysisAPIRequest?
 
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisAPIResponse {
+    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
         lastRequest = request
-        return EpisodeAdAnalysisAPIResponse(
+        return .completed(EpisodeAdAnalysisAPIResponse(
             schemaVersion: 1,
             requestID: request.requestID,
             model: "gemini-3.5-flash",
@@ -1285,7 +1436,11 @@ private final class FakeEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @unche
                 candidatesTokenCount: 20,
                 totalTokenCount: 120
             )
-        )
+        ))
+    }
+
+    func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
+        throw EpisodeAdAnalysisError.clientDisabled
     }
 }
 
@@ -1313,13 +1468,18 @@ private final class FakeEpisodeAdAnalysisHTTPTransport: EpisodeAdAnalysisHTTPTra
 
 private final class AppAttestRoutingHTTPTransport: EpisodeAdAnalysisHTTPTransport, AppAttestHTTPTransport, @unchecked Sendable {
     private var analyzeResponses: [AnalyzeResponse]
+    private var pollResponses: [AnalyzeResponse]
     private var challengeCount = 0
     private(set) var requestPaths: [String] = []
     private(set) var registerRequests: [CapturedAppAttestRegisterRequest] = []
     private(set) var analyzeEnvelopes: [CapturedAppAttestEnvelope] = []
+    private(set) var analyzeRequestTimeouts: [TimeInterval] = []
+    private(set) var pollEnvelopes: [CapturedAppAttestEnvelope] = []
+    private(set) var pollRequestTimeouts: [TimeInterval] = []
 
-    init(analyzeResponses: [AnalyzeResponse]) {
+    init(analyzeResponses: [AnalyzeResponse], pollResponses: [AnalyzeResponse] = []) {
         self.analyzeResponses = analyzeResponses
+        self.pollResponses = pollResponses
     }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
@@ -1348,11 +1508,20 @@ private final class AppAttestRoutingHTTPTransport: EpisodeAdAnalysisHTTPTranspor
             response = (200, Data(#"{"message":"registered"}"#.utf8))
         case "/v1/ad-analysis/transcript":
             let body = try #require(request.httpBody)
+            analyzeRequestTimeouts.append(request.timeoutInterval)
             analyzeEnvelopes.append(try JSONDecoder().decode(
                 CapturedAppAttestEnvelope.self,
                 from: body
             ))
             response = try #require(analyzeResponses.isEmpty ? nil : analyzeResponses.removeFirst().httpResponse)
+        case let path where path.hasPrefix("/v1/ad-analysis/jobs/"):
+            let body = try #require(request.httpBody)
+            pollRequestTimeouts.append(request.timeoutInterval)
+            pollEnvelopes.append(try JSONDecoder().decode(
+                CapturedAppAttestEnvelope.self,
+                from: body
+            ))
+            response = try #require(pollResponses.isEmpty ? nil : pollResponses.removeFirst().httpResponse)
         default:
             response = (404, Data(#"{"error":"not_found"}"#.utf8))
         }
@@ -1369,6 +1538,8 @@ private final class AppAttestRoutingHTTPTransport: EpisodeAdAnalysisHTTPTranspor
 
 private enum AnalyzeResponse {
     case success(requestID: String)
+    case accepted(jobID: String)
+    case running(jobID: String)
     case error(statusCode: Int, code: String)
 
     var httpResponse: (statusCode: Int, body: Data) {
@@ -1387,6 +1558,16 @@ private enum AnalyzeResponse {
                   "usage": null
                 }
                 """.utf8)
+            )
+        case .accepted(let jobID):
+            return (
+                202,
+                Data(#"{"job_id":"\#(jobID)","state":"running","poll_after_seconds":15}"#.utf8)
+            )
+        case .running(let jobID):
+            return (
+                202,
+                Data(#"{"job_id":"\#(jobID)","state":"running","poll_after_seconds":10}"#.utf8)
             )
         case .error(let statusCode, let code):
             return (statusCode, Data(#"{"error":"\#(code)"}"#.utf8))
@@ -1463,13 +1644,13 @@ private actor HangingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     private(set) var requestCount = 0
     private var shouldRelease = false
 
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisAPIResponse {
+    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
         requestCount += 1
         while !shouldRelease {
             try await Task.sleep(for: .milliseconds(10))
             try Task.checkCancellation()
         }
-        return EpisodeAdAnalysisAPIResponse(
+        return .completed(EpisodeAdAnalysisAPIResponse(
             schemaVersion: request.schemaVersion,
             requestID: request.requestID,
             model: "gemini-3.5-flash",
@@ -1488,7 +1669,11 @@ private actor HangingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
             ],
             warnings: [],
             usage: nil
-        )
+        ))
+    }
+
+    func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
+        throw EpisodeAdAnalysisError.clientDisabled
     }
 
     func waitForRequest() async -> Bool {

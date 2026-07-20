@@ -2,18 +2,26 @@
 // compiled wasm Worker with local D1 + Durable Object bindings and a mocked
 // Gemini upstream. These cover the wasm orchestration glue that host `cargo
 // test` cannot reach. Requires `build/index.js` (see `yarn build:worker`).
-import { SELF } from "cloudflare:test";
+import {
+  SELF,
+  abortAllDurableObjects,
+  env,
+  runDurableObjectAlarm,
+} from "cloudflare:test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const ANALYZE_PATH = "/v1/ad-analysis/transcript";
 const BASE = "https://ad-analysis.integration.test";
 const BEARER = "integration-test-bearer-token";
 const fixture = {
+  app_id: "A1B2C3D4E5.com.example.opencast",
+  environment: "development",
   install_id: "integration-install",
   key_id: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
   challenge: "integration-challenge",
   attestation_object: "synthetic-invalid-attestation",
   assertion: "synthetic-invalid-assertion",
+  response_request_id: "integration-request",
   payload: JSON.stringify({
     episode_id: "integration-episode",
     episode_title: "Integration Episode",
@@ -102,6 +110,23 @@ function mockGeminiOnce(body = GEMINI_RESPONSE) {
   pendingGeminiResponses.push(body);
 }
 
+function mockGeminiDeferred(body) {
+  let markStarted;
+  let release;
+  const started = new Promise((resolve) => {
+    markStarted = resolve;
+  });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  pendingGeminiResponses.push(async () => {
+    markStarted();
+    await gate;
+    return body;
+  });
+  return { started, release };
+}
+
 function installFetchStub() {
   globalThis.fetch = async (input) => {
     const url = typeof input === "string" ? input : input.url;
@@ -112,7 +137,8 @@ function installFetchStub() {
       if (pendingGeminiResponses.length === 0) {
         throw new Error("unexpected Gemini call: no mocked response pending");
       }
-      const body = pendingGeminiResponses.shift();
+      const pending = pendingGeminiResponses.shift();
+      const body = typeof pending === "function" ? await pending() : pending;
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -120,6 +146,135 @@ function installFetchStub() {
     }
     throw new Error(`unexpected outbound fetch in integration test: ${url}`);
   };
+}
+
+function bytesToBase64(bytes) {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
+function concatBytes(...parts) {
+  const result = new Uint8Array(
+    parts.reduce((total, part) => total + part.length, 0),
+  );
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+async function sha256Bytes(value) {
+  const bytes =
+    typeof value === "string" ? new TextEncoder().encode(value) : value;
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+}
+
+function derInteger(bytes) {
+  let first = 0;
+  while (first < bytes.length - 1 && bytes[first] === 0) {
+    first += 1;
+  }
+  let value = bytes.slice(first);
+  if ((value[0] & 0x80) !== 0) {
+    value = concatBytes(Uint8Array.of(0), value);
+  }
+  return concatBytes(Uint8Array.of(0x02, value.length), value);
+}
+
+function ecdsaSignatureDER(signature) {
+  if (signature[0] === 0x30) {
+    return signature;
+  }
+  if (signature.length !== 64) {
+    throw new Error(`unexpected ECDSA signature length ${signature.length}`);
+  }
+  const r = derInteger(signature.slice(0, 32));
+  const s = derInteger(signature.slice(32));
+  return concatBytes(Uint8Array.of(0x30, r.length + s.length), r, s);
+}
+
+function cborByteString(bytes) {
+  if (bytes.length >= 256) {
+    throw new Error("test CBOR helper only supports byte strings under 256 bytes");
+  }
+  return concatBytes(Uint8Array.of(0x58, bytes.length), bytes);
+}
+
+function cborText(value) {
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.length > 23) {
+    throw new Error("test CBOR helper only supports short text keys");
+  }
+  return concatBytes(Uint8Array.of(0x60 + bytes.length), bytes);
+}
+
+async function makeSyntheticAppAttestIdentity() {
+  const keys = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const publicKey = new Uint8Array(
+    await crypto.subtle.exportKey("raw", keys.publicKey),
+  );
+  return {
+    installID: `synthetic-${crypto.randomUUID()}`,
+    keyID: bytesToBase64(await sha256Bytes(publicKey)),
+    privateKey: keys.privateKey,
+    publicKey,
+  };
+}
+
+async function seedSyntheticKey(identity) {
+  const now = Math.floor(Date.now() / 1000);
+  await env.AD_ANALYSIS_DB.prepare(
+    "INSERT INTO app_attest_keys \
+     (install_id, key_id, public_key, sign_counter, app_id, environment, created_at, last_used_at) \
+     VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?6)",
+  )
+    .bind(
+      identity.installID,
+      identity.keyID,
+      identity.publicKey.buffer,
+      fixture.app_id,
+      fixture.environment,
+      now,
+    )
+    .run();
+}
+
+async function syntheticAssertion(identity, path, payload, counter) {
+  const payloadHash = bytesToHex(await sha256Bytes(payload));
+  const clientDataHash = await sha256Bytes(`POST\n${path}\n${payloadHash}`);
+  const authenticatorData = new Uint8Array(37);
+  authenticatorData.set(await sha256Bytes(fixture.app_id), 0);
+  new DataView(authenticatorData.buffer).setUint32(33, counter, false);
+  const nonce = await sha256Bytes(
+    concatBytes(authenticatorData, clientDataHash),
+  );
+  const rawSignature = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      identity.privateKey,
+      nonce,
+    ),
+  );
+  const signature = ecdsaSignatureDER(rawSignature);
+  const cbor = concatBytes(
+    Uint8Array.of(0xa2),
+    cborText("signature"),
+    cborByteString(signature),
+    cborText("authenticatorData"),
+    cborByteString(authenticatorData),
+  );
+  return bytesToBase64(cbor);
 }
 
 function envelopeBody() {
@@ -137,6 +292,116 @@ function postAnalyze(body, headers = {}) {
     headers: { "content-type": "application/json", ...headers },
     body,
   });
+}
+
+function postPoll(jobID, headers = {}) {
+  return SELF.fetch(`${BASE}/v1/ad-analysis/jobs/${jobID}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ job_id: jobID }),
+  });
+}
+
+function geminiResponseForSpan(segmentID, evidenceQuote) {
+  return {
+    candidates: [
+      {
+        content: {
+          parts: [
+            {
+              text: JSON.stringify({
+                spans: [
+                  {
+                    kind: "host_read_ad",
+                    label: `Sponsor at ${segmentID}`,
+                    start_segment_id: segmentID,
+                    end_segment_id: segmentID,
+                    confidence: 0.96,
+                    evidence_quote: evidenceQuote,
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+        finishReason: "STOP",
+      },
+    ],
+    usageMetadata: {
+      promptTokenCount: 120,
+      candidatesTokenCount: 40,
+      totalTokenCount: 160,
+    },
+  };
+}
+
+function makeLongRequest({
+  fingerprint = "a".repeat(64),
+  asyncSupported = true,
+  segmentCount = 2100,
+} = {}) {
+  const firstEvidence =
+    "This episode is brought to you by Window One Sponsor for a special offer.";
+  const secondEvidence =
+    "This episode is brought to you by Window Two Sponsor for a special offer.";
+  const segments = Array.from({ length: segmentCount }, (_, index) => ({
+    id: index,
+    start: index * 20,
+    end: (index + 1) * 20,
+    text:
+      index === 2
+        ? firstEvidence
+        : index === 1802
+          ? secondEvidence
+          : `Discussion segment ${index} continues the episode conversation.`,
+  }));
+  const request = {
+    schema_version: 1,
+    request_id: `integration-${fingerprint.slice(0, 8)}`,
+    episode_id: `episode-${fingerprint.slice(0, 8)}`,
+    podcast_id: "https://example.com/long-feed.xml",
+    episode_title: "Long integration episode",
+    podcast_title: "Integration Podcast",
+    transcript: {
+      language_code: "en",
+      audio_duration: segmentCount * 20,
+      fingerprint,
+      updated_at: "2026-07-15T00:00:00Z",
+      state: "completed",
+      segment_count: segmentCount,
+    },
+    segments,
+  };
+  if (asyncSupported !== undefined) {
+    request.async_supported = asyncSupported;
+  }
+  return { request, firstEvidence, secondEvidence };
+}
+
+async function waitForTerminalPoll(jobID) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const response = await postPoll(jobID, {
+      authorization: `Bearer ${BEARER}`,
+    });
+    if (response.status !== 202) {
+      return response;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error(`job ${jobID} did not reach a terminal poll response`);
+}
+
+async function waitForCompletedResubmit(request) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const response = await postAnalyze(JSON.stringify(request), {
+      authorization: `Bearer ${BEARER}`,
+    });
+    if (response.status !== 202) {
+      return response;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("completed job was not served from a repeated submit");
 }
 
 beforeAll(() => {
@@ -205,6 +470,177 @@ describe("bearer bridge", () => {
     // AD_ANALYSIS_GEMINI_MODEL selected the fallback model; the stub above
     // proves the outbound URL targeted it and this proves it is reported.
     expect(body.model).toBe(EXPECTED_MODEL);
+  });
+});
+
+describe("async jobs", () => {
+  it("submits, attaches without new model calls, polls to folded spans, then deletes", async () => {
+    const { request, firstEvidence, secondEvidence } = makeLongRequest();
+    const first = mockGeminiDeferred(geminiResponseForSpan(2, firstEvidence));
+    const second = mockGeminiDeferred(
+      geminiResponseForSpan(1802, secondEvidence),
+    );
+
+    const submitted = await postAnalyze(JSON.stringify(request), {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(submitted.status).toBe(202);
+    expect(await submitted.json()).toEqual({
+      job_id: request.transcript.fingerprint,
+      state: "running",
+      poll_after_seconds: 15,
+    });
+    await Promise.all([first.started, second.started]);
+
+    const attached = await postAnalyze(JSON.stringify(request), {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(attached.status).toBe(202);
+    expect((await attached.json()).job_id).toBe(request.transcript.fingerprint);
+
+    const running = await postPoll(request.transcript.fingerprint, {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(running.status).toBe(202);
+    expect(await running.json()).toEqual({
+      job_id: request.transcript.fingerprint,
+      state: "running",
+      poll_after_seconds: 10,
+    });
+
+    first.release();
+    second.release();
+    const completed = await waitForTerminalPoll(request.transcript.fingerprint);
+    expect(completed.status).toBe(200);
+    const result = await completed.json();
+    expect(result.request_id).toBe(request.request_id);
+    expect(result.spans.map((span) => span.start_segment_id)).toEqual([
+      2, 1802,
+    ]);
+    expect(result.usage).toEqual({
+      prompt_token_count: 240,
+      candidates_token_count: 80,
+      total_token_count: 320,
+    });
+
+    const alreadyFetched = await postPoll(request.transcript.fingerprint, {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(alreadyFetched.status).toBe(404);
+    expect((await alreadyFetched.json()).error).toBe("job_not_found");
+  });
+
+  it("serves a completed unfetched job directly from a repeated submit", async () => {
+    const { request, firstEvidence, secondEvidence } = makeLongRequest({
+      fingerprint: "b".repeat(64),
+    });
+    mockGeminiOnce(geminiResponseForSpan(2, firstEvidence));
+    mockGeminiOnce(geminiResponseForSpan(1802, secondEvidence));
+
+    const submitted = await postAnalyze(JSON.stringify(request), {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(submitted.status).toBe(202);
+
+    const completed = await waitForCompletedResubmit(request);
+    expect(completed.status).toBe(200);
+    expect((await completed.json()).spans).toHaveLength(2);
+
+    const deleted = await postPoll(request.transcript.fingerprint, {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(deleted.status).toBe(404);
+  });
+
+  it("turns an evicted running job into a transient failure on its alarm", async () => {
+    const { request, firstEvidence, secondEvidence } = makeLongRequest({
+      fingerprint: "c".repeat(64),
+    });
+    const first = mockGeminiDeferred(geminiResponseForSpan(2, firstEvidence));
+    const second = mockGeminiDeferred(
+      geminiResponseForSpan(1802, secondEvidence),
+    );
+
+    const submitted = await postAnalyze(JSON.stringify(request), {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(submitted.status).toBe(202);
+    await Promise.all([first.started, second.started]);
+
+    await abortAllDurableObjects();
+    const stub = env.AD_ANALYSIS_JOB.getByName(
+      `ad-analysis:v1:job:${request.transcript.fingerprint}`,
+    );
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const failed = await postPoll(request.transcript.fingerprint, {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(failed.status).toBe(503);
+    expect((await failed.json()).error).toBe("job_failed_transient");
+    first.release();
+    second.release();
+  });
+
+  it("keeps legacy multi-window and opted-in single-window requests synchronous", async () => {
+    const legacy = makeLongRequest({
+      fingerprint: "d".repeat(64),
+    });
+    delete legacy.request.async_supported;
+    mockGeminiOnce(geminiResponseForSpan(2, legacy.firstEvidence));
+    mockGeminiOnce(geminiResponseForSpan(1802, legacy.secondEvidence));
+    const legacyResponse = await postAnalyze(JSON.stringify(legacy.request), {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(legacyResponse.status).toBe(200);
+    expect((await legacyResponse.json()).spans).toHaveLength(2);
+
+    const singleWindow = JSON.parse(fixture.payload);
+    singleWindow.async_supported = true;
+    mockGeminiOnce();
+    const singleResponse = await postAnalyze(JSON.stringify(singleWindow), {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(singleResponse.status).toBe(200);
+    expect((await singleResponse.json()).spans).toHaveLength(1);
+  });
+
+  it("authenticates the exact dynamic poll path before rejecting a payload mismatch", async () => {
+    const identity = await makeSyntheticAppAttestIdentity();
+    await seedSyntheticKey(identity);
+    const pathJobID = "e".repeat(64);
+    const payloadJobID = "f".repeat(64);
+    const path = `/v1/ad-analysis/jobs/${pathJobID}`;
+    const payload = JSON.stringify({ job_id: payloadJobID });
+    const assertion = await syntheticAssertion(identity, path, payload, 1);
+
+    const response = await SELF.fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        install_id: identity.installID,
+        key_id: identity.keyID,
+        payload,
+        assertion,
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe("job_id_mismatch");
+  });
+
+  it("caps the complete App Attest poll envelope at 16 KiB", async () => {
+    const response = await SELF.fetch(
+      `${BASE}/v1/ad-analysis/jobs/${"9".repeat(64)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ payload: "x".repeat(17 * 1024) }),
+      },
+    );
+
+    expect(response.status).toBe(413);
+    expect((await response.json()).error).toBe("payload_too_large");
   });
 });
 

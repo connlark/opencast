@@ -9,7 +9,7 @@
 # Balanced by measured per-test wall-clock (log 'passed (N seconds)' lines), NOT the
 # .xcresult duration field — that reports 0.0s for screenshot-matrix tests. Regenerate
 # with scripts/gen-ui-test-shards.py <run-dir> after a fresh run.
-# shard1 est 960s (32 tests) | shard2 est 962s (32 tests) | serial 37s
+# shard1 est 960s (32 tests) | shard2 est 984s (33 tests) | serial 37s
 
 # --- shard1 (est 960s) ---
 shard1 OpenCastUITests/OpenCastUITests/testAddPodcastRSSClipboardPrefillScreenshots
@@ -45,7 +45,7 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededStaleAdAnalysisDoesNotAnnotateT
 shard1 OpenCastUITests/OpenCastUITests/testSeededTranscriptAndSpeechModelSmoke
 shard1 OpenCastUITests/OpenCastUITests/testSettingsDebugRunOnboardingScreenshotsAndKeepsSubscriptions
 
-# --- shard2 (est 962s) ---
+# --- shard2 (est 984s) ---
 shard2 OpenCastUITests/OpenCastUITests/testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty
 shard2 OpenCastUITests/OpenCastUITests/testEpisodeActionsMarkPlayedAndClearProgress
 shard2 OpenCastUITests/OpenCastUITests/testEpisodeDetailSupportsAccessibilityDynamicType
@@ -69,6 +69,7 @@ shard2 OpenCastUITests/OpenCastUITests/testSeededNowPlayingArtworkPeelClosesSoun
 shard2 OpenCastUITests/OpenCastUITests/testSeededNowPlayingArtworkPeelsOpenSoundLabPanel
 shard2 OpenCastUITests/OpenCastUITests/testSeededNowPlayingColorCheckerArtworkPeelScreenshots
 shard2 OpenCastUITests/OpenCastUITests/testSeededNowPlayingMoreMenuOpensTranscriptSheet
+shard2 OpenCastUITests/OpenCastUITests/testSeededNowPlayingPeelRemoteTranscriptionPresentsEstimateSheet
 shard2 OpenCastUITests/OpenCastUITests/testSeededNowPlayingPlaceholderArtworkPeelScreenshots
 shard2 OpenCastUITests/OpenCastUITests/testSeededOutdatedPolicyAnalysisSkipsNothingAndOffersRerun
 shard2 OpenCastUITests/OpenCastUITests/testSeededPlayEpisodeButtonWhileListeningExpandsNowPlaying

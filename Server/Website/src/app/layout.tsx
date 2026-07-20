@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
 import { SiteHeader } from "@/components/SiteHeader";
+import { createPageMetadata } from "@/lib/metadata";
+import { marketingURL } from "@/lib/site";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -10,9 +12,12 @@ const geistSans = Geist({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://opencast.mobile"),
-  title: "opencast - A Native Podcast Client",
-  description:
-    "opencast is a native iPhone and iPad podcast client for RSS subscriptions, streaming playback, local progress, and private sync.",
+  ...createPageMetadata({
+    title: "opencast - A Native Podcast Client",
+    description:
+      "opencast is a native iPhone and iPad podcast client for RSS subscriptions, streaming playback, local progress, and private sync.",
+    url: marketingURL,
+  }),
 };
 
 export const viewport: Viewport = {

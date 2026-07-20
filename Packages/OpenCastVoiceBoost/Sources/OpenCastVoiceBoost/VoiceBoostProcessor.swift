@@ -64,7 +64,49 @@ public final class VoiceBoostProcessor {
         OCVBProcessorProcessInterleavedFloat32(handle, baseAddress, Int32(frameCount))
     }
 
+    /// Processes planar (non-interleaved) Float32 channel buffers in place —
+    /// the production tap path, no marshalling copies. `channels` must hold
+    /// `channelCount` non-nil pointers, each to `frameCount` samples.
+    public func processPlanarFloat32(
+        _ channels: UnsafeMutablePointer<UnsafeMutablePointer<Float>?>,
+        frameCount: Int
+    ) {
+        guard frameCount > 0 else {
+            return
+        }
+        for channel in 0..<channelCount {
+            guard channels[channel] != nil else {
+                assertionFailure("Planar processing requires a pointer per channel.")
+                return
+            }
+        }
+        OCVBProcessorProcessPlanarFloat32(handle, channels, Int32(frameCount))
+    }
+
+    /// Routes interleaved processing through the retained pre-vectorization
+    /// scalar implementation — the test oracle. Set once right after
+    /// creation; the two engines keep independent signal state.
+    public func setScalarReferenceProcessing(_ usesScalarReference: Bool) {
+        OCVBProcessorSetScalarReferenceProcessing(handle, usesScalarReference ? 1 : 0)
+    }
+
     public var metrics: VoiceBoostMetrics {
         VoiceBoostMetrics(cMetrics: OCVBProcessorCopyMetrics(handle))
+    }
+
+    /// Adaptation control state for carrying across processor recreation.
+    /// Same external-serialization contract as every other member.
+    public var controlSnapshot: VoiceBoostControlSnapshot {
+        VoiceBoostControlSnapshot(cSnapshot: OCVBProcessorCopyControlSnapshot(handle))
+    }
+
+    public func apply(controlSnapshot: VoiceBoostControlSnapshot) {
+        OCVBProcessorApplyControlSnapshot(handle, controlSnapshot.cSnapshot)
+    }
+
+    /// Wet/dry crossfade position: 1 fully wet, 0 fully dry. Reaches the
+    /// exact endpoints, so equality against 0 detects a completed drain.
+    public var currentWetMix: Double {
+        OCVBProcessorCurrentWetMix(handle)
     }
 }

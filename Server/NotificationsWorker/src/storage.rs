@@ -43,7 +43,7 @@ pub struct FeedPollRow {
     pub latest_episode_published_at: Option<i64>,
     pub baseline_established_at: Option<i64>,
     pub consecutive_failures: i64,
-    pub poll_interval_seconds: i64,
+    pub publish_cadence_seconds: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +75,8 @@ pub struct FeedPollSuccess<'a> {
     pub latest_episode_published_at: Option<i64>,
     pub http_status: i32,
     pub next_poll_at: i64,
+    pub poll_interval_seconds: i64,
+    pub publish_cadence_seconds: Option<i64>,
     pub now: i64,
 }
 
@@ -89,6 +91,7 @@ pub struct FeedBaselineUpsert<'a> {
     pub latest_episode_title: Option<&'a str>,
     pub latest_episode_published_at: Option<i64>,
     pub poll_interval_seconds: i64,
+    pub publish_cadence_seconds: Option<i64>,
     pub now: i64,
 }
 
@@ -157,7 +160,7 @@ pub struct EpisodeNotificationSendOutcome<'a> {
 const MAX_STORED_FEED_TITLE_CHARS: usize = 512;
 const MAX_STORED_EPISODE_TITLE_CHARS: usize = 512;
 
-const DUE_FEED_ROWS_SQL: &str = "SELECT feed_url, source_url, etag, last_modified, latest_episode_id, latest_episode_title, latest_episode_published_at, baseline_established_at, consecutive_failures, poll_interval_seconds \
+const DUE_FEED_ROWS_SQL: &str = "SELECT feed_url, source_url, etag, last_modified, latest_episode_id, latest_episode_title, latest_episode_published_at, baseline_established_at, consecutive_failures, publish_cadence_seconds \
          FROM feeds \
          WHERE (next_poll_at IS NULL OR next_poll_at <= ?1) \
            AND EXISTS ( \
@@ -767,6 +770,10 @@ pub async fn upsert_feed_baseline(db: &D1Database, baseline: FeedBaselineUpsert<
         .latest_episode_published_at
         .map(d1_i64)
         .unwrap_or(D1Type::Null);
+    let publish_cadence_seconds = baseline
+        .publish_cadence_seconds
+        .map(d1_i64)
+        .unwrap_or(D1Type::Null);
     let args = [
         D1Type::Text(baseline.feed_url),
         D1Type::Text(baseline.source_url),
@@ -780,14 +787,15 @@ pub async fn upsert_feed_baseline(db: &D1Database, baseline: FeedBaselineUpsert<
         d1_i64(baseline.now),
         d1_i64(baseline.now.saturating_add(baseline.poll_interval_seconds)),
         d1_i64(baseline.poll_interval_seconds),
+        publish_cadence_seconds,
         d1_i64(baseline.now),
         d1_i64(baseline.now),
     ];
 
     db.prepare(
         "INSERT INTO feeds \
-         (feed_url, source_url, title, website_url, etag, last_modified, latest_episode_id, latest_episode_title, latest_episode_published_at, baseline_established_at, next_poll_at, poll_interval_seconds, consecutive_failures, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?14) \
+         (feed_url, source_url, title, website_url, etag, last_modified, latest_episode_id, latest_episode_title, latest_episode_published_at, baseline_established_at, next_poll_at, poll_interval_seconds, publish_cadence_seconds, consecutive_failures, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14, ?15) \
          ON CONFLICT(feed_url) DO UPDATE SET \
          source_url = excluded.source_url, \
          title = excluded.title, \
@@ -800,6 +808,7 @@ pub async fn upsert_feed_baseline(db: &D1Database, baseline: FeedBaselineUpsert<
          baseline_established_at = COALESCE(feeds.baseline_established_at, excluded.baseline_established_at), \
          next_poll_at = excluded.next_poll_at, \
          poll_interval_seconds = excluded.poll_interval_seconds, \
+         publish_cadence_seconds = excluded.publish_cadence_seconds, \
          consecutive_failures = 0, \
          last_error = NULL, \
          updated_at = excluded.updated_at",
@@ -973,7 +982,7 @@ pub async fn due_feed_rows(
 pub async fn subscribed_feed_rows(db: &D1Database, install_id: &str) -> Result<Vec<FeedPollRow>> {
     let args = [D1Type::Text(install_id)];
     db.prepare(
-        "SELECT feeds.feed_url, feeds.source_url, feeds.etag, feeds.last_modified, feeds.latest_episode_id, feeds.latest_episode_title, feeds.latest_episode_published_at, feeds.baseline_established_at, feeds.consecutive_failures, feeds.poll_interval_seconds \
+        "SELECT feeds.feed_url, feeds.source_url, feeds.etag, feeds.last_modified, feeds.latest_episode_id, feeds.latest_episode_title, feeds.latest_episode_published_at, feeds.baseline_established_at, feeds.consecutive_failures, feeds.publish_cadence_seconds \
          FROM feeds \
          INNER JOIN feed_subscriptions ON feed_subscriptions.feed_url = feeds.feed_url \
          WHERE feed_subscriptions.install_id = ?1 \
@@ -994,7 +1003,7 @@ pub async fn subscribed_feed_row(
 ) -> Result<Option<FeedPollRow>> {
     let args = [D1Type::Text(install_id), D1Type::Text(feed_url)];
     db.prepare(
-        "SELECT feeds.feed_url, feeds.source_url, feeds.etag, feeds.last_modified, feeds.latest_episode_id, feeds.latest_episode_title, feeds.latest_episode_published_at, feeds.baseline_established_at, feeds.consecutive_failures, feeds.poll_interval_seconds \
+        "SELECT feeds.feed_url, feeds.source_url, feeds.etag, feeds.last_modified, feeds.latest_episode_id, feeds.latest_episode_title, feeds.latest_episode_published_at, feeds.baseline_established_at, feeds.consecutive_failures, feeds.publish_cadence_seconds \
          FROM feeds \
          INNER JOIN feed_subscriptions ON feed_subscriptions.feed_url = feeds.feed_url \
          WHERE feed_subscriptions.install_id = ?1 \
@@ -1011,7 +1020,7 @@ pub async fn subscribed_feed_row(
 pub async fn feed_poll_row(db: &D1Database, feed_url: &str) -> Result<Option<FeedPollRow>> {
     let args = [D1Type::Text(feed_url)];
     db.prepare(
-        "SELECT feed_url, source_url, etag, last_modified, latest_episode_id, latest_episode_title, latest_episode_published_at, baseline_established_at, consecutive_failures, poll_interval_seconds \
+        "SELECT feed_url, source_url, etag, last_modified, latest_episode_id, latest_episode_title, latest_episode_published_at, baseline_established_at, consecutive_failures, publish_cadence_seconds \
          FROM feeds \
          WHERE feed_url = ?1 \
          LIMIT 1",
@@ -1055,13 +1064,19 @@ pub async fn update_feed_poll_not_modified(
     db: &D1Database,
     feed_url: &str,
     next_poll_at: i64,
+    poll_interval_seconds: i64,
     now: i64,
 ) -> Result<()> {
-    let args = [d1_i64(now), d1_i64(next_poll_at), D1Type::Text(feed_url)];
+    let args = [
+        d1_i64(now),
+        d1_i64(next_poll_at),
+        d1_i64(poll_interval_seconds),
+        D1Type::Text(feed_url),
+    ];
     db.prepare(
         "UPDATE feeds \
-         SET last_polled_at = ?1, next_poll_at = ?2, consecutive_failures = 0, last_http_status = 304, last_error = NULL, updated_at = ?1 \
-         WHERE feed_url = ?3",
+         SET last_polled_at = ?1, next_poll_at = ?2, poll_interval_seconds = ?3, consecutive_failures = 0, last_http_status = 304, last_error = NULL, updated_at = ?1 \
+         WHERE feed_url = ?4",
     )
     .bind_refs(&args)?
     .run()
@@ -1099,6 +1114,10 @@ pub async fn update_feed_poll_success(db: &D1Database, success: FeedPollSuccess<
         .latest_episode_published_at
         .map(d1_i64)
         .unwrap_or(D1Type::Null);
+    let publish_cadence_seconds = success
+        .publish_cadence_seconds
+        .map(d1_i64)
+        .unwrap_or(D1Type::Null);
     let args = [
         title,
         website_url,
@@ -1110,13 +1129,15 @@ pub async fn update_feed_poll_success(db: &D1Database, success: FeedPollSuccess<
         d1_i64(success.now),
         d1_i64(success.next_poll_at),
         D1Type::Integer(success.http_status),
+        d1_i64(success.poll_interval_seconds),
+        publish_cadence_seconds,
         D1Type::Text(success.feed_url),
     ];
 
     db.prepare(
         "UPDATE feeds \
-         SET title = ?1, website_url = ?2, etag = ?3, last_modified = ?4, latest_episode_id = ?5, latest_episode_title = ?6, latest_episode_published_at = ?7, last_polled_at = ?8, next_poll_at = ?9, consecutive_failures = 0, last_http_status = ?10, last_error = NULL, updated_at = ?8 \
-         WHERE feed_url = ?11",
+         SET title = ?1, website_url = ?2, etag = ?3, last_modified = ?4, latest_episode_id = ?5, latest_episode_title = ?6, latest_episode_published_at = ?7, last_polled_at = ?8, next_poll_at = ?9, consecutive_failures = 0, last_http_status = ?10, poll_interval_seconds = ?11, publish_cadence_seconds = ?12, last_error = NULL, updated_at = ?8 \
+         WHERE feed_url = ?13",
     )
     .bind_refs(&args)?
     .run()
@@ -1298,6 +1319,10 @@ mod tests {
         .expect("cleanup superseded devices");
         db.execute_batch(include_str!("../migrations/0009_delete_dead_device_rows.sql"))
             .expect("delete dead device rows");
+        db.execute_batch(include_str!("../migrations/0010_index_feeds_next_poll_at.sql"))
+            .expect("index feed poll schedule");
+        db.execute_batch(include_str!("../migrations/0011_feed_publish_cadence.sql"))
+            .expect("add publish cadence column");
         db
     }
 
@@ -1685,6 +1710,23 @@ mod tests {
                 "https://example.com/old.xml"
             ]
         );
+    }
+
+    #[test]
+    fn feed_poll_schedule_index_migration_is_idempotent() {
+        let db = setup_db();
+
+        db.execute_batch(include_str!("../migrations/0010_index_feeds_next_poll_at.sql"))
+            .expect("reapply feed poll schedule index");
+
+        let index_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_feeds_next_poll_at'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count feed poll schedule index");
+        assert_eq!(index_count, 1);
     }
 
     #[test]

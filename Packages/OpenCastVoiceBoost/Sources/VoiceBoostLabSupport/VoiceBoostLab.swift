@@ -88,7 +88,10 @@ public enum VoiceBoostLab {
                 sampleRate: try doubleOption("--sample-rate", in: arguments) ?? 48_000,
                 channelCount: try intOption("--channels", in: arguments) ?? 2,
                 blockFrameCount: try intOption("--block-frames", in: arguments) ?? 1_024,
-                configuration: try configuration(from: arguments, base: preset.configuration)
+                configuration: try configuration(from: arguments, base: preset.configuration),
+                quietAmplitude: try doubleOption("--fixture-quiet-amplitude", in: arguments) ?? 0.025,
+                loudAmplitude: try doubleOption("--fixture-loud-amplitude", in: arguments) ?? 0.35,
+                usesScalarReference: arguments.contains("--scalar-reference")
             )
             try JSONFile.write(metrics, to: URL(fileURLWithPath: output))
         default:
@@ -136,6 +139,19 @@ public enum VoiceBoostLab {
             ?? configuration.maximumPositiveGainDB
         configuration.maximumNegativeGainDB = try doubleOption("--min-gain-db", in: arguments)
             ?? configuration.maximumNegativeGainDB
+        configuration.compressorThresholdDB = try doubleOption("--compressor-threshold-db", in: arguments)
+            ?? configuration.compressorThresholdDB
+        configuration.compressorRatio = try doubleOption("--compressor-ratio", in: arguments)
+            ?? configuration.compressorRatio
+        configuration.compressorKneeWidthDB = try doubleOption("--compressor-knee-db", in: arguments)
+            ?? configuration.compressorKneeWidthDB
+        configuration.compressorAttackSeconds = try doubleOption("--compressor-attack", in: arguments)
+            ?? configuration.compressorAttackSeconds
+        configuration.compressorReleaseSeconds = try doubleOption("--compressor-release", in: arguments)
+            ?? configuration.compressorReleaseSeconds
+        configuration.compressorMaximumReductionDB =
+            try doubleOption("--compressor-max-reduction-db", in: arguments)
+            ?? configuration.compressorMaximumReductionDB
         if arguments.contains("--no-adaptive-gain") {
             configuration.usesAdaptiveGain = false
         }
@@ -191,6 +207,12 @@ public enum VoiceBoostLab {
       --no-adaptive-gain
       --no-eq
       --no-compression
+      --compressor-threshold-db -20
+      --compressor-ratio 1.35
+      --compressor-knee-db 6
+      --compressor-attack 0.010
+      --compressor-release 0.250
+      --compressor-max-reduction-db 5
 
     Listening-pack options:
       --reference reference.wav

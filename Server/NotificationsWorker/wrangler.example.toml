@@ -1,6 +1,6 @@
 name = "your-notifications-worker"
 main = "build/index.js"
-compatibility_date = "2026-06-19"
+compatibility_date = "2026-07-09"
 
 [observability]
 enabled = true
@@ -38,6 +38,33 @@ migrations_dir = "migrations"
 [[mtls_certificates]]
 binding = "APNS_CERT"
 certificate_id = "REPLACE_WITH_APNS_MTLS_CERTIFICATE_ID"
+
+[env.prod-staging]
+name = "your-notifications-worker-prod-staging"
+workers_dev = true
+
+[env.prod-staging.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+APNS_ENVIRONMENT = "production"
+ADMIN_TEST_ENDPOINTS_ENABLED = "false"
+DEBUG_ENDPOINTS_ENABLED = "false"
+PUBLIC_NOTIFICATIONS_ENABLED = "false"
+
+[env.prod-staging.triggers]
+# Enable only during an intentional proof after the lane is fully configured.
+crons = []
+
+[[env.prod-staging.d1_databases]]
+binding = "APP_ATTEST_DB"
+database_name = "your-notifications-db-prod-staging"
+database_id = "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.prod-staging.mtls_certificates]]
+binding = "APNS_CERT"
+certificate_id = "REPLACE_WITH_PROD_STAGING_APNS_MTLS_CERTIFICATE_ID"
 
 [env.production]
 name = "your-notifications-worker-production"

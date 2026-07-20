@@ -37,9 +37,18 @@ enum OpenCastUITestSeedData {
         let usesBadAudioURL = ProcessInfo.processInfo.environment["OPENCAST_SEED_BAD_AUDIO_URL"] == "1"
         let usesLongShowNotes = ProcessInfo.processInfo.environment["OPENCAST_SEED_LONG_SHOW_NOTES"] == "1"
         let extraFeedCount = Int(ProcessInfo.processInfo.environment["OPENCAST_SEED_EXTRA_FEED_COUNT"] ?? "") ?? 0
-        let audioURL = usesBadAudioURL
-            ? "file:///tmp/opencast-ui-test-missing-audio.wav"
-            : try writeDeterministicAudio().absoluteString
+        let overrideAudioFileURL = ProcessInfo.processInfo.environment["OPENCAST_SEED_AUDIO_FILE_URL"]
+        let audioURL = if usesBadAudioURL {
+            "file:///tmp/opencast-ui-test-missing-audio.wav"
+        } else if let overrideAudioFileURL, !overrideAudioFileURL.isEmpty {
+            // A bare filename resolves against Documents so device runs can
+            // pre-seed fixtures via `devicectl device copy to`.
+            overrideAudioFileURL.contains("://")
+                ? overrideAudioFileURL
+                : URL.documentsDirectory.appending(path: overrideAudioFileURL).absoluteString
+        } else {
+            try writeDeterministicAudio().absoluteString
+        }
         let showNotesHTML = usesLongShowNotes
             ? longShowNotesHTML()
             : "<p>Deterministic show notes for UI tests.</p>"
@@ -141,10 +150,10 @@ enum OpenCastUITestSeedData {
         let seededVoiceBoostMode = ProcessInfo.processInfo.environment[
             OpenCastLaunchConfiguration.seedVoiceBoostModeEnvironmentKey
         ]
-        if seededVoiceBoostMode == VoiceBoostMode.perEpisode.rawValue {
+        if let seededVoiceBoostMode, VoiceBoostMode(rawValue: seededVoiceBoostMode) != nil {
             context.insert(LocalPreferenceRecord(
                 key: PlaybackSettingsStore.voiceBoostModePreferenceKey,
-                value: VoiceBoostMode.perEpisode.rawValue
+                value: seededVoiceBoostMode
             ))
         }
 

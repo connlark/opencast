@@ -1,0 +1,141 @@
+# Public self-hosting template for the private service-bound PurchaseWorker.
+# It has no routes or workers.dev exposure. Each lane must use isolated D1/DO
+# state and credentials.
+name = "your-purchase-worker"
+main = "src/index.ts"
+compatibility_date = "2026-07-09"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+# The Apple library's OCSP path needs this transport-only alias under workerd.
+[alias]
+"node-fetch" = "./src/node-fetch-shim.cjs"
+
+[vars]
+LANE = "development"
+STOREKIT_ENVIRONMENT = "Sandbox"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+# Sandbox JWS commonly omits appAppleId; production must require it.
+ALLOW_MISSING_APP_APPLE_ID = "true"
+APPLE_APP_APPLE_ID = ""
+# Keep online revocation checks enabled in every deployed lane.
+ENABLE_ONLINE_CHECKS = "true"
+# Apple Root CA - G3 (DER, base64), fetched 2026-07-16 from
+# https://www.apple.com/certificateauthority/AppleRootCA-G3.cer
+# SHA-256 63:34:3A:BF:B8:9A:6A:03:EB:B5:7E:9B:3F:5F:A7:BE:7C:4F:5C:75:6F:30:17:B3:A8:C4:88:C3:65:3E:91:79
+APPLE_ROOT_CAS_BASE64 = "MIICQzCCAcmgAwIBAgIILcX8iNLFS5UwCgYIKoZIzj0EAwMwZzEbMBkGA1UEAwwSQXBwbGUgUm9vdCBDQSAtIEczMSYwJAYDVQQLDB1BcHBsZSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTETMBEGA1UECgwKQXBwbGUgSW5jLjELMAkGA1UEBhMCVVMwHhcNMTQwNDMwMTgxOTA2WhcNMzkwNDMwMTgxOTA2WjBnMRswGQYDVQQDDBJBcHBsZSBSb290IENBIC0gRzMxJjAkBgNVBAsMHUFwcGxlIENlcnRpZmljYXRpb24gQXV0aG9yaXR5MRMwEQYDVQQKDApBcHBsZSBJbmMuMQswCQYDVQQGEwJVUzB2MBAGByqGSM49AgEGBSuBBAAiA2IABJjpLz1AcqTtkyJygRMc3RCV8cWjTnHcFBbZDuWmBSp3ZHtfTjjTuxxEtX/1H7YyYl3J6YRbTzBPEVoA/VhYDKX1DyxNB0cTddqXl5dvMVztK517IDvYuVTZXpmkOlEKMaNCMEAwHQYDVR0OBBYEFLuw3qFYM4iapIqZ3r6966/ayySrMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMDA2gAMGUCMQCD6cHEFl4aXTQY2e3v9GwOAEZLuN+yRhHFD/3meoyhpmvOwgPUnPWTxnS4at+qIxUCMG1mihDK1A3UT82NQz60imOlM27jbdoXt2QfyFMm+YhidDkLF1vLUagM6BgD56KyKA=="
+# Test-fixture root override is honored ONLY when LANE = "development".
+APPLE_ROOT_CAS_OVERRIDE_BASE64 = ""
+RECONCILE_BATCH_ACCOUNTS = "20"
+RECONCILE_INTERVAL_SECONDS = "21600"
+LIABILITY_SNAPSHOT_MAX_ACCOUNTS = "500"
+
+[[d1_databases]]
+binding = "PURCHASE_DB"
+database_name = "your-purchase-db"
+database_id = "REPLACE_WITH_DEVELOPMENT_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "PURCHASE_ACCOUNT"
+class_name = "PurchaseAccount"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PurchaseAccount"]
+
+# --- prod-staging lane: isolated resources + reconciliation cron ------------
+[env.prod-staging]
+name = "your-purchase-worker-prod-staging"
+workers_dev = false
+
+[env.prod-staging.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.prod-staging.observability.logs]
+enabled = true
+invocation_logs = true
+
+[env.prod-staging.vars]
+LANE = "prod-staging"
+STOREKIT_ENVIRONMENT = "Sandbox"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+ALLOW_MISSING_APP_APPLE_ID = "true"
+APPLE_APP_APPLE_ID = ""
+ENABLE_ONLINE_CHECKS = "true"
+APPLE_ROOT_CAS_BASE64 = "MIICQzCCAcmgAwIBAgIILcX8iNLFS5UwCgYIKoZIzj0EAwMwZzEbMBkGA1UEAwwSQXBwbGUgUm9vdCBDQSAtIEczMSYwJAYDVQQLDB1BcHBsZSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTETMBEGA1UECgwKQXBwbGUgSW5jLjELMAkGA1UEBhMCVVMwHhcNMTQwNDMwMTgxOTA2WhcNMzkwNDMwMTgxOTA2WjBnMRswGQYDVQQDDBJBcHBsZSBSb290IENBIC0gRzMxJjAkBgNVBAsMHUFwcGxlIENlcnRpZmljYXRpb24gQXV0aG9yaXR5MRMwEQYDVQQKDApBcHBsZSBJbmMuMQswCQYDVQQGEwJVUzB2MBAGByqGSM49AgEGBSuBBAAiA2IABJjpLz1AcqTtkyJygRMc3RCV8cWjTnHcFBbZDuWmBSp3ZHtfTjjTuxxEtX/1H7YyYl3J6YRbTzBPEVoA/VhYDKX1DyxNB0cTddqXl5dvMVztK517IDvYuVTZXpmkOlEKMaNCMEAwHQYDVR0OBBYEFLuw3qFYM4iapIqZ3r6966/ayySrMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMDA2gAMGUCMQCD6cHEFl4aXTQY2e3v9GwOAEZLuN+yRhHFD/3meoyhpmvOwgPUnPWTxnS4at+qIxUCMG1mihDK1A3UT82NQz60imOlM27jbdoXt2QfyFMm+YhidDkLF1vLUagM6BgD56KyKA=="
+APPLE_ROOT_CAS_OVERRIDE_BASE64 = ""
+RECONCILE_BATCH_ACCOUNTS = "20"
+RECONCILE_INTERVAL_SECONDS = "21600"
+LIABILITY_SNAPSHOT_MAX_ACCOUNTS = "500"
+
+[[env.prod-staging.d1_databases]]
+binding = "PURCHASE_DB"
+database_name = "your-purchase-db-prod-staging"
+database_id = "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.prod-staging.durable_objects.bindings]]
+name = "PURCHASE_ACCOUNT"
+class_name = "PurchaseAccount"
+
+[[env.prod-staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["PurchaseAccount"]
+
+[env.prod-staging.triggers]
+# Add a reconciliation schedule only after the lane is fully configured.
+crons = []
+
+# --- production lane: Production StoreKit, isolated resources, private ----
+[env.production]
+name = "your-purchase-worker-production"
+workers_dev = false
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.observability.logs]
+enabled = true
+invocation_logs = true
+
+[env.production.vars]
+LANE = "production"
+STOREKIT_ENVIRONMENT = "Production"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+ALLOW_MISSING_APP_APPLE_ID = "false"
+APPLE_APP_APPLE_ID = "6766770733"
+ENABLE_ONLINE_CHECKS = "true"
+APPLE_ROOT_CAS_BASE64 = "MIICQzCCAcmgAwIBAgIILcX8iNLFS5UwCgYIKoZIzj0EAwMwZzEbMBkGA1UEAwwSQXBwbGUgUm9vdCBDQSAtIEczMSYwJAYDVQQLDB1BcHBsZSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTETMBEGA1UECgwKQXBwbGUgSW5jLjELMAkGA1UEBhMCVVMwHhcNMTQwNDMwMTgxOTA2WhcNMzkwNDMwMTgxOTA2WjBnMRswGQYDVQQDDBJBcHBsZSBSb290IENBIC0gRzMxJjAkBgNVBAsMHUFwcGxlIENlcnRpZmljYXRpb24gQXV0aG9yaXR5MRMwEQYDVQQKDApBcHBsZSBJbmMuMQswCQYDVQQGEwJVUzB2MBAGByqGSM49AgEGBSuBBAAiA2IABJjpLz1AcqTtkyJygRMc3RCV8cWjTnHcFBbZDuWmBSp3ZHtfTjjTuxxEtX/1H7YyYl3J6YRbTzBPEVoA/VhYDKX1DyxNB0cTddqXl5dvMVztK517IDvYuVTZXpmkOlEKMaNCMEAwHQYDVR0OBBYEFLuw3qFYM4iapIqZ3r6966/ayySrMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMDA2gAMGUCMQCD6cHEFl4aXTQY2e3v9GwOAEZLuN+yRhHFD/3meoyhpmvOwgPUnPWTxnS4at+qIxUCMG1mihDK1A3UT82NQz60imOlM27jbdoXt2QfyFMm+YhidDkLF1vLUagM6BgD56KyKA=="
+APPLE_ROOT_CAS_OVERRIDE_BASE64 = ""
+RECONCILE_BATCH_ACCOUNTS = "20"
+RECONCILE_INTERVAL_SECONDS = "21600"
+LIABILITY_SNAPSHOT_MAX_ACCOUNTS = "500"
+
+[[env.production.d1_databases]]
+binding = "PURCHASE_DB"
+database_name = "your-purchase-db-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.production.durable_objects.bindings]]
+name = "PURCHASE_ACCOUNT"
+class_name = "PurchaseAccount"
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = ["PurchaseAccount"]
+
+[env.production.triggers]
+# Add a reconciliation schedule only after the lane is fully configured.
+crons = []

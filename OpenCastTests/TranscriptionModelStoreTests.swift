@@ -183,7 +183,7 @@ struct TranscriptionModelStoreTests {
 
     @Test("Late install progress cannot overwrite installed state")
     func lateInstallProgressCannotOverwriteInstalledState() async {
-        let installer = FakeTranscriptionModelInstaller(isInstalled: false, sendsLateProgress: true)
+        let installer = FakeTranscriptionModelInstaller(isInstalled: false)
         let store = TranscriptionModelStore(installer: installer)
 
         #expect(store.installPinnedModel())
@@ -195,7 +195,8 @@ struct TranscriptionModelStoreTests {
                 false
             }
         })
-        try? await Task.sleep(for: .milliseconds(120))
+        #expect(installer.emitLateProgress())
+        #expect(await waitUntil { installer.lateProgressDeliveryAcknowledged })
         if case .installed(let summary) = store.state {
             #expect(summary.treeSHA256 == installer.summary.treeSHA256)
         } else {
@@ -291,10 +292,11 @@ private final class FakeTranscriptionModelInstaller: TranscriptionModelInstallin
     var isInstalled: Bool
     let summary: OpenCastWhisperModelInstalledSummary
     let manifestSummary: OpenCastWhisperModelInstalledSummary
-    let sendsLateProgress: Bool
     var installRequestCount = 0
     var requestedInstallModel: OpenCastWhisperModel?
     var requestedInstallVersion: String?
+    private(set) var lateProgressDeliveryAcknowledged = false
+    private var installProgress: OpenCastWhisperModelInstallProgressHandler?
 
     init(
         isInstalled: Bool,
@@ -304,13 +306,11 @@ private final class FakeTranscriptionModelInstaller: TranscriptionModelInstallin
             totalByteCount: 10,
             treeSHA256: String(repeating: "a", count: 64)
         ),
-        manifestSummary: OpenCastWhisperModelInstalledSummary? = nil,
-        sendsLateProgress: Bool = false
+        manifestSummary: OpenCastWhisperModelInstalledSummary? = nil
     ) {
         self.isInstalled = isInstalled
         self.summary = summary
         self.manifestSummary = manifestSummary ?? summary
-        self.sendsLateProgress = sendsLateProgress
     }
 
     func installedSummary(model: OpenCastWhisperModel, version: String) throws -> OpenCastWhisperModelInstalledSummary {
@@ -342,6 +342,7 @@ private final class FakeTranscriptionModelInstaller: TranscriptionModelInstallin
         installRequestCount += 1
         requestedInstallModel = model
         requestedInstallVersion = version
+        installProgress = progress
         progress?(OpenCastWhisperModelInstallProgress(
             modelIdentifier: summary.modelIdentifier,
             version: summary.version,
@@ -353,22 +354,27 @@ private final class FakeTranscriptionModelInstaller: TranscriptionModelInstallin
         ))
         try await Task.sleep(for: .milliseconds(40))
         isInstalled = true
-        if sendsLateProgress {
-            let lateProgress = OpenCastWhisperModelInstallProgress(
-                modelIdentifier: summary.modelIdentifier,
-                version: summary.version,
-                completedFileCount: 1,
-                totalFileCount: 2,
-                completedByteCount: 6,
-                totalByteCount: 10,
-                currentFilePath: "model/late.bin"
-            )
-            Task {
-                try? await Task.sleep(for: .milliseconds(40))
-                progress?(lateProgress)
-            }
-        }
         return summary
+    }
+
+    func emitLateProgress() -> Bool {
+        guard let installProgress else {
+            return false
+        }
+
+        installProgress(OpenCastWhisperModelInstallProgress(
+            modelIdentifier: summary.modelIdentifier,
+            version: summary.version,
+            completedFileCount: 1,
+            totalFileCount: 2,
+            completedByteCount: 6,
+            totalByteCount: 10,
+            currentFilePath: "model/late.bin"
+        ))
+        Task { @MainActor [weak self] in
+            self?.lateProgressDeliveryAcknowledged = true
+        }
+        return true
     }
 
     func deleteInstalledModel(model: OpenCastWhisperModel, version: String) throws {

@@ -53,6 +53,8 @@ struct SettingsView: View {
 
             SettingsTranscriptionModelSection()
 
+            SettingsRemoteTranscriptionSection()
+
             OPMLSettingsSection()
 
             SettingsDangerZoneSection(
@@ -66,8 +68,10 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .contentMargins(.bottom, Self.compactMiniPlayerScrollMargin, for: .scrollContent)
         .task {
+            async let prepared: Void = appModel.remoteTranscriptionPurchases.prepare()
             await refreshSyncStatus()
             appModel.cacheController.refreshSummaries()
+            await prepared
         }
         .onDisappear {
             cancelVoiceBoostDeviceProbe()

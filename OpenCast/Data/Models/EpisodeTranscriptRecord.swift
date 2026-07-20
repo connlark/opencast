@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastTranscription
 import SwiftData
 
 @Model
@@ -18,6 +19,7 @@ final class EpisodeTranscriptRecord {
     var checkpointCount: Int = 0
     var transcriptRelativePath: String?
     var errorMessage: String?
+    var transcriptionEngineRawValue: String = ""
     var createdAt: Date = Date.now
     var updatedAt: Date = Date.now
 
@@ -66,5 +68,20 @@ final class EpisodeTranscriptRecord {
         set {
             stateRawValue = newValue.rawValue
         }
+    }
+
+    /// Explicit engine when recorded (schema 3+ writes), otherwise inferred
+    /// from the model identifier the way pre-3 readers did.
+    var engineProvenance: EpisodeTranscriptEngineProvenance {
+        EpisodeTranscriptEngineProvenance(rawValue: transcriptionEngineRawValue)
+            ?? .inferred(fromModelIdentifier: modelIdentifier)
+    }
+
+    var isAppleSpeechTranscript: Bool {
+        engineProvenance == .appleSpeech
+    }
+
+    var isRemoteTranscript: Bool {
+        engineProvenance == .remoteWhisper
     }
 }

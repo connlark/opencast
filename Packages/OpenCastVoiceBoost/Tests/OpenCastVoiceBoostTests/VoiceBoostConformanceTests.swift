@@ -170,7 +170,7 @@ struct VoiceBoostConformanceTests {
         let truePeak = VoiceBoostTruePeakAnalyzer.truePeakDBTP(
             buffer,
             channelCount: 1,
-            oversampleFactor: 4
+            sampleRate: 48_000
         )
 
         #expect(truePeak > samplePeak + 0.6)
@@ -199,7 +199,7 @@ struct VoiceBoostConformanceTests {
         let truePeak = VoiceBoostTruePeakAnalyzer.truePeakDBTP(
             buffer,
             channelCount: 1,
-            oversampleFactor: 4
+            sampleRate: 48_000
         )
         #expect(truePeak <= -0.9)
     }

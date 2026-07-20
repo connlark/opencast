@@ -29,6 +29,19 @@ struct TranscriptTimelineTests {
         #expect(TranscriptTimeline().segmentIndex(at: 10) == nil)
     }
 
+    @Test("Handoff is the next segment's start, or infinity for the last")
+    func handoffIsTheNextSegmentsStartOrInfinityForTheLast() {
+        let timeline = TranscriptTimeline(segments: [
+            segment(id: 0, start: 0, end: 4),
+            segment(id: 1, start: 4, end: 9),
+            segment(id: 2, start: 12, end: 20)
+        ])
+
+        #expect(timeline.handoff(afterSegmentAt: 0) == 4)
+        #expect(timeline.handoff(afterSegmentAt: 1) == 12)
+        #expect(timeline.handoff(afterSegmentAt: 2) == .infinity)
+    }
+
     @Test("Active word is the last one starting at or before the time")
     func activeWordIsTheLastOneStartingAtOrBeforeTheTime() {
         let timeline = TranscriptTimeline(segments: [

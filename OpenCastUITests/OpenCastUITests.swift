@@ -21,6 +21,7 @@ final class OpenCastUITests: XCTestCase {
     private static let perEpisodeVoiceBoostModeValue = "perEpisode"
     private static let playEpisodeTraceArmingSecondsEnvironmentKey = "OPENCAST_PLAY_EPISODE_TRACE_ARMING_SECONDS"
     private static let seededPeelTraceArmingSecondsEnvironmentKey = "OPENCAST_SEEDED_PEEL_TRACE_ARMING_SECONDS"
+    private static let nowPlayingDismissTraceArmingSecondsEnvironmentKey = "OPENCAST_NOW_PLAYING_DISMISS_TRACE_ARMING_SECONDS"
     private static let coldStartTraceArmingSecondsEnvironmentKey = "OPENCAST_COLD_START_TRACE_ARMING_SECONDS"
     private static let manyArtworkTraceArmingSecondsEnvironmentKey = "OPENCAST_MANY_ARTWORK_TRACE_ARMING_SECONDS"
     private static let manyArtworkPerformanceProbeEnvironmentKey = "OPENCAST_RUN_MANY_ARTWORK_PREVIEW_PERF_UI_TESTS"
@@ -50,6 +51,86 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSettingsShowsRemoteTranscriptionUnavailableRetry() throws {
+        let app = makeCompletedOnboardingApp()
+        app.launchArguments += [
+            "-OPENCAST_REMOTE_TRANSCRIPTION_PURCHASE_FIXTURE",
+            "unavailable",
+        ]
+        app.launch()
+
+        openSettings(in: app)
+
+        let header = app.staticTexts["Remote Transcription"]
+        var swipes = 0
+        while !header.waitForExistence(timeout: 5) && swipes < 12 {
+            app.swipeUp()
+            swipes += 1
+        }
+        XCTAssertTrue(
+            header.exists,
+            "Remote Transcription section should remain discoverable when StoreKit is unavailable"
+        )
+        assertExists(app.buttons["Try Again"], named: "remote transcription retry action")
+    }
+
+    @MainActor
+    func testRemoteTranscriptionIAPReviewScreenshot() throws {
+        let app = makeSeededApp(forcesDarkMode: false, forcesLightMode: true)
+        app.launchArguments += [
+            "-OPENCAST_REMOTE_TRANSCRIPTION_PURCHASE_FIXTURE",
+            "review-screenshot",
+        ]
+        app.launch()
+
+        openSettings(in: app)
+        let product = app.staticTexts["20 Transcription Hours"]
+        scrollUntilExists(product, in: app, maxSwipes: 8)
+        assertExists(app.staticTexts["Remote Transcription"], named: "Remote Transcription section")
+        assertExists(app.staticTexts["Balance, 1 hr"], named: "fixture balance")
+        assertExists(product, named: "20-hour product")
+        assertExists(app.staticTexts["100 Transcription Hours"], named: "100-hour product")
+        assertExists(
+            app.buttons["Buy 20 Transcription Hours for $0.99"],
+            named: "20-hour purchase button"
+        )
+        assertExists(
+            app.buttons["Buy 100 Transcription Hours for $4.99"],
+            named: "100-hour purchase button"
+        )
+        attachSmokeScreenshot(named: "remote_transcription_iap_review")
+    }
+
+    @MainActor
+    func testEpisodeMenuShowsRemoteSurfacesOnFreshLaunchWithoutSettings() throws {
+        // Launch-scoped gate resolution (pass 2 decision 10): remote surfaces
+        // must appear in the episode menu on a fresh launch without Settings
+        // ever mounting (pass 1 resolved the gate only from Settings' task).
+        let app = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true
+        )
+        app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        openEpisodeDetailFromContextMenu(inboxEpisode, in: app, named: "seeded inbox episode")
+
+        let actionsButton = app.buttons["Episode Actions"].firstMatch
+        assertExists(actionsButton, named: "Episode Actions menu", timeout: 8)
+        actionsButton.tap()
+
+        assertExists(app.buttons["Download"], named: "download action proving episode is not local")
+        let remoteAction = app.descendants(matching: .any)["Transcribe Remotely"].firstMatch
+        XCTAssertTrue(
+            remoteAction.waitForExistence(timeout: 8),
+            "Remote transcription menu entry should be present on fresh launch without opening Settings"
+        )
+    }
+
+    @MainActor
     func testSearchTabFindsSeededEpisodeAndRecordsRecentQuery() throws {
         let app = makeSeededApp(forcesDarkMode: false, forcesLightMode: true)
         app.launch()
@@ -57,7 +138,7 @@ final class OpenCastUITests: XCTestCase {
         openSection("Search", in: app)
         let searchField = app.searchFields.firstMatch
         assertExists(searchField, named: "Search tab field")
-        searchField.tap()
+        assertExists(app.keyboards.firstMatch, named: "keyboard opened by Search tab")
         searchField.typeText("Deterministic UI Episode\n")
 
         assertExists(seededEpisodeRow(in: app), named: "seeded episode search result", timeout: 20)
@@ -1035,6 +1116,7 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     func testSeededNowPlayingCanDismissFromContentArea() throws {
         let app = makeSeededApp()
+        app.launchArguments.append("--opencast-frame-probe")
         app.launch()
 
         assertExists(app.tabBars.buttons["Library"], named: "Library tab")
@@ -1045,9 +1127,15 @@ final class OpenCastUITests: XCTestCase {
         inboxEpisode.tap()
 
         assertNowPlayingOverlay(in: app)
+        RunLoop.current.run(until: Date.now.addingTimeInterval(2))
+        waitForExternalTraceIfRequested(
+            environmentKey: Self.nowPlayingDismissTraceArmingSecondsEnvironmentKey
+        )
         dragDismissNowPlayingOverlayFromArtwork(in: app)
         XCTAssertTrue(nowPlayingOverlay(in: app).waitForNonExistence(timeout: 5))
         assertExists(app.buttons["Open Now Playing"], named: "mini-player after content-area dismiss")
+        let summary = captureFramePacingSummary(in: app, expectedSessions: 2)
+        XCTAssertTrue(summary.contains("dismiss-drag-start"), "expected warmed dismissal frame data")
     }
 
     @MainActor
@@ -1161,16 +1249,39 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededNowPlayingPeelRemoteTranscriptionPresentsEstimateSheet() throws {
+        let app = makeSeededApp()
+        app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
+        app.launch()
+
+        openSeededNowPlayingSoundLab(in: app)
+        let remoteRow = app.buttons["Transcribe Remotely"].firstMatch
+        assertExists(remoteRow, named: "Transcribe Remotely peel row")
+        remoteRow.tap()
+
+        assertExists(app.navigationBars["Remote Transcription"], named: "consumption estimate sheet")
+        assertExists(app.buttons["Start"], named: "estimate sheet Start action")
+        app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(
+            app.navigationBars["Remote Transcription"].waitForNonExistence(timeout: 5),
+            "Cancelling the estimate sheet should dismiss it without starting"
+        )
+    }
+
+    @MainActor
     func testSeededNowPlayingAdFreePassControlStateScreenshots() throws {
+        // The fixed-footprint row never shows progress text or "Working";
+        // in-flight stages keep the stable title and expose status through
+        // the accessibility value.
         let variants: [(stage: String, buttonLabel: String, statusFragment: String)] = [
             ("idle", "Skip Promos & Ads", "Ready to mark"),
             ("consent", "Download Model", "Speech model needed"),
-            ("downloading", "Working", "Downloading episode"),
-            ("installing", "Working", "Downloading speech model"),
-            ("checking", "Working", "Checking speech model"),
+            ("downloading", "Skip Promos & Ads", "Downloading episode"),
+            ("installing", "Skip Promos & Ads", "Downloading speech model"),
+            ("checking", "Skip Promos & Ads", "Checking speech model"),
             ("model-busy", "Skip Promos & Ads", "Speech model is not ready"),
-            ("transcribing", "Working", "Transcribing"),
-            ("analyzing", "Working", "Analyzing promos"),
+            ("transcribing", "Skip Promos & Ads", "Transcribing"),
+            ("analyzing", "Skip Promos & Ads", "Analyzing promos"),
             ("completed", "Reanalyze", "2 zones marked"),
             ("outdated", "Skip Promos & Ads", "Outdated — run again"),
             ("interrupted", "Resume", "Transcript interrupted"),
@@ -1197,8 +1308,8 @@ final class OpenCastUITests: XCTestCase {
 
         let variants: [(stage: String, buttonLabel: String, statusFragment: String)] = [
             ("consent", "Download Model", "Speech model needed"),
-            ("installing", "Working", "Downloading speech model"),
-            ("transcribing", "Working", "Transcribing"),
+            ("installing", "Skip Promos & Ads", "Downloading speech model"),
+            ("transcribing", "Skip Promos & Ads", "Transcribing"),
             ("failed", "Retry", "Daily promo/ad analysis limit reached")
         ]
 
@@ -1299,9 +1410,9 @@ final class OpenCastUITests: XCTestCase {
         let passButton = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
         assertExists(passButton, named: "stale-analysis pass re-run button")
         XCTAssertTrue(passButton.label.contains("Skip Promos & Ads"))
-        assertExists(
-            elementContaining(label: "Outdated — run again", in: app),
-            named: "stale-analysis re-run status"
+        XCTAssertTrue(
+            ((passButton.value as? String) ?? "").contains("Outdated — run again"),
+            "stale-analysis re-run status should surface as the row's accessibility value"
         )
         attachSmokeScreenshot(named: "seeded_stale_ad_analysis_offers_rerun")
     }
@@ -1353,9 +1464,11 @@ final class OpenCastUITests: XCTestCase {
 
         peelNowPlayingArtwork(in: app)
         assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
-        assertExists(
-            elementContaining(label: "Outdated — run again", in: app),
-            named: "outdated-policy re-run status"
+        let outdatedPassButton = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
+        assertExists(outdatedPassButton, named: "outdated-policy pass re-run button")
+        XCTAssertTrue(
+            ((outdatedPassButton.value as? String) ?? "").contains("Outdated — run again"),
+            "outdated-policy re-run status should surface as the row's accessibility value"
         )
         attachSmokeScreenshot(named: "seeded_outdated_policy_ad_analysis_offers_rerun")
     }
@@ -1557,7 +1670,18 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["Episodes"], named: "podcast detail episodes section")
         assertExists(seededEpisodeRow(in: app), named: "podcast detail seeded episode")
         attachSmokeScreenshot(named: "podcast_detail")
-        assertCompactCardPlateIsInset(named: "podcast detail compact card plate")
+        // The rewritten podcast detail fills the default scan band with its
+        // dark hero header, so measure the plate in the episode card's own
+        // vertical band instead.
+        let episodeRowFrame = seededEpisodeRow(in: app).frame
+        let appHeight = app.windows.firstMatch.frame.height
+        assertCompactCardPlateIsInset(
+            named: "podcast detail compact card plate",
+            verticalBand: (
+                start: episodeRowFrame.minY / appHeight,
+                end: episodeRowFrame.maxY / appHeight
+            )
+        )
 
         tapBackButton(in: app)
         assertExists(libraryPodcast, named: "Library root after podcast detail")
@@ -2243,6 +2367,74 @@ final class OpenCastUITests: XCTestCase {
         )
         assertExists(app.buttons["Retry"], named: "pipeline card Retry action")
         attachSmokeScreenshot(named: "episode_detail_failed_download")
+    }
+
+    @MainActor
+    func testRemoteTranscriptionFailureFixtureShowsTerminalStateAndFallback() throws {
+        let app = makeSeededApp(seedsCompletedDownload: true)
+        app.launchArguments += [
+            "-OPENCAST_REMOTE_TRANSCRIPTION_DEV",
+            "-OPENCAST_REMOTE_TRANSCRIPTION_FIXTURE", "failure:ui-test-episode-1"
+        ]
+        app.launch()
+        openSeededEpisodeDetail(in: app)
+
+        assertExists(
+            app.staticTexts["Remote transcription didn't finish"],
+            named: "remote failure card title"
+        )
+        assertExists(
+            elementContaining(label: "The server couldn't transcribe this episode.", in: app),
+            named: "category-level failure copy"
+        )
+        let fallback = app.buttons["Transcribe on Device"]
+        assertExists(fallback, named: "local fallback action")
+        attachSmokeScreenshot(named: "episode_detail_remote_failure")
+
+        // The fallback hands off to the existing local transcription path and
+        // dismisses the failure surface.
+        fallback.tap()
+        assertDoesNotExist(
+            app.staticTexts["Remote transcription didn't finish"],
+            named: "remote failure card after fallback",
+            timeout: 5
+        )
+    }
+
+    @MainActor
+    func testRemoteTranscriptionProgressFixtureShowsETAAndDeterminateProgress() throws {
+        let app = makeSeededApp(seedsCompletedDownload: true)
+        app.launchArguments += [
+            "-OPENCAST_REMOTE_TRANSCRIPTION_DEV",
+            "-OPENCAST_REMOTE_TRANSCRIPTION_FIXTURE", "transcribing:ui-test-episode-1"
+        ]
+        app.launch()
+        openSeededNowPlaying(in: app)
+
+        let toast = app.descendants(matching: .any)["Remote Transcription Progress Toast"]
+        assertExists(toast, named: "Now Playing remote transcription toast")
+        assertExists(toast.staticTexts["Transcribing"], named: "Now Playing remote stage")
+        assertExists(
+            toast.staticTexts["About 1 minute remaining."],
+            named: "Now Playing remote ETA"
+        )
+        let toastProgress = toast.progressIndicators["Remote Transcription Chunk Progress"]
+        assertExists(toastProgress, named: "Now Playing determinate remote progress")
+        // iOS 26.5 exposes this SwiftUI progress label as empty to XCUITest;
+        // the stable identifier above and exact value still verify the control.
+        XCTAssertEqual(toastProgress.value as? String, "43 percent")
+
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
+        let card = app.descendants(matching: .any)["Remote Transcription Status Card"]
+        assertExists(card, named: "episode remote transcription status card")
+        assertExists(card.staticTexts["Transcribing"], named: "episode remote stage")
+        assertExists(
+            card.staticTexts["About 1 minute remaining."],
+            named: "episode remote ETA"
+        )
+        let cardProgress = card.progressIndicators["Remote Transcription Chunk Progress"]
+        assertExists(cardProgress, named: "episode determinate remote progress")
+        XCTAssertEqual(cardProgress.value as? String, "43 percent")
     }
 
     @MainActor
@@ -3116,10 +3308,14 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     private func assertCompactCardPlateIsInset(
         named name: String,
+        verticalBand: (start: Double, end: Double) = (start: 0.18, end: 0.55),
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        guard let extents = compactCardPlateExtents(from: XCUIScreen.main.screenshot()) else {
+        guard let extents = compactCardPlateExtents(
+            from: XCUIScreen.main.screenshot(),
+            verticalBand: verticalBand
+        ) else {
             XCTFail("Could not detect \(name).", file: file, line: line)
             return
         }
@@ -3150,7 +3346,8 @@ final class OpenCastUITests: XCTestCase {
 
     @MainActor
     private func compactCardPlateExtents(
-        from screenshot: XCUIScreenshot
+        from screenshot: XCUIScreenshot,
+        verticalBand: (start: Double, end: Double)
     ) -> (imageWidth: Int, plateWidth: Int, leftMargin: Int, rightMargin: Int)? {
         guard let image = UIImage(data: screenshot.pngRepresentation),
               let cgImage = image.cgImage
@@ -3187,8 +3384,11 @@ final class OpenCastUITests: XCTestCase {
             return nil
         }
 
-        let scanStartY = Int(Double(height) * 0.18)
-        let scanEndY = Int(Double(height) * 0.55)
+        let scanStartY = max(0, Int(Double(height) * verticalBand.start))
+        let scanEndY = min(height, Int(Double(height) * verticalBand.end))
+        guard scanEndY > scanStartY else {
+            return nil
+        }
         let darkPixelThreshold = max(8, Int(Double(scanEndY - scanStartY) * 0.12))
         var detectedColumns: [Int] = []
 
@@ -3261,6 +3461,7 @@ final class OpenCastUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
     }
 
+    @MainActor
     private func dismissContextualMenu(in app: XCUIApplication) {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
     }
@@ -3623,19 +3824,18 @@ final class OpenCastUITests: XCTestCase {
         openSeededNowPlayingSoundLab(in: app)
         let panel = nowPlayingPeelSettingsPanel(in: app)
         let passButton = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
-        let status = elementContaining(label: statusFragment, in: app)
 
         assertExists(passButton, named: "\(stage) ad-free pass button", file: file, line: line)
         XCTAssertTrue(passButton.label.contains(buttonLabel), file: file, line: line)
+        // The row is fixed-footprint: no visible status line, so the status
+        // lives entirely in the accessibility value.
         XCTAssertTrue(
             ((passButton.value as? String) ?? "").contains(statusFragment),
             "\(stage) ad-free pass button should expose its status as an accessibility value",
             file: file,
             line: line
         )
-        assertExists(status, named: "\(stage) ad-free pass status", file: file, line: line)
         assertAdFreePassControlSitsInProtectedPanelSpace(passButton, panel: panel, stage: stage, file: file, line: line)
-        assertAdFreePassControlSitsInProtectedPanelSpace(status, panel: panel, stage: "\(stage) status", file: file, line: line)
         attachSmokeScreenshot(named: screenshotName)
 
         app.terminate()

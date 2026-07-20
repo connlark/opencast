@@ -26,6 +26,7 @@ struct EpisodePipelineState: Equatable {
     static let transcriptCancelledMessage = "The transcript was cancelled."
     static let analysisFailedMessage = "Ad detection couldn't finish."
     static let pausedFootnote = "Paused — resume anytime."
+    static let appleSpeechRestartFootnote = "Paused — Apple transcription starts over from the beginning."
     static let modelConsentFootnote = "A speech model download is needed to continue."
 
     static func make(
@@ -142,12 +143,12 @@ struct EpisodePipelineState: Equatable {
             return soloFailure(kind: .transcribe, title: transcriptFailedTitle, message: transcriptFailedMessage, action: .retryTranscription)
         case .cancelled:
             return soloFailure(kind: .transcribe, title: transcriptFailedTitle, message: transcriptCancelledMessage, action: .retryTranscription)
-        case .interrupted:
+        case .interrupted(let record):
             return EpisodePipelineState(
                 title: transcriptPausedTitle,
                 steps: [EpisodePipelineStep(kind: .transcribe, status: .waiting)],
-                footnote: pausedFootnote,
-                action: .resumeTranscription
+                footnote: record.isAppleSpeechTranscript ? appleSpeechRestartFootnote : pausedFootnote,
+                action: record.isAppleSpeechTranscript ? .retryTranscription : .resumeTranscription
             )
         case .unavailable, .downloadRequired, .modelRequired, .modelBusy, .ready, .completed:
             break

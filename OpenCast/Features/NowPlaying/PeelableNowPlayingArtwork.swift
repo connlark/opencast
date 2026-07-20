@@ -10,12 +10,12 @@ struct PeelableNowPlayingArtwork: View {
     let size: CGFloat
     @Binding var voiceBoostEnabled: Bool
     let voiceBoostControlEnabled: Bool
-    let adFreePassPresentation: EpisodeAdFreePassPresentation
+    let adFreePassRow: NowPlayingPeelAdFreePassRowModel
     let onAdFreePassAction: () -> Void
+    let onTranscribeRemotely: () -> Void
     let onAdFreePassBackgroundProbe: () -> Void
     @Binding var isPeelInteractionActive: Bool
     let prewarmsPeelRenderer: Bool
-    let prewarmsPeelSettingsPanel: Bool
     let allowsPeelStart: Bool
     let isCardDismissDragActive: Bool
 
@@ -36,13 +36,14 @@ struct PeelableNowPlayingArtwork: View {
         let artworkImage = loadedArtworkImage(for: request)
 
         ZStack {
-            if shouldMountSettingsPanel {
+            if shouldRenderSettingsPanel {
                 NowPlayingPeelSettingsPanel(
                     revealProgress: peelProgress,
                     voiceBoostEnabled: $voiceBoostEnabled,
                     voiceBoostControlEnabled: voiceBoostControlEnabled,
-                    adFreePassPresentation: adFreePassPresentation,
+                    adFreePassRow: adFreePassRow,
                     onAdFreePassAction: onAdFreePassAction,
+                    onTranscribeRemotely: onTranscribeRemotely,
                     onAdFreePassBackgroundProbe: onAdFreePassBackgroundProbe
                 )
                     .frame(width: size, height: size)
@@ -132,10 +133,6 @@ struct PeelableNowPlayingArtwork: View {
 
     private var canAcceptPeelInput: Bool {
         allowsPeelStart || shouldRenderSettingsPanel
-    }
-
-    private var shouldMountSettingsPanel: Bool {
-        shouldRenderSettingsPanel || prewarmsPeelSettingsPanel
     }
 
     private var shouldMountPeelRenderer: Bool {

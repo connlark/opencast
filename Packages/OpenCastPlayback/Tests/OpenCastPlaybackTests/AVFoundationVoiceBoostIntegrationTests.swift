@@ -53,6 +53,9 @@ struct AVFoundationVoiceBoostIntegrationTests {
         #expect(snapshot.prepareCount > 0)
         #expect(snapshot.processCount > 0)
         #expect(snapshot.processedFrameCount > 0)
+        // Steady playback with no configuration updates must never lose a
+        // buffer to lock contention (I2).
+        #expect(snapshot.contentionBypassedFrameCount == 0)
         #expect(snapshot.sourceErrorCount == 0)
         #expect(snapshot.unsupportedFormatCount == 0)
     }
@@ -140,6 +143,50 @@ struct AVFoundationVoiceBoostIntegrationTests {
         #expect(position > 0)
         #expect(controller.snapshot.state == .playing)
         #expect(diagnostics.snapshot.prepareCount == 0)
+        #expect(diagnostics.snapshot.processCount == 0)
+    }
+
+    @Test
+    @MainActor
+    func controllerRecordsVoiceBoostTapCreationFailureStatus() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 4
+        )
+        let diagnostics = VoiceBoostAudioTapDiagnostics()
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: diagnostics,
+            voiceBoostAudioTapFactory: { _, _ in
+                throw VoiceBoostAudioTapError.creationFailed(-50)
+            }
+        )
+        let episode = Episode(
+            id: EpisodeID(rawValue: "voiceboost-creation-failed-fixture"),
+            podcastID: PodcastID(rawValue: "https://example.com/voiceboost.xml"),
+            podcastTitle: "Voice Boost Fixture",
+            title: "Creation Failed Fixture",
+            duration: 4,
+            audioURL: fixtureURL
+        )
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+
+        try controller.load(episode)
+        controller.play()
+        let position = try await waitForPosition(in: controller, exceeding: 0)
+
+        #expect(position > 0)
+        #expect(controller.snapshot.state == .playing)
+        #expect(diagnostics.snapshot.tapCreationFailureCount >= 1)
+        #expect(diagnostics.snapshot.lastTapCreationStatus == -50)
         #expect(diagnostics.snapshot.processCount == 0)
     }
 

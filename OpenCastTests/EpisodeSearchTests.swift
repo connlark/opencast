@@ -419,6 +419,30 @@ struct EpisodeSearchTests {
         #expect(highlightedSegments(in: try #require(result.snippet)) == ["vector"])
     }
 
+    @Test("Snippet keeps its original window when word-boundary snapping crosses")
+    func snippetKeepsOriginalWindowWhenWordBoundarySnappingCrosses() throws {
+        let longURL = "https://www.amazon.com/" + String(repeating: "affiliate-path-", count: 8)
+            + "noisecancelling"
+            + String(repeating: "-tracking-value", count: 10)
+        let episodes = [
+            makeEpisode(id: "long-token", title: "Headphone Notes")
+        ]
+
+        let result = try #require(
+            EpisodeSearch.results(
+                in: episodes,
+                query: "noisecancelling",
+                mode: .fullText,
+                showNotesHTMLByEpisodeID: ["long-token": "<p>Before \(longURL) after.</p>"]
+            ).first
+        )
+        let snippetText = plainText(result.snippet)
+
+        #expect(result.episode.episodeID == "long-token")
+        #expect(snippetText.contains("noisecancelling"))
+        #expect(snippetText.count <= 180)
+    }
+
     @Test("Visible matches are highlighted in title and podcast title")
     func visibleMatchesAreHighlightedInTitleAndPodcastTitle() throws {
         let episodes = [

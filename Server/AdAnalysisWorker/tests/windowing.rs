@@ -71,6 +71,7 @@ fn max_segment_requests_use_at_most_four_windows() {
 fn sample_request(segment_count: usize) -> AdAnalysisRequest {
     AdAnalysisRequest {
         schema_version: SCHEMA_VERSION,
+        async_supported: false,
         request_id: "request-1".to_string(),
         episode_id: "episode-1".to_string(),
         podcast_id: "podcast-1".to_string(),

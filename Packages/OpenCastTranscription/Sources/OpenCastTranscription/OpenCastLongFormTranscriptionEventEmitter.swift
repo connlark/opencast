@@ -7,6 +7,7 @@ final class OpenCastLongFormTranscriptionEventEmitter: @unchecked Sendable {
     private let audioDuration: TimeInterval
     private let segmentMapper: @Sendable (TranscriptionSegment, Int) -> OpenCastTranscriptSegment
     private var segments: [OpenCastTranscriptSegment] = []
+    private var transcriptText = ""
     private var checkpointIndex = 0
     private var nextSegmentID = 0
     private var completedDuration: TimeInterval
@@ -49,6 +50,12 @@ final class OpenCastLongFormTranscriptionEventEmitter: @unchecked Sendable {
                 return nil
             }
 
+            for segment in mappedSegments {
+                if !transcriptText.isEmpty {
+                    transcriptText.append(" ")
+                }
+                transcriptText.append(segment.text)
+            }
             segments.append(contentsOf: mappedSegments)
             completedDuration = max(completedDuration, mappedSegments.map(\.end).max() ?? completedDuration)
             checkpointIndex += 1
@@ -57,7 +64,7 @@ final class OpenCastLongFormTranscriptionEventEmitter: @unchecked Sendable {
                 audioDuration: audioDuration,
                 completedDuration: min(completedDuration, audioDuration),
                 segments: segments,
-                text: segments.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+                text: transcriptText
             )
         }
 

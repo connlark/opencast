@@ -344,7 +344,11 @@ struct EpisodeAdAnalysisZoneMapperTests {
 }
 
 private struct UnusedEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisAPIResponse {
+    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
+        throw EpisodeAdAnalysisError.clientDisabled
+    }
+
+    func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
         throw EpisodeAdAnalysisError.clientDisabled
     }
 }

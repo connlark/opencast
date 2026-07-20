@@ -10,6 +10,12 @@ struct EpisodeDetailView: View {
 
     @State private var showNotes: EpisodeShowNotesContent = .empty
     @State private var transcriptSnippet: String?
+    @State private var adAnalysisTranscriptDocument: EpisodeTranscriptDocument?
+    @State private var adAnalysisDocument: EpisodeAdAnalysisDocument?
+    @State private var adAnalysisState: EpisodeAdAnalysisJobState = .unavailable("Transcript unavailable.")
+    @State private var hasCurrentCompletedAnalysis = false
+    @State private var currentAdAnalysisZoneTiers: EpisodeAdAnalysisZoneTiers = .empty
+    @State private var loadedAdAnalysisContentIdentifier: String?
     @State private var isConfirmingClearProgress = false
     @State private var sheetDestination: SheetDestination?
 
@@ -28,6 +34,7 @@ struct EpisodeDetailView: View {
         let episode = episode
         let progressSummary = episode.map { appModel.library.progressSummary(for: $0) }
         let progressRecord = episode.flatMap { appModel.library.progressRecord(for: $0.episodeID) }
+        let adAnalysisContentIdentifier = adAnalysisContentLoadIdentifier(for: episode?.episodeID)
 
         Group {
             if let episode {
@@ -61,12 +68,19 @@ struct EpisodeDetailView: View {
         } message: {
             Text("Listening position for this episode will be removed. Downloads are unchanged.")
         }
+        .sheet(item: Bindable(appModel.remoteTranscription.store).startPreview) { request in
+            RemoteTranscriptionConsumptionPreviewSheet(request: request) {
+                if let episode {
+                    startRemoteTranscript(episode)
+                }
+            }
+        }
         .sheet(item: $sheetDestination) { destination in
             SheetDestinationView(destination: destination, onDismiss: dismissSheet)
         }
         .task(id: TextContentTaskKey(
             episodeID: episode?.episodeID,
-            transcriptUpdatedAt: episode.flatMap { appModel.transcriptions.record(for: $0.episodeID)?.updatedAt },
+            transcriptCompletedAt: completedTranscriptUpdatedAt(for: episode?.episodeID),
             isNowPlayingPresented: appModel.isNowPlayingPresented
         )) {
             let episode = episode
@@ -75,6 +89,12 @@ struct EpisodeDetailView: View {
             }
 
             await updateTextContent(for: episode)
+        }
+        .task(id: adAnalysisContentIdentifier) {
+            await updateAdAnalysisContent(
+                for: episode,
+                identifier: adAnalysisContentIdentifier
+            )
         }
     }
 
@@ -89,10 +109,15 @@ struct EpisodeDetailView: View {
             modelState: appModel.transcriptionModels.state,
             requiresInstalledWhisperModel: !appModel.appleSpeechAssets.isTranscriberAvailable
         )
-        let analysis = appModel.adAnalyses.jobState(
-            for: appModel.transcriptions.document(for: episode.episodeID),
-            transcriptState: appModel.transcriptions.record(for: episode.episodeID)?.state
-        )
+        let isAdAnalysisContentCurrent = loadedAdAnalysisContentIdentifier
+            == adAnalysisContentLoadIdentifier(for: episode.episodeID)
+        let analysis: EpisodeAdAnalysisJobState = isAdAnalysisContentCurrent
+            ? adAnalysisState
+            : .unavailable("Transcript unavailable.")
+        let hasCurrentAnalysis = isAdAnalysisContentCurrent
+            && hasCurrentCompletedAnalysis
+            && adAnalysisDocument?.episodeID == episode.episodeID
+        let zoneTiers = hasCurrentAnalysis ? currentAdAnalysisZoneTiers : .empty
         let pipelineState = EpisodePipelineState.make(
             episodeID: episode.episodeID,
             queueStatus: appModel.adFreePass.queueStatus(for: episode.episodeID),
@@ -120,7 +145,10 @@ struct EpisodeDetailView: View {
 
                 EpisodeActionBar(
                     downloadRecord: downloadRecord,
-                    detectAdsState: appModel.detectAdsMenuState(for: episode),
+                    detectAdsState: EpisodeDetectAdsMenuState(
+                        queueStatus: appModel.adFreePass.queueStatus(for: episode.episodeID),
+                        hasCurrentCompletedAnalysis: hasCurrentAnalysis
+                    ),
                     onPlay: { play(episode) },
                     onDownload: { download(episode) },
                     onResumeDownload: { resumeDownload(episode) },
@@ -129,6 +157,21 @@ struct EpisodeDetailView: View {
                     onMakeAdFree: { makeAdFree(episode) }
                 )
 
+                // Remote flow surface (dev-flag gated): live phase while a
+                // request runs, and a visible terminal state with the
+                // on-device fallback when it ends — no silent endings.
+                if appModel.remoteTranscriptionPurchases.isSurfaceVisible,
+                   let remoteStatus = RemoteTranscriptionStatusPresentation.make(
+                       phase: appModel.remoteTranscription.store.phase(for: episode.episodeID)
+                   ) {
+                    RemoteTranscriptionStatusCard(
+                        presentation: remoteStatus,
+                        onTranscribeLocally: { transcribeLocallyAfterRemote(episode) },
+                        onCancel: appModel.remoteTranscription.cancel,
+                        onDismiss: { dismissRemoteOutcome(episode) }
+                    )
+                }
+
                 if let pipelineState {
                     EpisodePipelineCard(state: pipelineState) { action in
                         perform(action, episode: episode)
@@ -136,7 +179,6 @@ struct EpisodeDetailView: View {
                 }
 
                 if case .completed(_, let isStale) = analysis {
-                    let zoneTiers = appModel.adAnalysisZoneTiers(for: episode, duration: episode.duration)
                     EpisodeAdSpanTimelineView(
                         duration: timelineDuration(episode: episode, zoneTiers: zoneTiers),
                         zoneTiers: zoneTiers,
@@ -205,8 +247,25 @@ struct EpisodeDetailView: View {
         appModel.transcribeDownloadedEpisode(episode, downloadRecord: downloadRecord, modelContext: modelContext)
     }
 
+    private func startRemoteTranscript(_ episode: EpisodeListItemSnapshot) {
+        appModel.remoteTranscription.store.startPreview = nil
+        appModel.remoteTranscription.start(episode: episode, modelContext: modelContext)
+    }
+
+    private func transcribeLocallyAfterRemote(_ episode: EpisodeListItemSnapshot) {
+        appModel.remoteTranscription.store.dismissTerminalPhase(for: episode.episodeID)
+        transcribe(episode)
+    }
+
+    private func dismissRemoteOutcome(_ episode: EpisodeListItemSnapshot) {
+        appModel.remoteTranscription.store.dismissTerminalPhase(for: episode.episodeID)
+    }
+
     private func detectAds(_ episode: EpisodeListItemSnapshot) {
-        guard let document = appModel.transcriptions.document(for: episode.episodeID) else {
+        guard loadedAdAnalysisContentIdentifier == adAnalysisContentLoadIdentifier(for: episode.episodeID),
+              let document = adAnalysisTranscriptDocument,
+              document.episodeID == episode.episodeID
+        else {
             return
         }
 
@@ -303,7 +362,120 @@ struct EpisodeDetailView: View {
         }
 
         showNotes = resolved
-        transcriptSnippet = snippet(from: appModel.transcriptions.document(for: episode.episodeID))
+        let transcriptDocument: EpisodeTranscriptDocument?
+        if appModel.transcriptions.record(for: episode.episodeID)?.state == .completed {
+            do {
+                transcriptDocument = try await appModel.transcriptions.loadDocument(for: episode.episodeID)
+            } catch is CancellationError {
+                return
+            } catch {
+                transcriptDocument = nil
+            }
+        } else {
+            transcriptDocument = nil
+        }
+        guard !Task.isCancelled else {
+            return
+        }
+        transcriptSnippet = snippet(from: transcriptDocument)
+    }
+
+    private func updateAdAnalysisContent(
+        for episode: EpisodeListItemSnapshot?,
+        identifier: String
+    ) async {
+        loadedAdAnalysisContentIdentifier = nil
+        adAnalysisTranscriptDocument = nil
+        adAnalysisDocument = nil
+        adAnalysisState = .unavailable("Transcript unavailable.")
+        hasCurrentCompletedAnalysis = false
+        currentAdAnalysisZoneTiers = .empty
+
+        guard let episode,
+              appModel.transcriptions.record(for: episode.episodeID)?.state == .completed
+        else {
+            loadedAdAnalysisContentIdentifier = identifier
+            return
+        }
+
+        let transcriptDocument: EpisodeTranscriptDocument
+        do {
+            transcriptDocument = try await appModel.transcriptions.loadDocument(for: episode.episodeID)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else {
+                return
+            }
+            loadedAdAnalysisContentIdentifier = identifier
+            return
+        }
+        guard !Task.isCancelled else {
+            return
+        }
+
+        let analysisDocument: EpisodeAdAnalysisDocument?
+        if appModel.adAnalyses.record(for: episode.episodeID)?.state == .completed {
+            do {
+                analysisDocument = try await appModel.adAnalyses.loadDocument(for: episode.episodeID)
+            } catch is CancellationError {
+                return
+            } catch {
+                analysisDocument = nil
+            }
+        } else {
+            analysisDocument = nil
+        }
+        guard !Task.isCancelled else {
+            return
+        }
+
+        let state = appModel.adAnalyses.episodeDetailState(
+            for: transcriptDocument,
+            transcriptState: appModel.transcriptions.record(for: episode.episodeID)?.state,
+            analysisDocument: analysisDocument
+        )
+        adAnalysisTranscriptDocument = transcriptDocument
+        self.adAnalysisDocument = analysisDocument
+        adAnalysisState = state.jobState
+        hasCurrentCompletedAnalysis = state.hasCurrentCompletedAnalysis
+        if state.hasCurrentCompletedAnalysis, let analysisDocument {
+            currentAdAnalysisZoneTiers = EpisodeAdAnalysisZoneMapper.zoneTiers(
+                for: analysisDocument,
+                duration: episode.duration
+            )
+        } else {
+            currentAdAnalysisZoneTiers = .empty
+        }
+        loadedAdAnalysisContentIdentifier = identifier
+    }
+
+    private func completedTranscriptUpdatedAt(for episodeID: String?) -> Date? {
+        guard let episodeID,
+              let record = appModel.transcriptions.record(for: episodeID),
+              record.state == .completed
+        else {
+            return nil
+        }
+        return record.updatedAt
+    }
+
+    private func adAnalysisContentLoadIdentifier(for episodeID: String?) -> String {
+        guard let episodeID else {
+            return "missing"
+        }
+
+        let transcriptRecord = appModel.transcriptions.record(for: episodeID)
+        let transcriptStamp = transcriptRecord?.state == .completed
+            ? "completed:\(transcriptRecord?.updatedAt.timeIntervalSinceReferenceDate ?? -1)"
+            : "incomplete"
+        let analysisStamp: String
+        if let analysisRecord = appModel.adAnalyses.record(for: episodeID) {
+            analysisStamp = "\(analysisRecord.state.rawValue):\(analysisRecord.updatedAt.timeIntervalSinceReferenceDate)"
+        } else {
+            analysisStamp = "missing"
+        }
+        return "\(episodeID)|\(transcriptStamp)|\(analysisStamp)|\(appModel.adAnalyses.changeSequence)"
     }
 
     private func snippet(from document: EpisodeTranscriptDocument?) -> String? {
@@ -321,6 +493,6 @@ struct EpisodeDetailView: View {
 
 private struct TextContentTaskKey: Equatable {
     let episodeID: String?
-    let transcriptUpdatedAt: Date?
+    let transcriptCompletedAt: Date?
     let isNowPlayingPresented: Bool
 }

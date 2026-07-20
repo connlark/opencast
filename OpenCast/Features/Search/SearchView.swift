@@ -6,6 +6,8 @@ struct SearchView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
 
+    @Binding var isSearchPresented: Bool
+
     @State private var query = ""
     @State private var scope = SearchScope.library
     @State private var searchSession = EpisodeSearchSession()
@@ -18,9 +20,11 @@ struct SearchView: View {
 
     init(
         directoryService: any PodcastDirectoryService,
+        isSearchPresented: Binding<Bool>,
         onOpenEpisode: @escaping (String) -> Void,
         onOpenPodcast: @escaping (String) -> Void
     ) {
+        _isSearchPresented = isSearchPresented
         _searchStore = State(initialValue: PodcastSearchStore(directoryService: directoryService))
         self.onOpenEpisode = onOpenEpisode
         self.onOpenPodcast = onOpenPodcast
@@ -104,7 +108,11 @@ struct SearchView: View {
         }
         .scrollDismissesKeyboard(.immediately)
         .navigationTitle("Search")
-        .searchable(text: $query, prompt: "Podcasts and Episodes")
+        .searchable(
+            text: $query,
+            isPresented: $isSearchPresented,
+            prompt: "Podcasts and Episodes"
+        )
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
         .searchScopes($scope) {

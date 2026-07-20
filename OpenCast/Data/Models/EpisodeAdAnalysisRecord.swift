@@ -17,6 +17,7 @@ final class EpisodeAdAnalysisRecord {
     var warningCount: Int = 0
     var errorMessage: String?
     var failureKindRawValue: String?
+    var jobAcceptedAt: Date?
     var createdAt: Date = Date.now
     var updatedAt: Date = Date.now
 
@@ -34,6 +35,7 @@ final class EpisodeAdAnalysisRecord {
         spanCount: Int = 0,
         warningCount: Int = 0,
         errorMessage: String? = nil,
+        jobAcceptedAt: Date? = nil,
         createdAt: Date = Date.now,
         updatedAt: Date = Date.now
     ) {
@@ -50,6 +52,7 @@ final class EpisodeAdAnalysisRecord {
         self.spanCount = spanCount
         self.warningCount = warningCount
         self.errorMessage = errorMessage
+        self.jobAcceptedAt = jobAcceptedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

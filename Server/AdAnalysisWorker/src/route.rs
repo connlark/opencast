@@ -5,6 +5,7 @@ pub const HEALTH_PATH: &str = "/health";
 pub const APP_ATTEST_CHALLENGE_PATH: &str = "/v1/app-attest/challenge";
 pub const APP_ATTEST_REGISTER_PATH: &str = "/v1/app-attest/register";
 pub const ANALYZE_TRANSCRIPT_PATH: &str = "/v1/ad-analysis/transcript";
+pub const AD_ANALYSIS_JOBS_PREFIX: &str = "/v1/ad-analysis/jobs/";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
@@ -25,6 +26,7 @@ pub enum RouteAction {
     AppAttestChallenge,
     AppAttestRegister,
     AnalyzeTranscript,
+    PollJob { job_id: String },
 }
 
 pub fn route_request(method: &str, path: &str, enabled: bool) -> RouteAction {
@@ -42,6 +44,10 @@ pub fn route_request(method: &str, path: &str, enabled: bool) -> RouteAction {
 
     if path == ANALYZE_TRANSCRIPT_PATH {
         return handle_analysis(method, enabled);
+    }
+
+    if let Some(job_id) = path.strip_prefix(AD_ANALYSIS_JOBS_PREFIX) {
+        return handle_poll_job(method, enabled, job_id);
     }
 
     RouteAction::Static(json_response(404, ErrorResponse::new("not_found")))
@@ -100,6 +106,24 @@ fn handle_analysis(method: &str, enabled: bool) -> RouteAction {
         ));
     }
     RouteAction::AnalyzeTranscript
+}
+
+fn handle_poll_job(method: &str, enabled: bool, job_id: &str) -> RouteAction {
+    if method != "POST" {
+        return RouteAction::Static(method_not_allowed("POST"));
+    }
+    if !enabled {
+        return RouteAction::Static(json_response(
+            503,
+            ErrorResponse::new("ad_analysis_disabled"),
+        ));
+    }
+    if !crate::job::valid_job_id(job_id) {
+        return RouteAction::Static(json_response(404, ErrorResponse::new("not_found")));
+    }
+    RouteAction::PollJob {
+        job_id: job_id.to_string(),
+    }
 }
 
 fn method_not_allowed(allow: &'static str) -> StaticResponse {

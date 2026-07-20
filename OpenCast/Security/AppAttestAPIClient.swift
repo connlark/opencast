@@ -54,6 +54,7 @@ nonisolated struct AppAttestAPIClient: Sendable {
         keyID: String,
         payload: String,
         assertion: Data?,
+        timeout: TimeInterval? = nil,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
         let body = AppAttestAuthenticatedEnvelope(
@@ -62,16 +63,20 @@ nonisolated struct AppAttestAPIClient: Sendable {
             payload: payload,
             assertion: assertion?.base64EncodedString()
         )
-        return try await send(path: path, body: body, response: response)
+        return try await send(path: path, body: body, timeout: timeout, response: response)
     }
 
     func send<RequestBody: Encodable, ResponseBody: Decodable>(
         path: String,
         body: RequestBody,
+        timeout: TimeInterval? = nil,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
         var request = URLRequest(url: configuration.baseURL.appending(path: path))
         request.httpMethod = "POST"
+        if let timeout {
+            request.timeoutInterval = timeout
+        }
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue("application/json", forHTTPHeaderField: "accept")
         request.httpBody = try JSONEncoder().encode(body)

@@ -1,0 +1,39 @@
+// Public self-hosting template for the isolated production media worker.
+// It has no routes or workers.dev exposure and is reachable only through the
+// production gateway service binding.
+{
+  "name": "your-transcription-media-worker-production",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-09",
+  "workers_dev": false,
+  "observability": { "enabled": true },
+  // Replace every marker and pin the digest of your pushed image.
+  "containers": [
+    {
+      "class_name": "TranscriptionMediaContainer",
+      "image": "registry.cloudflare.com/REPLACE_WITH_ACCOUNT_HASH/your-transcription-media-container:REPLACE_WITH_TAG@sha256:REPLACE_WITH_IMAGE_DIGEST",
+      "max_instances": 2,
+      "instance_type": "basic"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MEDIA_CONTAINER",
+        "class_name": "TranscriptionMediaContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TranscriptionMediaContainer"]
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "TRANSCRIPTION_AUDIO",
+      "bucket_name": "your-remote-transcription-audio-production"
+    }
+  ]
+}

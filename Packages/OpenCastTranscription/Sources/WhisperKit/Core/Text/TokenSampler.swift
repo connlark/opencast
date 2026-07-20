@@ -53,6 +53,7 @@ open class GreedyTokenSampler: TokenSampling {
     // from this generator instead of the process-global RNG, making fallback
     // retries reproducible. Temperature-zero sampling never draws.
     private var seededGenerator: SplitMix64RandomNumberGenerator?
+    private var greedyScratch: [Float] = []
 
     public init(temperature: FloatType, eotToken: Int, decodingOptions: DecodingOptions, fallbackSeed: UInt64? = nil) {
         self.temperature = temperature
@@ -78,35 +79,30 @@ open class GreedyTokenSampler: TokenSampling {
     /// gates live in GreedySamplerEquivalenceTests.
     private func sampleGreedyOnCPU(logits: MLMultiArray) -> (token: Int, logprob: Float) {
         let count = logits.count
-        var floats = [Float](repeating: 0, count: count)
-        logits.withUnsafeBytes { rawBuffer in
-            let halfBuffer = rawBuffer.bindMemory(to: UInt16.self)
-            var sourceBuffer = vImage_Buffer(
-                data: UnsafeMutableRawPointer(mutating: halfBuffer.baseAddress),
-                height: 1, width: vImagePixelCount(count), rowBytes: count * 2
-            )
-            floats.withUnsafeMutableBufferPointer { destination in
-                var destinationBuffer = vImage_Buffer(
-                    data: destination.baseAddress, height: 1,
-                    width: vImagePixelCount(count), rowBytes: count * 4
-                )
-                vImageConvert_Planar16FtoPlanarF(&sourceBuffer, &destinationBuffer, 0)
+        if greedyScratch.count == count {
+            greedyScratch.withUnsafeMutableBufferPointer { destination in
+                Self.convertToFloat(logits, destination: destination)
+            }
+        } else {
+            greedyScratch = [Float](unsafeUninitializedCapacity: count) { destination, initializedCount in
+                Self.convertToFloat(logits, destination: destination)
+                initializedCount = count
             }
         }
 
         var maxValue: Float = 0
         var maxIndex: vDSP_Length = 0
-        vDSP_maxvi(floats, 1, &maxValue, &maxIndex, vDSP_Length(count))
+        vDSP_maxvi(greedyScratch, 1, &maxValue, &maxIndex, vDSP_Length(count))
 
         // logprob = x[argmax] - logsumexp(x), computed max-shifted:
         // logsumexp(x) = max + log(Σ exp(x - max)), so logprob = -log(Σ …).
         var sumOfExponentials: Float = 0
         if maxValue.isFinite {
             var negativeMax = -maxValue
-            vDSP_vsadd(floats, 1, &negativeMax, &floats, 1, vDSP_Length(count))
+            vDSP_vsadd(greedyScratch, 1, &negativeMax, &greedyScratch, 1, vDSP_Length(count))
             var elementCount = Int32(count)
-            vvexpf(&floats, floats, &elementCount)
-            vDSP_sve(floats, 1, &sumOfExponentials, vDSP_Length(count))
+            vvexpf(&greedyScratch, greedyScratch, &elementCount)
+            vDSP_sve(greedyScratch, 1, &sumOfExponentials, vDSP_Length(count))
             return (token: Int(maxIndex), logprob: -log(sumOfExponentials))
         } else {
             // Degenerate tensors can't occur from real decode filters; match
@@ -114,6 +110,22 @@ open class GreedyTokenSampler: TokenSampling {
             // equivalence suite): ±inf at the max → -inf logprob. NaN inputs
             // are outside the equivalence contract (see the suite).
             return (token: Int(maxIndex), logprob: maxValue.isNaN ? .nan : -.infinity)
+        }
+    }
+
+    private static func convertToFloat(_ logits: MLMultiArray, destination: UnsafeMutableBufferPointer<Float>) {
+        let count = logits.count
+        logits.withUnsafeBytes { rawBuffer in
+            let halfBuffer = rawBuffer.bindMemory(to: UInt16.self)
+            var sourceBuffer = vImage_Buffer(
+                data: UnsafeMutableRawPointer(mutating: halfBuffer.baseAddress),
+                height: 1, width: vImagePixelCount(count), rowBytes: count * 2
+            )
+            var destinationBuffer = vImage_Buffer(
+                data: destination.baseAddress, height: 1,
+                width: vImagePixelCount(count), rowBytes: count * 4
+            )
+            vImageConvert_Planar16FtoPlanarF(&sourceBuffer, &destinationBuffer, 0)
         }
     }
 

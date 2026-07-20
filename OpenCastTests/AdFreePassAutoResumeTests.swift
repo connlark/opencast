@@ -316,8 +316,8 @@ private final class AutoResumeCompletingTranscriber: EpisodeTranscribing, @unche
 }
 
 private final class AutoResumeAnalysisClient: EpisodeAdAnalysisClient, @unchecked Sendable {
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisAPIResponse {
-        EpisodeAdAnalysisAPIResponse(
+    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
+        .completed(EpisodeAdAnalysisAPIResponse(
             schemaVersion: 1,
             requestID: request.requestID,
             model: "test",
@@ -325,7 +325,11 @@ private final class AutoResumeAnalysisClient: EpisodeAdAnalysisClient, @unchecke
             spans: [],
             warnings: [],
             usage: nil
-        )
+        ))
+    }
+
+    func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
+        throw EpisodeAdAnalysisError.clientDisabled
     }
 }
 

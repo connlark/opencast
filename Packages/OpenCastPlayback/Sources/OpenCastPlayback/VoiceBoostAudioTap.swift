@@ -44,6 +44,16 @@ nonisolated final class VoiceBoostAudioTap {
     func reset() {
         context.reset()
     }
+
+    /// Adaptation control state for handing across tap replacement (the
+    /// track-bound reinstall creates a new tap on the same item).
+    func captureControlSnapshot() -> VoiceBoostControlSnapshot? {
+        context.captureControlSnapshot()
+    }
+
+    func seedControlSnapshot(_ snapshot: VoiceBoostControlSnapshot) {
+        context.seedControlSnapshot(snapshot)
+    }
 }
 
 enum VoiceBoostAudioTapError: Error {
@@ -55,7 +65,17 @@ public nonisolated struct VoiceBoostAudioTapDiagnosticsSnapshot: Equatable, Send
     public var unprepareCount = 0
     public var processCount = 0
     public var processedFrameCount = 0
-    public var bypassedFrameCount = 0
+    /// Frames processed while a toggle transition (drain, latency splice,
+    /// or warmup) was blending; also included in `processedFrameCount`.
+    public var transitionFrameCount = 0
+    /// Untouched frames from the steady-state disabled short-circuit.
+    public var disabledBypassedFrameCount = 0
+    /// Untouched frames because the state lock was contended. Normal
+    /// playback records zero; configuration updates may cost single buffers.
+    public var contentionBypassedFrameCount = 0
+    /// Untouched frames with no prepared processor or an unprocessable
+    /// format.
+    public var unsupportedFormatBypassedFrameCount = 0
     public var sourceErrorCount = 0
     public var unsupportedFormatCount = 0
     public var tapInstallAttemptCount = 0
@@ -72,6 +92,13 @@ public nonisolated struct VoiceBoostAudioTapDiagnosticsSnapshot: Equatable, Send
     public var totalProcessDurationNanoseconds: UInt64 = 0
 
     public init() {}
+
+    /// All untouched frames regardless of reason.
+    public var bypassedFrameCount: Int {
+        disabledBypassedFrameCount
+            + contentionBypassedFrameCount
+            + unsupportedFormatBypassedFrameCount
+    }
 
     public var averageProcessDurationNanoseconds: UInt64 {
         guard timedProcessCount > 0 else {
@@ -142,13 +169,25 @@ public nonisolated final class VoiceBoostAudioTapDiagnostics {
         }
     }
 
-    func recordProcess(frameCount: Int, wasProcessed: Bool, durationNanoseconds: UInt64?) {
+    func recordProcess(
+        frameCount: Int,
+        outcome: VoiceBoostTapProcessOutcome,
+        durationNanoseconds: UInt64?
+    ) {
         lock.withLock {
             state.processCount += 1
-            if wasProcessed {
+            switch outcome {
+            case .processedEngaged:
                 state.processedFrameCount += frameCount
-            } else {
-                state.bypassedFrameCount += frameCount
+            case .processedTransition:
+                state.processedFrameCount += frameCount
+                state.transitionFrameCount += frameCount
+            case .bypassedDisabled:
+                state.disabledBypassedFrameCount += frameCount
+            case .bypassedContended:
+                state.contentionBypassedFrameCount += frameCount
+            case .bypassedUnsupported:
+                state.unsupportedFormatBypassedFrameCount += frameCount
             }
             if let durationNanoseconds {
                 state.timedProcessCount += 1
@@ -227,13 +266,13 @@ nonisolated private enum VoiceBoostAudioTapCallbacks {
             numberFramesOut.pointee = 0
             return
         }
-        let wasProcessed = context.process(
+        let outcome = context.process(
             bufferList: bufferListInOut,
             frameCount: Int(numberFramesOut.pointee)
         )
         context.recordProcess(
             frameCount: Int(numberFramesOut.pointee),
-            wasProcessed: wasProcessed,
+            outcome: outcome,
             startedAt: startedAt
         )
     }
@@ -311,6 +350,18 @@ nonisolated private final class VoiceBoostAudioTapContext {
         }
     }
 
+    func captureControlSnapshot() -> VoiceBoostControlSnapshot? {
+        stateLock.withLock {
+            state.captureControlSnapshot()
+        }
+    }
+
+    func seedControlSnapshot(_ snapshot: VoiceBoostControlSnapshot) {
+        stateLock.withLock {
+            state.seedControlSnapshot(snapshot)
+        }
+    }
+
     func recordSourceError() {
         diagnostics?.recordSourceError()
     }
@@ -322,10 +373,10 @@ nonisolated private final class VoiceBoostAudioTapContext {
         return DispatchTime.now().uptimeNanoseconds
     }
 
-    func recordProcess(frameCount: Int, wasProcessed: Bool, startedAt: UInt64?) {
+    func recordProcess(frameCount: Int, outcome: VoiceBoostTapProcessOutcome, startedAt: UInt64?) {
         diagnostics?.recordProcess(
             frameCount: frameCount,
-            wasProcessed: wasProcessed,
+            outcome: outcome,
             durationNanoseconds: startedAt.map { DispatchTime.now().uptimeNanoseconds - $0 }
         )
     }
@@ -334,9 +385,9 @@ nonisolated private final class VoiceBoostAudioTapContext {
     func process(
         bufferList: UnsafeMutablePointer<AudioBufferList>,
         frameCount: Int
-    ) -> Bool {
+    ) -> VoiceBoostTapProcessOutcome {
         stateLock.withLockIfAvailable {
             state.process(bufferList: bufferList, frameCount: frameCount)
-        } ?? false
+        } ?? .bypassedContended
     }
 }

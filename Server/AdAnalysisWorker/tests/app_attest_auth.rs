@@ -1,6 +1,18 @@
-use opencast_app_attest_core::app_attest::verify_attestation;
+use opencast_app_attest_core::app_attest::{request_client_data_hash, verify_attestation};
 use rusqlite::{params, Connection};
 use serde::Deserialize;
+
+#[test]
+fn poll_request_binding_matches_swift_fixture() {
+    let job_id = "fingerprint-123";
+    let path = format!("/v1/ad-analysis/jobs/{job_id}");
+    let payload = format!(r#"{{"job_id":"{job_id}"}}"#);
+
+    assert_eq!(
+        hex::encode(request_client_data_hash("POST", &path, &payload)),
+        "c079e99784a3722a3b90e2523920fcca7c99a429ec3ad37e192acc8a87458d0a"
+    );
+}
 
 #[test]
 fn register_consumes_valid_challenge_before_attestation_verification() {

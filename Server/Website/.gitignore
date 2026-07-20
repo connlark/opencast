@@ -42,6 +42,3 @@ next-env.d.ts
 
 # wrangler local dev state
 .wrangler/
-
-# The site ships the standalone runtime badge, not Apple's full source pack.
-/vendor/apple-app-store-badges/

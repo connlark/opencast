@@ -5,3 +5,7 @@ node_modules/
 dist/
 target/
 build/
+
+# Private physical-device App Attest capture and its replay-only test.
+tests/fixture_replays.rs
+tests/fixtures/ad_analysis_app_attest_development_fixture.json

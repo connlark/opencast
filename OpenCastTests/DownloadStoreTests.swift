@@ -1,5 +1,6 @@
 import Foundation
 import OpenCastCore
+import OpenCastTranscription
 import SwiftData
 import Testing
 @testable import OpenCast
@@ -957,6 +958,81 @@ struct DownloadStoreTests {
         try await store.waitForDownload(episodeID: episode.episodeID)
 
         #expect(store.record(for: episode.episodeID)?.state == .completed)
+    }
+
+    @Test("Completed download persists the assembled-file hash and exposes source identity")
+    func completedDownloadPersistsSourceIdentity() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let downloader = ChunkedEpisodeAudioDownloader(chunks: [Data("abc".utf8), Data("def".utf8)])
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "identity-fresh")
+
+        store.startDownload(for: episode, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        #expect(record.sourceFileSHA256 == OpenCastSHA256.hash(Data("abcdef".utf8)))
+
+        let identity = try #require(store.completedSourceIdentity(for: episode.episodeID))
+        #expect(identity.sha256 == OpenCastSHA256.hash(Data("abcdef".utf8)))
+        #expect(identity.byteCount == 6)
+    }
+
+    @Test("Source identity invalidates when the local file drifts or disappears")
+    func sourceIdentityInvalidatesOnFileDrift() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let downloader = ChunkedEpisodeAudioDownloader(chunks: [Data("abcdef".utf8)])
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "identity-drift")
+
+        store.startDownload(for: episode, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+        #expect(store.completedSourceIdentity(for: episode.episodeID) != nil)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        let fileURL = try #require(store.localFileURL(for: record))
+        try Data("replaced-with-longer-bytes".utf8).write(to: fileURL, options: .atomic)
+        #expect(store.completedSourceIdentity(for: episode.episodeID) == nil)
+
+        try FileManager.default.removeItem(at: fileURL)
+        #expect(store.completedSourceIdentity(for: episode.episodeID) == nil)
+    }
+
+    @Test("Preexisting completed records without a hash expose no identity")
+    func preexistingCompletedRecordWithoutHashExposesNoIdentity() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let store = DownloadStore(fileStore: fileStore)
+        let sourceURL = URL(string: "https://example.com/legacy.mp3")!
+        let relativePath = fileStore.relativePath(episodeID: "identity-legacy", sourceAudioURL: sourceURL)
+        let fileURL = fileStore.fileURL(relativePath: relativePath)
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("legacy".utf8).write(to: fileURL, options: .atomic)
+        context.insert(
+            EpisodeDownloadRecord(
+                episodeID: "identity-legacy",
+                podcastID: "https://example.com/feed.xml",
+                sourceAudioURL: sourceURL.absoluteString,
+                localRelativePath: relativePath,
+                state: .completed,
+                bytesReceived: 6,
+                bytesExpected: 6
+            )
+        )
+        try context.save()
+        store.load(modelContext: context)
+
+        // The record predates hash persistence, so the identity is honestly
+        // unavailable until something recomputes it from the file.
+        #expect(store.completedSourceIdentity(for: "identity-legacy") == nil)
     }
 
     private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {

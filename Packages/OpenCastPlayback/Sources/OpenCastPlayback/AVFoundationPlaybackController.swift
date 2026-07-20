@@ -32,6 +32,8 @@ public final class AVFoundationPlaybackController: PlaybackController {
     @ObservationIgnored private let nowPlayingPublisher: NowPlayingInfoPublisher
     @ObservationIgnored private let remoteCommandController = RemoteCommandController()
     @ObservationIgnored private var timeObserver: PlayerTimeObserver?
+    @ObservationIgnored private var mediaClockObservers: [UUID: PlayerTimeObserver] = [:]
+    @ObservationIgnored private var mediaClockContinuations: [UUID: AsyncStream<PlaybackMediaClockSample>.Continuation] = [:]
     @ObservationIgnored private var currentItemEndObserver: NSObjectProtocol?
     @ObservationIgnored private var currentItemPlaybackStalledObserver: NSObjectProtocol?
     @ObservationIgnored private var currentItemDurationObservation: NSKeyValueObservation?
@@ -69,12 +71,14 @@ public final class AVFoundationPlaybackController: PlaybackController {
     public convenience init(
         voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics? = nil,
         nowPlayingArtworkLoader: (any NowPlayingArtworkLoading)? = nil,
-        streamingAudioCacheConfiguration: StreamingAudioCacheConfiguration = .disabled
+        streamingAudioCacheConfiguration: StreamingAudioCacheConfiguration = .disabled,
+        streamingAudioDiskCache: StreamingAudioDiskCache? = nil
     ) {
         self.init(
             voiceBoostTapDiagnostics: voiceBoostTapDiagnostics,
             nowPlayingArtworkLoader: nowPlayingArtworkLoader,
             streamingAudioCacheConfiguration: streamingAudioCacheConfiguration,
+            streamingAudioDiskCache: streamingAudioDiskCache,
             voiceBoostAudioTapFactory: {
                 try VoiceBoostAudioTap(configuration: $0, diagnostics: $1)
             }
@@ -85,6 +89,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics?,
         nowPlayingArtworkLoader: (any NowPlayingArtworkLoading)? = nil,
         streamingAudioCacheConfiguration: StreamingAudioCacheConfiguration = .disabled,
+        streamingAudioDiskCache: StreamingAudioDiskCache? = nil,
         voiceBoostAudioTapFactory: @escaping VoiceBoostAudioTapFactory = {
             try VoiceBoostAudioTap(configuration: $0, diagnostics: $1)
         }
@@ -95,7 +100,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         self.voiceBoostTapDiagnostics = voiceBoostTapDiagnostics
         self.voiceBoostAudioTapFactory = voiceBoostAudioTapFactory
         self.streamingAudioCacheConfiguration = streamingAudioCacheConfiguration
-        self.streamingAudioDiskCache = streamingAudioCacheConfiguration.directory.map {
+        self.streamingAudioDiskCache = streamingAudioDiskCache ?? streamingAudioCacheConfiguration.directory.map {
             StreamingAudioDiskCache(directory: $0)
         }
         self.streamingAudioRangeFetcher = URLSessionStreamingAudioRangeFetcher()
@@ -109,6 +114,14 @@ public final class AVFoundationPlaybackController: PlaybackController {
         if let timeObserver {
             player.removeTimeObserver(timeObserver.token)
         }
+        for observer in mediaClockObservers.values {
+            player.removeTimeObserver(observer.token)
+        }
+        mediaClockObservers.removeAll()
+        for continuation in mediaClockContinuations.values {
+            continuation.finish()
+        }
+        mediaClockContinuations.removeAll()
         removeCurrentItemObservations()
         resetStreamingCachePlaybackState()
         playerTimeControlStatusObservation?.invalidate()
@@ -443,6 +456,66 @@ public final class AVFoundationPlaybackController: PlaybackController {
         })
     }
 
+    /// Display-cadence media-time samples for one consumer, independent of the
+    /// 1 Hz snapshot publication. Each call installs its own periodic observer,
+    /// removed when the consuming task ends, so `.task(id:)` is the intended
+    /// lifecycle. Samples read the player directly and never mutate `snapshot`.
+    public func mediaClockSamples(
+        interval: TimeInterval = 1.0 / 30.0
+    ) -> AsyncStream<PlaybackMediaClockSample> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: PlaybackMediaClockSample.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        mediaClockContinuations[id] = continuation
+        mediaClockObservers[id] = PlayerTimeObserver(token: player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: interval, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let sample = currentMediaClockSample() else {
+                    return
+                }
+                continuation.yield(sample)
+            }
+        })
+        continuation.onTermination = { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.removeMediaClockClient(id)
+            }
+        }
+        // Prime so a consumer that subscribes while paused renders immediately
+        // instead of waiting for playback to produce the first callback.
+        if let sample = currentMediaClockSample() {
+            continuation.yield(sample)
+        }
+        return stream
+    }
+
+    var mediaClockClientCount: Int {
+        mediaClockObservers.count
+    }
+
+    private func currentMediaClockSample() -> PlaybackMediaClockSample? {
+        let seconds = player.currentTime().seconds
+        guard seconds.isFinite else {
+            return nil
+        }
+        return PlaybackMediaClockSample(
+            position: seconds,
+            rate: player.rate,
+            isPlaying: player.timeControlStatus == .playing
+        )
+    }
+
+    private func removeMediaClockClient(_ id: UUID) {
+        if let observer = mediaClockObservers.removeValue(forKey: id) {
+            player.removeTimeObserver(observer.token)
+        }
+        mediaClockContinuations.removeValue(forKey: id)?.finish()
+    }
+
     private func observePlayerTimeControlStatus() {
         playerTimeControlStatusObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
@@ -691,6 +764,13 @@ public final class AVFoundationPlaybackController: PlaybackController {
     }
 
     private func installVoiceBoostTap(on playerItem: AVPlayerItem, audioTrack: AVAssetTrack? = nil) {
+        // The track-bound reinstall replaces a live tap on the same item;
+        // carry the adaptation control state so gain does not re-bootstrap
+        // through the low-confidence cap (I3). Item changes pass no track
+        // here, so a new episode always starts fresh.
+        let carriedControlSnapshot = audioTrack != nil
+            ? currentVoiceBoostTap?.captureControlSnapshot()
+            : nil
         currentVoiceBoostTap = nil
         guard voiceBoostConfiguration.isEnabled else {
             playerItem.audioMix = nil
@@ -701,6 +781,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
             voiceBoostTapDiagnostics?.recordTapInstallAttempt()
             let tap = try voiceBoostAudioTapFactory(voiceBoostConfiguration, voiceBoostTapDiagnostics)
             voiceBoostTapDiagnostics?.recordTapInstallSuccess()
+            if let carriedControlSnapshot {
+                tap.seedControlSnapshot(carriedControlSnapshot)
+            }
             let inputParameters = if let audioTrack {
                 AVMutableAudioMixInputParameters(track: audioTrack)
             } else {

@@ -1,7 +1,7 @@
 use opencast_ad_analysis_worker::auth::{bearer_token, token_hash, token_matches};
 use opencast_ad_analysis_worker::route::{
-    route_request, RouteAction, ANALYZE_TRANSCRIPT_PATH, APP_ATTEST_CHALLENGE_PATH,
-    APP_ATTEST_REGISTER_PATH, HEALTH_PATH, JSON_CONTENT_TYPE,
+    route_request, RouteAction, AD_ANALYSIS_JOBS_PREFIX, ANALYZE_TRANSCRIPT_PATH,
+    APP_ATTEST_CHALLENGE_PATH, APP_ATTEST_REGISTER_PATH, HEALTH_PATH, JSON_CONTENT_TYPE,
 };
 
 #[test]
@@ -66,6 +66,35 @@ fn unknown_routes_and_wrong_health_method_return_json_errors() {
 }
 
 #[test]
+fn poll_routes_require_post_enabled_and_a_valid_job_id() {
+    let path = format!("{AD_ANALYSIS_JOBS_PREFIX}fingerprint-123");
+
+    let wrong_method = static_response(route_request("GET", &path, true));
+    assert_eq!(wrong_method.status, 405);
+    assert_header(&wrong_method, "allow", "POST");
+
+    let disabled = static_response(route_request("POST", &path, false));
+    assert_eq!(disabled.status, 503);
+    assert_eq!(disabled.body, r#"{"error":"ad_analysis_disabled"}"#);
+
+    assert_eq!(
+        route_request("POST", &path, true),
+        RouteAction::PollJob {
+            job_id: "fingerprint-123".to_string()
+        }
+    );
+
+    for invalid in ["short", "bad/id", "bad%2Fid", "trailing/"] {
+        let response = static_response(route_request(
+            "POST",
+            &format!("{AD_ANALYSIS_JOBS_PREFIX}{invalid}"),
+            true,
+        ));
+        assert_eq!(response.status, 404, "invalid id {invalid}");
+    }
+}
+
+#[test]
 fn bearer_token_parser_accepts_only_single_bearer_token() {
     assert_eq!(bearer_token(Some("Bearer token-123")), Some("token-123"));
     assert_eq!(bearer_token(Some("bearer token-123")), Some("token-123"));
@@ -87,6 +116,7 @@ fn static_response(action: RouteAction) -> opencast_ad_analysis_worker::route::S
         RouteAction::AppAttestChallenge => panic!("expected static response"),
         RouteAction::AppAttestRegister => panic!("expected static response"),
         RouteAction::AnalyzeTranscript => panic!("expected static response"),
+        RouteAction::PollJob { .. } => panic!("expected static response"),
     }
 }
 

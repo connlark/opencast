@@ -6,8 +6,8 @@
   <channel>
     <title>Example Current Affairs</title>
     <link>https://example.com/podcasts/current-affairs</link>
-    <description>Foreign policy, politics, and history.</description>
-    <itunes:author>Example Current Affairs</itunes:author>
+    <description>A synthetic current-affairs podcast fixture.</description>
+    <itunes:author>Example Studios</itunes:author>
     <itunes:image href="https://example.com/example-current-affairs.jpg" />
     <atom:link href="https://feeds.example.com/example-current-affairs.xml" rel="self" type="application/rss+xml" />
     <item>

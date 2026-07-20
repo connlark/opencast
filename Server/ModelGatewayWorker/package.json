@@ -16,6 +16,6 @@
     "typecheck": "cargo check --target wasm32-unknown-unknown --lib"
   },
   "devDependencies": {
-    "wrangler": "4.107.1"
+    "wrangler": "4.111.0"
   }
 }

@@ -1,0 +1,40 @@
+// Public self-hosting template for the isolated prod-staging media worker.
+// Its container reads through this worker's own R2 binding. Deploy with:
+//   yarn wrangler deploy -c wrangler.prod-staging.jsonc
+// It has no routes or workers.dev exposure.
+{
+  "name": "your-transcription-media-worker-prod-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-09",
+  "workers_dev": false,
+  "observability": { "enabled": true },
+  // Replace every marker and pin the digest of your pushed image.
+  "containers": [
+    {
+      "class_name": "TranscriptionMediaContainer",
+      "image": "registry.cloudflare.com/REPLACE_WITH_ACCOUNT_HASH/your-transcription-media-container:REPLACE_WITH_TAG@sha256:REPLACE_WITH_IMAGE_DIGEST",
+      "max_instances": 2,
+      "instance_type": "basic"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MEDIA_CONTAINER",
+        "class_name": "TranscriptionMediaContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TranscriptionMediaContainer"]
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "TRANSCRIPTION_AUDIO",
+      "bucket_name": "your-remote-transcription-audio-prod-staging"
+    }
+  ]
+}

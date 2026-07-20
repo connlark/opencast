@@ -10,7 +10,7 @@ struct OnboardingSubscribedPodcastsSection: View {
                 .font(.headline)
                 .foregroundStyle(.primary)
 
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 0) {
                 ForEach(Array(subscriptions.enumerated()), id: \.element.persistentModelID) { index, subscription in
                     SubscriptionRowView(subscription: subscription)
 

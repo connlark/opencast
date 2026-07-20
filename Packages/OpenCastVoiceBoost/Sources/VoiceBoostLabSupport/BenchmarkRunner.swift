@@ -8,7 +8,10 @@ enum BenchmarkRunner {
         sampleRate: Double,
         channelCount: Int,
         blockFrameCount: Int,
-        configuration: VoiceBoostConfiguration
+        configuration: VoiceBoostConfiguration,
+        quietAmplitude: Double = 0.025,
+        loudAmplitude: Double = 0.35,
+        usesScalarReference: Bool = false
     ) throws -> BenchmarkMetrics {
         guard durationSeconds.isFinite && durationSeconds > 0 else {
             throw LabError.invalidArguments("Benchmark duration must be positive.")
@@ -25,8 +28,8 @@ enum BenchmarkRunner {
 
         let totalFrames = Int((sampleRate * durationSeconds).rounded())
         let pattern = FixtureFactory.alternatingSpeechLike(
-            quietAmplitude: 0.025,
-            loudAmplitude: 0.35,
+            quietAmplitude: quietAmplitude,
+            loudAmplitude: loudAmplitude,
             segmentDuration: 0.5,
             sampleRate: sampleRate,
             duration: 4,
@@ -39,6 +42,9 @@ enum BenchmarkRunner {
             channelCount: channelCount,
             configuration: configuration
         )
+        if usesScalarReference {
+            processor.setScalarReferenceProcessing(true)
+        }
 
         let wallStart = Date.timeIntervalSinceReferenceDate
         var offsetFrames = 0

@@ -29,6 +29,23 @@ fn validates_completed_segment_payload() {
 }
 
 #[test]
+fn async_supported_defaults_false_and_parses_true() {
+    let mut value = serde_json::to_value(sample_request()).expect("request serializes");
+    value
+        .as_object_mut()
+        .expect("request object")
+        .remove("async_supported");
+    let encoded = serde_json::to_vec(&value).expect("request encodes");
+    let decoded = decode_and_validate_request(&encoded).expect("legacy request validates");
+    assert!(!decoded.request.async_supported);
+
+    value["async_supported"] = serde_json::Value::Bool(true);
+    let encoded = serde_json::to_vec(&value).expect("request encodes");
+    let decoded = decode_and_validate_request(&encoded).expect("opt-in request validates");
+    assert!(decoded.request.async_supported);
+}
+
+#[test]
 fn rejects_invalid_payloads_before_model_call() {
     let mut request = sample_request();
     request.transcript.state = "running".to_string();
@@ -1094,6 +1111,7 @@ fn wide_request(count: usize, seconds: f64) -> AdAnalysisRequest {
 fn request_with_segments(segments: Vec<TranscriptSegment>, duration: f64) -> AdAnalysisRequest {
     AdAnalysisRequest {
         schema_version: SCHEMA_VERSION,
+        async_supported: false,
         request_id: "request-1".to_string(),
         episode_id: "episode-1".to_string(),
         podcast_id: "podcast-1".to_string(),

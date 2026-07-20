@@ -7,6 +7,7 @@ nonisolated struct EpisodeAdAnalysisAPIRequest: Codable, Sendable, Equatable {
     var podcastID: String
     var episodeTitle: String?
     var podcastTitle: String?
+    var asyncSupported: Bool? = nil
     var transcript: EpisodeAdAnalysisAPITranscriptMetadata
     var segments: [EpisodeAdAnalysisAPISegment]
 
@@ -17,6 +18,7 @@ nonisolated struct EpisodeAdAnalysisAPIRequest: Codable, Sendable, Equatable {
         case podcastID = "podcast_id"
         case episodeTitle = "episode_title"
         case podcastTitle = "podcast_title"
+        case asyncSupported = "async_supported"
         case transcript
         case segments
     }

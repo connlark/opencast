@@ -76,4 +76,83 @@ nonisolated struct EpisodeListItemSnapshot: Identifiable, Equatable, Sendable {
             lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
         }
     }
+
+    static func oldestFirst(_ lhs: EpisodeListItemSnapshot, _ rhs: EpisodeListItemSnapshot) -> Bool {
+        switch (lhs.publishedAt, rhs.publishedAt) {
+        case let (lhsDate?, rhsDate?):
+            if lhsDate != rhsDate {
+                return lhsDate < rhsDate
+            }
+            return sortsByTitleThenEpisodeID(lhs, rhs)
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            return sortsByTitleThenEpisodeID(lhs, rhs)
+        }
+    }
+
+    static func longestFirst(_ lhs: EpisodeListItemSnapshot, _ rhs: EpisodeListItemSnapshot) -> Bool {
+        switch (lhs.sortableDuration, rhs.sortableDuration) {
+        case let (lhsDuration?, rhsDuration?):
+            if lhsDuration != rhsDuration {
+                return lhsDuration > rhsDuration
+            }
+            return sortsByNewestFirstThenEpisodeID(lhs, rhs)
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            return sortsByNewestFirstThenEpisodeID(lhs, rhs)
+        }
+    }
+
+    static func shortestFirst(_ lhs: EpisodeListItemSnapshot, _ rhs: EpisodeListItemSnapshot) -> Bool {
+        switch (lhs.sortableDuration, rhs.sortableDuration) {
+        case let (lhsDuration?, rhsDuration?):
+            if lhsDuration != rhsDuration {
+                return lhsDuration < rhsDuration
+            }
+            return sortsByNewestFirstThenEpisodeID(lhs, rhs)
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        case (.none, .none):
+            return sortsByNewestFirstThenEpisodeID(lhs, rhs)
+        }
+    }
+
+    private var sortableDuration: TimeInterval? {
+        guard let duration, duration > 0 else {
+            return nil
+        }
+        return duration
+    }
+
+    private static func sortsByTitleThenEpisodeID(
+        _ lhs: EpisodeListItemSnapshot,
+        _ rhs: EpisodeListItemSnapshot
+    ) -> Bool {
+        let titleComparison = lhs.title.localizedStandardCompare(rhs.title)
+        if titleComparison != .orderedSame {
+            return titleComparison == .orderedAscending
+        }
+        return lhs.episodeID < rhs.episodeID
+    }
+
+    private static func sortsByNewestFirstThenEpisodeID(
+        _ lhs: EpisodeListItemSnapshot,
+        _ rhs: EpisodeListItemSnapshot
+    ) -> Bool {
+        if newestFirst(lhs, rhs) {
+            return true
+        }
+        if newestFirst(rhs, lhs) {
+            return false
+        }
+        return lhs.episodeID < rhs.episodeID
+    }
 }

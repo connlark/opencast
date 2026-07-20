@@ -29,6 +29,21 @@ struct SettingsDebugSection: View {
             Toggle(isOn: $appModel.replacesNowPlayingArtworkWithPlaybackDiagnostics) {
                 Label("Playback Debug Artwork", systemImage: "terminal")
             }
+
+            #if DEBUG
+            Toggle(isOn: remoteTranscriptionDevBinding) {
+                Label("Remote Transcription (Dev)", systemImage: "cloud")
+            }
+            if remoteTranscriptionDevEnabled,
+               let balance = appModel.remoteTranscription.store.balance {
+                LabeledContent("Remote Dev Balance") {
+                    Text(
+                        Duration.seconds(balance.availableSeconds)
+                            .formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
+                    )
+                }
+            }
+            #endif
         } header: {
             Text("Debug")
         }
@@ -39,6 +54,20 @@ struct SettingsDebugSection: View {
     }
 
     #if DEBUG
+    @State private var remoteTranscriptionDevEnabled = RemoteTranscriptionDevFlag.isEnabled
+
+    // The flag lives in UserDefaults behind a static gate, so the alert-style
+    // manual Binding exception applies: local @State mirrors it for SwiftUI.
+    private var remoteTranscriptionDevBinding: Binding<Bool> {
+        Binding(
+            get: { remoteTranscriptionDevEnabled },
+            set: { enabled in
+                remoteTranscriptionDevEnabled = enabled
+                RemoteTranscriptionDevFlag.setEnabled(enabled)
+            }
+        )
+    }
+
     private func runAdFreePassBackgroundProbe() {
         AdFreePassBackgroundProbe.startFromUserAction()
     }

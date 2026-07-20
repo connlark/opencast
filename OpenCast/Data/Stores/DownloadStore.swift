@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OpenCastCore
+import OpenCastTranscription
 import SwiftData
 
 @Observable
@@ -112,6 +113,28 @@ final class DownloadStore {
         }
 
         return lastErrorMessage
+    }
+
+    /// Exact identity of a completed download, or nil when it cannot be
+    /// trusted: no persisted hash, missing file, or on-disk size drifting
+    /// from the recorded byte count (replacement/corruption).
+    func completedSourceIdentity(for episodeID: String) -> OpenCastRemoteTranscriptionSourceIdentity? {
+        guard let record = record(for: episodeID),
+              record.state == .completed,
+              record.sourceFileSHA256.isEmpty == false,
+              let fileURL = localFileURL(for: record),
+              let fileSize = try? fileStore.fileSize(at: fileURL),
+              fileSize == record.bytesReceived
+        else {
+            return nil
+        }
+        return OpenCastRemoteTranscriptionSourceIdentity(
+            sha256: record.sourceFileSHA256,
+            byteCount: record.bytesReceived,
+            durationSeconds: record.duration,
+            entityTag: record.entityTag,
+            lastModified: record.lastModifiedHeader
+        )
     }
 
     func localFileURL(for record: EpisodeDownloadRecord) -> URL? {
@@ -229,6 +252,7 @@ final class DownloadStore {
             record.localRelativePath = relativePath
             record.state = .downloading
             record.bytesReceived = offset
+            record.sourceFileSHA256 = ""
             record.errorMessage = nil
             record.updatedAt = .now
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
@@ -680,11 +704,18 @@ final class DownloadStore {
 
             try fileStore.moveCompletedDownload(from: temporaryURL, relativePath: relativePath)
             let fileSize = try fileStore.fileSize(relativePath: relativePath)
+            // Definitive identity is always the completed assembled file, so
+            // pause/resume and appended partials cannot skew the hash.
+            let sourceFileSHA256 = try await OpenCastSHA256.hashFileOffCaller(
+                at: fileStore.fileURL(relativePath: relativePath)
+            )
+            try Task.checkCancellation()
             try completeDownload(
                 episodeID: episodeID,
                 token: token,
                 relativePath: relativePath,
                 bytesReceived: fileSize,
+                sourceFileSHA256: sourceFileSHA256,
                 modelContext: modelContext
             )
         } catch is CancellationError {
@@ -926,6 +957,7 @@ final class DownloadStore {
         token: String,
         relativePath: String,
         bytesReceived: Int64,
+        sourceFileSHA256: String = "",
         modelContext: ModelContext
     ) throws {
         try withCurrentToken(episodeID, token) {
@@ -935,6 +967,7 @@ final class DownloadStore {
 
             record.state = .completed
             record.localRelativePath = relativePath
+            record.sourceFileSHA256 = sourceFileSHA256
             record.bytesReceived = max(0, bytesReceived)
             record.bytesExpected = record.bytesExpected ?? record.bytesReceived
             record.errorMessage = nil
@@ -959,6 +992,7 @@ final class DownloadStore {
                 }
 
                 record.state = .failed
+                record.sourceFileSHA256 = ""
                 record.errorMessage = error.localizedDescription
                 record.updatedAt = .now
                 progressCheckpoints[episodeID] = nil

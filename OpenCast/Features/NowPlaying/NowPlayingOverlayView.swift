@@ -20,11 +20,9 @@ struct NowPlayingOverlayView: View {
     @State private var isPeelInteractionActive = false
     @State private var isContentScrolledToTop = true
     @State private var prewarmsPeelRenderer = false
-    @State private var prewarmsPeelSettingsPanel = false
     @State private var peelPrewarmRequestID = 0
     @State private var suppressesColdPeelStart = false
     @State private var peelRendererPrewarmTask: Task<Void, Never>?
-    @State private var peelSettingsPanelPrewarmTask: Task<Void, Never>?
 
     private static let accessibilityTitle = "Now Playing"
     private static let peelPrewarmIdleDelay: TimeInterval = 0.6
@@ -52,7 +50,6 @@ struct NowPlayingOverlayView: View {
                     isContentScrolledToTop: $isContentScrolledToTop,
                     isTrackingDismissDrag: isTrackingDismissDrag,
                     prewarmsPeelRenderer: prewarmsPeelRenderer,
-                    prewarmsPeelSettingsPanel: prewarmsPeelSettingsPanel,
                     allowsPeelStart: !suppressesColdPeelStart,
                     onDismiss: { dismiss(containerHeight: proxy.size.height) },
                     onOpenEpisode: { openEpisode(containerHeight: proxy.size.height) },
@@ -264,23 +261,17 @@ struct NowPlayingOverlayView: View {
         cancelPeelPrewarmTasks()
         peelPrewarmRequestID += 1
         prewarmsPeelRenderer = false
-        prewarmsPeelSettingsPanel = false
         return peelPrewarmRequestID
     }
 
     private func cancelPeelPrewarmTasks() {
         peelRendererPrewarmTask?.cancel()
         peelRendererPrewarmTask = nil
-        peelSettingsPanelPrewarmTask?.cancel()
-        peelSettingsPanelPrewarmTask = nil
     }
 
     private func cancelPendingPeelPrewarmForDismissDrag() {
         cancelPeelPrewarmTasks()
         peelPrewarmRequestID += 1
-        if !prewarmsPeelRenderer {
-            prewarmsPeelSettingsPanel = false
-        }
     }
 
     private func schedulePeelRendererPrewarm(
@@ -313,29 +304,6 @@ struct NowPlayingOverlayView: View {
         prewarmsPeelRenderer = true
         suppressesColdPeelStart = false
         nowPlayingProbeMark("peel-prewarm-finished")
-        schedulePeelSettingsPanelPrewarm(requestID: requestID)
-    }
-
-    private func schedulePeelSettingsPanelPrewarm(requestID: Int) {
-        peelSettingsPanelPrewarmTask?.cancel()
-        peelSettingsPanelPrewarmTask = Task {
-            do {
-                try await Task.sleep(for: .seconds(1))
-            } catch is CancellationError {
-                return
-            } catch {
-                return
-            }
-            finishPeelSettingsPanelPrewarm(requestID: requestID)
-        }
-    }
-
-    private func finishPeelSettingsPanelPrewarm(requestID: Int) {
-        guard requestID == peelPrewarmRequestID, offsetY == 0 else {
-            return
-        }
-
-        prewarmsPeelSettingsPanel = true
     }
 
     private func handleScenePhaseChange(_ newPhase: ScenePhase, isPresented: Bool) {
@@ -459,6 +427,7 @@ struct NowPlayingOverlayView: View {
         let shouldDismiss = translation > dismissDistance * 0.28
             || predictedTranslation > dismissDistance * 0.56
 
+        nowPlayingProbeMark("dismiss-drag-ended")
         isTrackingDismissDrag = false
         dismissDragLatchBaselineHeight = 0
         if shouldDismiss {

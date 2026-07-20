@@ -14,6 +14,7 @@
       "!/badges/*",
       "!/favicon.ico",
       "!/app-icon.png",
+      "!/opengraph-image.jpg",
       "!/icon.png",
       "!/apple-icon.png"
     ]

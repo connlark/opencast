@@ -4,6 +4,7 @@ struct ComparisonMetrics: Codable {
     var input: AudioMetrics
     var output: AudioMetrics
     var loudnessDeltaLU: Double?
+    var steadyStateTailDeltaLU: Double?
     var truePeakDeltaDB: Double?
     var rmsDeltaDB: Double?
 }
@@ -13,6 +14,7 @@ extension ComparisonMetrics {
         self.input = input
         self.output = output
         loudnessDeltaLU = Self.delta(output.integratedLUFS, input.integratedLUFS)
+        steadyStateTailDeltaLU = Self.delta(output.steadyStateTailLUFS, input.steadyStateTailLUFS)
         truePeakDeltaDB = Self.delta(output.truePeakDBTP, input.truePeakDBTP)
         rmsDeltaDB = Self.delta(output.rmsDBFS, input.rmsDBFS)
     }

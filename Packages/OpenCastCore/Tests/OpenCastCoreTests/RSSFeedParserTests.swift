@@ -4,12 +4,12 @@ import Testing
 
 @Suite("RSS feed parsing")
 struct RSSFeedParserTests {
-    @Test("Parses RSS and iTunes namespace fields from the Example Current Affairs fixture")
+    @Test("Parses RSS and iTunes namespace fields from the synthetic fixture")
     func parsesFixture() throws {
         let snapshot = try fixtureSnapshot()
 
         #expect(snapshot.podcast.title == "Example Current Affairs")
-        #expect(snapshot.podcast.author == "Example Current Affairs")
+        #expect(snapshot.podcast.author == "Example Studios")
         #expect(snapshot.podcast.id.rawValue == "https://feeds.example.com/example-current-affairs.xml")
         #expect(snapshot.podcast.artworkURL?.absoluteString == "https://example.com/example-current-affairs.jpg")
         #expect(snapshot.episodes.count == 2)
@@ -24,6 +24,37 @@ struct RSSFeedParserTests {
 
         #expect(snapshot.episodes[0].audioURL?.absoluteString == "https://example.com/audio/example-001.mp3")
         #expect(snapshot.episodes[1].audioURL?.absoluteString == "https://example.com/audio/example-002.mp3")
+    }
+
+    @Test("Accumulates text across unescaped inline elements")
+    func accumulatesTextAcrossUnescapedInlineElements() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Open <em>Cast</em> Weekly</title>
+                <description>Show <strong>summary</strong> text</description>
+                <item>
+                  <title>Season <em>2</em> Finale</title>
+                  <guid>mixed-content</guid>
+                  <description>Hello <b>bold</b> and <i>italic</i> world</description>
+                  <enclosure url="https://example.com/mixed.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let feedURL = try #require(URL(string: "https://example.com/mixed.xml"))
+        let snapshot = try RSSFeedParser().parse(data: data, feedURL: feedURL)
+        let episode = try #require(snapshot.episodes.first)
+
+        #expect(snapshot.podcast.title == "Open Cast Weekly")
+        #expect(snapshot.podcast.summary == "Show summary text")
+        #expect(episode.title == "Season 2 Finale")
+        #expect(episode.summary == "Hello bold and italic world")
+        #expect(episode.showNotesHTML == "Hello bold and italic world")
     }
 
     @Test("Parses PDT item pubDate values")

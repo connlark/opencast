@@ -44,6 +44,8 @@ pub const GLOBAL_DAILY_ESTIMATED_INPUT_TOKEN_CAP: u64 = 8_000_000;
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct AdAnalysisRequest {
     pub schema_version: u16,
+    #[serde(default)]
+    pub async_supported: bool,
     pub request_id: String,
     pub episode_id: String,
     pub podcast_id: String,

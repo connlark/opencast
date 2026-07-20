@@ -11,16 +11,10 @@ struct InboxView: View {
     let onOpenEpisode: (String) -> Void
     var onOpenAdDetectionQueue: () -> Void = {}
 
-    private var adDetectionPresentation: AdDetectionQueuePresentation {
-        AdDetectionQueuePresentation(
-            snapshot: appModel.adFreePass.queueSnapshot,
-            isBackgroundSessionArmed: appModel.adFreePassBackgroundSession.isArmed
-        )
-    }
-
     var body: some View {
         let inboxEpisodes = appModel.library.inboxEpisodes
         let episodeIDs = inboxEpisodes.map(\.episodeID)
+        let adDetectionSnapshot = appModel.adFreePass.queueSnapshot
 
         List {
             if appModel.library.state == .loading && inboxEpisodes.isEmpty {
@@ -49,8 +43,8 @@ struct InboxView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 AdDetectionQueueToolbarIndicator(
-                    indicator: adDetectionPresentation.indicator,
-                    accessibilityValue: adDetectionPresentation.accessibilityValue,
+                    indicator: adDetectionIndicator(for: adDetectionSnapshot),
+                    accessibilityValue: adDetectionAccessibilityValue(for: adDetectionSnapshot),
                     onOpen: onOpenAdDetectionQueue
                 )
             }
@@ -62,5 +56,40 @@ struct InboxView: View {
 
     private var listAnimation: Animation? {
         reduceMotion ? nil : .default
+    }
+
+    private func adDetectionIndicator(
+        for snapshot: AdFreePassQueueSnapshot
+    ) -> AdDetectionQueuePresentation.Indicator {
+        let hasFailures = snapshot.failedCount > 0
+        return switch snapshot.state {
+        case .idle:
+            snapshot.outcomes.isEmpty ? .hidden : .finished(hasFailures: hasFailures)
+        case .running:
+            .running(
+                fractionCompleted: snapshot.fractionCompleted,
+                hasFailures: hasFailures
+            )
+        case .pausedInterrupted, .awaitingModelConsent, .capDeferred:
+            .paused(hasFailures: hasFailures)
+        }
+    }
+
+    private func adDetectionAccessibilityValue(for snapshot: AdFreePassQueueSnapshot) -> String {
+        let percent = Int((snapshot.fractionCompleted * 100).rounded())
+        return switch snapshot.state {
+        case .idle:
+            snapshot.outcomes.isEmpty
+                ? "Idle"
+                : "Finished — \(snapshot.completedCount) detected, \(snapshot.failedCount) failed"
+        case .running:
+            "\(percent)% — detecting ads"
+        case .pausedInterrupted:
+            "\(percent)% — paused"
+        case .awaitingModelConsent:
+            "\(percent)% — waiting for the speech model"
+        case .capDeferred:
+            "\(percent)% — " + EpisodeAdFreePassPresentation.capDeferred.statusText
+        }
     }
 }

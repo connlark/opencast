@@ -78,6 +78,23 @@ struct StreamingAudioRangeFetcherTests {
         }
     }
 
+    @Test("Fetcher rejects partial responses without content range offsets")
+    func fetcherRejectsPartialResponsesWithoutContentRangeOffsets() async throws {
+        let server = try HTTPFixtureServer(scenario: HTTPFixtureServerScenario(
+            data: Data([0, 1, 2, 3]),
+            fileName: "audio.mp3",
+            contentType: "audio/mpeg",
+            rangeBehavior: .partialWithoutContentRange
+        ))
+        defer {
+            server.stop()
+        }
+
+        await #expect(throws: StreamingAudioCacheError.invalidRange) {
+            try await URLSessionStreamingAudioRangeFetcher().data(for: server.url, range: 0..<2)
+        }
+    }
+
     @Test("Fetcher reports 416 range responses")
     func fetcherReportsRangeNotSatisfiableResponses() async throws {
         let server = try HTTPFixtureServer(scenario: HTTPFixtureServerScenario(

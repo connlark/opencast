@@ -2,8 +2,8 @@
 
 Self-hostable Cloudflare Worker code for detecting ad breaks from episode
 transcripts. The Worker uses App Attest for public clients, D1 for challenge
-state, a Durable Object for usage limits, and a deployer-provided Gemini API
-key. Yarn is the command surface for Wrangler.
+state, Durable Objects for usage limits and asynchronous jobs, and a
+deployer-provided Gemini API key. Yarn is the command surface for Wrangler.
 
 This public copy does not include deployed Worker names, routes, D1 IDs,
 Gemini credentials, bearer tokens, Cloudflare resources, or physical-device

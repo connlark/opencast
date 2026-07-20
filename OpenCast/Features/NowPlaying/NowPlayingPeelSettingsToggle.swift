@@ -7,6 +7,7 @@ struct NowPlayingPeelSettingsToggle: View {
     let systemImage: String
     let tint: Color
     let isEnabled: Bool
+    let isIconOnly: Bool
     @Binding var isOn: Bool
 
     var body: some View {
@@ -21,10 +22,12 @@ struct NowPlayingPeelSettingsToggle: View {
                             .fill(isOn ? tint : tint.opacity(0.18))
                     }
 
-                Text(title)
-                    .font(.footnote)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.76)
+                if !isIconOnly {
+                    Text(title)
+                        .font(.footnote)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.76)
+                }
 
                 Spacer(minLength: 4)
 
@@ -58,6 +61,9 @@ struct NowPlayingPeelSettingsToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
         .accessibilityHint(isEnabled ? "" : "Controlled by the global Voice Boost setting")
         .accessibilityIdentifier(title)
+        .accessibilityShowsLargeContentViewer {
+            Label(title, systemImage: systemImage)
+        }
         .sensoryFeedback(.selection, trigger: isOn)
     }
 

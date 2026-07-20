@@ -75,9 +75,31 @@ struct EpisodeMoreMenu: View {
         case .failed, .cancelled:
             Button("Retry Transcript", systemImage: "arrow.clockwise", action: generateTranscript)
             Button("Delete Partial Transcript", systemImage: "trash", role: .destructive, action: deleteTranscript)
-        case .interrupted:
-            Button("Resume Transcript", systemImage: "play.circle", action: generateTranscript)
+        case .interrupted(let record):
+            if record.isAppleSpeechTranscript {
+                Button("Retry Transcript", systemImage: "arrow.clockwise", action: generateTranscript)
+            } else {
+                Button("Resume Transcript", systemImage: "play.circle", action: generateTranscript)
+            }
             Button("Delete Partial Transcript", systemImage: "trash", role: .destructive, action: deleteTranscript)
+        }
+
+        remoteTranscriptActions
+    }
+
+    /// Remote eligibility is independent of download and local-model state.
+    /// The purchase store still gates this to a resolved backend lane.
+    @ViewBuilder
+    private var remoteTranscriptActions: some View {
+        if appModel.remoteTranscriptionPurchases.isSurfaceVisible {
+            if let phase = appModel.remoteTranscription.store.phase(for: episode.episodeID),
+               !phase.isTerminal {
+                Button("Remote: \(phase.displayText)", systemImage: "cloud", action: {})
+                    .disabled(true)
+                Button("Cancel Remote Transcript", systemImage: "xmark.circle", action: cancelRemoteTranscript)
+            } else {
+                Button("Transcribe Remotely", systemImage: "cloud", action: requestRemoteTranscript)
+            }
         }
     }
 
@@ -124,6 +146,18 @@ struct EpisodeMoreMenu: View {
 
     private func cancelTranscript() {
         appModel.cancelEpisodeTranscription(episodeID: episode.episodeID, modelContext: modelContext)
+    }
+
+    private func requestRemoteTranscript() {
+        // The consumption preview sheet (episode detail) owns the actual start.
+        appModel.remoteTranscription.store.startPreview = RemoteTranscriptionStartPreviewRequest(
+            episodeID: episode.episodeID,
+            durationSeconds: episode.duration
+        )
+    }
+
+    private func cancelRemoteTranscript() {
+        appModel.remoteTranscription.cancel()
     }
 
     private func deleteTranscript() {

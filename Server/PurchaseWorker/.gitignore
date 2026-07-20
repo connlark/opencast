@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+dist/
+dist-prod-staging/
+.dev.vars
+AppleRootCA-G3.cer

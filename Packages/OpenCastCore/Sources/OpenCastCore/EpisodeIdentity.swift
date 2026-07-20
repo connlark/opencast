@@ -9,7 +9,22 @@ public enum EpisodeIdentity {
         title: String,
         publishedAt: Date?
     ) -> EpisodeID {
-        let canonicalFeedURL = URLCanonicalizer.canonicalString(for: feedURL)
+        makeID(
+            canonicalFeedURL: URLCanonicalizer.canonicalString(for: feedURL),
+            guid: guid,
+            audioURL: audioURL,
+            title: title,
+            publishedAt: publishedAt
+        )
+    }
+
+    static func makeID(
+        canonicalFeedURL: String,
+        guid: String?,
+        audioURL: URL?,
+        title: String,
+        publishedAt: Date?
+    ) -> EpisodeID {
         let identityMaterial: String
 
         if let guid = guid?.trimmingCharacters(in: .whitespacesAndNewlines), !guid.isEmpty {

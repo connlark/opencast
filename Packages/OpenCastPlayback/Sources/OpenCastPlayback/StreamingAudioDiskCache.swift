@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-actor StreamingAudioDiskCache {
+public actor StreamingAudioDiskCache {
     private static let lastAccessWriteInterval: TimeInterval = 30
     private static let scheduledPruneDelay: Duration = .seconds(2)
 
@@ -11,9 +11,9 @@ actor StreamingAudioDiskCache {
     private let decoder = JSONDecoder()
     private var scheduledPruneTask: Task<Void, Never>?
 
-    init(directory: URL, fileManager: FileManager = .default) {
+    public init(directory: URL) {
         self.directory = directory
-        self.fileManager = fileManager
+        self.fileManager = .default
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
 

@@ -79,10 +79,6 @@ struct DownloadedEpisodeRowButton: View {
     }
 
     private func togglePlayed() {
-        if isPlayed {
-            appModel.clearEpisodeProgress(item.episode, modelContext: modelContext)
-        } else {
-            appModel.markEpisodePlayed(item.episode, modelContext: modelContext)
-        }
+        appModel.toggleEpisodePlayed(item.episode, modelContext: modelContext)
     }
 }

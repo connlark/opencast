@@ -25,7 +25,7 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     private var currentItem: ItemAccumulator?
     private var items: [ItemAccumulator] = []
     private var elementStack: [String] = []
-    private var textBuffer = ""
+    private var textBuffers: [String] = []
 
     init(feedURL: URL) {
         self.feedURL = feedURL
@@ -48,7 +48,7 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         let episodes = items.compactMap { item -> Episode? in
             let title = item.title.nilIfBlank ?? "Untitled Episode"
             let id = EpisodeIdentity.makeID(
-                feedURL: feedURL,
+                canonicalFeedURL: podcastID.rawValue,
                 guid: item.guid.nilIfBlank,
                 audioURL: item.audioURL,
                 title: title,
@@ -86,7 +86,7 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     ) {
         let name = normalizedName(elementName, qName: qName)
         elementStack.append(name)
-        textBuffer = ""
+        textBuffers.append("")
 
         switch name {
         case "item":
@@ -107,14 +107,14 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        textBuffer += string
+        appendText(string)
     }
 
     func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
         guard let value = String(data: CDATABlock, encoding: .utf8) else {
             return
         }
-        textBuffer += value
+        appendText(value)
     }
 
     func parser(
@@ -124,7 +124,8 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         qualifiedName qName: String?
     ) {
         let name = normalizedName(elementName, qName: qName)
-        let value = textBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawValue = textBuffers.popLast() ?? ""
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if currentItem == nil {
             applyChannelValue(name: name, value: value)
@@ -140,7 +141,14 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         if !elementStack.isEmpty {
             elementStack.removeLast()
         }
-        textBuffer = ""
+        appendText(rawValue)
+    }
+
+    private func appendText(_ value: String) {
+        guard let index = textBuffers.indices.last else {
+            return
+        }
+        textBuffers[index] += value
     }
 
     private func applyChannelValue(name: String, value: String) {

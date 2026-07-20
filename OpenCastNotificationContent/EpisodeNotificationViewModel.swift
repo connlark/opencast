@@ -1,8 +1,11 @@
 import Foundation
+import ImageIO
 import UIKit
 import UserNotifications
 
 struct EpisodeNotificationViewModel {
+    private static let artworkThumbnailMaxPixelSize = 306
+
     let podcastTitle: String
     let episodeTitle: String
     let durationText: String?
@@ -348,6 +351,24 @@ struct EpisodeNotificationViewModel {
                 url.stopAccessingSecurityScopedResource()
             }
         }
-        return UIImage(contentsOfFile: url.path)
+
+        let sourceOptions = [
+            kCGImageSourceShouldCache: false
+        ] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+            return nil
+        }
+
+        let thumbnailOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: artworkThumbnailMaxPixelSize
+        ] as CFDictionary
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
+            return nil
+        }
+
+        return UIImage(cgImage: image)
     }
 }

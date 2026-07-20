@@ -9,7 +9,7 @@ struct EpisodeTranscriptLineView: View {
     let adSpanLabel: String?
     let isAdSpanStart: Bool
     let searchHighlightRanges: [Range<String.Index>]?
-    let karaokeInterpolator: TranscriptPositionInterpolator?
+    let karaokeSpokenUpperBound: String.Index?
     let karaokeLayout: TranscriptKaraokeLayout?
     let action: () -> Void
 
@@ -53,17 +53,12 @@ struct EpisodeTranscriptLineView: View {
 
     @ViewBuilder
     private var lineText: some View {
-        if let karaokeInterpolator, let karaokeLayout {
-            TimelineView(.explicit(karaokeLayout.wordFlipDates(for: karaokeInterpolator))) { context in
-                Text(TranscriptLineTextBuilder.attributedText(
-                    text: karaokeLayout.text,
-                    spokenUpperBound: karaokeLayout.spokenUpperBound(
-                        at: karaokeInterpolator.estimatedTime(at: context.date)
-                            .clamped(to: segment.start...segment.end)
-                    ),
-                    highlightRanges: searchHighlightRanges
-                ))
-            }
+        if let karaokeLayout, let karaokeSpokenUpperBound {
+            Text(TranscriptLineTextBuilder.attributedText(
+                text: karaokeLayout.text,
+                spokenUpperBound: karaokeSpokenUpperBound,
+                highlightRanges: searchHighlightRanges
+            ))
         } else if let searchHighlightRanges {
             Text(TranscriptLineTextBuilder.attributedText(
                 text: segment.text,

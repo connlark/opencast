@@ -10,13 +10,36 @@ struct SettingsTranscriptionModelSection: View {
     var includesModelPicker = false
     var sectionTitle = "Transcription"
 
+    @State private var prefersAppleSpeech = false
+    @State private var isConfirmingAppleSpeech = false
     @State private var selectedChoice = TranscriptionModelChoice.defaultChoice
     @State private var isConfirmingInstall = false
     @State private var isConfirmingRepair = false
     @State private var isConfirmingDelete = false
+    @State private var loadedModelState = TranscriptionModelState.unknown
 
     var body: some View {
         Section {
+            if appModel.appleSpeechAssets.isTranscriberAvailable {
+                Toggle("Use Apple Transcription", isOn: $prefersAppleSpeech)
+                    .confirmationDialog(
+                        "Use Apple transcription?",
+                        isPresented: $isConfirmingAppleSpeech,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Use Apple Transcription", action: enableAppleSpeech)
+                        Button("Cancel", role: .cancel, action: cancelAppleSpeechSelection)
+                    } message: {
+                        Text("Apple transcription runs on-device and only while OpenCast is open in the foreground. The screen stays awake while it runs. If the app is closed, backgrounded, or the screen is locked mid-transcript, the run stops and starts over from the beginning. When a language or device isn't supported, the Whisper model is used automatically instead.")
+                    }
+            }
+
+            if let message = appModel.transcriptionEngineSettings.lastErrorMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+
             if includesModelPicker {
                 Picker("Transcript Model", selection: $selectedChoice) {
                     ForEach(TranscriptionModelChoice.allCases) { choice in
@@ -33,7 +56,7 @@ struct SettingsTranscriptionModelSection: View {
 
             statusRow
 
-            switch appModel.transcriptionModels.state {
+            switch modelState {
             case .unknown, .notInstalled, .failed:
                 Button(installButtonTitle, systemImage: "arrow.down.circle", action: confirmInstall)
             case .checking:
@@ -57,6 +80,15 @@ struct SettingsTranscriptionModelSection: View {
         }
         .onChange(of: selectedChoice) { _, newChoice in
             updateSelectedChoice(newChoice)
+        }
+        .onChange(of: prefersAppleSpeech) { _, newValue in
+            updateAppleSpeechPreference(newValue)
+        }
+        .onChange(of: appModel.transcriptionEngineSettings.prefersAppleSpeech) { _, storeValue in
+            guard prefersAppleSpeech != storeValue else {
+                return
+            }
+            prefersAppleSpeech = storeValue
         }
         .onChange(of: appModel.transcriptionModels.selectedChoice) { _, storeChoice in
             guard selectedChoice != storeChoice else {
@@ -95,12 +127,25 @@ struct SettingsTranscriptionModelSection: View {
             Text("Completed transcripts stay on this device. New \(selectedChoice.title) transcripts require reinstalling this model.")
         }
         .task {
-            appModel.transcriptionModels.load(modelContext: modelContext)
+            prefersAppleSpeech = appModel.transcriptionEngineSettings.prefersAppleSpeech
             selectedChoice = appModel.transcriptionModels.selectedChoice
+            let choice = selectedChoice
+            let loadedState = await Self.loadModelState(
+                modelIdentifier: choice.model.rawValue,
+                version: choice.defaultVersion
+            )
+            guard !Task.isCancelled,
+                  choice == appModel.transcriptionModels.selectedChoice else {
+                return
+            }
+            loadedModelState = loadedState
         }
     }
 
     private var footerText: String {
+        if prefersAppleSpeech {
+            return "Apple transcription is used when available. The tiny English Whisper model stays installed as the automatic fallback and stays on this device."
+        }
         if includesModelPicker {
             return "Fast downloads the tiny English model. Accurate downloads the large-v3 model. Both stay on this device."
         }
@@ -115,12 +160,20 @@ struct SettingsTranscriptionModelSection: View {
         }
     }
 
+    private var modelState: TranscriptionModelState {
+        if case .unknown = appModel.transcriptionModels.state {
+            loadedModelState
+        } else {
+            appModel.transcriptionModels.state
+        }
+    }
+
     private var statusText: String {
-        if case .failed(let message) = appModel.transcriptionModels.state {
+        if case .failed(let message) = modelState {
             return message
         }
 
-        return switch appModel.transcriptionModels.state {
+        return switch modelState {
         case .unknown:
             "Unknown"
         case .notInstalled:
@@ -141,11 +194,11 @@ struct SettingsTranscriptionModelSection: View {
     }
 
     private var statusSystemImage: String {
-        if case .failed = appModel.transcriptionModels.state {
+        if case .failed = modelState {
             return "exclamationmark.triangle.fill"
         }
 
-        return switch appModel.transcriptionModels.state {
+        return switch modelState {
         case .installed:
             "checkmark.circle.fill"
         case .repairAvailable, .failed:
@@ -166,6 +219,35 @@ struct SettingsTranscriptionModelSection: View {
             selectedChoice = appModel.transcriptionModels.selectedChoice
             return
         }
+    }
+
+    private func updateAppleSpeechPreference(_ newValue: Bool) {
+        let settings = appModel.transcriptionEngineSettings
+        guard newValue != settings.prefersAppleSpeech else {
+            return
+        }
+
+        if newValue, !settings.hasAcknowledgedAppleSpeechNotice {
+            isConfirmingAppleSpeech = true
+            return
+        }
+
+        guard settings.setPrefersAppleSpeech(newValue, modelContext: modelContext) else {
+            prefersAppleSpeech = settings.prefersAppleSpeech
+            return
+        }
+    }
+
+    private func enableAppleSpeech() {
+        let settings = appModel.transcriptionEngineSettings
+        guard settings.setPrefersAppleSpeech(true, modelContext: modelContext) else {
+            prefersAppleSpeech = settings.prefersAppleSpeech
+            return
+        }
+    }
+
+    private func cancelAppleSpeechSelection() {
+        prefersAppleSpeech = appModel.transcriptionEngineSettings.prefersAppleSpeech
     }
 
     private func confirmInstall() {
@@ -198,6 +280,28 @@ struct SettingsTranscriptionModelSection: View {
 
     private func checkModel() {
         appModel.checkTranscriptionModel()
+    }
+
+    @concurrent
+    private static func loadModelState(
+        modelIdentifier: String,
+        version: String
+    ) async -> TranscriptionModelState {
+        let installStore = OpenCastWhisperModelInstallStore()
+        do {
+            let summary = try installStore.installedSummary(
+                modelIdentifier: modelIdentifier,
+                version: version
+            )
+            return .installed(summary)
+        } catch let error as OpenCastTranscriptionError {
+            guard case .modelNotInstalled = error else {
+                return .failed(error.localizedDescription)
+            }
+            return .notInstalled
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 
     private var installButtonTitle: String {

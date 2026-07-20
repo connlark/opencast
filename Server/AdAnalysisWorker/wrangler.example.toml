@@ -34,9 +34,17 @@ migrations_dir = "migrations"
 name = "AD_ANALYSIS_USAGE_LIMITER"
 class_name = "AdAnalysisUsageLimiter"
 
+[[durable_objects.bindings]]
+name = "AD_ANALYSIS_JOB"
+class_name = "AdAnalysisJob"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AdAnalysisUsageLimiter"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["AdAnalysisJob"]
 
 [env.prod-staging]
 name = "your-ad-analysis-worker-prod-staging"
@@ -59,9 +67,17 @@ migrations_dir = "migrations"
 name = "AD_ANALYSIS_USAGE_LIMITER"
 class_name = "AdAnalysisUsageLimiter"
 
+[[env.prod-staging.durable_objects.bindings]]
+name = "AD_ANALYSIS_JOB"
+class_name = "AdAnalysisJob"
+
 [[env.prod-staging.migrations]]
 tag = "v1"
 new_sqlite_classes = ["AdAnalysisUsageLimiter"]
+
+[[env.prod-staging.migrations]]
+tag = "v2"
+new_sqlite_classes = ["AdAnalysisJob"]
 
 [env.production]
 name = "your-ad-analysis-worker-production"
@@ -88,6 +104,14 @@ migrations_dir = "migrations"
 name = "AD_ANALYSIS_USAGE_LIMITER"
 class_name = "AdAnalysisUsageLimiter"
 
+[[env.production.durable_objects.bindings]]
+name = "AD_ANALYSIS_JOB"
+class_name = "AdAnalysisJob"
+
 [[env.production.migrations]]
 tag = "v1"
 new_sqlite_classes = ["AdAnalysisUsageLimiter"]
+
+[[env.production.migrations]]
+tag = "v2"
+new_sqlite_classes = ["AdAnalysisJob"]

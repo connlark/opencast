@@ -4,22 +4,15 @@ struct SettingsNotificationsSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
-    @State private var notificationsEnabled = false
 
     var body: some View {
         let settings = appModel.notificationSettings
         Section("Notifications") {
             Toggle(
                 "New Episode Notifications",
-                isOn: $notificationsEnabled
+                isOn: notificationsEnabledBinding
             )
             .disabled(settings.isWorking)
-            .onChange(of: notificationsEnabled) { _, isEnabled in
-                guard isEnabled != settings.isEnabled else {
-                    return
-                }
-                updateNotificationsEnabled(isEnabled)
-            }
 
             LabeledContent("Status", value: settings.statusText)
 
@@ -39,10 +32,14 @@ struct SettingsNotificationsSection: View {
                 activePodcastIDs: appModel.library.activePodcastIDs,
                 modelContext: modelContext
             )
-            notificationsEnabled = settings.isEnabled
         }
-        .onChange(of: settings.isEnabled, initial: true) { _, isEnabled in
-            notificationsEnabled = isEnabled
+    }
+
+    private var notificationsEnabledBinding: Binding<Bool> {
+        Binding {
+            appModel.notificationSettings.isEnabled
+        } set: { isEnabled in
+            updateNotificationsEnabled(isEnabled)
         }
     }
 

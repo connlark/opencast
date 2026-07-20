@@ -568,11 +568,15 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
                 // Force the token unless it's the last prefill token and both are timestamps
                 if !(isLastPrefillToken && isTimestampToken && modelPredictedTimestamp) {
                     nextToken = currentTokens[tokenIndex]
-                    Logging.debug("Forcing prompt tokenIndex: \(tokenIndex), token: \(nextToken), text: \(tokenizer.decode(tokens: [nextToken]))")
+                    if Logging.isLoggingEnabled(for: .debug) {
+                        Logging.debug("Forcing prompt tokenIndex: \(tokenIndex), token: \(nextToken), text: \(tokenizer.decode(tokens: [nextToken]))")
+                    }
                 } else {
                     // Last prefill was a timestamp but the model predicted a timestamp
                     currentTokens[tokenIndex] = nextToken
-                    Logging.debug("Skipping prompt tokenIndex: \(tokenIndex), token: \(nextToken), text: \(tokenizer.decode(tokens: [nextToken]))")
+                    if Logging.isLoggingEnabled(for: .debug) {
+                        Logging.debug("Skipping prompt tokenIndex: \(tokenIndex), token: \(nextToken), text: \(tokenizer.decode(tokens: [nextToken]))")
+                    }
                 }
             }
 
@@ -637,7 +641,9 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
             nextToken = sampleResult.tokens.last!
             let nextTokenLogProb = sampleResult.logProbs.last!
 
-            Logging.debug("Predicted next tokenIndex: \(tokenIndex + 1), token: \(nextToken), text: \(tokenizer.decode(tokens: [nextToken]))")
+            if Logging.isLoggingEnabled(for: .debug) {
+                Logging.debug("Predicted next tokenIndex: \(tokenIndex + 1), token: \(nextToken), text: \(tokenizer.decode(tokens: [nextToken]))")
+            }
 
             let samplingTime = Date().timeIntervalSince(samplingStartTime)
             timings.decodingSampling += samplingTime

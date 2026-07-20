@@ -130,6 +130,7 @@ nonisolated final class StreamingAudioResourceLoaderDelegate: NSObject, AVAssetR
         }
 
         let fetched = try await fetcher.data(for: originalURL, range: range)
+        let responseData = try responseData(from: fetched, requestedRange: range)
         let manifest = try await cache.store(
             fetched,
             episodeID: episodeID,
@@ -138,9 +139,37 @@ nonisolated final class StreamingAudioResourceLoaderDelegate: NSObject, AVAssetR
         )
         await cache.schedulePrune(byteBudget: byteBudget)
         return StreamingAudioLoadingResponse(
-            data: fetched.data,
+            data: responseData,
             contentLength: manifest.contentLength,
             mimeType: manifest.mimeType
         )
+    }
+
+    nonisolated static func responseData(
+        from fetched: StreamingAudioRangeResponse,
+        requestedRange: Range<Int64>
+    ) throws -> Data {
+        guard requestedRange.lowerBound >= 0,
+              requestedRange.upperBound > requestedRange.lowerBound,
+              fetched.range.lowerBound >= 0,
+              fetched.range.upperBound > fetched.range.lowerBound,
+              Int64(fetched.data.count) == fetched.range.upperBound - fetched.range.lowerBound,
+              fetched.range.contains(requestedRange.lowerBound)
+        else {
+            throw StreamingAudioCacheError.invalidRange
+        }
+
+        let responseUpperBound = min(requestedRange.upperBound, fetched.range.upperBound)
+        let startOffset = requestedRange.lowerBound - fetched.range.lowerBound
+        let responseCount = responseUpperBound - requestedRange.lowerBound
+        guard let startOffset = Int(exactly: startOffset),
+              let responseCount = Int(exactly: responseCount)
+        else {
+            throw StreamingAudioCacheError.invalidRange
+        }
+
+        let startIndex = fetched.data.index(fetched.data.startIndex, offsetBy: startOffset)
+        let endIndex = fetched.data.index(startIndex, offsetBy: responseCount)
+        return Data(fetched.data[startIndex..<endIndex])
     }
 }

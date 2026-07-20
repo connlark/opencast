@@ -1,0 +1,259 @@
+# Public self-hosting template. The top level is a development lane;
+# prod-staging and production must use isolated storage and credentials.
+name = "your-remote-transcription-worker"
+main = "build/index.js"
+compatibility_date = "2026-07-09"
+workers_dev = true
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+
+[triggers]
+# Enable only after App Attest, storage, purchases, and abuse controls are ready.
+crons = []
+
+[build]
+command = "cargo install -q \"worker-build@^0.8\" && \"$HOME/.cargo/bin/worker-build\" --release"
+
+[vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "development"
+LANE = "development"
+PUBLIC_REMOTE_TRANSCRIPTION_ENABLED = "false"
+PURCHASES_ENABLED = "false"
+# DEV_BEARER_ENABLED is deliberately absent. Add it only for an isolated
+# development lane after setting DEV_BEARER_TOKEN; config.rs rejects it elsewhere.
+# Exact-device upload credentials stay in Worker secrets.
+R2_S3_HOST = "REPLACE_WITH_ACCOUNT_HASH.r2.cloudflarestorage.com"
+R2_S3_BUCKET = "your-remote-transcription-audio"
+REMOTE_TRANSCRIPTION_MODEL = "@cf/openai/whisper-large-v3-turbo"
+# Keep these admission and resource caps conservative.
+MAX_CANONICAL_DURATION_SECONDS = "14400"
+MAX_SOURCE_BYTES = "268435456"
+MAX_ACTIVE_JOBS_PER_ACCOUNT = "1"
+# The runtime clamps slots × CHUNK_AI_CONCURRENCY to a safe maximum.
+GLOBAL_INFERENCE_CONCURRENCY = "2"
+# Used only until a queued job can estimate itself.
+QUEUE_DEFAULT_REMAINING_SECONDS = "64"
+# Credit seam backend: the dev D1 fake. Only "purchase" (the PurchaseWorker
+# service binding) is valid outside the development lane; config.rs fails
+# closed on anything else.
+CREDIT_BACKEND = "dev"
+# Bounded chunk fan-out within one job.
+CHUNK_AI_CONCURRENCY = "4"
+MAX_CHUNK_ATTEMPTS = "3"
+DAILY_SPEND_CAP_USD_MICRO = "1000000"
+DEV_CREDIT_GRANT_SECONDS = "36000"
+# Deadlines are variables so workerd tests can shrink them.
+WAITING_FOR_DEVICE_SOURCE_DEADLINE_SECONDS = "43200"
+AWAITING_CREDITS_DEADLINE_SECONDS = "21600"
+STAGING_ORIGIN_DEADLINE_SECONDS = "3600"
+# Origin-fetch caps.
+ORIGIN_FETCH_MAX_REDIRECTS = "5"
+# Must stay inside the 15-minute Durable Object alarm wall budget.
+ORIGIN_FETCH_WALL_SECONDS = "840"
+POLL_AFTER_SECONDS = "2"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "TRANSCRIPTION_DB"
+database_name = "your-remote-transcription-db"
+database_id = "REPLACE_WITH_DEVELOPMENT_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "TRANSCRIPTION_AUDIO"
+bucket_name = "your-remote-transcription-audio"
+
+[[durable_objects.bindings]]
+name = "TRANSCRIPTION_JOB"
+class_name = "TranscriptionJob"
+
+[[durable_objects.bindings]]
+name = "TRANSCRIPTION_USAGE_LIMITER"
+class_name = "TranscriptionUsageLimiter"
+
+[[services]]
+binding = "TRANSCRIPTION_MEDIA_WORKER"
+service = "your-transcription-media-worker"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TranscriptionJob", "TranscriptionUsageLimiter"]
+
+# --- prod-staging lane: isolated D1/R2/DO, production App Attest, and
+# Sandbox StoreKit through the PurchaseWorker binding. The dev bearer gate
+# and development-only surfaces must stay absent here.
+[env.prod-staging]
+name = "your-remote-transcription-worker-prod-staging"
+workers_dev = true
+
+[env.prod-staging.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.prod-staging.observability.logs]
+enabled = true
+invocation_logs = true
+
+[env.prod-staging.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+LANE = "prod-staging"
+PUBLIC_REMOTE_TRANSCRIPTION_ENABLED = "false"
+CREDIT_BACKEND = "purchase"
+PURCHASES_ENABLED = "false"
+REMOTE_TRANSCRIPTION_MODEL = "@cf/openai/whisper-large-v3-turbo"
+# Four-hour duration cap and bounded source size.
+MAX_CANONICAL_DURATION_SECONDS = "14400"
+MAX_SOURCE_BYTES = "536870912"
+# Exact-device upload routes fail closed until the R2 S3 secrets are set.
+R2_S3_HOST = "REPLACE_WITH_ACCOUNT_HASH.r2.cloudflarestorage.com"
+R2_S3_BUCKET = "your-remote-transcription-audio-prod-staging"
+# Multiple devices or an abandoned pre-source job must not wedge an account.
+MAX_ACTIVE_JOBS_PER_ACCOUNT = "4"
+GLOBAL_INFERENCE_CONCURRENCY = "2"
+QUEUE_DEFAULT_REMAINING_SECONDS = "64"
+CHUNK_AI_CONCURRENCY = "4"
+MAX_CHUNK_ATTEMPTS = "3"
+# Keep the sandbox-lane spend cap deliberately small.
+DAILY_SPEND_CAP_USD_MICRO = "1000000"
+WAITING_FOR_DEVICE_SOURCE_DEADLINE_SECONDS = "43200"
+AWAITING_CREDITS_DEADLINE_SECONDS = "21600"
+STAGING_ORIGIN_DEADLINE_SECONDS = "3600"
+ORIGIN_FETCH_MAX_REDIRECTS = "5"
+ORIGIN_FETCH_WALL_SECONDS = "840"
+POLL_AFTER_SECONDS = "2"
+
+[env.prod-staging.ai]
+binding = "AI"
+
+[[env.prod-staging.d1_databases]]
+binding = "TRANSCRIPTION_DB"
+database_name = "your-remote-transcription-db-prod-staging"
+database_id = "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.prod-staging.r2_buckets]]
+binding = "TRANSCRIPTION_AUDIO"
+bucket_name = "your-remote-transcription-audio-prod-staging"
+
+[[env.prod-staging.durable_objects.bindings]]
+name = "TRANSCRIPTION_JOB"
+class_name = "TranscriptionJob"
+
+[[env.prod-staging.durable_objects.bindings]]
+name = "TRANSCRIPTION_USAGE_LIMITER"
+class_name = "TranscriptionUsageLimiter"
+
+[[env.prod-staging.services]]
+binding = "TRANSCRIPTION_MEDIA_WORKER"
+service = "your-transcription-media-worker-prod-staging"
+
+[[env.prod-staging.services]]
+binding = "PURCHASE_WORKER"
+service = "your-purchase-worker-prod-staging"
+
+[[env.prod-staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["TranscriptionJob", "TranscriptionUsageLimiter"]
+
+[env.prod-staging.triggers]
+# Add an orphan-sweep schedule only after the lane is fully configured.
+crons = []
+
+# --- production lane: custom-domain gateway, both customer flags off ------
+[env.production]
+name = "your-remote-transcription-worker-production"
+workers_dev = false
+
+[[env.production.routes]]
+pattern = "remote-transcription.example.com"
+custom_domain = true
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.observability.logs]
+enabled = true
+invocation_logs = true
+
+[env.production.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+LANE = "production"
+PUBLIC_REMOTE_TRANSCRIPTION_ENABLED = "false"
+CREDIT_BACKEND = "purchase"
+PURCHASES_ENABLED = "false"
+REMOTE_TRANSCRIPTION_MODEL = "@cf/openai/whisper-large-v3-turbo"
+MAX_CANONICAL_DURATION_SECONDS = "14400"
+MAX_SOURCE_BYTES = "536870912"
+R2_S3_HOST = "REPLACE_WITH_ACCOUNT_HASH.r2.cloudflarestorage.com"
+R2_S3_BUCKET = "your-remote-transcription-audio-production"
+# Multiple devices or an abandoned pre-source job must not wedge an account.
+MAX_ACTIVE_JOBS_PER_ACCOUNT = "4"
+GLOBAL_INFERENCE_CONCURRENCY = "2"
+QUEUE_DEFAULT_REMAINING_SECONDS = "64"
+CHUNK_AI_CONCURRENCY = "4"
+MAX_CHUNK_ATTEMPTS = "3"
+DAILY_SPEND_CAP_USD_MICRO = "1000000"
+WAITING_FOR_DEVICE_SOURCE_DEADLINE_SECONDS = "43200"
+AWAITING_CREDITS_DEADLINE_SECONDS = "21600"
+EXACT_UPLOAD_REQUIRED_DEADLINE_SECONDS = "43200"
+EXACT_UPLOADING_DEADLINE_SECONDS = "43200"
+STAGING_ORIGIN_DEADLINE_SECONDS = "3600"
+ORIGIN_FETCH_MAX_REDIRECTS = "5"
+ORIGIN_FETCH_WALL_SECONDS = "840"
+POLL_AFTER_SECONDS = "2"
+ORPHAN_SWEEP_MAX_R2_OBJECTS = "5000"
+ORPHAN_SWEEP_MAX_STALE_JOBS = "100"
+
+[env.production.ai]
+binding = "AI"
+
+[[env.production.d1_databases]]
+binding = "TRANSCRIPTION_DB"
+database_name = "your-remote-transcription-db-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.production.r2_buckets]]
+binding = "TRANSCRIPTION_AUDIO"
+bucket_name = "your-remote-transcription-audio-production"
+
+[[env.production.durable_objects.bindings]]
+name = "TRANSCRIPTION_JOB"
+class_name = "TranscriptionJob"
+
+[[env.production.durable_objects.bindings]]
+name = "TRANSCRIPTION_USAGE_LIMITER"
+class_name = "TranscriptionUsageLimiter"
+
+[[env.production.services]]
+binding = "TRANSCRIPTION_MEDIA_WORKER"
+service = "your-transcription-media-worker-production"
+
+[[env.production.services]]
+binding = "PURCHASE_WORKER"
+service = "your-purchase-worker-production"
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = ["TranscriptionJob", "TranscriptionUsageLimiter"]
+
+[env.production.triggers]
+crons = []

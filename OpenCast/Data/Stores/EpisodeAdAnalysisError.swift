@@ -1,11 +1,12 @@
 import Foundation
 
-enum EpisodeAdAnalysisError: LocalizedError, Equatable {
+enum EpisodeAdAnalysisError: LocalizedError, Sendable, Equatable {
     case clientDisabled
     case appAttestUnavailable
     case transcriptNotCompleted
     case analysisDocumentMissing
     case anotherJobActive
+    case analysisTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ enum EpisodeAdAnalysisError: LocalizedError, Equatable {
             "The promo/ad analysis file could not be found."
         case .anotherJobActive:
             "Finish the active promo/ad analysis before starting another one."
+        case .analysisTimedOut:
+            "Promo/ad analysis took too long. Try again."
         }
     }
 }

@@ -340,9 +340,8 @@ pub fn validate_request(request: AdAnalysisRequest) -> Result<ValidatedRequest, 
     })
 }
 
-// --- promo_ad_breaks_v2 structural validation (step-4 PLAN §A4, strengthened
-// per the measured stage-a/stage-b fixture replays; executable spec mirrored
-// at notes/plans/ad-detection/step4/eval/validation.py) ---
+// --- promo_ad_breaks_v2 structural validation. Keep the external evaluation
+// harness aligned with these executable rules. ---
 
 pub const MAX_SPAN_DURATION_SECONDS: f64 = 600.0;
 pub const MIN_BREAK_DURATION_SECONDS: f64 = 15.0;

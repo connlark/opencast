@@ -1,0 +1,41 @@
+// Public self-hosting template for the private development-lane media worker.
+// It has no routes or workers.dev exposure and is reachable only through the
+// RemoteTranscriptionWorker service binding.
+// Container image builds/pushes go through Podman: deploy with
+// WRANGLER_DOCKER_BIN="$(command -v podman)" (see package.json scripts).
+{
+  "name": "your-transcription-media-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-09",
+  "workers_dev": false,
+  "observability": { "enabled": true },
+  // Build and push your image, then replace every marker and pin its digest.
+  "containers": [
+    {
+      "class_name": "TranscriptionMediaContainer",
+      "image": "registry.cloudflare.com/REPLACE_WITH_ACCOUNT_HASH/your-transcription-media-container:REPLACE_WITH_TAG@sha256:REPLACE_WITH_IMAGE_DIGEST",
+      "max_instances": 2,
+      "instance_type": "basic"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MEDIA_CONTAINER",
+        "class_name": "TranscriptionMediaContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TranscriptionMediaContainer"]
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "TRANSCRIPTION_AUDIO",
+      "bucket_name": "your-remote-transcription-audio"
+    }
+  ]
+}

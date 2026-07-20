@@ -1,5 +1,6 @@
 use opencast_ad_analysis_worker::prompt::{
-    build_prompt, gemini_generate_content_url, gemini_request_payload, GEMINI_MAX_OUTPUT_TOKENS,
+    build_prompt, gemini_generate_content_url, gemini_request_payload, GeminiGenerationOptions,
+    GEMINI_MAX_OUTPUT_TOKENS,
 };
 use opencast_ad_analysis_worker::types::{
     resolve_gemini_model, AdAnalysisRequest, TranscriptMetadata, TranscriptSegment,
@@ -43,7 +44,7 @@ fn prompt_carries_the_promo_ad_breaks_v2_contract() {
 
 #[test]
 fn gemini_payload_requests_structured_json_with_thinking_headroom() {
-    let payload = gemini_request_payload(&sample_request());
+    let payload = gemini_request_payload(&sample_request(), GeminiGenerationOptions::default());
 
     assert_eq!(
         payload["generationConfig"]["temperature"],
@@ -67,6 +68,26 @@ fn gemini_payload_requests_structured_json_with_thinking_headroom() {
     // Model defaults were what the stage-a experiments measured — no
     // thinkingConfig may be sent.
     assert!(payload["generationConfig"].get("thinkingConfig").is_none());
+}
+
+#[test]
+fn gemini_payload_exposes_dormant_output_and_thinking_options() {
+    let payload = gemini_request_payload(
+        &sample_request(),
+        GeminiGenerationOptions {
+            max_output_tokens: 32_768,
+            thinking_budget: Some(8_192),
+        },
+    );
+
+    assert_eq!(
+        payload["generationConfig"]["maxOutputTokens"],
+        serde_json::json!(32768)
+    );
+    assert_eq!(
+        payload["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+        serde_json::json!(8192)
+    );
 }
 
 #[test]
@@ -115,7 +136,7 @@ fn model_env_var_resolves_against_the_allowlist() {
 #[test]
 fn gemini_payload_sends_transcript_segments_without_audio_provenance() {
     let request = sample_request();
-    let payload = gemini_request_payload(&request);
+    let payload = gemini_request_payload(&request, GeminiGenerationOptions::default());
     let encoded = serde_json::to_string(&payload).expect("payload serializes");
 
     assert!(encoded.contains("Sponsor copy."));
@@ -133,6 +154,7 @@ fn gemini_payload_sends_transcript_segments_without_audio_provenance() {
 fn sample_request() -> AdAnalysisRequest {
     AdAnalysisRequest {
         schema_version: SCHEMA_VERSION,
+        async_supported: false,
         request_id: "request-1".to_string(),
         episode_id: "episode-1".to_string(),
         podcast_id: "podcast-1".to_string(),

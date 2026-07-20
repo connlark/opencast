@@ -3,8 +3,8 @@ import Foundation
 public actor StreamingAudioCacheMaintenance {
     private let cache: StreamingAudioDiskCache
 
-    public init(directory: URL) {
-        cache = StreamingAudioDiskCache(directory: directory)
+    public init(cache: StreamingAudioDiskCache) {
+        self.cache = cache
     }
 
     public func summary() async throws -> StreamingAudioCacheSummary {

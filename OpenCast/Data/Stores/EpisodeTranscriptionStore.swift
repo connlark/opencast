@@ -3,6 +3,7 @@ import Observation
 import OpenCastCore
 import OpenCastTranscription
 import SwiftData
+import UIKit
 
 @Observable
 final class EpisodeTranscriptionStore {
@@ -26,6 +27,10 @@ final class EpisodeTranscriptionStore {
     @ObservationIgnored private var priorCompletedTranscriptSnapshot: PriorCompletedTranscriptSnapshot?
     @ObservationIgnored private let stateChanges = StoreChangeNotifier()
     @ObservationIgnored var onEpisodeStateChanged: ((String) -> Void)?
+    @ObservationIgnored var onAppleSpeechRunInterrupted: ((_ episodeID: String, _ restoredPriorTranscript: Bool) -> Void)?
+    @ObservationIgnored var setIdleTimerDisabled: (Bool) -> Void = {
+        UIApplication.shared.isIdleTimerDisabled = $0
+    }
     /// Set when a run's protected default-compute attempt was classified as an
     /// environmental compute failure and retried on `.cpuOnly` — the queue
     /// coordinator reads this to carry the degraded profile across items
@@ -257,6 +262,9 @@ final class EpisodeTranscriptionStore {
         activeCancellationPreservesPartial = false
         activePreservesPriorCompletedTranscript = preservesPriorCompletedTranscript
         priorCompletedTranscriptSnapshot = nil
+        if engine == .appleSpeech {
+            setIdleTimerDisabled(true)
+        }
         activeTask = Task {
             await runTranscription(
                 runID: runID,
@@ -434,18 +442,7 @@ final class EpisodeTranscriptionStore {
         modelContext: ModelContext
     ) async {
         defer {
-            if ownsActiveRun(episodeID: episode.episodeID, runID: runID) {
-                activeTask = nil
-                activeEpisodeID = nil
-                activeRunID = nil
-                activeSourceFileURL = nil
-                activeEngine = nil
-                activeCancellationPreservesPartial = false
-                activePreservesPriorCompletedTranscript = false
-                priorCompletedTranscriptSnapshot = nil
-                progressByEpisodeID[episode.episodeID] = nil
-                stateChanges.notify()
-            }
+            clearActiveRun(episodeID: episode.episodeID, runID: runID)
         }
 
         var workingRelativePath: String?
@@ -473,6 +470,7 @@ final class EpisodeTranscriptionStore {
                     handleCancellation(
                         episodeID: episode.episodeID,
                         relativePath: workingRelativePath,
+                        engine: engine,
                         modelContext: modelContext
                     )
                 }
@@ -485,6 +483,7 @@ final class EpisodeTranscriptionStore {
                 handleCancellation(
                     episodeID: episode.episodeID,
                     relativePath: workingRelativePath,
+                    engine: engine,
                     modelContext: modelContext
                 )
                 return
@@ -497,6 +496,7 @@ final class EpisodeTranscriptionStore {
                     handleCancellation(
                         episodeID: episode.episodeID,
                         relativePath: workingRelativePath,
+                        engine: engine,
                         modelContext: modelContext
                     )
                     return
@@ -619,19 +619,21 @@ final class EpisodeTranscriptionStore {
                 record.updatedAt = .now
                 updateLoadedRecord(record)
             case .checkpoint(let checkpoint):
-                try persistCheckpoint(
+                try await persistCheckpoint(
                     checkpoint,
                     baseDocument: baseDocument,
                     record: record,
                     relativePath: relativePath,
+                    runID: runID,
                     modelContext: modelContext
                 )
             case .finished(let result):
-                try persistFinalResult(
+                try await persistFinalResult(
                     result,
                     baseDocument: baseDocument,
                     record: record,
                     relativePath: relativePath,
+                    runID: runID,
                     modelContext: modelContext
                 )
             }
@@ -661,6 +663,7 @@ final class EpisodeTranscriptionStore {
             handleCancellation(
                 episodeID: episodeID,
                 relativePath: relativePath,
+                engine: engine,
                 modelContext: modelContext
             )
             return .finish
@@ -678,6 +681,7 @@ final class EpisodeTranscriptionStore {
                 episodeID: episodeID,
                 relativePath: relativePath,
                 error: error,
+                engine: engine,
                 modelContext: modelContext
             )
         case .failed:
@@ -698,6 +702,7 @@ final class EpisodeTranscriptionStore {
         episodeID: String,
         relativePath: String?,
         error: any Error,
+        engine: EpisodeTranscriptionEngine,
         modelContext: ModelContext
     ) -> TranscriptionFailureAction {
         do {
@@ -711,6 +716,7 @@ final class EpisodeTranscriptionStore {
             markInterruptedAfterEnvironmentalFailure(
                 record: record,
                 relativePath: relativePath,
+                engine: engine,
                 modelContext: modelContext
             )
             return .finish
@@ -740,6 +746,7 @@ final class EpisodeTranscriptionStore {
                 markInterruptedAfterEnvironmentalFailure(
                     record: record,
                     relativePath: relativePath,
+                    engine: engine,
                     modelContext: modelContext
                 )
                 return .finish
@@ -761,8 +768,9 @@ final class EpisodeTranscriptionStore {
         baseDocument: EpisodeTranscriptDocument?,
         record: EpisodeTranscriptRecord,
         relativePath: String,
+        runID: UUID,
         modelContext: ModelContext
-    ) throws {
+    ) async throws {
         let prefixSegments = baseSegments(from: baseDocument, resumeStart: record.completedDuration)
         let segments = OpenCastTranscriptSegmentNormalizer.normalized(
             prefixSegments + checkpoint.segments
@@ -786,7 +794,11 @@ final class EpisodeTranscriptionStore {
             timings: baseDocument?.timings ?? EpisodeTranscriptTimings(),
             createdAt: baseDocument?.createdAt ?? record.createdAt
         )
-        try fileStore.write(document, relativePath: relativePath)
+        try await fileStore.writeOffCaller(document, relativePath: relativePath)
+        try Task.checkCancellation()
+        guard ownsActiveRun(episodeID: record.episodeID, runID: runID) else {
+            throw CancellationError()
+        }
 
         record.state = .running
         record.completedDuration = min(completedDuration, record.audioDuration)
@@ -801,8 +813,9 @@ final class EpisodeTranscriptionStore {
         baseDocument: EpisodeTranscriptDocument?,
         record: EpisodeTranscriptRecord,
         relativePath: String,
+        runID: UUID,
         modelContext: ModelContext
-    ) throws {
+    ) async throws {
         let prefixSegments = baseSegments(from: baseDocument, resumeStart: record.completedDuration)
         let segments = OpenCastTranscriptSegmentNormalizer.normalized(
             prefixSegments + result.segments
@@ -816,7 +829,11 @@ final class EpisodeTranscriptionStore {
             timings: EpisodeTranscriptTimings(resultTimings: result.timings),
             createdAt: baseDocument?.createdAt ?? record.createdAt
         )
-        try fileStore.write(document, relativePath: relativePath)
+        try await fileStore.writeOffCaller(document, relativePath: relativePath)
+        try Task.checkCancellation()
+        guard ownsActiveRun(episodeID: record.episodeID, runID: runID) else {
+            throw CancellationError()
+        }
 
         record.state = .completed
         record.completedDuration = record.audioDuration
@@ -835,6 +852,70 @@ final class EpisodeTranscriptionStore {
         )
         lastErrorMessage = nil
         lastErrorEpisodeID = nil
+    }
+
+    /// Narrow import path for remotely produced transcripts. Writes the
+    /// schema-3 document atomically at its remote fingerprint, upserts the
+    /// record with explicit remote provenance, preserves any prior completed
+    /// transcript until the new document has committed, and notifies the
+    /// existing UI. Remote jobs never touch the local run loop.
+    func importRemoteTranscript(
+        _ document: EpisodeTranscriptDocument,
+        modelContext: ModelContext
+    ) async throws {
+        guard activeEngine(for: document.episodeID) == nil else {
+            throw RemoteTranscriptImportError.localTranscriptionActive
+        }
+
+        let fingerprint = fileStore.remoteFingerprint(
+            sourceFileSHA256: document.sourceFileSHA256,
+            provider: EpisodeRemoteTranscriptMapper.provider,
+            providerModelIdentifier: document.providerModelIdentifier ?? document.modelIdentifier,
+            servingContractVersion: document.remoteServingContractVersion ?? document.modelVersion,
+            pipelineVersion: document.remotePipelineVersion ?? ""
+        )
+        let relativePath = fileStore.relativePath(
+            episodeID: document.episodeID,
+            fingerprint: fingerprint
+        )
+        let priorRecord = try fetchStoredRecord(
+            episodeID: document.episodeID,
+            modelContext: modelContext
+        )
+        let priorRelativePath = priorRecord?.state == .completed
+            ? priorRecord?.transcriptRelativePath
+            : nil
+
+        try await fileStore.writeOffCaller(document, relativePath: relativePath)
+
+        let record = try upsertRecord(
+            episodeID: document.episodeID,
+            podcastID: document.podcastID,
+            sourceAudioURL: document.sourceAudioURL,
+            sourceFileByteCount: document.sourceFileByteCount,
+            sourceFileSHA256: document.sourceFileSHA256,
+            modelIdentity: EpisodeTranscriptionModelIdentity(
+                modelIdentifier: document.modelIdentifier,
+                version: document.modelVersion,
+                treeSHA256: document.modelTreeSHA256
+            ),
+            languageCode: document.languageCode,
+            state: .completed,
+            audioDuration: document.audioDuration,
+            completedDuration: document.audioDuration,
+            checkpointCount: 0,
+            transcriptRelativePath: relativePath,
+            errorMessage: nil,
+            modelContext: modelContext
+        )
+        record.transcriptionEngineRawValue = EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue
+        try commit(episodeID: document.episodeID, modelContext: modelContext, resort: true)
+        if let priorRelativePath, priorRelativePath != relativePath {
+            // The committed remote document supersedes the preserved one; a
+            // cleanup failure must not fail the completed import.
+            try? fileStore.delete(relativePath: priorRelativePath)
+        }
+        notifyEpisodeStateChanged(document.episodeID)
     }
 
     private func makeDocument(
@@ -862,13 +943,15 @@ final class EpisodeTranscriptionStore {
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
             timings: timings,
             createdAt: createdAt,
-            updatedAt: .now
+            updatedAt: .now,
+            transcriptionEngine: record.engineProvenance.rawValue
         )
     }
 
     private func handleCancellation(
         episodeID: String,
         relativePath: String?,
+        engine: EpisodeTranscriptionEngine,
         modelContext: ModelContext
     ) {
         do {
@@ -886,6 +969,9 @@ final class EpisodeTranscriptionStore {
                     discardingPartialAt: relativePath ?? record.transcriptRelativePath,
                     modelContext: modelContext
                 )
+                if activeCancellationPreservesPartial, engine == .appleSpeech {
+                    onAppleSpeechRunInterrupted?(episodeID, true)
+                }
                 return
             }
 
@@ -903,6 +989,9 @@ final class EpisodeTranscriptionStore {
             record.updatedAt = .now
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
             clearFailure(episodeID: episodeID)
+            if activeCancellationPreservesPartial, engine == .appleSpeech {
+                onAppleSpeechRunInterrupted?(episodeID, false)
+            }
         } catch {
             recordFailure(error, episodeID: episodeID)
         }
@@ -945,6 +1034,7 @@ final class EpisodeTranscriptionStore {
     private func markInterruptedAfterEnvironmentalFailure(
         record: EpisodeTranscriptRecord,
         relativePath: String?,
+        engine: EpisodeTranscriptionEngine,
         modelContext: ModelContext
     ) {
         do {
@@ -958,6 +1048,9 @@ final class EpisodeTranscriptionStore {
                 AdFreePassBackgroundRunLog.record(
                     "transcription environmental compute failure action=restoredPriorCompleted episodeID=\(record.episodeID)"
                 )
+                if engine == .appleSpeech {
+                    onAppleSpeechRunInterrupted?(record.episodeID, true)
+                }
                 return
             }
             record.state = .interrupted
@@ -966,6 +1059,9 @@ final class EpisodeTranscriptionStore {
             record.updatedAt = .now
             try commit(episodeID: record.episodeID, modelContext: modelContext, resort: true)
             clearFailure(episodeID: record.episodeID)
+            if engine == .appleSpeech {
+                onAppleSpeechRunInterrupted?(record.episodeID, false)
+            }
             AdFreePassBackgroundRunLog.record(
                 "transcription environmental compute failure action=interrupted episodeID=\(record.episodeID) completed=\(record.completedDuration.backgroundLogSeconds) checkpoints=\(record.checkpointCount)"
             )
@@ -980,6 +1076,24 @@ final class EpisodeTranscriptionStore {
         }
         priorCompletedTranscriptSnapshot = nil
         return snapshot
+    }
+
+    private func clearActiveRun(episodeID: String, runID: UUID) {
+        guard ownsActiveRun(episodeID: episodeID, runID: runID) else {
+            return
+        }
+
+        setIdleTimerDisabled(false)
+        activeTask = nil
+        activeEpisodeID = nil
+        activeRunID = nil
+        activeSourceFileURL = nil
+        activeEngine = nil
+        activeCancellationPreservesPartial = false
+        activePreservesPriorCompletedTranscript = false
+        priorCompletedTranscriptSnapshot = nil
+        progressByEpisodeID[episodeID] = nil
+        stateChanges.notify()
     }
 
     /// Aborted improve runs put the app back exactly as before the tap: the

@@ -32,7 +32,9 @@ nonisolated final class URLSessionStreamingAudioRangeFetcher: StreamingAudioHTTP
             throw StreamingAudioCacheError.unexpectedStatus(httpResponse.statusCode)
         }
 
-        let contentRange = try Self.contentRange(from: httpResponse) ?? range
+        guard let contentRange = try Self.contentRange(from: httpResponse) else {
+            throw StreamingAudioCacheError.invalidRange
+        }
         let normalizedResponse = OpenCastHTTPResponse(httpResponse)
         let metadata = StreamingAudioRangeMetadata(
             contentLength: Self.contentLength(from: httpResponse),

@@ -15,6 +15,14 @@ final class OpenCastAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
 
     func application(
         _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        RemoteTranscriptionUploadBackgroundEvents.shared.store(completionHandler, for: identifier)
+    }
+
+    func application(
+        _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
         RemoteNotificationRegistrationBridge.shared.didRegister(deviceToken: deviceToken)

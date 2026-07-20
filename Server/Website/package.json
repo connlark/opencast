@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "sync-screenshots": "node scripts/sync-screenshots.mjs",
     "preview": "next build && wrangler dev",
-    "deploy": "node scripts/sync-screenshots.mjs && next build && wrangler deploy",
+    "deploy": "yarn sync-screenshots && next build && wrangler deploy",
     "lint": "eslint",
     "typecheck": "tsc --noEmit && tsc -p worker --noEmit"
   },
@@ -27,8 +28,9 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "wrangler": "4.110.0"
+    "wrangler": "4.111.0"
   }
 }

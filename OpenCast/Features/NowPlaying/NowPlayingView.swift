@@ -15,6 +15,7 @@ struct NowPlayingView: View {
     @State private var isVoiceBoostEnabled = true
     @State private var showsAutoSkipPill = false
     @State private var displayedAutoSkipEventSequence = 0
+    @State private var remoteEstimateRequest: RemoteTranscriptionStartPreviewRequest?
 
     let bottomContentPadding: CGFloat
     let topContentPadding: CGFloat
@@ -23,7 +24,6 @@ struct NowPlayingView: View {
     @Binding var isContentScrolledToTop: Bool
     let isTrackingDismissDrag: Bool
     let prewarmsPeelRenderer: Bool
-    let prewarmsPeelSettingsPanel: Bool
     let allowsPeelStart: Bool
     let onDismiss: () -> Void
     let onOpenEpisode: () -> Void
@@ -47,12 +47,14 @@ struct NowPlayingView: View {
                                 size: artworkSize,
                                 voiceBoostEnabled: $isVoiceBoostEnabled,
                                 voiceBoostControlEnabled: appModel.playbackSettings.canChangeCurrentEpisodeVoiceBoost,
-                                adFreePassPresentation: appModel.currentAdFreePassPresentation,
+                                adFreePassRow: NowPlayingPeelAdFreePassRowModel(
+                                    presentation: appModel.currentAdFreePassPresentation
+                                ),
                                 onAdFreePassAction: startAdFreePass,
+                                onTranscribeRemotely: presentRemoteTranscriptionEstimate,
                                 onAdFreePassBackgroundProbe: startAdFreePassBackgroundProbe,
                                 isPeelInteractionActive: $isPeelInteractionActive,
                                 prewarmsPeelRenderer: prewarmsPeelRenderer,
-                                prewarmsPeelSettingsPanel: prewarmsPeelSettingsPanel,
                                 allowsPeelStart: allowsPeelStart,
                                 isCardDismissDragActive: isTrackingDismissDrag
                             )
@@ -174,7 +176,19 @@ struct NowPlayingView: View {
                 }
             }
             .overlay(alignment: .top) {
-                if let transcriptionRequest {
+                if let remoteTranscriptionPresentation {
+                    NowPlayingRemoteTranscriptionToast(
+                        presentation: remoteTranscriptionPresentation,
+                        onCancel: appModel.remoteTranscription.cancel
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.top, moreMenuTopPadding + 48)
+                    .transition(
+                        accessibilityReduceMotion
+                            ? .opacity
+                            : .move(edge: .top).combined(with: .opacity)
+                    )
+                } else if let transcriptionRequest {
                     NowPlayingTranscriptionToast(
                         request: transcriptionRequest,
                         onOpenTranscript: openTranscriptFromToast,
@@ -192,6 +206,10 @@ struct NowPlayingView: View {
             .animation(
                 accessibilityReduceMotion ? .easeOut(duration: 0.2) : .bouncy,
                 value: transcriptionRequest?.id
+            )
+            .animation(
+                accessibilityReduceMotion ? .easeOut(duration: 0.2) : .bouncy,
+                value: remoteTranscriptionPresentation != nil
             )
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 // At rest, a scroll view's top offset is the negative top inset.
@@ -234,6 +252,13 @@ struct NowPlayingView: View {
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
                 }
+            }
+            .sheet(item: $remoteEstimateRequest) { request in
+                RemoteTranscriptionConsumptionPreviewSheet(request: request) {
+                    startRemoteTranscription(for: request)
+                }
+                .environment(appModel)
+                .modelContext(modelContext)
             }
             .onAppear {
                 showAutoSkipPillIfNeeded(for: appModel.playback.lastAutoSkipEvent)
@@ -332,6 +357,17 @@ struct NowPlayingView: View {
             return nil
         }
         return request
+    }
+
+    private var remoteTranscriptionPresentation: RemoteTranscriptionStatusPresentation? {
+        guard appModel.remoteTranscriptionPurchases.isSurfaceVisible,
+              let currentEpisodeID,
+              let phase = appModel.remoteTranscription.store.phase(for: currentEpisodeID),
+              !phase.isTerminal
+        else {
+            return nil
+        }
+        return RemoteTranscriptionStatusPresentation.make(phase: phase)
     }
 
     private func performTranscriptAction() {
@@ -494,6 +530,24 @@ struct NowPlayingView: View {
 
     private func startAdFreePass() {
         appModel.startOrContinueAdFreePassForCurrentEpisode(modelContext: modelContext)
+    }
+
+    private func presentRemoteTranscriptionEstimate() {
+        guard appModel.remoteTranscriptionPurchases.isSurfaceVisible,
+              !appModel.remoteTranscription.store.hasActiveRequest
+        else {
+            return
+        }
+
+        remoteEstimateRequest = appModel.remoteTranscriptionStartPreviewRequestForCurrentEpisode()
+    }
+
+    private func startRemoteTranscription(for request: RemoteTranscriptionStartPreviewRequest) {
+        guard request.episodeID == currentEpisodeID else {
+            return
+        }
+
+        appModel.startRemoteTranscriptionForCurrentEpisode(modelContext: modelContext)
     }
 
     private func startAdFreePassBackgroundProbe() {

@@ -1,16 +1,17 @@
 import { Chip, Link, Typography } from "@heroui/react";
 import type { Metadata } from "next";
-import { LifeBuoy, Mail, Rss } from "lucide-react";
+import { Cloud, LifeBuoy, Mail, Rss } from "lucide-react";
 import { ActionLink } from "@/components/ActionLink";
 import { PolicySection } from "@/components/PolicySection";
 import { SiteFooter } from "@/components/SiteFooter";
+import { createPageMetadata } from "@/lib/metadata";
 import { githubIssueURL, supportEmail, supportHost } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "opencast support",
   description: "Support for the opencast podcast app.",
-  alternates: { canonical: `https://${supportHost}/support` },
-};
+  url: `https://${supportHost}`,
+});
 
 export default function SupportPage() {
   return (
@@ -66,6 +67,29 @@ export default function SupportPage() {
               <p>
                 For app issues, include your device, iOS version, opencast
                 version, and the RSS URL if a feed is involved.
+              </p>
+            </PolicySection>
+            <PolicySection
+              icon={<Cloud aria-hidden="true" />}
+              title="Remote Transcription"
+              wide
+            >
+              <p>
+                Remote Transcription is optional and separate from the
+                on-device transcript model. Open the episode menu and choose
+                Transcribe Remotely; opencast shows the estimated time and your
+                balance before it starts.
+              </p>
+              <p>
+                If Remote Transcription is unavailable, open Settings, find
+                Remote Transcription, and choose Try Again. Check your network
+                connection and App Store sign-in if it still cannot connect.
+              </p>
+              <p>
+                For a stuck job, missing credit, purchase, or refund issue,
+                email support with your opencast version and an approximate
+                time of the event. Do not send App Store credentials or signed
+                transaction data.
               </p>
             </PolicySection>
           </div>

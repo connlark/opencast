@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use futures_util::StreamExt;
 use opencast_app_attest_core::{
     app_attest::{
@@ -9,6 +7,7 @@ use opencast_app_attest_core::{
     random,
 };
 
+use crate::analysis::run_windows_analysis;
 use crate::auth::{bearer_token, token_hash, token_matches, AUTHORIZATION_HEADER};
 use crate::challenge_limits::{
     challenge_bucket_start, challenge_source_hash_key_for_environment,
@@ -18,31 +17,28 @@ use crate::challenge_limits::{
     CHALLENGE_SOURCE_BUCKET_RETENTION_SECONDS, CHALLENGE_TTL_SECONDS,
     MAX_APP_ATTEST_KEYS_PER_INSTALL_PER_DAY,
 };
-use crate::gemini::{parse_error_envelope, parse_generate_content_response};
-use crate::prompt::{gemini_generate_content_url, gemini_request_payload};
-use crate::retry::{classify_http_status, RetryDecision};
+use crate::job::{job_object_name, valid_job_id, JobPollRequest, JobSubmitRequest, JOB_BINDING};
 use crate::route::{
     json_response as static_json_response, route_request, Header as StaticHeader, RouteAction,
     StaticResponse, ANALYZE_TRANSCRIPT_PATH, JSON_CONTENT_TYPE,
 };
 use crate::storage;
 use crate::types::{
-    resolve_gemini_model, AdAnalysisResponse, ErrorResponse, GEMINI_MODEL_ENV_VAR,
-    MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES, MAX_BODY_BYTES, POLICY_NAME, SCHEMA_VERSION,
+    resolve_gemini_model, ErrorResponse, GEMINI_MODEL_ENV_VAR,
+    MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES, MAX_BODY_BYTES,
 };
 use crate::usage::{
     global_usage_object_name, usage_object_name, UsageAdmitRequest, UsageLimitProfile,
     USAGE_LIMITER_BINDING,
 };
 use crate::validation::{
-    combine_warnings, decode_and_validate_request, validate_content_length, validate_model_output,
-    DailyUsage, ValidatedRequest,
+    decode_and_validate_request, validate_content_length, DailyUsage, ValidatedRequest,
 };
-use crate::windowing::analysis_windows;
+use crate::windowing::window_count;
 use sha2::{Digest, Sha256};
 use worker::{
-    console_error, durable_object, wasm_bindgen, Date, Delay, DurableObject, Env, Fetch, Headers,
-    Method, Request, RequestInit, Response, Result, SqlStorage, SqlStorageValue, State,
+    durable_object, wasm_bindgen, Date, DurableObject, Env, Headers, Method, Request, RequestInit,
+    Response, Result, SqlStorage, SqlStorageValue, State,
 };
 
 const AD_ANALYSIS_DB: &str = "AD_ANALYSIS_DB";
@@ -56,7 +52,7 @@ const CHALLENGE_SOURCE_HASH_KEY: &str = "CHALLENGE_SOURCE_HASH_KEY";
 const REGISTER_PURPOSE: &str = "register";
 const MAX_CHALLENGE_REQUEST_BODY_BYTES: usize = 1024;
 const MAX_REGISTER_REQUEST_BODY_BYTES: usize = 48 * 1024;
-const MAX_GEMINI_ATTEMPTS: usize = 5;
+const MAX_JOB_POLL_BODY_BYTES: usize = 16 * 1024;
 
 pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
     let method = req.method();
@@ -84,6 +80,7 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
             handle_register(&mut req, &db, &config, now_seconds()).await
         }
         RouteAction::AnalyzeTranscript => analyze_transcript(&mut req, &env).await,
+        RouteAction::PollJob { job_id } => poll_job(&mut req, &env, &path, &job_id).await,
     }
 }
 
@@ -398,6 +395,7 @@ async fn analyze_transcript_with_envelope(req: &mut Request, env: &Env) -> Resul
         now_seconds(),
         "POST",
         ANALYZE_TRANSCRIPT_PATH,
+        MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES,
         MAX_BODY_BYTES,
     )
     .await?
@@ -430,6 +428,10 @@ async fn analyze_validated_request(
         Err(error) => return json_error(503, error),
     };
 
+    if validated.request.async_supported && window_count(validated.request.segments.len()) > 1 {
+        return submit_async_job(env, validated, usage_object_name, usage_profile).await;
+    }
+
     if let Some(response) = admit_spend_caps(
         env,
         usage_object_name,
@@ -448,66 +450,118 @@ async fn analyze_validated_request(
             .map(|value| value.to_string())
             .as_deref(),
     );
-    let gemini_url = gemini_generate_content_url(model);
+    match run_windows_analysis(&gemini_api_key, model, validated.request).await {
+        Ok(response) => json_success(200, &response),
+        Err(error) => json_error(error.status, error.body),
+    }
+}
 
-    let mut combined_model_output = crate::validation::ModelOutput::from_spans(Vec::new());
-    let mut combined_usage = None;
-    let mut gemini_warnings = Vec::new();
-    for window in analysis_windows(&validated.request) {
-        let payload = gemini_request_payload(&window);
-        let response_body =
-            match call_gemini_with_retry(&gemini_api_key, &gemini_url, &payload).await {
-                Ok(body) => body,
-                Err(error) => return json_error(error.status, error.body),
-            };
-
-        // Malformed/truncated model output degrades this window to zero spans
-        // plus warnings — never a whole-request 502 (step-4 PLAN §A5). One
-        // full re-request first: temp-0 truncation is deterministic in
-        // content but retries are cheap relative to a parked analysis.
-        let mut parsed = parse_generate_content_response(&response_body);
-        if parsed.output.is_none() {
-            if let Ok(retry_body) =
-                call_gemini_with_retry(&gemini_api_key, &gemini_url, &payload).await
-            {
-                let retried = parse_generate_content_response(&retry_body);
-                combined_usage = combine_usage(combined_usage, parsed.usage.take());
-                gemini_warnings.append(&mut parsed.warnings);
-                parsed = retried;
-            }
-        }
-
-        combined_usage = combine_usage(combined_usage, parsed.usage);
-        gemini_warnings.extend(parsed.warnings);
-        match parsed.output {
-            Some(mut model_output) => {
-                combined_model_output.spans.append(&mut model_output.spans);
-                combined_model_output.malformed_span_count = combined_model_output
-                    .malformed_span_count
-                    .saturating_add(model_output.malformed_span_count);
-            }
-            None => {
-                let code = parsed
-                    .failure
-                    .map(|failure| failure.code())
-                    .unwrap_or("malformed_model_json");
-                gemini_warnings.push(format!("{code}_skipped"));
-            }
-        }
+async fn submit_async_job(
+    env: &Env,
+    validated: ValidatedRequest,
+    usage_object_name: &str,
+    usage_profile: UsageLimitProfile,
+) -> Result<Response> {
+    let job_id = &validated.request.transcript.fingerprint;
+    if !valid_job_id(job_id) {
+        return json_error_code(400, "invalid_fingerprint");
     }
 
-    let (spans, validation_warnings) =
-        validate_model_output(&validated.request, combined_model_output);
-    let response = AdAnalysisResponse {
-        schema_version: SCHEMA_VERSION,
-        request_id: validated.request.request_id,
-        model: model.to_string(),
-        policy: POLICY_NAME.to_string(),
-        spans,
-        warnings: combine_warnings(validation_warnings, gemini_warnings),
-        usage: combined_usage,
+    let namespace = env.durable_object(JOB_BINDING)?;
+    let stub = namespace.get_by_name(&job_object_name(job_id))?;
+    let body = serde_json::to_string(&JobSubmitRequest {
+        usage_object_name: usage_object_name.to_string(),
+        usage_profile,
+        estimated_input_tokens: validated.estimate.estimated_input_tokens,
+        request: validated.request,
+    })?;
+    let request = internal_post("https://ad-analysis-job.opencast.internal/submit", body)?;
+    stub.fetch_with_request(request).await
+}
+
+async fn poll_job(req: &mut Request, env: &Env, path: &str, job_id: &str) -> Result<Response> {
+    let authorization = req.headers().get(AUTHORIZATION_HEADER)?;
+    if authorization.is_some() {
+        return poll_job_with_bearer(env, authorization.as_deref(), job_id).await;
+    }
+    poll_job_with_envelope(req, env, path, job_id).await
+}
+
+async fn poll_job_with_bearer(
+    env: &Env,
+    authorization: Option<&str>,
+    job_id: &str,
+) -> Result<Response> {
+    let Some(provided_token) = bearer_token(authorization) else {
+        return json_error_code(401, "unauthorized");
     };
-    json_success(200, &response)
+    let client_token = match required_secret(env, AD_ANALYSIS_CLIENT_TOKEN) {
+        Ok(client_token) => client_token,
+        Err(error) => return json_error(503, error),
+    };
+    if !token_matches(provided_token, &client_token) {
+        return json_error_code(401, "unauthorized");
+    }
+    forward_job_poll(env, job_id).await
+}
+
+async fn poll_job_with_envelope(
+    req: &mut Request,
+    env: &Env,
+    path: &str,
+    job_id: &str,
+) -> Result<Response> {
+    let db = match required_d1(env, AD_ANALYSIS_DB) {
+        Ok(db) => db,
+        Err(error) => return json_error(503, error),
+    };
+    let config = match AppConfig::from_env(env) {
+        Ok(config) => config,
+        Err(error) => return json_error(503, error),
+    };
+    let authenticated = match authenticate_envelope(
+        req,
+        &db,
+        &config,
+        now_seconds(),
+        "POST",
+        path,
+        MAX_JOB_POLL_BODY_BYTES,
+        MAX_JOB_POLL_BODY_BYTES,
+    )
+    .await?
+    {
+        Ok(authenticated) => authenticated,
+        Err(failure) => return json_error_code(failure.status, failure.code),
+    };
+    let poll_request = match serde_json::from_str::<JobPollRequest>(&authenticated.payload) {
+        Ok(poll_request) => poll_request,
+        Err(_) => return json_error_code(400, "invalid_json"),
+    };
+    if poll_request.job_id != job_id {
+        return json_error_code(400, "job_id_mismatch");
+    }
+    forward_job_poll(env, job_id).await
+}
+
+async fn forward_job_poll(env: &Env, job_id: &str) -> Result<Response> {
+    let namespace = env.durable_object(JOB_BINDING)?;
+    let stub = namespace.get_by_name(&job_object_name(job_id))?;
+    let body = serde_json::to_string(&JobPollRequest {
+        job_id: job_id.to_string(),
+    })?;
+    let request = internal_post("https://ad-analysis-job.opencast.internal/poll", body)?;
+    stub.fetch_with_request(request).await
+}
+
+fn internal_post(url: &str, body: String) -> Result<Request> {
+    let headers = Headers::new();
+    headers.set("content-type", JSON_CONTENT_TYPE)?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(body.into()));
+    Request::new_with_init(url, &init)
 }
 
 async fn authenticate_envelope(
@@ -516,15 +570,11 @@ async fn authenticate_envelope(
     config: &AppConfig,
     now: i64,
     method: &str,
-    path: &'static str,
+    path: &str,
+    max_body_bytes: usize,
     max_payload_bytes: usize,
 ) -> Result<std::result::Result<AuthenticatedPayload, AuthFailure>> {
-    let body = match read_limited_json::<AuthenticatedEnvelope>(
-        req,
-        MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES,
-    )
-    .await?
-    {
+    let body = match read_limited_json::<AuthenticatedEnvelope>(req, max_body_bytes).await? {
         Ok(body) => body,
         Err(response) => {
             return Ok(Err(AuthFailure::new(
@@ -592,7 +642,7 @@ async fn authenticate_envelope(
     Ok(Ok(AuthenticatedPayload { key_id, payload }))
 }
 
-async fn admit_spend_caps(
+pub(crate) async fn admit_spend_caps(
     env: &Env,
     usage_object_name: &str,
     usage_profile: UsageLimitProfile,
@@ -742,141 +792,6 @@ impl DailyUsageRow {
             request_count: self.request_count.max(0) as u64,
             estimated_input_tokens: self.estimated_input_tokens.max(0) as u64,
         }
-    }
-}
-
-struct UpstreamError {
-    status: u16,
-    body: ErrorResponse,
-}
-
-async fn call_gemini_with_retry(
-    gemini_api_key: &str,
-    gemini_url: &str,
-    payload: &serde_json::Value,
-) -> std::result::Result<String, UpstreamError> {
-    let payload_string = serde_json::to_string(payload).map_err(|error| UpstreamError {
-        status: 500,
-        body: ErrorResponse::with_detail("gemini_payload_error", error.to_string()),
-    })?;
-    let mut last_error = UpstreamError {
-        status: 502,
-        body: ErrorResponse::new("gemini_unavailable"),
-    };
-
-    for attempt in 1..=MAX_GEMINI_ATTEMPTS {
-        let mut response = match call_gemini_once(gemini_api_key, gemini_url, &payload_string).await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                last_error = error;
-                if attempt < MAX_GEMINI_ATTEMPTS {
-                    Delay::from(Duration::from_secs(backoff_seconds(attempt))).await;
-                    continue;
-                }
-                break;
-            }
-        };
-
-        let status = response.status_code();
-        let retry_after = response.headers().get("retry-after").ok().flatten();
-        let text = response.text().await.unwrap_or_default();
-        if (200..300).contains(&status) {
-            return Ok(text);
-        }
-
-        let error_body = parse_error_envelope(&text);
-        match classify_http_status(status, retry_after.as_deref(), error_body.as_ref()) {
-            RetryDecision::Retry {
-                retry_after_seconds,
-            } if attempt < MAX_GEMINI_ATTEMPTS => {
-                let seconds = retry_after_seconds.unwrap_or_else(|| backoff_seconds(attempt));
-                Delay::from(Duration::from_secs(seconds)).await;
-                last_error = UpstreamError {
-                    status: 503,
-                    body: ErrorResponse::new("gemini_retry_exhausted"),
-                };
-            }
-            RetryDecision::HardQuota => {
-                return Err(UpstreamError {
-                    status: 503,
-                    body: ErrorResponse::new("gemini_quota_exhausted"),
-                });
-            }
-            _ => {
-                return Err(UpstreamError {
-                    status: upstream_status(status),
-                    body: ErrorResponse::with_detail(
-                        "gemini_http_error",
-                        format!("status {status}"),
-                    ),
-                });
-            }
-        }
-    }
-
-    Err(last_error)
-}
-
-async fn call_gemini_once(
-    gemini_api_key: &str,
-    gemini_url: &str,
-    payload_string: &str,
-) -> std::result::Result<Response, UpstreamError> {
-    let headers = Headers::new();
-    headers
-        .set("content-type", JSON_CONTENT_TYPE)
-        .map_err(worker_error)?;
-    headers
-        .set("x-goog-api-key", gemini_api_key)
-        .map_err(worker_error)?;
-
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(payload_string.into()));
-
-    let request = Request::new_with_init(gemini_url, &init).map_err(worker_error)?;
-    Fetch::Request(request).send().await.map_err(worker_error)
-}
-
-fn worker_error(error: worker::Error) -> UpstreamError {
-    console_error!("Worker error: {error:?}");
-    UpstreamError {
-        status: 502,
-        body: ErrorResponse::new("worker_fetch_error"),
-    }
-}
-
-fn backoff_seconds(attempt: usize) -> u64 {
-    (1u64 << attempt.min(4)).min(20)
-}
-
-fn upstream_status(status: u16) -> u16 {
-    if status == 429 || (500..600).contains(&status) {
-        503
-    } else {
-        502
-    }
-}
-
-fn combine_usage(
-    lhs: Option<crate::types::GeminiUsage>,
-    rhs: Option<crate::types::GeminiUsage>,
-) -> Option<crate::types::GeminiUsage> {
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => Some(crate::types::GeminiUsage {
-            prompt_token_count: lhs
-                .prompt_token_count
-                .saturating_add(rhs.prompt_token_count),
-            candidates_token_count: lhs
-                .candidates_token_count
-                .saturating_add(rhs.candidates_token_count),
-            total_token_count: lhs.total_token_count.saturating_add(rhs.total_token_count),
-        }),
-        (Some(lhs), None) => Some(lhs),
-        (None, Some(rhs)) => Some(rhs),
-        (None, None) => None,
     }
 }
 
