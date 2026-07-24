@@ -8,7 +8,8 @@ use crate::types::{
     BEARER_DAILY_ESTIMATED_INPUT_TOKEN_CAP, BEARER_DAILY_REQUEST_CAP,
     GLOBAL_DAILY_ESTIMATED_INPUT_TOKEN_CAP, GLOBAL_DAILY_REQUEST_CAP, MAX_BODY_BYTES,
     MAX_ESTIMATED_INPUT_TOKENS_PER_REQUEST, MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS,
-    MAX_TRANSCRIPT_TEXT_CHARS, SCHEMA_VERSION,
+    MAX_TRANSCRIPT_TEXT_CHARS, SCHEMA_VERSION, TRANSCRIPTION_ACCOUNT_DAILY_ESTIMATED_INPUT_TOKEN_CAP,
+    TRANSCRIPTION_ACCOUNT_DAILY_REQUEST_CAP,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +153,13 @@ impl UsageLimits {
     pub const APP_ATTEST_KEY: Self = Self {
         request_cap: APP_ATTEST_KEY_DAILY_REQUEST_CAP,
         estimated_input_token_cap: APP_ATTEST_KEY_DAILY_ESTIMATED_INPUT_TOKEN_CAP,
+        request_error: CapError::DailyRequestsExceeded,
+        estimated_input_token_error: CapError::DailyEstimatedInputTokensExceeded,
+    };
+
+    pub const TRANSCRIPTION_ACCOUNT: Self = Self {
+        request_cap: TRANSCRIPTION_ACCOUNT_DAILY_REQUEST_CAP,
+        estimated_input_token_cap: TRANSCRIPTION_ACCOUNT_DAILY_ESTIMATED_INPUT_TOKEN_CAP,
         request_error: CapError::DailyRequestsExceeded,
         estimated_input_token_error: CapError::DailyEstimatedInputTokensExceeded,
     };

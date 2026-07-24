@@ -215,6 +215,11 @@ const DELETE_SUPERSEDED_DEVICES_SQL: &str = "DELETE FROM devices \
            AND bundle_id = ?3 \
            AND device_token_hash <> ?4";
 
+const DELETE_PUSH_SEND_ATTEMPTS_FOR_INSTALL_SQL: &str =
+    "DELETE FROM push_send_attempts WHERE install_id = ?1";
+const DELETE_SECURE_ATTEMPTS_FOR_INSTALL_SQL: &str =
+    "DELETE FROM secure_hello_attempts WHERE install_id = ?1";
+
 pub async fn insert_challenge(
     db: &D1Database,
     challenge_id: &str,
@@ -900,11 +905,11 @@ pub async fn delete_install_data(db: &D1Database, install_id: &str) -> Result<()
     db.batch(
         [
             "DELETE FROM episode_notification_sends WHERE install_id = ?1",
-            "DELETE FROM push_send_attempts WHERE install_id = ?1",
+            DELETE_PUSH_SEND_ATTEMPTS_FOR_INSTALL_SQL,
             "DELETE FROM feed_admission_attempts WHERE install_id = ?1",
             "DELETE FROM feed_subscriptions WHERE install_id = ?1",
             "DELETE FROM devices WHERE install_id = ?1",
-            "DELETE FROM secure_hello_attempts WHERE install_id = ?1",
+            DELETE_SECURE_ATTEMPTS_FOR_INSTALL_SQL,
             "DELETE FROM app_attest_challenges WHERE install_id = ?1",
             "DELETE FROM app_attest_keys WHERE install_id = ?1",
         ]
@@ -1323,7 +1328,44 @@ mod tests {
             .expect("index feed poll schedule");
         db.execute_batch(include_str!("../migrations/0011_feed_publish_cadence.sql"))
             .expect("add publish cadence column");
+        db.execute_batch(include_str!("../migrations/0012_admin_history_indexes.sql"))
+            .expect("create admin history indexes");
+        db.execute_batch(include_str!(
+            "../migrations/0013_install_delete_indexes.sql"
+        ))
+        .expect("create install deletion indexes");
         db
+    }
+
+    fn query_plan(db: &Connection, sql: &str) -> Vec<String> {
+        let mut statement = db
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .expect("prepare query plan");
+        statement
+            .query_map(params!["install-a"], |row| row.get::<_, String>(3))
+            .expect("query plan")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read query plan")
+    }
+
+    #[test]
+    fn install_delete_uses_indexes_for_global_attempt_tables() {
+        let db = setup_db();
+        let push_plan = query_plan(&db, DELETE_PUSH_SEND_ATTEMPTS_FOR_INSTALL_SQL);
+        assert!(
+            push_plan
+                .iter()
+                .any(|detail| detail.contains("idx_push_send_attempts_install")),
+            "expected push-attempt install index: {push_plan:?}"
+        );
+
+        let secure_plan = query_plan(&db, DELETE_SECURE_ATTEMPTS_FOR_INSTALL_SQL);
+        assert!(
+            secure_plan
+                .iter()
+                .any(|detail| detail.contains("idx_secure_hello_attempts_install")),
+            "expected secure-attempt install index: {secure_plan:?}"
+        );
     }
 
     fn setup_db_through_0007() -> Connection {
@@ -1727,6 +1769,36 @@ mod tests {
             )
             .expect("count feed poll schedule index");
         assert_eq!(index_count, 1);
+    }
+
+    #[test]
+    fn scheduled_feed_poll_uses_indexes_instead_of_scanning_feed_tables() {
+        let db = setup_db();
+        let mut statement = db
+            .prepare(&format!("EXPLAIN QUERY PLAN {DUE_FEED_ROWS_SQL}"))
+            .expect("prepare scheduled feed query plan");
+        let plan = statement
+            .query_map(params![NOW, CURRENT_APNS_ENVIRONMENT, 50_i64], |row| {
+                row.get::<_, String>(3)
+            })
+            .expect("query scheduled feed plan")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read scheduled feed plan");
+
+        for expected_index in [
+            "idx_feeds_next_poll_at",
+            "idx_feed_subscriptions_feed_enabled",
+            "idx_devices_install",
+        ] {
+            assert!(
+                plan.iter().any(|detail| detail.contains(expected_index)),
+                "expected {expected_index} in scheduled feed plan: {plan:?}"
+            );
+        }
+        assert!(
+            plan.iter().all(|detail| !detail.starts_with("SCAN ")),
+            "unexpected full scan in scheduled feed plan: {plan:?}"
+        );
     }
 
     #[test]

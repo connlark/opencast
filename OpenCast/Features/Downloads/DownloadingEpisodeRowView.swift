@@ -18,7 +18,7 @@ struct DownloadingEpisodeRowView: View {
                 imageURL: item.episode.artworkURL,
                 size: 56,
                 cacheKind: .episode,
-                preview: item.episode.artworkPreview,
+                preview: appModel.library.artworkPreview(for: item.episode),
                 onPreviewResolved: updateArtworkPreview
             )
             .overlay {
@@ -61,20 +61,22 @@ struct DownloadingEpisodeRowView: View {
         }
     }
 
-    private var progressFraction: Double? {
-        guard let bytesExpected = item.record.bytesExpected, bytesExpected > 0 else {
-            return nil
-        }
+    private var byteProgress: DownloadByteProgress? {
+        appModel.downloads.byteProgress(for: item.id)
+    }
 
-        return Double(max(item.record.bytesReceived, 0)) / Double(bytesExpected)
+    private var progressFraction: Double? {
+        byteProgress?.fractionCompleted
     }
 
     private var progressDescription: String {
-        let received = max(item.record.bytesReceived, 0).formatted(.byteCount(style: .file))
+        let progress = byteProgress
+        let bytesReceived = max(progress?.bytesReceived ?? 0, 0)
+        let received = bytesReceived.formatted(.byteCount(style: .file))
         let byteDescription: String
-        if let bytesExpected = item.record.bytesExpected, bytesExpected > 0 {
+        if let bytesExpected = progress?.bytesExpected, bytesExpected > 0 {
             byteDescription = "\(received) of \(bytesExpected.formatted(.byteCount(style: .file)))"
-        } else if item.record.bytesReceived > 0 {
+        } else if bytesReceived > 0 {
             byteDescription = "\(received) downloaded"
         } else {
             byteDescription = "Preparing download"

@@ -41,6 +41,10 @@ final class LibraryStore {
     private var progressIndexRevision = 0
     @ObservationIgnored private var progressByEpisodeID: [String: EpisodeProgressRecord] = [:]
     @ObservationIgnored private var pendingCacheWriteTask: Task<Void, Never>?
+    // Resolved artwork previews live beside `episodes`, not inside it: writing
+    // episodes[index] republishes the whole array and re-diffs every List that
+    // reads it — once per newly realized row during a scroll.
+    private var artworkPreviewOverridesByEpisodeID: [String: ArtworkPreview] = [:]
 
     init(
         feedService: any FeedService = DefaultFeedService(),
@@ -466,6 +470,7 @@ final class LibraryStore {
         episodeIndexByID.removeAll()
         episodeIndicesByPodcastID.removeAll()
         progressByEpisodeID.removeAll()
+        artworkPreviewOverridesByEpisodeID.removeAll()
         progressIndexRevision &+= 1
         lastErrorMessage = nil
     }
@@ -698,20 +703,31 @@ final class LibraryStore {
         }
     }
 
+    /// The row that resolved the preview shows it locally; the override map
+    /// carries it to other appearances of the episode and the cache write
+    /// persists it for the next full reload.
+    func artworkPreview(for episode: EpisodeListItemSnapshot) -> ArtworkPreview? {
+        if let override = artworkPreviewOverridesByEpisodeID[episode.episodeID],
+           override.matchesArtworkURLString(episode.artworkURL) {
+            return override
+        }
+        return episode.artworkPreview
+    }
+
     @discardableResult
     func updateArtworkPreview(
         _ preview: ArtworkPreview,
         for episode: EpisodeListItemSnapshot
     ) -> Bool {
         guard preview.matchesArtworkURLString(episode.artworkURL),
-              let index = episodeIndexByID[episode.episodeID],
-              episodes[index].artworkPreview?.storageSignature != preview.storageSignature
+              episodeIndexByID[episode.episodeID] != nil,
+              artworkPreview(for: episode)?.storageSignature != preview.storageSignature
         else {
             return false
         }
 
-        episodes[index].artworkPreview = preview
         let episodeID = episode.episodeID
+        artworkPreviewOverridesByEpisodeID[episodeID] = preview
         let artworkURL = episode.artworkURL
         enqueueCacheWrite { localCache in
             try await localCache.updateEpisodeArtworkPreview(preview, episodeID: episodeID, artworkURL: artworkURL)
@@ -1454,8 +1470,16 @@ final class LibraryStore {
     }
 
     private func rebuildProgressByEpisodeID() {
-        progressByEpisodeID = Self.latestProgressRecordsByEpisodeID(progressRecords)
-        progressIndexRevision &+= 1
+        let rebuilt = Self.latestProgressRecordsByEpisodeID(progressRecords)
+        // Refetches usually hand back the same registered instances; rows
+        // observe those directly, so the all-row revision bump is owed only
+        // when an episode's indexed record actually changes identity.
+        let membershipChanged = rebuilt.count != progressByEpisodeID.count
+            || rebuilt.contains { episodeID, record in progressByEpisodeID[episodeID] !== record }
+        progressByEpisodeID = rebuilt
+        if membershipChanged {
+            progressIndexRevision &+= 1
+        }
     }
 
     private func rebuildLatestRefreshLogByFeedURL() {

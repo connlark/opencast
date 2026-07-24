@@ -11,6 +11,12 @@ public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Eq
     public var declaredDurationSeconds: Double?
     public var languageCode: String?
     public var sourceIdentity: OpenCastRemoteTranscriptionSourceIdentity?
+    /// Chains server-side ad detection after stitching; requires `podcastID`.
+    public var adAnalysisRequested: Bool?
+    public var podcastID: String?
+    /// Prompt context only; never required, never echoed back.
+    public var episodeTitle: String?
+    public var podcastTitle: String?
 
     public init(
         schemaVersion: Int = OpenCastRemoteTranscriptionSchema.version,
@@ -19,7 +25,11 @@ public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Eq
         enclosureURL: String,
         declaredDurationSeconds: Double? = nil,
         languageCode: String? = nil,
-        sourceIdentity: OpenCastRemoteTranscriptionSourceIdentity? = nil
+        sourceIdentity: OpenCastRemoteTranscriptionSourceIdentity? = nil,
+        adAnalysisRequested: Bool? = nil,
+        podcastID: String? = nil,
+        episodeTitle: String? = nil,
+        podcastTitle: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.clientRequestID = clientRequestID
@@ -28,6 +38,10 @@ public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Eq
         self.declaredDurationSeconds = declaredDurationSeconds
         self.languageCode = languageCode
         self.sourceIdentity = sourceIdentity
+        self.adAnalysisRequested = adAnalysisRequested
+        self.podcastID = podcastID
+        self.episodeTitle = episodeTitle
+        self.podcastTitle = podcastTitle
     }
 
     enum CodingKeys: String, CodingKey {
@@ -38,5 +52,9 @@ public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Eq
         case declaredDurationSeconds = "declared_duration_seconds"
         case languageCode = "language_code"
         case sourceIdentity = "source_identity"
+        case adAnalysisRequested = "ad_analysis_requested"
+        case podcastID = "podcast_id"
+        case episodeTitle = "episode_title"
+        case podcastTitle = "podcast_title"
     }
 }

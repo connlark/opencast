@@ -4,8 +4,9 @@ import Foundation
 nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     private static let analyzePath = "/v1/ad-analysis/transcript"
 
-    /// Single-window requests remain synchronous. Multi-window requests return
-    /// a job promptly, so this only needs to cover one model call plus retries.
+    /// Async-capable submits return promptly (202, or a cached completed
+    /// result); the generous ceiling covers App Attest handshakes and large
+    /// cached-result bodies, not model time.
     static let analyzeTimeout: TimeInterval = 90
     static let pollTimeout: TimeInterval = 30
 

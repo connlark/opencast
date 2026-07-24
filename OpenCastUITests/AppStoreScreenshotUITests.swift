@@ -53,9 +53,10 @@ final class AppStoreScreenshotUITests: XCTestCase {
         assertExists(playbackProgress(in: app), named: "Playback Progress control")
         attachAppStoreScreenshot(named: "app_store_01_now_playing")
 
-        peelNowPlayingArtwork(in: app)
+        revealNowPlayingSoundLab(in: app)
         assertExists(nowPlayingSoundLab(in: app), named: "Now Playing Sound Lab panel")
         assertSeededSkipZonesMarked(in: app)
+        assertCompletedTranscriptReady(in: app)
         attachAppStoreScreenshot(named: "app_store_06_sound_lab")
 
         try captureCompletionNotificationScreenshot(app: app)
@@ -68,7 +69,9 @@ final class AppStoreScreenshotUITests: XCTestCase {
         app.launchArguments += [
             "--opencast-ui-testing",
             "--opencast-seed-app-store-screenshots",
-            "--opencast-force-light-mode"
+            "--opencast-force-light-mode",
+            "-OPENCAST_REMOTE_TRANSCRIPTION_PURCHASE_FIXTURE",
+            "review-screenshot"
         ]
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
         app.launchEnvironment["OPENCAST_SEED_APP_STORE_SCREENSHOTS"] = "1"
@@ -232,6 +235,13 @@ final class AppStoreScreenshotUITests: XCTestCase {
     }
 
     @MainActor
+    private func assertCompletedTranscriptReady(in app: XCUIApplication) {
+        let control = app.descendants(matching: .any)["Show Transcript"].firstMatch
+        assertExists(control, named: "Show Transcript control")
+        XCTAssertTrue(control.isEnabled, "Show Transcript control should be ready to open")
+    }
+
+    @MainActor
     private func primarySubscriptionRow(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: Self.primarySubscriptionRowIdentifier).firstMatch
     }
@@ -287,9 +297,9 @@ final class AppStoreScreenshotUITests: XCTestCase {
     }
 
     @MainActor
-    private func peelNowPlayingArtwork(in app: XCUIApplication) {
+    private func revealNowPlayingSoundLab(in app: XCUIApplication) {
         let artwork = nowPlayingArtwork(in: app)
-        assertExists(artwork, named: "Now Playing artwork before peel")
+        assertExists(artwork, named: "Now Playing artwork before Sound Lab reveal")
         let start = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: 0.52))
         let end = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.48))
         start.press(forDuration: 0.10, thenDragTo: end)

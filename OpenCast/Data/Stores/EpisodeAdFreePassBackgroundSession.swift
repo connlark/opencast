@@ -454,7 +454,10 @@ private extension EpisodeAdFreePassStage {
         switch self {
         case .downloadingEpisode, .analyzing, .transcribing:
             true
-        case .idle, .awaitingModelDownloadConsent, .installingModel, .installingSpeechAssets, .completed, .interrupted, .failed, .unavailable:
+        case .idle, .awaitingModelDownloadConsent, .installingModel, .installingSpeechAssets,
+             .cloudQueued, .cloudTranscribing, .cloudDetectingAds, .cloudUnavailable,
+             .completed, .interrupted, .failed, .unavailable:
+            // Cloud stages never run under the background session at all.
             false
         }
     }
@@ -509,6 +512,14 @@ private extension EpisodeAdFreePassPresentation {
             self = .transcribing(progress)
         case .analyzing:
             self = .analyzing
+        case .cloudQueued:
+            self = .cloudQueued
+        case .cloudTranscribing(let progress):
+            self = .cloudTranscribing(progress)
+        case .cloudDetectingAds:
+            self = .cloudDetectingAds
+        case .cloudUnavailable(let message):
+            self = .cloudUnavailable(message)
         case .completed(let zoneCount):
             self = .completed(zoneCount: zoneCount)
         case .interrupted:

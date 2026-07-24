@@ -13,7 +13,9 @@ struct AdAutoDetectPlayPolicy {
         }
 
         switch queueStatus {
-        case .notQueued, .failed:
+        case .notQueued, .failed, .cloudUnavailable:
+            // `.cloudUnavailable` re-qualifies like `.failed`: credits
+            // arriving later self-heal the next play.
             return true
         case .queued, .running, .completed, .capDeferred:
             return false

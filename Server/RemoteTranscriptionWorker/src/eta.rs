@@ -10,8 +10,12 @@ pub const PROBE_AND_RESERVATION_SECONDS: f64 = 4.0;
 pub const AI_WAVE_SECONDS: f64 = 13.0;
 pub const AI_SCHEDULING_SECONDS: f64 = 2.0;
 pub const CHUNK_PREPARATION_SECONDS_PER_MB: f64 = 0.5;
+pub const NORMALIZED_CHUNK_PREPARATION_SECONDS_PER_MB: f64 = 2.0;
 pub const FINALIZATION_BASE_SECONDS: f64 = 2.0;
 pub const FINALIZATION_SECONDS_PER_CHUNK: f64 = 0.5;
+/// Chained cloud ad detection budget (submit + Gemini + poll), added to
+/// finalization only when the job requested the phase.
+pub const AD_ANALYSIS_PHASE_SECONDS: f64 = 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EtaProjection {
@@ -69,10 +73,23 @@ pub fn self_remaining_seconds(record: &JobRecord, chunk_concurrency: u32, now: i
             })
             .flatten()
     })?;
+    let stream_copy_bytes_per_chunk = source_bytes.max(0) as f64 / duration * job::CHUNK_SECONDS;
+    let preparation_seconds_per_mb =
+        if stream_copy_bytes_per_chunk > job::MAX_CHUNK_RAW_BYTES as f64 {
+            NORMALIZED_CHUNK_PREPARATION_SECONDS_PER_MB
+        } else {
+            CHUNK_PREPARATION_SECONDS_PER_MB
+        };
     let chunk_preparation_seconds =
-        source_bytes.max(0) as f64 / 1_000_000.0 * CHUNK_PREPARATION_SECONDS_PER_MB;
-    let finalization_seconds =
-        FINALIZATION_BASE_SECONDS + f64::from(total) * FINALIZATION_SECONDS_PER_CHUNK;
+        source_bytes.max(0) as f64 / 1_000_000.0 * preparation_seconds_per_mb;
+    let ad_phase_seconds = if record.ad_analysis_requested {
+        AD_ANALYSIS_PHASE_SECONDS
+    } else {
+        0.0
+    };
+    let finalization_seconds = FINALIZATION_BASE_SECONDS
+        + f64::from(total) * FINALIZATION_SECONDS_PER_CHUNK
+        + ad_phase_seconds;
 
     let remaining = match record.state.as_str() {
         job::STATE_SOURCE_MATCHED | job::STATE_PROBING => {
@@ -94,6 +111,10 @@ pub fn self_remaining_seconds(record: &JobRecord, chunk_concurrency: u32, now: i
         job::STATE_STITCHING => {
             let elapsed = elapsed_since_first(record, &[job::STATE_STITCHING], now);
             (finalization_seconds - elapsed).max(0.0)
+        }
+        job::STATE_DETECTING_ADS => {
+            let elapsed = elapsed_since_first(record, &[job::STATE_DETECTING_ADS], now);
+            (ad_phase_seconds - elapsed).max(0.0)
         }
         _ => return None,
     };
@@ -197,6 +218,47 @@ mod tests {
         stitching.updated_at = now;
         stitching.chunk_work = job::init_chunk_work(10, 10);
         assert_eq!(self_remaining_seconds(&stitching, 4, now), Some(4));
+    }
+
+    #[test]
+    fn oversized_stream_copy_projection_accounts_for_normalization() {
+        let now = 1_000;
+        let mut record = record(4_099.004, 164_041_483, job::STATE_PROBING, now);
+        assert_eq!(self_remaining_seconds(&record, 4, now), Some(342));
+
+        record.state = job::STATE_CHUNKING.into();
+        record.phase_timestamps.clear();
+        record
+            .phase_timestamps
+            .insert(job::STATE_CHUNKING.into(), now - 240);
+        record.chunk_work = job::init_chunk_work(14, 10);
+        assert_eq!(self_remaining_seconds(&record, 4, now), Some(98));
+    }
+
+    #[test]
+    fn ad_analysis_flag_adds_the_phase_and_counts_it_down() {
+        let now = 1_000;
+        // Flag-off anchors are byte-identical to the calibrated model.
+        let baseline = record(885.943, 9_825_356, job::STATE_PROBING, now);
+        assert_eq!(self_remaining_seconds(&baseline, 4, now), Some(23));
+
+        let mut flagged = record(885.943, 9_825_356, job::STATE_PROBING, now);
+        flagged.ad_analysis_requested = true;
+        assert_eq!(self_remaining_seconds(&flagged, 4, now), Some(53));
+
+        // The new state counts the phase down from its first entry.
+        let mut detecting = record(885.943, 9_825_356, job::STATE_DETECTING_ADS, now - 12);
+        detecting.ad_analysis_requested = true;
+        detecting.updated_at = now;
+        detecting.chunk_work = job::init_chunk_work(3, 3);
+        assert_eq!(self_remaining_seconds(&detecting, 4, now), Some(18));
+
+        // Elapsed past the budget clamps to the 1-second floor.
+        let mut overdue = record(885.943, 9_825_356, job::STATE_DETECTING_ADS, now - 90);
+        overdue.ad_analysis_requested = true;
+        overdue.updated_at = now;
+        overdue.chunk_work = job::init_chunk_work(3, 3);
+        assert_eq!(self_remaining_seconds(&overdue, 4, now), Some(1));
     }
 
     #[test]

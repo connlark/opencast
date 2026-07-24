@@ -288,6 +288,141 @@ struct OpenCastRemoteTranscriptionWireTests {
         #expect(OpenCastRemoteTranscriptionErrorCode.uploadUnavailable.wireValue == "upload_unavailable")
     }
 
+    @Test("Detect-ads create fields encode when set and are omitted when nil")
+    func adAnalysisCreateFieldsEncode() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+
+        let plain = OpenCastRemoteTranscriptionJobCreateRequest(
+            clientRequestID: "req-1",
+            episodeID: "ep-hash-1",
+            enclosureURL: "https://example.com/audio.mp3"
+        )
+        let plainJSON = String(decoding: try encoder.encode(plain), as: UTF8.self)
+        #expect(!plainJSON.contains("ad_analysis_requested"))
+        #expect(!plainJSON.contains("podcast_id"))
+        #expect(!plainJSON.contains("episode_title"))
+        #expect(!plainJSON.contains("podcast_title"))
+
+        let detect = OpenCastRemoteTranscriptionJobCreateRequest(
+            clientRequestID: "req-2",
+            episodeID: "ep-hash-1",
+            enclosureURL: "https://example.com/audio.mp3",
+            adAnalysisRequested: true,
+            podcastID: "https://example.com/feed.xml",
+            episodeTitle: "Episode 42",
+            podcastTitle: "The Example Show"
+        )
+        let detectJSON = String(decoding: try encoder.encode(detect), as: UTF8.self)
+        #expect(detectJSON.contains("\"ad_analysis_requested\":true"))
+        #expect(detectJSON.contains("\"podcast_id\":\"https:\\/\\/example.com\\/feed.xml\""))
+        #expect(detectJSON.contains("\"episode_title\":\"Episode 42\""))
+        #expect(detectJSON.contains("\"podcast_title\":\"The Example Show\""))
+    }
+
+    @Test("detecting_ads is a known non-terminal state")
+    func detectingAdsState() {
+        #expect(OpenCastRemoteTranscriptionJobState(wireValue: "detecting_ads") == .detectingAds)
+        #expect(OpenCastRemoteTranscriptionJobState.detectingAds.wireValue == "detecting_ads")
+        #expect(OpenCastRemoteTranscriptionJobState.detectingAds.isTerminal == false)
+    }
+
+    @Test("Completed ad analysis decodes spans alongside an untouched result")
+    func adAnalysisCompletedDecodes() throws {
+        let json = """
+        {
+          "schema_version": 1,
+          "result": \(Self.resultJSON),
+          "ad_analysis": {
+            "state": "completed",
+            "schema_version": 1,
+            "request_id": "job-abc123",
+            "model": "gemini-3.5-flash",
+            "policy": "promo_ad_breaks_v2",
+            "spans": [
+              {
+                "kind": "host_read_ad",
+                "label": "Mattress sponsor",
+                "start_segment_id": 4,
+                "end_segment_id": 9,
+                "start_time": 61.5,
+                "end_time": 122.0,
+                "confidence": 0.92,
+                "evidence_quote": "this episode is brought to you by"
+              }
+            ],
+            "warnings": [],
+            "usage": { "prompt_token_count": 100, "candidates_token_count": 20, "total_token_count": 120 }
+          }
+        }
+        """
+        let response = try JSONDecoder().decode(
+            OpenCastRemoteTranscriptionResultResponse.self,
+            from: Data(json.utf8)
+        )
+        guard case let .completed(success) = response.adAnalysis else {
+            Issue.record("expected completed outcome")
+            return
+        }
+        #expect(success.model == "gemini-3.5-flash")
+        #expect(success.policy == "promo_ad_breaks_v2")
+        #expect(success.spans.count == 1)
+        #expect(success.spans[0].kind == "host_read_ad")
+        #expect(success.spans[0].startSegmentID == 4)
+        #expect(success.spans[0].endTime == 122.0)
+        #expect(response.result.text == "hello world")
+    }
+
+    @Test("Failed, absent, and unknown ad analysis outcomes decode safely")
+    func adAnalysisFailureShapesDecode() throws {
+        let decoder = JSONDecoder()
+
+        let failed = try decoder.decode(
+            OpenCastRemoteTranscriptionAdAnalysisOutcome.self,
+            from: Data(#"{"state":"failed","error_code":"ad_analysis_capacity"}"#.utf8)
+        )
+        #expect(failed == .failed(errorCode: "ad_analysis_capacity"))
+
+        let bareFailure = try decoder.decode(
+            OpenCastRemoteTranscriptionAdAnalysisOutcome.self,
+            from: Data(#"{"state":"failed"}"#.utf8)
+        )
+        #expect(bareFailure == .failed(errorCode: nil))
+
+        let unknown = try decoder.decode(
+            OpenCastRemoteTranscriptionAdAnalysisOutcome.self,
+            from: Data(#"{"state":"deferred"}"#.utf8)
+        )
+        #expect(unknown == .unknown(state: "deferred"))
+
+        let absent = try decoder.decode(
+            OpenCastRemoteTranscriptionResultResponse.self,
+            from: Data(#"{"schema_version":1,"result":\#(Self.resultJSON)}"#.utf8)
+        )
+        #expect(absent.adAnalysis == nil)
+    }
+
+    private static let resultJSON = """
+    {
+      "schema_version": 1,
+      "source_identity": { "sha256": "da26a00f", "byte_count": 16328368, "duration_seconds": 2040.0 },
+      "language_code": "en",
+      "duration_seconds": 2040.0,
+      "text": "hello world",
+      "segments": [],
+      "provenance": {
+        "provider": "cloudflare-workers-ai",
+        "model_identifier": "@cf/openai/whisper-large-v3-turbo",
+        "serving_contract_version": "1",
+        "request_settings_sha256": "aa",
+        "chunk_manifest_sha256": "bb",
+        "normalized_transcript_sha256": "cc",
+        "pipeline_version": "pass0"
+      },
+      "warnings": []
+    }
+    """
+
     @Test("Provenance source match mode is additive and preserved")
     func provenanceSourceMatchMode() throws {
         let withMode = """

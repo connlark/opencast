@@ -53,6 +53,8 @@ struct SettingsView: View {
 
             SettingsTranscriptionModelSection()
 
+            SettingsAdDetectionSection()
+
             SettingsRemoteTranscriptionSection()
 
             OPMLSettingsSection()

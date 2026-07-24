@@ -18,9 +18,10 @@ final class OpenCastUITests: XCTestCase {
     private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
     private static let adFreePassPresentationOverrideEnvironmentKey = "OPENCAST_UI_TEST_AD_FREE_PASS_STAGE"
     private static let seedAdAnalysisSpanAtStartEnvironmentKey = "OPENCAST_SEED_AD_ANALYSIS_SPAN_AT_START"
+    private static let soundLabLaunchHoldEnvironmentKey =
+        "OPENCAST_UI_TEST_SOUND_LAB_LAUNCH_HOLD_MILLISECONDS"
     private static let perEpisodeVoiceBoostModeValue = "perEpisode"
     private static let playEpisodeTraceArmingSecondsEnvironmentKey = "OPENCAST_PLAY_EPISODE_TRACE_ARMING_SECONDS"
-    private static let seededPeelTraceArmingSecondsEnvironmentKey = "OPENCAST_SEEDED_PEEL_TRACE_ARMING_SECONDS"
     private static let nowPlayingDismissTraceArmingSecondsEnvironmentKey = "OPENCAST_NOW_PLAYING_DISMISS_TRACE_ARMING_SECONDS"
     private static let coldStartTraceArmingSecondsEnvironmentKey = "OPENCAST_COLD_START_TRACE_ARMING_SECONDS"
     private static let manyArtworkTraceArmingSecondsEnvironmentKey = "OPENCAST_MANY_ARTWORK_TRACE_ARMING_SECONDS"
@@ -28,7 +29,6 @@ final class OpenCastUITests: XCTestCase {
     private static let manyArtworkPerformanceProbeFilePath = "/tmp/opencast-run-many-artwork-preview-perf-ui-tests"
     private static let longShowNotesColdStartProbeEnvironmentKey = "OPENCAST_RUN_LONG_SHOW_NOTES_COLD_START_UI_TESTS"
     private static let longShowNotesColdStartProbeFilePath = "/tmp/opencast-run-long-show-notes-cold-start-ui-tests"
-    private static let remotePeelTraceArmingSecondsEnvironmentKey = "OPENCAST_REMOTE_PEEL_TRACE_ARMING_SECONDS"
     private static let thisAmericanLifeReviewerPathProbeEnvironmentKey = "OPENCAST_RUN_TAL_REVIEWER_PATH_UI_TESTS"
     private static let thisAmericanLifeReviewerPathProbeFilePath = "/tmp/opencast-run-tal-reviewer-path-ui-tests"
 
@@ -364,8 +364,34 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Pause"].exists || app.buttons["Play"].exists)
 
         openCurrentEpisodeDetailFromNowPlaying(in: app)
-        XCTAssertTrue(app.buttons["Play Episode"].waitForExistence(timeout: 5))
+        let playbackControl = episodePlaybackControl(in: app)
+        assertExists(playbackControl, named: "episode playback control")
+        assertExists(app.buttons["Pause Episode"], named: "Pause Episode control")
         XCTAssertTrue(app.staticTexts["Show Notes"].exists)
+
+        playbackControl.tap()
+        assertExists(app.buttons["Play Episode"], named: "Play Episode after pausing")
+        episodePlaybackControl(in: app).tap()
+        assertExists(app.buttons["Pause Episode"], named: "Pause Episode after resuming")
+
+        let artwork = app.buttons["Episode Artwork"]
+        assertHittable(artwork, named: "episode artwork")
+        artwork.tap()
+        let zoomableArtwork = app.descendants(matching: .any)
+            .matching(identifier: "Zoomable Episode Artwork")
+            .firstMatch
+        assertHittable(zoomableArtwork, named: "zoomable episode artwork")
+        XCTAssertEqual(zoomableArtwork.elementType, .image)
+        XCTAssertEqual(zoomableArtwork.label, "Artwork for Deterministic UI Episode")
+        XCTAssertEqual(zoomableArtwork.value as? String, "100%")
+        zoomableArtwork.pinch(withScale: 2, velocity: 1)
+        let resetZoom = app.buttons["Reset Zoom"]
+        assertExists(resetZoom, named: "Reset Zoom after magnifying artwork")
+        zoomableArtwork.swipeLeft()
+        resetZoom.tap()
+        assertDoesNotExist(resetZoom, named: "Reset Zoom at default scale")
+        tapBackButton(in: app)
+        assertExists(episodePlaybackControl(in: app), named: "episode detail after closing artwork")
     }
 
     @MainActor
@@ -403,8 +429,27 @@ final class OpenCastUITests: XCTestCase {
         assertNowPlayingOverlay(in: app)
         attachSmokeScreenshot(named: "episode_tap_expanded_now_playing")
 
-        dismissNowPlayingOverlay(in: app)
-        assertExists(app.buttons["Open Now Playing"], named: "mini-player after episode tap")
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
+        swipeBack(in: app)
+        let inboxTab = app.tabBars.buttons["Inbox"]
+        assertExists(inboxTab, named: "Inbox tab after episode detail Back")
+        XCTAssertTrue(inboxTab.isSelected)
+        assertExists(seededEpisodeRow(in: app), named: "Inbox after episode detail Back")
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertExists(miniPlayer, named: "mini-player after episode detail Back")
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        let podcastTitle = nowPlayingOverlay(in: app).buttons["Now Playing Podcast Title"].firstMatch
+        assertHittable(podcastTitle, named: "Now Playing podcast title")
+        podcastTitle.tap()
+        assertExists(app.navigationBars["UI Test Show"], named: "show detail from Now Playing")
+        assertExists(app.staticTexts["Episodes"], named: "show episodes section")
+
+        swipeBack(in: app)
+        assertExists(inboxTab, named: "Inbox tab after show detail Back")
+        XCTAssertTrue(inboxTab.isSelected)
+        assertExists(seededEpisodeRow(in: app), named: "Inbox after show detail Back")
     }
 
     @MainActor
@@ -920,6 +965,95 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testDetectAdsFirstTapPromptsForModeAndRemembersOnDeviceChoice() throws {
+        let app = makeSeededApp()
+        app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
+        app.launch()
+
+        let episodeRow = seededEpisodeRow(in: app)
+        assertExists(episodeRow, named: "seeded inbox episode row")
+        episodeRow.press(forDuration: 1.2)
+        let detectAction = app.buttons["Detect Ads"].firstMatch
+        assertExists(detectAction, named: "Detect Ads context action")
+        detectAction.tap()
+
+        // First manual tap with no stored mode: the cloud-or-device dialog.
+        let deviceChoice = app.buttons["Detect On This Device"]
+        assertExists(deviceChoice, named: "mode dialog device choice", timeout: 10)
+        assertExists(app.buttons["Use Cloud Credits"], named: "mode dialog cloud choice")
+        attachSmokeScreenshot(named: "admode_dialog_first_tap")
+        deviceChoice.tap()
+
+        // The chosen on-device pass runs (parks at whisper model consent on
+        // the simulator) — no second confirmation.
+        let indicator = app.buttons["Ad Detection Queue Indicator"]
+        assertExists(indicator, named: "indicator after device choice", timeout: 10)
+        assertDoesNotExist(
+            app.buttons["Use Cloud Credits"],
+            named: "mode dialog after the choice ran"
+        )
+
+        // Settings reflects the remembered device-local choice. (Cross-
+        // relaunch persistence is covered at the store layer — UI-test
+        // launches deliberately use an in-memory store.) The section sits
+        // below the fold of the lazy settings list, so scroll it into
+        // existence, and the collapsed picker may expose the selection as
+        // its value rather than its label.
+        openSettings(in: app)
+        let modeSelection = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "label CONTAINS %@ OR value CONTAINS %@",
+                "On This Device",
+                "On This Device"
+            )
+        ).firstMatch
+        scrollUntilExists(modeSelection, in: app, maxSwipes: 12)
+        assertExists(modeSelection, named: "Detect Ads mode in Settings")
+        attachSmokeScreenshot(named: "admode_settings_on_device")
+    }
+
+    @MainActor
+    func testCloudUnavailableDetectPassOffersOneTapOnDeviceFallback() throws {
+        let app = makeSeededApp()
+        app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
+        app.launchArguments += [
+            "-OPENCAST_REMOTE_TRANSCRIPTION_PURCHASE_FIXTURE", "unavailable",
+        ]
+        app.launch()
+
+        let episodeRow = seededEpisodeRow(in: app)
+        assertExists(episodeRow, named: "seeded inbox episode row")
+        episodeRow.press(forDuration: 1.2)
+        let detectAction = app.buttons["Detect Ads"].firstMatch
+        assertExists(detectAction, named: "Detect Ads context action")
+        detectAction.tap()
+
+        let cloudChoice = app.buttons["Use Cloud Credits"]
+        assertExists(cloudChoice, named: "mode dialog cloud choice", timeout: 10)
+        cloudChoice.tap()
+
+        // The unresolved backend fails the viability precheck immediately:
+        // the queue finishes with a cloud-unavailable outcome — never a
+        // silent switch to on-device.
+        let indicator = app.buttons["Ad Detection Queue Indicator"]
+        assertExists(indicator, named: "indicator after cloud-unavailable outcome", timeout: 10)
+        indicator.tap()
+        assertExists(app.navigationBars["Ad Detection"], named: "queue screen title")
+        let fallback = app.buttons["Detect on this device instead"]
+        assertExists(fallback, named: "one-tap on-device fallback", timeout: 10)
+        attachSmokeScreenshot(named: "adqueue_cloud_unavailable_fallback")
+
+        // The explicit fallback runs a fresh on-device pass, which parks at
+        // whisper model consent on the simulator.
+        fallback.tap()
+        let consentButton = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Download Model")
+        ).firstMatch
+        assertExists(consentButton, named: "on-device pass model consent", timeout: 15)
+        attachSmokeScreenshot(named: "adqueue_fallback_running_on_device")
+    }
+
+    @MainActor
     func testSeededAdDetectionQueueCapDeferredShowsBannerAndRetry() throws {
         let app = makeSeededApp(seedsCompletedTranscript: true)
         app.launchEnvironment["OPENCAST_ADANALYSIS_FORCE_CAP"] = "1"
@@ -1163,7 +1297,7 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testSeededNowPlayingArtworkPeelsOpenSoundLabPanel() throws {
+    func testSeededNowPlayingArtworkSlideOpensSoundLabPanel() throws {
         let app = makeSeededApp()
         app.launch()
 
@@ -1175,20 +1309,18 @@ final class OpenCastUITests: XCTestCase {
         inboxEpisode.tap()
 
         assertNowPlayingOverlay(in: app)
-        waitForExternalTraceIfRequested(environmentKey: Self.seededPeelTraceArmingSecondsEnvironmentKey)
-        peelNowPlayingArtwork(in: app)
-        attachPeelScreenshotIfRequested(in: app, name: "Now Playing artwork peel open")
+        revealNowPlayingSoundLab(in: app)
 
         assertNowPlayingOverlay(in: app)
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
-        assertExists(app.buttons["Voice Boost"], named: "Voice Boost peel toggle")
+        assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
+        assertExists(app.switches["Voice Boost"], named: "Voice Boost Sound Lab toggle")
         XCTAssertFalse(app.buttons["Smart Speed"].exists)
         XCTAssertFalse(app.buttons["Skip Intros"].exists)
         XCTAssertFalse(app.buttons["Show Alerts"].exists)
     }
 
     @MainActor
-    func testSeededNowPlayingArtworkPeelClosesSoundLabPanel() throws {
+    func testSeededNowPlayingArtworkSlideClosesSoundLabPanel() throws {
         let app = makeSeededApp()
         app.launch()
 
@@ -1200,15 +1332,14 @@ final class OpenCastUITests: XCTestCase {
         inboxEpisode.tap()
 
         assertNowPlayingOverlay(in: app)
-        peelNowPlayingArtwork(in: app)
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
+        revealNowPlayingSoundLab(in: app)
+        assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
 
-        closeNowPlayingArtworkPeel(in: app)
-        attachPeelScreenshotIfRequested(in: app, name: "Now Playing artwork peel closed")
+        closeNowPlayingSoundLab(in: app)
 
         assertNowPlayingOverlay(in: app)
-        XCTAssertTrue(nowPlayingPeelSettingsPanel(in: app).waitForNonExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Voice Boost"].exists)
+        XCTAssertTrue(nowPlayingSoundLabPanel(in: app).waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.switches["Voice Boost"].exists)
     }
 
     @MainActor
@@ -1224,14 +1355,14 @@ final class OpenCastUITests: XCTestCase {
         inboxEpisode.tap()
 
         assertNowPlayingOverlay(in: app)
-        peelNowPlayingArtwork(in: app)
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
+        revealNowPlayingSoundLab(in: app)
+        assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
 
         nowPlayingArtwork(in: app).tap()
 
         assertNowPlayingOverlay(in: app)
-        XCTAssertTrue(nowPlayingPeelSettingsPanel(in: app).waitForNonExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Voice Boost"].exists)
+        XCTAssertTrue(nowPlayingSoundLabPanel(in: app).waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.switches["Voice Boost"].exists)
     }
 
     @MainActor
@@ -1240,23 +1371,77 @@ final class OpenCastUITests: XCTestCase {
         app.launch()
 
         openSeededNowPlaying(in: app)
-        waitForExternalTraceIfRequested(environmentKey: Self.seededPeelTraceArmingSecondsEnvironmentKey)
         nowPlayingArtwork(in: app).tap()
 
         assertNowPlayingOverlay(in: app)
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
-        assertExists(app.buttons["Voice Boost"], named: "Voice Boost peel toggle")
+        assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
+        assertExists(app.switches["Voice Boost"], named: "Voice Boost Sound Lab toggle")
     }
 
     @MainActor
-    func testSeededNowPlayingPeelRemoteTranscriptionPresentsEstimateSheet() throws {
+    func testSeededSoundLabAdActionAcknowledgesBeforeHeldLaunchPreparation() throws {
+        let app = makeSeededApp(seedsCompletedTranscript: true)
+        app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
+        app.launchEnvironment[Self.soundLabLaunchHoldEnvironmentKey] =
+            optionalEnvironmentValue(Self.soundLabLaunchHoldEnvironmentKey) ?? "5000"
+        app.launchEnvironment[Self.adAnalysisClientTokenEnvironmentKey] =
+            "ui-test-held-preparation"
+        app.launch()
+
+        openSeededNowPlayingSoundLab(in: app)
+
+        let voiceBoost = app.switches["Voice Boost"]
+        let adAction = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
+        let remoteAction = app.buttons.matching(identifier: "Show Transcript").firstMatch
+        for (control, name) in [
+            (voiceBoost, "Voice Boost"),
+            (adAction, "Skip Promos & Ads"),
+            (remoteAction, "Show Transcript")
+        ] {
+            assertExists(control, named: "\(name) Sound Lab control")
+            XCTAssertTrue(control.isHittable, "\(name) should be hittable")
+            XCTAssertGreaterThanOrEqual(
+                control.frame.height,
+                43.99,
+                "\(name) should keep the 44-point tap target"
+            )
+        }
+        for title in ["Skip Promos & Ads", "Show Transcript"] {
+            let label = app.staticTexts[title]
+            assertExists(label, named: "complete \(title) label")
+            let intrinsicWidth = (title as NSString).size(
+                withAttributes: [
+                    .font: UIFont.preferredFont(forTextStyle: .subheadline)
+                ]
+            ).width
+            XCTAssertGreaterThanOrEqual(
+                label.frame.width + 1,
+                intrinsicWidth,
+                "\(title) should receive enough width to render without truncation"
+            )
+        }
+
+        adAction.tap()
+
+        let accepted = NSPredicate(format: "value CONTAINS[c] %@", "Queued")
+        expectation(for: accepted, evaluatedWith: adAction)
+        waitForExpectations(timeout: 2)
+        XCTAssertFalse(adAction.isEnabled)
+        XCTAssertTrue(
+            app.staticTexts["Skip Promos & Ads"].exists,
+            "The stable action title should not reflow while accepted"
+        )
+    }
+
+    @MainActor
+    func testSeededNowPlayingSoundLabRemoteTranscriptionPresentsEstimateSheet() throws {
         let app = makeSeededApp()
         app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
         app.launch()
 
         openSeededNowPlayingSoundLab(in: app)
         let remoteRow = app.buttons["Transcribe Remotely"].firstMatch
-        assertExists(remoteRow, named: "Transcribe Remotely peel row")
+        assertExists(remoteRow, named: "Transcribe Remotely Sound Lab row")
         remoteRow.tap()
 
         assertExists(app.navigationBars["Remote Transcription"], named: "consumption estimate sheet")
@@ -1265,6 +1450,28 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(
             app.navigationBars["Remote Transcription"].waitForNonExistence(timeout: 5),
             "Cancelling the estimate sheet should dismiss it without starting"
+        )
+    }
+
+    @MainActor
+    func testSeededCompletedTranscriptSoundLabOpensTranscript() throws {
+        let app = makeSeededApp(seedsCompletedTranscript: true)
+        app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
+        app.launch()
+
+        openSeededNowPlayingSoundLab(in: app)
+        assertDoesNotExist(
+            app.buttons["Transcribe Remotely"],
+            named: "cloud transcription action after transcript completion"
+        )
+        let showTranscript = app.buttons["Show Transcript"].firstMatch
+        assertHittable(showTranscript, named: "Show Transcript Sound Lab row")
+        showTranscript.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "transcript sheet title")
+        assertExists(
+            app.buttons["Welcome to a deterministic transcript."],
+            named: "seeded transcript line"
         )
     }
 
@@ -1405,8 +1612,8 @@ final class OpenCastUITests: XCTestCase {
         _ = waitForPlaybackElapsed(progress, in: 4.2..<8.8, timeout: 8)
         assertDoesNotExist(autoSkipPill(in: app), named: "auto-skip feedback pill for stale analysis", timeout: 1)
 
-        peelNowPlayingArtwork(in: app)
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
+        revealNowPlayingSoundLab(in: app)
+        assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
         let passButton = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
         assertExists(passButton, named: "stale-analysis pass re-run button")
         XCTAssertTrue(passButton.label.contains("Skip Promos & Ads"))
@@ -1462,8 +1669,8 @@ final class OpenCastUITests: XCTestCase {
             timeout: 1
         )
 
-        peelNowPlayingArtwork(in: app)
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
+        revealNowPlayingSoundLab(in: app)
+        assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
         let outdatedPassButton = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
         assertExists(outdatedPassButton, named: "outdated-policy pass re-run button")
         XCTAssertTrue(
@@ -1603,7 +1810,7 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testSeededNowPlayingArtworkPeelDragDoesNotDismissOrMoveCard() throws {
+    func testSeededNowPlayingArtworkSlideDragDoesNotDismissOrMoveCard() throws {
         let app = makeSeededApp()
         app.launch()
 
@@ -1611,50 +1818,12 @@ final class OpenCastUITests: XCTestCase {
         let overlay = nowPlayingOverlay(in: app)
         let initialFrame = overlay.frame
 
-        peelNowPlayingArtwork(in: app)
+        revealNowPlayingSoundLab(in: app)
 
         assertNowPlayingOverlay(in: app)
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
+        assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
         XCTAssertEqual(overlay.frame.minY, initialFrame.minY, accuracy: 6)
         XCTAssertEqual(overlay.frame.height, initialFrame.height, accuracy: 6)
-    }
-
-    @MainActor
-    func testSeededNowPlayingColorCheckerArtworkPeelScreenshots() throws {
-        let app = makeSeededApp(
-            forcesDarkMode: false,
-            forcesLightMode: true,
-            artworkVariant: "color-checker"
-        )
-        app.launch()
-
-        openSeededNowPlaying(in: app)
-        assertExists(playbackProgress(in: app), named: "Playback Progress control")
-        attachSmokeScreenshot(named: "color_checker_now_playing_closed")
-
-        peelNowPlayingArtwork(in: app)
-
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
-        attachSmokeScreenshot(named: "color_checker_now_playing_peel_open")
-    }
-
-    @MainActor
-    func testSeededNowPlayingPlaceholderArtworkPeelScreenshots() throws {
-        let app = makeSeededApp(
-            forcesDarkMode: false,
-            forcesLightMode: true,
-            artworkVariant: "placeholder"
-        )
-        app.launch()
-
-        openSeededNowPlaying(in: app)
-        assertExists(playbackProgress(in: app), named: "Playback Progress control")
-        attachSmokeScreenshot(named: "placeholder_now_playing_closed")
-
-        peelNowPlayingArtwork(in: app)
-
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
-        attachSmokeScreenshot(named: "placeholder_now_playing_peel_open")
     }
 
     @MainActor
@@ -1693,8 +1862,7 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         openCurrentEpisodeDetailFromNowPlaying(in: app)
-        let playEpisodeButton = app.buttons["Play Episode"]
-        assertExists(playEpisodeButton, named: "Play Episode button")
+        assertExists(episodePlaybackControl(in: app), named: "episode playback control")
         assertExists(app.staticTexts["Show Notes"], named: "episode show notes heading")
         attachSmokeScreenshot(named: "episode_detail")
 
@@ -1771,7 +1939,7 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         openCurrentEpisodeDetailFromNowPlaying(in: app)
-        assertExists(app.buttons["Play Episode"], named: "Play Episode button")
+        assertExists(episodePlaybackControl(in: app), named: "episode playback control")
         let downloadedButton = app.buttons["Downloaded"]
         assertExists(downloadedButton, named: "Downloaded button")
         assertExists(elementContaining(label: "Downloaded", in: app), named: "downloaded metadata chip")
@@ -2293,7 +2461,7 @@ final class OpenCastUITests: XCTestCase {
         )
         darkApp.launch()
         openSeededEpisodeDetail(in: darkApp)
-        assertExists(darkApp.buttons["Play Episode"], named: "Play Episode button")
+        assertExists(episodePlaybackControl(in: darkApp), named: "episode playback control")
         assertExists(darkApp.buttons["Downloaded"], named: "Downloaded action button")
         assertExists(
             elementContaining(label: "ad segment", in: darkApp),
@@ -2319,7 +2487,7 @@ final class OpenCastUITests: XCTestCase {
         )
         lightApp.launch()
         openSeededEpisodeDetail(in: lightApp)
-        assertExists(lightApp.buttons["Play Episode"], named: "Play Episode button (light)")
+        assertExists(episodePlaybackControl(in: lightApp), named: "episode playback control (light)")
         attachSmokeScreenshot(named: "episode_detail_full_pipeline_light")
         lightApp.terminate()
 
@@ -2331,7 +2499,7 @@ final class OpenCastUITests: XCTestCase {
         )
         longNotesApp.launch()
         openSeededEpisodeDetail(in: longNotesApp)
-        assertExists(longNotesApp.buttons["Play Episode"], named: "Play Episode button (long notes)")
+        assertExists(episodePlaybackControl(in: longNotesApp), named: "episode playback control (long notes)")
         for _ in 0..<4 {
             let start = longNotesApp.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
             let end = longNotesApp.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
@@ -2348,7 +2516,7 @@ final class OpenCastUITests: XCTestCase {
         app.launch()
         openSeededEpisodeDetail(in: app)
 
-        assertExists(app.buttons["Play Episode"], named: "Play Episode button at AX size")
+        assertExists(episodePlaybackControl(in: app), named: "episode playback control at AX size")
         assertExists(app.buttons["Download"], named: "Download button at AX size")
         assertExists(app.buttons["Make Ad-Free"], named: "Make Ad-Free button at AX size")
         attachSmokeScreenshot(named: "episode_detail_dynamic_type_ax")
@@ -2449,7 +2617,10 @@ final class OpenCastUITests: XCTestCase {
         assertExists(clearProgressConfirmation, named: "Clear Progress confirmation")
         clearProgressConfirmation.tap()
         assertDoesNotExist(progressApp.staticTexts["2m left"], named: "remaining time after Clear Progress", timeout: 5)
-        assertExists(progressApp.buttons["Play Episode"], named: "Play Episode after Clear Progress")
+        assertExists(
+            episodePlaybackControl(in: progressApp),
+            named: "episode playback control after Clear Progress"
+        )
 
         let markPlayedApp = makeSeededApp()
         markPlayedApp.launch()
@@ -2473,8 +2644,8 @@ final class OpenCastUITests: XCTestCase {
 
         openSeededNowPlayingSoundLab(in: app)
 
-        let voiceBoostToggle = app.buttons["Voice Boost"]
-        assertExists(voiceBoostToggle, named: "Voice Boost peel toggle")
+        let voiceBoostToggle = app.switches["Voice Boost"]
+        assertExists(voiceBoostToggle, named: "Voice Boost Sound Lab toggle")
         assertToggle(voiceBoostToggle, isOn: true)
         attachSmokeScreenshot(named: "now_playing_voice_boost_on")
 
@@ -2494,7 +2665,7 @@ final class OpenCastUITests: XCTestCase {
 
         openSeededNowPlayingSoundLab(in: app)
 
-        let voiceBoostToggle = app.buttons["Voice Boost"]
+        let voiceBoostToggle = app.switches["Voice Boost"]
         assertToggle(voiceBoostToggle, isOn: true)
         attachSmokeScreenshot(named: "now_playing_voice_boost_dynamic_type")
 
@@ -2773,11 +2944,12 @@ final class OpenCastUITests: XCTestCase {
         assertExists(playbackProgress(in: app), named: "Playback Progress control", timeout: 30)
         openCurrentEpisodeDetailFromNowPlaying(in: app)
 
-        let playEpisodeButton = app.buttons["Play Episode"]
-        assertExists(playEpisodeButton, named: "Play Episode button", timeout: 20)
-        playEpisodeButton.tap()
+        assertExists(episodePlaybackControl(in: app), named: "episode playback control", timeout: 20)
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertExists(miniPlayer, named: "mini-player from episode detail", timeout: 20)
+        miniPlayer.tap()
         assertNowPlayingOverlay(in: app)
-        assertExists(playbackProgress(in: app), named: "Playback Progress control after Play Episode", timeout: 30)
+        assertExists(playbackProgress(in: app), named: "Playback Progress control after reopening player", timeout: 30)
 
         let pauseButton = nowPlayingOverlay(in: app).buttons["Pause"].firstMatch
         assertExists(pauseButton, named: "Pause button", timeout: 30)
@@ -2882,48 +3054,6 @@ final class OpenCastUITests: XCTestCase {
 
         RunLoop.current.run(until: Date.now.addingTimeInterval(4))
         attachSmokeScreenshot(named: "tal_rapid_scrub_visual_probe")
-    }
-
-    @MainActor
-    func testOptInRestIsScienceNowPlayingArtworkPeelScreenshot() throws {
-        let shouldRunRemotePeelProbe = ProcessInfo.processInfo.environment["OPENCAST_RUN_REMOTE_PEEL_UI_TESTS"] == "1"
-            || FileManager.default.fileExists(atPath: "/tmp/opencast-run-remote-peel-ui-tests")
-        guard shouldRunRemotePeelProbe else {
-            throw XCTSkip("Set OPENCAST_RUN_REMOTE_PEEL_UI_TESTS=1 or create /tmp/opencast-run-remote-peel-ui-tests to run the live The Rest Is Science peel visual probe.")
-        }
-
-        let app = XCUIApplication()
-        app.launchArguments += [
-            "--opencast-ui-testing",
-            "--opencast-force-light-mode"
-        ]
-        app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
-        app.launchEnvironment["OPENCAST_FORCE_LIGHT_MODE"] = "1"
-        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = "https://feeds.megaphone.fm/GLT6907573392"
-        app.launch()
-
-        openLibrary(in: app)
-        tapAddPodcastButton(in: app)
-        app.buttons["Subscribe"].tap()
-
-        assertExists(app.staticTexts["The Rest Is Science - Goalhanger"], named: "The Rest Is Science subscription", timeout: 30)
-        openInbox(in: app)
-
-        let firstEpisode = restIsScienceFirstEpisode(in: app)
-        assertExists(firstEpisode, named: "The Rest Is Science inbox episode", timeout: 30)
-        waitForExternalTraceIfRequested(environmentKey: Self.remotePeelTraceArmingSecondsEnvironmentKey)
-        firstEpisode.tap()
-
-        assertNowPlayingOverlay(in: app)
-        assertExists(playbackProgress(in: app), named: "Playback Progress control", timeout: 20)
-        peelNowPlayingArtwork(in: app)
-
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
-        assertExists(app.buttons["Voice Boost"], named: "Voice Boost peel toggle")
-        XCTAssertFalse(app.buttons["Smart Speed"].exists)
-        XCTAssertFalse(app.buttons["Skip Intros"].exists)
-        XCTAssertFalse(app.buttons["Show Alerts"].exists)
-        attachSmokeScreenshot(named: "librivox_now_playing_peel_open")
     }
 
     @MainActor
@@ -3092,7 +3222,7 @@ final class OpenCastUITests: XCTestCase {
         ]
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
         app.launchEnvironment["OPENCAST_SEED_UI_LIBRARY"] = "1"
-        if ProcessInfo.processInfo.environment["OPENCAST_FRAME_PROBE"] == "1" {
+        if optionalEnvironmentValue("OPENCAST_FRAME_PROBE") == "1" {
             app.launchArguments.append("--opencast-frame-probe")
             app.launchEnvironment["OPENCAST_FRAME_PROBE"] = "1"
         }
@@ -3435,6 +3565,11 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func episodePlaybackControl(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: "Episode Playback Control").firstMatch
+    }
+
+    @MainActor
     private func liveAdAnalysisEpisodeRow(in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(identifier: Self.liveAdAnalysisEpisodeRowIdentifier).firstMatch
     }
@@ -3518,6 +3653,13 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func swipeBack(in app: XCUIApplication) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    @MainActor
     private func assertNowPlayingOverlay(in app: XCUIApplication) {
         assertExists(nowPlayingOverlay(in: app), named: "Now Playing overlay")
     }
@@ -3564,7 +3706,11 @@ final class OpenCastUITests: XCTestCase {
         let titleButton = overlay.buttons["Now Playing Episode Title"].firstMatch
         assertHittable(titleButton, named: "Now Playing episode title button")
         titleButton.tap()
-        assertExists(app.buttons["Play Episode"], named: "episode detail after tapping Now Playing title", timeout: 10)
+        assertExists(
+            episodePlaybackControl(in: app),
+            named: "episode detail after tapping Now Playing title",
+            timeout: 10
+        )
     }
 
     @MainActor
@@ -3680,8 +3826,8 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     private func openSeededNowPlayingSoundLab(in app: XCUIApplication) {
         openSeededNowPlaying(in: app)
-        peelNowPlayingArtwork(in: app)
-        assertExists(nowPlayingPeelSettingsPanel(in: app), named: "Now Playing Sound Lab panel")
+        revealNowPlayingSoundLab(in: app)
+        assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
     }
 
     @MainActor
@@ -3739,35 +3885,21 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    private func peelNowPlayingArtwork(in app: XCUIApplication) {
+    private func revealNowPlayingSoundLab(in app: XCUIApplication) {
         let artwork = nowPlayingArtwork(in: app)
-        assertExists(artwork, named: "Now Playing artwork before peel")
+        assertExists(artwork, named: "Now Playing artwork before Sound Lab reveal")
         let start = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: 0.52))
         let end = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.48))
         start.press(forDuration: 0.10, thenDragTo: end)
     }
 
     @MainActor
-    private func closeNowPlayingArtworkPeel(in app: XCUIApplication) {
+    private func closeNowPlayingSoundLab(in app: XCUIApplication) {
         let artwork = nowPlayingArtwork(in: app)
-        assertExists(artwork, named: "Now Playing artwork before peel close")
+        assertExists(artwork, named: "Now Playing artwork before closing Sound Lab")
         let start = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.52))
         let end = start.withOffset(CGVector(dx: max(180, artwork.frame.width * 2.2), dy: 0))
         start.press(forDuration: 0.06, thenDragTo: end)
-    }
-
-    @MainActor
-    private func attachPeelScreenshotIfRequested(in app: XCUIApplication, name: String) {
-        let shouldAttach = ProcessInfo.processInfo.environment["OPENCAST_ATTACH_PEEL_SCREENSHOTS"] == "1"
-            || FileManager.default.fileExists(atPath: "/tmp/opencast-attach-peel-screenshots")
-        guard shouldAttach else {
-            return
-        }
-
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 
     @MainActor
@@ -3781,7 +3913,7 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    private func nowPlayingPeelSettingsPanel(in app: XCUIApplication) -> XCUIElement {
+    private func nowPlayingSoundLabPanel(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["Now Playing Sound Lab"]
     }
 
@@ -3795,7 +3927,7 @@ final class OpenCastUITests: XCTestCase {
     ) {
         XCTAssertTrue(
             panel.frame.contains(element.frame),
-            "\(stage) ad-free pass control should stay inside the peel panel",
+            "\(stage) ad-free pass control should stay inside the Sound Lab panel",
             file: file,
             line: line
         )
@@ -3822,7 +3954,7 @@ final class OpenCastUITests: XCTestCase {
         app.launch()
 
         openSeededNowPlayingSoundLab(in: app)
-        let panel = nowPlayingPeelSettingsPanel(in: app)
+        let panel = nowPlayingSoundLabPanel(in: app)
         let passButton = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
 
         assertExists(passButton, named: "\(stage) ad-free pass button", file: file, line: line)

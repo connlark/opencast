@@ -45,7 +45,7 @@ struct DownloadStoreTests {
         let episode = makeEpisode(episodeID: "download-cancel")
 
         store.startDownload(for: episode, modelContext: context)
-        #expect(await waitUntil { store.record(for: episode.episodeID)?.bytesReceived == 7 })
+        #expect(await waitUntil { store.byteProgress(for: episode.episodeID)?.bytesReceived == 7 })
 
         store.cancelDownload(episodeID: episode.episodeID, modelContext: context)
 
@@ -56,6 +56,32 @@ struct DownloadStoreTests {
             sourceAudioURL: URL(string: episode.audioURL!)!
         )
         #expect(fileStore.fileExists(relativePath: relativePath) == false)
+    }
+
+    @Test("Active progress stays in memory until a durable transition")
+    func activeProgressDoesNotSaveEveryTick() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
+        let store = DownloadStore(
+            downloader: HangingEpisodeAudioDownloader(),
+            fileStore: fileStore
+        )
+        let episode = makeEpisode(episodeID: "transient-download-progress")
+
+        store.startDownload(for: episode, modelContext: context)
+        #expect(await waitUntil { store.byteProgress(for: episode.episodeID)?.bytesReceived == 7 })
+
+        // Ticks surface through the transient accessor; the record and the
+        // context stay untouched so autosave has nothing to persist (and the
+        // remote-change reload cascade never fires mid-download).
+        let record = try #require(store.record(for: episode.episodeID))
+        #expect(record.bytesReceived == 0)
+        #expect(store.byteProgress(for: episode.episodeID)?.bytesExpected == 100)
+        #expect(context.hasChanges == false)
+
+        store.cancelDownload(episodeID: episode.episodeID, modelContext: context)
     }
 
     @Test("Reconcile marks interrupted and missing downloads")
@@ -466,7 +492,7 @@ struct DownloadStoreTests {
         let episode = makeEpisode(episodeID: "pause-download")
 
         store.startDownload(for: episode, modelContext: context)
-        #expect(await waitUntil { store.record(for: episode.episodeID)?.bytesReceived == 3 })
+        #expect(await waitUntil { store.byteProgress(for: episode.episodeID)?.bytesReceived == 3 })
         let waiter = Task {
             try await store.waitForDownload(episodeID: episode.episodeID)
         }
@@ -504,7 +530,7 @@ struct DownloadStoreTests {
 
         store.startDownload(for: episode, modelContext: context)
         #expect(await waitUntil {
-            store.record(for: episode.episodeID)?.bytesReceived == Int64(receivedByteCount)
+            store.byteProgress(for: episode.episodeID)?.bytesReceived == Int64(receivedByteCount)
         })
 
         store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
@@ -528,7 +554,7 @@ struct DownloadStoreTests {
         let episode = makeEpisode(episodeID: "resume-download")
 
         firstStore.startDownload(for: episode, modelContext: context)
-        #expect(await waitUntil { firstStore.record(for: episode.episodeID)?.bytesReceived == 3 })
+        #expect(await waitUntil { firstStore.byteProgress(for: episode.episodeID)?.bytesReceived == 3 })
         firstStore.pauseDownload(episodeID: episode.episodeID, modelContext: context)
         try await firstStore.waitForDownload(episodeID: episode.episodeID)
 
@@ -564,7 +590,7 @@ struct DownloadStoreTests {
         let episode = makeEpisode(episodeID: "resume-failure")
 
         store.startDownload(for: episode, modelContext: context)
-        #expect(await waitUntil { store.record(for: episode.episodeID)?.bytesReceived == 3 })
+        #expect(await waitUntil { store.byteProgress(for: episode.episodeID)?.bytesReceived == 3 })
         store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
         try await store.waitForDownload(episodeID: episode.episodeID)
 
@@ -761,8 +787,8 @@ struct DownloadStoreTests {
 
         store.retryAllFailedDownloads(modelContext: context)
         #expect(await waitUntil {
-            store.record(for: "failed-retry")?.bytesReceived == 7
-                && store.record(for: "missing-retry")?.bytesReceived == 7
+            store.byteProgress(for: "failed-retry")?.bytesReceived == 7
+                && store.byteProgress(for: "missing-retry")?.bytesReceived == 7
         })
         store.retryAllFailedDownloads(modelContext: context)
 
@@ -952,7 +978,7 @@ struct DownloadStoreTests {
         store.startDownload(for: episode, modelContext: context)
         #expect(await waitUntil {
             store.record(for: episode.episodeID)?.state == .downloading
-                && store.record(for: episode.episodeID)?.bytesReceived == 8
+                && store.byteProgress(for: episode.episodeID)?.bytesReceived == 8
         })
         store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
         try await store.waitForDownload(episodeID: episode.episodeID)
@@ -978,6 +1004,7 @@ struct DownloadStoreTests {
         let identity = try #require(store.completedSourceIdentity(for: episode.episodeID))
         #expect(identity.sha256 == OpenCastSHA256.hash(Data("abcdef".utf8)))
         #expect(identity.byteCount == 6)
+        #expect(identity.durationSeconds == nil)
     }
 
     @Test("Source identity invalidates when the local file drifts or disappears")

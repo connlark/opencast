@@ -25,7 +25,7 @@ struct AdFreePassCompletionNotificationContent: Equatable {
             switch outcome.kind {
             case .completed(let zoneCount):
                 completed.append((outcome.episodeTitle, zoneCount))
-            case .failed:
+            case .failed, .cloudUnavailable:
                 failedCount += 1
             }
         }

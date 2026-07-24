@@ -62,6 +62,25 @@ struct StaleJobRow {
     job_id: String,
 }
 
+const STALE_JOB_IDS_SQL: &str = "SELECT job_id FROM jobs WHERE \
+     ((state IN ('created', 'staging_origin') AND updated_at <= ?1) OR \
+      (state = 'waiting_for_device_source' AND updated_at <= ?2) OR \
+      (state = 'awaiting_credits' AND updated_at <= ?3) OR \
+      (state = 'exact_upload_required' AND updated_at <= ?4) OR \
+      (state = 'exact_uploading' AND updated_at <= ?5) OR \
+      (state = 'detecting_ads' AND updated_at <= ?6) OR \
+      (state IN ('result_ready', 'delivered') AND updated_at <= ?7)) \
+     ORDER BY updated_at ASC, job_id ASC LIMIT ?8";
+
+// Parked results ('result_ready'/'delivered') are excluded: the cap bounds
+// concurrent processing, and a finished result waiting for pickup consumes
+// no compute. Counting it let one unacknowledged result (client killed
+// before ack) hold the account slot for the full 7-day result TTL — every
+// new create 429'd as rate_limited.
+const ACTIVE_JOB_COUNT_SQL: &str = "SELECT COUNT(*) AS count FROM jobs \
+     WHERE account_id = ?1 \
+     AND state NOT IN ('acknowledged', 'cancelled', 'failed', 'result_ready', 'delivered')";
+
 // --- App Attest challenge/key storage (mirrors AdAnalysisWorker) ---
 
 pub async fn insert_challenge(
@@ -460,14 +479,7 @@ pub async fn update_job_state(db: &D1Database, job_id: &str, state: &str, now: i
 
 pub async fn active_job_count(db: &D1Database, account_id: &str) -> Result<i64> {
     let args = [D1Type::Text(account_id)];
-    count(
-        db,
-        "SELECT COUNT(*) AS count FROM jobs \
-         WHERE account_id = ?1 \
-         AND state NOT IN ('acknowledged', 'cancelled', 'failed')",
-        &args,
-    )
-    .await
+    count(db, ACTIVE_JOB_COUNT_SQL, &args).await
 }
 
 /// Content-free D1 index scan for jobs whose state-specific deadline has
@@ -487,20 +499,12 @@ pub async fn stale_job_ids(
         d1_i64(now.saturating_sub(config.awaiting_credits_deadline_seconds))?,
         d1_i64(now.saturating_sub(config.exact_upload_required_deadline_seconds))?,
         d1_i64(now.saturating_sub(config.exact_uploading_deadline_seconds))?,
+        d1_i64(now.saturating_sub(config.ad_analysis_deadline_seconds))?,
         d1_i64(now.saturating_sub(7 * 24 * 60 * 60))?,
         d1_i64(i64::try_from(query_limit).unwrap_or(1_001))?,
     ];
     let rows = db
-        .prepare(
-            "SELECT job_id FROM jobs WHERE \
-             ((state IN ('created', 'staging_origin') AND updated_at <= ?1) OR \
-              (state = 'waiting_for_device_source' AND updated_at <= ?2) OR \
-              (state = 'awaiting_credits' AND updated_at <= ?3) OR \
-              (state = 'exact_upload_required' AND updated_at <= ?4) OR \
-              (state = 'exact_uploading' AND updated_at <= ?5) OR \
-              (state IN ('result_ready', 'delivered') AND updated_at <= ?6)) \
-             ORDER BY updated_at ASC, job_id ASC LIMIT ?7",
-        )
+        .prepare(STALE_JOB_IDS_SQL)
         .bind_refs(&args)?
         .all()
         .await?
@@ -713,6 +717,7 @@ fn d1_i64(value: i64) -> Result<D1Type<'static>> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use super::{ACTIVE_JOB_COUNT_SQL, STALE_JOB_IDS_SQL};
     use rusqlite::{params, Connection};
 
     const NOW: i64 = 1_784_000_000;
@@ -723,7 +728,45 @@ mod tests {
             .expect("create app attest auth tables");
         db.execute_batch(include_str!("../migrations/0002_accounts_jobs_credit.sql"))
             .expect("create account/job/credit tables");
+        db.execute_batch(include_str!("../migrations/0003_counters.sql"))
+            .expect("create counters table");
+        db.execute_batch(include_str!("../migrations/0004_install_account_links.sql"))
+            .expect("create install account links");
+        db.execute_batch(include_str!(
+            "../migrations/0005_index_stale_job_sweeper.sql"
+        ))
+        .expect("create stale-job sweeper indexes");
         db
+    }
+
+    #[test]
+    fn stale_job_sweep_uses_partial_indexes_instead_of_scanning_jobs() {
+        let db = setup_db();
+        let mut statement = db
+            .prepare(&format!("EXPLAIN QUERY PLAN {STALE_JOB_IDS_SQL}"))
+            .expect("prepare stale-job query plan");
+        let plan = statement
+            .query_map(params![NOW, NOW, NOW, NOW, NOW, NOW, NOW, 101_i64], |row| {
+                row.get::<_, String>(3)
+            })
+            .expect("query stale-job plan")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("read stale-job plan");
+
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_jobs_sweep_staging")),
+            "expected staging sweep index in plan: {plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_jobs_sweep_results")),
+            "expected result sweep index in plan: {plan:?}"
+        );
+        assert!(
+            plan.iter().all(|detail| detail != "SCAN jobs"),
+            "unexpected full jobs scan: {plan:?}"
+        );
     }
 
     fn seed_account(db: &Connection, account_id: &str, available: i64) {
@@ -762,6 +805,46 @@ mod tests {
             .expect("insert reservation");
         }
         debited == 1
+    }
+
+    #[test]
+    fn active_job_count_ignores_terminal_and_parked_result_states() {
+        let db = setup_db();
+        seed_account(&db, "acct-1", 36_000);
+        let states = [
+            ("created", true),
+            ("staging_origin", true),
+            ("waiting_for_device_source", true),
+            ("source_matched", true),
+            ("exact_upload_required", true),
+            ("exact_uploading", true),
+            ("probing", true),
+            ("awaiting_credits", true),
+            ("reserved", true),
+            ("chunking", true),
+            ("transcribing", true),
+            ("stitching", true),
+            ("detecting_ads", true),
+            ("cancelling", true),
+            ("result_ready", false),
+            ("delivered", false),
+            ("acknowledged", false),
+            ("cancelled", false),
+            ("failed", false),
+        ];
+        for (index, (state, _)) in states.iter().enumerate() {
+            db.execute(
+                "INSERT INTO jobs (job_id, account_id, client_request_id, episode_id, state, created_at, updated_at) \
+                 VALUES (?1, 'acct-1', ?1, ?1, ?2, ?3, ?3)",
+                params![format!("job-{index}"), state, NOW],
+            )
+            .expect("insert job");
+        }
+        let expected = states.iter().filter(|(_, active)| *active).count() as i64;
+        let counted: i64 = db
+            .query_row(ACTIVE_JOB_COUNT_SQL, params!["acct-1"], |row| row.get(0))
+            .expect("count active jobs");
+        assert_eq!(counted, expected);
     }
 
     #[test]

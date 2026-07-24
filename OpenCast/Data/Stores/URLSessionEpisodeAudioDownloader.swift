@@ -2,10 +2,17 @@ import Foundation
 import OpenCastCore
 
 struct URLSessionEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
-    private let session: URLSession
+    nonisolated private static let localCopyChunkByteCount = 1 * 1_024 * 1_024
+    nonisolated private static let progressInterval: Duration = .milliseconds(250)
 
-    init(session: URLSession = URLSession(configuration: OpenCastURLSessionFactory.downloadConfiguration())) {
-        self.session = session
+    private let configuration: URLSessionConfiguration
+
+    init(configuration: URLSessionConfiguration = OpenCastURLSessionFactory.downloadConfiguration()) {
+        self.configuration = configuration
+    }
+
+    init(session: URLSession) {
+        configuration = session.configuration
     }
 
     @concurrent
@@ -65,53 +72,16 @@ struct URLSessionEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sen
             request.setValue(ifRangeValidator, forHTTPHeaderField: "If-Range")
         }
 
-        let (bytes, response) = try await session.bytes(for: request)
-        let normalizedResponse = OpenCastHTTPResponse(response)
-        let policy = EpisodeDownloadResumeResponsePolicy.evaluate(
-            statusCode: normalizedResponse.statusCode ?? -1,
-            resumeOffset: resumeOffset,
-            headers: normalizedResponse.headers
-        )
-
-        switch policy {
-        case .append(let bytesExpected):
-            try validateContentEncoding(in: normalizedResponse)
-            let metadata = responseMetadata(from: normalizedResponse)
-            await onResponseMetadata(
-                EpisodeDownloadResponseMetadata(
-                    entityTag: metadata.entityTag ?? resume?.entityTag,
-                    lastModified: metadata.lastModified ?? resume?.lastModified
-                )
-            )
-            try await write(
-                bytes: bytes,
-                expectedBytes: bytesExpected,
-                initialBytesReceived: resumeOffset,
-                appends: true,
-                validatesExpectedByteCount: true,
+        do {
+            try await performRemoteRequest(
+                request,
                 to: temporaryURL,
+                resumeOffset: resumeOffset,
+                resume: resume,
+                onResponseMetadata: onResponseMetadata,
                 progress: progress
             )
-        case .restart(let bytesExpected, false):
-            try validateContentEncoding(in: normalizedResponse)
-            try Task.checkCancellation()
-            try Data().write(to: temporaryURL, options: .atomic)
-            try Task.checkCancellation()
-            await onResponseMetadata(responseMetadata(from: normalizedResponse))
-            let fullResponseExpectedBytes = normalizedResponse.statusCode == 200
-                && normalizedResponse.expectedContentLength >= 0
-                ? normalizedResponse.expectedContentLength
-                : nil
-            try await write(
-                bytes: bytes,
-                expectedBytes: bytesExpected ?? fullResponseExpectedBytes,
-                initialBytesReceived: 0,
-                appends: false,
-                validatesExpectedByteCount: normalizedResponse.statusCode == 206,
-                to: temporaryURL,
-                progress: progress
-            )
-        case .restart(_, true):
+        } catch is URLSessionEpisodeAudioDownloadDelegate.RestartRequired {
             try await downloadRemoteFile(
                 from: sourceURL,
                 to: temporaryURL,
@@ -119,8 +89,64 @@ struct URLSessionEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sen
                 onResponseMetadata: onResponseMetadata,
                 progress: progress
             )
-        case .fail(let statusCode):
-            throw EpisodeDownloadError.invalidHTTPStatus(statusCode)
+        }
+    }
+
+    @concurrent
+    private func performRemoteRequest(
+        _ request: URLRequest,
+        to temporaryURL: URL,
+        resumeOffset: Int64,
+        resume: EpisodeDownloadResumeContext?,
+        onResponseMetadata: @escaping @MainActor @Sendable (EpisodeDownloadResponseMetadata) -> Void,
+        progress: @escaping @MainActor @Sendable (_ bytesReceived: Int64, _ bytesExpected: Int64?) -> Void
+    ) async throws {
+        let progressStream = AsyncStream<URLSessionEpisodeAudioDownloadDelegate.ProgressUpdate>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        let delegate = URLSessionEpisodeAudioDownloadDelegate(
+            temporaryURL: temporaryURL,
+            resumeOffset: resumeOffset,
+            resume: resume,
+            progressInterval: Self.progressInterval,
+            progressContinuation: progressStream.continuation,
+            onResponseMetadata: onResponseMetadata
+        )
+        let delegateQueue = OperationQueue()
+        delegateQueue.maxConcurrentOperationCount = 1
+        delegateQueue.qualityOfService = .utility
+        let requestSession = URLSession(
+            configuration: configuration,
+            delegate: delegate,
+            delegateQueue: delegateQueue
+        )
+        let dataTask = requestSession.dataTask(with: request)
+
+        defer {
+            requestSession.invalidateAndCancel()
+        }
+
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for await update in progressStream.stream {
+                        try Task.checkCancellation()
+                        await progress(update.bytesReceived, update.bytesExpected)
+                    }
+                }
+                group.addTask {
+                    try await delegate.awaitCompletion(of: dataTask)
+                }
+
+                do {
+                    try await group.waitForAll()
+                } catch {
+                    group.cancelAll()
+                    throw error
+                }
+            }
+        } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+            throw CancellationError()
         }
     }
 
@@ -130,85 +156,28 @@ struct URLSessionEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sen
         to temporaryURL: URL,
         progress: @escaping @MainActor @Sendable (_ bytesReceived: Int64, _ bytesExpected: Int64?) -> Void
     ) async throws {
-        let data = try Data(contentsOf: sourceURL)
-        try Task.checkCancellation()
-        try data.write(to: temporaryURL, options: .atomic)
-        await progress(Int64(data.count), Int64(data.count))
-    }
-
-    @concurrent
-    private func write(
-        bytes: URLSession.AsyncBytes,
-        expectedBytes: Int64?,
-        initialBytesReceived: Int64,
-        appends: Bool,
-        validatesExpectedByteCount: Bool,
-        to temporaryURL: URL,
-        progress: @escaping @MainActor @Sendable (_ bytesReceived: Int64, _ bytesExpected: Int64?) -> Void
-    ) async throws {
-        try Task.checkCancellation()
-        let fileHandle = try FileHandle(forWritingTo: temporaryURL)
+        let expectedBytes = try sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init)
+        FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
+        let sourceHandle = try FileHandle(forReadingFrom: sourceURL)
+        let destinationHandle = try FileHandle(forWritingTo: temporaryURL)
         defer {
-            try? fileHandle.close()
+            try? sourceHandle.close()
+            try? destinationHandle.close()
         }
 
-        if appends {
-            let fileOffset = try fileHandle.seekToEnd()
-            guard fileOffset == UInt64(initialBytesReceived) else {
-                throw EpisodeDownloadError.invalidDownloadedRecord
-            }
-        } else {
-            try fileHandle.truncate(atOffset: 0)
-        }
-
-        var receivedBytes = initialBytesReceived
-        var buffer = Data()
-        buffer.reserveCapacity(64 * 1_024)
-
-        for try await byte in bytes {
+        var receivedBytes: Int64 = 0
+        var lastProgressAt: ContinuousClock.Instant?
+        while let chunk = try sourceHandle.read(upToCount: Self.localCopyChunkByteCount), !chunk.isEmpty {
             try Task.checkCancellation()
-            buffer.append(byte)
-            receivedBytes += 1
+            try destinationHandle.write(contentsOf: chunk)
+            receivedBytes += Int64(chunk.count)
 
-            guard buffer.count >= 64 * 1_024 else {
-                continue
+            let now = ContinuousClock.now
+            if lastProgressAt.map({ $0.duration(to: now) >= Self.progressInterval }) ?? true {
+                await progress(receivedBytes, expectedBytes)
+                lastProgressAt = now
             }
-
-            try fileHandle.write(contentsOf: buffer)
-            buffer.removeAll(keepingCapacity: true)
-            await progress(receivedBytes, expectedBytes)
-        }
-
-        if !buffer.isEmpty {
-            try fileHandle.write(contentsOf: buffer)
-        }
-        if validatesExpectedByteCount,
-           let expectedBytes,
-           receivedBytes != expectedBytes {
-            throw EpisodeDownloadError.interrupted
         }
         await progress(receivedBytes, expectedBytes)
-    }
-
-    private nonisolated func responseMetadata(
-        from response: OpenCastHTTPResponse
-    ) -> EpisodeDownloadResponseMetadata {
-        EpisodeDownloadResponseMetadata(
-            entityTag: response.headerValue("etag"),
-            lastModified: response.headerValue("last-modified")
-        )
-    }
-
-    private nonisolated func validateContentEncoding(
-        in response: OpenCastHTTPResponse
-    ) throws {
-        guard let contentEncoding = response.headerValue("content-encoding")?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              contentEncoding.isEmpty == false,
-              contentEncoding.caseInsensitiveCompare("identity") != .orderedSame
-        else {
-            return
-        }
-        throw EpisodeDownloadError.unsupportedContentEncoding
     }
 }

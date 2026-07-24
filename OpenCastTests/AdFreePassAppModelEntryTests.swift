@@ -170,7 +170,7 @@ struct AdFreePassAppModelEntryTests {
         fixture.appModel.downloads.startDownload(for: episode, modelContext: fixture.context)
         #expect(await waitUntil {
             fixture.appModel.downloads.record(for: episode.episodeID)?.state == .downloading
-                && fixture.appModel.downloads.record(for: episode.episodeID)?.bytesReceived == 7
+                && fixture.appModel.downloads.byteProgress(for: episode.episodeID)?.bytesReceived == 7
         })
         #expect(fixture.appModel.downloadMenuState(for: episode) == .downloading)
         fixture.appModel.downloads.pauseDownload(episodeID: episode.episodeID, modelContext: fixture.context)

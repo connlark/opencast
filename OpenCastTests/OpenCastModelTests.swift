@@ -776,7 +776,9 @@ struct OpenCastModelTests {
         #expect(firstDidSave)
         #expect(!duplicateDidSave)
         #expect(updatedDidSave)
-        #expect(store.episode(with: episodeID)?.artworkPreview == updatedPreview)
+        // Live resolutions surface through the override accessor; the episodes
+        // array itself is not republished per preview.
+        #expect(store.artworkPreview(for: episode) == updatedPreview)
         let cached = try await localCache.loadLibrary(activePodcastIDs: [feedURL])
         #expect(cached.episodes.first?.artworkPreview == updatedPreview)
     }

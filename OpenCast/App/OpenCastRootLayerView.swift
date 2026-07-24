@@ -29,15 +29,17 @@ struct OpenCastRootLayerView<Content: View>: View {
                 .allowsHitTesting(!isNowPlayingPresented)
                 .accessibilityHidden(isNowPlayingPresented)
 
-            if appModel.playback.currentEpisode != nil || isNowPlayingPresented {
+            // Mounted only while presented: the overlay animates itself in on
+            // appear and calls onDismissed after its exit animation, so the
+            // full Now Playing tree never idles behind the tab content
+            // re-evaluating on every playback tick.
+            if isNowPlayingPresented {
                 NowPlayingOverlayView(
                     isPresented: isNowPlayingPresented,
                     onDismissed: onDismissNowPlaying,
                     onOpenEpisode: onOpenCurrentEpisode,
                     onOpenPodcast: onOpenCurrentPodcast
                 )
-                .allowsHitTesting(isNowPlayingPresented)
-                .accessibilityHidden(!isNowPlayingPresented)
                 .zIndex(1)
             }
 
@@ -56,6 +58,8 @@ struct OpenCastRootLayerView<Content: View>: View {
             if NowPlayingFramePacingProbe.shared.isEnabled {
                 NowPlayingFramePacingStatusView()
                     .allowsHitTesting(false)
+                FrameProbeMarkButton()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
             }
             #endif
         }

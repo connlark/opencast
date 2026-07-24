@@ -179,10 +179,69 @@ struct AdDetectionQueuePresentationTests {
 
     // MARK: - Fixtures
 
+    @Test("Cloud items hide the background-continuation affordance while running")
+    func cloudRunningHidesBackgroundAffordance() {
+        let cloud = makePresentation(
+            state: .running,
+            activeEpisodeID: "a",
+            activeItemMode: .cloud
+        )
+        #expect(cloud.affordance == nil)
+
+        let device = makePresentation(
+            state: .running,
+            activeEpisodeID: "a",
+            activeItemMode: .onDevice
+        )
+        #expect(device.affordance == .continueInBackground)
+    }
+
+    @Test("Cloud stages render their own status text")
+    func cloudStageStatusText() {
+        #expect(
+            AdDetectionQueuePresentation.statusText(for: .cloudQueued)
+                == EpisodeAdFreePassPresentation.cloudQueued.statusText
+        )
+        #expect(
+            AdDetectionQueuePresentation.statusText(for: .cloudTranscribing(nil))
+                == "Transcribing on the server..."
+        )
+        #expect(
+            AdDetectionQueuePresentation.statusText(for: .cloudDetectingAds)
+                == EpisodeAdFreePassPresentation.cloudDetectingAds.statusText
+        )
+        #expect(
+            AdDetectionQueuePresentation.statusText(for: .cloudUnavailable(message: "No credits."))
+                == "No credits."
+        )
+    }
+
+    @Test("Cloud-unavailable outcomes surface as their own finished row status")
+    func cloudUnavailableFinishedRow() {
+        let presentation = makePresentation(
+            state: .idle,
+            failedCount: 1,
+            outcomes: [AdFreePassQueueItemOutcome(
+                episodeID: "a",
+                episodeTitle: "Episode a",
+                artworkURL: nil,
+                kind: .cloudUnavailable(message: "Cloud detection is off.")
+            )]
+        )
+        #expect(presentation.finishedRows.count == 1)
+        #expect(
+            presentation.finishedRows[0].status
+                == .cloudUnavailable(message: "Cloud detection is off.")
+        )
+        #expect(presentation.finishedRows[0].statusText == "Cloud detection is off.")
+        #expect(presentation.indicator == .finished(hasFailures: true))
+    }
+
     private func makePresentation(
         state: AdFreePassQueueState,
         activeEpisodeID: String? = nil,
         activeEpisodeTitle: String? = nil,
+        activeItemMode: AdDetectionMode? = nil,
         currentStage: EpisodeAdFreePassStage? = nil,
         completedCount: Int = 0,
         failedCount: Int = 0,
@@ -198,6 +257,7 @@ struct AdDetectionQueuePresentationTests {
                 activeEpisodeID: activeEpisodeID,
                 activeEpisodeTitle: activeEpisodeTitle,
                 activeArtworkURL: nil,
+                activeItemMode: activeItemMode,
                 currentStage: currentStage,
                 finishedItemCount: completedCount + failedCount,
                 totalItemCount: completedCount + failedCount

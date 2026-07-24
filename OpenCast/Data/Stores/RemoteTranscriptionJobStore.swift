@@ -74,31 +74,46 @@ final class RemoteTranscriptionJobStore {
 
     // MARK: Persisted job references
 
-    /// The stable reference for an episode, minting a new client request ID
-    /// only when none is persisted (duplicate submits attach server-side).
-    func reference(for episodeID: String) -> RemoteTranscriptionJobReference {
-        if let existing = references().first(where: { $0.episodeID == episodeID }) {
+    /// The stable reference for an episode and purpose, minting a new client
+    /// request ID only when none is persisted (duplicate submits attach
+    /// server-side). Purposes are keyed separately so a detect-ads pass never
+    /// attaches to a plain Transcribe Remotely job.
+    func reference(
+        for episodeID: String,
+        purpose: RemoteTranscriptionJobPurpose = .transcription
+    ) -> RemoteTranscriptionJobReference {
+        if let existing = references().first(where: {
+            $0.episodeID == episodeID && $0.resolvedPurpose == purpose
+        }) {
             return existing
         }
         let reference = RemoteTranscriptionJobReference(
             episodeID: episodeID,
             clientRequestID: UUID().uuidString.lowercased(),
             jobID: nil,
-            createdAt: .now
+            createdAt: .now,
+            purpose: purpose
         )
         persist(reference)
         return reference
     }
 
-    func attachJob(id jobID: String, episodeID: String) {
-        var reference = reference(for: episodeID)
+    func attachJob(
+        id jobID: String,
+        episodeID: String,
+        purpose: RemoteTranscriptionJobPurpose = .transcription
+    ) {
+        var reference = reference(for: episodeID, purpose: purpose)
         reference.jobID = jobID
         persist(reference)
     }
 
-    func clearReference(for episodeID: String) {
+    func clearReference(
+        for episodeID: String,
+        purpose: RemoteTranscriptionJobPurpose = .transcription
+    ) {
         var all = references()
-        all.removeAll { $0.episodeID == episodeID }
+        all.removeAll { $0.episodeID == episodeID && $0.resolvedPurpose == purpose }
         write(all)
     }
 
@@ -111,7 +126,10 @@ final class RemoteTranscriptionJobStore {
 
     private func persist(_ reference: RemoteTranscriptionJobReference) {
         var all = references()
-        all.removeAll { $0.episodeID == reference.episodeID }
+        all.removeAll {
+            $0.episodeID == reference.episodeID
+                && $0.resolvedPurpose == reference.resolvedPurpose
+        }
         all.append(reference)
         write(all)
     }

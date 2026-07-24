@@ -9,14 +9,20 @@ struct EpisodeHeroHeaderView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            ArtworkPlaceholder(
-                title: episode.podcastTitle,
-                imageURL: episode.artworkURL,
-                size: artworkLength,
-                cacheKind: .episode,
-                preview: episode.artworkPreview,
-                onPreviewResolved: onPreviewResolved
-            )
+            NavigationLink(value: AppRoute.episodeArtwork(id: episode.episodeID)) {
+                ArtworkPlaceholder(
+                    title: episode.podcastTitle,
+                    imageURL: episode.artworkURL,
+                    size: artworkLength,
+                    cacheKind: .episode,
+                    preview: episode.artworkPreview,
+                    onPreviewResolved: onPreviewResolved
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("View Episode Artwork")
+            .accessibilityHint("Opens a zoomable artwork view")
+            .accessibilityIdentifier("Episode Artwork")
 
             VStack(spacing: 6) {
                 Text(episode.title)

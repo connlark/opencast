@@ -135,6 +135,10 @@ pub struct PhaseTimestamps {
 pub struct JobStatus {
     pub job_id: String,
     pub state: String,
+    /// Echo of the effective chained-ad-detection flag (first create wins on
+    /// dedupe, so a re-send with a different flag sees the divergence here).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ad_analysis_requested: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub episode_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -198,6 +202,17 @@ pub struct JobCreateRequest {
     pub language_code: Option<String>,
     #[serde(default)]
     pub source_identity: Option<SourceIdentity>,
+    /// Chain server-side ad detection after stitching (requires a non-empty
+    /// `podcast_id`); the transcription outcome and pricing are unchanged.
+    #[serde(default)]
+    pub ad_analysis_requested: bool,
+    #[serde(default)]
+    pub podcast_id: Option<String>,
+    /// Prompt context only; optional, never logged, erased with the record.
+    #[serde(default)]
+    pub episode_title: Option<String>,
+    #[serde(default)]
+    pub podcast_title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

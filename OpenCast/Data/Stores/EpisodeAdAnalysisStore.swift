@@ -16,8 +16,9 @@ final class EpisodeAdAnalysisStore {
     @ObservationIgnored private let resumeTTL: TimeInterval
     @ObservationIgnored private let resumeInitialPollAfter: TimeInterval
     @ObservationIgnored private let pollingSleep: @Sendable (Duration) async throws -> Void
+    @ObservationIgnored private let preparationGate: @Sendable () async throws -> Void
     @ObservationIgnored private var activeTask: Task<Void, Never>?
-    @ObservationIgnored private var activeEpisodeID: String?
+    private var activeEpisodeID: String?
     @ObservationIgnored private var activeRunID: UUID?
     @ObservationIgnored private let stateChanges = StoreChangeNotifier()
     @ObservationIgnored var onEpisodeStateChanged: ((String) -> Void)?
@@ -25,7 +26,8 @@ final class EpisodeAdAnalysisStore {
     init(
         fileStore: EpisodeAdAnalysisFileStore = EpisodeAdAnalysisFileStore(),
         configuration: AdAnalysisBackendConfiguration = .current,
-        transport: any EpisodeAdAnalysisHTTPTransport & AppAttestHTTPTransport = URLSession.shared
+        transport: any EpisodeAdAnalysisHTTPTransport & AppAttestHTTPTransport = URLSession.shared,
+        preparationGate: @escaping @Sendable () async throws -> Void = {}
     ) {
         client = URLSessionEpisodeAdAnalysisClient(
             configuration: configuration,
@@ -39,6 +41,7 @@ final class EpisodeAdAnalysisStore {
         pollingSleep = { duration in
             try await Task.sleep(for: duration)
         }
+        self.preparationGate = preparationGate
     }
 
     init(
@@ -50,7 +53,8 @@ final class EpisodeAdAnalysisStore {
         resumeInitialPollAfter: TimeInterval = 1,
         pollingSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
             try await Task.sleep(for: duration)
-        }
+        },
+        preparationGate: @escaping @Sendable () async throws -> Void = {}
     ) {
         self.client = client
         self.fileStore = fileStore
@@ -59,6 +63,7 @@ final class EpisodeAdAnalysisStore {
         self.resumeTTL = resumeTTL
         self.resumeInitialPollAfter = resumeInitialPollAfter
         self.pollingSleep = pollingSleep
+        self.preparationGate = preparationGate
     }
 
     deinit {
@@ -69,8 +74,16 @@ final class EpisodeAdAnalysisStore {
         analysisUnavailableMessage == nil
     }
 
+    var analysisStartUnavailableMessage: String? {
+        analysisUnavailableMessage
+    }
+
     var hasActiveJob: Bool {
         activeTask != nil
+    }
+
+    func isRunning(for episodeID: String) -> Bool {
+        activeEpisodeID == episodeID && activeTask != nil
     }
 
     var changeSequence: Int {
@@ -137,12 +150,55 @@ final class EpisodeAdAnalysisStore {
             for: transcriptDocument,
             segments: segments
         )
-        return isCurrentAnalysisDocument(
+        return Self.isCurrentAnalysisDocument(
             analysisDocument,
             for: transcriptDocument,
             transcriptFingerprint: fingerprint,
             transcriptSegmentCount: segments.count
         )
+    }
+
+    /// Normalizing and fingerprinting a full transcript scales with episode
+    /// length; this variant keeps that work off the caller's actor.
+    @concurrent
+    func isCurrentAnalysisDocumentOffCaller(
+        _ analysisDocument: EpisodeAdAnalysisDocument,
+        for transcriptDocument: EpisodeTranscriptDocument
+    ) async -> Bool {
+        let segments = OpenCastTranscriptSegmentNormalizer.normalized(transcriptDocument.segments)
+        let fingerprint = fileStore.transcriptFingerprint(
+            for: transcriptDocument,
+            segments: segments
+        )
+        return Self.isCurrentAnalysisDocument(
+            analysisDocument,
+            for: transcriptDocument,
+            transcriptFingerprint: fingerprint,
+            transcriptSegmentCount: segments.count
+        )
+    }
+
+    func hasCurrentCompletedAnalysis(
+        for transcriptDocument: EpisodeTranscriptDocument
+    ) async -> Bool {
+        guard let analysisRecord = record(for: transcriptDocument.episodeID),
+              analysisRecord.state == .completed
+        else {
+            return false
+        }
+
+        let recordStamp = analysisRecord.updatedAt
+        guard let analysisDocument = try? await loadDocument(
+            for: transcriptDocument.episodeID
+        ) else {
+            return false
+        }
+        let isCurrent = await isCurrentAnalysisDocumentOffCaller(
+            analysisDocument,
+            for: transcriptDocument
+        )
+        return record(for: transcriptDocument.episodeID)?.updatedAt == recordStamp
+            && isCurrent
     }
 
     func jobState(
@@ -151,6 +207,9 @@ final class EpisodeAdAnalysisStore {
     ) -> EpisodeAdAnalysisJobState {
         guard let document else {
             return .unavailable("Transcript unavailable.")
+        }
+        if isRunning(for: document.episodeID) {
+            return .running
         }
         guard transcriptState == .completed else {
             return .unavailable(EpisodeAdAnalysisError.transcriptNotCompleted.localizedDescription)
@@ -190,7 +249,7 @@ final class EpisodeAdAnalysisStore {
             transcriptFingerprint: fingerprint
         )
         let hasCurrentCompletedAnalysis = analysisDocument.map {
-            isCurrentAnalysisDocument(
+            Self.isCurrentAnalysisDocument(
                 $0,
                 for: document,
                 transcriptFingerprint: fingerprint,
@@ -268,41 +327,8 @@ final class EpisodeAdAnalysisStore {
             recordFailure(EpisodeAdAnalysisError.transcriptNotCompleted, episodeID: document.episodeID)
             return
         }
-        let segments = normalizedSegments(for: document)
-        guard !segments.isEmpty else {
-            recordFailure(EpisodeAdAnalysisError.transcriptNotCompleted, episodeID: document.episodeID)
-            return
-        }
 
         clearFailure(episodeID: document.episodeID)
-        let fingerprint = fileStore.transcriptFingerprint(for: document, segments: segments)
-        let relativePath = fileStore.relativePath(
-            episodeID: document.episodeID,
-            transcriptFingerprint: fingerprint
-        )
-        do {
-            try upsertRecord(
-                episodeID: document.episodeID,
-                podcastID: document.podcastID,
-                transcriptFingerprint: fingerprint,
-                transcriptUpdatedAt: document.updatedAt,
-                transcriptSegmentCount: segments.count,
-                transcriptState: .completed,
-                state: .running,
-                analysisRelativePath: relativePath,
-                model: "",
-                policy: "",
-                spanCount: 0,
-                warningCount: 0,
-                errorMessage: nil,
-                modelContext: modelContext
-            )
-            try commit(episodeID: document.episodeID, modelContext: modelContext, resort: true)
-        } catch {
-            recordFailure(error, episodeID: document.episodeID)
-            return
-        }
-
         let runID = UUID()
         activeEpisodeID = document.episodeID
         activeRunID = runID
@@ -310,10 +336,48 @@ final class EpisodeAdAnalysisStore {
             await runAnalysis(
                 runID: runID,
                 transcript: document,
-                segments: segments,
                 modelContext: modelContext
             )
         }
+        stateChanges.notify()
+        notifyEpisodeStateChanged(document.episodeID)
+        SoundLabResponsivenessDiagnostics.mark(
+            "analysis-store-reports-running",
+            episodeID: document.episodeID
+        )
+    }
+
+    /// Durable import of a server-produced completed analysis (cloud detect
+    /// pass): writes the document and upserts a completed record through the
+    /// same path a device analysis uses. Mirror of
+    /// `EpisodeTranscriptionStore.importRemoteTranscript`.
+    func importCompletedAnalysis(
+        _ document: EpisodeAdAnalysisDocument,
+        modelContext: ModelContext
+    ) throws {
+        let relativePath = fileStore.relativePath(
+            episodeID: document.episodeID,
+            transcriptFingerprint: document.transcriptFingerprint
+        )
+        try fileStore.write(document, relativePath: relativePath)
+        try upsertRecord(
+            episodeID: document.episodeID,
+            podcastID: document.podcastID,
+            transcriptFingerprint: document.transcriptFingerprint,
+            transcriptUpdatedAt: document.transcriptUpdatedAt,
+            transcriptSegmentCount: document.transcriptSegmentCount,
+            transcriptState: document.transcriptState,
+            state: .completed,
+            analysisRelativePath: relativePath,
+            model: document.model,
+            policy: document.policy,
+            spanCount: document.spans.count,
+            warningCount: document.warnings.count,
+            errorMessage: nil,
+            modelContext: modelContext
+        )
+        try commit(episodeID: document.episodeID, modelContext: modelContext, resort: true)
+        clearFailure(episodeID: document.episodeID)
     }
 
     func deleteAnalysis(episodeID: String, modelContext: ModelContext) {
@@ -381,7 +445,6 @@ final class EpisodeAdAnalysisStore {
     private func runAnalysis(
         runID: UUID,
         transcript document: EpisodeTranscriptDocument,
-        segments: [OpenCastTranscriptSegment],
         modelContext: ModelContext
     ) async {
         defer {
@@ -397,38 +460,64 @@ final class EpisodeAdAnalysisStore {
             return
         }
 
-        let fingerprint = fileStore.transcriptFingerprint(for: document, segments: segments)
-        let relativePath = fileStore.relativePath(
-            episodeID: document.episodeID,
-            transcriptFingerprint: fingerprint
-        )
-
+        var relativePath: String?
         do {
-            let request = makeRequest(
-                transcript: document,
-                segments: segments,
-                fingerprint: fingerprint,
-                requestID: UUID().uuidString
+            let preparation = try await prepareAnalysis(transcript: document)
+            relativePath = preparation.relativePath
+            try Task.checkCancellation()
+            guard ownsActiveRun(episodeID: document.episodeID, runID: runID) else {
+                throw CancellationError()
+            }
+
+            try upsertRecord(
+                episodeID: document.episodeID,
+                podcastID: document.podcastID,
+                transcriptFingerprint: preparation.fingerprint,
+                transcriptUpdatedAt: document.updatedAt,
+                transcriptSegmentCount: preparation.segments.count,
+                transcriptState: .completed,
+                state: .running,
+                analysisRelativePath: preparation.relativePath,
+                model: "",
+                policy: "",
+                spanCount: 0,
+                warningCount: 0,
+                errorMessage: nil,
+                modelContext: modelContext
             )
-            let submitOutcome = try await client.analyze(request)
+            try commit(episodeID: document.episodeID, modelContext: modelContext, resort: true)
+
+            let submitOutcome: EpisodeAdAnalysisSubmitOutcome
+            do {
+                submitOutcome = try await client.analyze(preparation.request)
+            } catch is URLError {
+                // A lost submit response is recovered through the poll loop:
+                // the job ID is the transcript fingerprint, so it is known
+                // without the response. If the submit landed, polling attaches
+                // to the running job (or re-reads the completed result, which
+                // the worker serves idempotently until its TTL purge); if it
+                // never landed, the poll's job_not_found resubmit path starts
+                // it fresh.
+                submitOutcome = .accepted(jobID: preparation.fingerprint, pollAfter: 1)
+            }
             let response: EpisodeAdAnalysisAPIResponse
             switch submitOutcome {
             case .completed(let completedResponse):
                 response = completedResponse
             case .accepted(let jobID, let pollAfter):
-                guard jobID == fingerprint else {
+                guard jobID == preparation.fingerprint else {
                     throw Self.jobIDMismatchError()
                 }
                 try persistAcceptedJob(
                     episodeID: document.episodeID,
-                    fingerprint: fingerprint,
+                    fingerprint: preparation.fingerprint,
                     modelContext: modelContext
                 )
                 response = try await pollUntilCompleted(
                     jobID: jobID,
                     initialPollAfter: pollAfter,
                     resubmit: { [client] in
-                        try await client.analyze(request)
+                        try await client.analyze(preparation.request)
                     }
                 )
             }
@@ -440,13 +529,13 @@ final class EpisodeAdAnalysisStore {
             let analysisDocument = makeDocument(
                 transcript: document,
                 response: response,
-                fingerprint: fingerprint,
-                transcriptSegmentCount: segments.count
+                fingerprint: preparation.fingerprint,
+                transcriptSegmentCount: preparation.segments.count
             )
             try completeAnalysis(
                 episodeID: document.episodeID,
-                fingerprint: fingerprint,
-                relativePath: relativePath,
+                fingerprint: preparation.fingerprint,
+                relativePath: preparation.relativePath,
                 document: analysisDocument,
                 response: response,
                 modelContext: modelContext
@@ -462,6 +551,49 @@ final class EpisodeAdAnalysisStore {
                 modelContext: modelContext
             )
         }
+    }
+
+    @concurrent
+    private func prepareAnalysis(
+        transcript document: EpisodeTranscriptDocument
+    ) async throws -> EpisodeAdAnalysisPreparation {
+        try await preparationGate()
+        try Task.checkCancellation()
+        SoundLabResponsivenessDiagnostics.mark(
+            "analysis-normalize-fingerprint-begin",
+            episodeID: document.episodeID
+        )
+
+        let segments = OpenCastTranscriptSegmentNormalizer.normalized(document.segments)
+        guard !segments.isEmpty else {
+            throw EpisodeAdAnalysisError.transcriptNotCompleted
+        }
+        let fingerprint = fileStore.transcriptFingerprint(
+            for: document,
+            segments: segments
+        )
+        let relativePath = fileStore.relativePath(
+            episodeID: document.episodeID,
+            transcriptFingerprint: fingerprint
+        )
+        let request = Self.makeRequest(
+            transcript: document,
+            segments: segments,
+            fingerprint: fingerprint,
+            requestID: UUID().uuidString
+        )
+        SoundLabResponsivenessDiagnostics.mark(
+            "analysis-normalize-fingerprint-end",
+            episodeID: document.episodeID
+        )
+        try Task.checkCancellation()
+
+        return EpisodeAdAnalysisPreparation(
+            segments: segments,
+            fingerprint: fingerprint,
+            relativePath: relativePath,
+            request: request
+        )
     }
 
     private func startResumingAnalysis(
@@ -660,13 +792,13 @@ final class EpisodeAdAnalysisStore {
         EpisodeAdAnalysisHTTPError(statusCode: -1, code: "job_id_mismatch", detail: nil)
     }
 
-    private func makeRequest(
+    private nonisolated static func makeRequest(
         transcript document: EpisodeTranscriptDocument,
         segments: [OpenCastTranscriptSegment],
         fingerprint: String,
         requestID: String
     ) -> EpisodeAdAnalysisAPIRequest {
-        return EpisodeAdAnalysisAPIRequest(
+        EpisodeAdAnalysisAPIRequest(
             schemaVersion: EpisodeAdAnalysisContract.schemaVersion,
             requestID: requestID,
             episodeID: document.episodeID,
@@ -766,15 +898,19 @@ final class EpisodeAdAnalysisStore {
         // A completed record from a pre-`promo_ad_breaks_v2` policy is
         // outdated even when its transcript still matches: the old contract's
         // cue-fragment spans must never render or skip again.
+        // Whole-second comparison: the transcript's `updatedAt` loses its
+        // fractional seconds on the `.iso8601` disk round trip, while the
+        // SwiftData record keeps full precision, so exact equality would
+        // brand a record seeded from an in-memory document permanently stale.
         return (record.state != .completed || record.policy == EpisodeAdAnalysisContract.expectedPolicy)
             && record.transcriptFingerprint == transcriptFingerprint
-            && record.transcriptUpdatedAt == document.updatedAt
+            && record.transcriptUpdatedAt.truncatedToWholeSeconds == document.updatedAt.truncatedToWholeSeconds
             && record.transcriptSegmentCount == transcriptSegmentCount
             && record.transcriptState == .completed
             && fileStore.documentExists(relativePath: record.analysisRelativePath)
     }
 
-    private func isCurrentAnalysisDocument(
+    private nonisolated static func isCurrentAnalysisDocument(
         _ analysisDocument: EpisodeAdAnalysisDocument,
         for transcriptDocument: EpisodeTranscriptDocument,
         transcriptFingerprint: String,
@@ -782,7 +918,8 @@ final class EpisodeAdAnalysisStore {
     ) -> Bool {
         analysisDocument.policy == EpisodeAdAnalysisContract.expectedPolicy
             && analysisDocument.transcriptFingerprint == transcriptFingerprint
-            && analysisDocument.transcriptUpdatedAt == transcriptDocument.updatedAt
+            && analysisDocument.transcriptUpdatedAt.truncatedToWholeSeconds
+                == transcriptDocument.updatedAt.truncatedToWholeSeconds
             && analysisDocument.transcriptSegmentCount == transcriptSegmentCount
             && analysisDocument.transcriptState == .completed
     }

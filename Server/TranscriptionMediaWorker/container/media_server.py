@@ -6,10 +6,12 @@ Runs inside the no-internet Container. The only egress is plain HTTP to
 bucket calls scoped to the job scratch prefixes. No model, no customer
 route, no other network.
 
-The chunk contract is the immutable bakeoff contract (see
+The preferred chunk contract is the immutable bakeoff contract (see
 scripts/remote-transcription-bakeoff/make_chunks.py): ffmpeg input-side time
 seek plus MP3 stream copy on valid packet/frame boundaries, 300 s requested
 chunks, 2 s overlap, 298 s step, metadata stripped, bitexact, no Xing/ID3.
+Chunks above the proven model-input envelope are deterministically normalized
+to the pinned speech profile before upload.
 """
 
 from __future__ import annotations
@@ -30,6 +32,9 @@ from pathlib import Path
 R2_BASE = os.environ.get("R2_BASE", "http://r2.internal")
 PORT = 8080
 MAX_SOURCE_BYTES = 512 * 1024 * 1024
+STREAM_COPY_PROFILE = "mp3-stream-copy-v1"
+NORMALIZED_PROFILE = "mp3-cbr-128k-mono-44100-v1"
+MIXED_PROFILE = "mp3-mixed-stream-copy-and-cbr-128k-mono-44100-v1"
 
 
 class MediaError(Exception):
@@ -128,6 +133,46 @@ def extract_chunk(source: Path, out: Path, start: float, duration: float) -> Non
         raise MediaError(422, "chunk_extraction_failed")
 
 
+def normalize_chunk(source: Path, out: Path, start: float, duration: float) -> None:
+    completed = subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
+            "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "44100",
+            "-c:a", "libmp3lame", "-b:a", "128k",
+            "-map_metadata", "-1", "-map_chapters", "-1",
+            "-fflags", "+bitexact", "-write_xing", "0", "-id3v2_version", "0",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0 or not out.exists():
+        # Probe and stream-copy already established that this is readable MP3.
+        # A missing encoder or a failed re-encode is service infrastructure,
+        # not an unsupported customer media format.
+        raise MediaError(500, "chunk_normalization_failed")
+
+
+def extract_bounded_chunk(
+    source: Path,
+    out: Path,
+    start: float,
+    duration: float,
+    max_chunk_raw_bytes: int,
+) -> str:
+    extract_chunk(source, out, start, duration)
+    if 0 < out.stat().st_size <= max_chunk_raw_bytes:
+        return STREAM_COPY_PROFILE
+
+    out.unlink(missing_ok=True)
+    normalize_chunk(source, out, start, duration)
+    if out.stat().st_size <= 0 or out.stat().st_size > max_chunk_raw_bytes:
+        out.unlink(missing_ok=True)
+        raise MediaError(413, "normalized_chunk_too_large")
+    return NORMALIZED_PROFILE
+
+
 def chunk(payload: dict) -> dict:
     source_key = payload["source_key"]
     chunk_prefix = payload["chunk_prefix"]
@@ -149,18 +194,19 @@ def chunk(payload: dict) -> dict:
 
         chunks = []
         manifest_hasher = hashlib.sha256()
+        audio_profiles = set()
         start = 0.0
         index = 0
         while start < duration:
             out = workpath / f"chunk-{index:04d}.mp3"
-            extract_chunk(source, out, quantized(start), quantized(chunk_seconds))
+            audio_profiles.add(extract_bounded_chunk(
+                source,
+                out,
+                quantized(start),
+                quantized(chunk_seconds),
+                max_chunk_raw_bytes,
+            ))
             byte_count = out.stat().st_size
-            if byte_count <= 0:
-                raise MediaError(422, "chunk_extraction_failed")
-            if byte_count > max_chunk_raw_bytes:
-                # Pass 0 rejects oversized stream-copy chunks to local
-                # fallback rather than widening the proven AI envelope.
-                raise MediaError(413, "chunk_too_large")
             chunk_info = ffprobe(out)
             actual_duration = float(chunk_info.get("format", {}).get("duration", 0.0))
             sha256 = hashlib.sha256(out.read_bytes()).hexdigest()
@@ -182,7 +228,17 @@ def chunk(payload: dict) -> dict:
             index += 1
             start += step_seconds
 
-        return {"chunks": chunks, "manifest_sha256": manifest_hasher.hexdigest()}
+        if audio_profiles == {STREAM_COPY_PROFILE}:
+            profile = STREAM_COPY_PROFILE
+        elif audio_profiles == {NORMALIZED_PROFILE}:
+            profile = NORMALIZED_PROFILE
+        else:
+            profile = MIXED_PROFILE
+        return {
+            "chunks": chunks,
+            "manifest_sha256": manifest_hasher.hexdigest(),
+            "chunk_audio_profile": profile,
+        }
 
 
 class Handler(BaseHTTPRequestHandler):

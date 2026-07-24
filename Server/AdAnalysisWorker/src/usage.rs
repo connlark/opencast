@@ -15,6 +15,9 @@ pub struct UsageAdmitRequest {
 pub enum UsageLimitProfile {
     Bearer,
     AppAttestKey,
+    /// Internal transcription-chained requests, keyed per transcription
+    /// account (`transcription-account:{token_hash(account_id)}`).
+    TranscriptionAccount,
     Global,
 }
 
@@ -23,6 +26,7 @@ impl UsageLimitProfile {
         match self {
             UsageLimitProfile::Bearer => UsageLimits::BEARER,
             UsageLimitProfile::AppAttestKey => UsageLimits::APP_ATTEST_KEY,
+            UsageLimitProfile::TranscriptionAccount => UsageLimits::TRANSCRIPTION_ACCOUNT,
             UsageLimitProfile::Global => UsageLimits::GLOBAL,
         }
     }

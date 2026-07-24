@@ -7,6 +7,14 @@ pub const APP_ATTEST_REGISTER_PATH: &str = "/v1/app-attest/register";
 pub const ANALYZE_TRANSCRIPT_PATH: &str = "/v1/ad-analysis/transcript";
 pub const AD_ANALYSIS_JOBS_PREFIX: &str = "/v1/ad-analysis/jobs/";
 
+/// Internal surface for the RemoteTranscriptionWorker service binding
+/// (PurchaseWorker convention: a `.internal` host reachable only over the
+/// binding). The public host 404s `/internal/*`; the internal host resolves
+/// nothing else.
+pub const INTERNAL_HOST: &str = "opencast-ad-analysis.internal";
+pub const INTERNAL_ANALYZE_PATH: &str = "/internal/v1/analyze";
+pub const INTERNAL_JOBS_PREFIX: &str = "/internal/v1/jobs/";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     pub name: &'static str,
@@ -27,9 +35,25 @@ pub enum RouteAction {
     AppAttestRegister,
     AnalyzeTranscript,
     PollJob { job_id: String },
+    InternalAnalyze,
+    InternalPollJob { job_id: String },
 }
 
-pub fn route_request(method: &str, path: &str, enabled: bool) -> RouteAction {
+pub fn route_request(
+    method: &str,
+    path: &str,
+    enabled: bool,
+    internal: bool,
+    internal_enabled: bool,
+) -> RouteAction {
+    if internal {
+        return route_internal(method, path, internal_enabled);
+    }
+
+    if path.starts_with("/internal/") {
+        return RouteAction::Static(json_response(404, ErrorResponse::new("not_found")));
+    }
+
     if path == HEALTH_PATH {
         return RouteAction::Static(handle_health(method));
     }
@@ -51,6 +75,35 @@ pub fn route_request(method: &str, path: &str, enabled: bool) -> RouteAction {
     }
 
     RouteAction::Static(json_response(404, ErrorResponse::new("not_found")))
+}
+
+/// Internal-host routing: only the two binding paths exist, POST only, both
+/// behind the `INTERNAL_AD_ANALYSIS_ENABLED` kill switch (independent of the
+/// public flag). Everything else 404s.
+fn route_internal(method: &str, path: &str, internal_enabled: bool) -> RouteAction {
+    let action = if path == INTERNAL_ANALYZE_PATH {
+        Some(RouteAction::InternalAnalyze)
+    } else {
+        path.strip_prefix(INTERNAL_JOBS_PREFIX)
+            .and_then(|rest| rest.strip_suffix("/poll"))
+            .filter(|job_id| crate::job::valid_job_id(job_id))
+            .map(|job_id| RouteAction::InternalPollJob {
+                job_id: job_id.to_string(),
+            })
+    };
+    let Some(action) = action else {
+        return RouteAction::Static(json_response(404, ErrorResponse::new("not_found")));
+    };
+    if method != "POST" {
+        return RouteAction::Static(method_not_allowed("POST"));
+    }
+    if !internal_enabled {
+        return RouteAction::Static(json_response(
+            503,
+            ErrorResponse::new("ad_analysis_disabled"),
+        ));
+    }
+    action
 }
 
 pub fn json_response(status: u16, body: ErrorResponse) -> StaticResponse {

@@ -47,9 +47,19 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
             )
         case .analyzing:
             min(975, 910 + creepUnits(stageElapsed: stageElapsed))
+        case .cloudQueued:
+            min(250, 20 + creepUnits(stageElapsed: stageElapsed))
+        case .cloudTranscribing(let progress):
+            min(
+                900,
+                250 + Int64(((progress?.fractionCompleted ?? 0) * 650).rounded(.down))
+                    + creepUnits(stageElapsed: stageElapsed)
+            )
+        case .cloudDetectingAds:
+            min(975, 910 + creepUnits(stageElapsed: stageElapsed))
         case .completed:
             1_000
-        case .failed, .unavailable, .interrupted:
+        case .failed, .unavailable, .interrupted, .cloudUnavailable:
             currentUnits
         }
     }

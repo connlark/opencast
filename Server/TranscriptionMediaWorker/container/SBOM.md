@@ -1,10 +1,11 @@
 # Media Container SBOM
 
-Generated 2026-07-16 from the built image (podman, digest-pinned base).
+Generated 2026-07-19 from a linux/amd64 image.
 
-- Base: docker.io/library/python:3.12-slim@sha256:55842c72c6b3584d06ec84c731fc516b30b8a53ad262ebd085e47ab568b3bfc1
+- Image: registry.cloudflare.com/REPLACE_WITH_ACCOUNT_HASH/your-transcription-media-container:REPLACE_WITH_TAG@sha256:REPLACE_WITH_IMAGE_DIGEST
+- Base: docker.io/library/python:3.12-slim@sha256:cab2dbf575e971934a81e4622f5aba17aa7929719bd7e31033a3a83b97fd0464
 - ffmpeg: 7:7.1.5-0+deb13u1 (Debian trixie)
-- Image build: `podman build container` (WRANGLER_DOCKER_BIN=podman for deploys)
+- Image build: `podman build --format=docker --platform=linux/amd64 container`
 
 ## Debian packages
 
@@ -30,7 +31,7 @@ fontconfig-config 2.15.0-2.3
 fonts-dejavu-core 2.37-8
 fonts-dejavu-mono 2.37-8
 gcc-14-base 14.2.0-19
-grep 3.11-4+b1
+grep 3.11-4
 gzip 1.13-1
 hostname 3.25
 init-system-helpers 1.69~deb13u1
@@ -83,6 +84,7 @@ libdecor-0-0 0.2.2-2
 libdeflate0 1.23-2
 libdrm-amdgpu1 2.4.124-2
 libdrm-common 2.4.124-2
+libdrm-intel1 2.4.124-2
 libdrm2 2.4.124-2
 libdvdnav4 6.1.1-3+b1
 libdvdread8t64 6.1.3-2
@@ -160,6 +162,7 @@ libpam0g 1.7.0-5
 libpango-1.0-0 1.56.3-1
 libpangocairo-1.0-0 1.56.3-1
 libpangoft2-1.0-0 1.56.3-1
+libpciaccess0 0.17-3+b3
 libpcre2-8-0 10.46-1~deb13u1
 libpgm-5.3-0t64 5.3.128~dfsg-2.1+b1
 libpixman-1-0 0.44.0-3
@@ -211,7 +214,7 @@ libthai-data 0.1.29-2
 libthai0 0.1.29-2+b1
 libtheoradec1 1.2.0~alpha1+dfsg-6
 libtheoraenc1 1.2.0~alpha1+dfsg-6
-libtiff6 4.7.0-3+deb13u2
+libtiff6 4.7.0-3+deb13u3
 libtinfo6 6.5+20250216-2
 libtwolame0 0.4.0-2+b2
 libudev1 257.13-1~deb13u1
@@ -228,6 +231,7 @@ libvidstab1.1 1.1.0-2+b2
 libvorbis0a 1.3.7-3
 libvorbisenc2 1.3.7-3
 libvorbisfile3 1.3.7-3
+libvpl2 1:2.14.0-1+b1
 libvpx9 1.15.0-2.1+deb13u1
 libvulkan1 1.4.309.0-1
 libwayland-client0 1.23.1-3

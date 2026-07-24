@@ -20,7 +20,7 @@ struct EpisodeRowView: View {
                 imageURL: episode.artworkURL,
                 size: 56,
                 cacheKind: .episode,
-                preview: episode.artworkPreview,
+                preview: appModel.library.artworkPreview(for: episode),
                 onPreviewResolved: updateArtworkPreview
             )
 

@@ -17,16 +17,10 @@ struct NowPlayingOverlayView: View {
     @State private var isTrackingDismissDrag = false
     @State private var dismissDragLatchBaselineHeight: CGFloat = 0
     @State private var isFinishingDismissal = false
-    @State private var isPeelInteractionActive = false
+    @State private var isSoundLabInteractionActive = false
     @State private var isContentScrolledToTop = true
-    @State private var prewarmsPeelRenderer = false
-    @State private var peelPrewarmRequestID = 0
-    @State private var suppressesColdPeelStart = false
-    @State private var peelRendererPrewarmTask: Task<Void, Never>?
 
     private static let accessibilityTitle = "Now Playing"
-    private static let peelPrewarmIdleDelay: TimeInterval = 0.6
-    private static let postForegroundPeelPrewarmDelay: TimeInterval = 1.25
 
     var body: some View {
         GeometryReader { proxy in
@@ -46,11 +40,9 @@ struct NowPlayingOverlayView: View {
                     bottomContentPadding: proxy.safeAreaInsets.bottom + bottomContentPadding,
                     topContentPadding: topContentPadding(in: proxy),
                     moreMenuTopPadding: moreMenuTopPadding(in: proxy),
-                    isPeelInteractionActive: $isPeelInteractionActive,
+                    isSoundLabInteractionActive: $isSoundLabInteractionActive,
                     isContentScrolledToTop: $isContentScrolledToTop,
                     isTrackingDismissDrag: isTrackingDismissDrag,
-                    prewarmsPeelRenderer: prewarmsPeelRenderer,
-                    allowsPeelStart: !suppressesColdPeelStart,
                     onDismiss: { dismiss(containerHeight: proxy.size.height) },
                     onOpenEpisode: { openEpisode(containerHeight: proxy.size.height) },
                     onOpenPodcast: { openPodcast(containerHeight: proxy.size.height) }
@@ -89,7 +81,7 @@ struct NowPlayingOverlayView: View {
                 resetPresentedEpisode(isPresented: isPresented, containerHeight: proxy.size.height)
             }
             .onChange(of: scenePhase) { _, newPhase in
-                handleScenePhaseChange(newPhase, isPresented: isPresented)
+                handleScenePhaseChange(newPhase)
             }
             .opacity(isPresented ? 1 : 0)
         }
@@ -186,18 +178,13 @@ struct NowPlayingOverlayView: View {
     }
 
     private func prepareForPresentation(containerHeight: CGFloat) {
-        let prewarmRequestID = resetPeelRendererPrewarm()
-        suppressesColdPeelStart = false
-
         if reduceMotion {
             offsetY = 0
-            schedulePeelRendererPrewarm(requestID: prewarmRequestID)
             return
         }
 
         // Re-entry while already presented should not replay the card spring.
         guard offsetY != 0 else {
-            schedulePeelRendererPrewarm(requestID: prewarmRequestID)
             return
         }
 
@@ -210,17 +197,14 @@ struct NowPlayingOverlayView: View {
             offsetY = 0
         } completion: {
             nowPlayingProbeMark("card-settled")
-            schedulePeelRendererPrewarm(requestID: prewarmRequestID)
         }
     }
 
-    private func prepareForHiddenPrewarm(containerHeight: CGFloat) {
+    private func prepareForHiddenPresentation(containerHeight: CGFloat) {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             offsetY = reduceMotion ? 0 : containerHeight
-            resetPeelRendererPrewarm()
-            suppressesColdPeelStart = false
             resetOverlayInteractionState()
         }
     }
@@ -229,22 +213,17 @@ struct NowPlayingOverlayView: View {
         if isPresented {
             prepareForPresentation(containerHeight: containerHeight)
         } else {
-            prepareForHiddenPrewarm(containerHeight: containerHeight)
+            prepareForHiddenPresentation(containerHeight: containerHeight)
         }
     }
 
     private func resetPresentedEpisode(isPresented: Bool, containerHeight: CGFloat) {
-        let prewarmRequestID = resetPeelRendererPrewarm()
         let shouldKeepPresentedOffset = isPresented && offsetY == 0
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             offsetY = reduceMotion || shouldKeepPresentedOffset ? 0 : containerHeight
-            suppressesColdPeelStart = false
             resetOverlayInteractionState()
-        }
-        if isPresented {
-            schedulePeelRendererPrewarm(requestID: prewarmRequestID)
         }
     }
 
@@ -252,80 +231,17 @@ struct NowPlayingOverlayView: View {
         isTrackingDismissDrag = false
         dismissDragLatchBaselineHeight = 0
         isFinishingDismissal = false
-        isPeelInteractionActive = false
+        isSoundLabInteractionActive = false
         isContentScrolledToTop = true
     }
 
-    @discardableResult
-    private func resetPeelRendererPrewarm() -> Int {
-        cancelPeelPrewarmTasks()
-        peelPrewarmRequestID += 1
-        prewarmsPeelRenderer = false
-        return peelPrewarmRequestID
-    }
-
-    private func cancelPeelPrewarmTasks() {
-        peelRendererPrewarmTask?.cancel()
-        peelRendererPrewarmTask = nil
-    }
-
-    private func cancelPendingPeelPrewarmForDismissDrag() {
-        cancelPeelPrewarmTasks()
-        peelPrewarmRequestID += 1
-    }
-
-    private func schedulePeelRendererPrewarm(
-        requestID: Int,
-        delay: TimeInterval = Self.peelPrewarmIdleDelay
-    ) {
-        peelRendererPrewarmTask?.cancel()
-        nowPlayingProbeMark("peel-prewarm-scheduled")
-        peelRendererPrewarmTask = Task {
-            // Defer the Metal peel mount (~75ms shader + drawable-surface setup) to a
-            // quiet window after the entrance spring settles. Mounting it inside the
-            // presentation animation drops frames; on the static, settled card the
-            // one-time main-thread cost is imperceptible.
-            do {
-                try await Task.sleep(for: .seconds(delay))
-            } catch is CancellationError {
-                return
-            } catch {
-                return
-            }
-            finishPeelRendererPrewarm(requestID: requestID)
-        }
-    }
-
-    private func finishPeelRendererPrewarm(requestID: Int) {
-        guard requestID == peelPrewarmRequestID, offsetY == 0 else {
-            return
-        }
-
-        prewarmsPeelRenderer = true
-        suppressesColdPeelStart = false
-        nowPlayingProbeMark("peel-prewarm-finished")
-    }
-
-    private func handleScenePhaseChange(_ newPhase: ScenePhase, isPresented: Bool) {
+    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
         switch newPhase {
         case .inactive, .background:
             nowPlayingProbeMark("scene-exit")
-            suppressesColdPeelStart = true
-            resetPeelRendererPrewarm()
             resetOverlayInteractionState()
         case .active:
             nowPlayingProbeMark("scene-active")
-            guard isPresented else {
-                suppressesColdPeelStart = false
-                return
-            }
-
-            let prewarmRequestID = resetPeelRendererPrewarm()
-            suppressesColdPeelStart = true
-            schedulePeelRendererPrewarm(
-                requestID: prewarmRequestID,
-                delay: Self.postForegroundPeelPrewarmDelay
-            )
         @unknown default:
             break
         }
@@ -349,13 +265,11 @@ struct NowPlayingOverlayView: View {
         }
 
         if reduceMotion {
-            resetPeelRendererPrewarm()
             onDismissed()
             completion?()
             return
         }
 
-        resetPeelRendererPrewarm()
         isFinishingDismissal = true
         isTrackingDismissDrag = false
         dismissDragLatchBaselineHeight = 0
@@ -379,13 +293,12 @@ struct NowPlayingOverlayView: View {
 
             guard NowPlayingDragIntent.shouldStartCardDismiss(
                 translation: value.translation,
-                isPeelInteractionActive: isPeelInteractionActive
+                isSoundLabInteractionActive: isSoundLabInteractionActive
             ) else {
                 return
             }
 
             nowPlayingProbeMark("dismiss-drag-start")
-            cancelPendingPeelPrewarmForDismissDrag()
             isTrackingDismissDrag = true
             dismissDragLatchBaselineHeight = value.translation.height
         }
@@ -433,20 +346,12 @@ struct NowPlayingOverlayView: View {
         if shouldDismiss {
             dismiss(containerHeight: containerHeight)
         } else {
-            let prewarmRequestID = peelPrewarmRequestID
             guard !reduceMotion else {
-                if !prewarmsPeelRenderer {
-                    schedulePeelRendererPrewarm(requestID: prewarmRequestID)
-                }
                 return
             }
 
             withAnimation(springAnimation(response: 0.24, damping: 0.88)) {
                 offsetY = 0
-            } completion: {
-                if !prewarmsPeelRenderer {
-                    schedulePeelRendererPrewarm(requestID: prewarmRequestID)
-                }
             }
         }
     }

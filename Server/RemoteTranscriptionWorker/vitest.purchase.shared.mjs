@@ -69,6 +69,14 @@ export async function makePurchaseConfig({ include, extraBindings = {} }) {
                 status: 501,
               });
             },
+            // No purchase spec requests ad analysis; this stub exists only so
+            // the binding added by the cloud-mode ad-detection lane resolves
+            // (the pool refuses to start on an undefined service).
+            AD_ANALYSIS_WORKER() {
+              return new Response("ad analysis unavailable in purchase tests", {
+                status: 501,
+              });
+            },
             // The real compiled PurchaseWorker (auxiliary worker below).
             PURCHASE_WORKER: "purchase-worker-test",
           },

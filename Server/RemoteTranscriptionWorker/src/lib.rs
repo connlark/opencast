@@ -1,3 +1,4 @@
+pub mod ad_analysis;
 pub mod ai;
 pub mod auth;
 pub mod challenge_limits;
@@ -12,6 +13,7 @@ pub mod job;
 pub mod limiter;
 pub mod media;
 pub mod origin;
+pub mod result_validation;
 pub mod route;
 pub mod sigv4;
 pub mod stitch;

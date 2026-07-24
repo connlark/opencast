@@ -90,7 +90,7 @@ export default {
     // One small pinned instance; media work is sequential in pass 0. The
     // instance name tracks the image tag so an image rollout always gets a
     // fresh container instead of waiting out a sleepy old instance.
-    const response = await getContainer(env.MEDIA_CONTAINER, "media-pass0-5").fetch(request);
+    const response = await getContainer(env.MEDIA_CONTAINER, "media-pass0-6").fetch(request);
     if (response.status >= 500) {
       const body = await response.clone().text();
       console.error(`container ${url.pathname} -> ${response.status}: ${body.slice(0, 300)}`);

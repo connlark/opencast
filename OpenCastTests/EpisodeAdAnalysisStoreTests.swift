@@ -186,7 +186,9 @@ struct EpisodeAdAnalysisStoreTests {
         }
 
         store.startAnalysis(transcript: transcript, modelContext: context)
-        try? await Task.sleep(for: .milliseconds(20))
+        #expect(await waitUntil {
+            !store.hasActiveJob
+        })
 
         #expect(client.lastRequest == nil)
         #expect(store.record(for: transcript.episodeID) == nil)
@@ -303,6 +305,95 @@ struct EpisodeAdAnalysisStoreTests {
         #expect(!store.hasActiveJob)
     }
 
+    @Test("Store reports running while normalization and fingerprint preparation is held")
+    func reportsRunningDuringHeldPreparation() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let gate = AsyncTestGate()
+        let client = FakeEpisodeAdAnalysisClient()
+        let store = EpisodeAdAnalysisStore(
+            client: client,
+            fileStore: EpisodeAdAnalysisFileStore(baseDirectory: try makeTemporaryDirectory()),
+            preparationGate: {
+                await gate.wait()
+            }
+        )
+        let transcript = makeTranscriptDocument(episodeID: "ad-held-preparation")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+
+        #expect(store.hasActiveJob)
+        #expect(store.record(for: transcript.episodeID) == nil)
+        if case .running = store.jobState(for: transcript) {
+        } else {
+            Issue.record("Expected running while preparation is held.")
+        }
+        #expect(client.lastRequest == nil)
+
+        await gate.release()
+
+        #expect(await waitUntil {
+            store.record(for: transcript.episodeID)?.state == .completed
+        })
+    }
+
+    @Test("Cancellation during held preparation performs no request or persistence")
+    func cancellationDuringHeldPreparation() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let gate = AsyncTestGate()
+        let client = FakeEpisodeAdAnalysisClient()
+        let store = EpisodeAdAnalysisStore(
+            client: client,
+            fileStore: EpisodeAdAnalysisFileStore(baseDirectory: try makeTemporaryDirectory()),
+            preparationGate: {
+                await gate.wait()
+            }
+        )
+        let transcript = makeTranscriptDocument(episodeID: "ad-cancelled-preparation")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+        store.cancelActiveJob()
+        await gate.release()
+
+        #expect(await waitUntil {
+            !store.hasActiveJob
+        })
+        #expect(store.record(for: transcript.episodeID) == nil)
+        #expect(client.lastRequest == nil)
+    }
+
+    @Test("Preparation failure clears running state and surfaces the error")
+    func preparationFailureSurfacesError() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let gate = AsyncTestGate()
+        let client = FakeEpisodeAdAnalysisClient()
+        let store = EpisodeAdAnalysisStore(
+            client: client,
+            fileStore: EpisodeAdAnalysisFileStore(baseDirectory: try makeTemporaryDirectory()),
+            preparationGate: {
+                await gate.wait()
+                throw EpisodeAdAnalysisError.transcriptNotCompleted
+            }
+        )
+        let transcript = makeTranscriptDocument(episodeID: "ad-failed-preparation")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+        #expect(store.hasActiveJob)
+        await gate.release()
+
+        #expect(await waitUntil {
+            !store.hasActiveJob
+        })
+        #expect(
+            store.lastErrorMessage(for: transcript.episodeID)
+                == EpisodeAdAnalysisError.transcriptNotCompleted.localizedDescription
+        )
+        #expect(store.record(for: transcript.episodeID) == nil)
+        #expect(client.lastRequest == nil)
+    }
+
     @Test("Nuke cancels active analysis and removes running record")
     func nukeCancelsActiveAnalysisAndRemovesRunningRecord() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -315,7 +406,6 @@ struct EpisodeAdAnalysisStoreTests {
 
         store.startAnalysis(transcript: transcript, modelContext: context)
         #expect(store.hasActiveJob)
-        #expect(store.record(for: transcript.episodeID)?.state == .running)
 
         try await store.nukeAllAnalyses(modelContext: context)
 
@@ -495,6 +585,56 @@ struct EpisodeAdAnalysisStoreTests {
         let rerunDocument = try #require(store.document(for: transcript.episodeID))
         #expect(rerunDocument.policy == EpisodeAdAnalysisContract.expectedPolicy)
         #expect(store.isCurrentAnalysisDocument(rerunDocument, for: transcript))
+    }
+
+    @Test("Cloud-imported analysis stays current against the disk round-tripped transcript")
+    func cloudImportedAnalysisStaysCurrentAfterTranscriptRoundTrip() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let store = EpisodeAdAnalysisStore(
+            client: FakeEpisodeAdAnalysisClient(),
+            fileStore: EpisodeAdAnalysisFileStore(baseDirectory: temporaryDirectory)
+        )
+        // The cloud pass maps the analysis from the in-memory transcript,
+        // whose minted `updatedAt` can carry fractional seconds that the
+        // `.iso8601` disk round trip drops.
+        let inMemoryTranscript = makeTranscriptDocument(
+            episodeID: "ad-cloud-round-trip",
+            updatedAt: Date(timeIntervalSince1970: 1_780_000_000.742)
+        )
+        let success = OpenCastRemoteTranscriptionAdAnalysisSuccess(
+            model: "gemini-3.5-flash",
+            policy: EpisodeAdAnalysisContract.expectedPolicy,
+            spans: [OpenCastRemoteTranscriptionAdAnalysisSpan(
+                kind: "host_read_ad",
+                label: "Sponsor",
+                startSegmentID: 1,
+                endSegmentID: 1,
+                startTime: 5,
+                endTime: 12,
+                confidence: 0.9,
+                evidenceQuote: "brought to you by"
+            )],
+            warnings: []
+        )
+        let analysisDocument = try EpisodeRemoteAdAnalysisMapper.document(
+            from: success,
+            transcript: inMemoryTranscript,
+            requestID: "job-cloud-round-trip"
+        )
+
+        try store.importCompletedAnalysis(analysisDocument, modelContext: context)
+
+        let reloadedTranscript = makeTranscriptDocument(
+            episodeID: "ad-cloud-round-trip",
+            updatedAt: Date(timeIntervalSince1970: 1_780_000_000)
+        )
+        if case .completed(_, let isStale) = store.jobState(for: reloadedTranscript) {
+            #expect(!isStale)
+        } else {
+            Issue.record("Expected completed current state after cloud import.")
+        }
     }
 
     @Test("Current document check requires matching fingerprint metadata")
@@ -1375,10 +1515,12 @@ struct EpisodeAdAnalysisStoreTests {
     ) async {
         store.startAnalysis(transcript: transcript, modelContext: modelContext)
         #expect(await waitUntil {
-            store.record(for: transcript.episodeID)?.state == .completed
+            !store.hasActiveJob
+                && store.record(for: transcript.episodeID)?.state == .completed
         })
     }
 }
+
 
 private final class ThrowingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @unchecked Sendable {
     var error: Error?

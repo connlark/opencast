@@ -8,6 +8,9 @@ use crate::types::{
     ERROR_DURATION_TOO_LONG, ERROR_SOURCE_TOO_LARGE, ERROR_UNSUPPORTED_MEDIA_TYPE,
 };
 
+const MANIFEST_TIMING_TOLERANCE_SECONDS: f64 = 0.001;
+const FINAL_COVERAGE_TOLERANCE_SECONDS: f64 = 0.1;
+
 pub const MEDIA_BINDING: &str = "TRANSCRIPTION_MEDIA_WORKER";
 pub const MEDIA_PROBE_PATH: &str = "/probe";
 pub const MEDIA_CHUNK_PATH: &str = "/chunk";
@@ -56,6 +59,8 @@ pub struct MediaChunkEntry {
 pub struct MediaChunkResponse {
     pub chunks: Vec<MediaChunkEntry>,
     pub manifest_sha256: String,
+    #[serde(default)]
+    pub chunk_audio_profile: Option<String>,
 }
 
 /// Media worker calls fail in two ways: contract rejections (fatal, mapped to
@@ -75,9 +80,10 @@ pub fn classify_media_failure(status: u16, error_code: Option<&str>) -> MediaCal
     match (status, error_code) {
         (422, _) => MediaCallFailure::Fatal(ERROR_UNSUPPORTED_MEDIA_TYPE),
         (413, Some("source_too_large")) => MediaCallFailure::Fatal(ERROR_SOURCE_TOO_LARGE),
-        // chunk_too_large: an oversized stream-copy chunk rejects to local
-        // fallback rather than widening the proven AI envelope.
-        (413, _) => MediaCallFailure::Fatal(ERROR_UNSUPPORTED_MEDIA_TYPE),
+        // The media worker normalizes supported MP3 before enforcing the
+        // model envelope. Any remaining chunk overflow is an internal
+        // contract/configuration failure, not an unsupported customer file.
+        (413, _) => MediaCallFailure::Fatal(crate::types::ERROR_INTERNAL),
         (400, _) => MediaCallFailure::Fatal(crate::types::ERROR_INTERNAL),
         _ => MediaCallFailure::Retryable,
     }
@@ -112,25 +118,90 @@ pub fn validate_probe(
     Ok(())
 }
 
+/// The chunk manifest is authenticated service output, so malformed entries
+/// are an internal contract failure rather than unsupported customer media.
 pub fn validate_chunks(
     chunks: &[MediaChunkEntry],
     max_chunk_raw_bytes: i64,
+    canonical_duration_seconds: f64,
+    chunk_seconds: f64,
+    step_seconds: f64,
 ) -> Result<(), &'static str> {
-    if chunks.is_empty() {
-        return Err(ERROR_UNSUPPORTED_MEDIA_TYPE);
+    if chunks.is_empty()
+        || !canonical_duration_seconds.is_finite()
+        || canonical_duration_seconds <= 0.0
+        || !chunk_seconds.is_finite()
+        || chunk_seconds <= 0.0
+        || !step_seconds.is_finite()
+        || step_seconds <= 0.0
+        || step_seconds > chunk_seconds
+    {
+        return Err(crate::types::ERROR_INTERNAL);
     }
+    let overlap_seconds = chunk_seconds - step_seconds;
+    let mut previous_valid_end = 0.0;
     for (position, chunk) in chunks.iter().enumerate() {
+        let expected_start = position as f64 * step_seconds;
+        let Some((valid_start, valid_end)) =
+            valid_chunk_interval(chunk, canonical_duration_seconds)
+        else {
+            return Err(crate::types::ERROR_INTERNAL);
+        };
+        let ownership_boundary =
+            (valid_start + overlap_seconds / 2.0).min(canonical_duration_seconds);
         if chunk.index as usize != position
             || chunk.byte_count <= 0
             || chunk.byte_count > max_chunk_raw_bytes
+            || !chunk.requested_start_seconds.is_finite()
+            || chunk.requested_start_seconds < 0.0
+            || (chunk.requested_start_seconds - expected_start).abs()
+                > MANIFEST_TIMING_TOLERANCE_SECONDS
+            || !chunk.requested_duration_seconds.is_finite()
+            || chunk.requested_duration_seconds <= 0.0
+            || (chunk.requested_duration_seconds - chunk_seconds).abs()
+                > MANIFEST_TIMING_TOLERANCE_SECONDS
             || !chunk.actual_duration_seconds.is_finite()
             || chunk.actual_duration_seconds <= 0.0
+            || (position > 0
+                && previous_valid_end + MANIFEST_TIMING_TOLERANCE_SECONDS
+                    < ownership_boundary)
             || chunk.sha256.len() != 64
+            || !chunk.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
-            return Err(ERROR_UNSUPPORTED_MEDIA_TYPE);
+            return Err(crate::types::ERROR_INTERNAL);
         }
+        previous_valid_end = valid_end;
+    }
+    if canonical_duration_seconds - previous_valid_end > FINAL_COVERAGE_TOLERANCE_SECONDS {
+        return Err(crate::types::ERROR_INTERNAL);
     }
     Ok(())
+}
+
+/// Intersect the encoded chunk's measured span with both its requested source
+/// span and the canonical source duration. MP3 frame padding can make the
+/// encoded duration slightly longer than either source interval, so it never
+/// expands what model timestamps are allowed to claim.
+pub fn valid_chunk_interval(
+    chunk: &MediaChunkEntry,
+    canonical_duration_seconds: f64,
+) -> Option<(f64, f64)> {
+    let start = chunk.requested_start_seconds;
+    let requested_end = start + chunk.requested_duration_seconds;
+    let measured_end = start + chunk.actual_duration_seconds;
+    let end = requested_end
+        .min(measured_end)
+        .min(canonical_duration_seconds);
+    if !start.is_finite()
+        || !requested_end.is_finite()
+        || !measured_end.is_finite()
+        || !end.is_finite()
+        || start < 0.0
+        || end <= start
+    {
+        return None;
+    }
+    Some((start, end))
 }
 
 #[cfg(test)]
@@ -203,7 +274,11 @@ mod tests {
         );
         assert_eq!(
             classify_media_failure(413, Some("chunk_too_large")),
-            MediaCallFailure::Fatal(ERROR_UNSUPPORTED_MEDIA_TYPE)
+            MediaCallFailure::Fatal(crate::types::ERROR_INTERNAL)
+        );
+        assert_eq!(
+            classify_media_failure(413, Some("normalized_chunk_too_large")),
+            MediaCallFailure::Fatal(crate::types::ERROR_INTERNAL)
         );
         // Cold starts, missing propagation, stub 501s, 5xx: retryable.
         for status in [404u16, 500, 501, 502, 503] {
@@ -222,15 +297,132 @@ mod tests {
             byte_count: 2_400_339,
             sha256: "a".repeat(64),
         };
-        assert!(validate_chunks(std::slice::from_ref(&entry), 5 * 1024 * 1024).is_ok());
-        assert!(validate_chunks(&[], 5 * 1024 * 1024).is_err());
+        assert!(validate_chunks(
+            std::slice::from_ref(&entry),
+            5 * 1024 * 1024,
+            300.0,
+            300.0,
+            298.0,
+        )
+        .is_ok());
+        assert_eq!(
+            validate_chunks(&[], 5 * 1024 * 1024, 300.0, 300.0, 298.0),
+            Err(crate::types::ERROR_INTERNAL)
+        );
 
         let mut oversized = entry.clone();
         oversized.byte_count = 6 * 1024 * 1024;
-        assert!(validate_chunks(&[oversized], 5 * 1024 * 1024).is_err());
+        assert_eq!(
+            validate_chunks(&[oversized], 5 * 1024 * 1024, 300.0, 300.0, 298.0),
+            Err(crate::types::ERROR_INTERNAL)
+        );
 
         let mut out_of_order = entry;
         out_of_order.index = 1;
-        assert!(validate_chunks(&[out_of_order], 5 * 1024 * 1024).is_err());
+        assert_eq!(
+            validate_chunks(
+                &[out_of_order],
+                5 * 1024 * 1024,
+                300.0,
+                300.0,
+                298.0,
+            ),
+            Err(crate::types::ERROR_INTERNAL)
+        );
+
+        let gap = MediaChunkEntry {
+            index: 1,
+            key: "chunks/job/1.mp3".to_string(),
+            requested_start_seconds: 298.0,
+            requested_duration_seconds: 300.0,
+            actual_duration_seconds: 2.0,
+            byte_count: 20_000,
+            sha256: "b".repeat(64),
+        };
+        let insufficient_seam_coverage = MediaChunkEntry {
+            actual_duration_seconds: 298.998,
+            ..MediaChunkEntry {
+                index: 0,
+                key: "chunks/job/0.mp3".to_string(),
+                requested_start_seconds: 0.0,
+                requested_duration_seconds: 300.0,
+                actual_duration_seconds: 300.042,
+                byte_count: 2_400_339,
+                sha256: "a".repeat(64),
+            }
+        };
+        assert_eq!(
+            validate_chunks(
+                &[insufficient_seam_coverage.clone(), gap.clone()],
+                5 * 1024 * 1024,
+                300.0,
+                300.0,
+                298.0,
+            ),
+            Err(crate::types::ERROR_INTERNAL)
+        );
+
+        let sufficient_seam_coverage = MediaChunkEntry {
+            actual_duration_seconds: 299.0,
+            ..insufficient_seam_coverage
+        };
+        assert!(validate_chunks(
+            &[sufficient_seam_coverage, gap],
+            5 * 1024 * 1024,
+            300.0,
+            300.0,
+            298.0,
+        )
+        .is_ok());
+
+        let short_terminal_overlap = MediaChunkEntry {
+            actual_duration_seconds: 0.5,
+            ..MediaChunkEntry {
+                index: 1,
+                key: "chunks/job/1.mp3".to_string(),
+                requested_start_seconds: 298.0,
+                requested_duration_seconds: 300.0,
+                actual_duration_seconds: 300.0,
+                byte_count: 20_000,
+                sha256: "b".repeat(64),
+            }
+        };
+        let full_first = MediaChunkEntry {
+            index: 0,
+            key: "chunks/job/0.mp3".to_string(),
+            requested_start_seconds: 0.0,
+            requested_duration_seconds: 300.0,
+            actual_duration_seconds: 300.042,
+            byte_count: 2_400_339,
+            sha256: "a".repeat(64),
+        };
+        assert!(validate_chunks(
+            &[full_first, short_terminal_overlap],
+            5 * 1024 * 1024,
+            298.5,
+            300.0,
+            298.0,
+        )
+        .is_ok());
+
+        let interval = valid_chunk_interval(
+            &MediaChunkEntry {
+                requested_start_seconds: 298.0,
+                requested_duration_seconds: 300.0,
+                actual_duration_seconds: 300.042,
+                ..MediaChunkEntry {
+                    index: 1,
+                    key: "chunks/job/1.mp3".to_string(),
+                    requested_start_seconds: 0.0,
+                    requested_duration_seconds: 300.0,
+                    actual_duration_seconds: 300.0,
+                    byte_count: 20_000,
+                    sha256: "b".repeat(64),
+                }
+            },
+            500.0,
+        )
+        .expect("valid interval");
+        assert_eq!(interval, (298.0, 500.0));
     }
 }

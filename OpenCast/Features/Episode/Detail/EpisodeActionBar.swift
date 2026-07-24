@@ -13,8 +13,10 @@ struct EpisodeActionBar: View {
     private let playIconOpticalOffset: CGFloat = 3
 
     let downloadRecord: EpisodeDownloadRecord?
+    var downloadLiveProgress: DownloadByteProgress?
     let detectAdsState: EpisodeDetectAdsMenuState
-    let onPlay: () -> Void
+    let showsPauseButton: Bool
+    let onTogglePlayback: () -> Void
     let onDownload: () -> Void
     let onResumeDownload: () -> Void
     let onCancelDownload: () -> Void
@@ -26,6 +28,7 @@ struct EpisodeActionBar: View {
             HStack(spacing: controlSpacing) {
                 EpisodeDownloadActionButton(
                     record: downloadRecord,
+                    liveProgress: downloadLiveProgress,
                     glassNamespace: glassNamespace,
                     buttonSize: resolvedSideButtonSize,
                     iconSize: resolvedSideIconSize,
@@ -56,15 +59,17 @@ struct EpisodeActionBar: View {
     }
 
     private var playButton: some View {
-        Button(action: onPlay) {
+        Button(action: onTogglePlayback) {
             Label {
-                Text("Play Episode")
+                Text(showsPauseButton ? "Pause Episode" : "Play Episode")
             } icon: {
-                Image(systemName: "play.fill")
+                Image(systemName: showsPauseButton ? "pause.fill" : "play.fill")
                     .resizable()
                     .scaledToFit()
+                    .contentTransition(.symbolEffect(.replace))
                     .frame(width: resolvedPlayIconSize, height: resolvedPlayIconSize)
-                    .offset(x: playIconOpticalOffset)
+                    .offset(x: showsPauseButton ? 0 : playIconOpticalOffset)
+                    .animation(.easeOut(duration: 0.2), value: showsPauseButton)
             }
             .labelStyle(.iconOnly)
             .frame(width: resolvedPlayButtonSize, height: resolvedPlayButtonSize)
@@ -74,7 +79,9 @@ struct EpisodeActionBar: View {
         .foregroundStyle(.white)
         .glassEffect(.regular.tint(.accentColor).interactive(), in: .circle)
         .glassEffectID("episodeActions.play", in: glassNamespace)
-        .accessibilityLabel("Play Episode")
+        .accessibilityLabel(showsPauseButton ? "Pause Episode" : "Play Episode")
+        .accessibilityInputLabels(["Play Episode", "Pause Episode"])
+        .accessibilityIdentifier("Episode Playback Control")
     }
 
     private var makeAdFreeButton: some View {
@@ -150,7 +157,8 @@ struct EpisodeActionBar: View {
     EpisodeActionBar(
         downloadRecord: nil,
         detectAdsState: .detect,
-        onPlay: {}, onDownload: {}, onResumeDownload: {},
+        showsPauseButton: false,
+        onTogglePlayback: {}, onDownload: {}, onResumeDownload: {},
         onCancelDownload: {}, onDeleteDownload: {}, onMakeAdFree: {}
     )
     .padding()
@@ -166,7 +174,8 @@ struct EpisodeActionBar: View {
             state: .completed
         ),
         detectAdsState: .detected,
-        onPlay: {}, onDownload: {}, onResumeDownload: {},
+        showsPauseButton: true,
+        onTogglePlayback: {}, onDownload: {}, onResumeDownload: {},
         onCancelDownload: {}, onDeleteDownload: {}, onMakeAdFree: {}
     )
     .padding()
@@ -177,7 +186,8 @@ struct EpisodeActionBar: View {
     EpisodeActionBar(
         downloadRecord: nil,
         detectAdsState: .detect,
-        onPlay: {}, onDownload: {}, onResumeDownload: {},
+        showsPauseButton: false,
+        onTogglePlayback: {}, onDownload: {}, onResumeDownload: {},
         onCancelDownload: {}, onDeleteDownload: {}, onMakeAdFree: {}
     )
     .padding()

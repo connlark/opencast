@@ -13,6 +13,7 @@ public enum OpenCastRemoteTranscriptionJobState: Sendable, Equatable, Hashable {
     case chunking
     case transcribing
     case stitching
+    case detectingAds
     case resultReady
     case delivered
     case acknowledged
@@ -39,6 +40,7 @@ public enum OpenCastRemoteTranscriptionJobState: Sendable, Equatable, Hashable {
         case .chunking: "chunking"
         case .transcribing: "transcribing"
         case .stitching: "stitching"
+        case .detectingAds: "detecting_ads"
         case .resultReady: "result_ready"
         case .delivered: "delivered"
         case .acknowledged: "acknowledged"
@@ -62,8 +64,9 @@ public enum OpenCastRemoteTranscriptionJobState: Sendable, Equatable, Hashable {
         let cases: [Self] = [
             .created, .stagingOrigin, .waitingForDeviceSource, .sourceMatched,
             .exactUploadRequired, .exactUploading, .probing, .awaitingCredits,
-            .reserved, .chunking, .transcribing, .stitching, .resultReady,
-            .delivered, .acknowledged, .cancelling, .cancelled, .failed,
+            .reserved, .chunking, .transcribing, .stitching, .detectingAds,
+            .resultReady, .delivered, .acknowledged, .cancelling, .cancelled,
+            .failed,
         ]
         return Dictionary(uniqueKeysWithValues: cases.map { ($0.wireValue, $0) })
     }()

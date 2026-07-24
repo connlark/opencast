@@ -1,10 +1,14 @@
-//! Stitcher (v2 pinned contract; see the golden fixtures and STATE.md):
+//! Stitcher (v3 pinned contract; see the golden fixtures and STATE.md):
 //! native-word timestamp-midpoint ownership at each seam boundary
 //! (`seam start + overlap/2`), segments surviving iff they keep ≥1 owned
 //! word with words trimmed / start-end clamped / text rebuilt from owned
 //! words, sequential re-numbering, and a normalized transcript SHA-256 using
 //! the bakeoff normalization. Must reproduce the committed golden fixtures
 //! bit-for-bit; the Swift mapper implements the same normalization.
+//! V3 additionally binds every chunk to its validated interval on the
+//! canonical source timeline. Words wholly outside that interval are dropped;
+//! words that cross either boundary are clamped before segment text and the
+//! normalized hash are rebuilt.
 //!
 //! Adjacent overlap copies are aligned one-to-one by normalized word text,
 //! interval adjacency, and midpoint skew. When timestamp drift makes both
@@ -25,8 +29,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
-pub const PIPELINE_VERSION: &str = "stitch-v2";
+pub const PIPELINE_VERSION: &str = "stitch-v3";
 const SEAM_DEDUPE_EPSILON_SECONDS: f64 = 0.9;
+const TIMESTAMP_TOLERANCE_SECONDS: f64 = 0.001;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelWord {
@@ -47,7 +52,10 @@ pub struct ModelSegment {
 
 #[derive(Debug, Clone)]
 pub struct ChunkTranscription {
+    /// Start of this chunk's valid interval on the canonical source timeline.
     pub requested_start_seconds: f64,
+    /// End of this chunk's valid interval, already capped to source duration.
+    pub valid_end_seconds: f64,
     pub segments: Vec<ModelSegment>,
 }
 
@@ -66,11 +74,18 @@ pub struct StitchedTranscript {
     pub text: String,
     pub word_count: usize,
     pub deduplicated_word_count: usize,
+    pub interval_trimmed_word_count: usize,
+    pub empty_model_word_count: usize,
+    pub reversed_timing_word_count: usize,
     pub normalized_transcript_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StitchError {
+    InvalidDuration,
+    InvalidChunkInterval {
+        chunk_index: usize,
+    },
     NonFiniteTimestamp {
         chunk_index: usize,
     },
@@ -78,6 +93,11 @@ pub enum StitchError {
         chunk_index: usize,
         prev_start: f64,
         next_start: f64,
+    },
+    OutOfOrderSegments {
+        chunk_index: usize,
+        prev_start: f64,
+        next_end: f64,
     },
     Empty,
 }
@@ -229,8 +249,20 @@ fn seam_word_refs(
     let mut refs = Vec::new();
     for (segment_index, segment) in chunk.segments.iter().enumerate() {
         for (word_index, word) in segment.words.iter().enumerate() {
-            let start = word.start + chunk.requested_start_seconds;
-            let end = word.end + chunk.requested_start_seconds;
+            let mut start = word.start + chunk.requested_start_seconds;
+            let mut end = word.end + chunk.requested_start_seconds;
+            if !start.is_finite()
+                || !end.is_finite()
+                || end <= chunk.requested_start_seconds
+                || start >= chunk.valid_end_seconds
+            {
+                continue;
+            }
+            start = start.max(chunk.requested_start_seconds);
+            end = end.min(chunk.valid_end_seconds);
+            if end < start {
+                continue;
+            }
             if end < window_start || start > window_end {
                 continue;
             }
@@ -283,7 +315,21 @@ fn seam_duplicate_drops(
 pub fn stitch(
     chunks: &[ChunkTranscription],
     overlap_seconds: f64,
+    duration_seconds: f64,
 ) -> Result<StitchedTranscript, StitchError> {
+    if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+        return Err(StitchError::InvalidDuration);
+    }
+    for (chunk_index, chunk) in chunks.iter().enumerate() {
+        if !chunk.requested_start_seconds.is_finite()
+            || !chunk.valid_end_seconds.is_finite()
+            || chunk.requested_start_seconds < 0.0
+            || chunk.valid_end_seconds <= chunk.requested_start_seconds
+            || chunk.valid_end_seconds > duration_seconds
+        {
+            return Err(StitchError::InvalidChunkInterval { chunk_index });
+        }
+    }
     let duplicate_drops = seam_duplicate_drops(chunks, overlap_seconds);
     let boundaries: Vec<f64> = chunks
         .iter()
@@ -293,6 +339,10 @@ pub fn stitch(
 
     let mut segments: Vec<StitchedSegment> = Vec::new();
     let mut previous_start: Option<f64> = None;
+    let mut previous_segment_start: Option<f64> = None;
+    let mut interval_trimmed_word_count = 0;
+    let mut empty_model_word_count = 0;
+    let mut reversed_timing_word_count = 0;
     for (index, chunk) in chunks.iter().enumerate() {
         let lower = if index > 0 {
             Some(boundaries[index - 1])
@@ -303,12 +353,33 @@ pub fn stitch(
         let offset = chunk.requested_start_seconds;
 
         for (segment_index, segment) in chunk.segments.iter().enumerate() {
+            if !segment.start.is_finite() || !segment.end.is_finite() {
+                return Err(StitchError::NonFiniteTimestamp { chunk_index: index });
+            }
             let mut owned: Vec<ModelWord> = Vec::new();
             for (word_index, word) in segment.words.iter().enumerate() {
+                let text = word.text.trim();
+                if text.is_empty() {
+                    empty_model_word_count += 1;
+                    continue;
+                }
                 let mut start = word.start + offset;
                 let mut end = word.end + offset;
                 if !start.is_finite() || !end.is_finite() {
                     return Err(StitchError::NonFiniteTimestamp { chunk_index: index });
+                }
+                if end < start {
+                    reversed_timing_word_count += 1;
+                    continue;
+                }
+                if end <= chunk.requested_start_seconds || start >= chunk.valid_end_seconds {
+                    interval_trimmed_word_count += 1;
+                    continue;
+                }
+                if start < chunk.requested_start_seconds || end > chunk.valid_end_seconds {
+                    interval_trimmed_word_count += 1;
+                    start = start.max(chunk.requested_start_seconds);
+                    end = end.min(chunk.valid_end_seconds);
                 }
                 let midpoint = (start + end) / 2.0;
                 if lower.is_some_and(|lower| midpoint < lower) {
@@ -325,7 +396,7 @@ pub fn stitch(
                     continue;
                 }
                 if let Some(previous) = previous_start {
-                    if start + 0.001 < previous {
+                    if start + TIMESTAMP_TOLERANCE_SECONDS < previous {
                         if previous - start > overlap_seconds {
                             return Err(StitchError::OutOfOrderWords {
                                 chunk_index: index,
@@ -339,7 +410,7 @@ pub fn stitch(
                 }
                 previous_start = Some(start);
                 owned.push(ModelWord {
-                    text: word.text.trim().to_string(),
+                    text: text.to_string(),
                     start,
                     end,
                 });
@@ -347,8 +418,21 @@ pub fn stitch(
             let (Some(first), Some(last)) = (owned.first(), owned.last()) else {
                 continue;
             };
-            let segment_start = (segment.start + offset).max(first.start);
             let segment_end = last.end;
+            let candidate_start = (segment.start + offset).max(first.start).min(segment_end);
+            let segment_start = if let Some(previous) = previous_segment_start {
+                if segment_end + TIMESTAMP_TOLERANCE_SECONDS < previous {
+                    return Err(StitchError::OutOfOrderSegments {
+                        chunk_index: index,
+                        prev_start: previous,
+                        next_end: segment_end,
+                    });
+                }
+                candidate_start.max(previous.min(segment_end))
+            } else {
+                candidate_start
+            };
+            previous_segment_start = Some(segment_start);
             let text = owned
                 .iter()
                 .map(|word| word.text.as_str())
@@ -384,6 +468,9 @@ pub fn stitch(
     Ok(StitchedTranscript {
         word_count: all_words.len(),
         deduplicated_word_count: duplicate_drops.len(),
+        interval_trimmed_word_count,
+        empty_model_word_count,
+        reversed_timing_word_count,
         segments,
         text,
         normalized_transcript_sha256: normalized,
@@ -461,6 +548,7 @@ mod tests {
         let chunks = vec![
             ChunkTranscription {
                 requested_start_seconds: 0.0,
+                valid_end_seconds: 300.0,
                 segments: vec![ModelSegment {
                     start: 296.0,
                     end: 300.0,
@@ -482,6 +570,7 @@ mod tests {
             },
             ChunkTranscription {
                 requested_start_seconds: 298.0,
+                valid_end_seconds: 598.0,
                 segments: vec![ModelSegment {
                     start: 0.0,
                     end: 4.0,
@@ -503,7 +592,7 @@ mod tests {
                 }],
             },
         ];
-        let stitched = stitch(&chunks, 2.0).expect("stitches");
+        let stitched = stitch(&chunks, 2.0, 600.0).expect("stitches");
         let words: Vec<&str> = stitched
             .segments
             .iter()
@@ -521,6 +610,7 @@ mod tests {
         let chunks = vec![
             ChunkTranscription {
                 requested_start_seconds: 0.0,
+                valid_end_seconds: 300.0,
                 segments: vec![ModelSegment {
                     start: 298.22,
                     end: 299.52,
@@ -534,6 +624,7 @@ mod tests {
             },
             ChunkTranscription {
                 requested_start_seconds: 298.0,
+                valid_end_seconds: 598.0,
                 segments: vec![ModelSegment {
                     start: 0.98,
                     end: 1.5,
@@ -547,7 +638,7 @@ mod tests {
             },
         ];
 
-        let stitched = stitch(&chunks, 2.0).expect("stitches");
+        let stitched = stitch(&chunks, 2.0, 600.0).expect("stitches");
         let words: Vec<&ModelWord> = stitched
             .segments
             .iter()
@@ -564,6 +655,7 @@ mod tests {
         let chunks = vec![
             ChunkTranscription {
                 requested_start_seconds: 0.0,
+                valid_end_seconds: 300.0,
                 segments: vec![
                     ModelSegment {
                         start: 100.0,
@@ -623,6 +715,7 @@ mod tests {
             },
             ChunkTranscription {
                 requested_start_seconds: 298.0,
+                valid_end_seconds: 598.0,
                 segments: vec![
                     ModelSegment {
                         start: 0.25,
@@ -655,7 +748,7 @@ mod tests {
             },
         ];
 
-        let stitched = stitch(&chunks, 2.0).expect("stitches");
+        let stitched = stitch(&chunks, 2.0, 600.0).expect("stitches");
         let words: Vec<&str> = stitched
             .segments
             .iter()
@@ -677,6 +770,7 @@ mod tests {
         let chunks = vec![
             ChunkTranscription {
                 requested_start_seconds: 1788.0,
+                valid_end_seconds: 2_088.0,
                 segments: vec![ModelSegment {
                     start: 296.0,
                     end: 298.88,
@@ -697,6 +791,7 @@ mod tests {
             },
             ChunkTranscription {
                 requested_start_seconds: 2086.0,
+                valid_end_seconds: 2_386.0,
                 segments: vec![ModelSegment {
                     start: 0.0,
                     end: 2.88,
@@ -721,7 +816,7 @@ mod tests {
                 }],
             },
         ];
-        let stitched = stitch(&chunks, 2.0).expect("clamps the seam inversion");
+        let stitched = stitch(&chunks, 2.0, 2_400.0).expect("clamps the seam inversion");
         let words: Vec<&ModelWord> = stitched
             .segments
             .iter()
@@ -740,6 +835,7 @@ mod tests {
     fn backward_jump_beyond_overlap_still_fails() {
         let chunks = vec![ChunkTranscription {
             requested_start_seconds: 0.0,
+            valid_end_seconds: 20.0,
             segments: vec![ModelSegment {
                 start: 0.0,
                 end: 11.0,
@@ -758,7 +854,7 @@ mod tests {
                 ],
             }],
         }];
-        let error = stitch(&chunks, 2.0).expect_err("gross inversion rejects");
+        let error = stitch(&chunks, 2.0, 20.0).expect_err("gross inversion rejects");
         assert_eq!(
             error,
             StitchError::OutOfOrderWords {
@@ -767,6 +863,118 @@ mod tests {
                 next_start: 5.0,
             }
         );
+    }
+
+    #[test]
+    fn drops_empty_and_reversed_model_words_with_distinct_counts() {
+        let chunks = vec![ChunkTranscription {
+            requested_start_seconds: 0.0,
+            valid_end_seconds: 5.0,
+            segments: vec![ModelSegment {
+                start: 0.0,
+                end: 2.0,
+                text: String::new(),
+                words: vec![
+                    ModelWord {
+                        text: "valid".into(),
+                        start: 0.0,
+                        end: 0.5,
+                    },
+                    ModelWord {
+                        text: " \n\t ".into(),
+                        start: 0.6,
+                        end: 0.7,
+                    },
+                    ModelWord {
+                        text: "reversed".into(),
+                        start: 1.0,
+                        end: 0.9,
+                    },
+                    ModelWord {
+                        text: "tail".into(),
+                        start: 1.1,
+                        end: 1.5,
+                    },
+                ],
+            }],
+        }];
+
+        let stitched = stitch(&chunks, 2.0, 5.0).expect("drops invalid model words");
+
+        assert_eq!(stitched.text, "valid tail");
+        assert_eq!(stitched.empty_model_word_count, 1);
+        assert_eq!(stitched.reversed_timing_word_count, 1);
+        assert_eq!(stitched.interval_trimmed_word_count, 0);
+    }
+
+    #[test]
+    fn trims_final_chunk_model_padding_to_source_duration() {
+        // Exact boundary shape from prod-staging job
+        // job-wZzZaNNx95tG806K4lg_xQ: the final model word started 1.542 s
+        // after the probed source had ended.
+        let duration = 6_676.798;
+        let chunks = vec![ChunkTranscription {
+            requested_start_seconds: 6_556.0,
+            valid_end_seconds: duration,
+            segments: vec![
+                ModelSegment {
+                    start: 94.62,
+                    end: 95.0,
+                    text: String::new(),
+                    words: vec![ModelWord {
+                        text: "valid".into(),
+                        start: 94.62,
+                        end: 95.0,
+                    }],
+                },
+                ModelSegment {
+                    start: 120.5,
+                    end: 121.5,
+                    text: String::new(),
+                    words: vec![ModelWord {
+                        text: "edge".into(),
+                        start: 120.5,
+                        end: 121.5,
+                    }],
+                },
+                ModelSegment {
+                    start: 122.34,
+                    end: 122.74,
+                    text: String::new(),
+                    words: vec![ModelWord {
+                        text: "padding".into(),
+                        start: 122.34,
+                        end: 122.74,
+                    }],
+                },
+            ],
+        }];
+
+        let stitched = stitch(&chunks, 2.0, duration).expect("bounds final chunk");
+        let words: Vec<&ModelWord> = stitched
+            .segments
+            .iter()
+            .flat_map(|segment| segment.words.iter())
+            .collect();
+
+        assert_eq!(
+            words
+                .iter()
+                .map(|word| word.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["valid", "edge"]
+        );
+        assert_eq!(words.last().expect("edge word").end, duration);
+        assert!(stitched
+            .segments
+            .iter()
+            .all(|segment| segment.start <= segment.end && segment.end <= duration));
+        assert_eq!(stitched.text, "valid edge");
+        assert_eq!(
+            stitched.normalized_transcript_sha256,
+            normalized_transcript_sha256("valid edge")
+        );
+        assert_eq!(stitched.interval_trimmed_word_count, 2);
     }
 
     #[test]
@@ -820,10 +1028,12 @@ mod tests {
                 .iter()
                 .map(|chunk| ChunkTranscription {
                     requested_start_seconds: chunk.requested_start_seconds,
+                    valid_end_seconds: f64::MAX,
                     segments: chunk.response.segments.clone(),
                 })
                 .collect();
-            let stitched = stitch(&chunks, fixture.contract.overlap_seconds).expect("stitches");
+            let stitched =
+                stitch(&chunks, fixture.contract.overlap_seconds, f64::MAX).expect("stitches");
 
             assert_eq!(
                 stitched.word_count, fixture.expected.stitched_word_count,

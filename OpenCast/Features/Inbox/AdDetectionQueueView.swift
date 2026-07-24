@@ -6,6 +6,7 @@ import SwiftUI
 /// model consent).
 struct AdDetectionQueueView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -39,7 +40,10 @@ struct AdDetectionQueueView: View {
                 if !presentation.finishedRows.isEmpty {
                     Section("Finished") {
                         ForEach(presentation.finishedRows) { row in
-                            AdDetectionQueueRowView(row: row)
+                            AdDetectionQueueRowView(
+                                row: row,
+                                onDetectOnDevice: { detectOnDevice(episodeID: row.episodeID) }
+                            )
                         }
                     }
                 }
@@ -76,6 +80,13 @@ struct AdDetectionQueueView: View {
                 action: resumeQueue
             )
         }
+    }
+
+    private func detectOnDevice(episodeID: String) {
+        guard let episode = appModel.library.episode(with: episodeID) else {
+            return
+        }
+        appModel.startAdFreePass(for: episode, modelContext: modelContext, mode: .onDevice)
     }
 
     private func continueInBackground() {

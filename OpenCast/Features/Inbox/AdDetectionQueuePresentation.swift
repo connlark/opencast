@@ -27,6 +27,7 @@ struct AdDetectionQueuePresentation: Equatable {
             case interrupted
             case completed(zoneCount: Int)
             case failed(message: String)
+            case cloudUnavailable(message: String)
         }
 
         let episodeID: String
@@ -53,6 +54,8 @@ struct AdDetectionQueuePresentation: Equatable {
             case .completed(let zoneCount):
                 EpisodeAdFreePassPresentation.completed(zoneCount: zoneCount).statusText
             case .failed(let message):
+                message
+            case .cloudUnavailable(let message):
                 message
             }
         }
@@ -82,7 +85,13 @@ struct AdDetectionQueuePresentation: Equatable {
                 fractionCompleted: snapshot.fractionCompleted,
                 hasFailures: hasFailures
             )
-            affordance = isBackgroundSessionArmed ? .backgroundContinuationArmed : .continueInBackground
+            // Cloud items never arm the continued-processing card: the
+            // server keeps working while the app is suspended.
+            if snapshot.activeItemMode == .cloud {
+                affordance = nil
+            } else {
+                affordance = isBackgroundSessionArmed ? .backgroundContinuationArmed : .continueInBackground
+            }
         case .pausedInterrupted:
             indicator = .paused(hasFailures: hasFailures)
             affordance = .resumeInterrupted
@@ -140,6 +149,8 @@ struct AdDetectionQueuePresentation: Equatable {
                         .completed(zoneCount: zoneCount)
                     case .failed(let message):
                         .failed(message: message)
+                    case .cloudUnavailable(let message):
+                        .cloudUnavailable(message: message)
                     }
                 }()
             )
@@ -178,6 +189,14 @@ struct AdDetectionQueuePresentation: Equatable {
             EpisodeAdFreePassPresentation.transcribing(progress).statusText
         case .analyzing:
             EpisodeAdFreePassPresentation.analyzing.statusText
+        case .cloudQueued:
+            EpisodeAdFreePassPresentation.cloudQueued.statusText
+        case .cloudTranscribing(let progress):
+            EpisodeAdFreePassPresentation.cloudTranscribing(progress).statusText
+        case .cloudDetectingAds:
+            EpisodeAdFreePassPresentation.cloudDetectingAds.statusText
+        case .cloudUnavailable(let message):
+            message
         case .completed(let zoneCount):
             EpisodeAdFreePassPresentation.completed(zoneCount: zoneCount).statusText
         case .interrupted:

@@ -18,16 +18,10 @@ struct EpisodeDetailView: View {
     @State private var loadedAdAnalysisContentIdentifier: String?
     @State private var isConfirmingClearProgress = false
     @State private var sheetDestination: SheetDestination?
+    @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
 
     private var episode: EpisodeListItemSnapshot? {
-        if let episode = appModel.library.episode(with: episodeID) {
-            return episode
-        }
-
-        guard let record = appModel.downloads.record(for: episodeID) else {
-            return nil
-        }
-        return DownloadListItem.make(record: record, library: appModel.library).episode
+        appModel.episodeSnapshot(for: episodeID)
     }
 
     var body: some View {
@@ -118,11 +112,13 @@ struct EpisodeDetailView: View {
             && hasCurrentCompletedAnalysis
             && adAnalysisDocument?.episodeID == episode.episodeID
         let zoneTiers = hasCurrentAnalysis ? currentAdAnalysisZoneTiers : .empty
+        let downloadLiveProgress = appModel.downloads.byteProgress(for: episode.episodeID)
         let pipelineState = EpisodePipelineState.make(
             episodeID: episode.episodeID,
             queueStatus: appModel.adFreePass.queueStatus(for: episode.episodeID),
             queueSnapshot: appModel.adFreePass.queueSnapshot,
             downloadRecord: downloadRecord,
+            downloadLiveProgress: downloadLiveProgress,
             transcription: transcription,
             analysis: analysis
         )
@@ -145,11 +141,13 @@ struct EpisodeDetailView: View {
 
                 EpisodeActionBar(
                     downloadRecord: downloadRecord,
+                    downloadLiveProgress: downloadLiveProgress,
                     detectAdsState: EpisodeDetectAdsMenuState(
                         queueStatus: appModel.adFreePass.queueStatus(for: episode.episodeID),
                         hasCurrentCompletedAnalysis: hasCurrentAnalysis
                     ),
-                    onPlay: { play(episode) },
+                    showsPauseButton: showsPauseButton(for: episode),
+                    onTogglePlayback: { togglePlayback(episode) },
                     onDownload: { download(episode) },
                     onResumeDownload: { resumeDownload(episode) },
                     onCancelDownload: { cancelDownload(episode) },
@@ -197,10 +195,24 @@ struct EpisodeDetailView: View {
             .padding()
             .animation(.smooth, value: pipelineState)
         }
+        .adDetectionModeDialog(episode: $adDetectionModePromptEpisode)
         .background(alignment: .top) {
             EpisodeArtworkGlowBackground(preview: episode.artworkPreview)
         }
         .contentMargins(.bottom, 72, for: .scrollContent)
+    }
+
+    private func togglePlayback(_ episode: EpisodeListItemSnapshot) {
+        guard appModel.playback.currentEpisode?.id.rawValue == episode.episodeID else {
+            play(episode)
+            return
+        }
+
+        if showsPauseButton(for: episode) {
+            appModel.playback.pause()
+        } else {
+            appModel.playback.play()
+        }
     }
 
     private func play(_ episode: EpisodeListItemSnapshot) {
@@ -210,8 +222,23 @@ struct EpisodeDetailView: View {
         }
     }
 
+    private func showsPauseButton(for episode: EpisodeListItemSnapshot) -> Bool {
+        guard appModel.playback.currentEpisode?.id.rawValue == episode.episodeID else {
+            return false
+        }
+
+        switch appModel.playback.state {
+        case .loading, .buffering, .playing:
+            return true
+        case .idle, .paused, .failed:
+            return false
+        }
+    }
+
     private func makeAdFree(_ episode: EpisodeListItemSnapshot) {
-        appModel.startAdFreePass(for: episode, modelContext: modelContext)
+        if appModel.startAdFreePassResolvingMode(for: episode, modelContext: modelContext) {
+            adDetectionModePromptEpisode = episode
+        }
     }
 
     private func perform(_ action: EpisodePipelineAction, episode: EpisodeListItemSnapshot) {
@@ -229,13 +256,15 @@ struct EpisodeDetailView: View {
         case .resumeTranscription, .retryTranscription:
             transcribe(episode)
         case .retryPass:
-            appModel.startAdFreePass(for: episode, modelContext: modelContext)
+            makeAdFree(episode)
         case .retryDownload:
             download(episode)
         case .retryAnalysis:
             detectAds(episode)
         case .removeFromQueue:
             appModel.adFreePass.removePendingItem(episodeID: episode.episodeID, modelContext: modelContext)
+        case .detectOnDevice:
+            appModel.startAdFreePass(for: episode, modelContext: modelContext, mode: .onDevice)
         }
     }
 

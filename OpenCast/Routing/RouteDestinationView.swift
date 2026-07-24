@@ -13,6 +13,8 @@ struct RouteDestinationView: View {
             )
         case .episodeDetail(let id):
             EpisodeDetailView(episodeID: id)
+        case .episodeArtwork(let id):
+            EpisodeArtworkZoomView(episodeID: id)
         case .episodeTranscript(let id):
             EpisodeTranscriptView(episodeID: id)
         case .adDetectionQueue:

@@ -22,6 +22,8 @@ APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
 APP_ATTEST_ENVIRONMENT = "development"
 PUBLIC_AD_ANALYSIS_ENABLED = "false"
+# Independent kill switch for the service-bound internal surface.
+INTERNAL_AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
 
 [[d1_databases]]
@@ -55,6 +57,8 @@ APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
 APP_ATTEST_ENVIRONMENT = "production"
 PUBLIC_AD_ANALYSIS_ENABLED = "false"
+# Independent kill switch for the service-bound internal surface.
+INTERNAL_AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
 
 [[env.prod-staging.d1_databases]]
@@ -92,6 +96,8 @@ APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
 APP_ATTEST_ENVIRONMENT = "production"
 PUBLIC_AD_ANALYSIS_ENABLED = "false"
+# Independent kill switch for the service-bound internal surface.
+INTERNAL_AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
 
 [[env.production.d1_databases]]

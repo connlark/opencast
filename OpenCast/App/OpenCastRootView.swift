@@ -207,6 +207,29 @@ struct OpenCastRootView: View {
     }
 
     private func openRouteFromNowPlaying(_ route: AppRoute) {
+        switch selectedTab {
+        case .library:
+            if libraryNavigationPath.last != route {
+                libraryNavigationPath.append(route)
+            }
+        case .inbox:
+            if inboxNavigationPath.last != route {
+                inboxNavigationPath.append(route)
+            }
+        case .downloads:
+            if downloadsNavigationPath.last != route {
+                downloadsNavigationPath.append(route)
+            }
+        case .search:
+            if searchNavigationPath.last != route {
+                searchNavigationPath.append(route)
+            }
+        case .settings:
+            openRouteInLibrary(route)
+        }
+    }
+
+    private func openRouteInLibrary(_ route: AppRoute) {
         selectedTab = .library
         libraryNavigationPath = [route]
     }
@@ -218,10 +241,26 @@ struct OpenCastRootView: View {
     }
 
     private func observeRemoteStoreChanges() async {
-        for await _ in NotificationCenter.default.notifications(
+        // Both stores post remote-change notifications for every transaction,
+        // including this process's own local-store saves. Only the synced
+        // store's changes warrant the synced-data refetch; reloading on
+        // local-store churn (download/transcription commits) re-ran the full
+        // subscriptions + progress refetch throughout every download.
+        let syncedStoreURL = modelContext.container.configurations
+            .first { $0.name == OpenCastModelContainerFactory.syncedConfigurationName }?
+            .url.standardizedFileURL
+        for await notification in NotificationCenter.default.notifications(
             named: Notification.Name.NSPersistentStoreRemoteChange
         ) {
-            scheduleRemoteStoreChangeReload()
+            guard let syncedStoreURL else {
+                scheduleRemoteStoreChangeReload()
+                continue
+            }
+            let changedStoreURL = (notification.userInfo?[NSPersistentStoreURLKey] as? URL)?
+                .standardizedFileURL
+            if changedStoreURL == nil || changedStoreURL == syncedStoreURL {
+                scheduleRemoteStoreChangeReload()
+            }
         }
     }
 
@@ -549,10 +588,10 @@ struct OpenCastRootView: View {
         await appModel.library.refresh(feedURL: canonicalFeedURL, modelContext: modelContext)
         if appModel.library.episode(with: route.episodeID) != nil {
             record("Opened Episode")
-            openRouteFromNowPlaying(.episodeDetail(id: route.episodeID))
+            openRouteInLibrary(.episodeDetail(id: route.episodeID))
         } else {
             record("Opened Podcast")
-            openRouteFromNowPlaying(.podcastDetail(feedURL: canonicalFeedURL))
+            openRouteInLibrary(.podcastDetail(feedURL: canonicalFeedURL))
         }
     }
 
@@ -632,7 +671,7 @@ struct OpenCastRootView: View {
         switch route {
         case .podcastDetail(let feedURL):
             !appModel.library.isActivelySubscribed(to: feedURL)
-        case .episodeDetail(let id), .episodeTranscript(let id):
+        case .episodeDetail(let id), .episodeTranscript(let id), .episodeArtwork(let id):
             appModel.library.episode(with: id) == nil && appModel.downloads.record(for: id) == nil
         case .adDetectionQueue:
             false

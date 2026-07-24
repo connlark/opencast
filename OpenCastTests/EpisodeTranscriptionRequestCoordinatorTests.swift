@@ -198,9 +198,13 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
             episode: harness.episode,
             modelContext: harness.context
         )
+        // The record carries the checkpoint-persisted duration (12); the
+        // beyond-checkpoint progress event (20) stays transient.
         #expect(await waitUntil {
             let record = harness.transcriptions.record(for: harness.episode.episodeID)
-            return record?.checkpointCount == 1 && record?.completedDuration == 20
+            return record?.checkpointCount == 1
+                && record?.completedDuration == 12
+                && harness.transcriptions.progressByEpisodeID[harness.episode.episodeID]?.completedDuration == 20
         })
 
         harness.coordinator.prepareForLifecycleExit(modelContext: harness.context)
@@ -210,7 +214,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
             harness.transcriptions.record(for: harness.episode.episodeID)
         )
         #expect(interruptedRecord.state == .interrupted)
-        #expect(interruptedRecord.completedDuration == 20)
+        #expect(interruptedRecord.completedDuration == 12)
         #expect(interruptedRecord.checkpointCount == 1)
         #expect(harness.transcriptions.document(for: harness.episode.episodeID) != nil)
         #expect(harness.coordinator.request?.canResumeFromCheckpoint == true)
@@ -242,9 +246,13 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
             episode: harness.episode,
             modelContext: harness.context
         )
+        // The record carries the checkpoint-persisted duration (12); the
+        // beyond-checkpoint progress event (20) stays transient.
         #expect(await waitUntil {
             let record = harness.transcriptions.record(for: harness.episode.episodeID)
-            return record?.checkpointCount == 1 && record?.completedDuration == 20
+            return record?.checkpointCount == 1
+                && record?.completedDuration == 12
+                && harness.transcriptions.progressByEpisodeID[harness.episode.episodeID]?.completedDuration == 20
         })
         harness.coordinator.prepareForLifecycleExit(modelContext: harness.context)
         #expect(await waitUntil { harness.coordinator.request?.phase == .interrupted })

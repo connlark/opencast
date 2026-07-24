@@ -14,7 +14,7 @@ struct FailedDownloadRowView: View {
                 imageURL: item.episode.artworkURL,
                 size: 56,
                 cacheKind: .episode,
-                preview: item.episode.artworkPreview,
+                preview: appModel.library.artworkPreview(for: item.episode),
                 onPreviewResolved: updateArtworkPreview
             )
 

@@ -82,9 +82,14 @@ pub struct WhisperResponse {
 }
 
 impl WhisperResponse {
-    pub fn to_chunk_transcription(&self, requested_start_seconds: f64) -> crate::stitch::ChunkTranscription {
+    pub fn to_chunk_transcription(
+        &self,
+        requested_start_seconds: f64,
+        valid_end_seconds: f64,
+    ) -> crate::stitch::ChunkTranscription {
         crate::stitch::ChunkTranscription {
             requested_start_seconds,
+            valid_end_seconds,
             segments: self
                 .segments
                 .iter()
@@ -328,7 +333,9 @@ mod tests {
         assert_eq!(decoded.segments[0].words.len(), 2);
         assert!(decoded.extra.contains_key("vtt"));
         assert!(decoded.segments[0].extra.contains_key("word_count"));
-        let chunk = decoded.to_chunk_transcription(298.0);
+        let chunk = decoded.to_chunk_transcription(298.0, 598.0);
+        assert_eq!(chunk.requested_start_seconds, 298.0);
+        assert_eq!(chunk.valid_end_seconds, 598.0);
         assert_eq!(chunk.segments[0].words[0].text, "hello");
     }
 

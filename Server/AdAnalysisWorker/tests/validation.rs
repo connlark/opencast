@@ -934,6 +934,64 @@ fn app_attest_and_global_profiles_use_public_caps_and_global_error_code() {
 }
 
 #[test]
+fn transcription_account_profile_uses_app_attest_scale_caps_and_shares_the_global_cap() {
+    use opencast_ad_analysis_worker::types::{
+        TRANSCRIPTION_ACCOUNT_DAILY_ESTIMATED_INPUT_TOKEN_CAP,
+        TRANSCRIPTION_ACCOUNT_DAILY_REQUEST_CAP,
+    };
+
+    let full_account = DailyUsage {
+        request_count: TRANSCRIPTION_ACCOUNT_DAILY_REQUEST_CAP,
+        estimated_input_tokens: 0,
+    };
+    assert_eq!(
+        admitted_usage_with_profile(
+            Some(&serde_json::to_string(&full_account).unwrap()),
+            1,
+            UsageLimitProfile::TranscriptionAccount
+        )
+        .unwrap_err(),
+        CapError::DailyRequestsExceeded
+    );
+
+    let token_capped = DailyUsage {
+        request_count: 0,
+        estimated_input_tokens: TRANSCRIPTION_ACCOUNT_DAILY_ESTIMATED_INPUT_TOKEN_CAP,
+    };
+    assert_eq!(
+        admitted_usage_with_profile(
+            Some(&serde_json::to_string(&token_capped).unwrap()),
+            1,
+            UsageLimitProfile::TranscriptionAccount
+        )
+        .unwrap_err(),
+        CapError::DailyEstimatedInputTokensExceeded
+    );
+
+    // The internal profile admits against the SAME global usage state public
+    // traffic fills: a public-exhausted global day rejects internal traffic.
+    let publicly_exhausted_global = DailyUsage {
+        request_count: GLOBAL_DAILY_REQUEST_CAP,
+        estimated_input_tokens: 0,
+    };
+    let rejection = admit_subject_then_global(
+        &DailyUsage::default(),
+        UsageLimitProfile::TranscriptionAccount,
+        &publicly_exhausted_global,
+        1,
+    )
+    .expect_err("shared global cap should reject internal traffic too");
+    assert_eq!(rejection.scope, SpendCapScope::Global);
+    assert_eq!(rejection.error, CapError::GlobalCapacityExhausted);
+
+    // Wire form is stable snake_case for the DO submit payload.
+    assert_eq!(
+        serde_json::to_string(&UsageLimitProfile::TranscriptionAccount).unwrap(),
+        "\"transcription_account\""
+    );
+}
+
+#[test]
 fn spend_caps_reject_subject_before_consuming_global_capacity() {
     let full_subject_usage = DailyUsage {
         request_count: APP_ATTEST_KEY_DAILY_REQUEST_CAP,

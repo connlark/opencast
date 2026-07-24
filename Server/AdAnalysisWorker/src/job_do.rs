@@ -91,7 +91,10 @@ impl AdAnalysisJob {
                     return job_status(202, &job_id, "running", JOB_SUBMIT_POLL_AFTER_SECONDS);
                 }
                 SubmitDecision::ServeCompleted { result_json, .. } => {
-                    self.purge().await?;
+                    // Completed results serve idempotently until the TTL
+                    // alarm purges them: a response lost in transit must be
+                    // recoverable by asking again, never by re-running the
+                    // model.
                     return raw_json(200, result_json);
                 }
                 SubmitDecision::Start => {}
@@ -157,10 +160,12 @@ impl AdAnalysisJob {
             PollDecision::Running { job_id } => {
                 job_status(202, &job_id, "running", JOB_POLL_AFTER_SECONDS)
             }
-            PollDecision::ServeCompleted { result_json, .. } => {
-                self.purge().await?;
-                raw_json(200, result_json)
-            }
+            // Success is served idempotently until the TTL purge (a lost
+            // response re-polls). Failures purge as they serve: nothing of
+            // value is lost with them, and the purge is what lets a caller's
+            // resubmit — or the internal alarm loop's 404 path — start a
+            // fresh run instead of re-reading a dead record.
+            PollDecision::ServeCompleted { result_json, .. } => raw_json(200, result_json),
             PollDecision::ServeFailedUpstream { status, code } => {
                 self.purge().await?;
                 json_error_owned(status, code)

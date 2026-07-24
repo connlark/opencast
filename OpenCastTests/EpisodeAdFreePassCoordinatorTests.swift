@@ -70,7 +70,10 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(fixture.analysisClient.requestCount == 1)
         #expect(refreshCount == 1)
         #expect(fixture.coordinator.queueState == .idle)
-        #expect(fixture.presentation(for: episode, currentZoneCount: 1).stage == .completed(zoneCount: 1))
+        #expect(await waitUntil {
+            fixture.presentation(for: episode, currentZoneCount: 1).stage
+                == .completed(zoneCount: 1)
+        })
     }
 
     @Test("Queue drains FIFO with manual tail order, auto front insertion, and no preemption")
@@ -97,7 +100,9 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(fixture.coordinator.queueItems.map(\.episodeID) == [
             autoFront.episodeID, second.episodeID, third.episodeID
         ])
-        #expect(preparedTitles.count == 3)
+        #expect(await waitUntil {
+            preparedTitles.count == 3
+        })
         #expect(fixture.coordinator.queueStatus(for: second.episodeID) == .queued(ahead: 2))
         #expect(fixture.presentation(for: second).statusText == "Queued — 2 ahead")
         #expect(fixture.coordinator.queueStatus(for: first.episodeID) == .running)
@@ -149,6 +154,50 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(terminals == [.drained(completedCount: 2, failedCount: 1)])
     }
 
+    @Test("hasCurrentCompletedAnalysis caches an off-main verdict keyed by record stamps")
+    func hasCurrentCompletedAnalysisCachesOffMainVerdict() async throws {
+        let fixture = try makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
+        )
+        let episode = makeEpisode(episodeID: "ad-free-verdict-cache")
+        fixture.enqueue(episode)
+        #expect(await waitUntil {
+            fixture.adAnalyses.record(for: episode.episodeID)?.state == .completed
+                && fixture.coordinator.activeEpisodeID == nil
+        })
+
+        // The verdict computes off-main: the first read may be a provisional
+        // false, but it must converge to true without this actor ever
+        // decoding the transcript document synchronously.
+        #expect(await waitUntil {
+            fixture.coordinator.hasCurrentCompletedAnalysis(
+                for: episode.episodeID,
+                transcriptions: fixture.transcriptions,
+                adAnalyses: fixture.adAnalyses
+            )
+        })
+
+        // Dirtying either record stamp invalidates the cached verdict: the
+        // next read is provisional false again, then reconverges because the
+        // documents themselves are unchanged.
+        fixture.transcriptions.record(for: episode.episodeID)?.updatedAt =
+            Date.now.addingTimeInterval(60)
+        #expect(
+            !fixture.coordinator.hasCurrentCompletedAnalysis(
+                for: episode.episodeID,
+                transcriptions: fixture.transcriptions,
+                adAnalyses: fixture.adAnalyses
+            )
+        )
+        #expect(await waitUntil {
+            fixture.coordinator.hasCurrentCompletedAnalysis(
+                for: episode.episodeID,
+                transcriptions: fixture.transcriptions,
+                adAnalyses: fixture.adAnalyses
+            )
+        })
+    }
+
     @Test("Re-enqueueing an already queued or already active episode is idempotent")
     func enqueueIsIdempotentForQueuedAndActiveEpisodes() async throws {
         let downloader = GatedEpisodeAudioDownloader()
@@ -165,13 +214,58 @@ struct EpisodeAdFreePassCoordinatorTests {
         fixture.enqueue(second, prepare: { prepareCount += 1 })
         fixture.enqueue(second, prepare: { prepareCount += 1 })
 
-        #expect(prepareCount == 2)
+        #expect(await waitUntil {
+            prepareCount == 2
+        })
         #expect(fixture.coordinator.queueItems.map(\.episodeID) == [second.episodeID])
 
         downloader.release(urlContaining: first.episodeID)
         downloader.release(urlContaining: second.episodeID)
         #expect(await waitUntil {
             fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 2
+        })
+    }
+
+    @Test("Acceptance is observable before persistence and background preparation are released")
+    func acceptancePrecedesLaunchPreparation() async throws {
+        let gate = AsyncTestGate()
+        let downloader = GatedEpisodeAudioDownloader()
+        let fixture = try makeFixture(
+            downloader: downloader,
+            launchPreparationGate: {
+                await gate.wait()
+            }
+        )
+        let episode = makeEpisode(episodeID: "queue-acceptance-before-launch")
+        var didPrepareBackgroundSession = false
+
+        fixture.enqueue(
+            episode,
+            prepare: {
+                didPrepareBackgroundSession = true
+            }
+        )
+
+        #expect(fixture.coordinator.queueState == .running)
+        #expect(fixture.coordinator.queueStatus(for: episode.episodeID) == .queued(ahead: 0))
+        #expect(fixture.presentation(for: episode).phase == .queued)
+        #expect(!didPrepareBackgroundSession)
+        #expect(fixture.downloads.record(for: episode.episodeID) == nil)
+        #expect(try fixture.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).isEmpty)
+
+        await gate.release()
+
+        #expect(await waitUntil {
+            didPrepareBackgroundSession
+                && fixture.coordinator.activeEpisodeID == episode.episodeID
+        })
+        let persistedRecords = try fixture.context.fetch(
+            FetchDescriptor<AdFreePassQueueItemRecord>()
+        )
+        #expect(!persistedRecords.isEmpty)
+        downloader.release(urlContaining: episode.episodeID)
+        #expect(await waitUntil {
+            fixture.coordinator.queueState == .idle
         })
     }
 
@@ -191,8 +285,11 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(fixture.analysisClient.requestCount == 1)
 
         fixture.enqueue(analyzed, origin: .auto)
-        #expect(fixture.coordinator.queueItems.isEmpty)
-        #expect(fixture.coordinator.activeEpisodeID == nil)
+        #expect(await waitUntil {
+            fixture.coordinator.queueItems.isEmpty
+                && fixture.coordinator.activeEpisodeID == nil
+        })
+        #expect(fixture.analysisClient.requestCount == 1)
 
         fixture.enqueue(fresh, origin: .auto)
         #expect(await waitUntil {
@@ -420,6 +517,9 @@ struct EpisodeAdFreePassCoordinatorTests {
         })
         fixture.enqueue(second)
         fixture.enqueue(third, origin: .auto)
+        #expect(await waitUntil {
+            (try? context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).count) == 3
+        })
         context.insert(AdFreePassQueueItemRecord(
             episodeID: "queue-persist-unresolvable",
             podcastID: "https://example.com/feed.xml",
@@ -880,7 +980,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         fixture.enqueue(episode)
         #expect(await waitUntil {
             fixture.downloads.record(for: episode.episodeID)?.state == .downloading
-                && fixture.downloads.record(for: episode.episodeID)?.bytesReceived == 7
+                && fixture.downloads.byteProgress(for: episode.episodeID)?.bytesReceived == 7
         })
 
         fixture.downloads.pauseDownload(episodeID: episode.episodeID, modelContext: fixture.context)
@@ -914,6 +1014,12 @@ struct EpisodeAdFreePassCoordinatorTests {
         fixture.enqueue(second)
         fixture.enqueue(third)
         #expect(fixture.coordinator.queueItems.map(\.episodeID) == [second.episodeID, third.episodeID])
+        #expect(await waitUntil {
+            let episodeIDs = try? fixture.context.fetch(
+                FetchDescriptor<AdFreePassQueueItemRecord>()
+            ).map(\.episodeID)
+            return episodeIDs?.contains(third.episodeID) == true
+        })
 
         fixture.coordinator.removePendingItem(episodeID: first.episodeID, modelContext: fixture.context)
         #expect(fixture.coordinator.activeEpisodeID == first.episodeID)
@@ -1027,7 +1133,8 @@ struct EpisodeAdFreePassCoordinatorTests {
         container: ModelContainer? = nil,
         context: ModelContext? = nil,
         temporaryDirectory: URL? = nil,
-        loadsStores: Bool = true
+        loadsStores: Bool = true,
+        launchPreparationGate: @escaping @Sendable () async -> Void = {}
     ) throws -> QueueFixture {
         let resolvedContainer = try container ?? OpenCastModelContainerFactory.make(inMemory: true)
         let resolvedContext = context ?? ModelContext(resolvedContainer)
@@ -1054,7 +1161,9 @@ struct EpisodeAdFreePassCoordinatorTests {
                 client: analysisClient,
                 fileStore: EpisodeAdAnalysisFileStore(baseDirectory: directory)
             ),
-            coordinator: EpisodeAdFreePassCoordinator(),
+            coordinator: EpisodeAdFreePassCoordinator(
+                launchPreparationGate: launchPreparationGate
+            ),
             analysisClient: analysisClient,
             modelInstaller: modelInstaller
         )

@@ -372,6 +372,27 @@ async fn handle_create_job(
             return json_error_code(400, types::ERROR_DURATION_TOO_LONG);
         }
     }
+    // Chained ad detection requires the podcast identity it analyzes under;
+    // the titles are optional prompt context with bounded length.
+    if request.ad_analysis_requested
+        && !request
+            .podcast_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty() && id.len() <= 256)
+    {
+        return json_error_code(400, types::ERROR_INVALID_REQUEST);
+    }
+    if request
+        .episode_title
+        .as_deref()
+        .is_some_and(|title| title.len() > 512)
+        || request
+            .podcast_title
+            .as_deref()
+            .is_some_and(|title| title.len() > 512)
+    {
+        return json_error_code(400, types::ERROR_INVALID_REQUEST);
+    }
     // Pass 2 decision 1: a policy-unsafe URL (http, userinfo, IP-literal,
     // unusual port, forbidden host) is no longer a create-time failure — the
     // server just never fetches it and the job goes straight to the
@@ -431,6 +452,10 @@ async fn handle_create_job(
         },
         device_identity: request.source_identity.clone(),
         origin_unsafe,
+        ad_analysis_requested: request.ad_analysis_requested,
+        podcast_id: request.podcast_id.clone(),
+        episode_title: request.episode_title.clone(),
+        podcast_title: request.podcast_title.clone(),
     };
     let internal = internal_post(
         "https://transcription-job.opencast.internal/create",

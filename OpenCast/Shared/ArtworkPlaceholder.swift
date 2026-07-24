@@ -4,6 +4,7 @@ struct ArtworkPlaceholder: View {
     let title: String
     let imageURL: String?
     let displaySize: CGSize
+    let targetPixelSize: CGSize?
     let cacheKind: ArtworkCacheKind
     let preview: ArtworkPreview?
     let onPreviewResolved: ((ArtworkPreview) -> Void)?
@@ -15,6 +16,7 @@ struct ArtworkPlaceholder: View {
         title: String,
         imageURL: String?,
         size: CGFloat,
+        targetPixelSize: CGSize? = nil,
         cacheKind: ArtworkCacheKind = .show,
         preview: ArtworkPreview? = nil,
         onPreviewResolved: ((ArtworkPreview) -> Void)? = nil
@@ -23,6 +25,7 @@ struct ArtworkPlaceholder: View {
             title: title,
             imageURL: imageURL,
             displaySize: CGSize(width: size, height: size),
+            targetPixelSize: targetPixelSize,
             cacheKind: cacheKind,
             preview: preview,
             onPreviewResolved: onPreviewResolved
@@ -33,6 +36,7 @@ struct ArtworkPlaceholder: View {
         title: String,
         imageURL: String?,
         displaySize: CGSize,
+        targetPixelSize: CGSize? = nil,
         cacheKind: ArtworkCacheKind = .show,
         preview: ArtworkPreview? = nil,
         onPreviewResolved: ((ArtworkPreview) -> Void)? = nil
@@ -40,6 +44,7 @@ struct ArtworkPlaceholder: View {
         self.title = title
         self.imageURL = imageURL
         self.displaySize = displaySize
+        self.targetPixelSize = targetPixelSize
         self.cacheKind = cacheKind
         self.preview = preview
         self.onPreviewResolved = onPreviewResolved
@@ -73,8 +78,8 @@ struct ArtworkPlaceholder: View {
         return URL(string: imageURL)
     }
 
-    private var targetPixelSize: CGSize {
-        CGSize(
+    private var resolvedTargetPixelSize: CGSize {
+        targetPixelSize ?? CGSize(
             width: displaySize.width * displayScale,
             height: displaySize.height * displayScale
         )
@@ -85,6 +90,6 @@ struct ArtworkPlaceholder: View {
             return nil
         }
 
-        return ArtworkRequest(url: artworkURL, targetPixelSize: targetPixelSize)
+        return ArtworkRequest(url: artworkURL, targetPixelSize: resolvedTargetPixelSize)
     }
 }

@@ -718,3 +718,126 @@ describe("register", () => {
     expect((await response.json()).error).toBe("invalid_challenge");
   });
 });
+
+describe("internal transcription surface", () => {
+  const INTERNAL_BASE = "https://opencast-ad-analysis.internal";
+
+  function postInternalAnalyze(request, overrides = {}) {
+    return SELF.fetch(`${INTERNAL_BASE}/internal/v1/analyze`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        schema_version: 1,
+        account_id: "acct-integration-1",
+        transcription_job_id: "job-integration-1",
+        request,
+        ...overrides,
+      }),
+    });
+  }
+
+  function postInternalPoll(jobID) {
+    return SELF.fetch(`${INTERNAL_BASE}/internal/v1/jobs/${jobID}/poll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ job_id: jobID }),
+    });
+  }
+
+  it("404s internal paths on the public host even with every flag on", async () => {
+    const analyze = await SELF.fetch(`${BASE}/internal/v1/analyze`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(analyze.status).toBe(404);
+
+    const poll = await SELF.fetch(
+      `${BASE}/internal/v1/jobs/${"a".repeat(64)}/poll`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      },
+    );
+    expect(poll.status).toBe(404);
+  });
+
+  it("rejects malformed internal envelopes and invalid payloads", async () => {
+    const { request } = makeLongRequest({
+      fingerprint: "b".repeat(64),
+      segmentCount: 5,
+    });
+
+    const badVersion = await postInternalAnalyze(request, { schema_version: 2 });
+    expect(badVersion.status).toBe(400);
+    expect((await badVersion.json()).error).toBe("invalid_internal_request");
+
+    const emptyAccount = await postInternalAnalyze(request, { account_id: " " });
+    expect(emptyAccount.status).toBe(400);
+    expect((await emptyAccount.json()).error).toBe("invalid_internal_request");
+
+    const invalidInner = await postInternalAnalyze({
+      ...request,
+      podcast_id: "",
+    });
+    expect(invalidInner.status).toBe(400);
+    expect((await invalidInner.json()).error).toBe("empty_podcast_id");
+  });
+
+  it("runs a single-window internal analyze always-async with attach dedupe", async () => {
+    const fingerprint = "c".repeat(64);
+    // async_supported=false proves the internal path lifts the public
+    // multi-window-only async restriction: it still runs as a job.
+    const { request, firstEvidence } = makeLongRequest({
+      fingerprint,
+      asyncSupported: false,
+      segmentCount: 5,
+    });
+    const deferred = mockGeminiDeferred(geminiResponseForSpan(2, firstEvidence));
+
+    const submitted = await postInternalAnalyze(request);
+    expect(submitted.status).toBe(202);
+    expect(await submitted.json()).toEqual({
+      job_id: fingerprint,
+      state: "running",
+      poll_after_seconds: 15,
+    });
+    await deferred.started;
+
+    // A duplicate submit attaches to the running fingerprint-keyed job
+    // without a second Gemini call (afterEach proves no pending mocks).
+    const attached = await postInternalAnalyze(request);
+    expect(attached.status).toBe(202);
+    expect((await attached.json()).job_id).toBe(fingerprint);
+
+    const running = await postInternalPoll(fingerprint);
+    expect(running.status).toBe(202);
+
+    deferred.release();
+    let completed;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      completed = await postInternalPoll(fingerprint);
+      if (completed.status !== 202) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(completed.status).toBe(200);
+    const result = await completed.json();
+    expect(result.request_id).toBe(request.request_id);
+    expect(result.policy).toBe("promo_ad_breaks_v2");
+    expect(result.spans).toHaveLength(1);
+    expect(result.spans[0].start_segment_id).toBe(2);
+
+    // Serve-once: the completed record purges after the fetch.
+    const afterFetch = await postInternalPoll(fingerprint);
+    expect(afterFetch.status).toBe(404);
+  });
+
+  it("404s an unknown internal job id", async () => {
+    const response = await postInternalPoll("d".repeat(64));
+    expect(response.status).toBe(404);
+    expect((await response.json()).error).toBe("job_not_found");
+  });
+});

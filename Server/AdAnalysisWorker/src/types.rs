@@ -40,6 +40,23 @@ pub const APP_ATTEST_KEY_DAILY_REQUEST_CAP: u64 = 12;
 pub const APP_ATTEST_KEY_DAILY_ESTIMATED_INPUT_TOKEN_CAP: u64 = 1_500_000;
 pub const GLOBAL_DAILY_REQUEST_CAP: u64 = 300;
 pub const GLOBAL_DAILY_ESTIMATED_INPUT_TOKEN_CAP: u64 = 8_000_000;
+// Internal transcription-chained requests are already credit-gated upstream,
+// so these per-account caps are a backstop (App-Attest profile numbers;
+// retunable independently).
+pub const TRANSCRIPTION_ACCOUNT_DAILY_REQUEST_CAP: u64 = 12;
+pub const TRANSCRIPTION_ACCOUNT_DAILY_ESTIMATED_INPUT_TOKEN_CAP: u64 = 1_500_000;
+
+/// Body of the internal analyze route (RemoteTranscriptionWorker binding).
+/// Trust boundary is the service binding + `.internal` host — no App Attest
+/// or bearer. `transcription_job_id` is diagnostics only, never keyed on.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct InternalAnalyzeRequest {
+    pub schema_version: u16,
+    pub account_id: String,
+    #[serde(default)]
+    pub transcription_job_id: Option<String>,
+    pub request: AdAnalysisRequest,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct AdAnalysisRequest {

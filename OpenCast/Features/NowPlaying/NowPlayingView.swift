@@ -16,15 +16,14 @@ struct NowPlayingView: View {
     @State private var showsAutoSkipPill = false
     @State private var displayedAutoSkipEventSequence = 0
     @State private var remoteEstimateRequest: RemoteTranscriptionStartPreviewRequest?
+    @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
 
     let bottomContentPadding: CGFloat
     let topContentPadding: CGFloat
     let moreMenuTopPadding: CGFloat
-    @Binding var isPeelInteractionActive: Bool
+    @Binding var isSoundLabInteractionActive: Bool
     @Binding var isContentScrolledToTop: Bool
     let isTrackingDismissDrag: Bool
-    let prewarmsPeelRenderer: Bool
-    let allowsPeelStart: Bool
     let onDismiss: () -> Void
     let onOpenEpisode: () -> Void
     let onOpenPodcast: () -> Void
@@ -41,21 +40,17 @@ struct NowPlayingView: View {
                                 size: artworkSize
                             )
                         } else {
-                            PeelableNowPlayingArtwork(
+                            NowPlayingSoundLabArtwork(
                                 title: episode.podcastTitle,
                                 imageURL: episode.artworkURL?.absoluteString,
                                 size: artworkSize,
                                 voiceBoostEnabled: $isVoiceBoostEnabled,
                                 voiceBoostControlEnabled: appModel.playbackSettings.canChangeCurrentEpisodeVoiceBoost,
-                                adFreePassRow: NowPlayingPeelAdFreePassRowModel(
-                                    presentation: appModel.currentAdFreePassPresentation
-                                ),
                                 onAdFreePassAction: startAdFreePass,
                                 onTranscribeRemotely: presentRemoteTranscriptionEstimate,
+                                onShowTranscript: performTranscriptAction,
                                 onAdFreePassBackgroundProbe: startAdFreePassBackgroundProbe,
-                                isPeelInteractionActive: $isPeelInteractionActive,
-                                prewarmsPeelRenderer: prewarmsPeelRenderer,
-                                allowsPeelStart: allowsPeelStart,
+                                isSoundLabInteractionActive: $isSoundLabInteractionActive,
                                 isCardDismissDragActive: isTrackingDismissDrag
                             )
                         }
@@ -85,7 +80,8 @@ struct NowPlayingView: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(!canOpenCurrentPodcast)
-                            .accessibilityHint("Opens the podcast feed")
+                            .accessibilityHint("Opens the show in your library")
+                            .accessibilityIdentifier("Now Playing Podcast Title")
                         }
                         .layoutPriority(0)
 
@@ -170,9 +166,9 @@ struct NowPlayingView: View {
                     )
                     .padding(.top, moreMenuTopPadding)
                     .padding(.trailing, 20)
-                    .opacity(isPeelInteractionActive ? 0 : 1)
-                    .allowsHitTesting(!isPeelInteractionActive)
-                    .animation(.easeOut(duration: 0.15), value: isPeelInteractionActive)
+                    .opacity(isSoundLabInteractionActive ? 0 : 1)
+                    .allowsHitTesting(!isSoundLabInteractionActive)
+                    .animation(.easeOut(duration: 0.15), value: isSoundLabInteractionActive)
                 }
             }
             .overlay(alignment: .top) {
@@ -219,6 +215,7 @@ struct NowPlayingView: View {
             }
             .tint(.accentColor)
             .foregroundStyle(.primary)
+            .adDetectionModeDialog(episode: $adDetectionModePromptEpisode)
             .sensoryFeedback(.impact(flexibility: .soft), trigger: playPauseFeedback)
             .sensoryFeedback(.selection, trigger: skipFeedback)
             .sensoryFeedback(.impact(flexibility: .soft), trigger: autoSkipFeedback)
@@ -529,12 +526,16 @@ struct NowPlayingView: View {
     }
 
     private func startAdFreePass() {
-        appModel.startOrContinueAdFreePassForCurrentEpisode(modelContext: modelContext)
+        adDetectionModePromptEpisode = appModel.startOrContinueAdFreePassForCurrentEpisodeResolvingMode(
+            modelContext: modelContext
+        )
     }
 
     private func presentRemoteTranscriptionEstimate() {
         guard appModel.remoteTranscriptionPurchases.isSurfaceVisible,
-              !appModel.remoteTranscription.store.hasActiveRequest
+              !appModel.remoteTranscription.store.hasActiveRequest,
+              let currentEpisodeID,
+              !appModel.transcriptions.hasCompletedTranscript(for: currentEpisodeID)
         else {
             return
         }

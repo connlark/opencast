@@ -64,6 +64,24 @@ nonisolated struct EpisodeListItemSnapshot: Identifiable, Equatable, Sendable {
         )
     }
 
+    init(downloadRecord: EpisodeDownloadRecord, podcastCache: PodcastCacheSnapshot?) {
+        self.init(
+            episodeID: downloadRecord.episodeID,
+            podcastID: downloadRecord.podcastID,
+            podcastTitle: Self.nonempty(downloadRecord.podcastTitle) ?? podcastCache?.title ?? "Removed Podcast",
+            title: Self.nonempty(downloadRecord.episodeTitle)
+                ?? Self.humanizedAudioTitle(downloadRecord.sourceAudioURL),
+            summary: nil,
+            publishedAt: downloadRecord.publishedAt,
+            duration: downloadRecord.duration,
+            audioURL: Self.nonempty(downloadRecord.sourceAudioURL),
+            artworkURL: Self.nonempty(downloadRecord.artworkURLString) ?? podcastCache?.artworkURL,
+            artworkPreview: podcastCache?.artworkPreview,
+            guid: nil,
+            cachedAt: downloadRecord.updatedAt
+        )
+    }
+
     static func newestFirst(_ lhs: EpisodeListItemSnapshot, _ rhs: EpisodeListItemSnapshot) -> Bool {
         switch (lhs.publishedAt, rhs.publishedAt) {
         case let (lhsDate?, rhsDate?):
@@ -130,6 +148,29 @@ nonisolated struct EpisodeListItemSnapshot: Identifiable, Equatable, Sendable {
             return nil
         }
         return duration
+    }
+
+    private static func nonempty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+
+        return value
+    }
+
+    private static func humanizedAudioTitle(_ sourceAudioURL: String) -> String {
+        guard let url = URL(string: sourceAudioURL),
+              let decodedName = url.deletingPathExtension().lastPathComponent.removingPercentEncoding
+        else {
+            return "Downloaded Episode"
+        }
+
+        let words = decodedName
+            .replacing("-", with: " ")
+            .replacing("_", with: " ")
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+        return words.isEmpty ? "Downloaded Episode" : words.capitalized
     }
 
     private static func sortsByTitleThenEpisodeID(

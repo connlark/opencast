@@ -37,12 +37,17 @@ final class EpisodeAdFreePassCoordinator {
     @ObservationIgnored private var pausedForEnvironmentalInterrupt = false
     @ObservationIgnored private var lastInterruptedEpisodeID: String?
     @ObservationIgnored private var hasProbedCapThisForegroundSession = false
+    @ObservationIgnored private let launchPreparationGate: @Sendable () async -> Void
     @ObservationIgnored var onStageChange: (@MainActor (EpisodeAdFreePassStage, AdFreePassQueueContext) -> Void)?
     @ObservationIgnored var onQueueTerminal: (@MainActor (AdFreePassQueueTerminalOutcome) -> Void)?
     @ObservationIgnored var isBackgroundProtected: @MainActor () -> Bool = { false }
 
-    init(cancellationSource: AdFreePassCancellationSource = AdFreePassCancellationSource()) {
+    init(
+        cancellationSource: AdFreePassCancellationSource = AdFreePassCancellationSource(),
+        launchPreparationGate: @escaping @Sendable () async -> Void = {}
+    ) {
         self.cancellationSource = cancellationSource
+        self.launchPreparationGate = launchPreparationGate
     }
 
     var activeEpisodeID: String? {
@@ -63,6 +68,7 @@ final class EpisodeAdFreePassCoordinator {
             activeEpisodeID: activeItem?.episodeID,
             activeEpisodeTitle: activeItem?.episode.title,
             activeArtworkURL: activeItem?.episode.artworkURL,
+            activeItemMode: activeItem?.mode,
             currentStage: activeItem != nil ? currentStage : nil,
             finishedItemCount: finishedItemCount,
             totalItemCount: drainTotalItemCount,
@@ -94,6 +100,8 @@ final class EpisodeAdFreePassCoordinator {
                 return .completed(zoneCount: zoneCount)
             case .failed(let message):
                 return .failed(message: message)
+            case .cloudUnavailable(let message):
+                return .cloudUnavailable(message: message)
             }
         }
 
@@ -122,6 +130,29 @@ final class EpisodeAdFreePassCoordinator {
 
         if let queuedPresentation = queuedPresentation(for: episodeID) {
             return queuedPresentation
+        }
+
+        // Cloud stages live entirely in the coordinator (no local store
+        // reflects them), so the active cloud item presents from its stage.
+        if activeEpisodeID == episodeID, let currentStage {
+            switch currentStage {
+            case .cloudQueued:
+                return .cloudQueued
+            case .cloudTranscribing(let progress):
+                return .cloudTranscribing(progress)
+            case .cloudDetectingAds:
+                return .cloudDetectingAds
+            case .cloudUnavailable(let message):
+                return .cloudUnavailable(message)
+            default:
+                break
+            }
+        }
+
+        if activeEpisodeID == nil,
+           let outcome = drainOutcomes.last(where: { $0.episodeID == episodeID }),
+           case .cloudUnavailable(let message) = outcome.kind {
+            return .cloudUnavailable(message)
         }
 
         if activeEpisodeID == nil,
@@ -171,6 +202,7 @@ final class EpisodeAdFreePassCoordinator {
         }
 
         let downloadRecord = downloads.record(for: episodeID)
+        let transcriptRecord: EpisodeTranscriptRecord
         switch transcriptions.jobState(
             for: episodeID,
             downloadRecord: downloadRecord,
@@ -186,8 +218,8 @@ final class EpisodeAdFreePassCoordinator {
             return .failed("Transcript cancelled.")
         case .interrupted(let record):
             return transcriptions.isEnvironmentalInterruption(record) ? .pausedInBackground : .interrupted
-        case .completed:
-            break
+        case .completed(let record):
+            transcriptRecord = record
         case .unavailable, .downloadRequired, .modelRequired, .modelBusy, .ready:
             if let lastFailure = failureMessage(for: episodeID) {
                 return .failed(lastFailure)
@@ -195,33 +227,40 @@ final class EpisodeAdFreePassCoordinator {
             return .idle
         }
 
-        guard let transcriptDocument = transcriptions.document(for: episodeID) else {
+        if adAnalyses.isRunning(for: episodeID) {
+            return .analyzing
+        }
+
+        guard let analysisRecord = adAnalyses.record(for: episodeID) else {
             if let lastFailure = failureMessage(for: episodeID) {
                 return .failed(lastFailure)
+            }
+            if let unavailableMessage = adAnalyses.analysisStartUnavailableMessage {
+                return .unavailable(unavailableMessage)
             }
             return .idle
         }
 
-        switch adAnalyses.jobState(
-            for: transcriptDocument,
-            transcriptState: transcriptions.record(for: episodeID)?.state
-        ) {
-        case .running:
+        switch analysisRecord.state {
+        case .queued, .running:
             return .analyzing
-        case .completed(_, let isStale):
-            return isStale ? .outdated : .completed(zoneCount: currentZoneCount)
-        case .failed(let record, let isStale):
-            if isStale {
+        case .completed:
+            guard let isCurrent = completedAnalysisVerdictIfAvailable(
+                for: episodeID,
+                transcriptions: transcriptions,
+                adAnalyses: adAnalyses
+            ) else {
+                return .checkingAnalysis
+            }
+            return isCurrent ? .completed(zoneCount: currentZoneCount) : .outdated
+        case .failed:
+            guard analysisRecord.transcriptState == .completed,
+                  analysisRecord.transcriptUpdatedAt.truncatedToWholeSeconds
+                    == transcriptRecord.updatedAt.truncatedToWholeSeconds
+            else {
                 return .outdated
             }
-            return .failed(record.errorMessage ?? "Promo/ad analysis failed.")
-        case .unavailable(let message):
-            return .unavailable(message)
-        case .ready:
-            if let lastFailure = failureMessage(for: episodeID) {
-                return .failed(lastFailure)
-            }
-            return .idle
+            return .failed(analysisRecord.errorMessage ?? "Promo/ad analysis failed.")
         }
     }
 
@@ -236,6 +275,10 @@ final class EpisodeAdFreePassCoordinator {
         modelContext: ModelContext,
         transcriptionEngine: AdFreePassTranscriptionEngine = .productDefault,
         podcastLanguageCode: String? = nil,
+        mode: AdDetectionMode = .onDevice,
+        remoteRunner: RemoteTranscriptionJobRunner? = nil,
+        remoteJobStore: RemoteTranscriptionJobStore? = nil,
+        remotePurchases: RemoteTranscriptionPurchaseStore? = nil,
         prepareBackgroundSession: @escaping @MainActor () -> Void = {},
         refreshSkipZones: @escaping @MainActor () -> Int
     ) {
@@ -253,15 +296,6 @@ final class EpisodeAdFreePassCoordinator {
             return
         }
 
-        if origin == .auto,
-           hasCurrentCompletedAnalysis(
-               for: episodeID,
-               transcriptions: transcriptions,
-               adAnalyses: adAnalyses
-           ) {
-            return
-        }
-
         beginDrainSessionIfNeeded()
 
         let insertsAtFront = origin == .auto
@@ -270,34 +304,45 @@ final class EpisodeAdFreePassCoordinator {
             episode: episode,
             origin: origin,
             enqueuedAt: .now,
-            sequence: nextSequence(front: insertsAtFront)
+            sequence: nextSequence(front: insertsAtFront),
+            mode: mode
         )
+        let dependencies = PassDependencies(
+            downloads: downloads,
+            transcriptionModels: transcriptionModels,
+            appleSpeechAssets: appleSpeechAssets,
+            transcriptions: transcriptions,
+            adAnalyses: adAnalyses,
+            modelContext: modelContext,
+            transcriptionEngine: transcriptionEngine,
+            podcastLanguageCode: podcastLanguageCode,
+            prepareBackgroundSession: prepareBackgroundSession,
+            refreshSkipZones: refreshSkipZones,
+            remoteRunner: remoteRunner,
+            remoteJobStore: remoteJobStore,
+            remotePurchases: remotePurchases
+        )
+        let launchPreparation = Task { [weak self] in
+            await Task.yield()
+            guard let self else {
+                return LaunchPreparationOutcome.failed
+            }
+            return await self.prepareAcceptedItemLaunch(
+                item: item,
+                dependencies: dependencies
+            )
+        }
         let entry = QueueEntry(
             item: item,
-            deps: PassDependencies(
-                downloads: downloads,
-                transcriptionModels: transcriptionModels,
-                appleSpeechAssets: appleSpeechAssets,
-                transcriptions: transcriptions,
-                adAnalyses: adAnalyses,
-                modelContext: modelContext,
-                transcriptionEngine: transcriptionEngine,
-                podcastLanguageCode: podcastLanguageCode,
-                prepareBackgroundSession: prepareBackgroundSession,
-                refreshSkipZones: refreshSkipZones
-            )
+            deps: dependencies,
+            launchPreparation: launchPreparation
         )
         if insertsAtFront {
             entries.insert(entry, at: 0)
         } else {
             entries.append(entry)
         }
-        persistItem(item, modelContext: modelContext)
         clearFailure(episodeID: episodeID)
-        prepareBackgroundSession()
-        AdFreePassBackgroundRunLog.record(
-            "queue enqueued episodeID=\(episodeID) origin=\(origin.rawValue) front=\(insertsAtFront) pending=\(entries.count) state=\(queueState)"
-        )
 
         switch queueState {
         case .idle:
@@ -307,6 +352,10 @@ final class EpisodeAdFreePassCoordinator {
         case .running, .pausedInterrupted, .awaitingModelConsent, .capDeferred:
             break
         }
+        SoundLabResponsivenessDiagnostics.mark(
+            "queue-state-acknowledged",
+            episodeID: episodeID
+        )
     }
 
     func restorePersistedQueue(
@@ -318,6 +367,9 @@ final class EpisodeAdFreePassCoordinator {
         adAnalyses: EpisodeAdAnalysisStore,
         modelContext: ModelContext,
         podcastLanguageCode: (String) -> String?,
+        remoteRunner: RemoteTranscriptionJobRunner? = nil,
+        remoteJobStore: RemoteTranscriptionJobStore? = nil,
+        remotePurchases: RemoteTranscriptionPurchaseStore? = nil,
         refreshSkipZones: @escaping @MainActor (EpisodeListItemSnapshot) -> Int
     ) {
         let records: [AdFreePassQueueItemRecord]
@@ -346,14 +398,18 @@ final class EpisodeAdFreePassCoordinator {
                 continue
             }
 
+            let mode = AdDetectionMode(rawValue: record.modeRawValue) ?? .onDevice
             let item = AdFreePassQueueItem(
                 episode: episode,
                 origin: origin,
                 enqueuedAt: record.enqueuedAt,
-                sequence: record.sequence
+                sequence: record.sequence,
+                mode: mode
             )
             // Restored items drain foreground-opportunistically; background
             // continuation always requires a fresh explicit tap (decision 5).
+            // A restored cloud item re-attaches server-side through its
+            // stable purpose-keyed clientRequestID.
             let entry = QueueEntry(
                 item: item,
                 deps: PassDependencies(
@@ -366,8 +422,12 @@ final class EpisodeAdFreePassCoordinator {
                     transcriptionEngine: .productDefault,
                     podcastLanguageCode: podcastLanguageCode(episode.podcastID),
                     prepareBackgroundSession: {},
-                    refreshSkipZones: { refreshSkipZones(episode) }
-                )
+                    refreshSkipZones: { refreshSkipZones(episode) },
+                    remoteRunner: remoteRunner,
+                    remoteJobStore: remoteJobStore,
+                    remotePurchases: remotePurchases
+                ),
+                launchPreparation: nil
             )
             entries.append(entry)
         }
@@ -389,7 +449,11 @@ final class EpisodeAdFreePassCoordinator {
         }
 
         pausedForEnvironmentalInterrupt = false
-        entries.first?.deps.prepareBackgroundSession()
+        if let prepareBackgroundSession = entries.first?.deps.prepareBackgroundSession {
+            scheduleResumeLaunchPreparation(
+                prepareBackgroundSession: prepareBackgroundSession
+            )
+        }
         startDrain()
     }
 
@@ -397,7 +461,11 @@ final class EpisodeAdFreePassCoordinator {
         switch queueState {
         case .pausedInterrupted, .awaitingModelConsent, .capDeferred:
             pausedForEnvironmentalInterrupt = false
-            entries.first?.deps.prepareBackgroundSession()
+            if let prepareBackgroundSession = entries.first?.deps.prepareBackgroundSession {
+                scheduleResumeLaunchPreparation(
+                    prepareBackgroundSession: prepareBackgroundSession
+                )
+            }
             startDrain()
         case .idle, .running:
             break
@@ -436,6 +504,9 @@ final class EpisodeAdFreePassCoordinator {
         passTask?.cancel()
         passTask = nil
         cancellationSource.clearTask()
+        for entry in entries {
+            entry.launchPreparation?.cancel()
+        }
         entries = []
         activeItem = nil
         currentStage = nil
@@ -467,6 +538,9 @@ final class EpisodeAdFreePassCoordinator {
         }
 
         let countBefore = entries.count
+        for entry in entries where entry.item.episodeID == episodeID {
+            entry.launchPreparation?.cancel()
+        }
         entries.removeAll { $0.item.episodeID == episodeID }
         guard entries.count != countBefore else {
             return
@@ -498,16 +572,28 @@ final class EpisodeAdFreePassCoordinator {
         let podcastLanguageCode: String?
         let prepareBackgroundSession: @MainActor () -> Void
         let refreshSkipZones: @MainActor () -> Int
+        // Cloud detect passes only; on-device items never touch these.
+        var remoteRunner: RemoteTranscriptionJobRunner?
+        var remoteJobStore: RemoteTranscriptionJobStore?
+        var remotePurchases: RemoteTranscriptionPurchaseStore?
     }
 
     private struct QueueEntry {
         let item: AdFreePassQueueItem
         let deps: PassDependencies
+        var launchPreparation: Task<LaunchPreparationOutcome, Never>?
+    }
+
+    private enum LaunchPreparationOutcome {
+        case ready
+        case skip
+        case failed
     }
 
     private enum PassOutcome {
         case completed(zoneCount: Int)
         case failed(message: String)
+        case cloudUnavailable(message: String)
         case awaitingConsent
         case interrupted(environmental: Bool)
         case capDeferred
@@ -545,7 +631,7 @@ final class EpisodeAdFreePassCoordinator {
 
     private func resumePausedQueueIfHeadReEnqueued(
         episodeID: String,
-        prepareBackgroundSession: @MainActor () -> Void
+        prepareBackgroundSession: @escaping @MainActor () -> Void
     ) {
         guard entries.first?.item.episodeID == episodeID else {
             return
@@ -554,16 +640,85 @@ final class EpisodeAdFreePassCoordinator {
         switch queueState {
         case .awaitingModelConsent, .pausedInterrupted:
             pausedForEnvironmentalInterrupt = false
-            prepareBackgroundSession()
+            scheduleResumeLaunchPreparation(
+                prepareBackgroundSession: prepareBackgroundSession
+            )
             startDrain()
         case .capDeferred:
             // A manual tap on the deferred episode is always allowed to probe.
             hasProbedCapThisForegroundSession = true
-            prepareBackgroundSession()
+            scheduleResumeLaunchPreparation(
+                prepareBackgroundSession: prepareBackgroundSession
+            )
             startDrain()
         case .idle, .running:
             break
         }
+    }
+
+    private func scheduleResumeLaunchPreparation(
+        prepareBackgroundSession: @escaping @MainActor () -> Void
+    ) {
+        guard !entries.isEmpty else {
+            return
+        }
+
+        let episodeID = entries[0].item.episodeID
+        entries[0].launchPreparation = Task {
+            await Task.yield()
+            await launchPreparationGate()
+            await SoundLabResponsivenessDiagnostics.holdLaunchPreparationIfRequested()
+            guard !Task.isCancelled else {
+                return LaunchPreparationOutcome.skip
+            }
+            prepareBackgroundSession()
+            SoundLabResponsivenessDiagnostics.mark(
+                "background-session-armed",
+                episodeID: episodeID
+            )
+            return LaunchPreparationOutcome.ready
+        }
+    }
+
+    private func prepareAcceptedItemLaunch(
+        item: AdFreePassQueueItem,
+        dependencies: PassDependencies
+    ) async -> LaunchPreparationOutcome {
+        await launchPreparationGate()
+        await SoundLabResponsivenessDiagnostics.holdLaunchPreparationIfRequested()
+        guard !Task.isCancelled else {
+            return .skip
+        }
+
+        if item.origin == .auto,
+           await currentCompletedAnalysisVerdict(
+               for: item.episodeID,
+               transcriptions: dependencies.transcriptions,
+               adAnalyses: dependencies.adAnalyses
+           ) {
+            return .skip
+        }
+
+        do {
+            try persistItem(item, modelContext: dependencies.modelContext)
+            SoundLabResponsivenessDiagnostics.mark(
+                "queue-record-persisted",
+                episodeID: item.episodeID
+            )
+        } catch {
+            recordFailure(error.localizedDescription, episodeID: item.episodeID)
+            return .failed
+        }
+
+        dependencies.prepareBackgroundSession()
+        SoundLabResponsivenessDiagnostics.mark(
+            "background-session-armed",
+            episodeID: item.episodeID
+        )
+        AdFreePassBackgroundRunLog.record(
+            "queue enqueued episodeID=\(item.episodeID) origin=\(item.origin.rawValue) mode=\(item.mode.rawValue) pending=\(entries.count) state=\(queueState)"
+        )
+        return .ready
     }
 
     private func startDrain() {
@@ -597,6 +752,36 @@ final class EpisodeAdFreePassCoordinator {
         }
 
         while !entries.isEmpty {
+            let pendingEntry = entries[0]
+            let launchPreparation = await pendingEntry.launchPreparation?.value ?? .ready
+            guard !Task.isCancelled else {
+                endDrain(
+                    state: entries.isEmpty ? .idle : .pausedInterrupted,
+                    terminal: .interrupted
+                )
+                return
+            }
+            guard entries.first?.item.episodeID == pendingEntry.item.episodeID else {
+                continue
+            }
+            if launchPreparation == .skip {
+                entries.removeFirst()
+                continue
+            }
+            guard launchPreparation == .ready else {
+                let failedEntry = entries.removeFirst()
+                let message = failureMessage(for: failedEntry.item.episodeID)
+                    ?? "Unable to save the ad detection request."
+                drainFailedCount += 1
+                drainOutcomes.append(AdFreePassQueueItemOutcome(
+                    episodeID: failedEntry.item.episodeID,
+                    episodeTitle: failedEntry.item.episode.title,
+                    artworkURL: failedEntry.item.episode.artworkURL,
+                    kind: .failed(message: message)
+                ))
+                continue
+            }
+
             let entry = entries.removeFirst()
             activeItem = entry.item
             lastPublishedStage = nil
@@ -636,6 +821,15 @@ final class EpisodeAdFreePassCoordinator {
                     episodeTitle: entry.item.episode.title,
                     artworkURL: entry.item.episode.artworkURL,
                     kind: .failed(message: message)
+                ))
+                removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
+            case .cloudUnavailable(let message):
+                drainFailedCount += 1
+                drainOutcomes.append(AdFreePassQueueItemOutcome(
+                    episodeID: entry.item.episodeID,
+                    episodeTitle: entry.item.episode.title,
+                    artworkURL: entry.item.episode.artworkURL,
+                    kind: .cloudUnavailable(message: message)
                 ))
                 removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
             case .awaitingConsent:
@@ -681,6 +875,9 @@ final class EpisodeAdFreePassCoordinator {
     }
 
     private func runPass(_ entry: QueueEntry) async -> PassOutcome {
+        if entry.item.mode == .cloud {
+            return await runCloudPass(entry)
+        }
         let episode = entry.item.episode
         let deps = entry.deps
 
@@ -696,7 +893,7 @@ final class EpisodeAdFreePassCoordinator {
             // resource setup entirely.
             let transcriptDocument: EpisodeTranscriptDocument
             if !deps.transcriptionEngine.isExplicitOverride,
-               let reusableDocument = reusableCompletedTranscriptDocument(
+               let reusableDocument = await reusableCompletedTranscriptDocument(
                    for: episode.episodeID,
                    transcriptions: deps.transcriptions
                ) {
@@ -754,6 +951,209 @@ final class EpisodeAdFreePassCoordinator {
         }
     }
 
+    /// One cloud detect item: transcript reuse first (free), then a
+    /// viability precheck (never a silent mode switch), then one server job
+    /// with chained ad detection. The transcript always imports when the job
+    /// delivers; a failed/invalid ad block falls back to the on-device
+    /// analysis path over that imported transcript automatically.
+    private func runCloudPass(_ entry: QueueEntry) async -> PassOutcome {
+        let episode = entry.item.episode
+        let deps = entry.deps
+
+        do {
+            // Decision 5: a current completed local transcript never buys a
+            // cloud job — the analysis-only device path is free.
+            if let reusableDocument = await reusableCompletedTranscriptDocument(
+                for: episode.episodeID,
+                transcriptions: deps.transcriptions
+            ) {
+                AdFreePassBackgroundRunLog.record(
+                    "cloud pass transcript reuse episodeID=\(episode.episodeID)"
+                )
+                return try await finishCloudPassWithAnalysis(
+                    transcript: reusableDocument,
+                    entry: entry
+                )
+            }
+
+            guard let runner = deps.remoteRunner,
+                  let jobStore = deps.remoteJobStore,
+                  let purchases = deps.remotePurchases
+            else {
+                return cloudUnavailableOutcome(
+                    "Cloud detection isn't available right now.",
+                    episodeID: episode.episodeID
+                )
+            }
+            if case .unavailable(let reason) = purchases.availability {
+                // `.unknown` deliberately does not block: the job's own
+                // bootstrap is authoritative (and the only gate that exists
+                // in the dev lane).
+                return cloudUnavailableOutcome(reason, episodeID: episode.episodeID)
+            }
+            if let duration = episode.duration,
+               !purchases.estimate(durationSeconds: duration).fitsWithinHeadroom {
+                return cloudUnavailableOutcome(
+                    RemoteTranscriptionFailureCategory.serverRejected(.insufficientCredits).message,
+                    episodeID: episode.episodeID
+                )
+            }
+            guard let audioURL = episode.audioURL, !audioURL.isEmpty else {
+                throw PassFailure(
+                    RemoteTranscriptionFailureCategory.missingAudio.message
+                )
+            }
+            if jobStore.hasActiveRequest, jobStore.activeEpisodeID == episode.episodeID {
+                // A plain Transcribe Remotely job already owns this episode;
+                // it will deliver the transcript the free path can use.
+                return cloudUnavailableOutcome(
+                    "A remote transcription of this episode is already running.",
+                    episodeID: episode.episodeID
+                )
+            }
+
+            let outcome = try await runner.run(
+                episode: episode,
+                enclosureURL: audioURL,
+                purpose: .adDetection,
+                adAnalysis: RemoteTranscriptionJobRunner.AdAnalysisContext(
+                    podcastID: episode.podcastID,
+                    episodeTitle: episode.title,
+                    podcastTitle: episode.podcastTitle
+                ),
+                modelContext: deps.modelContext,
+                onEvent: { [weak self] event in
+                    self?.applyCloudEvent(event)
+                }
+            )
+
+            if case .completed(let success) = outcome.adAnalysis {
+                do {
+                    let analysisDocument = try EpisodeRemoteAdAnalysisMapper.document(
+                        from: success,
+                        transcript: outcome.document,
+                        requestID: outcome.jobID
+                    )
+                    try deps.adAnalyses.importCompletedAnalysis(
+                        analysisDocument,
+                        modelContext: deps.modelContext
+                    )
+                    let zoneCount = deps.refreshSkipZones()
+                    clearFailure(episodeID: episode.episodeID)
+                    setStage(.completed(zoneCount: zoneCount))
+                    return .completed(zoneCount: zoneCount)
+                } catch {
+                    AdFreePassBackgroundRunLog.record(
+                        "cloud analysis import rejected episodeID=\(episode.episodeID); falling back to device analysis"
+                    )
+                }
+            }
+            // Failure marker, missing block, or an import the mapper refused:
+            // the transcript is durably imported, so the existing on-device
+            // analysis path finishes the pass automatically.
+            return try await finishCloudPassWithAnalysis(
+                transcript: outcome.document,
+                entry: entry
+            )
+        } catch PassStop.capDeferred {
+            return .capDeferred
+        } catch PassStop.awaitingModelConsent {
+            return .awaitingConsent
+        } catch PassStop.interrupted {
+            setStage(.interrupted)
+            return .interrupted(environmental: false)
+        } catch is CancellationError {
+            // The runner already fired the server cancel; the charge stands
+            // once the job settled (documented server behavior).
+            deps.remoteJobStore?.clearReference(for: episode.episodeID, purpose: .adDetection)
+            setStage(.interrupted)
+            return .interrupted(environmental: false)
+        } catch let error as RemoteTranscriptionJobRunError {
+            if Self.isCloudUnavailableRunError(error) {
+                return cloudUnavailableOutcome(
+                    Self.cloudFailureMessage(for: error),
+                    episodeID: episode.episodeID
+                )
+            }
+            let message = Self.cloudFailureMessage(for: error)
+            recordFailure(message, episodeID: episode.episodeID)
+            setStage(.failed(message: message))
+            return .failed(message: message)
+        } catch {
+            recordFailure(error.localizedDescription, episodeID: episode.episodeID)
+            setStage(.failed(message: error.localizedDescription))
+            return .failed(message: error.localizedDescription)
+        }
+    }
+
+    /// Shared tail of the cloud pass: run (or reuse) the on-device analysis
+    /// over a completed transcript, with cap-deferral semantics intact.
+    private func finishCloudPassWithAnalysis(
+        transcript: EpisodeTranscriptDocument,
+        entry: QueueEntry
+    ) async throws -> PassOutcome {
+        try await completedAnalysis(
+            for: transcript,
+            transcriptions: entry.deps.transcriptions,
+            adAnalyses: entry.deps.adAnalyses,
+            modelContext: entry.deps.modelContext
+        )
+        let zoneCount = entry.deps.refreshSkipZones()
+        clearFailure(episodeID: entry.item.episodeID)
+        setStage(.completed(zoneCount: zoneCount))
+        return .completed(zoneCount: zoneCount)
+    }
+
+    private func cloudUnavailableOutcome(_ message: String, episodeID: String) -> PassOutcome {
+        recordFailure(message, episodeID: episodeID)
+        setStage(.cloudUnavailable(message: message))
+        return .cloudUnavailable(message: message)
+    }
+
+    private func applyCloudEvent(_ event: RemoteTranscriptionJobEvent) {
+        switch event {
+        case .downloading:
+            setStage(.downloadingEpisode)
+        case .verifying, .queuedRemotely, .waitingForCredits, .uploadingExactCopy:
+            setStage(.cloudQueued)
+        case .processing(let progress) where progress.stage == .finalizing:
+            // Finalization follows the ad phase on detect jobs; falling back
+            // to "Transcribing" copy here would read as a regression.
+            setStage(.cloudDetectingAds)
+        case .processing(let progress):
+            setStage(.cloudTranscribing(progress))
+        case .detectingAds, .saving:
+            setStage(.cloudDetectingAds)
+        }
+    }
+
+    /// Failures where "Detect on this device instead" is the honest recovery
+    /// (credits, capacity, kill switch, unreachable service) — never a
+    /// silent mode switch, always the explicit one-tap fallback.
+    private static func isCloudUnavailableRunError(_ error: RemoteTranscriptionJobRunError) -> Bool {
+        switch error {
+        case .serviceUnavailable:
+            true
+        case .serverRejected(let code):
+            code == .featureDisabled
+                || code == .insufficientCredits
+                || code == .rateLimited
+        case .downloadFailed, .remoteCancelled, .mismatchLocalFallback, .resultInvalid:
+            false
+        }
+    }
+
+    private static func cloudFailureMessage(for error: RemoteTranscriptionJobRunError) -> String {
+        switch error {
+        case .mismatchLocalFallback:
+            "The server's audio didn't match this device's copy."
+        case .remoteCancelled:
+            "The server ended the cloud detection job."
+        default:
+            error.failureCategory.message
+        }
+    }
+
     // MARK: - Presentation helpers
 
     private func queuedPresentation(for episodeID: String) -> EpisodeAdFreePassPresentation? {
@@ -773,21 +1173,147 @@ final class EpisodeAdFreePassCoordinator {
         }
     }
 
+    /// True while a cloud detect item is running or pending for the episode;
+    /// gates Transcribe Remotely (the cloud pass delivers the transcript).
+    func hasActiveOrQueuedCloudItem(for episodeID: String) -> Bool {
+        if let activeItem, activeItem.episodeID == episodeID, activeItem.mode == .cloud {
+            return true
+        }
+        return entries.contains { $0.item.episodeID == episodeID && $0.item.mode == .cloud }
+    }
+
     func hasCurrentCompletedAnalysis(
         for episodeID: String,
         transcriptions: EpisodeTranscriptionStore,
         adAnalyses: EpisodeAdAnalysisStore
     ) -> Bool {
-        guard adAnalyses.record(for: episodeID)?.state == .completed,
+        completedAnalysisVerdictIfAvailable(
+            for: episodeID,
+            transcriptions: transcriptions,
+            adAnalyses: adAnalyses
+        ) ?? false
+    }
+
+    private func completedAnalysisVerdictIfAvailable(
+        for episodeID: String,
+        transcriptions: EpisodeTranscriptionStore,
+        adAnalyses: EpisodeAdAnalysisStore
+    ) -> Bool? {
+        guard let analysisRecord = adAnalyses.record(for: episodeID),
+              analysisRecord.state == .completed,
               let transcriptRecord = transcriptions.record(for: episodeID),
-              transcriptRecord.state == .completed,
-              let transcriptDocument = transcriptions.document(for: episodeID),
-              let analysisDocument = adAnalyses.document(for: episodeID)
+              transcriptRecord.state == .completed
         else {
             return false
         }
 
-        return adAnalyses.isCurrentAnalysisDocument(analysisDocument, for: transcriptDocument)
+        // Answering for real means decoding + fingerprinting the full
+        // transcript document, which scales with episode length — done
+        // synchronously here it froze scrolling for every realized row with
+        // a completed analysis. The verdict is computed off-main once per
+        // (transcript, analysis) revision and cached; until it lands,
+        // readers see `false`, which only under-offers "Ads Detected" for
+        // the moments before a menu could actually be presented. Gates that
+        // must not double-run passes use
+        // `currentCompletedAnalysisVerdict` instead.
+        let transcriptStamp = transcriptRecord.updatedAt
+        let analysisStamp = analysisRecord.updatedAt
+        if let verdict = completedAnalysisVerdictsByEpisodeID[episodeID],
+           verdict.transcriptRecordUpdatedAt == transcriptStamp,
+           verdict.analysisRecordUpdatedAt == analysisStamp {
+            return verdict.isCurrent
+        }
+
+        scheduleCompletedAnalysisVerdictCompute(
+            episodeID: episodeID,
+            transcriptions: transcriptions,
+            adAnalyses: adAnalyses
+        )
+        return nil
+    }
+
+    /// Definitive variant for no-double-run gates. A cache miss loads both
+    /// documents and fingerprints off the caller's actor.
+    func currentCompletedAnalysisVerdict(
+        for episodeID: String,
+        transcriptions: EpisodeTranscriptionStore,
+        adAnalyses: EpisodeAdAnalysisStore
+    ) async -> Bool {
+        guard let analysisRecord = adAnalyses.record(for: episodeID),
+              analysisRecord.state == .completed,
+              let transcriptRecord = transcriptions.record(for: episodeID),
+              transcriptRecord.state == .completed
+        else {
+            return false
+        }
+
+        let transcriptStamp = transcriptRecord.updatedAt
+        let analysisStamp = analysisRecord.updatedAt
+        if let verdict = completedAnalysisVerdictsByEpisodeID[episodeID],
+           verdict.transcriptRecordUpdatedAt == transcriptStamp,
+           verdict.analysisRecordUpdatedAt == analysisStamp {
+            return verdict.isCurrent
+        }
+
+        SoundLabResponsivenessDiagnostics.mark(
+            "verdict-documents-load-begin",
+            episodeID: episodeID
+        )
+        async let transcriptLoad = try? transcriptions.loadDocument(for: episodeID)
+        async let analysisLoad = try? adAnalyses.loadDocument(for: episodeID)
+        let (transcriptDocument, analysisDocument) = await (transcriptLoad, analysisLoad)
+        SoundLabResponsivenessDiagnostics.mark(
+            "verdict-documents-load-end",
+            episodeID: episodeID
+        )
+
+        var isCurrent = false
+        if let transcriptDocument, let analysisDocument {
+            isCurrent = await adAnalyses.isCurrentAnalysisDocumentOffCaller(
+                analysisDocument,
+                for: transcriptDocument
+            )
+        }
+        if transcriptions.record(for: episodeID)?.updatedAt == transcriptStamp,
+           adAnalyses.record(for: episodeID)?.updatedAt == analysisStamp {
+            completedAnalysisVerdictsByEpisodeID[episodeID] = CompletedAnalysisVerdict(
+                transcriptRecordUpdatedAt: transcriptStamp,
+                analysisRecordUpdatedAt: analysisStamp,
+                isCurrent: isCurrent
+            )
+        }
+        return isCurrent
+    }
+
+    private struct CompletedAnalysisVerdict {
+        let transcriptRecordUpdatedAt: Date
+        let analysisRecordUpdatedAt: Date
+        let isCurrent: Bool
+    }
+
+    private var completedAnalysisVerdictsByEpisodeID: [String: CompletedAnalysisVerdict] = [:]
+    @ObservationIgnored private var completedAnalysisVerdictComputesInFlight: Set<String> = []
+
+    private func scheduleCompletedAnalysisVerdictCompute(
+        episodeID: String,
+        transcriptions: EpisodeTranscriptionStore,
+        adAnalyses: EpisodeAdAnalysisStore
+    ) {
+        guard !completedAnalysisVerdictComputesInFlight.contains(episodeID) else {
+            return
+        }
+        completedAnalysisVerdictComputesInFlight.insert(episodeID)
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            _ = await self.currentCompletedAnalysisVerdict(
+                for: episodeID,
+                transcriptions: transcriptions,
+                adAnalyses: adAnalyses
+            )
+            self.completedAnalysisVerdictComputesInFlight.remove(episodeID)
+        }
     }
 
     // MARK: - Persistence
@@ -802,15 +1328,22 @@ final class EpisodeAdFreePassCoordinator {
         return front ? bounds.low - 1 : bounds.high + 1
     }
 
-    private func persistItem(_ item: AdFreePassQueueItem, modelContext: ModelContext) {
-        modelContext.insert(AdFreePassQueueItemRecord(
+    private func persistItem(_ item: AdFreePassQueueItem, modelContext: ModelContext) throws {
+        let record = AdFreePassQueueItemRecord(
             episodeID: item.episodeID,
             podcastID: item.episode.podcastID,
             originRawValue: item.origin.rawValue,
             enqueuedAt: item.enqueuedAt,
-            sequence: item.sequence
-        ))
-        try? modelContext.save()
+            sequence: item.sequence,
+            modeRawValue: item.mode.rawValue
+        )
+        modelContext.insert(record)
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.delete(record)
+            throw error
+        }
     }
 
     private func removePersistedItem(episodeID: String, modelContext: ModelContext) {
@@ -832,13 +1365,22 @@ final class EpisodeAdFreePassCoordinator {
     private func reusableCompletedTranscriptDocument(
         for episodeID: String,
         transcriptions: EpisodeTranscriptionStore
-    ) -> EpisodeTranscriptDocument? {
+    ) async -> EpisodeTranscriptDocument? {
         guard let record = transcriptions.record(for: episodeID),
               record.state == .completed
         else {
             return nil
         }
-        return transcriptions.document(for: episodeID)
+        SoundLabResponsivenessDiagnostics.mark(
+            "transcript-document-load-begin",
+            episodeID: episodeID
+        )
+        let document = try? await transcriptions.loadDocument(for: episodeID)
+        SoundLabResponsivenessDiagnostics.mark(
+            "transcript-document-load-end",
+            episodeID: episodeID
+        )
+        return document
     }
 
     private func completedDownload(
@@ -998,9 +1540,19 @@ final class EpisodeAdFreePassCoordinator {
             )
             switch state {
             case .completed:
-                guard let document = transcriptions.document(for: episode.episodeID) else {
+                SoundLabResponsivenessDiagnostics.mark(
+                    "transcript-document-load-begin",
+                    episodeID: episode.episodeID
+                )
+                guard let document = try? await transcriptions.loadDocument(
+                    for: episode.episodeID
+                ) else {
                     throw EpisodeTranscriptionError.transcriptDocumentMissing
                 }
+                SoundLabResponsivenessDiagnostics.mark(
+                    "transcript-document-load-end",
+                    episodeID: episode.episodeID
+                )
                 return document
             case .running(let progress):
                 setStage(.transcribing(progress))
@@ -1056,53 +1608,91 @@ final class EpisodeAdFreePassCoordinator {
             try Task.checkCancellation()
 
             let analysisChangeSequence = adAnalyses.changeSequence
-            switch adAnalyses.jobState(
-                for: transcriptDocument,
-                transcriptState: transcriptions.record(for: transcriptDocument.episodeID)?.state
-            ) {
-            case .completed(_, let isStale) where !isStale:
-                return
-            case .running:
+            if adAnalyses.isRunning(for: transcriptDocument.episodeID) {
                 setStage(.analyzing)
-                break
-            case .ready, .completed:
+            } else if let record = adAnalyses.record(for: transcriptDocument.episodeID) {
+                switch record.state {
+                case .queued, .running:
+                    setStage(.analyzing)
+                case .completed:
+                    if await adAnalyses.hasCurrentCompletedAnalysis(
+                        for: transcriptDocument
+                    ) {
+                        return
+                    }
+                    try startAnalysisOrThrowOnSecondAttempt(
+                        didStartAnalysis: &didStartAnalysis,
+                        transcriptDocument: transcriptDocument,
+                        transcriptions: transcriptions,
+                        adAnalyses: adAnalyses,
+                        modelContext: modelContext
+                    )
+                case .failed:
+                    guard !didStartAnalysis else {
+                        if record.failureKind == .capExceeded {
+                            throw PassStop.capDeferred
+                        }
+                        throw PassFailure(
+                            record.errorMessage
+                                ?? adAnalyses.lastErrorMessage(for: transcriptDocument.episodeID)
+                                ?? FailureMessage.analysisFailed
+                        )
+                    }
+                    try startAnalysisOrThrowOnSecondAttempt(
+                        didStartAnalysis: &didStartAnalysis,
+                        transcriptDocument: transcriptDocument,
+                        transcriptions: transcriptions,
+                        adAnalyses: adAnalyses,
+                        modelContext: modelContext
+                    )
+                }
+            } else {
+                if let unavailableMessage = adAnalyses.analysisStartUnavailableMessage {
+                    throw PassFailure(unavailableMessage)
+                }
                 guard !didStartAnalysis else {
                     throw PassFailure(
                         adAnalyses.lastErrorMessage(for: transcriptDocument.episodeID)
                             ?? FailureMessage.analysisFailed
                     )
                 }
-                adAnalyses.startAnalysis(
-                    transcript: transcriptDocument,
-                    transcriptState: transcriptions.record(for: transcriptDocument.episodeID)?.state,
+                try startAnalysisOrThrowOnSecondAttempt(
+                    didStartAnalysis: &didStartAnalysis,
+                    transcriptDocument: transcriptDocument,
+                    transcriptions: transcriptions,
+                    adAnalyses: adAnalyses,
                     modelContext: modelContext
                 )
-                didStartAnalysis = true
-                setStage(.analyzing)
-            case .failed(let record, _):
-                guard !didStartAnalysis else {
-                    if record.failureKind == .capExceeded {
-                        throw PassStop.capDeferred
-                    }
-                    throw PassFailure(
-                        record.errorMessage
-                            ?? adAnalyses.lastErrorMessage(for: transcriptDocument.episodeID)
-                            ?? FailureMessage.analysisFailed
-                    )
-                }
-                adAnalyses.startAnalysis(
-                    transcript: transcriptDocument,
-                    transcriptState: transcriptions.record(for: transcriptDocument.episodeID)?.state,
-                    modelContext: modelContext
-                )
-                didStartAnalysis = true
-                setStage(.analyzing)
-            case .unavailable(let message):
-                throw PassFailure(message)
             }
 
             try await adAnalyses.waitForChange(after: analysisChangeSequence)
         }
+    }
+
+    private func startAnalysisOrThrowOnSecondAttempt(
+        didStartAnalysis: inout Bool,
+        transcriptDocument: EpisodeTranscriptDocument,
+        transcriptions: EpisodeTranscriptionStore,
+        adAnalyses: EpisodeAdAnalysisStore,
+        modelContext: ModelContext
+    ) throws {
+        guard !didStartAnalysis else {
+            if adAnalyses.record(for: transcriptDocument.episodeID)?.failureKind == .capExceeded {
+                throw PassStop.capDeferred
+            }
+            throw PassFailure(
+                adAnalyses.lastErrorMessage(for: transcriptDocument.episodeID)
+                    ?? FailureMessage.analysisFailed
+            )
+        }
+
+        adAnalyses.startAnalysis(
+            transcript: transcriptDocument,
+            transcriptState: transcriptions.record(for: transcriptDocument.episodeID)?.state,
+            modelContext: modelContext
+        )
+        didStartAnalysis = true
+        setStage(.analyzing)
     }
 
     private func installModelIfConsentedOrStop(
@@ -1233,8 +1823,15 @@ final class EpisodeAdFreePassCoordinator {
             return
         }
 
+        let isFirstConcreteStage = lastPublishedStage == nil
         lastPublishedStage = stage
         currentStage = stage
+        if isFirstConcreteStage {
+            SoundLabResponsivenessDiagnostics.mark(
+                "coordinator-first-concrete-stage",
+                episodeID: activeEpisodeID
+            )
+        }
         let context = currentQueueContext
         _ = uiProgressMapper.update(for: stage, queueContext: context)
         onStageChange?(stage, context)

@@ -46,7 +46,7 @@ export async function ensureAccount(
   candidate: PurchaseAccountRow,
   now: number,
 ): Promise<PurchaseAccountRow> {
-  await db
+  const insertAccount = db
     .prepare(
       `INSERT INTO purchase_accounts (app_tx_hmac, account_id, app_transaction_id_encrypted, environment, status, created_at, updated_at)
        VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5)
@@ -58,8 +58,18 @@ export async function ensureAccount(
       candidate.app_transaction_id_encrypted,
       candidate.environment,
       now,
+    );
+  const incrementAccountCount = db
+    .prepare(
+      `INSERT INTO purchase_ops_counters (name, value, updated_at)
+       SELECT 'purchase_account_count', 1, ?1
+       WHERE changes() = 1
+       ON CONFLICT(name) DO UPDATE SET
+         value = purchase_ops_counters.value + 1,
+         updated_at = excluded.updated_at`,
     )
-    .run();
+    .bind(now);
+  await db.batch([insertAccount, incrementAccountCount]);
   const winner = await accountByHmac(db, candidate.app_tx_hmac);
   if (!winner) {
     throw new Error('purchase account insert did not persist');
@@ -306,9 +316,9 @@ export async function finishReconciliation(
 
 export async function purchaseAccountCount(db: D1Database): Promise<number> {
   const row = await db
-    .prepare(`SELECT COUNT(*) AS count FROM purchase_accounts`)
-    .first<{ count: number }>();
-  return Number(row?.count ?? 0);
+    .prepare(`SELECT value FROM purchase_ops_counters WHERE name = 'purchase_account_count'`)
+    .first<{ value: number }>();
+  return Number(row?.value ?? 0);
 }
 
 export async function purchaseAccountIds(db: D1Database, limit: number): Promise<string[]> {

@@ -20,21 +20,21 @@ use crate::challenge_limits::{
 use crate::job::{job_object_name, valid_job_id, JobPollRequest, JobSubmitRequest, JOB_BINDING};
 use crate::route::{
     json_response as static_json_response, route_request, Header as StaticHeader, RouteAction,
-    StaticResponse, ANALYZE_TRANSCRIPT_PATH, JSON_CONTENT_TYPE,
+    StaticResponse, ANALYZE_TRANSCRIPT_PATH, INTERNAL_HOST, JSON_CONTENT_TYPE,
 };
 use crate::storage;
 use crate::types::{
-    resolve_gemini_model, ErrorResponse, GEMINI_MODEL_ENV_VAR,
-    MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES, MAX_BODY_BYTES,
+    resolve_gemini_model, ErrorResponse, InternalAnalyzeRequest, GEMINI_MODEL_ENV_VAR,
+    MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES, MAX_BODY_BYTES, SCHEMA_VERSION,
 };
 use crate::usage::{
     global_usage_object_name, usage_object_name, UsageAdmitRequest, UsageLimitProfile,
     USAGE_LIMITER_BINDING,
 };
 use crate::validation::{
-    decode_and_validate_request, validate_content_length, DailyUsage, ValidatedRequest,
+    decode_and_validate_request, validate_content_length, validate_request, DailyUsage,
+    ValidatedRequest,
 };
-use crate::windowing::window_count;
 use sha2::{Digest, Sha256};
 use worker::{
     durable_object, wasm_bindgen, Date, DurableObject, Env, Headers, Method, Request, RequestInit,
@@ -45,6 +45,9 @@ const AD_ANALYSIS_DB: &str = "AD_ANALYSIS_DB";
 const GEMINI_API_KEY: &str = "GEMINI_API_KEY";
 const AD_ANALYSIS_CLIENT_TOKEN: &str = "AD_ANALYSIS_CLIENT_TOKEN";
 const PUBLIC_AD_ANALYSIS_ENABLED: &str = "PUBLIC_AD_ANALYSIS_ENABLED";
+/// Kill switch for the internal transcription-chained surface, independent
+/// of the public flag.
+const INTERNAL_AD_ANALYSIS_ENABLED: &str = "INTERNAL_AD_ANALYSIS_ENABLED";
 const APPLE_TEAM_ID: &str = "APPLE_TEAM_ID";
 const APPLE_BUNDLE_ID: &str = "APPLE_BUNDLE_ID";
 const APP_ATTEST_ENVIRONMENT: &str = "APP_ATTEST_ENVIRONMENT";
@@ -53,13 +56,24 @@ const REGISTER_PURPOSE: &str = "register";
 const MAX_CHALLENGE_REQUEST_BODY_BYTES: usize = 1024;
 const MAX_REGISTER_REQUEST_BODY_BYTES: usize = 48 * 1024;
 const MAX_JOB_POLL_BODY_BYTES: usize = 16 * 1024;
+/// The internal analyze body wraps the public analysis payload in a small
+/// envelope (schema version, account id, diagnostics job id).
+const MAX_INTERNAL_ANALYZE_BODY_BYTES: usize = MAX_BODY_BYTES + 16 * 1024;
 
 pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
     let method = req.method();
     let path = req.path();
     let enabled = env_flag(&env, PUBLIC_AD_ANALYSIS_ENABLED, false);
+    // The `.internal` host is reachable only over the service binding; the
+    // public host never carries it, so the host IS the trust boundary.
+    let internal = req
+        .url()
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host == INTERNAL_HOST))
+        .unwrap_or(false);
+    let internal_enabled = env_flag(&env, INTERNAL_AD_ANALYSIS_ENABLED, false);
 
-    match route_request(method.as_ref(), &path, enabled) {
+    match route_request(method.as_ref(), &path, enabled, internal, internal_enabled) {
         RouteAction::Static(response) => static_response(response),
         RouteAction::AppAttestChallenge => {
             let db = match required_d1(&env, AD_ANALYSIS_DB) {
@@ -81,7 +95,44 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
         }
         RouteAction::AnalyzeTranscript => analyze_transcript(&mut req, &env).await,
         RouteAction::PollJob { job_id } => poll_job(&mut req, &env, &path, &job_id).await,
+        RouteAction::InternalAnalyze => handle_internal_analyze(&mut req, &env).await,
+        RouteAction::InternalPollJob { job_id } => forward_job_poll(&env, &job_id).await,
     }
+}
+
+/// Internal transcription-chained analyze: no App Attest or bearer (the
+/// service binding + host gate is the trust boundary), always async so the
+/// caller's alarm loop polls the fingerprint-keyed job regardless of window
+/// count. Usage is capped per transcription account plus the same global
+/// daily object public traffic uses.
+async fn handle_internal_analyze(req: &mut Request, env: &Env) -> Result<Response> {
+    let body = match read_limited_json::<InternalAnalyzeRequest>(
+        req,
+        MAX_INTERNAL_ANALYZE_BODY_BYTES,
+    )
+    .await?
+    {
+        Ok(body) => body,
+        Err(response) => return Ok(response),
+    };
+    if body.schema_version != SCHEMA_VERSION || body.account_id.trim().is_empty() {
+        return json_error_code(400, "invalid_internal_request");
+    }
+    let validated = match validate_request(body.request) {
+        Ok(validated) => validated,
+        Err(error) => return json_error(error.http_status(), ErrorResponse::new(error.code())),
+    };
+    if !valid_job_id(&validated.request.transcript.fingerprint) {
+        return json_error_code(400, "invalid_fingerprint");
+    }
+    let subject = format!("transcription-account:{}", token_hash(&body.account_id));
+    submit_async_job(
+        env,
+        validated,
+        &usage_object_name(&subject, day_index()),
+        UsageLimitProfile::TranscriptionAccount,
+    )
+    .await
 }
 
 #[derive(Clone)]
@@ -428,7 +479,13 @@ async fn analyze_validated_request(
         Err(error) => return json_error(503, error),
     };
 
-    if validated.request.async_supported && window_count(validated.request.segments.len()) > 1 {
+    // Async-capable clients always get the fingerprint-keyed job, matching
+    // the internal surface: every HTTP exchange stays short, a lost response
+    // is recovered by polling (or re-submitting) the same fingerprint, and
+    // completed results serve idempotently until their TTL purge. The inline
+    // path below survives only for legacy `async_supported: false` callers,
+    // whose single exchange spans the whole model call.
+    if validated.request.async_supported {
         return submit_async_job(env, validated, usage_object_name, usage_profile).await;
     }
 

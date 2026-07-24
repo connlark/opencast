@@ -41,7 +41,11 @@ struct OpenCastTabRootView: View {
                             inboxNavigationPath.append(.adDetectionQueue)
                         }
                     )
-                    .withOpenCastDestinations()
+                    .withOpenCastDestinations(
+                        onOpenEpisode: { episodeID in
+                            inboxNavigationPath.append(.episodeDetail(id: episodeID))
+                        }
+                    )
                 }
             }
 
@@ -56,7 +60,11 @@ struct OpenCastTabRootView: View {
                             downloadsNavigationPath.append(.episodeDetail(id: episodeID))
                         }
                     )
-                    .withOpenCastDestinations()
+                    .withOpenCastDestinations(
+                        onOpenEpisode: { episodeID in
+                            downloadsNavigationPath.append(.episodeDetail(id: episodeID))
+                        }
+                    )
                 }
             }
             .badge(appModel.downloads.activeDownloadCount)

@@ -19,6 +19,7 @@ struct EpisodePipelineState: Equatable {
     static let transcriptPausedTitle = "Transcript paused"
     static let analyzingTitle = "Detecting ads…"
     static let analysisFailedTitle = "Ad detection didn't finish"
+    static let cloudUnavailableTitle = "Cloud detection unavailable"
 
     static let downloadFailedMessage = "The download couldn't finish."
     static let downloadMissingMessage = "The downloaded file is missing."
@@ -34,11 +35,16 @@ struct EpisodePipelineState: Equatable {
         queueStatus: AdFreePassQueueEpisodeStatus,
         queueSnapshot: AdFreePassQueueSnapshot,
         downloadRecord: EpisodeDownloadRecord?,
+        downloadLiveProgress: DownloadByteProgress? = nil,
         transcription: EpisodeTranscriptionJobState,
         analysis: EpisodeAdAnalysisJobState?
     ) -> EpisodePipelineState? {
         if queueStatus == .running {
-            return activePassState(stage: queueSnapshot.currentStage, downloadRecord: downloadRecord)
+            return activePassState(
+                stage: queueSnapshot.currentStage,
+                downloadRecord: downloadRecord,
+                downloadLiveProgress: downloadLiveProgress
+            )
         }
 
         // A current completed analysis means the chips and ad-span timeline
@@ -102,13 +108,24 @@ struct EpisodePipelineState: Equatable {
             )
         }
 
+        if case .cloudUnavailable(let message) = queueStatus {
+            return cloudUnavailableState(
+                message: message,
+                downloadRecord: downloadRecord,
+                transcription: transcription
+            )
+        }
+
         switch downloadRecord?.state {
         case .downloading:
             return EpisodePipelineState(
                 title: downloadingTitle,
                 steps: [EpisodePipelineStep(
                     kind: .download,
-                    status: .running(fraction: downloadFraction(downloadRecord), detail: nil)
+                    status: .running(
+                        fraction: downloadFraction(downloadRecord, live: downloadLiveProgress),
+                        detail: nil
+                    )
                 )],
                 footnote: nil,
                 action: .cancelDownload
@@ -172,14 +189,18 @@ struct EpisodePipelineState: Equatable {
 
     private static func activePassState(
         stage: EpisodeAdFreePassStage?,
-        downloadRecord: EpisodeDownloadRecord?
+        downloadRecord: EpisodeDownloadRecord?,
+        downloadLiveProgress: DownloadByteProgress? = nil
     ) -> EpisodePipelineState? {
         switch stage {
         case .downloadingEpisode, .idle, .unavailable, nil:
             return EpisodePipelineState(
                 title: passTitle,
                 steps: passSteps(
-                    download: .running(fraction: downloadFraction(downloadRecord), detail: nil),
+                    download: .running(
+                        fraction: downloadFraction(downloadRecord, live: downloadLiveProgress),
+                        detail: nil
+                    ),
                     transcribe: .waiting,
                     detect: .waiting
                 ),
@@ -217,6 +238,44 @@ struct EpisodePipelineState: Equatable {
                 steps: passSteps(download: .done, transcribe: .done, detect: .running(fraction: nil, detail: nil)),
                 footnote: nil,
                 action: .cancelPass
+            )
+        case .cloudQueued:
+            return EpisodePipelineState(
+                title: passTitle,
+                steps: passSteps(
+                    download: completedOrWaiting(downloadRecord),
+                    transcribe: .running(fraction: nil, detail: "Working in the cloud…"),
+                    detect: .waiting
+                ),
+                footnote: nil,
+                action: .cancelPass
+            )
+        case .cloudTranscribing(let progress):
+            return EpisodePipelineState(
+                title: passTitle,
+                steps: passSteps(
+                    download: .done,
+                    transcribe: .running(
+                        fraction: progress?.fractionCompleted,
+                        detail: progress?.estimate?.displayText ?? "Transcribing in the cloud…"
+                    ),
+                    detect: .waiting
+                ),
+                footnote: nil,
+                action: .cancelPass
+            )
+        case .cloudDetectingAds:
+            return EpisodePipelineState(
+                title: passTitle,
+                steps: passSteps(download: .done, transcribe: .done, detect: .running(fraction: nil, detail: nil)),
+                footnote: nil,
+                action: .cancelPass
+            )
+        case .cloudUnavailable(let message):
+            return cloudUnavailableState(
+                message: message,
+                downloadRecord: downloadRecord,
+                transcription: .unavailable
             )
         case .interrupted:
             return EpisodePipelineState(
@@ -275,6 +334,26 @@ struct EpisodePipelineState: Equatable {
         )
     }
 
+    /// Cloud detection couldn't run (credits, capacity, kill switch): name
+    /// the reason on the detect step and offer the explicit on-device
+    /// fallback — never a silent switch.
+    private static func cloudUnavailableState(
+        message: String,
+        downloadRecord: EpisodeDownloadRecord?,
+        transcription: EpisodeTranscriptionJobState
+    ) -> EpisodePipelineState {
+        EpisodePipelineState(
+            title: cloudUnavailableTitle,
+            steps: passSteps(
+                download: completedOrWaiting(downloadRecord),
+                transcribe: transcriptDone(transcription) ? .done : .waiting,
+                detect: .failed(message: message)
+            ),
+            footnote: nil,
+            action: .detectOnDevice
+        )
+    }
+
     private static func preparingModelState(fraction: Double?) -> EpisodePipelineState {
         let detail = if let fraction {
             "Preparing speech model… \(Int((fraction * 100).rounded()))%"
@@ -330,7 +409,13 @@ struct EpisodePipelineState: Equatable {
         return false
     }
 
-    private static func downloadFraction(_ record: EpisodeDownloadRecord?) -> Double? {
+    private static func downloadFraction(
+        _ record: EpisodeDownloadRecord?,
+        live: DownloadByteProgress?
+    ) -> Double? {
+        if let fraction = live?.fractionCompleted {
+            return fraction
+        }
         guard let record, let expected = record.bytesExpected, expected > 0 else {
             return nil
         }

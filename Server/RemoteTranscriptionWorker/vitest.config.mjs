@@ -56,6 +56,13 @@ export default defineConfig(async () => {
             POLL_AFTER_SECONDS: "1",
             PUSHOVER_APP_TOKEN: "test-pushover-token",
             PUSHOVER_USER_KEY: "test-pushover-user",
+            // Chained cloud ad detection against the stubbed binding below.
+            // Deadline short enough for the timeout drill, long enough that
+            // the happy path (submit + one poll at 1 s) never trips it.
+            AD_ANALYSIS_ENABLED: "true",
+            AD_ANALYSIS_DEADLINE_SECONDS: "10",
+            AD_ANALYSIS_POLL_SECONDS: "1",
+            AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS: "3",
           },
           serviceBindings: {
             // FAKE_MEDIA short-circuits before the service binding; this stub
@@ -65,6 +72,99 @@ export default defineConfig(async () => {
                 status: 501,
               });
             },
+            // Stubbed AdAnalysisWorker internal surface. Scenario selection
+            // rides the submitted podcast_id: "ad-cap" => 429 cap,
+            // "ad-transient" => 503 every submit, "ad-hang" => runs forever;
+            // anything else completes on the first poll with spans derived
+            // from the submitted segments.
+            AD_ANALYSIS_WORKER: (() => {
+              const jobs = new Map();
+              const json = (body, status) =>
+                new Response(JSON.stringify(body), {
+                  status,
+                  headers: { "content-type": "application/json" },
+                });
+              return async (request) => {
+                const url = new URL(request.url);
+                if (url.hostname !== "opencast-ad-analysis.internal") {
+                  return json({ error: "not_found" }, 404);
+                }
+                if (url.pathname === "/internal/v1/analyze") {
+                  const body = await request.json();
+                  const inner = body.request;
+                  const podcast = inner?.podcast_id ?? "";
+                  if (podcast.includes("ad-cap")) {
+                    return json({ error: "daily_request_cap_exceeded" }, 429);
+                  }
+                  if (podcast.includes("ad-transient")) {
+                    return json({ error: "job_failed_transient" }, 503);
+                  }
+                  const fingerprint = inner.transcript.fingerprint;
+                  jobs.set(fingerprint, {
+                    hang: podcast.includes("ad-hang"),
+                    request: inner,
+                  });
+                  return json(
+                    {
+                      job_id: fingerprint,
+                      state: "running",
+                      poll_after_seconds: 1,
+                    },
+                    202,
+                  );
+                }
+                const poll = url.pathname.match(
+                  /^\/internal\/v1\/jobs\/([^/]+)\/poll$/,
+                );
+                if (poll) {
+                  const job = jobs.get(poll[1]);
+                  if (!job) {
+                    return json({ error: "job_not_found" }, 404);
+                  }
+                  if (job.hang) {
+                    return json(
+                      {
+                        job_id: poll[1],
+                        state: "running",
+                        poll_after_seconds: 1,
+                      },
+                      202,
+                    );
+                  }
+                  const segments = job.request.segments;
+                  const first = segments[0];
+                  const last = segments[Math.min(1, segments.length - 1)];
+                  return json(
+                    {
+                      schema_version: 1,
+                      request_id: job.request.request_id,
+                      model: "gemini-3.5-flash",
+                      policy: "promo_ad_breaks_v2",
+                      spans: [
+                        {
+                          kind: "host_read_ad",
+                          label: "Stub sponsor",
+                          start_segment_id: first.id,
+                          end_segment_id: last.id,
+                          start_time: first.start,
+                          end_time: Math.max(last.end, first.start + 1),
+                          confidence: 0.92,
+                          evidence_quote: "brought to you by",
+                        },
+                      ],
+                      warnings: [],
+                      usage: {
+                        prompt_token_count: 100,
+                        candidates_token_count: 20,
+                        total_token_count: 120,
+                      },
+                    },
+                    200,
+                  );
+                }
+                return json({ error: "not_found" }, 404);
+              };
+            })(),
           },
         },
       }),

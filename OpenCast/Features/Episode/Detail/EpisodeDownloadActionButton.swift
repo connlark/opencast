@@ -4,6 +4,7 @@ import SwiftUI
 /// progress ring while downloading, and a Downloaded menu once complete.
 struct EpisodeDownloadActionButton: View {
     let record: EpisodeDownloadRecord?
+    var liveProgress: DownloadByteProgress?
     let glassNamespace: Namespace.ID
     let buttonSize: CGFloat
     let iconSize: CGFloat
@@ -112,6 +113,9 @@ struct EpisodeDownloadActionButton: View {
     }
 
     private var downloadFraction: Double? {
+        if let fraction = liveProgress?.fractionCompleted {
+            return fraction
+        }
         guard let record, let expected = record.bytesExpected, expected > 0 else {
             return nil
         }

@@ -3,6 +3,8 @@ import SwiftData
 
 enum OpenCastModelContainerFactory {
     static let cloudKitContainerIdentifier = "iCloud.com.connor.opencast"
+    static let syncedConfigurationName = "SyncedUserData"
+    static let localConfigurationName = "LocalDeviceData"
 
     static var syncedSchema: Schema {
         Schema([
@@ -45,13 +47,13 @@ enum OpenCastModelContainerFactory {
             : .private(cloudKitContainerIdentifier)
 
         let syncedConfiguration = ModelConfiguration(
-            "SyncedUserData",
+            syncedConfigurationName,
             schema: syncedSchema,
             isStoredInMemoryOnly: inMemory,
             cloudKitDatabase: syncedCloudKitDatabase
         )
         let localConfiguration = ModelConfiguration(
-            "LocalDeviceData",
+            localConfigurationName,
             schema: localSchema,
             isStoredInMemoryOnly: inMemory,
             cloudKitDatabase: .none

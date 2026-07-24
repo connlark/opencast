@@ -22,6 +22,7 @@ pub const STATE_RESERVED: &str = "reserved";
 pub const STATE_CHUNKING: &str = "chunking";
 pub const STATE_TRANSCRIBING: &str = "transcribing";
 pub const STATE_STITCHING: &str = "stitching";
+pub const STATE_DETECTING_ADS: &str = "detecting_ads";
 pub const STATE_RESULT_READY: &str = "result_ready";
 pub const STATE_DELIVERED: &str = "delivered";
 pub const STATE_ACKNOWLEDGED: &str = "acknowledged";
@@ -83,6 +84,11 @@ pub struct ChunkRef {
     pub key: String,
     pub requested_start_seconds: f64,
     pub actual_duration_seconds: f64,
+    /// Valid source interval carried durably from the verified media manifest.
+    #[serde(default)]
+    pub valid_start_seconds: f64,
+    #[serde(default)]
+    pub valid_end_seconds: f64,
     pub byte_count: i64,
     pub sha256: String,
 }
@@ -250,6 +256,12 @@ pub struct JobRecord {
     pub server_sha256: Option<String>,
     #[serde(default)]
     pub server_byte_count: Option<i64>,
+    /// Identity recomputed by the media probe from the exact R2 object that
+    /// defines the canonical duration and all chunks.
+    #[serde(default)]
+    pub canonical_source_sha256: Option<String>,
+    #[serde(default)]
+    pub canonical_source_byte_count: Option<i64>,
     #[serde(default)]
     pub canonical_duration_seconds: Option<f64>,
     #[serde(default)]
@@ -258,6 +270,8 @@ pub struct JobRecord {
     pub chunks: Vec<ChunkRef>,
     #[serde(default)]
     pub chunk_manifest_sha256: Option<String>,
+    #[serde(default)]
+    pub chunk_audio_profile: Option<String>,
     /// Pass-0 walk position, kept as a completed-count mirror so old records
     /// decode and old readers stay coherent; `chunk_work` is the pass-0.5
     /// scheduling truth.
@@ -320,6 +334,26 @@ pub struct JobRecord {
     /// `uploads/` key instead of `raw/`.
     #[serde(default)]
     pub upload_completed: bool,
+    /// Chained cloud ad detection (first create wins on dedupe). The three
+    /// content-bearing companions are optional, never logged, and erased
+    /// with the record.
+    #[serde(default)]
+    pub ad_analysis_requested: bool,
+    #[serde(default)]
+    pub podcast_id: Option<String>,
+    #[serde(default)]
+    pub episode_title: Option<String>,
+    #[serde(default)]
+    pub podcast_title: Option<String>,
+    /// Fingerprint-keyed AdAnalysis job id once a submit was accepted; the
+    /// poll target. Cleared on a 404 so the next turn resubmits (attach-
+    /// idempotent server-side).
+    #[serde(default)]
+    pub ad_analysis_job_id: Option<String>,
+    #[serde(default)]
+    pub ad_analysis_attempts: u32,
+    #[serde(default)]
+    pub ad_analysis_submitted_at: Option<i64>,
 }
 
 impl JobRecord {
@@ -347,10 +381,13 @@ impl JobRecord {
             device_identity,
             server_sha256: None,
             server_byte_count: None,
+            canonical_source_sha256: None,
+            canonical_source_byte_count: None,
             canonical_duration_seconds: None,
             reserved_seconds: None,
             chunks: Vec::new(),
             chunk_manifest_sha256: None,
+            chunk_audio_profile: None,
             next_chunk_index: 0,
             current_chunk_attempts: 0,
             chunk_work: Vec::new(),
@@ -371,6 +408,13 @@ impl JobRecord {
             upload_part_size_bytes: None,
             upload_part_count: None,
             upload_completed: false,
+            ad_analysis_requested: false,
+            podcast_id: None,
+            episode_title: None,
+            podcast_title: None,
+            ad_analysis_job_id: None,
+            ad_analysis_attempts: 0,
+            ad_analysis_submitted_at: None,
         }
     }
 
@@ -849,6 +893,49 @@ mod tests {
         assert!(!decoded.upload_completed);
         assert_eq!(decoded.upload_id, None);
         assert_eq!(decoded.upload_part_count, None);
+    }
+
+    #[test]
+    fn ad_analysis_fields_default_off_for_old_records_and_roundtrip() {
+        let minimal = serde_json::json!({
+            "job_id": "job-old",
+            "account_id": "acct-1",
+            "episode_id": "ep-old",
+            "state": "stitching",
+            "created_at": 1,
+            "updated_at": 1,
+        });
+        let decoded: JobRecord = serde_json::from_value(minimal).expect("decode");
+        assert!(!decoded.ad_analysis_requested);
+        assert_eq!(decoded.podcast_id, None);
+        assert_eq!(decoded.episode_title, None);
+        assert_eq!(decoded.podcast_title, None);
+        assert_eq!(decoded.ad_analysis_job_id, None);
+        assert_eq!(decoded.ad_analysis_attempts, 0);
+        assert_eq!(decoded.ad_analysis_submitted_at, None);
+
+        let mut record = JobRecord::created(
+            "job-ads".into(),
+            "acct-1".into(),
+            "ep-1".into(),
+            None,
+            None,
+            None,
+            None,
+            1,
+        );
+        record.ad_analysis_requested = true;
+        record.podcast_id = Some("https://example.com/feed.xml".into());
+        record.state = STATE_DETECTING_ADS.to_string();
+        record.ad_analysis_job_id = Some("f".repeat(64));
+        record.ad_analysis_attempts = 2;
+        let json = serde_json::to_string(&record).expect("serialize");
+        let decoded: JobRecord = serde_json::from_str(&json).expect("deserialize");
+        assert!(decoded.ad_analysis_requested);
+        assert_eq!(decoded.state, STATE_DETECTING_ADS);
+        assert_eq!(decoded.ad_analysis_attempts, 2);
+        assert!(!is_terminal(STATE_DETECTING_ADS));
+        assert!(is_cancellable(STATE_DETECTING_ADS));
     }
 
     #[test]

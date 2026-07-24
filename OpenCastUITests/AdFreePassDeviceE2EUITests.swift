@@ -378,7 +378,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
     }
 
     /// Parity: the step-5 single-episode megaphone flow, re-run through the
-    /// Sound Lab peel control against the real pipeline.
+    /// Sound Lab control against the real pipeline.
     @MainActor
     func testDeviceE2E06MegaphoneParitySoloPass() throws {
         try skipUnlessDeviceE2E()
@@ -388,7 +388,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         resetEpisodeAnalysis(for: Self.megaphoneEpisode, in: app)
 
         startPlayback(of: Self.megaphoneEpisode, in: app)
-        peelNowPlayingArtwork(in: app)
+        revealNowPlayingSoundLab(in: app)
         assertExists(app.descendants(matching: .any)["Now Playing Sound Lab"], named: "Sound Lab panel")
         let megaphone = app.descendants(matching: .any)["Skip Promos & Ads"].firstMatch
         assertExists(megaphone, named: "Skip Promos & Ads control")
@@ -634,7 +634,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
     }
 
     @MainActor
-    private func peelNowPlayingArtwork(in app: XCUIApplication) {
+    private func revealNowPlayingSoundLab(in app: XCUIApplication) {
         let artwork = app.descendants(matching: .any)["Now Playing Artwork"]
         assertExists(artwork, named: "Now Playing artwork")
         let start = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: 0.52))

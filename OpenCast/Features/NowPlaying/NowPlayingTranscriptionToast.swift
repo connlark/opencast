@@ -133,13 +133,7 @@ struct NowPlayingTranscriptionToast: View {
     private var progressFraction: Double? {
         switch request.phase {
         case .downloading:
-            guard let record = downloadRecord,
-                  let expected = record.bytesExpected,
-                  expected > 0
-            else {
-                return nil
-            }
-            return Double(record.bytesReceived) / Double(expected)
+            return downloadByteProgress?.fractionCompleted
         case .preparingWhisper:
             if case .installing(let progress) = appModel.transcriptionModels.state,
                progress.totalByteCount > 0 {
@@ -153,8 +147,8 @@ struct NowPlayingTranscriptionToast: View {
         }
     }
 
-    private var downloadRecord: EpisodeDownloadRecord? {
-        appModel.downloads.record(for: request.episodeID)
+    private var downloadByteProgress: DownloadByteProgress? {
+        appModel.downloads.byteProgress(for: request.episodeID)
     }
 
     private var transcriptionProgress: EpisodeTranscriptionProgress? {
@@ -162,11 +156,11 @@ struct NowPlayingTranscriptionToast: View {
     }
 
     private var downloadDetail: String {
-        guard let record = downloadRecord else {
+        guard let progress = downloadByteProgress else {
             return "Preparing audio for on-device transcription."
         }
-        let received = record.bytesReceived.formatted(.byteCount(style: .file))
-        guard let expected = record.bytesExpected, expected > 0 else {
+        let received = progress.bytesReceived.formatted(.byteCount(style: .file))
+        guard let expected = progress.bytesExpected, expected > 0 else {
             return received
         }
         return "\(received) of \(expected.formatted(.byteCount(style: .file)))"

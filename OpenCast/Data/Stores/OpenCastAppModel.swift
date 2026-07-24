@@ -16,10 +16,12 @@ final class OpenCastAppModel {
     let downloads: DownloadStore
     let transcriptionModels: TranscriptionModelStore
     let transcriptionEngineSettings: TranscriptionEngineSettingsStore
+    let adDetectionSettings: AdDetectionSettingsStore
     let appleSpeechAssets: AppleSpeechAssetStore
     let transcriptions: EpisodeTranscriptionStore
     let transcriptionRequests: EpisodeTranscriptionRequestCoordinator
     let remoteTranscription: EpisodeRemoteTranscriptionCoordinator
+    @ObservationIgnored private let remoteTranscriptionRunner: RemoteTranscriptionJobRunner
     let remoteTranscriptionPurchases: RemoteTranscriptionPurchaseStore
     let adAnalyses: EpisodeAdAnalysisStore
     let adFreePass: EpisodeAdFreePassCoordinator
@@ -79,6 +81,7 @@ final class OpenCastAppModel {
         downloads: DownloadStore = DownloadStore(),
         transcriptionModels: TranscriptionModelStore = TranscriptionModelStore(),
         transcriptionEngineSettings: TranscriptionEngineSettingsStore = TranscriptionEngineSettingsStore(),
+        adDetectionSettings: AdDetectionSettingsStore = AdDetectionSettingsStore(),
         appleSpeechAssets: AppleSpeechAssetStore = AppleSpeechAssetStore(),
         transcriptions: EpisodeTranscriptionStore = EpisodeTranscriptionStore(),
         adAnalyses: EpisodeAdAnalysisStore = EpisodeAdAnalysisStore(),
@@ -119,6 +122,7 @@ final class OpenCastAppModel {
         self.downloads = downloads
         self.transcriptionModels = transcriptionModels
         self.transcriptionEngineSettings = transcriptionEngineSettings
+        self.adDetectionSettings = adDetectionSettings
         self.appleSpeechAssets = appleSpeechAssets
         self.transcriptions = transcriptions
         self.transcriptionRequests = EpisodeTranscriptionRequestCoordinator(
@@ -139,6 +143,14 @@ final class OpenCastAppModel {
             api: remoteTranscriptionAPI,
             downloads: downloads,
             transcriptions: transcriptions
+        )
+        // Cloud detect passes share the plain surface's job store (purpose-
+        // keyed references, one balance) through their own runner instance.
+        self.remoteTranscriptionRunner = RemoteTranscriptionJobRunner(
+            api: remoteTranscriptionAPI,
+            downloads: downloads,
+            transcriptions: transcriptions,
+            store: remoteTranscription.store
         )
         self.remoteTranscriptionPurchases = RemoteTranscriptionPurchaseStore(
             api: remoteTranscriptionAPI,
@@ -244,6 +256,21 @@ final class OpenCastAppModel {
         try play(episode, source: .stream, modelContext: modelContext)
     }
 
+    func episodeSnapshot(for episodeID: String) -> EpisodeListItemSnapshot? {
+        if let episode = library.episode(with: episodeID) {
+            return episode
+        }
+
+        guard let downloadRecord = downloads.record(for: episodeID) else {
+            return nil
+        }
+
+        return EpisodeListItemSnapshot(
+            downloadRecord: downloadRecord,
+            podcastCache: library.podcastCache(for: downloadRecord.podcastID)
+        )
+    }
+
     /// Starts an episode at an explicit position (e.g. a tapped transcript
     /// line), preferring a completed download over streaming.
     func playEpisode(
@@ -302,6 +329,7 @@ final class OpenCastAppModel {
     func loadLocalTranscriptionState(modelContext: ModelContext) {
         transcriptionModels.load(modelContext: modelContext)
         transcriptionEngineSettings.load(modelContext: modelContext)
+        adDetectionSettings.load(modelContext: modelContext)
         transcriptions.load(modelContext: modelContext)
         adAnalyses.load(modelContext: modelContext)
         refreshPlaybackSkipZonesForCurrentEpisode()
@@ -416,7 +444,10 @@ final class OpenCastAppModel {
     }
 
     func remoteTranscriptionStartPreviewRequestForCurrentEpisode() -> RemoteTranscriptionStartPreviewRequest? {
-        guard let episode = currentPlaybackEpisodeSnapshot else {
+        guard let episode = currentPlaybackEpisodeSnapshot,
+              !transcriptions.hasCompletedTranscript(for: episode.episodeID),
+              !remoteTranscription.store.hasActiveRequest
+        else {
             return nil
         }
 
@@ -427,7 +458,9 @@ final class OpenCastAppModel {
     }
 
     func startRemoteTranscriptionForCurrentEpisode(modelContext: ModelContext) {
-        guard let episode = currentPlaybackEpisodeSnapshot else {
+        guard let episode = currentPlaybackEpisodeSnapshot,
+              !transcriptions.hasCompletedTranscript(for: episode.episodeID)
+        else {
             return
         }
 
@@ -545,10 +578,29 @@ final class OpenCastAppModel {
         startAdFreePass(for: episode, modelContext: modelContext, transcriptionEngine: transcriptionEngine)
     }
 
+    /// Sound Lab entry: a visible cloud-unavailable outcome runs the one-tap
+    /// on-device fallback directly; otherwise the prompt policy decides.
+    /// Returns the episode when the caller must present the mode dialog.
+    func startOrContinueAdFreePassForCurrentEpisodeResolvingMode(
+        modelContext: ModelContext
+    ) -> EpisodeListItemSnapshot? {
+        guard let episode = currentPlaybackEpisodeSnapshot else {
+            return nil
+        }
+        if case .cloudUnavailable = adFreePass.queueStatus(for: episode.episodeID) {
+            startAdFreePass(for: episode, modelContext: modelContext, mode: .onDevice)
+            return nil
+        }
+        return startAdFreePassResolvingMode(for: episode, modelContext: modelContext)
+            ? episode
+            : nil
+    }
+
     func startAdFreePass(
         for episode: EpisodeListItemSnapshot,
         modelContext: ModelContext,
-        transcriptionEngine: AdFreePassTranscriptionEngine = .productDefault
+        transcriptionEngine: AdFreePassTranscriptionEngine = .productDefault,
+        mode: AdDetectionMode = .onDevice
     ) {
         adFreePass.enqueue(
             episode: episode,
@@ -561,13 +613,63 @@ final class OpenCastAppModel {
             modelContext: modelContext,
             transcriptionEngine: transcriptionEngine,
             podcastLanguageCode: podcastLanguageCode(forPodcastID: episode.podcastID),
+            mode: mode,
+            remoteRunner: remoteTranscriptionRunner,
+            remoteJobStore: remoteTranscription.store,
+            remotePurchases: remoteTranscriptionPurchases,
             prepareBackgroundSession: { [weak self] in
+                // Cloud items never arm the continued-processing card: the
+                // server keeps working while the app is suspended.
+                guard mode == .onDevice else {
+                    return
+                }
                 self?.armAdFreePassBackgroundSessionIfNeeded(episodeTitle: episode.title)
             },
             refreshSkipZones: { [weak self] in
                 self?.zoneCountAfterPass(for: episode) ?? 0
             }
         )
+    }
+
+    /// Decision table for a manual Detect Ads tap: a current completed
+    /// transcript always runs the free on-device analysis, a stored mode
+    /// runs directly, and only an unset mode with the remote surface visible
+    /// prompts.
+    func detectAdsTapDecision(for episode: EpisodeListItemSnapshot) -> AdDetectionModePromptPolicy.Decision {
+        return AdDetectionModePromptPolicy(
+            storedMode: adDetectionSettings.mode,
+            hasCurrentCompletedTranscript: transcriptions.hasCompletedDocument(for: episode.episodeID),
+            isRemoteSurfaceVisible: remoteTranscriptionPurchases.isSurfaceVisible
+        ).decision
+    }
+
+    /// First-tap dialog choice: remember the mode device-locally, then run
+    /// the pass it selected.
+    func chooseAdDetectionMode(
+        _ mode: AdDetectionMode,
+        for episode: EpisodeListItemSnapshot,
+        modelContext: ModelContext
+    ) {
+        adDetectionSettings.setMode(mode, modelContext: modelContext)
+        startAdFreePass(for: episode, modelContext: modelContext, mode: mode)
+    }
+
+    /// Runs the Detect Ads tap through the prompt policy; returns true when
+    /// the caller must present the mode dialog instead.
+    func startAdFreePassResolvingMode(
+        for episode: EpisodeListItemSnapshot,
+        modelContext: ModelContext
+    ) -> Bool {
+        switch detectAdsTapDecision(for: episode) {
+        case .runOnDevice:
+            startAdFreePass(for: episode, modelContext: modelContext, mode: .onDevice)
+            return false
+        case .runCloud:
+            startAdFreePass(for: episode, modelContext: modelContext, mode: .cloud)
+            return false
+        case .prompt:
+            return true
+        }
     }
 
     func cancelAdFreePass(for episode: EpisodeListItemSnapshot, modelContext: ModelContext) {
@@ -592,7 +694,10 @@ final class OpenCastAppModel {
     func armBackgroundContinuationForActiveQueue() {
         guard adFreePass.queueState == .running,
               !adFreePassBackgroundSession.isArmed,
-              let activeItem = adFreePass.activeItem
+              let activeItem = adFreePass.activeItem,
+              // Cloud items never arm: the server keeps working while the
+              // app is suspended and polling resumes on foreground.
+              activeItem.mode == .onDevice
         else {
             return
         }
@@ -615,6 +720,9 @@ final class OpenCastAppModel {
             podcastLanguageCode: { [weak self] podcastID in
                 self?.podcastLanguageCode(forPodcastID: podcastID)
             },
+            remoteRunner: remoteTranscriptionRunner,
+            remoteJobStore: remoteTranscription.store,
+            remotePurchases: remoteTranscriptionPurchases,
             refreshSkipZones: { [weak self] episode in
                 self?.zoneCountAfterPass(for: episode) ?? 0
             }
@@ -849,7 +957,7 @@ final class OpenCastAppModel {
             switch adFreePass.queueStatus(for: record.episodeID) {
             case .queued, .running, .capDeferred:
                 return false
-            case .notQueued, .completed, .failed:
+            case .notQueued, .completed, .failed, .cloudUnavailable:
                 return true
             }
         }
@@ -1325,13 +1433,32 @@ final class OpenCastAppModel {
         _ episode: EpisodeListItemSnapshot,
         modelContext: ModelContext
     ) {
+        guard library.isAdAutoDetectEnabled(forPodcastID: episode.podcastID),
+              adFreePass.queueStatus(for: episode.episodeID) == .notQueued
+        else {
+            return
+        }
+
+        Task { [weak self] in
+            await self?.enqueueAutoDetectAdsOnPlayIfQualified(
+                episode,
+                modelContext: modelContext
+            )
+        }
+    }
+
+    private func enqueueAutoDetectAdsOnPlayIfQualified(
+        _ episode: EpisodeListItemSnapshot,
+        modelContext: ModelContext
+    ) async {
+        let hasCurrentCompletedAnalysis = await adFreePass.currentCompletedAnalysisVerdict(
+            for: episode.episodeID,
+            transcriptions: transcriptions,
+            adAnalyses: adAnalyses
+        )
         let policy = AdAutoDetectPlayPolicy(
             isAutoDetectEnabled: library.isAdAutoDetectEnabled(forPodcastID: episode.podcastID),
-            hasCurrentCompletedAnalysis: adFreePass.hasCurrentCompletedAnalysis(
-                for: episode.episodeID,
-                transcriptions: transcriptions,
-                adAnalyses: adAnalyses
-            ),
+            hasCurrentCompletedAnalysis: hasCurrentCompletedAnalysis,
             queueStatus: adFreePass.queueStatus(for: episode.episodeID)
         )
         guard policy.shouldEnqueue else {
@@ -1339,7 +1466,10 @@ final class OpenCastAppModel {
         }
 
         // Auto passes never arm the background session (decision 1);
-        // continuation requires an explicit tap.
+        // continuation requires an explicit tap. They follow the stored
+        // detection mode (decision 3): cloud mode enqueues a cloud job on
+        // play with no per-episode confirmation; the authoritative credits
+        // check lives inside the cloud pass itself.
         adFreePass.enqueue(
             episode: episode,
             origin: .auto,
@@ -1350,6 +1480,10 @@ final class OpenCastAppModel {
             adAnalyses: adAnalyses,
             modelContext: modelContext,
             podcastLanguageCode: podcastLanguageCode(forPodcastID: episode.podcastID),
+            mode: adDetectionSettings.mode ?? .onDevice,
+            remoteRunner: remoteTranscriptionRunner,
+            remoteJobStore: remoteTranscription.store,
+            remotePurchases: remoteTranscriptionPurchases,
             refreshSkipZones: { [weak self] in
                 self?.zoneCountAfterPass(for: episode) ?? 0
             }

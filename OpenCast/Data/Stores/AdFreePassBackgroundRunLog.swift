@@ -51,6 +51,14 @@ extension EpisodeAdFreePassStage {
             "transcribing completed=\(progress.completedDuration.backgroundLogSeconds) audio=\(progress.audioDuration.backgroundLogSeconds) checkpoints=\(progress.checkpointCount) window=\(progress.currentWindowIndex.map(String.init) ?? "nil")"
         case .analyzing:
             "analyzing"
+        case .cloudQueued:
+            "cloudQueued"
+        case .cloudTranscribing(let progress):
+            "cloudTranscribing fraction=\((progress?.fractionCompleted ?? 0).backgroundLogNumber)"
+        case .cloudDetectingAds:
+            "cloudDetectingAds"
+        case .cloudUnavailable(let message):
+            "cloudUnavailable message=\(message)"
         case .completed(let zoneCount):
             "completed zoneCount=\(zoneCount)"
         case .interrupted:
@@ -79,6 +87,14 @@ extension EpisodeAdFreePassStage {
             "transcribing"
         case .analyzing:
             "analyzing"
+        case .cloudQueued:
+            "cloudQueued"
+        case .cloudTranscribing:
+            "cloudTranscribing"
+        case .cloudDetectingAds:
+            "cloudDetectingAds"
+        case .cloudUnavailable:
+            "cloudUnavailable"
         case .completed:
             "completed"
         case .interrupted:

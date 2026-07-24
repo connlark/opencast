@@ -3,7 +3,7 @@ import Testing
 @testable import OpenCast
 
 @MainActor
-@Suite("Episode download infrastructure")
+@Suite("Episode download infrastructure", .serialized)
 struct EpisodeDownloadInfrastructureTests {
     @Test("URLSession downloader appends ranges and restarts safely")
     func urlSessionDownloaderRangeBehavior() async throws {
@@ -315,6 +315,40 @@ struct EpisodeDownloadInfrastructureTests {
             Issue.record("Expected CancellationError, got \(error).")
         }
         #expect(try Data(contentsOf: metadataRaceURL).isEmpty)
+    }
+
+    @Test("URLSession downloader coalesces rapid network progress")
+    func urlSessionDownloaderCoalescesRapidProgress() async throws {
+        let baseDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: baseDirectory) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [EpisodeDownloadTestURLProtocol.self]
+        let downloader = URLSessionEpisodeAudioDownloader(configuration: configuration)
+        let sourceURL = try #require(URL(string: "https://example.com/large-episode.mp3"))
+        let destinationURL = baseDirectory.appending(path: "large-episode.partial")
+        let body = Data(repeating: 0x5A, count: 4 * 1_024 * 1_024)
+        EpisodeDownloadTestURLProtocol.configure(
+            stubs: [(
+                statusCode: 200,
+                headers: ["Content-Length": body.count.description],
+                body: body
+            )],
+            deliveryChunkByteCount: 1_024
+        )
+        var progressEvents: [(Int64, Int64?)] = []
+
+        try await downloader.download(
+            from: sourceURL,
+            to: destinationURL,
+            resume: nil,
+            onResponseMetadata: { _ in },
+            progress: { progressEvents.append(($0, $1)) }
+        )
+
+        #expect(progressEvents.count < 16)
+        #expect(progressEvents.last?.0 == Int64(body.count))
+        #expect(progressEvents.last?.1 == Int64(body.count))
+        #expect(try Data(contentsOf: destinationURL) == body)
     }
 
     @Test("Resume response policy handles partial, full, and unsatisfiable responses")

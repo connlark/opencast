@@ -26,6 +26,7 @@ final class EpisodeTranscriptionStore {
     @ObservationIgnored private var activePreservesPriorCompletedTranscript = false
     @ObservationIgnored private var priorCompletedTranscriptSnapshot: PriorCompletedTranscriptSnapshot?
     @ObservationIgnored private let stateChanges = StoreChangeNotifier()
+    @ObservationIgnored private var lastProgressPublicationByEpisodeID: [String: Date] = [:]
     @ObservationIgnored var onEpisodeStateChanged: ((String) -> Void)?
     @ObservationIgnored var onAppleSpeechRunInterrupted: ((_ episodeID: String, _ restoredPriorTranscript: Bool) -> Void)?
     @ObservationIgnored var setIdleTimerDisabled: (Bool) -> Void = {
@@ -119,6 +120,25 @@ final class EpisodeTranscriptionStore {
             return nil
         }
         return try? fileStore.read(relativePath: relativePath)
+    }
+
+    func hasCompletedTranscript(for episodeID: String) -> Bool {
+        guard let record = record(for: episodeID), record.state == .completed else {
+            return false
+        }
+
+        return record.transcriptRelativePath != nil
+    }
+
+    func hasCompletedDocument(for episodeID: String) -> Bool {
+        guard let record = record(for: episodeID),
+              record.state == .completed,
+              let relativePath = record.transcriptRelativePath
+        else {
+            return false
+        }
+
+        return fileStore.documentExists(relativePath: relativePath)
     }
 
     func markTranscriptDocumentUnavailable(episodeID: String, modelContext: ModelContext) {
@@ -253,7 +273,7 @@ final class EpisodeTranscriptionStore {
         }
 
         clearFailure(episodeID: episode.episodeID)
-        progressByEpisodeID[episode.episodeID] = nil
+        clearTransientProgress(episodeID: episode.episodeID)
         let runID = UUID()
         activeEpisodeID = episode.episodeID
         activeRunID = runID
@@ -315,7 +335,7 @@ final class EpisodeTranscriptionStore {
                 modelContext.delete(record)
             }
             try modelContext.save()
-            progressByEpisodeID[episodeID] = nil
+            clearTransientProgress(episodeID: episodeID)
             try reload(modelContext: modelContext)
             clearFailure(episodeID: episodeID)
             notifyEpisodeStateChanged(episodeID)
@@ -392,6 +412,7 @@ final class EpisodeTranscriptionStore {
         await unloadRuntime()
         priorCompletedTranscriptSnapshot = nil
         progressByEpisodeID.removeAll()
+        lastProgressPublicationByEpisodeID.removeAll()
 
         for record in try fetchRecords(modelContext: modelContext) {
             modelContext.delete(record)
@@ -614,10 +635,11 @@ final class EpisodeTranscriptionStore {
             }
             switch event {
             case .progress(let progress):
-                progressByEpisodeID[episode.episodeID] = progress
-                record.completedDuration = max(record.completedDuration, progress.completedDuration)
-                record.updatedAt = .now
-                updateLoadedRecord(record)
+                // Progress stays transient and rate-limited: Apple Speech emits
+                // events every 40–100ms, and dirtying the record per event both
+                // autosaves churn and invalidates every observer at event rate.
+                // Checkpoints persist completedDuration durably.
+                publishProgress(progress, episodeID: episode.episodeID)
             case .checkpoint(let checkpoint):
                 try await persistCheckpoint(
                     checkpoint,
@@ -1092,7 +1114,7 @@ final class EpisodeTranscriptionStore {
         activeCancellationPreservesPartial = false
         activePreservesPriorCompletedTranscript = false
         priorCompletedTranscriptSnapshot = nil
-        progressByEpisodeID[episodeID] = nil
+        clearTransientProgress(episodeID: episodeID)
         stateChanges.notify()
     }
 
@@ -1419,6 +1441,25 @@ final class EpisodeTranscriptionStore {
     private func notifyEpisodeStateChanged(_ episodeID: String) {
         stateChanges.notify()
         onEpisodeStateChanged?(episodeID)
+    }
+
+    private static let minimumProgressPublicationInterval: TimeInterval = 0.5
+
+    private func publishProgress(_ progress: EpisodeTranscriptionProgress, episodeID: String) {
+        let now = Date.now
+        if let lastPublishedAt = lastProgressPublicationByEpisodeID[episodeID],
+           now.timeIntervalSince(lastPublishedAt) < Self.minimumProgressPublicationInterval {
+            return
+        }
+
+        lastProgressPublicationByEpisodeID[episodeID] = now
+        progressByEpisodeID[episodeID] = progress
+        notifyEpisodeStateChanged(episodeID)
+    }
+
+    private func clearTransientProgress(episodeID: String) {
+        progressByEpisodeID[episodeID] = nil
+        lastProgressPublicationByEpisodeID[episodeID] = nil
     }
 
     private func ownsActiveRun(episodeID: String, runID: UUID) -> Bool {

@@ -21,6 +21,7 @@ private final class FakeRemoteTranscriptionAPI: RemoteTranscriptionAPI, @uncheck
 
     private let lock = NSLock()
     private var pollStates: [OpenCastRemoteTranscriptionJobStatus]
+    private var transientPollErrors: [Error]
     private let pollError: Error?
     private let resultResponse: OpenCastRemoteTranscriptionResultResponse?
     private let ackError: Error?
@@ -38,6 +39,7 @@ private final class FakeRemoteTranscriptionAPI: RemoteTranscriptionAPI, @uncheck
 
     init(
         pollStates: [OpenCastRemoteTranscriptionJobStatus],
+        transientPollErrors: [Error] = [],
         pollError: Error? = nil,
         resultResponse: OpenCastRemoteTranscriptionResultResponse? = nil,
         ackError: Error? = nil,
@@ -45,6 +47,7 @@ private final class FakeRemoteTranscriptionAPI: RemoteTranscriptionAPI, @uncheck
         uploadScript: UploadScript? = nil
     ) {
         self.pollStates = pollStates
+        self.transientPollErrors = transientPollErrors
         self.pollError = pollError
         self.resultResponse = resultResponse
         self.ackError = ackError
@@ -82,6 +85,14 @@ private final class FakeRemoteTranscriptionAPI: RemoteTranscriptionAPI, @uncheck
     }
 
     func poll(jobID: String) async throws -> OpenCastRemoteTranscriptionPollResponse {
+        // Transient errors are consumed one per call before any state is
+        // served, so tests can script a blip the retry grace must absorb.
+        let transient: Error? = lock.withLock {
+            transientPollErrors.isEmpty ? nil : transientPollErrors.removeFirst()
+        }
+        if let transient {
+            throw transient
+        }
         // Without a pollError the last scripted state repeats forever; with
         // one, the states are consumed and then the backend goes unreachable.
         let job: OpenCastRemoteTranscriptionJobStatus? = lock.withLock {
@@ -280,7 +291,7 @@ private enum RemoteFixtures {
     static func result(
         identity: OpenCastRemoteTranscriptionSourceIdentity,
         durationSeconds: Double,
-        pipelineVersion: String = "stitch-v2"
+        pipelineVersion: String = "stitch-v3"
     ) -> OpenCastRemoteTranscriptionResult {
         let words = [
             OpenCastRemoteTranscriptWord(start: 0.0, end: 0.6, text: "Hello"),
@@ -357,13 +368,29 @@ struct EpisodeRemoteTranscriptMapperTests {
         #expect(document.providerModelIdentifier == RemoteFixtures.model)
         #expect(document.modelIdentifier == RemoteFixtures.model)
         #expect(document.modelTreeSHA256.isEmpty)
-        #expect(document.remotePipelineVersion == "stitch-v2")
+        #expect(document.remotePipelineVersion == "stitch-v3")
         #expect(document.remoteJobProvenanceToken == "job-fake-1")
         #expect(document.remoteSourceMatchMode == EpisodeRemoteTranscriptSourceMatchMode.serverDeviceHashMatch.rawValue)
         #expect(document.normalizedTranscriptSHA256 == result.provenance.normalizedTranscriptSHA256)
         #expect(document.sourceFileSHA256 == identity.sha256)
         #expect(document.segments.count == 1)
         #expect(document.segments[0].words?.count == 3)
+    }
+
+    @Test("Minted document dates carry no fractional seconds")
+    func mintedDatesAreWholeSeconds() throws {
+        let result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+
+        let document = try EpisodeRemoteTranscriptMapper.document(
+            from: result,
+            context: context(identity: identity)
+        )
+
+        // The in-memory document must equal its `.iso8601` disk round trip
+        // (which drops fractional seconds): the ad-analysis freshness checks
+        // compare a record seeded from this document against the reloaded one.
+        #expect(document.createdAt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) == 0)
+        #expect(document.updatedAt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) == 0)
     }
 
     @Test("Normalizes a remote tail word that overlaps the next segment")
@@ -431,9 +458,21 @@ struct EpisodeRemoteTranscriptMapperTests {
         }
     }
 
-    @Test("Rejects a duration outside the tolerance")
-    func rejectsDurationOutsideTolerance() {
+    @Test("Exact SHA-256 and byte count do not depend on duration metadata")
+    func exactIdentityDoesNotDependOnDurationMetadata() throws {
         let result = RemoteFixtures.result(identity: identity, durationSeconds: 150)
+
+        let document = try EpisodeRemoteTranscriptMapper.document(
+            from: result,
+            context: context(identity: identity)
+        )
+
+        #expect(document.audioDuration == 150)
+    }
+
+    @Test("Rejects a non-finite canonical duration")
+    func rejectsNonFiniteDuration() {
+        let result = RemoteFixtures.result(identity: identity, durationSeconds: .nan)
 
         #expect(throws: EpisodeRemoteTranscriptMapper.ValidationError.invalidDuration) {
             try EpisodeRemoteTranscriptMapper.document(from: result, context: context(identity: identity))
@@ -446,6 +485,70 @@ struct EpisodeRemoteTranscriptMapperTests {
         result.segments[0].words?[2].start = 0.1
 
         #expect(throws: EpisodeRemoteTranscriptMapper.ValidationError.invalidTimings) {
+            try EpisodeRemoteTranscriptMapper.document(from: result, context: context(identity: identity))
+        }
+    }
+
+    @Test("Rejects a word whose end precedes its start")
+    func rejectsReversedWordTiming() {
+        var result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        result.segments[0].words?[1].end = 0.5
+
+        #expect(throws: EpisodeRemoteTranscriptMapper.ValidationError.invalidTimings) {
+            try EpisodeRemoteTranscriptMapper.document(from: result, context: context(identity: identity))
+        }
+    }
+
+    @Test("Rejects segments whose starts move backwards")
+    func rejectsNonmonotonicSegments() {
+        var result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        result.segments[0].start = 0.5
+        var second = result.segments[0]
+        second.id = 1
+        second.start = 0.4
+        result.segments.append(second)
+
+        #expect(throws: EpisodeRemoteTranscriptMapper.ValidationError.invalidTimings) {
+            try EpisodeRemoteTranscriptMapper.document(from: result, context: context(identity: identity))
+        }
+    }
+
+    @Test("Rejects transcript text that disagrees with verified words")
+    func rejectsTextMismatch() {
+        var result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        result.text = "different text"
+
+        #expect(throws: EpisodeRemoteTranscriptMapper.ValidationError.textMismatch) {
+            try EpisodeRemoteTranscriptMapper.document(from: result, context: context(identity: identity))
+        }
+    }
+
+    @Test("Rejects segment text that disagrees with verified words")
+    func rejectsSegmentTextMismatch() {
+        var result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        result.segments[0].text = "different segment text"
+
+        #expect(throws: EpisodeRemoteTranscriptMapper.ValidationError.textMismatch) {
+            try EpisodeRemoteTranscriptMapper.document(from: result, context: context(identity: identity))
+        }
+    }
+
+    @Test("Rejects nonempty segment text without words")
+    func rejectsNonemptySegmentWithoutWords() {
+        var result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        result.segments[0].words = nil
+
+        #expect(throws: EpisodeRemoteTranscriptMapper.ValidationError.textMismatch) {
+            try EpisodeRemoteTranscriptMapper.document(from: result, context: context(identity: identity))
+        }
+    }
+
+    @Test("Rejects an empty word")
+    func rejectsEmptyWord() {
+        var result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        result.segments[0].words?[0].text = " "
+
+        #expect(throws: EpisodeRemoteTranscriptMapper.ValidationError.emptyTranscript) {
             try EpisodeRemoteTranscriptMapper.document(from: result, context: context(identity: identity))
         }
     }
@@ -478,6 +581,7 @@ struct EpisodeRemoteTranscriptMapperTests {
 struct EpisodeRemoteTranscriptionCoordinatorTests {
     private struct Environment {
         var coordinator: EpisodeRemoteTranscriptionCoordinator
+        var runner: RemoteTranscriptionJobRunner
         var api: FakeRemoteTranscriptionAPI
         var store: RemoteTranscriptionJobStore
         var transcriptions: EpisodeTranscriptionStore
@@ -487,11 +591,13 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
     }
 
     /// A full environment around one completed, hashed download so the
-    /// coordinator can proceed without any downloader.
+    /// coordinator can proceed without any downloader. Retry delays default
+    /// to none so unreachable-backend scripts fail fast in tests.
     private func makeEnvironment(
         api: FakeRemoteTranscriptionAPI,
         episodeID: String,
-        uploadTransport: FakeUploadTransport? = nil
+        uploadTransport: FakeUploadTransport? = nil,
+        transportRetryDelays: [Duration] = []
     ) throws -> Environment {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
@@ -543,10 +649,19 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
                         defaults: defaults
                     )
                 }
-            }
+            },
+            transportRetryDelays: transportRetryDelays
+        )
+        let runner = RemoteTranscriptionJobRunner(
+            api: api,
+            downloads: downloads,
+            transcriptions: transcriptions,
+            store: store,
+            transportRetryDelays: transportRetryDelays
         )
         return Environment(
             coordinator: coordinator,
+            runner: runner,
             api: api,
             store: store,
             transcriptions: transcriptions,
@@ -556,11 +671,11 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         )
     }
 
-    @Test("Happy path imports before ack and completes")
-    func happyPathImportsBeforeAckAndCompletes() async throws {
+    @Test("Happy path ignores unmeasured RSS duration, imports before ack, and completes")
+    func happyPathIgnoresUnmeasuredRSSDurationAndCompletes() async throws {
         let identityData = Data("remote audio bytes ep-happy".utf8)
         let identity = RemoteFixtures.identity(for: identityData, duration: 120)
-        let result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        let result = RemoteFixtures.result(identity: identity, durationSeconds: 150)
         let api = FakeRemoteTranscriptionAPI(
             pollStates: [
                 OpenCastRemoteTranscriptionJobStatus(
@@ -579,7 +694,9 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         #expect(await waitUntil { environment.store.phase == .completed })
         #expect(api.createRequests.count == 1)
         #expect(api.createRequests[0].sourceIdentity?.sha256 == identity.sha256)
+        #expect(api.createRequests[0].sourceIdentity?.durationSeconds == nil)
         #expect(api.reportedIdentities.map(\.sha256) == [identity.sha256])
+        #expect(api.reportedIdentities.map(\.durationSeconds) == [nil])
         #expect(api.resultCallCount == 1)
         #expect(api.ackHashes == [result.provenance.normalizedTranscriptSHA256])
         let record = try #require(environment.transcriptions.record(for: "ep-happy"))
@@ -705,6 +822,155 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         )
         #expect(presentation.isTerminalFailure)
         #expect(presentation.offersLocalFallback)
+    }
+
+    @Test("A detect run bails out of awaiting_credits as insufficient credits instead of parking")
+    func detectRunBailsOutOfAwaitingCredits() async throws {
+        let api = FakeRemoteTranscriptionAPI(
+            pollStates: [
+                OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .awaitingCredits),
+            ]
+        )
+        let environment = try makeEnvironment(api: api, episodeID: "ep-credits-detect")
+
+        await #expect(throws: RemoteTranscriptionJobRunError.serverRejected(.insufficientCredits)) {
+            _ = try await environment.runner.run(
+                episode: environment.episode,
+                enclosureURL: environment.episode.audioURL!,
+                purpose: .adDetection,
+                adAnalysis: RemoteTranscriptionJobRunner.AdAnalysisContext(
+                    podcastID: environment.episode.podcastID,
+                    episodeTitle: environment.episode.title,
+                    podcastTitle: environment.episode.podcastTitle
+                ),
+                modelContext: environment.context,
+                onEvent: { _ in }
+            )
+        }
+
+        // Nothing is charged while the reservation is unfunded, so the job is
+        // cancelled and the reference dropped — the device fallback is honest.
+        #expect(api.cancelledJobIDs == ["job-fake-1"])
+        #expect(environment.store.references().isEmpty)
+    }
+
+    @Test("Plain transcription keeps waiting through awaiting_credits and completes")
+    func plainTranscriptionWaitsThroughAwaitingCredits() async throws {
+        let identityData = Data("remote audio bytes ep-credits-wait".utf8)
+        let identity = RemoteFixtures.identity(for: identityData, duration: 120)
+        let result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        let api = FakeRemoteTranscriptionAPI(
+            pollStates: [
+                OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .awaitingCredits),
+                OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .resultReady),
+            ],
+            resultResponse: OpenCastRemoteTranscriptionResultResponse(schemaVersion: 1, result: result)
+        )
+        let environment = try makeEnvironment(api: api, episodeID: "ep-credits-wait")
+        var sawWaitingForCredits = false
+
+        let outcome = try await environment.runner.run(
+            episode: environment.episode,
+            enclosureURL: environment.episode.audioURL!,
+            purpose: .transcription,
+            modelContext: environment.context,
+            onEvent: { event in
+                if case .waitingForCredits = event {
+                    sawWaitingForCredits = true
+                }
+            }
+        )
+
+        #expect(sawWaitingForCredits)
+        #expect(outcome.document.text == "Hello remote transcript.")
+        #expect(api.cancelledJobIDs.isEmpty)
+    }
+
+    @Test("A transient poll blip is retried and the run still completes")
+    func transientPollBlipIsRetried() async throws {
+        let identityData = Data("remote audio bytes ep-poll-blip".utf8)
+        let identity = RemoteFixtures.identity(for: identityData, duration: 120)
+        let result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        let api = FakeRemoteTranscriptionAPI(
+            pollStates: [
+                OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .resultReady),
+            ],
+            transientPollErrors: [URLError(.networkConnectionLost)],
+            resultResponse: OpenCastRemoteTranscriptionResultResponse(schemaVersion: 1, result: result)
+        )
+        let environment = try makeEnvironment(
+            api: api,
+            episodeID: "ep-poll-blip",
+            transportRetryDelays: [.zero]
+        )
+
+        let outcome = try await environment.runner.run(
+            episode: environment.episode,
+            enclosureURL: environment.episode.audioURL!,
+            purpose: .transcription,
+            modelContext: environment.context,
+            onEvent: { _ in }
+        )
+
+        #expect(outcome.document.text == "Hello remote transcript.")
+        #expect(api.cancelledJobIDs.isEmpty)
+    }
+
+    @Test("Transport give-up after create cancels a detect job and drops its reference")
+    func transportGiveUpAbandonsDetectJob() async throws {
+        let api = FakeRemoteTranscriptionAPI(
+            pollStates: [
+                OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .transcribing),
+            ],
+            pollError: URLError(.notConnectedToInternet)
+        )
+        let environment = try makeEnvironment(api: api, episodeID: "ep-detect-unreachable")
+
+        await #expect(throws: RemoteTranscriptionJobRunError.serviceUnavailable) {
+            _ = try await environment.runner.run(
+                episode: environment.episode,
+                enclosureURL: environment.episode.audioURL!,
+                purpose: .adDetection,
+                adAnalysis: RemoteTranscriptionJobRunner.AdAnalysisContext(
+                    podcastID: environment.episode.podcastID,
+                    episodeTitle: environment.episode.title,
+                    podcastTitle: environment.episode.podcastTitle
+                ),
+                modelContext: environment.context,
+                onEvent: { _ in }
+            )
+        }
+
+        // The cancel is best-effort and detached; the reference drop is
+        // immediate so the offered device fallback never races a live job.
+        #expect(await waitUntil { api.cancelledJobIDs == ["job-fake-1"] })
+        #expect(environment.store.references().isEmpty)
+    }
+
+    @Test("Transport give-up keeps a plain transcription reference for re-attach")
+    func transportGiveUpKeepsPlainTranscriptionReference() async throws {
+        let api = FakeRemoteTranscriptionAPI(
+            pollStates: [
+                OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .transcribing),
+            ],
+            pollError: URLError(.notConnectedToInternet)
+        )
+        let environment = try makeEnvironment(api: api, episodeID: "ep-plain-unreachable")
+
+        await #expect(throws: RemoteTranscriptionJobRunError.serviceUnavailable) {
+            _ = try await environment.runner.run(
+                episode: environment.episode,
+                enclosureURL: environment.episode.audioURL!,
+                purpose: .transcription,
+                modelContext: environment.context,
+                onEvent: { _ in }
+            )
+        }
+
+        // A retry re-attaches to the still-running job via the stable client
+        // request ID, so the paid work is never abandoned.
+        #expect(api.cancelledJobIDs.isEmpty)
+        #expect(environment.store.references().isEmpty == false)
     }
 
     @Test("Cancel reaches the server and ends in the cancelled phase")
@@ -867,6 +1133,42 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         environment.coordinator.start(episode: episode, modelContext: environment.context)
 
         #expect(environment.store.phase == .failed(.missingAudio))
+        #expect(api.createRequests.isEmpty)
+    }
+
+    @Test("A completed transcript prevents a second remote transcription job")
+    func completedTranscriptPreventsDuplicateRemoteJob() async throws {
+        let api = FakeRemoteTranscriptionAPI(pollStates: [
+            OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .created),
+        ])
+        let environment = try makeEnvironment(api: api, episodeID: "ep-already-transcribed")
+        let document = try EpisodeRemoteTranscriptMapper.document(
+            from: RemoteFixtures.result(
+                identity: environment.identity,
+                durationSeconds: 120.4
+            ),
+            context: EpisodeRemoteTranscriptMapper.Context(
+                episodeID: environment.episode.episodeID,
+                podcastID: environment.episode.podcastID,
+                sourceAudioURL: environment.episode.audioURL!,
+                localIdentity: environment.identity,
+                jobProvenanceToken: "job-existing"
+            )
+        )
+        try await environment.transcriptions.importRemoteTranscript(
+            document,
+            modelContext: environment.context
+        )
+
+        environment.coordinator.start(
+            episode: environment.episode,
+            modelContext: environment.context
+        )
+
+        #expect(environment.transcriptions.hasCompletedTranscript(
+            for: environment.episode.episodeID
+        ))
+        #expect(environment.store.phase == nil)
         #expect(api.createRequests.isEmpty)
     }
 

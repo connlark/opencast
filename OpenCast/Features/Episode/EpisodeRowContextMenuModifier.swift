@@ -8,10 +8,14 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
     let episode: EpisodeListItemSnapshot
     let onViewDetails: (EpisodeListItemSnapshot) -> Void
 
+    @State private var modePromptEpisode: EpisodeListItemSnapshot?
+
     func body(content: Content) -> some View {
         let isPlayed = appModel.library.progressRecord(for: episode.episodeID)?.isPlayed == true
 
-        content.contextMenu {
+        content
+            .adDetectionModeDialog(episode: $modePromptEpisode)
+            .contextMenu {
             Button("View Episode Details", systemImage: "info.circle", action: viewDetails)
             Button(
                 isPlayed ? "Mark Unplayed" : "Mark Played",
@@ -53,6 +57,8 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
     }
 
     private func detectAds() {
-        appModel.startAdFreePass(for: episode, modelContext: modelContext)
+        if appModel.startAdFreePassResolvingMode(for: episode, modelContext: modelContext) {
+            modePromptEpisode = episode
+        }
     }
 }

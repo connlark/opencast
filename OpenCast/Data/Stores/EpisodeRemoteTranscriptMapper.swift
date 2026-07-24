@@ -12,6 +12,7 @@ nonisolated enum EpisodeRemoteTranscriptMapper {
         case invalidDuration
         case emptyTranscript
         case invalidTimings
+        case textMismatch
         case normalizedHashMismatch
         case unsupportedSchema
     }
@@ -39,44 +40,52 @@ nonisolated enum EpisodeRemoteTranscriptMapper {
         guard result.durationSeconds.isFinite, result.durationSeconds > 0 else {
             throw ValidationError.invalidDuration
         }
-        if let localDuration = context.localIdentity.durationSeconds {
-            // AVFoundation and ffprobe measure slightly differently; the
-            // tolerance is tight but not exact.
-            let tolerance = max(2.0, result.durationSeconds * 0.01)
-            guard abs(localDuration - result.durationSeconds) <= tolerance else {
-                throw ValidationError.invalidDuration
-            }
-        }
         guard result.segments.isEmpty == false else {
             throw ValidationError.emptyTranscript
         }
 
         let upperBound = result.durationSeconds + 0.5
+        var previousSegmentStart = -Double.infinity
         var previousWordStart = -Double.infinity
         var words: [String] = []
         for segment in result.segments {
             guard segment.start.isFinite, segment.end.isFinite,
                   segment.start >= 0, segment.end >= segment.start,
-                  segment.end <= upperBound
+                  segment.end <= upperBound,
+                  segment.start + 0.001 >= previousSegmentStart
             else {
                 throw ValidationError.invalidTimings
             }
+            previousSegmentStart = segment.start
+            var segmentWords: [String] = []
             for word in segment.words ?? [] {
+                guard word.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                    throw ValidationError.emptyTranscript
+                }
                 guard word.start.isFinite, word.end.isFinite,
-                      word.start >= 0, word.end <= upperBound,
+                      word.start >= 0, word.end >= word.start, word.end <= upperBound,
                       word.start + 0.001 >= previousWordStart
                 else {
                     throw ValidationError.invalidTimings
                 }
                 previousWordStart = word.start
                 words.append(word.text)
+                segmentWords.append(word.text)
+            }
+            guard segment.text == segmentWords.joined(separator: " ")
+            else {
+                throw ValidationError.textMismatch
             }
         }
         guard words.isEmpty == false else {
             throw ValidationError.emptyTranscript
         }
+        let rebuiltText = words.joined(separator: " ")
+        guard result.text == rebuiltText else {
+            throw ValidationError.textMismatch
+        }
         let normalized = OpenCastRemoteTranscriptNormalization.normalizedTranscriptSHA256(
-            words.joined(separator: " ")
+            rebuiltText
         )
         guard normalized == result.provenance.normalizedTranscriptSHA256 else {
             throw ValidationError.normalizedHashMismatch
@@ -97,6 +106,11 @@ nonisolated enum EpisodeRemoteTranscriptMapper {
         }
         let segments = OpenCastTranscriptSegmentNormalizer.normalized(mappedSegments)
 
+        // Whole-second dates: the document is compared against its
+        // `.iso8601`-coded disk round trip (which drops fractional seconds)
+        // by the ad-analysis freshness checks, so the in-memory copy must
+        // already carry the truncated value.
+        let mintedAt = Date.now.truncatedToWholeSeconds
         var document = EpisodeTranscriptDocument(
             schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
             episodeID: context.episodeID,
@@ -114,10 +128,10 @@ nonisolated enum EpisodeRemoteTranscriptMapper {
             audioDuration: result.durationSeconds,
             checkpoints: [],
             segments: segments,
-            text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
+            text: result.text,
             timings: EpisodeTranscriptTimings(),
-            createdAt: .now,
-            updatedAt: .now
+            createdAt: mintedAt,
+            updatedAt: mintedAt
         )
         document.transcriptionEngine = EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue
         document.providerModelIdentifier = result.provenance.modelIdentifier

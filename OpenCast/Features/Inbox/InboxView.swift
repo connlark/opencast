@@ -14,7 +14,6 @@ struct InboxView: View {
     var body: some View {
         let inboxEpisodes = appModel.library.inboxEpisodes
         let episodeIDs = inboxEpisodes.map(\.episodeID)
-        let adDetectionSnapshot = appModel.adFreePass.queueSnapshot
 
         List {
             if appModel.library.state == .loading && inboxEpisodes.isEmpty {
@@ -42,11 +41,7 @@ struct InboxView: View {
         .navigationTitle("Inbox")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                AdDetectionQueueToolbarIndicator(
-                    indicator: adDetectionIndicator(for: adDetectionSnapshot),
-                    accessibilityValue: adDetectionAccessibilityValue(for: adDetectionSnapshot),
-                    onOpen: onOpenAdDetectionQueue
-                )
+                InboxAdDetectionToolbarStatus(onOpen: onOpenAdDetectionQueue)
             }
         }
         .refreshable {
@@ -56,6 +51,24 @@ struct InboxView: View {
 
     private var listAnimation: Animation? {
         reduceMotion ? nil : .default
+    }
+}
+
+/// Reads the ad-detection queue snapshot in its own body so per-stage queue
+/// churn (transcription progress publishes many stage updates per episode)
+/// re-evaluates this indicator alone, never the inbox List above it.
+private struct InboxAdDetectionToolbarStatus: View {
+    @Environment(OpenCastAppModel.self) private var appModel
+
+    let onOpen: () -> Void
+
+    var body: some View {
+        let snapshot = appModel.adFreePass.queueSnapshot
+        AdDetectionQueueToolbarIndicator(
+            indicator: adDetectionIndicator(for: snapshot),
+            accessibilityValue: adDetectionAccessibilityValue(for: snapshot),
+            onOpen: onOpen
+        )
     }
 
     private func adDetectionIndicator(

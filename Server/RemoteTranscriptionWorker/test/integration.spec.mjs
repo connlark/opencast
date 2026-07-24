@@ -155,6 +155,21 @@ async function sha256Hex(bytes) {
     .join("");
 }
 
+function normalizedTranscript(text) {
+  return text
+    .toLowerCase()
+    .replace(/[\u2018\u2019']/gu, "")
+    .replace(/(\d),(\d)/gu, "$1$2")
+    .replace(/[^a-z0-9 ]/gu, " ")
+    .split(/\s+/u)
+    .filter(Boolean)
+    .join(" ");
+}
+
+async function normalizedTranscriptSha256(text) {
+  return sha256Hex(new TextEncoder().encode(normalizedTranscript(text)));
+}
+
 async function post(path, body) {
   return SELF.fetch(`${BASE}${path}`, {
     method: "POST",
@@ -180,6 +195,10 @@ async function createJob({
   durationSeconds,
   languageCode,
   enclosureUrl = ORIGIN_URL,
+  adAnalysisRequested,
+  podcastId,
+  episodeTitle,
+  podcastTitle,
 }) {
   const response = await post("/v1/remote-transcription/jobs", {
     schema_version: 1,
@@ -188,6 +207,10 @@ async function createJob({
     enclosure_url: enclosureUrl,
     declared_duration_seconds: durationSeconds,
     language_code: languageCode,
+    ad_analysis_requested: adAnalysisRequested,
+    podcast_id: podcastId,
+    episode_title: episodeTitle,
+    podcast_title: podcastTitle,
   });
   expect(response.status).toBe(200);
   const body = await response.json();
@@ -304,7 +327,8 @@ describe("remote transcription dev lane", () => {
       episodeId: "ep-e2e-1",
       durationSeconds: 600,
     });
-    await reportSource(job.job_id, await deviceIdentity(600));
+    const source = await deviceIdentity(600);
+    await reportSource(job.job_id, source);
 
     const ready = await waitForState(job.job_id, ["result_ready"]);
     expect(ready.job.progress.chunks_total).toBe(3);
@@ -328,9 +352,45 @@ describe("remote transcription dev lane", () => {
     expect(payload.result.segments.length).toBeGreaterThan(0);
     expect(payload.result.segments[0].words.length).toBeGreaterThan(0);
     expect(payload.result.provenance.provider).toBe("cloudflare-workers-ai");
-    expect(payload.result.provenance.pipeline_version).toBe("stitch-v2");
+    expect(payload.result.provenance.pipeline_version).toBe("stitch-v3");
+    expect(payload.result.provenance.chunk_audio_profile).toBe(
+      "mp3-stream-copy-v1",
+    );
     expect(payload.result.provenance.normalized_transcript_sha256).toMatch(
       /^[0-9a-f]{64}$/,
+    );
+    expect(payload.result.source_identity.sha256).toBe(source.sha256);
+    expect(payload.result.source_identity.byte_count).toBe(source.byte_count);
+    const resultWords = payload.result.segments.flatMap(
+      (segment) => segment.words,
+    );
+    expect(resultWords.length).toBeGreaterThan(0);
+    let previousSegmentStart = Number.NEGATIVE_INFINITY;
+    let previousWordStart = Number.NEGATIVE_INFINITY;
+    for (const segment of payload.result.segments) {
+      expect(Number.isFinite(segment.start)).toBe(true);
+      expect(Number.isFinite(segment.end)).toBe(true);
+      expect(segment.start).toBeGreaterThanOrEqual(0);
+      expect(segment.end).toBeGreaterThanOrEqual(segment.start);
+      expect(segment.end).toBeLessThanOrEqual(payload.result.duration_seconds + 0.5);
+      expect(segment.start + 0.001).toBeGreaterThanOrEqual(previousSegmentStart);
+      previousSegmentStart = segment.start;
+      expect(segment.text).toBe(segment.words.map(({ text }) => text).join(" "));
+      for (const word of segment.words) {
+        expect(word.text.trim().length).toBeGreaterThan(0);
+        expect(Number.isFinite(word.start)).toBe(true);
+        expect(Number.isFinite(word.end)).toBe(true);
+        expect(word.start).toBeGreaterThanOrEqual(0);
+        expect(word.end).toBeGreaterThanOrEqual(word.start);
+        expect(word.end).toBeLessThanOrEqual(payload.result.duration_seconds + 0.5);
+        expect(word.start + 0.001).toBeGreaterThanOrEqual(previousWordStart);
+        previousWordStart = word.start;
+      }
+    }
+    const rebuiltText = resultWords.map(({ text }) => text).join(" ");
+    expect(payload.result.text).toBe(rebuiltText);
+    expect(payload.result.provenance.normalized_transcript_sha256).toBe(
+      await normalizedTranscriptSha256(rebuiltText),
     );
 
     // Duplicate (account, clientRequestID) attaches to the same job.
@@ -1117,5 +1177,184 @@ describe("remote transcription dev lane", () => {
       title: "OpenCast transcription alert (development)",
     });
     expect(alert.message).not.toContain("ep-content-must-not-leak");
+  });
+
+  // --- Chained cloud ad detection (stubbed AD_ANALYSIS_WORKER binding).
+  // These run last: they spend from the same cumulative dev account, after
+  // every absolute-balance assertion above.
+
+  async function runDetectJob({ clientRequestId, episodeId, podcastId }) {
+    const job = await createJob({
+      clientRequestId,
+      episodeId,
+      durationSeconds: 120,
+      adAnalysisRequested: true,
+      podcastId,
+      episodeTitle: "Episode Title",
+      podcastTitle: "Podcast Title",
+    });
+    expect(job.ad_analysis_requested).toBe(true);
+    await reportSource(job.job_id, await deviceIdentity(120));
+    return job;
+  }
+
+  async function fetchResultEnvelope(jobId) {
+    const response = await post(`/v1/remote-transcription/jobs/${jobId}/result`, {
+      schema_version: 1,
+    });
+    expect(response.status).toBe(200);
+    return response.json();
+  }
+
+  async function ackJob(jobId) {
+    const response = await post(`/v1/remote-transcription/jobs/${jobId}/ack`, {
+      schema_version: 1,
+    });
+    expect(response.status).toBe(200);
+  }
+
+  it("requires podcast_id when ad analysis is requested", async () => {
+    const response = await post("/v1/remote-transcription/jobs", {
+      schema_version: 1,
+      client_request_id: "e2e-ads-badcreate-1",
+      episode_id: "ep-ads-badcreate-1",
+      enclosure_url: ORIGIN_URL,
+      ad_analysis_requested: true,
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe("invalid_request");
+  });
+
+  it("chains ad detection after stitch and injects the success block", async () => {
+    const job = await runDetectJob({
+      clientRequestId: "e2e-ads-happy-1",
+      episodeId: "ep-ads-happy-1",
+      podcastId: "https://example.com/happy/feed.xml",
+    });
+    const ready = await waitForState(job.job_id, ["result_ready"]);
+    expect(ready.job.ad_analysis_requested).toBe(true);
+
+    // First-create-wins dedupe: a re-send WITHOUT the flag attaches and the
+    // echoed flag reveals the divergence.
+    const duplicate = await createJob({
+      clientRequestId: "e2e-ads-happy-1",
+      episodeId: "ep-ads-happy-1",
+      durationSeconds: 120,
+    });
+    expect(duplicate.job_id).toBe(job.job_id);
+    expect(duplicate.ad_analysis_requested).toBe(true);
+
+    const payload = await fetchResultEnvelope(job.job_id);
+    expect(payload.ad_analysis.state).toBe("completed");
+    expect(payload.ad_analysis.policy).toBe("promo_ad_breaks_v2");
+    expect(payload.ad_analysis.model).toBe("gemini-3.5-flash");
+    expect(payload.ad_analysis.spans.length).toBe(1);
+    const span = payload.ad_analysis.spans[0];
+    expect(span.kind).toBe("host_read_ad");
+    const segmentIds = payload.result.segments.map(({ id }) => id);
+    expect(segmentIds).toContain(span.start_segment_id);
+    expect(segmentIds).toContain(span.end_segment_id);
+    // The transcript subtree is untouched by the injection.
+    expect(payload.result.duration_seconds).toBe(120);
+    expect(payload.result.provenance.provider).toBe("cloudflare-workers-ai");
+    await ackJob(job.job_id);
+    await expectJobStorageEmpty(job.job_id);
+  });
+
+  it("keeps the envelope free of ad_analysis when the flag is off", async () => {
+    const job = await createJob({
+      clientRequestId: "e2e-ads-flagoff-1",
+      episodeId: "ep-ads-flagoff-1",
+      durationSeconds: 120,
+    });
+    expect(job.ad_analysis_requested).toBeUndefined();
+    await reportSource(job.job_id, await deviceIdentity(120));
+    const ready = await waitForState(job.job_id, ["result_ready"]);
+    expect(ready.job.ad_analysis_requested).toBeUndefined();
+    const payload = await fetchResultEnvelope(job.job_id);
+    expect("ad_analysis" in payload).toBe(false);
+    await ackJob(job.job_id);
+  });
+
+  it("finalizes with the capacity marker on a 429 and keeps the transcript", async () => {
+    const job = await runDetectJob({
+      clientRequestId: "e2e-ads-cap-1",
+      episodeId: "ep-ads-cap-1",
+      podcastId: "https://example.com/ad-cap/feed.xml",
+    });
+    await waitForState(job.job_id, ["result_ready"]);
+    const payload = await fetchResultEnvelope(job.job_id);
+    expect(payload.ad_analysis).toEqual({
+      state: "failed",
+      error_code: "ad_analysis_capacity",
+    });
+    expect(payload.result.segments.length).toBeGreaterThan(0);
+    await ackJob(job.job_id);
+  });
+
+  it("exhausts bounded submit retries into the failed marker", async () => {
+    const job = await runDetectJob({
+      clientRequestId: "e2e-ads-transient-1",
+      episodeId: "ep-ads-transient-1",
+      podcastId: "https://example.com/ad-transient/feed.xml",
+    });
+    const ready = await waitForState(job.job_id, ["result_ready"]);
+    expect(ready.job.ad_analysis_requested).toBe(true);
+    const payload = await fetchResultEnvelope(job.job_id);
+    expect(payload.ad_analysis).toEqual({
+      state: "failed",
+      error_code: "ad_analysis_failed",
+    });
+    await ackJob(job.job_id);
+  });
+
+  it("times out a hung analysis at the phase deadline with the transcript intact", async () => {
+    const job = await runDetectJob({
+      clientRequestId: "e2e-ads-hang-1",
+      episodeId: "ep-ads-hang-1",
+      podcastId: "https://example.com/ad-hang/feed.xml",
+    });
+    // The job is visibly parked in the new state while the analysis hangs.
+    const detecting = await waitForState(job.job_id, ["detecting_ads"]);
+    expect(detecting.job.ad_analysis_requested).toBe(true);
+    const ready = await waitForState(job.job_id, ["result_ready"], 25_000);
+    expect(ready.job.state).toBe("result_ready");
+    const payload = await fetchResultEnvelope(job.job_id);
+    expect(payload.ad_analysis).toEqual({
+      state: "failed",
+      error_code: "ad_analysis_timeout",
+    });
+    expect(payload.result.duration_seconds).toBe(120);
+    await ackJob(job.job_id);
+  });
+
+  it("does not count parked results toward the per-account active cap", async () => {
+    // Park two unacknowledged results (the workerd cap is
+    // MAX_ACTIVE_JOBS_PER_ACCOUNT=2). Counting result_ready as active made
+    // the next create 429 rate_limited for the full 7-day result TTL
+    // whenever a client died before acking.
+    const parked = [];
+    for (const index of [1, 2]) {
+      const job = await createJob({
+        clientRequestId: `e2e-parked-${index}`,
+        episodeId: `ep-parked-${index}`,
+        durationSeconds: 60,
+      });
+      await reportSource(job.job_id, await deviceIdentity(60));
+      await waitForState(job.job_id, ["result_ready"]);
+      parked.push(job);
+    }
+
+    const fresh = await createJob({
+      clientRequestId: "e2e-parked-3",
+      episodeId: "ep-parked-3",
+      durationSeconds: 60,
+    });
+    await reportSource(fresh.job_id, await deviceIdentity(60));
+    await waitForState(fresh.job_id, ["result_ready"]);
+
+    for (const job of [...parked, fresh]) {
+      await ackJob(job.job_id);
+    }
   });
 });

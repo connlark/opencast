@@ -98,7 +98,10 @@ struct EpisodeMoreMenu: View {
                     .disabled(true)
                 Button("Cancel Remote Transcript", systemImage: "xmark.circle", action: cancelRemoteTranscript)
             } else {
+                // Disabled while a cloud detect pass owns this episode — it
+                // already delivers the transcript when it lands.
                 Button("Transcribe Remotely", systemImage: "cloud", action: requestRemoteTranscript)
+                    .disabled(appModel.adFreePass.hasActiveOrQueuedCloudItem(for: episode.episodeID))
             }
         }
     }

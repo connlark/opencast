@@ -15,6 +15,7 @@ use worker::{
     RequestInit, RequestRedirect, Response, Result, State,
 };
 
+use crate::ad_analysis;
 use crate::ai::{self, AiFailureClass};
 use crate::config::AppConfig;
 use crate::credit::{CreditAuthority, CreditError};
@@ -55,6 +56,16 @@ pub struct CreateMessage {
     /// stored; the job goes straight to the exact-device upload path.
     #[serde(default)]
     pub origin_unsafe: bool,
+    /// Chained cloud ad detection after stitching (validated by the gateway:
+    /// the flag requires a non-empty `podcast_id`).
+    #[serde(default)]
+    pub ad_analysis_requested: bool,
+    #[serde(default)]
+    pub podcast_id: Option<String>,
+    #[serde(default)]
+    pub episode_title: Option<String>,
+    #[serde(default)]
+    pub podcast_title: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -258,6 +269,10 @@ impl TranscriptionJob {
             now,
         );
         record.origin_unsafe = message.origin_unsafe;
+        record.ad_analysis_requested = message.ad_analysis_requested;
+        record.podcast_id = message.podcast_id;
+        record.episode_title = message.episode_title;
+        record.podcast_title = message.podcast_title;
         record.state_deadline_at = Some(now + config.staging_origin_deadline_seconds);
         self.write_record(&record).await?;
         self.bump("jobs_created", 1).await;
@@ -682,9 +697,18 @@ impl TranscriptionJob {
             .config()
             .map_err(|error| worker::Error::RustError(error.error))?;
 
-        // Deadlines drive the normal cancellation path.
+        // Deadlines drive the normal cancellation path — except the ad
+        // phase, whose transcript is already stitched and settled: a missed
+        // deadline there finalizes with the timeout marker instead.
         if let Some(deadline) = record.state_deadline_at {
             if !job::is_terminal(&record.state) && now_seconds() >= deadline {
+                if record.state == job::STATE_DETECTING_ADS {
+                    return self
+                        .finalize_ad_phase(ad_analysis::failure_block(
+                            ad_analysis::MARKER_TIMEOUT,
+                        ))
+                        .await;
+                }
                 self.finish_terminal(
                     record,
                     job::STATE_CANCELLED,
@@ -716,6 +740,7 @@ impl TranscriptionJob {
             job::STATE_CHUNKING => self.step_chunk(record, &config).await,
             job::STATE_TRANSCRIBING => self.step_transcribe_wave(record, &config).await,
             job::STATE_STITCHING => self.step_stitch(record, &config).await,
+            job::STATE_DETECTING_ADS => self.step_detect_ads(record, &config).await,
             job::STATE_RESULT_READY | job::STATE_DELIVERED => {
                 // Result TTL backstop: settled either way; content is removed.
                 self.finish_terminal(
@@ -900,6 +925,10 @@ impl TranscriptionJob {
 
         let updated = self
             .update_record(|record| {
+                // Pin the identity recomputed by the media worker from the
+                // same exact R2 object whose duration becomes canonical.
+                record.canonical_source_sha256 = Some(probe.sha256.clone());
+                record.canonical_source_byte_count = Some(probe.byte_count);
                 record.canonical_duration_seconds = Some(probe.duration_seconds);
                 record.reserved_seconds = Some(reserved_seconds);
                 record.media_attempts = 0;
@@ -997,11 +1026,44 @@ impl TranscriptionJob {
             Ok(response) => response,
             Err(failure) => return self.handle_media_failure(record, config, failure).await,
         };
-        if let Err(code) = media::validate_chunks(&chunk_response.chunks, job::MAX_CHUNK_RAW_BYTES)
-        {
+        let canonical = record.canonical_duration_seconds.unwrap_or_default();
+        if let Err(code) = media::validate_chunks(
+            &chunk_response.chunks,
+            job::MAX_CHUNK_RAW_BYTES,
+            canonical,
+            job::CHUNK_SECONDS,
+            job::STEP_SECONDS,
+        ) {
             self.release_and_fail(record, config, code).await?;
             return Ok(());
         }
+        let Some(validated_chunks) = chunk_response
+            .chunks
+            .iter()
+            .map(|chunk| {
+                media::valid_chunk_interval(chunk, canonical).map(
+                    |(valid_start_seconds, valid_end_seconds)| job::ChunkRef {
+                        index: chunk.index,
+                        key: chunk.key.clone(),
+                        requested_start_seconds: chunk.requested_start_seconds,
+                        actual_duration_seconds: chunk.actual_duration_seconds,
+                        valid_start_seconds,
+                        valid_end_seconds,
+                        byte_count: chunk.byte_count,
+                        sha256: chunk.sha256.clone(),
+                    },
+                )
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            worker::console_error!(
+                "validated chunk interval reconstruction failed: job {}",
+                record.job_id
+            );
+            self.release_and_fail(record, config, types::ERROR_INTERNAL)
+                .await?;
+            return Ok(());
+        };
 
         // Merge the manifest without resurrecting a job a route handler
         // ended mid-chunking: cancel runs its cleanup inline, and blindly
@@ -1011,19 +1073,9 @@ impl TranscriptionJob {
                 if job::is_terminal(&record.state) || record.state == job::STATE_CANCELLING {
                     return;
                 }
-                record.chunks = chunk_response
-                    .chunks
-                    .iter()
-                    .map(|chunk| job::ChunkRef {
-                        index: chunk.index,
-                        key: chunk.key.clone(),
-                        requested_start_seconds: chunk.requested_start_seconds,
-                        actual_duration_seconds: chunk.actual_duration_seconds,
-                        byte_count: chunk.byte_count,
-                        sha256: chunk.sha256.clone(),
-                    })
-                    .collect();
+                record.chunks = validated_chunks;
                 record.chunk_manifest_sha256 = Some(chunk_response.manifest_sha256.clone());
+                record.chunk_audio_profile = chunk_response.chunk_audio_profile.clone();
                 // Preserve overlap outcomes; entries the driver never
                 // touched start fresh.
                 let mut chunk_work =
@@ -1164,6 +1216,16 @@ impl TranscriptionJob {
                                             requested_start_seconds: index as f64
                                                 * job::STEP_SECONDS,
                                             actual_duration_seconds: job::CHUNK_SECONDS,
+                                            valid_start_seconds: index as f64
+                                                * job::STEP_SECONDS,
+                                            valid_end_seconds: ((index as f64
+                                                * job::STEP_SECONDS)
+                                                + job::CHUNK_SECONDS)
+                                                .min(
+                                                    record
+                                                        .canonical_duration_seconds
+                                                        .unwrap_or_default(),
+                                                ),
                                             byte_count: 0,
                                             sha256: String::new(),
                                         };
@@ -1645,6 +1707,7 @@ impl TranscriptionJob {
 
     async fn step_stitch(&self, record: JobRecord, config: &AppConfig) -> Result<()> {
         let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
+        let canonical = record.canonical_duration_seconds.unwrap_or_default();
         let mut chunk_transcriptions = Vec::with_capacity(record.chunks.len());
         for chunk in &record.chunks {
             let key = job::r2_response_key(&record.job_id, chunk.index);
@@ -1663,11 +1726,14 @@ impl TranscriptionJob {
             let bytes = body.bytes().await?;
             let response: ai::WhisperResponse = serde_json::from_slice(&bytes)
                 .map_err(|error| worker::Error::RustError(format!("response decode: {error}")))?;
-            chunk_transcriptions
-                .push(response.to_chunk_transcription(chunk.requested_start_seconds));
+            chunk_transcriptions.push(response.to_chunk_transcription(
+                chunk.valid_start_seconds,
+                chunk.valid_end_seconds,
+            ));
         }
 
-        let stitched = match stitch::stitch(&chunk_transcriptions, job::OVERLAP_SECONDS) {
+        let stitched = match stitch::stitch(&chunk_transcriptions, job::OVERLAP_SECONDS, canonical)
+        {
             Ok(stitched) => stitched,
             Err(error) => {
                 worker::console_error!(
@@ -1680,20 +1746,86 @@ impl TranscriptionJob {
                 return Ok(());
             }
         };
+        if stitched.interval_trimmed_word_count > 0 {
+            worker::console_log!(
+                "stitch bounded model padding: job {} interval_trimmed_words {}",
+                record.job_id,
+                stitched.interval_trimmed_word_count
+            );
+            self.bump(
+                "stitch_interval_trimmed_words",
+                i64::try_from(stitched.interval_trimmed_word_count).unwrap_or(i64::MAX),
+            )
+            .await;
+        }
+        if stitched.empty_model_word_count > 0 {
+            worker::console_log!(
+                "stitch dropped empty model words: job {} empty_model_words {}",
+                record.job_id,
+                stitched.empty_model_word_count
+            );
+            self.bump(
+                "stitch_empty_model_words",
+                i64::try_from(stitched.empty_model_word_count).unwrap_or(i64::MAX),
+            )
+            .await;
+        }
+        if stitched.reversed_timing_word_count > 0 {
+            worker::console_log!(
+                "stitch dropped reversed model word timings: job {} reversed_timing_words {}",
+                record.job_id,
+                stitched.reversed_timing_word_count
+            );
+            self.bump(
+                "stitch_reversed_timing_words",
+                i64::try_from(stitched.reversed_timing_word_count).unwrap_or(i64::MAX),
+            )
+            .await;
+        }
 
         let device = record
             .device_identity
             .clone()
             .expect("matched implies device identity");
-        let canonical = record.canonical_duration_seconds.unwrap_or_default();
+        let (Some(canonical_source_sha256), Some(canonical_source_byte_count)) = (
+            record.canonical_source_sha256.clone(),
+            record.canonical_source_byte_count,
+        ) else {
+            worker::console_error!(
+                "result publication verification failed: job {} missing canonical source proof",
+                record.job_id
+            );
+            self.preserve_stitch_debug_responses(&record, config).await;
+            self.release_and_fail(record, config, types::ERROR_TRANSCRIPTION_FAILED)
+                .await?;
+            return Ok(());
+        };
+        let verification_context = crate::result_validation::ResultVerificationContext {
+            schema_version: SCHEMA_VERSION,
+            source_sha256: &canonical_source_sha256,
+            source_byte_count: canonical_source_byte_count,
+            expected_source_sha256: &device.sha256,
+            expected_source_byte_count: device.byte_count,
+            duration_seconds: canonical,
+        };
+        if let Err(error) = crate::result_validation::verify(&stitched, &verification_context) {
+            worker::console_error!(
+                "result publication verification failed: job {} error {error:?}",
+                record.job_id
+            );
+            self.preserve_stitch_debug_responses(&record, config).await;
+            self.release_and_fail(record, config, types::ERROR_TRANSCRIPTION_FAILED)
+                .await?;
+            return Ok(());
+        }
         let language = record.language_code.clone().unwrap_or_else(|| "en".into());
         let result = serde_json::json!({
             "schema_version": SCHEMA_VERSION,
             "result": {
                 "schema_version": SCHEMA_VERSION,
                 "source_identity": {
-                    "sha256": device.sha256,
-                    "byte_count": device.byte_count,
+                    "sha256": canonical_source_sha256,
+                    "byte_count": canonical_source_byte_count,
                     "duration_seconds": canonical,
                 },
                 "language_code": language,
@@ -1719,6 +1851,7 @@ impl TranscriptionJob {
                         record.language_code.as_deref(),
                     ),
                     "chunk_manifest_sha256": record.chunk_manifest_sha256.clone().unwrap_or_default(),
+                    "chunk_audio_profile": record.chunk_audio_profile.as_deref().unwrap_or("mp3-stream-copy-v1"),
                     "normalized_transcript_sha256": stitched.normalized_transcript_sha256,
                     "pipeline_version": stitch::PIPELINE_VERSION,
                     // Additive (pass 2): how the source bytes were proven.
@@ -1770,18 +1903,234 @@ impl TranscriptionJob {
                 .join(" "),
         );
         let _ = normalized;
+        // Flag on → the ad phase runs before result_ready under its own
+        // deadline; flag off → today's result_ready transition unchanged.
+        let ad_deadline = now_seconds() + config.ad_analysis_deadline_seconds;
         let updated = self
             .update_record(|record| {
-                record.state = job::STATE_RESULT_READY.to_string();
+                if record.ad_analysis_requested {
+                    record.state = job::STATE_DETECTING_ADS.to_string();
+                    record.state_deadline_at = Some(ad_deadline);
+                } else {
+                    record.state = job::STATE_RESULT_READY.to_string();
+                    record.state_deadline_at = Some(now_seconds() + RESULT_TTL_SECONDS);
+                }
                 record.result_key = Some(job::r2_result_key(&record.job_id));
                 record.normalized_transcript_sha256 =
                     Some(stitched.normalized_transcript_sha256.clone());
-                record.state_deadline_at = Some(now_seconds() + RESULT_TTL_SECONDS);
             })
             .await?
             .expect("record exists");
         self.sync_index(&updated).await;
+        if updated.state == job::STATE_DETECTING_ADS {
+            self.schedule(Duration::from_secs(0)).await
+        } else {
+            self.schedule_at(updated.state_deadline_at.expect("just set")).await
+        }
+    }
+
+    /// One ad-phase alarm turn: poll the fingerprint-keyed internal job when
+    /// one is recorded, otherwise submit (bounded attempts; fingerprint
+    /// keying makes retries attach instead of re-running Gemini). Every
+    /// terminal outcome finalizes into `result_ready` — the phase can only
+    /// delay the transcript, never lose it.
+    async fn step_detect_ads(&self, record: JobRecord, config: &AppConfig) -> Result<()> {
+        if !config.ad_analysis_enabled {
+            return self
+                .finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_UNAVAILABLE))
+                .await;
+        }
+        if let Some(ad_job_id) = record.ad_analysis_job_id.clone() {
+            let body = serde_json::json!({ "job_id": ad_job_id }).to_string();
+            let response = self
+                .ad_analysis_post(&ad_analysis::ad_analysis_poll_path(&ad_job_id), body)
+                .await;
+            return self.apply_ad_outcome(record, config, response).await;
+        }
+
+        if record.ad_analysis_attempts >= config.ad_analysis_max_submit_attempts {
+            return self
+                .finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_FAILED))
+                .await;
+        }
+        let Some(envelope) = self.read_result_envelope(&record.job_id).await? else {
+            // The result object is gone mid-phase (a raced cancel's cleanup);
+            // the terminal path owns the record now.
+            return Ok(());
+        };
+        let request =
+            match ad_analysis::build_request(&record, &envelope, &config.model, now_seconds()) {
+                Ok(request) => request,
+                Err(reason) => {
+                    worker::console_log!(
+                        "job {} ad analysis request build failed ({reason})",
+                        record.job_id
+                    );
+                    return self
+                        .finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_FAILED))
+                        .await;
+                }
+            };
+        // Count the attempt before the call so a crash mid-submit stays
+        // bounded; a duplicate submit attaches server-side.
+        self.update_record(|record| {
+            record.ad_analysis_attempts += 1;
+            record.ad_analysis_submitted_at = Some(now_seconds());
+        })
+        .await?;
+        self.bump("ad_analysis_submits", 1).await;
+        let response = self
+            .ad_analysis_post(
+                ad_analysis::AD_ANALYSIS_ANALYZE_PATH,
+                serde_json::to_string(&request)?,
+            )
+            .await;
+        self.apply_ad_outcome(record, config, response).await
+    }
+
+    async fn apply_ad_outcome(
+        &self,
+        record: JobRecord,
+        config: &AppConfig,
+        response: std::result::Result<(u16, Vec<u8>), AdAnalysisCallFailure>,
+    ) -> Result<()> {
+        let outcome = match response {
+            Ok((status, body)) => ad_analysis::classify_analyze_response(status, &body),
+            Err(AdAnalysisCallFailure::BindingMissing) => {
+                return self
+                    .finalize_ad_phase(ad_analysis::failure_block(
+                        ad_analysis::MARKER_UNAVAILABLE,
+                    ))
+                    .await;
+            }
+            Err(AdAnalysisCallFailure::Transport) => ad_analysis::AnalyzeOutcome::Retryable,
+        };
+        match outcome {
+            ad_analysis::AnalyzeOutcome::Completed(mut success) => {
+                // Invalid analyses become the failed marker — a malformed
+                // block must never reach the envelope.
+                let block = match self.read_result_envelope(&record.job_id).await? {
+                    Some(envelope)
+                        if ad_analysis::validate_analysis(
+                            &mut success,
+                            &envelope,
+                            record.canonical_duration_seconds.unwrap_or_default(),
+                        )
+                        .is_ok() =>
+                    {
+                        ad_analysis::success_block(&success).unwrap_or_else(|_| {
+                            ad_analysis::failure_block(ad_analysis::MARKER_FAILED)
+                        })
+                    }
+                    _ => ad_analysis::failure_block(ad_analysis::MARKER_FAILED),
+                };
+                self.finalize_ad_phase(block).await
+            }
+            ad_analysis::AnalyzeOutcome::Running => {
+                if record.ad_analysis_job_id.is_none() {
+                    self.update_record(|record| {
+                        record.ad_analysis_job_id =
+                            Some(ad_analysis::ad_job_fingerprint(&record.job_id));
+                    })
+                    .await?;
+                }
+                self.schedule(Duration::from_secs(config.ad_analysis_poll_seconds))
+                    .await
+            }
+            ad_analysis::AnalyzeOutcome::Capacity => {
+                self.finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_CAPACITY))
+                    .await
+            }
+            ad_analysis::AnalyzeOutcome::Rejected => {
+                self.finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_FAILED))
+                    .await
+            }
+            ad_analysis::AnalyzeOutcome::NotFound => {
+                // The internal record was purged (crash window or TTL);
+                // clear the poll target so the next turn resubmits, still
+                // bounded by the submit-attempt cap.
+                self.update_record(|record| {
+                    record.ad_analysis_job_id = None;
+                })
+                .await?;
+                self.schedule(Duration::from_secs(0)).await
+            }
+            ad_analysis::AnalyzeOutcome::Retryable => {
+                self.schedule(Duration::from_secs(config.ad_analysis_poll_seconds))
+                    .await
+            }
+        }
+    }
+
+    /// Merge the ad-phase outcome into the stored envelope and release the
+    /// job to `result_ready` with the standard result TTL. Idempotent (an
+    /// envelope already carrying `ad_analysis` is left untouched), and a
+    /// raced cancel wins: only a record still in the ad phase finalizes.
+    async fn finalize_ad_phase(&self, block: serde_json::Value) -> Result<()> {
+        let Some(record) = self.read_record().await? else {
+            return Ok(());
+        };
+        if record.state != job::STATE_DETECTING_ADS {
+            return Ok(());
+        }
+        if let Some(envelope) = self.read_result_envelope(&record.job_id).await? {
+            match ad_analysis::inject_ad_analysis(&envelope, &block) {
+                Ok(Some(updated)) => {
+                    let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
+                    bucket
+                        .put(&job::r2_result_key(&record.job_id), updated)
+                        .execute()
+                        .await?;
+                }
+                Ok(None) => {}
+                Err(reason) => {
+                    worker::console_error!(
+                        "job {} ad analysis injection failed ({reason})",
+                        record.job_id
+                    );
+                }
+            }
+        }
+        let updated = self
+            .update_record(|record| {
+                record.state = job::STATE_RESULT_READY.to_string();
+                record.state_deadline_at = Some(now_seconds() + RESULT_TTL_SECONDS);
+            })
+            .await?
+            .expect("record existed above");
+        self.sync_index(&updated).await;
+        self.bump("ad_analysis_finalized", 1).await;
         self.schedule_at(updated.state_deadline_at.expect("just set")).await
+    }
+
+    async fn read_result_envelope(&self, job_id: &str) -> Result<Option<Vec<u8>>> {
+        self.read_chunk_audio(&job::r2_result_key(job_id)).await
+    }
+
+    async fn ad_analysis_post(
+        &self,
+        path: &str,
+        body: String,
+    ) -> std::result::Result<(u16, Vec<u8>), AdAnalysisCallFailure> {
+        let service = self
+            .env
+            .service(ad_analysis::AD_ANALYSIS_BINDING)
+            .map_err(|_| AdAnalysisCallFailure::BindingMissing)?;
+        let request = internal_post(
+            &format!("{}{path}", ad_analysis::AD_ANALYSIS_INTERNAL_ORIGIN),
+            body,
+        )
+        .map_err(|_| AdAnalysisCallFailure::Transport)?;
+        let mut response = service.fetch_request(request).await.map_err(|error| {
+            worker::console_error!("ad analysis {path} transport error: {error:?}");
+            AdAnalysisCallFailure::Transport
+        })?;
+        let status = response.status_code();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| AdAnalysisCallFailure::Transport)?;
+        Ok((status, bytes))
     }
 
     /// Staging-lane debugging: when the stitcher rejects a transcript, copy
@@ -2236,6 +2585,7 @@ impl TranscriptionJob {
         Ok(MediaChunkResponse {
             chunks,
             manifest_sha256: hex::encode(manifest_hasher.finalize()),
+            chunk_audio_profile: Some("mp3-stream-copy-v1".to_string()),
         })
     }
 
@@ -2456,6 +2806,14 @@ impl TranscriptionJob {
     }
 }
 
+/// Ad-analysis service-binding call failures. A missing binding is the
+/// unavailable marker (misdeployed lane must not burn the phase deadline);
+/// transport hiccups retry on the alarm loop.
+enum AdAnalysisCallFailure {
+    BindingMissing,
+    Transport,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LimiterOutcome {
     Admitted,
@@ -2553,6 +2911,7 @@ pub fn job_status(
     JobStatus {
         job_id: record.job_id.clone(),
         state: record.state.clone(),
+        ad_analysis_requested: record.ad_analysis_requested,
         episode_id: Some(record.episode_id.clone()),
         progress,
         error: record.error_code.as_ref().map(|code| JobError {

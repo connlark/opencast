@@ -5,25 +5,25 @@ import Testing
 @MainActor
 @Suite("Now Playing drag intent")
 struct NowPlayingDragIntentTests {
-    @Test("Open peel yields vertical flicks to card dismissal")
-    func openPeelYieldsVerticalFlicksToCardDismissal() {
+    @Test("Open Sound Lab yields vertical flicks to card dismissal")
+    func openSoundLabYieldsVerticalFlicksToCardDismissal() {
         let translation = CGSize(width: 48, height: 72)
 
-        #expect(NowPlayingDragIntent.shouldPeelYieldToCardDismiss(translation: translation))
+        #expect(NowPlayingDragIntent.shouldSoundLabYieldToCardDismiss(translation: translation))
         #expect(NowPlayingDragIntent.shouldStartCardDismiss(
             translation: translation,
-            isPeelInteractionActive: true
+            isSoundLabInteractionActive: true
         ))
     }
 
-    @Test("Active peel keeps horizontal drags for peel interaction")
-    func activePeelKeepsHorizontalDragsForPeelInteraction() {
+    @Test("Active Sound Lab keeps horizontal drags for reveal interaction")
+    func activeSoundLabKeepsHorizontalDragsForRevealInteraction() {
         let translation = CGSize(width: 72, height: 48)
 
-        #expect(!NowPlayingDragIntent.shouldPeelYieldToCardDismiss(translation: translation))
+        #expect(!NowPlayingDragIntent.shouldSoundLabYieldToCardDismiss(translation: translation))
         #expect(!NowPlayingDragIntent.shouldStartCardDismiss(
             translation: translation,
-            isPeelInteractionActive: true
+            isSoundLabInteractionActive: true
         ))
     }
 
@@ -33,7 +33,7 @@ struct NowPlayingDragIntentTests {
 
         #expect(NowPlayingDragIntent.shouldStartCardDismiss(
             translation: translation,
-            isPeelInteractionActive: false
+            isSoundLabInteractionActive: false
         ))
     }
 

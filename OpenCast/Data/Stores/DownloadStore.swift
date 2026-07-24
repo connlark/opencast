@@ -12,6 +12,11 @@ final class DownloadStore {
     private(set) var lastErrorMessage: String?
     private(set) var autoDeletesPlayedDownloads = false
     private var lastErrorEpisodeID: String?
+    // Live byte progress never touches the SwiftData record: per-tick record
+    // writes get autosaved, and every save re-enters the persistent-history →
+    // remote-change → synced-reload cascade. Records carry bytes only at
+    // committed state transitions (pause/complete/fail).
+    private var liveByteProgressByEpisodeID: [String: DownloadByteProgress] = [:]
 
     @ObservationIgnored private let downloader: any EpisodeAudioDownloading
     @ObservationIgnored private let fileStore: EpisodeDownloadFileStore
@@ -21,8 +26,7 @@ final class DownloadStore {
     @ObservationIgnored private var pauseRequestedEpisodeIDs: Set<String> = []
     @ObservationIgnored private let stateChanges = StoreChangeNotifier()
 
-    private static let minimumProgressSaveInterval: TimeInterval = 0.25
-    private static let minimumProgressFractionDelta = 0.01
+    private static let minimumProgressPublicationInterval: TimeInterval = 0.25
 
     init(
         downloader: any EpisodeAudioDownloading = URLSessionEpisodeAudioDownloader(),
@@ -107,6 +111,22 @@ final class DownloadStore {
         records.first { $0.episodeID == episodeID }
     }
 
+    /// Byte progress for display: the transient live value while a download is
+    /// running, otherwise the record's last committed bytes.
+    func byteProgress(for episodeID: String) -> DownloadByteProgress? {
+        guard let record = record(for: episodeID) else {
+            return nil
+        }
+
+        if record.state == .downloading, let live = liveByteProgressByEpisodeID[episodeID] {
+            return live
+        }
+        return DownloadByteProgress(
+            bytesReceived: max(record.bytesReceived, 0),
+            bytesExpected: record.bytesExpected
+        )
+    }
+
     func lastErrorMessage(for episodeID: String) -> String? {
         guard lastErrorEpisodeID == episodeID else {
             return nil
@@ -115,9 +135,10 @@ final class DownloadStore {
         return lastErrorMessage
     }
 
-    /// Exact identity of a completed download, or nil when it cannot be
+    /// Exact byte identity of a completed download, or nil when it cannot be
     /// trusted: no persisted hash, missing file, or on-disk size drifting
-    /// from the recorded byte count (replacement/corruption).
+    /// from the recorded byte count (replacement/corruption). The record's
+    /// duration is RSS display metadata, not a measurement of the local file.
     func completedSourceIdentity(for episodeID: String) -> OpenCastRemoteTranscriptionSourceIdentity? {
         guard let record = record(for: episodeID),
               record.state == .completed,
@@ -131,7 +152,7 @@ final class DownloadStore {
         return OpenCastRemoteTranscriptionSourceIdentity(
             sha256: record.sourceFileSHA256,
             byteCount: record.bytesReceived,
-            durationSeconds: record.duration,
+            durationSeconds: nil,
             entityTag: record.entityTag,
             lastModified: record.lastModifiedHeader
         )
@@ -247,7 +268,11 @@ final class DownloadStore {
             progressCheckpoints[episodeID] = DownloadProgressCheckpoint(
                 bytesReceived: offset,
                 bytesExpected: record.bytesExpected,
-                savedAt: .now
+                publishedAt: .now
+            )
+            liveByteProgressByEpisodeID[episodeID] = DownloadByteProgress(
+                bytesReceived: offset,
+                bytesExpected: record.bytesExpected
             )
             record.localRelativePath = relativePath
             record.state = .downloading
@@ -347,7 +372,7 @@ final class DownloadStore {
         downloadTasks[episodeID]?.cancel()
         downloadTasks[episodeID] = nil
         downloadTaskTokens[episodeID] = nil
-        progressCheckpoints[episodeID] = nil
+        clearTransientProgress(episodeID: episodeID)
         pauseRequestedEpisodeIDs.remove(episodeID)
         stateChanges.notify()
 
@@ -492,7 +517,7 @@ final class DownloadStore {
         downloadTasks[episodeID] = nil
         downloadTaskTokens[episodeID] = nil
         pauseRequestedEpisodeIDs.remove(episodeID)
-        progressCheckpoints[episodeID] = nil
+        clearTransientProgress(episodeID: episodeID)
         stateChanges.notify()
 
         try fileStore.prepareDownloadsDirectory()
@@ -561,7 +586,7 @@ final class DownloadStore {
         pauseRequestedEpisodeIDs.remove(record.episodeID)
         downloadTasks[record.episodeID] = nil
         downloadTaskTokens[record.episodeID] = nil
-        progressCheckpoints[record.episodeID] = nil
+        clearTransientProgress(episodeID: record.episodeID)
         try? fileStore.removeTemporaryFiles(episodeID: record.episodeID)
         try? fileStore.removePausedPartial(episodeID: record.episodeID)
         record.state = .failed
@@ -583,7 +608,7 @@ final class DownloadStore {
         pauseRequestedEpisodeIDs.remove(record.episodeID)
         downloadTasks[record.episodeID] = nil
         downloadTaskTokens[record.episodeID] = nil
-        progressCheckpoints[record.episodeID] = nil
+        clearTransientProgress(episodeID: record.episodeID)
         record.state = .failed
         record.errorMessage = error.localizedDescription
         record.updatedAt = .now
@@ -632,7 +657,7 @@ final class DownloadStore {
         downloadTasks[record.episodeID] = nil
         downloadTaskTokens[record.episodeID] = nil
         pauseRequestedEpisodeIDs.remove(record.episodeID)
-        progressCheckpoints[record.episodeID] = nil
+        clearTransientProgress(episodeID: record.episodeID)
         record.state = .paused
         record.bytesReceived = fileSize
         record.errorMessage = nil
@@ -691,8 +716,7 @@ final class DownloadStore {
                         episodeID: episodeID,
                         token: token,
                         bytesReceived: bytesReceived,
-                        bytesExpected: bytesExpected,
-                        modelContext: modelContext
+                        bytesExpected: bytesExpected
                     )
                 }
             )
@@ -792,12 +816,12 @@ final class DownloadStore {
 
         record.state = .failed
         record.bytesReceived = partialSize
-        if let bytesExpected = record.bytesExpected, bytesExpected < partialSize {
-            record.bytesExpected = partialSize
+        if let bytesExpected = record.bytesExpected ?? liveByteProgressByEpisodeID[episodeID]?.bytesExpected {
+            record.bytesExpected = max(bytesExpected, partialSize)
         }
         record.errorMessage = error.localizedDescription
         record.updatedAt = .now
-        progressCheckpoints[episodeID] = nil
+        clearTransientProgress(episodeID: episodeID)
         pauseRequestedEpisodeIDs.remove(episodeID)
 
         do {
@@ -833,10 +857,14 @@ final class DownloadStore {
             return
         }
 
+        // The record no longer carries live byte totals mid-download, so the
+        // durable transitions read the server-reported total from the
+        // transient progress (before clearing it).
+        let knownBytesExpected = liveByteProgressByEpisodeID[episodeID]?.bytesExpected
         do {
             if let record = try fetchRecord(episodeID: episodeID, modelContext: modelContext),
                record.state == .downloading,
-               let bytesExpected = record.bytesExpected,
+               let bytesExpected = record.bytesExpected ?? knownBytesExpected,
                bytesExpected > 0 {
                 let temporaryFileSize = try fileStore.fileSize(at: temporaryURL)
                 if temporaryFileSize == bytesExpected,
@@ -867,12 +895,12 @@ final class DownloadStore {
 
             record.state = .paused
             record.bytesReceived = fileSize
-            if let bytesExpected = record.bytesExpected, bytesExpected < fileSize {
-                record.bytesExpected = fileSize
+            if let bytesExpected = record.bytesExpected ?? knownBytesExpected {
+                record.bytesExpected = max(bytesExpected, fileSize)
             }
             record.errorMessage = nil
             record.updatedAt = .now
-            progressCheckpoints[episodeID] = nil
+            clearTransientProgress(episodeID: episodeID)
             pauseRequestedEpisodeIDs.remove(episodeID)
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
             lastErrorMessage = nil
@@ -914,41 +942,40 @@ final class DownloadStore {
         episodeID: String,
         token: String,
         bytesReceived: Int64,
-        bytesExpected: Int64?,
-        modelContext: ModelContext
+        bytesExpected: Int64?
     ) {
-        do {
-            try withCurrentToken(episodeID, token) {
-                guard let record = try fetchRecord(episodeID: episodeID, modelContext: modelContext),
-                      record.state == .downloading
-                else {
-                    return
-                }
-
-                let received = max(0, bytesReceived)
-                guard record.bytesReceived != received || record.bytesExpected != bytesExpected else {
-                    return
-                }
-                guard shouldPersistProgress(
-                    episodeID: episodeID,
-                    bytesReceived: received,
-                    bytesExpected: bytesExpected
-                ) else {
-                    return
-                }
-
-                record.bytesReceived = received
-                record.bytesExpected = bytesExpected
-                record.updatedAt = .now
-                try commit(episodeID: episodeID, modelContext: modelContext)
-                progressCheckpoints[episodeID] = DownloadProgressCheckpoint(
-                    bytesReceived: received,
-                    bytesExpected: bytesExpected,
-                    savedAt: record.updatedAt
-                )
+        withCurrentToken(episodeID, token) {
+            guard let record = records.first(where: { $0.episodeID == episodeID }),
+                  record.state == .downloading
+            else {
+                return
             }
-        } catch {
-            recordFailure(error)
+
+            let received = max(0, bytesReceived)
+            // The live value must always carry the latest report: the
+            // URLSession delegate already coalesces callback frequency, and
+            // a report suppressed here would stay lost if it turns out to be
+            // the last one before a stall (the resume seed stamps a fresh
+            // checkpoint, so the first post-resume report otherwise falls
+            // inside the throttle window). Only checkpoint persistence is
+            // paced by shouldPublishProgress.
+            liveByteProgressByEpisodeID[episodeID] = DownloadByteProgress(
+                bytesReceived: received,
+                bytesExpected: bytesExpected
+            )
+            guard shouldPublishProgress(
+                episodeID: episodeID,
+                bytesReceived: received,
+                bytesExpected: bytesExpected
+            ) else {
+                return
+            }
+
+            progressCheckpoints[episodeID] = DownloadProgressCheckpoint(
+                bytesReceived: received,
+                bytesExpected: bytesExpected,
+                publishedAt: .now
+            )
         }
     }
 
@@ -972,7 +999,7 @@ final class DownloadStore {
             record.bytesExpected = record.bytesExpected ?? record.bytesReceived
             record.errorMessage = nil
             record.updatedAt = .now
-            progressCheckpoints[episodeID] = nil
+            clearTransientProgress(episodeID: episodeID)
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
             lastErrorMessage = nil
             lastErrorEpisodeID = nil
@@ -993,9 +1020,13 @@ final class DownloadStore {
 
                 record.state = .failed
                 record.sourceFileSHA256 = ""
+                if let live = liveByteProgressByEpisodeID[episodeID] {
+                    record.bytesReceived = max(live.bytesReceived, record.bytesReceived)
+                    record.bytesExpected = record.bytesExpected ?? live.bytesExpected
+                }
                 record.errorMessage = error.localizedDescription
                 record.updatedAt = .now
-                progressCheckpoints[episodeID] = nil
+                clearTransientProgress(episodeID: episodeID)
                 pauseRequestedEpisodeIDs.remove(episodeID)
                 try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
                 recordFailure(error, episodeID: episodeID)
@@ -1014,7 +1045,7 @@ final class DownloadStore {
         downloadTasks[episode.episodeID] = nil
         downloadTaskTokens[episode.episodeID] = nil
         pauseRequestedEpisodeIDs.remove(episode.episodeID)
-        progressCheckpoints[episode.episodeID] = nil
+        clearTransientProgress(episodeID: episode.episodeID)
         try fileStore.removeTemporaryFiles(episodeID: episode.episodeID)
         try fileStore.removePausedPartial(episodeID: episode.episodeID)
         let record = try upsertRecord(
@@ -1053,7 +1084,7 @@ final class DownloadStore {
         downloadTasks[record.episodeID]?.cancel()
         downloadTasks[record.episodeID] = nil
         downloadTaskTokens[record.episodeID] = nil
-        progressCheckpoints[record.episodeID] = nil
+        clearTransientProgress(episodeID: record.episodeID)
         pauseRequestedEpisodeIDs.remove(record.episodeID)
         stateChanges.notify()
 
@@ -1241,7 +1272,12 @@ final class DownloadStore {
         return true
     }
 
-    private func shouldPersistProgress(
+    private func clearTransientProgress(episodeID: String) {
+        progressCheckpoints[episodeID] = nil
+        liveByteProgressByEpisodeID[episodeID] = nil
+    }
+
+    private func shouldPublishProgress(
         episodeID: String,
         bytesReceived: Int64,
         bytesExpected: Int64?
@@ -1254,27 +1290,12 @@ final class DownloadStore {
             return false
         }
 
-        if Date.now.timeIntervalSince(checkpoint.savedAt) >= Self.minimumProgressSaveInterval {
+        if bytesExpected.map({ bytesReceived >= $0 }) == true {
             return true
         }
 
-        guard let fraction = progressFraction(bytesReceived: bytesReceived, bytesExpected: bytesExpected) else {
-            return false
-        }
-
-        guard let checkpointFraction = checkpoint.progressFraction else {
-            return true
-        }
-
-        return abs(fraction - checkpointFraction) >= Self.minimumProgressFractionDelta
-    }
-
-    private func progressFraction(bytesReceived: Int64, bytesExpected: Int64?) -> Double? {
-        guard let bytesExpected, bytesExpected > 0 else {
-            return nil
-        }
-
-        return Double(bytesReceived) / Double(bytesExpected)
+        return Date.now.timeIntervalSince(checkpoint.publishedAt)
+            >= Self.minimumProgressPublicationInterval
     }
 
     private func updateLoadedRecord(_ record: EpisodeDownloadRecord, resort: Bool = false) {
@@ -1368,18 +1389,24 @@ final class DownloadStore {
     private struct DownloadProgressCheckpoint {
         let bytesReceived: Int64
         let bytesExpected: Int64?
-        let progressFraction: Double?
-        let savedAt: Date
+        let publishedAt: Date
 
-        init(bytesReceived: Int64, bytesExpected: Int64?, savedAt: Date) {
+        init(bytesReceived: Int64, bytesExpected: Int64?, publishedAt: Date) {
             self.bytesReceived = bytesReceived
             self.bytesExpected = bytesExpected
-            if let bytesExpected, bytesExpected > 0 {
-                progressFraction = Double(bytesReceived) / Double(bytesExpected)
-            } else {
-                progressFraction = nil
-            }
-            self.savedAt = savedAt
+            self.publishedAt = publishedAt
         }
+    }
+}
+
+struct DownloadByteProgress: Equatable {
+    var bytesReceived: Int64
+    var bytesExpected: Int64?
+
+    var fractionCompleted: Double? {
+        guard let bytesExpected, bytesExpected > 0 else {
+            return nil
+        }
+        return min(max(Double(bytesReceived) / Double(bytesExpected), 0), 1)
     }
 }

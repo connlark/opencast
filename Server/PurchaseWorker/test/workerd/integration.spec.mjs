@@ -664,5 +664,12 @@ describe('operations floor', () => {
       .prepare("SELECT value FROM purchase_ops_counters WHERE name = 'liability_snapshot_runs'")
       .first();
     expect(Number(counter.value)).toBeGreaterThanOrEqual(2);
+    const rawAccountCount = await env.PURCHASE_DB
+      .prepare('SELECT COUNT(*) AS count FROM purchase_accounts')
+      .first();
+    const maintainedAccountCount = await env.PURCHASE_DB
+      .prepare("SELECT value FROM purchase_ops_counters WHERE name = 'purchase_account_count'")
+      .first();
+    expect(Number(maintainedAccountCount.value)).toBe(Number(rawAccountCount.count));
   });
 });

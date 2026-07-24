@@ -58,8 +58,9 @@ struct EpisodeInfoSheet: View {
     private func downloadSection(_ record: EpisodeDownloadRecord) -> some View {
         Section {
             LabeledContent("Status", value: record.state.rawValue.capitalized)
-            LabeledContent("Received", value: byteCount(record.bytesReceived))
-            if let bytesExpected = record.bytesExpected {
+            let progress = appModel.downloads.byteProgress(for: episodeID)
+            LabeledContent("Received", value: byteCount(progress?.bytesReceived ?? record.bytesReceived))
+            if let bytesExpected = progress?.bytesExpected ?? record.bytesExpected {
                 LabeledContent("Expected", value: byteCount(bytesExpected))
             }
             if let errorMessage = record.errorMessage {

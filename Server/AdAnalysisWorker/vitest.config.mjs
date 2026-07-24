@@ -20,6 +20,7 @@ export default defineConfig(async () => {
             AD_ANALYSIS_CLIENT_TOKEN: "integration-test-bearer-token",
             GEMINI_API_KEY: "integration-test-gemini-key",
             PUBLIC_AD_ANALYSIS_ENABLED: "true",
+            INTERNAL_AD_ANALYSIS_ENABLED: "true",
             APPLE_TEAM_ID: "A1B2C3D4E5",
             APPLE_BUNDLE_ID: "com.example.opencast",
             // Overrides the public template default (gemini-3.5-flash) so the

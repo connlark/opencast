@@ -6,7 +6,7 @@ struct EpisodeAdAnalysisFileStore: Sendable {
 
     let baseDirectory: URL
 
-    init(baseDirectory: URL = .applicationSupportDirectory) {
+    nonisolated init(baseDirectory: URL = .applicationSupportDirectory) {
         self.baseDirectory = baseDirectory
     }
 

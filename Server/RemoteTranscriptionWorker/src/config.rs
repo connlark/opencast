@@ -60,6 +60,15 @@ pub struct AppConfig {
     pub origin_fetch_max_redirects: u32,
     pub origin_fetch_wall_seconds: u64,
     pub poll_after_seconds: u32,
+    /// Chained cloud ad detection. Fail-safe defaults: disabled ⇒ jobs that
+    /// requested the phase finalize immediately with the
+    /// `ad_analysis_unavailable` marker — the transcript is never blocked.
+    pub ad_analysis_enabled: bool,
+    /// Whole-phase deadline; must exceed AdAnalysis's 600 s running
+    /// watchdog plus resubmit slack, or timeouts fire under live jobs.
+    pub ad_analysis_deadline_seconds: i64,
+    pub ad_analysis_poll_seconds: u64,
+    pub ad_analysis_max_submit_attempts: u32,
 }
 
 impl AppConfig {
@@ -164,6 +173,14 @@ impl AppConfig {
             origin_fetch_max_redirects: int_var(env, "ORIGIN_FETCH_MAX_REDIRECTS", 5) as u32,
             origin_fetch_wall_seconds: int_var(env, "ORIGIN_FETCH_WALL_SECONDS", 900) as u64,
             poll_after_seconds: int_var(env, "POLL_AFTER_SECONDS", 5) as u32,
+            ad_analysis_enabled: optional_var(env, "AD_ANALYSIS_ENABLED")
+                .map(|value| value == "true")
+                .unwrap_or(false),
+            ad_analysis_deadline_seconds: int_var(env, "AD_ANALYSIS_DEADLINE_SECONDS", 900)
+                .max(1),
+            ad_analysis_poll_seconds: int_var(env, "AD_ANALYSIS_POLL_SECONDS", 5).max(1) as u64,
+            ad_analysis_max_submit_attempts: int_var(env, "AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS", 3)
+                .clamp(1, 10) as u32,
         })
     }
 
