@@ -69,7 +69,6 @@ export default defineConfig(async () => {
           outboundService,
           bindings: {
             TEST_MIGRATIONS: migrations,
-            APPLE_BUNDLE_ID: "com.connor.opencast",
             // Development-lane-only root override pointing at the minted
             // trusted root; offline checks (no OCSP responder here — the W1
             // spike proved the online path separately).

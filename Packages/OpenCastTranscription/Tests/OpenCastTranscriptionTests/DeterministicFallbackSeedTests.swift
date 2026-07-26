@@ -13,14 +13,14 @@ struct DeterministicFallbackSeedTests {
     func sameInputsSameSeed() {
         // A resumed run reaching the same absolute seek with the same
         // attempt index must draw identical samples.
-        let a = TranscribeTask.deterministicFallbackSeed(base: 0x0123_4567_89AB_CDEF, windowSeek: 4_800_000, attempt: 1)
-        let b = TranscribeTask.deterministicFallbackSeed(base: 0x0123_4567_89AB_CDEF, windowSeek: 4_800_000, attempt: 1)
+        let a = TranscribeTask.deterministicFallbackSeed(base: 0xDA26_A00F_82F4_EDFC, windowSeek: 4_800_000, attempt: 1)
+        let b = TranscribeTask.deterministicFallbackSeed(base: 0xDA26_A00F_82F4_EDFC, windowSeek: 4_800_000, attempt: 1)
         #expect(a == b)
     }
 
     @Test("Seek, attempt, and audio identity all separate the seeds")
     func inputsSeparateSeeds() {
-        let base: UInt64 = 0x0123_4567_89AB_CDEF
+        let base: UInt64 = 0xDA26_A00F_82F4_EDFC
         let reference = TranscribeTask.deterministicFallbackSeed(base: base, windowSeek: 4_800_000, attempt: 1)
         #expect(TranscribeTask.deterministicFallbackSeed(base: base, windowSeek: 4_800_001, attempt: 1) != reference)
         #expect(TranscribeTask.deterministicFallbackSeed(base: base, windowSeek: 4_800_000, attempt: 2) != reference)
@@ -29,8 +29,8 @@ struct DeterministicFallbackSeedTests {
 
     @Test("Base seed derives stably from the audio hash prefix")
     func baseSeedFromHash() {
-        let sha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        #expect(OpenCastTranscriptionService.deterministicFallbackBaseSeed(from: sha) == 0x0123_4567_89AB_CDEF)
+        let sha = "da26a00f82f4edfcfc133ab06ce4d89d2af5864b28a2c039d55dea1c7b5f8699"
+        #expect(OpenCastTranscriptionService.deterministicFallbackBaseSeed(from: sha) == 0xDA26_A00F_82F4_EDFC)
         #expect(OpenCastTranscriptionService.deterministicFallbackBaseSeed(from: "short") == nil)
         #expect(OpenCastTranscriptionService.deterministicFallbackBaseSeed(from: "zzzzzzzzzzzzzzzz") == nil)
     }

@@ -11,6 +11,7 @@ One worker, two hostnames (Workers Custom Domains):
 | `opencast.mobile` | `/` | Home page |
 | `opencast.mobile` | `/support`, `/privacy` | Served directly |
 | `opencast.mobile` | `/app-store` | 302 → App Store listing |
+| `opencast.mobile` | `/testflight` | TestFlight landing page |
 | `opencast.mobile` | anything else | 302 → `/` |
 | `support.opencast.mobile` | `/` | Support page body |
 | `support.opencast.mobile` | `/support`, `/privacy` | Served directly (App Store support/privacy URLs) |

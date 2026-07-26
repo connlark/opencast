@@ -14,6 +14,10 @@ public protocol PlaybackController: AnyObject {
     var sleepTimerEndsAt: Date? { get }
     var skipZones: [PlaybackSkipZone] { get }
     var lastAutoSkipEvent: PlaybackAutoSkipEvent? { get }
+    /// Identity of the actual current `AVPlayerItem`. Source-identity checks
+    /// must use this, not `currentEpisode?.audioURL`: metadata records what
+    /// was requested, the item proves what is playing.
+    var currentItemSourceIdentity: PlaybackItemSourceIdentity? { get }
 
     func load(_ episode: Episode, startPosition: TimeInterval) throws
     func play()

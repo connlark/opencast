@@ -128,8 +128,10 @@ struct SeededFallbackReproducibilityGateTests {
         print("F_GATE mode=\(unseeded ? "unseeded" : "seeded") runs=\(runCount) fallbacks=\(fallbackCounts) identical=\(allIdentical) sha=\(OpenCastSHA256.hash(Data(dumps[0].utf8)))")
         if !unseeded {
             #expect(allIdentical, "seeded runs must be bit-identical")
-            // Some stress workloads decode without fallbacks on some surfaces.
-            // Keep the strict non-vacuous default unless explicitly overridden.
+            // Whisper-perf pass 5: OPENCAST_F_GATE_ALLOW_ZERO=1 admits
+            // content that decodes without fallbacks on this surface (the
+            // 3-h stress episode and logfiles are zero-fallback on host);
+            // the anchor keeps the strict non-vacuous default.
             if environment["OPENCAST_F_GATE_ALLOW_ZERO"] != "1" {
                 #expect(fallbackCounts.allSatisfy { $0 > 0 }, "workload must exercise fallbacks or the gate is vacuous")
             }

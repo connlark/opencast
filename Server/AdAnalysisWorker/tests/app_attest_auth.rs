@@ -1,6 +1,114 @@
-use opencast_app_attest_core::app_attest::{request_client_data_hash, verify_attestation};
+use opencast_app_attest_core::app_attest::{
+    request_client_data_hash, verify_assertion, verify_attestation,
+};
 use rusqlite::{params, Connection};
 use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct AppAttestFixture {
+    app_id: String,
+    assertion: String,
+    attestation_object: String,
+    captured_at_seconds: i64,
+    challenge: String,
+    client_data_hash_sha256_hex: String,
+    environment: String,
+    install_id: String,
+    key_id: String,
+    method: String,
+    path: String,
+    payload: String,
+    previous_counter: u32,
+    public_key_sec1_hex: String,
+}
+
+#[test]
+fn real_development_ad_analysis_fixture_verifies_and_rejects_replay_counter_update() {
+    let fixture = load_fixture();
+    assert_eq!(fixture.method, "POST");
+    assert_eq!(fixture.path, "/v1/ad-analysis/transcript");
+
+    let verified_attestation = verify_attestation(
+        &fixture.attestation_object,
+        &fixture.challenge,
+        &fixture.app_id,
+        &fixture.key_id,
+        &fixture.environment,
+        fixture.captured_at_seconds,
+    )
+    .expect("real App Attest attestation should verify");
+
+    // Pins the SEC1 public key bytes the workerd integration tests seed
+    // directly into local D1 (the fixture's leaf cert is only valid for
+    // three days, so integration tests cannot re-run attestation live).
+    assert_eq!(
+        hex::encode(&verified_attestation.public_key),
+        fixture.public_key_sec1_hex
+    );
+
+    let client_data_hash =
+        request_client_data_hash(&fixture.method, &fixture.path, &fixture.payload);
+    assert_eq!(
+        hex::encode(client_data_hash),
+        fixture.client_data_hash_sha256_hex
+    );
+    let verified_assertion = verify_assertion(
+        &fixture.assertion,
+        &client_data_hash,
+        &fixture.app_id,
+        &verified_attestation.public_key,
+        fixture.previous_counter,
+    )
+    .expect("real App Attest assertion should verify");
+
+    let db = setup_db();
+    db.execute(
+        "INSERT INTO app_attest_keys \
+         (install_id, key_id, public_key, sign_counter, app_id, environment, created_at, last_used_at) \
+         VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?6)",
+        params![
+            fixture.install_id,
+            fixture.key_id,
+            verified_attestation.public_key,
+            fixture.app_id,
+            fixture.environment,
+            fixture.captured_at_seconds
+        ],
+    )
+    .expect("insert verified key");
+
+    let accepted = db
+        .execute(
+            "UPDATE app_attest_keys \
+             SET sign_counter = ?1, last_used_at = ?2 \
+             WHERE install_id = ?3 AND key_id = ?4 AND sign_counter = ?5",
+            params![
+                i64::from(verified_assertion.sign_counter),
+                fixture.captured_at_seconds + 1,
+                fixture.install_id,
+                fixture.key_id,
+                i64::from(fixture.previous_counter)
+            ],
+        )
+        .expect("accept first assertion counter");
+    assert_eq!(accepted, 1);
+
+    let replay = db
+        .execute(
+            "UPDATE app_attest_keys \
+             SET sign_counter = ?1, last_used_at = ?2 \
+             WHERE install_id = ?3 AND key_id = ?4 AND sign_counter = ?5",
+            params![
+                i64::from(verified_assertion.sign_counter),
+                fixture.captured_at_seconds + 2,
+                fixture.install_id,
+                fixture.key_id,
+                i64::from(fixture.previous_counter)
+            ],
+        )
+        .expect("reject stale assertion counter");
+    assert_eq!(replay, 0);
+}
 
 #[test]
 fn poll_request_binding_matches_swift_fixture() {
@@ -50,6 +158,53 @@ fn register_consumes_valid_challenge_before_attestation_verification() {
     let consumed = read_challenge(&db, "challenge-a").expect("challenge should remain recorded");
     assert_eq!(consumed.consumed_at, Some(1_780_000_001));
     assert_eq!(consume_challenge(&db, "challenge-a", 1_780_000_002), 0);
+}
+
+#[test]
+fn assertion_counter_cas_failure_is_the_replay_boundary() {
+    let fixture = load_fixture();
+    let verified_attestation = verify_attestation(
+        &fixture.attestation_object,
+        &fixture.challenge,
+        &fixture.app_id,
+        &fixture.key_id,
+        &fixture.environment,
+        fixture.captured_at_seconds,
+    )
+    .expect("real App Attest attestation should verify");
+    let client_data_hash =
+        request_client_data_hash(&fixture.method, &fixture.path, &fixture.payload);
+    let verified_assertion = verify_assertion(
+        &fixture.assertion,
+        &client_data_hash,
+        &fixture.app_id,
+        &verified_attestation.public_key,
+        fixture.previous_counter,
+    )
+    .expect("real App Attest assertion should verify");
+
+    let db = setup_db();
+    insert_key(
+        &db,
+        &fixture.install_id,
+        &fixture.key_id,
+        &verified_attestation.public_key,
+        &fixture.app_id,
+        &fixture.environment,
+        i64::from(verified_assertion.sign_counter),
+        fixture.captured_at_seconds,
+    );
+
+    let replay = update_counter(
+        &db,
+        &fixture.install_id,
+        &fixture.key_id,
+        i64::from(fixture.previous_counter),
+        i64::from(verified_assertion.sign_counter),
+        fixture.captured_at_seconds + 1,
+    );
+
+    assert_eq!(replay, 0);
 }
 
 fn setup_db() -> Connection {
@@ -119,4 +274,55 @@ fn consume_challenge(db: &Connection, challenge_id: &str, consumed_at: i64) -> u
         params![consumed_at, challenge_id],
     )
     .expect("consume challenge")
+}
+
+fn insert_key(
+    db: &Connection,
+    install_id: &str,
+    key_id: &str,
+    public_key: &[u8],
+    app_id: &str,
+    environment: &str,
+    sign_counter: i64,
+    now: i64,
+) {
+    db.execute(
+        "INSERT INTO app_attest_keys \
+         (install_id, key_id, public_key, sign_counter, app_id, environment, created_at, last_used_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![
+            install_id,
+            key_id,
+            public_key,
+            sign_counter,
+            app_id,
+            environment,
+            now
+        ],
+    )
+    .expect("insert key");
+}
+
+fn update_counter(
+    db: &Connection,
+    install_id: &str,
+    key_id: &str,
+    previous_counter: i64,
+    next_counter: i64,
+    now: i64,
+) -> usize {
+    db.execute(
+        "UPDATE app_attest_keys \
+         SET sign_counter = ?1, last_used_at = ?2 \
+         WHERE install_id = ?3 AND key_id = ?4 AND sign_counter = ?5",
+        params![next_counter, now, install_id, key_id, previous_counter],
+    )
+    .expect("update counter")
+}
+
+fn load_fixture() -> AppAttestFixture {
+    serde_json::from_str(include_str!(
+        "fixtures/ad_analysis_app_attest_development_fixture.json"
+    ))
+    .expect("fixture should decode")
 }

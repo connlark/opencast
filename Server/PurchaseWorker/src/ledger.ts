@@ -3,7 +3,7 @@
 // PurchaseAccount DO loads state, calls these, and persists the result, so
 // every rule here is property-testable in plain Node.
 //
-// Overdraft semantics:
+// Overdraft semantics (Connor's 2026-07-16 call, PLAN.md decision 2):
 // - buckets per account (integer seconds, each >= 0): available, reserved,
 //   consumed, debt; DEBT_CAP = 10,800.
 // - headroom = available + (DEBT_CAP - min(debt, DEBT_CAP)) - reserved.

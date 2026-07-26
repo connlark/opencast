@@ -1,11 +1,6 @@
 node_modules/
 .wrangler/
 .dev.vars
-.env*
 dist/
 target/
 build/
-
-# Private physical-device App Attest capture and its replay-only test.
-tests/app_attest_fixture.rs
-tests/fixtures/app_attest_development_fixture.json

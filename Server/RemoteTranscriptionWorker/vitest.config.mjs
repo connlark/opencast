@@ -17,8 +17,6 @@ export default defineConfig(async () => {
         miniflare: {
           bindings: {
             TEST_MIGRATIONS: migrations,
-            PUBLIC_REMOTE_TRANSCRIPTION_ENABLED: "true",
-            DEV_BEARER_ENABLED: "true",
             DEV_BEARER_TOKEN: "integration-test-bearer-token",
             // Fake upstreams (development lane only): media chunking without
             // ffmpeg and deterministic AI responses; the AI/media bindings

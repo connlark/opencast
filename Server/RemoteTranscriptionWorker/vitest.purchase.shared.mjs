@@ -78,7 +78,7 @@ export async function makePurchaseConfig({ include, extraBindings = {} }) {
               });
             },
             // The real compiled PurchaseWorker (auxiliary worker below).
-            PURCHASE_WORKER: "purchase-worker-test",
+            PURCHASE_WORKER: "opencast-purchase",
           },
           // Same database ID as the auxiliary worker's PURCHASE_DB: the test
           // env needs a handle to apply PurchaseWorker's migrations.
@@ -86,9 +86,6 @@ export async function makePurchaseConfig({ include, extraBindings = {} }) {
           bindings: {
             TEST_MIGRATIONS: migrations,
             PURCHASE_TEST_MIGRATIONS: purchaseMigrations,
-            PUBLIC_REMOTE_TRANSCRIPTION_ENABLED: "true",
-            PURCHASES_ENABLED: "true",
-            DEV_BEARER_ENABLED: "true",
             DEV_BEARER_TOKEN: "integration-test-bearer-token",
             FAKE_MEDIA: "true",
             FAKE_AI: "true",
@@ -111,7 +108,7 @@ export async function makePurchaseConfig({ include, extraBindings = {} }) {
           },
           workers: [
             {
-              name: "purchase-worker-test",
+              name: "opencast-purchase",
               modules: [purchaseWorkerModule()],
               compatibilityDate: "2026-07-09",
               compatibilityFlags: ["nodejs_compat"],

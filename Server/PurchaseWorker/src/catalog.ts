@@ -1,7 +1,9 @@
-// Immutable public server catalog. A unit test recomputes the canonical
-// mapping hash from this embedded copy, and the Worker fails closed at runtime
-// if its own copy stops hashing to the expected value. Once a product has been
-// sold its grant is immutable — ship a .v2 product instead of editing it.
+// Immutable server catalog. Source of truth is the checked-in manifest
+// fastlane/in_app_purchases/remote_transcription.json; a unit test recomputes
+// the canonical mapping hash from this embedded copy and fails on drift, and
+// the worker fails closed at runtime if its own copy stops hashing to the
+// expected value. Once a product has been sold its grant is immutable — ship
+// a .v2 product instead of editing.
 
 import type { CatalogProduct } from './types';
 
@@ -11,7 +13,7 @@ export const EXPECTED_CATALOG_SHA256 =
 export const FREE_GRANT_SECONDS = 3600;
 export const FREE_GRANT_LEDGER_KIND = 'free_grant_v1';
 
-/** Overdraft cap: 3 hours of debt. */
+/** Overdraft cap (Connor's 2026-07-16 call): 3 hours of debt. */
 export const DEBT_CAP_SECONDS = 10_800;
 
 export const CATALOG: CatalogProduct[] = [
@@ -26,7 +28,7 @@ export function grantSecondsForProduct(productId: string): number | undefined {
 /**
  * Canonical mapping hash: SHA-256 of the compact JSON array of
  * {grant_seconds, product_id} sorted by product_id with sorted keys —
- * used by the app and Worker integrity checks.
+ * identical to fastlane's iap_catalog_mapping_sha256.
  */
 export async function computeCatalogSha256(catalog: CatalogProduct[]): Promise<string> {
   const mapping = [...catalog]

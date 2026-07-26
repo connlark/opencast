@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_dir="$(cd "${script_dir}/.." && pwd)"
+repo_dir="/Users/connor/dev/opencast"
 warmup_script="${repo_dir}/scripts/run-ipad-ui-test-warmup.sh"
 
 cd "${repo_dir}" || exit 1

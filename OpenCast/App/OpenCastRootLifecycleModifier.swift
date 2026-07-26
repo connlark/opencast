@@ -18,7 +18,6 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     private static let foregroundSyncedDataRefreshInterval: Duration = .seconds(60)
 
     let performInitialSetup: () async -> Void
-    let persistPlaybackProgress: () async -> Void
     let refreshImportedData: () async -> Void
     let refreshSyncedUserData: () async -> Void
     let runVoiceBoostDeviceProbeIfActive: () async -> Void
@@ -29,20 +28,11 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
                 appModel.configureBackgroundSessionExpirations(modelContext: modelContext)
                 await performInitialSetup()
             }
-            .task(id: appModel.playback.currentEpisode?.id.rawValue) {
-                await persistPlaybackProgress()
-            }
             .onChange(of: scenePhase) { _, newPhase in
                 handleScenePhaseChange(newPhase)
             }
             .onChange(of: appModel.isNowPlayingPresented) { _, isPresented in
                 handleNowPlayingPresentationChange(isPresented: isPresented)
-            }
-            .onChange(of: appModel.playback.progressBoundaryID) { _, _ in
-                appModel.flushPlaybackProgress(
-                    modelContext: modelContext,
-                    refreshObservableProgress: scenePhase == .active && !appModel.isNowPlayingPresented
-                )
             }
             .onChange(of: appModel.playback.state) { _, newState in
                 if case .failed(let message) = newState {

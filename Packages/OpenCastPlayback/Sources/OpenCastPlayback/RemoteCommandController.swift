@@ -27,12 +27,32 @@ final class RemoteCommandController {
         }
 
         applySkipIntervals()
+        commandCenter.changePlaybackRateCommand.supportedPlaybackRates =
+            PlaybackRateSteps.steps.map { NSNumber(value: $0) }
 
         register(command: commandCenter.playCommand, handler: handlers.play)
         register(command: commandCenter.pauseCommand, handler: handlers.pause)
         register(command: commandCenter.togglePlayPauseCommand, handler: handlers.togglePlayPause)
         register(command: commandCenter.skipForwardCommand, handler: handlers.skipForward)
         register(command: commandCenter.skipBackwardCommand, handler: handlers.skipBackward)
+
+        targets.append(RemoteCommandTarget(
+            command: commandCenter.changePlaybackRateCommand,
+            target: commandCenter.changePlaybackRateCommand.addTarget { [stateStore] event in
+                guard let event = event as? MPChangePlaybackRateCommandEvent else {
+                    return .commandFailed
+                }
+                guard stateStore.read().hasLoadedContent else {
+                    return .noSuchContent
+                }
+
+                let rate = event.playbackRate
+                Task { @MainActor in
+                    handlers.changeRate(rate)
+                }
+                return .success
+            }
+        ))
 
         targets.append(RemoteCommandTarget(
             command: commandCenter.changePlaybackPositionCommand,
@@ -85,6 +105,7 @@ final class RemoteCommandController {
         commandCenter.togglePlayPauseCommand.isEnabled = hasLoadedContent
         commandCenter.skipForwardCommand.isEnabled = hasLoadedContent
         commandCenter.skipBackwardCommand.isEnabled = hasLoadedContent
+        commandCenter.changePlaybackRateCommand.isEnabled = hasLoadedContent
         commandCenter.changePlaybackPositionCommand.isEnabled = isSeekable
 
         stateStore.update(state)

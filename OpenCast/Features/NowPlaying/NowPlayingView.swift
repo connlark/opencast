@@ -36,7 +36,8 @@ struct NowPlayingView: View {
                     VStack(spacing: contentSpacing) {
                         if appModel.replacesNowPlayingArtworkWithPlaybackDiagnostics {
                             NowPlayingPlaybackDiagnosticsView(
-                                text: appModel.playback.playbackDiagnosticsText,
+                                text: appModel.playback.playbackDiagnosticsText
+                                    + appModel.playbackSourceIdentityDiagnostics,
                                 size: artworkSize
                             )
                         } else {

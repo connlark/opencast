@@ -6,6 +6,8 @@
 	<string>production</string>
 	<key>com.apple.developer.background-tasks.continued-processing.gpu</key>
 	<true/>
+	<key>com.apple.developer.carplay-audio</key>
+	<true/>
 	<key>com.apple.developer.devicecheck.appattest-environment</key>
 	<string>production</string>
 	<key>com.apple.developer.icloud-container-identifiers</key>

@@ -15,9 +15,6 @@ repo_dir="$(cd "${scripts_dir}/.." && pwd)"
 RUNNER="${scripts_dir}/run-ui-tests.sh"
 MOCK_XCB="${tests_dir}/mock_xcodebuild.py"
 MOCK_XCR="${tests_dir}/mock_xcresulttool.py"
-SIM_A="selftest-simulator-a"
-SIM_B="selftest-simulator-b"
-export SIM_A SIM_B
 chmod +x "$MOCK_XCB" "$MOCK_XCR"
 
 work="$(mktemp -d)"

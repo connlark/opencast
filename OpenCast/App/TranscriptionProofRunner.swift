@@ -27,8 +27,8 @@ nonisolated struct TranscriptionProofRunner: Sendable {
     static let appleSpeechAllowsAssetInstallationArgument = "--opencast-apple-speech-allow-asset-installation"
 
     private static let defaultFeedURL = URL(string: "https://feeds.feedburner.com/LibrivoxCommunityPodcast")!
-    private static let largeV3ReportFileName = "transcription-large-v3-proof.json"
-    private static let appleSpeechReportFileName = "transcription-apple-speech-proof.json"
+    private static let largeV3ReportFileName = "debuggers-almanac-large-v3-proof.json"
+    private static let appleSpeechReportFileName = "debuggers-almanac-apple-speech-proof.json"
     private static let transcriptPreviewLimit = 700
 
     var feedURL: URL
@@ -496,7 +496,7 @@ nonisolated struct TranscriptionProofRunner: Sendable {
         case .whisper:
             switch model {
             case .tinyEnglish:
-                "whisper-tiny-proof.json"
+                "debuggers-almanac-tiny-proof.json"
             case .largeV3:
                 largeV3ReportFileName
             }

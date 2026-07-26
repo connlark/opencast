@@ -8,7 +8,7 @@ pub const MAX_CHALLENGES_PER_SOURCE_PER_HOUR: i64 = 300;
 pub const MAX_GLOBAL_CHALLENGES_PER_HOUR: i64 = 10_000;
 pub const MAX_APP_ATTEST_KEYS_PER_INSTALL_PER_DAY: i64 = 10;
 pub const DEVELOPMENT_CHALLENGE_SOURCE_HASH_KEY: &str =
-    "remote-transcription-development-challenge-source-key";
+    "opencast-remote-transcription-development-challenge-source-key";
 
 pub fn source_challenge_allows_after_increment(count_after_increment: i64) -> bool {
     count_after_increment <= MAX_CHALLENGES_PER_SOURCE_PER_HOUR

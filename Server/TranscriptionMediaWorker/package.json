@@ -9,7 +9,7 @@
     "test:container": "python3 -m unittest discover -s container -p 'test_*.py'",
     "login": "wrangler login",
     "typecheck": "tsc --noEmit",
-    "build:image": "podman build -t your-transcription-media-container:dev container"
+    "build:image": "podman build -t opencast-transcription-media:dev container"
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7"

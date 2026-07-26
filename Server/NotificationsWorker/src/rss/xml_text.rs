@@ -3,8 +3,7 @@
 //! Adapted from the MIT-licensed `feed-rs` crate (© 2019 Hiroki Kumamoto),
 //! upstream `feed-rs/src/xml/mod.rs` (`XmlEvent::text` / `text_from_cdata`). The
 //! full crate is not linked because it pulls in chrono/url/regex/serde_json/
-//! mediatype/uuid/siphasher, bloating this Cloudflare Workers wasm target. See
-//! `LICENSES/feed-rs-LICENSE` for the required copyright and permission notice.
+//! mediatype/uuid/siphasher, bloating this Cloudflare Workers wasm target.
 //!
 //! feed-rs targets quick-xml 0.37, where entity references arrive inside
 //! `Event::Text` and are resolved with `quick_xml::escape::unescape`. This crate

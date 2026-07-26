@@ -1,7 +1,7 @@
 // Contract checks that fail on drift:
-// 1. The embedded public catalog must hash to the value both the app and this
-//    Worker embed (fail closed).
-// 2. While ENABLE_ONLINE_CHECKS is true anywhere, the wrangler
+// 1. The embedded catalog must equal the checked-in fastlane manifest and
+//    hash to the value both the app and this worker embed (fail closed).
+// 2. W1 contract: while ENABLE_ONLINE_CHECKS is true anywhere, the wrangler
 //    config must keep the node-fetch transport alias — losing it silently
 //    breaks the Apple library's OCSP path under workerd.
 
@@ -13,23 +13,28 @@ import { CATALOG, computeCatalogSha256, EXPECTED_CATALOG_SHA256, FREE_GRANT_SECO
 import { laneConfigFromEnv } from '../../src/apple';
 
 const workerDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const repoRoot = path.join(workerDir, '..', '..');
 
 describe('catalog contract', () => {
-  it('embeds exactly the immutable public products and grants', () => {
-    const expectedMapping = [
-      { product_id: 'com.connor.opencast.transcription.hours100.v1', grant_seconds: 360_000 },
-      { product_id: 'com.connor.opencast.transcription.hours20.v1', grant_seconds: 72_000 },
-    ].sort((a, b) => a.product_id.localeCompare(b.product_id));
+  const manifest = JSON.parse(
+    readFileSync(path.join(repoRoot, 'fastlane', 'in_app_purchases', 'remote_transcription.json'), 'utf8'),
+  );
+
+  it('embeds exactly the manifest products and grants', () => {
+    const manifestMapping = manifest.products
+      .map((product) => ({ product_id: product.product_id, grant_seconds: product.grant_seconds }))
+      .sort((a, b) => a.product_id.localeCompare(b.product_id));
     const embedded = [...CATALOG].sort((a, b) => a.product_id.localeCompare(b.product_id));
-    expect(embedded).toEqual(expectedMapping);
+    expect(embedded).toEqual(manifestMapping);
   });
 
-  it('hashes to the embedded expected value', async () => {
+  it('hashes to the manifest catalog_sha256 and the embedded expected value', async () => {
     expect(await computeCatalogSha256(CATALOG)).toBe(EXPECTED_CATALOG_SHA256);
+    expect(manifest.catalog_sha256).toBe(EXPECTED_CATALOG_SHA256);
   });
 
-  it('keeps the public free grant stable', () => {
-    expect(FREE_GRANT_SECONDS).toBe(3600);
+  it('embeds the manifest free grant', () => {
+    expect(manifest.free_grant.grant_seconds).toBe(FREE_GRANT_SECONDS);
   });
 });
 

@@ -37,6 +37,8 @@ enum AVFoundationPlaybackDiagnosticsFormatter {
             "protectedPlaybackPosition: \(time(protectedPlaybackPosition))",
             "failureRecovery.automaticTransientRetries: \(automaticTransientFailureRetryCount)/\(automaticTransientFailureRetryLimit)",
             "",
+            "playback.sourceMode: \(sourceModeDescription(for: item))",
+            "playback.item.assetURL: \((item?.asset as? AVURLAsset)?.url.absoluteString ?? "nil")",
             "streaming.mode: \(streamingModeDescription(for: item, currentStreamingPlayerItem: currentStreamingPlayerItem))",
             "streaming.cache.enabled: \(streamingAudioCacheConfiguration.isEnabled)",
             "streaming.cache.directory: \(streamingAudioCacheConfiguration.directory?.path ?? "nil")",
@@ -168,6 +170,19 @@ enum AVFoundationPlaybackDiagnosticsFormatter {
         for event in events.suffix(5) {
             lines.append("- \(accessLogSummary(for: event))")
         }
+    }
+
+    /// Reported from the live item's asset, never episode metadata: the two
+    /// can only be proven equal by reading the item, which is the point of
+    /// this line in a source-identity report.
+    private static func sourceModeDescription(for item: AVPlayerItem?) -> String {
+        guard let asset = item?.asset as? AVURLAsset else {
+            return "nil"
+        }
+        if asset.url.scheme == StreamingAudioCacheURL.scheme {
+            return "streaming cache"
+        }
+        return asset.url.isFileURL ? "local file" : "network stream"
     }
 
     private static func streamingModeDescription(

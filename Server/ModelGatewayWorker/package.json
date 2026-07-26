@@ -12,6 +12,7 @@
     "deploy:prod-staging": "wrangler deploy --env prod-staging",
     "deploy:production": "wrangler deploy --env production",
     "login": "wrangler login",
+    "smoke": "node scripts/smoke-model-gateway.mjs",
     "test": "cargo test",
     "typecheck": "cargo check --target wasm32-unknown-unknown --lib"
   },

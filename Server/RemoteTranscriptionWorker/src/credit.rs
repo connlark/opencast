@@ -20,7 +20,7 @@ use crate::types::Balance;
 use worker::{D1Database, Env, Fetcher, Headers, Method, Request, RequestInit, Response};
 
 pub const PURCHASE_WORKER_BINDING: &str = "PURCHASE_WORKER";
-const PURCHASE_INTERNAL_ORIGIN: &str = "https://purchase-worker.internal";
+const PURCHASE_INTERNAL_ORIGIN: &str = "https://opencast-purchase.internal";
 
 pub const CREDIT_ERROR_INSUFFICIENT: &str = "insufficient_credits";
 pub const CREDIT_ERROR_RESERVATION_NOT_FOUND: &str = "reservation_not_found";

@@ -834,17 +834,17 @@ mod tests {
             "com.connor.opencast",
             ApnsEnvironment::Development,
             EpisodeNotification {
-                podcast_title: "Example Subscriber Show",
-                episode_title: "Example Subscriber Episode",
-                episode_summary: Some("Synthetic subscriber-feed notification fixture."),
+                podcast_title: "This American Life",
+                episode_title: "866: Very Nice",
+                episode_summary: Some("Stories from people trying very hard to be nice."),
                 show_notes_html: None,
                 duration_seconds: Some(3_309),
                 podcast_artwork_url: None,
                 episode_artwork_url: Some(
-                    "http://feeds.example.com/subscriber/artwork.png",
+                    "http://assets.thisamericanlife.org/episodes/866-art.jpg",
                 ),
-                feed_url: "http://feeds.example.com/subscriber/feed.xml",
-                episode_id: "example-subscriber-episode",
+                feed_url: "http://feeds.thisamericanlife.org/talpodcast",
+                episode_id: "tal-866",
             },
         )
         .expect("request should build");
@@ -852,7 +852,7 @@ mod tests {
         let payload = json_payload(&request);
         assert_eq!(
             payload["opencast"]["artwork_url"],
-            "http://feeds.example.com/subscriber/artwork.png"
+            "http://assets.thisamericanlife.org/episodes/866-art.jpg"
         );
         assert!(payload["opencast"].get("episode_artwork_url").is_none());
     }

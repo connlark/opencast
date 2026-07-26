@@ -580,7 +580,7 @@ fn extract_certificate_public_key(certificate_der: &[u8]) -> Result<Vec<u8>, App
 
 // DER helpers adapted from the MIT-licensed `appattest` crate. The dependency
 // itself is not linked because its aws-lc-sys backend does not compile for this
-// Cloudflare Workers wasm target. See LICENSES/appattest-LICENSE.
+// Cloudflare Workers wasm target.
 fn der_read_len(buf: &[u8], pos: usize) -> Option<(usize, usize)> {
     let first = *buf.get(pos)?;
     if first < 0x80 {

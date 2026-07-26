@@ -26,7 +26,7 @@ SAFE_RESPONSE_HEADERS = {"content-type", "cf-ray", "server-timing"}
 
 
 def wrangler_json(*arguments: str) -> dict:
-    with tempfile.TemporaryDirectory(prefix="remote-transcription-wrangler-") as cwd:
+    with tempfile.TemporaryDirectory(prefix="opencast-remote-transcription-wrangler-") as cwd:
         completed = subprocess.run(
             ["wrangler", *arguments, "--json"],
             check=True,

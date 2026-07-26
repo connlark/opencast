@@ -43,7 +43,7 @@ function appTransactionJws(appTransactionId) {
 }
 
 async function post(path, body) {
-  return SELF.fetch(`https://purchase-worker.internal${path}`, {
+  return SELF.fetch(`https://opencast-purchase.internal${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

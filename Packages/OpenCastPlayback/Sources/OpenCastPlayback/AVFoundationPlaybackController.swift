@@ -497,6 +497,26 @@ public final class AVFoundationPlaybackController: PlaybackController {
         mediaClockObservers.count
     }
 
+    public var currentItemSourceIdentity: PlaybackItemSourceIdentity? {
+        guard let item = player.currentItem, let asset = item.asset as? AVURLAsset else {
+            return nil
+        }
+
+        let kind: PlaybackItemSourceIdentity.Kind = if asset.url.scheme == StreamingAudioCacheURL.scheme {
+            .streamingCache
+        } else if asset.url.isFileURL {
+            .localFile
+        } else {
+            .networkStream
+        }
+        let itemDuration = item.duration.seconds
+        return PlaybackItemSourceIdentity(
+            assetURL: asset.url,
+            kind: kind,
+            itemDuration: itemDuration.isFinite && itemDuration > 0 ? itemDuration : nil
+        )
+    }
+
     private func currentMediaClockSample() -> PlaybackMediaClockSample? {
         let seconds = player.currentTime().seconds
         guard seconds.isFinite else {
@@ -543,6 +563,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
             },
             seek: { [weak self] position in
                 self?.seek(to: position, intent: .scrub)
+            },
+            changeRate: { [weak self] rate in
+                self?.setRate(rate)
             }
         ))
     }
@@ -710,7 +733,14 @@ public final class AVFoundationPlaybackController: PlaybackController {
     }
 
     private func makeDirectPlayerItem(audioURL: URL) -> AVPlayerItem {
-        let asset = AVURLAsset(url: audioURL)
+        // Local files get a precise timeline: karaoke equates item media time
+        // with transcript timestamps, and estimated MP3 timing (the default)
+        // can report a duration and land seeks at bytes that do not
+        // correspond to the requested time in stitched or VBR files.
+        let options: [String: Any]? = audioURL.isFileURL
+            ? [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+            : nil
+        let asset = AVURLAsset(url: audioURL, options: options)
         return configuredPlayerItem(asset: asset)
     }
 

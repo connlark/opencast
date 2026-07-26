@@ -33,7 +33,6 @@ export default defineConfig(async () => {
             TEST_MIGRATIONS: migrations,
             LANE: 'production',
             STOREKIT_ENVIRONMENT: 'Production',
-            APPLE_BUNDLE_ID: 'com.connor.opencast',
             APPLE_APP_APPLE_ID: '6766770733',
             ALLOW_MISSING_APP_APPLE_ID: 'false',
             ENABLE_ONLINE_CHECKS: 'false',

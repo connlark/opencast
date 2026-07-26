@@ -377,7 +377,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         assertAdsDetected(for: Self.persistenceEpisodeB, in: app)
     }
 
-    /// Parity: the step-5 single-episode megaphone flow, re-run through the
+    /// Parity: the single-episode megaphone flow, re-run through the
     /// Sound Lab control against the real pipeline.
     @MainActor
     func testDeviceE2E06MegaphoneParitySoloPass() throws {
@@ -406,7 +406,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         attachScreen(named: "06-solo-pass-completed")
     }
 
-    /// Foreground-only fallback via the step-5 force hook: arming degrades
+    /// Foreground-only fallback via the debug force hook: arming degrades
     /// gracefully and the pass still completes in the foreground.
     @MainActor
     func testDeviceE2E07ForegroundOnlyFallback() throws {
@@ -519,7 +519,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         }
     }
 
-    /// Some searchable presentations have no Cancel button; committing the
+    /// iPad's searchable presentation has no Cancel button; committing the
     /// query with Return drops the keyboard so toolbar taps land.
     @MainActor
     private func dismissSearchIfPresented(in app: XCUIApplication) {

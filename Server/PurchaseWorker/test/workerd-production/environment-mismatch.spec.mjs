@@ -22,7 +22,7 @@ function signSandboxNotification(uuid, chain = fixtures.trusted) {
 }
 
 async function notify(signedPayload) {
-  return SELF.fetch('https://purchase-worker.internal/internal/v1/notifications', {
+  return SELF.fetch('https://opencast-purchase.internal/internal/v1/notifications', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ signedPayload }),

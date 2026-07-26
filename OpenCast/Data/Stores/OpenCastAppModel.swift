@@ -9,6 +9,7 @@ import UserNotifications
 @Observable
 final class OpenCastAppModel {
     private static let lastPlaybackEpisodeIDKey = "playback.lastEpisodeID"
+    private static let playbackProgressPersistenceInterval = Duration.seconds(5)
 
     let cacheController: OpenCastCacheController
     let httpClient: any OpenCastHTTPClient
@@ -70,6 +71,10 @@ final class OpenCastAppModel {
     var lastVoiceBoostDeviceProbeReportStatus: String?
     var lastVoiceBoostDeviceProbeApplicationState: String?
     #endif
+    @ObservationIgnored private var coreStoresLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var playbackDependenciesLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var progressPersistenceTask: Task<Void, Never>?
+    @ObservationIgnored private var progressBoundaryPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var hasRunVoiceBoostDeviceProbe = false
     @ObservationIgnored private var importedSubscriptionsNotificationID = 0
 
@@ -252,8 +257,103 @@ final class OpenCastAppModel {
         }
     }
 
-    func playEpisode(_ episode: EpisodeListItemSnapshot, modelContext: ModelContext) throws {
-        try play(episode, source: .stream, modelContext: modelContext)
+    func ensureCoreStoresLoaded(modelContext: ModelContext) async {
+        if let coreStoresLoadTask {
+            await coreStoresLoadTask.value
+            return
+        }
+
+        let task = Task {
+            await library.load(modelContext: modelContext)
+            downloads.load(modelContext: modelContext)
+            playbackSettings.load(modelContext: modelContext, playback: playback)
+            podcastEpisodeListSettings.load(modelContext: modelContext)
+        }
+        coreStoresLoadTask = task
+        await task.value
+    }
+
+    /// Everything playback reads before it can start correctly: transcripts and
+    /// ad analyses back the skip zones installed on load, and the auto-detect
+    /// decision on play. A CarPlay-only launch has no phone setup pass to load
+    /// them, so both surfaces share this one-shot.
+    func ensurePlaybackDependenciesLoaded(modelContext: ModelContext) async {
+        if let playbackDependenciesLoadTask {
+            await playbackDependenciesLoadTask.value
+            return
+        }
+
+        let task = Task {
+            loadLocalTranscriptionState(modelContext: modelContext)
+        }
+        playbackDependenciesLoadTask = task
+        await task.value
+    }
+
+    /// Progress persistence has to outlive any one scene: a CarPlay-only launch
+    /// never builds the phone scene, and without this a whole drive's listening
+    /// would be lost when the process goes away.
+    func startPlaybackProgressPersistence(modelContext: ModelContext) {
+        guard progressPersistenceTask == nil else {
+            return
+        }
+
+        progressPersistenceTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.playbackProgressPersistenceInterval)
+                guard let self, !Task.isCancelled else {
+                    return
+                }
+                guard playback.state == .playing else {
+                    continue
+                }
+
+                flushPlaybackProgress(
+                    modelContext: modelContext,
+                    refreshObservableProgress: isSceneActive
+                )
+            }
+        }
+
+        progressBoundaryPersistenceTask = Task { [weak self] in
+            for await _ in Observations({ self?.playback.progressBoundaryID ?? 0 }) {
+                guard let self, !Task.isCancelled else {
+                    return
+                }
+
+                flushPlaybackProgress(
+                    modelContext: modelContext,
+                    refreshObservableProgress: isSceneActive && !isNowPlayingPresented
+                )
+            }
+        }
+    }
+
+    func playEpisode(
+        _ episode: EpisodeListItemSnapshot,
+        presentsNowPlaying: Bool = true,
+        modelContext: ModelContext
+    ) throws {
+        try play(
+            episode,
+            source: preferredPlaybackSource(for: episode.episodeID),
+            presentsNowPlaying: presentsNowPlaying,
+            modelContext: modelContext
+        )
+    }
+
+    /// A completed download is the preferred source for any playback: it is
+    /// offline, byte-stable, and the copy that transcripts and ad analyses
+    /// describe. Dynamic enclosure URLs can return a different audio assembly
+    /// per request, so streaming is the fallback, not the default.
+    private func preferredPlaybackSource(for episodeID: String) -> EpisodePlaybackSource {
+        guard let record = downloads.record(for: episodeID),
+              record.state == .completed,
+              downloads.downloadedFileExists(for: record)
+        else {
+            return .stream
+        }
+        return .downloaded(record)
     }
 
     func episodeSnapshot(for episodeID: String) -> EpisodeListItemSnapshot? {
@@ -271,27 +371,34 @@ final class OpenCastAppModel {
         )
     }
 
-    /// Starts an episode at an explicit position (e.g. a tapped transcript
-    /// line), preferring a completed download over streaming.
+    /// Starts an episode from its transcript (a tapped line or the play
+    /// button), using the completed download only when its trusted byte
+    /// identity matches the transcript's recorded source hash. An unproven
+    /// local file or a fresh dynamic-stream response can be a different audio
+    /// assembly than the one transcribed, which no seek can realign.
     func playEpisode(
         _ episode: EpisodeListItemSnapshot,
         at startPosition: TimeInterval?,
+        matchingSourceSHA256 sourceSHA256: String,
         presentsNowPlaying: Bool = true,
+        autoplay: Bool = true,
         modelContext: ModelContext
     ) throws {
         let source: EpisodePlaybackSource
-        if let downloadRecord = downloads.record(for: episode.episodeID),
-           downloadRecord.state == .completed,
-           downloads.downloadedFileExists(for: downloadRecord) {
+        if TranscriptSourceAlignment.downloadMatchesTranscript(
+            trustedDownloadSHA256: downloads.completedSourceIdentity(for: episode.episodeID)?.sha256,
+            documentSHA256: sourceSHA256
+        ), let downloadRecord = downloads.record(for: episode.episodeID) {
             source = .downloaded(downloadRecord)
         } else {
-            source = .stream
+            source = preferredPlaybackSource(for: episode.episodeID)
         }
         try play(
             episode,
             source: source,
             startPosition: startPosition,
             presentsNowPlaying: presentsNowPlaying,
+            autoplay: autoplay,
             modelContext: modelContext
         )
     }
@@ -953,6 +1060,16 @@ final class OpenCastAppModel {
             else {
                 return false
             }
+            // A download whose bytes a transcript describes is that
+            // transcript's karaoke asset; sweeping it would strand the
+            // transcript on a mismatch no re-download can repair (dynamic
+            // enclosures return different assemblies).
+            if TranscriptSourceAlignment.downloadMatchesTranscript(
+                trustedDownloadSHA256: record.sourceFileSHA256,
+                documentSHA256: transcriptions.record(for: record.episodeID)?.sourceFileSHA256 ?? ""
+            ) {
+                return false
+            }
 
             switch adFreePass.queueStatus(for: record.episodeID) {
             case .queued, .running, .capDeferred:
@@ -997,6 +1114,77 @@ final class OpenCastAppModel {
         return episode
     }
 
+    /// Appended to the Now Playing diagnostics text so one report establishes
+    /// both source-identity invariants for the current episode: which bytes
+    /// the transcript and download recorded, which asset the live player item
+    /// actually loaded, whether their timelines agree, and the resulting
+    /// alignment verdict — plus the build that produced the report.
+    var playbackSourceIdentityDiagnostics: String {
+        guard let episodeID = playback.currentEpisode?.id.rawValue else {
+            return ""
+        }
+
+        let transcriptRecord = transcriptions.record(for: episodeID)
+        let downloadRecord = downloads.record(for: episodeID)
+        let itemIdentity = playback.currentItemSourceIdentity
+        let alignment = TranscriptSourceAlignment.resolve(
+            documentSHA256: transcriptRecord?.sourceFileSHA256 ?? "",
+            trustedDownloadSHA256: downloads.completedSourceIdentity(for: episodeID)?.sha256,
+            downloadFileURL: downloadRecord.flatMap(downloads.localFileURL(for:)),
+            playerItemURL: itemIdentity?.assetURL
+        )
+
+        return """
+
+
+        app.build: \(diagnosticsValue(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)) (\(diagnosticsValue(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)))
+        sourceIdentity.transcript.sha256: \(diagnosticsValue(transcriptRecord?.sourceFileSHA256))
+        sourceIdentity.transcript.audioDuration: \(diagnosticsSeconds(transcriptRecord?.audioDuration))
+        sourceIdentity.download.sha256: \(diagnosticsValue(downloadRecord?.sourceFileSHA256))
+        sourceIdentity.download.trusted.sha256: \(diagnosticsValue(downloads.completedSourceIdentity(for: episodeID)?.sha256))
+        sourceIdentity.player.assetURL: \(diagnosticsValue(itemIdentity?.assetURL.absoluteString))
+        sourceIdentity.player.kind: \(diagnosticsItemKind(itemIdentity?.kind))
+        sourceIdentity.player.itemDuration: \(diagnosticsSeconds(itemIdentity?.itemDuration))
+        sourceIdentity.alignment: \(diagnosticsAlignment(alignment))
+        """
+    }
+
+    private func diagnosticsValue(_ value: String?) -> String {
+        guard let value, !value.isEmpty else {
+            return "nil"
+        }
+        return value
+    }
+
+    private func diagnosticsSeconds(_ value: TimeInterval?) -> String {
+        guard let value, value.isFinite else {
+            return "nil"
+        }
+        return value.formatted(.number.precision(.fractionLength(3)))
+    }
+
+    private func diagnosticsItemKind(_ kind: PlaybackItemSourceIdentity.Kind?) -> String {
+        switch kind {
+        case .localFile:
+            "local file"
+        case .networkStream:
+            "network stream"
+        case .streamingCache:
+            "streaming cache"
+        case nil:
+            "nil"
+        }
+    }
+
+    private func diagnosticsAlignment(_ alignment: TranscriptSourceAlignment) -> String {
+        switch alignment {
+        case .verified:
+            "verified"
+        case .mismatched(let canSwitch):
+            "mismatched (switchable=\(canSwitch))"
+        }
+    }
+
     @discardableResult
     func flushPlaybackProgress(
         modelContext: ModelContext,
@@ -1035,7 +1223,11 @@ final class OpenCastAppModel {
         }
 
         do {
-            let episode = try resolvedPlaybackEpisode(for: record, modelContext: modelContext)
+            let episode = try resolvedPlaybackEpisode(
+                for: record,
+                source: preferredPlaybackSource(for: record.episodeID),
+                modelContext: modelContext
+            )
             applyVoiceBoostSetting(for: episode, modelContext: modelContext)
             try playback.load(episode, startPosition: library.resumePosition(for: record.episodeID))
             refreshPlaybackSkipZonesForCurrentEpisode()
@@ -1407,6 +1599,7 @@ final class OpenCastAppModel {
         source: EpisodePlaybackSource,
         startPosition: TimeInterval? = nil,
         presentsNowPlaying: Bool = true,
+        autoplay: Bool = true,
         modelContext: ModelContext
     ) throws {
         flushPlaybackProgress(modelContext: modelContext)
@@ -1421,8 +1614,10 @@ final class OpenCastAppModel {
         refreshPlaybackSkipZonesForCurrentEpisode()
         nowPlayingProbeMark("play-loaded")
         rememberLastPlaybackEpisode(snapshot.episodeID, modelContext: modelContext)
-        playback.play()
-        nowPlayingProbeMark("play-started")
+        if autoplay {
+            playback.play()
+            nowPlayingProbeMark("play-started")
+        }
         if presentsNowPlaying {
             requestNowPlayingPresentationAfterPrewarm(for: episode.id)
         }

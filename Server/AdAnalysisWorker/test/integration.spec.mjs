@@ -9,49 +9,11 @@ import {
   runDurableObjectAlarm,
 } from "cloudflare:test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import fixture from "../tests/fixtures/ad_analysis_app_attest_development_fixture.json";
 
 const ANALYZE_PATH = "/v1/ad-analysis/transcript";
 const BASE = "https://ad-analysis.integration.test";
 const BEARER = "integration-test-bearer-token";
-const fixture = {
-  app_id: "A1B2C3D4E5.com.example.opencast",
-  environment: "development",
-  install_id: "integration-install",
-  key_id: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-  challenge: "integration-challenge",
-  attestation_object: "synthetic-invalid-attestation",
-  assertion: "synthetic-invalid-assertion",
-  response_request_id: "integration-request",
-  payload: JSON.stringify({
-    episode_id: "integration-episode",
-    episode_title: "Integration Episode",
-    podcast_id: "https://example.com/integration-feed.xml",
-    podcast_title: "Integration Podcast",
-    request_id: "integration-request",
-    schema_version: 1,
-    segments: [
-      { end: 8, id: 1, start: 0, text: "Welcome back to the integration episode." },
-      {
-        end: 24,
-        id: 2,
-        start: 8,
-        text: "This episode is brought to you by Seed Sponsor.",
-      },
-      { end: 45, id: 3, start: 24, text: "Now back to the episode." },
-    ],
-    transcript: {
-      audio_duration: 45,
-      fingerprint: "integration-fingerprint",
-      language_code: "en",
-      model_identifier: "integration-model",
-      model_tree_sha256: "integration-tree-sha",
-      model_version: "v1",
-      segment_count: 3,
-      state: "completed",
-      updated_at: "2026-05-28T20:26:40Z",
-    },
-  }),
-};
 
 const GEMINI_MODEL_OUTPUT = JSON.stringify({
   spans: [
@@ -146,6 +108,14 @@ function installFetchStub() {
     }
     throw new Error(`unexpected outbound fetch in integration test: ${url}`);
   };
+}
+
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i += 1) {
+    bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
 }
 
 function bytesToBase64(bytes) {
@@ -275,6 +245,24 @@ async function syntheticAssertion(identity, path, payload, counter) {
     cborByteString(authenticatorData),
   );
   return bytesToBase64(cbor);
+}
+
+async function seedFixtureKey() {
+  const now = Math.floor(Date.now() / 1000);
+  await env.AD_ANALYSIS_DB.prepare(
+    "INSERT INTO app_attest_keys \
+     (install_id, key_id, public_key, sign_counter, app_id, environment, created_at, last_used_at) \
+     VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?6)",
+  )
+    .bind(
+      fixture.install_id,
+      fixture.key_id,
+      hexToBytes(fixture.public_key_sec1_hex).buffer,
+      fixture.app_id,
+      fixture.environment,
+      now,
+    )
+    .run();
 }
 
 function envelopeBody() {
@@ -454,6 +442,29 @@ describe("analyze auth", () => {
     const response = await postAnalyze(envelopeBody());
     expect(response.status).toBe(401);
     expect((await response.json()).error).toBe("unknown_key");
+  });
+});
+
+describe("app attest envelope", () => {
+  it("accepts the real fixture assertion once and rejects its replay", async () => {
+    await seedFixtureKey();
+
+    mockGeminiOnce();
+    const first = await postAnalyze(envelopeBody());
+    expect(first.status).toBe(200);
+    const body = await first.json();
+    expect(body.schema_version).toBe(1);
+    expect(body.request_id).toBe(fixture.response_request_id);
+    expect(body.policy).toBe("promo_ad_breaks_v2");
+    expect(body.spans).toHaveLength(1);
+    expect(body.spans[0].kind).toBe("host_read_ad");
+    expect(body.spans[0].start_segment_id).toBe(2);
+    expect(body.spans[0].start_time).toBe(8);
+    expect(body.spans[0].end_time).toBe(24);
+
+    const replay = await postAnalyze(envelopeBody());
+    expect(replay.status).toBe(401);
+    expect((await replay.json()).error).toBe("invalid_counter");
   });
 });
 

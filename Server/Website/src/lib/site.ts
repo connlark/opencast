@@ -1,6 +1,7 @@
 import { screenshotAssets } from "@/lib/screenshots.generated";
 
 export const appStoreURL = "https://apps.apple.com/app/opencast/id6766770733";
+export const testFlightURL = "https://testflight.apple.com/join/3WtxfvfF";
 export const supportEmail = "support@opencast.mobile";
 export const githubURL = "https://github.com/connlark/opencast";
 export const githubIssueURL = `${githubURL}/issues/new`;

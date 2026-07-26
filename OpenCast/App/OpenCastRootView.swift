@@ -58,7 +58,6 @@ struct OpenCastRootView: View {
             OpenCastRootLifecycleModifier(
                 hasFlushedProgressForLifecycleExit: $hasFlushedProgressForLifecycleExit,
                 performInitialSetup: performInitialSetup,
-                persistPlaybackProgress: persistPlaybackProgress,
                 refreshImportedData: refreshImportedData,
                 refreshSyncedUserData: refreshSyncedUserData,
                 runVoiceBoostDeviceProbeIfActive: runVoiceBoostDeviceProbeIfActive
@@ -151,13 +150,11 @@ struct OpenCastRootView: View {
     private func performInitialSetup() async {
         let activePodcastIDsBeforeInitialLoad = appModel.library.activePodcastIDs
         appModel.syncStatus.beginLibraryActivity(.checkingAccount)
-        await appModel.library.load(modelContext: modelContext)
-        appModel.downloads.load(modelContext: modelContext)
-        appModel.loadLocalTranscriptionState(modelContext: modelContext)
+        await appModel.ensureCoreStoresLoaded(modelContext: modelContext)
+        await appModel.ensurePlaybackDependenciesLoaded(modelContext: modelContext)
+        appModel.startPlaybackProgressPersistence(modelContext: modelContext)
         appModel.appearanceSettings.load(modelContext: modelContext)
-        appModel.podcastEpisodeListSettings.load(modelContext: modelContext)
         appModel.recentSearches.load(modelContext: modelContext)
-        appModel.playbackSettings.load(modelContext: modelContext, playback: appModel.playback)
         await appModel.notificationSettings.load(modelContext: modelContext)
         let accountStatus = await appModel.syncStatus.refreshAccountStatus(force: true)
         let didRepairSyncDuplicates = await repairSyncDuplicatesAfterImportedData()
@@ -633,32 +630,6 @@ struct OpenCastRootView: View {
         #endif
     }
 
-    private func persistPlaybackProgress() async {
-        guard appModel.playback.currentEpisode != nil else {
-            return
-        }
-
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(for: .seconds(5))
-            } catch is CancellationError {
-                return
-            } catch {
-                return
-            }
-
-            guard appModel.playback.currentEpisode != nil else {
-                return
-            }
-            guard appModel.playback.state == .playing else {
-                continue
-            }
-            appModel.flushPlaybackProgress(
-                modelContext: modelContext,
-                refreshObservableProgress: scenePhase == .active
-            )
-        }
-    }
 
     private func pruneNavigationPaths() {
         libraryNavigationPath.removeAll(where: isRouteInvalid)

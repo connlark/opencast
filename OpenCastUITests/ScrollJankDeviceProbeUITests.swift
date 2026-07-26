@@ -1,8 +1,8 @@
 import XCTest
 
-/// On-device scroll-jank measurement for
-/// `notes/bugs/2026-07-22-scroll-jank-active-download.md`. Launches the real
-/// app (no seeding seams, real store) with the frame-pacing probe enabled,
+/// On-device scroll-jank measurement for a reproducible active-download load
+/// scenario. Launches the installed app (no seeding seams, persistent store)
+/// with the frame-pacing probe enabled,
 /// drives the same Inbox scroll workload under increasing load — restored
 /// baseline, active download, on-device ad detection, playback — and prints
 /// each scenario's frame-gap histogram as `SCROLLPROBE[...]` lines plus
@@ -11,7 +11,7 @@ import XCTest
 /// Opt-in via `TEST_RUNNER_OPENCAST_SCROLL_PROBE=1`; skips everywhere else so
 /// regression lanes are unaffected. Scenarios are cumulative by design: the
 /// download from scenario B may still be running during C and D, matching the
-/// real-world report ("active download + queue + playback").
+/// intended cumulative workload ("active download + queue + playback").
 final class ScrollJankDeviceProbeUITests: XCTestCase {
     private static let optInEnvironmentKey = "OPENCAST_SCROLL_PROBE"
     private static let flushSettleSeconds: UInt32 = 3
@@ -122,11 +122,11 @@ final class ScrollJankDeviceProbeUITests: XCTestCase {
 
     // MARK: - Load-state arrangement
 
-    /// Long real episodes from Connor's live library, all reachable within the
-    /// first screens of the Inbox (search targeting proved flaky on device).
-    /// Downloads finish in ~5s on Connor's Wi-Fi (160MB SN episodes measured at
-    /// ~32MB/s), so download scenarios scroll IMMEDIATELY after the tap to
-    /// catch the burst; the sustained load comes from on-device transcription.
+    /// Long episodes from the configured fixture feed, all reachable within
+    /// the first screens of the Inbox (search targeting proved flaky on device).
+    /// Download timing varies with the configured test network, so download
+    /// scenarios scroll IMMEDIATELY after the tap to catch the burst; the
+    /// sustained load comes from on-device transcription.
     ///
     /// Downloads and detections are sticky on-device (Download disappears once
     /// completed; Detect Ads becomes "Ads Detected" and disables), so repeat
@@ -137,10 +137,18 @@ final class ScrollJankDeviceProbeUITests: XCTestCase {
         return value?.isEmpty == false ? value! : defaultTitle
     }
 
-    private static var downloadEpisodeTitle: String { episodeTitle("DOWNLOAD", default: "SN 1087") }
-    private static var detectAdsEpisodeTitle: String { episodeTitle("DETECT", default: "Iraqi Insurgency") }
-    private static var playbackEpisodeTitle: String { episodeTitle("PLAY", default: "World Cup") }
-    private static var compoundDownloadEpisodeTitle: String { episodeTitle("DOWNLOAD2", default: "SN 1086") }
+    private static var downloadEpisodeTitle: String {
+        episodeTitle("DOWNLOAD", default: "Example Download Episode")
+    }
+    private static var detectAdsEpisodeTitle: String {
+        episodeTitle("DETECT", default: "Example Detection Episode")
+    }
+    private static var playbackEpisodeTitle: String {
+        episodeTitle("PLAY", default: "Example Playback Episode")
+    }
+    private static var compoundDownloadEpisodeTitle: String {
+        episodeTitle("DOWNLOAD2", default: "Example Compound Download Episode")
+    }
 
     @MainActor
     private func startAdDetection(onEpisodeTitled title: String, app: XCUIApplication) -> Bool {
