@@ -182,7 +182,7 @@ jobs:
         run: >-
           yarn test:integration --
           -t
-          'routing|rejects an unauthenticated request|challenges|internal transcription surface'
+          'routing|rejects an unauthenticated request|challenges|404s internal paths on the public host|rejects malformed internal envelopes and invalid payloads|404s an unknown internal job id'
 
       - name: Run deterministic RemoteTranscription integration tests
         if: matrix.name == 'RemoteTranscriptionWorker'
