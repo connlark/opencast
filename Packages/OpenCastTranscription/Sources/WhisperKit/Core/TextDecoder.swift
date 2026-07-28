@@ -851,7 +851,7 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
         )
         return decodingResult
     }
-
+    
     internal func createLogitsFilters(
         options: DecodingOptions,
         prefilledIndex: Int,
@@ -892,7 +892,7 @@ open class TextDecoder: TextDecoding, WhisperMLModel {
                 )
             )
         }
-
+        
         return allFilters
     }
 }

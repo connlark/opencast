@@ -563,6 +563,55 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(remaining.isEmpty)
     }
 
+    @Test("Restoring an already loaded queue item preserves one item and its durable record")
+    func repeatedRestorationPreservesLoadedItemAndRecord() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let downloader = GatedEpisodeAudioDownloader()
+        let fixture = try makeFixture(
+            downloader: downloader,
+            container: container,
+            context: context
+        )
+        let episode = makeEpisode(episodeID: "queue-persist-repeat")
+        context.insert(AdFreePassQueueItemRecord(
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            originRawValue: AdFreePassQueueOrigin.manual.rawValue,
+            sequence: 1
+        ))
+        try context.save()
+
+        func restore() {
+            fixture.coordinator.restorePersistedQueue(
+                resolveEpisode: { $0 == episode.episodeID ? episode : nil },
+                downloads: fixture.downloads,
+                transcriptionModels: fixture.transcriptionModels,
+                appleSpeechAssets: fixture.appleSpeechAssets,
+                transcriptions: fixture.transcriptions,
+                adAnalyses: fixture.adAnalyses,
+                modelContext: context,
+                podcastLanguageCode: { _ in nil },
+                refreshSkipZones: { _ in 1 }
+            )
+        }
+
+        restore()
+        #expect(await waitUntil {
+            fixture.coordinator.activeEpisodeID == episode.episodeID
+        })
+        restore()
+
+        let inMemoryCount = fixture.coordinator.queueItems.count
+            + (fixture.coordinator.activeEpisodeID == nil ? 0 : 1)
+        let persisted = try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
+        #expect(inMemoryCount == 1)
+        #expect(persisted.map(\.episodeID) == [episode.episodeID])
+
+        fixture.coordinator.cancelActivePass()
+        fixture.downloads.cancelDownload(episodeID: episode.episodeID, modelContext: context)
+    }
+
     @Test("Terminal items leave the persisted queue as they finish")
     func terminalItemsLeaveThePersistedQueue() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

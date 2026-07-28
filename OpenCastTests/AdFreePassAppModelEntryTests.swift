@@ -97,6 +97,9 @@ struct AdFreePassAppModelEntryTests {
         fixture.appModel.startAdFreePass(for: manualSecond, modelContext: fixture.context)
         try fixture.appModel.playEpisode(autoPlayed, modelContext: fixture.context)
 
+        #expect(await waitUntil {
+            fixture.appModel.adFreePass.queueItems.first?.episodeID == autoPlayed.episodeID
+        })
         let pending = fixture.appModel.adFreePass.queueItems
         #expect(pending.map(\.episodeID) == [autoPlayed.episodeID, manualSecond.episodeID])
         #expect(pending.first?.origin == .auto)

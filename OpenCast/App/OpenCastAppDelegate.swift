@@ -1,8 +1,17 @@
 import Foundation
+import Intents
 import UIKit
 import UserNotifications
 
 final class OpenCastAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    private lazy var siriPlayMediaHandler: SiriPlayMediaHandler = {
+        let runtime = OpenCastAppRuntime.shared
+        return SiriPlayMediaHandler(
+            appModel: runtime.appModel,
+            modelContext: runtime.modelContainer.mainContext
+        )
+    }()
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -11,6 +20,10 @@ final class OpenCastAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
         UNUserNotificationCenter.current().delegate = self
 
         return true
+    }
+
+    func application(_ application: UIApplication, handlerFor intent: INIntent) -> Any? {
+        intent is INPlayMediaIntent ? siriPlayMediaHandler : nil
     }
 
     func application(

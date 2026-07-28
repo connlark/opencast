@@ -135,7 +135,7 @@ open class TranscribeTask {
 
             // Prevent hallucinations at the end of the clip by stopping clip seek early
             let windowPadding = Int(options.windowClipTime * Float(WhisperKit.sampleRate))
-
+            
             let windowSamples = featureExtractor.windowSamples ?? Constants.defaultWindowSamples
             while seek < seekClipEnd - windowPadding {
                 let windowSeek = seek
@@ -266,7 +266,7 @@ open class TranscribeTask {
                         }
                     }
                 }
-
+                
                 // Prevent seek from exceeding previousSeek + maxWindowSeek if provided
                 if let maxWindowSeek = options.maxWindowSeek {
                     let maxSeekOffset = previousSeek + maxWindowSeek
@@ -329,7 +329,7 @@ open class TranscribeTask {
         )
         return transcriptionResult
     }
-
+    
     open func finalizeTranscriptionResult(
         tokens: [Int],
         segments allSegments: [TranscriptionSegment],

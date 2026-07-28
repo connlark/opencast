@@ -389,8 +389,11 @@ final class EpisodeAdFreePassCoordinator {
         for record in records {
             let alreadyQueued = entries.contains { $0.item.episodeID == record.episodeID }
                 || activeItem?.episodeID == record.episodeID
-            guard !alreadyQueued,
-                  let origin = AdFreePassQueueOrigin(rawValue: record.originRawValue),
+            if alreadyQueued {
+                continue
+            }
+
+            guard let origin = AdFreePassQueueOrigin(rawValue: record.originRawValue),
                   let episode = resolveEpisode(record.episodeID)
             else {
                 modelContext.delete(record)

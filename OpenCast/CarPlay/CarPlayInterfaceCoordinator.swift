@@ -227,18 +227,11 @@ final class CarPlayInterfaceCoordinator {
                 return
             }
 
-            await appModel.ensureCoreStoresLoaded(modelContext: modelContext)
-            // Skip zones and the auto-detect decision are read the moment an
-            // episode loads or a row is tapped, so transcripts and ad analyses
-            // have to be in memory before either can happen.
-            await appModel.ensurePlaybackDependenciesLoaded(modelContext: modelContext)
+            await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
             guard let self, !Task.isCancelled else {
                 return
             }
 
-            appModel.startPlaybackProgressPersistence(modelContext: modelContext)
-            appModel.restorePreviousPlaybackIfAvailable(modelContext: modelContext)
-            appModel.restoreAdFreePassQueue(modelContext: modelContext)
             isHydrating = false
             apply(makeSnapshots())
         }

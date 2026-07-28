@@ -66,3 +66,4 @@ struct TranscribeTaskProcessedDurationTests {
     }
 
 }
+

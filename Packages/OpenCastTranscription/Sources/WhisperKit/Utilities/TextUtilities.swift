@@ -52,3 +52,4 @@ public struct TextUtilities {
         }
     }
 }
+

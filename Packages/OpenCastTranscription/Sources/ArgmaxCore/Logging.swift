@@ -217,3 +217,4 @@ public extension Logging {
         return String(format: "%8.2f ms / %6.0f runs (%8.2f ms/run) %5.2f%%", time * 1000, runs, runTime, percentage)
     }
 }
+

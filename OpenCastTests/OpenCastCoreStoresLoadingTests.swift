@@ -79,4 +79,55 @@ struct OpenCastCoreStoresLoadingTests {
 
         #expect(appModel.adDetectionSettings.mode == .cloud)
     }
+
+    @Test("Concurrent and repeated playback-surface hydration restores once")
+    func playbackSurfaceHydrationRestoresOnce() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let modelContext = ModelContext(container)
+        let cache = CoreStoresLoadingProbeCacheStore(loadDelay: .milliseconds(100))
+        let appModel = OpenCastAppModel(localLibraryCacheStore: cache)
+
+        let siriHydration = Task {
+            await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
+        }
+        let carPlayHydration = Task {
+            await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
+        }
+
+        await siriHydration.value
+        await carPlayHydration.value
+        await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
+
+        #expect(appModel.playbackSurfaceRestorationCount == 1)
+        #expect(await cache.recordedLoadCount() == 1)
+    }
+
+    @Test("Siri-first hydration followed by the phone restoration tail is idempotent")
+    func siriFirstThenPhoneHydration() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let modelContext = ModelContext(container)
+        let appModel = OpenCastAppModel(
+            localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+
+        await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
+        await appModel.ensurePlaybackSurfaceLoaded(modelContext: modelContext)
+        appModel.restorePlaybackSurfaceIfNeeded(modelContext: modelContext)
+
+        #expect(appModel.playbackSurfaceRestorationCount == 1)
+    }
+
+    @Test("CarPlay-first hydration followed by Siri hydration is idempotent")
+    func carPlayFirstThenSiriHydration() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let modelContext = ModelContext(container)
+        let appModel = OpenCastAppModel(
+            localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+
+        await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
+        await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
+
+        #expect(appModel.playbackSurfaceRestorationCount == 1)
+    }
 }

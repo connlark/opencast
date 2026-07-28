@@ -35,6 +35,10 @@ final class RemoteCommandController {
         register(command: commandCenter.togglePlayPauseCommand, handler: handlers.togglePlayPause)
         register(command: commandCenter.skipForwardCommand, handler: handlers.skipForward)
         register(command: commandCenter.skipBackwardCommand, handler: handlers.skipBackward)
+        // Some steering-wheel controls emit track commands for their previous/next buttons.
+        // Until OpenCast has queue navigation, treat those as podcast skip aliases too.
+        register(command: commandCenter.nextTrackCommand, handler: handlers.skipForward)
+        register(command: commandCenter.previousTrackCommand, handler: handlers.skipBackward)
 
         targets.append(RemoteCommandTarget(
             command: commandCenter.changePlaybackRateCommand,
@@ -105,6 +109,8 @@ final class RemoteCommandController {
         commandCenter.togglePlayPauseCommand.isEnabled = hasLoadedContent
         commandCenter.skipForwardCommand.isEnabled = hasLoadedContent
         commandCenter.skipBackwardCommand.isEnabled = hasLoadedContent
+        commandCenter.nextTrackCommand.isEnabled = hasLoadedContent
+        commandCenter.previousTrackCommand.isEnabled = hasLoadedContent
         commandCenter.changePlaybackRateCommand.isEnabled = hasLoadedContent
         commandCenter.changePlaybackPositionCommand.isEnabled = isSeekable
 

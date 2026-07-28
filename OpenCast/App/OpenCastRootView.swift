@@ -150,9 +150,7 @@ struct OpenCastRootView: View {
     private func performInitialSetup() async {
         let activePodcastIDsBeforeInitialLoad = appModel.library.activePodcastIDs
         appModel.syncStatus.beginLibraryActivity(.checkingAccount)
-        await appModel.ensureCoreStoresLoaded(modelContext: modelContext)
-        await appModel.ensurePlaybackDependenciesLoaded(modelContext: modelContext)
-        appModel.startPlaybackProgressPersistence(modelContext: modelContext)
+        await appModel.ensurePlaybackSurfaceLoaded(modelContext: modelContext)
         appModel.appearanceSettings.load(modelContext: modelContext)
         appModel.recentSearches.load(modelContext: modelContext)
         await appModel.notificationSettings.load(modelContext: modelContext)
@@ -169,8 +167,7 @@ struct OpenCastRootView: View {
         if didRepairSyncDuplicates {
             updateLibrarySyncActivityAfterImportCheck(accountStatus: accountStatus)
         }
-        appModel.restorePreviousPlaybackIfAvailable(modelContext: modelContext)
-        appModel.restoreAdFreePassQueue(modelContext: modelContext)
+        appModel.restorePlaybackSurfaceIfNeeded(modelContext: modelContext)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         isInitialSetupComplete = true
         await appModel.refreshLibraryIfStale(modelContext: modelContext)

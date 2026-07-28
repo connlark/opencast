@@ -65,6 +65,8 @@ struct SettingsView: View {
 
             SettingsDebugSection()
 
+            SettingsSiriSection()
+
             SettingsAboutSection()
         }
         .navigationTitle("Settings")

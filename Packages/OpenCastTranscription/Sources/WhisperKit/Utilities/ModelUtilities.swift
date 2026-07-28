@@ -23,7 +23,7 @@ extension ModelUtilities {
         let tokenizerName = tokenizerNameForVariant(pretrained)
         let hubApi = HubApiWrapper(downloadBase: tokenizerFolder, useBackgroundSession: useBackgroundSession)
         let hubTokenizerFolder = hubApi.localRepoLocation(HubApiWrapper.Repo(id: tokenizerName))
-
+        
         // Determine which local folder to use
         let localTokenizerFolder: URL? = {
             func hasTokenizer(in folder: URL) -> Bool {
@@ -49,7 +49,7 @@ extension ModelUtilities {
             } else {
                 Logging.debug("No tokenizer found in any local search paths")
             }
-
+            
             return foundPath
         }()
 
@@ -65,12 +65,12 @@ extension ModelUtilities {
             throw WhisperError.tokenizerUnavailable("Failed to load local tokenizer at \(localFolder.path): \(error)")
         }
     }
-
+    
     /// Formats and sorts model file names based on model variants
-    ///
+    /// 
     /// Filters the provided model files to include only recognized model variants, removes path separators,
     /// and sorts them according to the predefined model size order in `ModelVariant` enum.
-    ///
+    /// 
     /// - Parameter modelFiles: An array of model file paths to format and sort
     /// - Returns: An array of formatted and sorted model names, with path separators removed
     public static func formatModelFiles(_ modelFiles: [String]) -> [String] {

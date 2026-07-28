@@ -63,7 +63,7 @@ open class WhisperKit {
         if let logitsFilters = config.logitsFilters {
             textDecoder.logitsFilters = logitsFilters
         }
-
+        
         segmentSeeker = config.segmentSeeker ?? SegmentSeeker()
         voiceActivityDetector = config.voiceActivityDetector
         tokenizerFolder = config.tokenizerFolder ?? config.downloadBase
@@ -344,7 +344,7 @@ open class WhisperKit {
         } else {
             additionalSearchPaths = []
         }
-
+        
         let tokenizer = try await ModelUtilities.loadTokenizer(
             for: modelVariant,
             tokenizerFolder: tokenizerFolder,
@@ -597,7 +597,7 @@ open class WhisperKit {
         guard audioArrays.count == decodeOptionsArray.count else {
             return [.failure(WhisperError.transcriptionFailed("The number of audio arrays and decoding options must be balanced."))]
         }
-
+        
         if let seekOffsets {
             guard audioArrays.count == seekOffsets.count else {
                 return [.failure(WhisperError.transcriptionFailed("The number of audio arrays and seek offset indexes must be balanced."))]

@@ -9,7 +9,7 @@ enum EpisodeSearch {
     ]
     private nonisolated static let snippetTargetLength = 160
 
-    static func isSearchActive(query: String) -> Bool {
+    nonisolated static func isSearchActive(query: String) -> Bool {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -19,7 +19,7 @@ enum EpisodeSearch {
         mode == .fullText && query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3
     }
 
-    static func documents(
+    nonisolated static func documents(
         from episodes: [EpisodeListItemSnapshot],
         showNotesHTMLByEpisodeID: [String: String] = [:]
     ) -> [EpisodeSearchDocument] {
@@ -45,21 +45,36 @@ enum EpisodeSearch {
             return episodes.map(unfilteredResult)
         }
 
-        let matches = matchesSynchronously(
-            in: documents(from: episodes, showNotesHTMLByEpisodeID: showNotesHTMLByEpisodeID),
+        let corpus = synchronousMatchCorpus(
+            episodes: episodes,
             query: query,
             mode: mode,
+            showNotesHTMLByEpisodeID: showNotesHTMLByEpisodeID,
             shouldStop: { false }
         )
-        let episodesByID = Dictionary(
-            episodes.map { ($0.episodeID, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
         return results(
-            from: matches,
-            episodesByID: episodesByID,
+            from: corpus.matches,
+            episodesByID: corpus.episodesByID,
             showNotesHTMLByEpisodeID: showNotesHTMLByEpisodeID
         )
+    }
+
+    nonisolated static func matchingEpisodes(
+        in episodes: [EpisodeListItemSnapshot],
+        query: String
+    ) -> [EpisodeListItemSnapshot] {
+        guard isSearchActive(query: query) else {
+            return episodes
+        }
+
+        let corpus = synchronousMatchCorpus(
+            episodes: episodes,
+            query: query,
+            mode: .episodes,
+            showNotesHTMLByEpisodeID: [:],
+            shouldStop: { false }
+        )
+        return corpus.matches.compactMap { corpus.episodesByID[$0.episodeID] }
     }
 
     @concurrent
@@ -140,6 +155,32 @@ enum EpisodeSearch {
                         : $0.rank.rawValue < $1.rank.rawValue
                 }
         }
+    }
+
+    private nonisolated static func synchronousMatchCorpus(
+        episodes: [EpisodeListItemSnapshot],
+        query: String,
+        mode: EpisodeSearchMode,
+        showNotesHTMLByEpisodeID: [String: String],
+        shouldStop: () -> Bool
+    ) -> (
+        matches: [EpisodeSearchMatch],
+        episodesByID: [String: EpisodeListItemSnapshot]
+    ) {
+        let matches = matchesSynchronously(
+            in: documents(
+                from: episodes,
+                showNotesHTMLByEpisodeID: showNotesHTMLByEpisodeID
+            ),
+            query: query,
+            mode: mode,
+            shouldStop: shouldStop
+        )
+        let episodesByID = Dictionary(
+            episodes.map { ($0.episodeID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return (matches, episodesByID)
     }
 
     private nonisolated static func exactVisibleMatch(
@@ -359,7 +400,7 @@ enum EpisodeSearch {
 
         for queryToken in queryTokens where containsExactTerm(queryToken, in: text) {
             highlightTerms.append(queryToken)
-            satisfiedTokens.insert(normalized(queryToken))
+            satisfiedTokens.insert(SearchTextNormalization.normalize(queryToken))
         }
 
         return (uniqueTerms(highlightTerms), satisfiedTokens)
@@ -376,14 +417,14 @@ enum EpisodeSearch {
         for queryToken in queryTokens {
             if containsExactTerm(queryToken, in: text) {
                 highlightTerms.append(queryToken)
-                satisfiedTokens.insert(normalized(queryToken))
+                satisfiedTokens.insert(SearchTextNormalization.normalize(queryToken))
                 continue
             }
 
             let matchedTerms = fieldTokens.filter { isFuzzyMatch(queryToken: queryToken, fieldToken: $0) }
             if !matchedTerms.isEmpty {
                 highlightTerms.append(contentsOf: matchedTerms)
-                satisfiedTokens.insert(normalized(queryToken))
+                satisfiedTokens.insert(SearchTextNormalization.normalize(queryToken))
             }
         }
 
@@ -397,7 +438,9 @@ enum EpisodeSearch {
         let satisfiedTokens = fieldSatisfiedTokens.reduce(into: Set<String>()) { partialResult, tokens in
             partialResult.formUnion(tokens)
         }
-        return queryTokens.allSatisfy { satisfiedTokens.contains(normalized($0)) }
+        return queryTokens.allSatisfy {
+            satisfiedTokens.contains(SearchTextNormalization.normalize($0))
+        }
     }
 
     private nonisolated static func containsExactTerm(_ term: String, in text: String) -> Bool {
@@ -405,8 +448,8 @@ enum EpisodeSearch {
     }
 
     private nonisolated static func isFuzzyMatch(queryToken: String, fieldToken: String) -> Bool {
-        let normalizedQuery = normalized(queryToken)
-        let normalizedField = normalized(fieldToken)
+        let normalizedQuery = SearchTextNormalization.normalize(queryToken)
+        let normalizedField = SearchTextNormalization.normalize(fieldToken)
         guard normalizedQuery != normalizedField,
               let limit = editDistanceLimit(for: normalizedQuery),
               abs(normalizedQuery.count - normalizedField.count) <= limit
@@ -525,7 +568,7 @@ enum EpisodeSearch {
     private nonisolated static func uniqueTerms(_ terms: [String]) -> [String] {
         var seenTerms: Set<String> = []
         return terms.filter { term in
-            let normalizedTerm = normalized(term)
+            let normalizedTerm = SearchTextNormalization.normalize(term)
             guard !normalizedTerm.isEmpty, !seenTerms.contains(normalizedTerm) else {
                 return false
             }
@@ -533,10 +576,5 @@ enum EpisodeSearch {
             seenTerms.insert(normalizedTerm)
             return true
         }
-    }
-
-    private nonisolated static func normalized(_ text: String) -> String {
-        text.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: .current)
-            .lowercased(with: .current)
     }
 }

@@ -50,7 +50,7 @@ public protocol AudioProcessorOutputType {}
 extension MLMultiArray : AudioProcessorOutputType {}
 
 public protocol AudioProcessing {
-
+    
     /// Loads audio data from a specified file path.
     /// - Parameters:
     ///   - audioFilePath: The file path of the audio file.
@@ -111,7 +111,7 @@ public protocol AudioProcessing {
 
     /// Resume recording audio from the specified input device, appending to continuous `audioArray` after pause
     func resumeRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws
-
+    
     ///  Pad or trim the audio data to the desired length.
     /// - Parameters:
     ///   - audioArray: An array of audio frames to be padded or trimmed.
@@ -135,11 +135,11 @@ public extension AudioProcessing {
             try AudioProcessor.loadAudio(fromPath: audioFilePath)
         }.value
     }
-
+    
     func startRecordingLive(inputDeviceID: DeviceID? = nil, callback: (([Float]) -> Void)?) throws {
         try startRecordingLive(inputDeviceID: inputDeviceID, callback: callback)
     }
-
+    
     func startStreamingRecordingLive(inputDeviceID: DeviceID? = nil) -> (AsyncThrowingStream<[Float], Error>, AsyncThrowingStream<[Float], Error>.Continuation) {
         return startStreamingRecordingLive(inputDeviceID: inputDeviceID)
     }
@@ -257,11 +257,11 @@ open class AudioProcessor: NSObject, AudioProcessing {
     public func setInputSuppressed(_ isSuppressed: Bool) {
         isInputSuppressed = isSuppressed
     }
-
+    
     open func padOrTrim(fromArray audioArray: [Float], startAt startIndex: Int, toLength frameLength: Int) -> (any AudioProcessorOutputType)? {
         return AudioProcessor.padOrTrimAudio(fromArray: audioArray, startAt: startIndex, toLength: frameLength, saveSegment: false)
     }
-
+    
     // MARK: - Loading and conversion
 
     public static func loadAudio(
@@ -1150,7 +1150,7 @@ public extension AudioProcessor {
             self.audioBufferCallback = nil
             self.stopRecording()
         }
-
+        
         do {
             try self.startRecordingLive(inputDeviceID: inputDeviceID) { @Sendable floats in
                 continuation.yield(floats)

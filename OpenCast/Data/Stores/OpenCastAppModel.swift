@@ -73,8 +73,13 @@ final class OpenCastAppModel {
     #endif
     @ObservationIgnored private var coreStoresLoadTask: Task<Void, Never>?
     @ObservationIgnored private var playbackDependenciesLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var playbackSurfaceHydrationTask: Task<Void, Never>?
+    @ObservationIgnored private var hasRestoredPlaybackSurface = false
+    @ObservationIgnored private(set) var playbackSurfaceRestorationCount = 0
     @ObservationIgnored private var progressPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var progressBoundaryPersistenceTask: Task<Void, Never>?
+    @ObservationIgnored private let siriMediaDiscovery: SiriMediaDiscovery
+    @ObservationIgnored private var siriMediaUserContextObservationTask: Task<Void, Never>?
     @ObservationIgnored private var hasRunVoiceBoostDeviceProbe = false
     @ObservationIgnored private var importedSubscriptionsNotificationID = 0
 
@@ -107,7 +112,8 @@ final class OpenCastAppModel {
         syncStatus: SyncStatusStore = SyncStatusStore(),
         allowsAutomaticFeedRefresh: Bool = true,
         adFreePassPresentationOverride: EpisodeAdFreePassPresentation? = nil,
-        adFreePassNotificationCenter: (any AdFreePassNotificationCenter)? = nil
+        adFreePassNotificationCenter: (any AdFreePassNotificationCenter)? = nil,
+        siriMediaDiscovery: SiriMediaDiscovery = SiriMediaDiscovery()
     ) {
         let resolvedHTTPClient = httpClient ?? URLSessionOpenCastHTTPClient(
             configuration: OpenCastURLSessionFactory.sharedConfiguration(
@@ -205,6 +211,7 @@ final class OpenCastAppModel {
         self.allowsAutomaticFeedRefresh = allowsAutomaticFeedRefresh
         self.adFreePassPresentationOverride = adFreePassPresentationOverride
         self.adFreePassNotificationCenter = adFreePassNotificationCenter ?? UNUserNotificationCenter.current()
+        self.siriMediaDiscovery = siriMediaDiscovery
         self.transcriptions.onEpisodeStateChanged = { [weak self] episodeID in
             self?.refreshPlaybackSkipZonesIfCurrentEpisode(episodeID: episodeID)
         }
@@ -255,6 +262,11 @@ final class OpenCastAppModel {
             }
             return self.transcriptions.progressByEpisodeID[episodeID]
         }
+        startSiriMediaUserContextObservation()
+    }
+
+    deinit {
+        siriMediaUserContextObservationTask?.cancel()
     }
 
     func ensureCoreStoresLoaded(modelContext: ModelContext) async {
@@ -288,6 +300,37 @@ final class OpenCastAppModel {
         }
         playbackDependenciesLoadTask = task
         await task.value
+    }
+
+    func ensurePlaybackSurfaceLoaded(modelContext: ModelContext) async {
+        await ensureCoreStoresLoaded(modelContext: modelContext)
+        await ensurePlaybackDependenciesLoaded(modelContext: modelContext)
+    }
+
+    func ensurePlaybackSurfaceHydrated(modelContext: ModelContext) async {
+        if let playbackSurfaceHydrationTask {
+            await playbackSurfaceHydrationTask.value
+            return
+        }
+
+        let task = Task {
+            await ensurePlaybackSurfaceLoaded(modelContext: modelContext)
+            restorePlaybackSurfaceIfNeeded(modelContext: modelContext)
+        }
+        playbackSurfaceHydrationTask = task
+        await task.value
+    }
+
+    func restorePlaybackSurfaceIfNeeded(modelContext: ModelContext) {
+        guard !hasRestoredPlaybackSurface else {
+            return
+        }
+
+        hasRestoredPlaybackSurface = true
+        playbackSurfaceRestorationCount += 1
+        startPlaybackProgressPersistence(modelContext: modelContext)
+        restorePreviousPlaybackIfAvailable(modelContext: modelContext)
+        restoreAdFreePassQueue(modelContext: modelContext)
     }
 
     /// Progress persistence has to outlive any one scene: a CarPlay-only launch
@@ -431,6 +474,10 @@ final class OpenCastAppModel {
             lastPlaybackError = podcastEpisodeListSettings.lastErrorMessage
         }
         await library.unsubscribe(feedURL: feedURL, modelContext: modelContext, downloadStore: downloads)
+        guard !library.isActivelySubscribed(to: feedURL) else {
+            return
+        }
+        siriMediaDiscovery.deleteDonations(forPodcastID: feedURL)
     }
 
     func loadLocalTranscriptionState(modelContext: ModelContext) {
@@ -1323,7 +1370,9 @@ final class OpenCastAppModel {
             try await transcriptions.nukeAllTranscripts(modelContext: modelContext)
             try downloads.nukeAllDownloads(modelContext: modelContext)
             try transcriptionModels.deleteInstalledModelImmediately()
+            let siriPodcastIDs = library.activePodcastIDs
             try deleteAllModelRows(modelContext: modelContext)
+            siriMediaDiscovery.deleteDonations(forPodcastIDs: siriPodcastIDs)
             // Reset runtime state before any suspension so the UI never renders
             // the deleted-and-saved SwiftData records, even if a later step throws.
             resetRuntimeStateAfterDataNuke(modelContext: modelContext)
@@ -1580,6 +1629,25 @@ final class OpenCastAppModel {
         #endif
     }
 
+    private func startSiriMediaUserContextObservation() {
+        let library = library
+        let discovery = siriMediaDiscovery
+        siriMediaUserContextObservationTask = Task {
+            var lastPublishedPodcastIDs: Set<String>?
+            for await activePodcastIDs in Observations({ library.activePodcastIDs }) {
+                guard !Task.isCancelled else {
+                    return
+                }
+                guard activePodcastIDs != lastPublishedPodcastIDs else {
+                    continue
+                }
+
+                lastPublishedPodcastIDs = activePodcastIDs
+                discovery.publishUserContext(subscriptionCount: activePodcastIDs.count)
+            }
+        }
+    }
+
     private func handleTranscriptionCleanupForDeletedDownloads(
         _ records: [EpisodeDownloadRecord],
         modelContext: ModelContext
@@ -1617,6 +1685,7 @@ final class OpenCastAppModel {
         if autoplay {
             playback.play()
             nowPlayingProbeMark("play-started")
+            siriMediaDiscovery.donatePlaybackIfNeeded(for: snapshot)
         }
         if presentsNowPlaying {
             requestNowPlayingPresentationAfterPrewarm(for: episode.id)
