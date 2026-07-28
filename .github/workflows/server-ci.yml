@@ -129,6 +129,21 @@ jobs:
         working-directory: ${{ matrix.directory }}
         run: |
           cp wrangler.example.toml wrangler.toml
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("wrangler.toml")
+          contents = path.read_text()
+          flags = (
+              'PUBLIC_AD_ANALYSIS_ENABLED = "false"',
+              'INTERNAL_AD_ANALYSIS_ENABLED = "false"',
+          )
+          for flag in flags:
+              if contents.count(flag) != 3:
+                  raise SystemExit(f"expected three public kill-switch defaults: {flag}")
+              contents = contents.replace(flag, flag.replace("false", "true"), 1)
+          path.write_text(contents)
+          PY
           mkdir -p tests/fixtures
           node --input-type=module --eval \
             "import { writeFileSync } from 'node:fs'; writeFileSync('tests/fixtures/ad_analysis_app_attest_development_fixture.json', '{}\n');"
@@ -150,6 +165,14 @@ jobs:
               if contents.count(block) != 1:
                   raise SystemExit(f"expected one public CI binding block: {block!r}")
               contents = contents.replace(block, "")
+          public_flag = 'PUBLIC_REMOTE_TRANSCRIPTION_ENABLED = "false"'
+          if contents.count(public_flag) != 3:
+              raise SystemExit("expected three public remote-transcription defaults")
+          contents = contents.replace(
+              public_flag,
+              'PUBLIC_REMOTE_TRANSCRIPTION_ENABLED = "true"\nDEV_BEARER_ENABLED = "true"',
+              1,
+          )
           path.write_text(contents)
           PY
 
@@ -208,6 +231,27 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes ffmpeg
+
+      - name: Prepare PurchaseWorker public test configuration
+        if: matrix.name == 'PurchaseWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("wrangler.toml")
+          contents = path.read_text()
+          placeholder = 'APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"'
+          if contents.count(placeholder) != 3:
+              raise SystemExit("expected three public bundle-ID placeholders")
+          path.write_text(
+              contents.replace(
+                  placeholder,
+                  'APPLE_BUNDLE_ID = "com.connor.opencast"',
+                  1,
+              )
+          )
+          PY
 
       - name: Test and typecheck PurchaseWorker
         if: matrix.name == 'PurchaseWorker'
