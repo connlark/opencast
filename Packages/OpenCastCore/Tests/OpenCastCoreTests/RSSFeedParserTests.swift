@@ -26,6 +26,68 @@ struct RSSFeedParserTests {
         #expect(snapshot.episodes[1].audioURL?.absoluteString == "https://example.com/audio/example-002.mp3")
     }
 
+    @Test("Nested image and text-input metadata does not overwrite channel fields")
+    func nestedMetadataDoesNotOverwriteChannelFields() throws {
+        let snapshot = try fixtureSnapshot(
+            named: "image-block",
+            feedURL: URL(string: "https://example.com/image-block.xml")!
+        )
+
+        #expect(snapshot.podcast.title == "Primary Podcast Title")
+        #expect(snapshot.podcast.websiteURL?.absoluteString == "https://example.com/podcast")
+        #expect(snapshot.podcast.artworkURL?.absoluteString == "https://example.com/artwork.jpg")
+    }
+
+    @Test("Recovers common, unknown, and bare HTML entities")
+    func recoversHTMLEntities() throws {
+        let snapshot = try fixtureSnapshot(
+            named: "entity-recovery",
+            feedURL: URL(string: "https://example.com/entity-recovery.xml")!
+        )
+
+        #expect(snapshot.episodes.count == 2)
+        #expect(snapshot.episodes[0].title == "Before Recovery")
+        #expect(snapshot.episodes[0].summary == "Rock & Roll keeps &future; literal.")
+        #expect(snapshot.episodes[1].title == "Space Oddity & Beyond &future; — More…")
+    }
+
+    @Test("Recovers entities using the XML-prolog encoding")
+    func recoversEntitiesUsingDeclaredEncoding() throws {
+        let xml = """
+        <?xml version="1.0" encoding="ISO-8859-1"?>
+        <rss version="2.0">
+          <channel>
+            <title>Café&nbsp;Sessions</title>
+            <item>
+              <title>Crème</title>
+              <guid>latin-one</guid>
+              <enclosure url="https://example.com/latin-one.mp3" type="audio/mpeg" />
+            </item>
+          </channel>
+        </rss>
+        """
+        let data = try #require(xml.data(using: .isoLatin1))
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/latin-one.xml")!
+        )
+
+        #expect(snapshot.podcast.title == "Café Sessions")
+        #expect(snapshot.episodes.first?.title == "Crème")
+    }
+
+    @Test("Selects the first usable enclosure unless later audio is better")
+    func selectsAudioEnclosures() throws {
+        let snapshot = try fixtureSnapshot(
+            named: "enclosures",
+            feedURL: URL(string: "https://example.com/enclosures.xml")!
+        )
+
+        #expect(snapshot.episodes[0].audioURL?.absoluteString == "https://example.com/first.mp3")
+        #expect(snapshot.episodes[1].audioURL?.absoluteString == "https://example.com/second.mp3")
+        #expect(snapshot.episodes[2].audioURL?.absoluteString == "https://example.com/third.mp3")
+    }
+
     @Test("Accumulates text across unescaped inline elements")
     func accumulatesTextAcrossUnescapedInlineElements() throws {
         let data = Data(

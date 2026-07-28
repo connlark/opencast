@@ -7,24 +7,31 @@ enum DurationParser {
             return nil
         }
 
-        if let seconds = TimeInterval(trimmed) {
+        if let seconds = TimeInterval(trimmed), seconds.isFinite, seconds >= 0 {
             return seconds
         }
 
-        let parts = trimmed.split(separator: ":").compactMap { TimeInterval($0) }
-        guard parts.count == trimmed.split(separator: ":").count else {
+        let rawParts = trimmed.split(separator: ":", omittingEmptySubsequences: false)
+        let parts = rawParts.compactMap { TimeInterval($0) }
+        guard
+            parts.count == rawParts.count,
+            parts.allSatisfy({ $0.isFinite && $0 >= 0 })
+        else {
+            return nil
+        }
+        guard (1...3).contains(parts.count) else {
             return nil
         }
 
-        switch parts.count {
+        let duration = switch parts.count {
         case 3:
-            return parts[0] * 3600 + parts[1] * 60 + parts[2]
+            parts[0] * 3600 + parts[1] * 60 + parts[2]
         case 2:
-            return parts[0] * 60 + parts[1]
-        case 1:
-            return parts[0]
+            parts[0] * 60 + parts[1]
         default:
-            return nil
+            parts[0]
         }
+
+        return duration.isFinite && duration >= 0 ? duration : nil
     }
 }

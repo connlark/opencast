@@ -1880,8 +1880,8 @@ struct OpenCastModelTests {
         #expect(result.recordsDeleted == 1)
     }
 
-    @Test("Duplicate progress rows merge according to played and latest rules")
-    func duplicateProgressRowsMergeByPlayedAndLatestRules() async throws {
+    @Test("Duplicate progress rows merge by latest update then played")
+    func duplicateProgressRowsMergeByLatestThenPlayedRules() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let oldUpdate = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1937,14 +1937,86 @@ struct OpenCastModelTests {
 
         #expect(records.count == 2)
         #expect(playedRecord?.podcastID == "https://example.com/progress.xml")
-        #expect(playedRecord?.position == 180)
+        #expect(playedRecord?.position == 60)
         #expect(playedRecord?.duration == 300)
-        #expect(playedRecord?.isPlayed == true)
-        #expect(playedRecord?.updatedAt == oldUpdate)
+        #expect(playedRecord?.isPlayed == false)
+        #expect(playedRecord?.updatedAt == newUpdate)
         #expect(latestRecord?.position == 50)
         #expect(latestRecord?.duration == 90)
         #expect(latestRecord?.isPlayed == false)
         #expect(latestRecord?.updatedAt == newUpdate)
+        #expect(result.duplicateProgressRecordsFound == 2)
+        #expect(result.progressGroupsMerged == 2)
+        #expect(result.progressRecordsDeleted == 2)
+    }
+
+    @Test("Offline re-listen survives duplicate progress repair")
+    func offlineRelistenSurvivesDuplicateProgressRepair() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let oldUpdate = Date(timeIntervalSince1970: 1_700_000_000)
+        let newUpdate = Date(timeIntervalSince1970: 1_700_000_100)
+        let tieUpdate = Date(timeIntervalSince1970: 1_700_000_200)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "offline-relisten",
+                podcastID: "https://example.com/progress.xml",
+                position: 240,
+                duration: 240,
+                isPlayed: true,
+                updatedAt: oldUpdate
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "offline-relisten",
+                podcastID: "HTTPS://EXAMPLE.com/progress.xml/",
+                position: 60,
+                duration: 300,
+                isPlayed: false,
+                updatedAt: newUpdate
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "played-tie-break",
+                podcastID: "https://example.com/progress.xml",
+                position: 80,
+                duration: 200,
+                isPlayed: false,
+                updatedAt: tieUpdate
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "played-tie-break",
+                podcastID: "https://example.com/progress.xml/",
+                position: 180,
+                duration: 180,
+                isPlayed: true,
+                updatedAt: tieUpdate
+            )
+        )
+        try context.save()
+
+        let result = try await store.repairSyncDuplicates(modelContext: context)
+        let records = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        let relistenRecord = records.first { $0.episodeID == "offline-relisten" }
+        let tieBreakRecord = records.first { $0.episodeID == "played-tie-break" }
+
+        #expect(records.count == 2)
+        #expect(relistenRecord?.podcastID == "https://example.com/progress.xml")
+        #expect(relistenRecord?.position == 60)
+        #expect(relistenRecord?.duration == 300)
+        #expect(relistenRecord?.isPlayed == false)
+        #expect(relistenRecord?.updatedAt == newUpdate)
+        #expect(tieBreakRecord?.podcastID == "https://example.com/progress.xml")
+        #expect(tieBreakRecord?.position == 180)
+        #expect(tieBreakRecord?.duration == 200)
+        #expect(tieBreakRecord?.isPlayed == true)
+        #expect(tieBreakRecord?.updatedAt == tieUpdate)
         #expect(result.duplicateProgressRecordsFound == 2)
         #expect(result.progressGroupsMerged == 2)
         #expect(result.progressRecordsDeleted == 2)

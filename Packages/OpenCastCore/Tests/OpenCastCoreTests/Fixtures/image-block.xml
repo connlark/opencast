@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Primary Podcast Title</title>
+    <link>https://example.com/podcast</link>
+    <description>Channel metadata must survive nested blocks.</description>
+    <image>
+      <url>https://example.com/artwork.jpg</url>
+      <title>Artwork Alternate Text</title>
+      <link>https://example.com/artwork</link>
+    </image>
+    <textInput>
+      <title>Search This Site</title>
+      <description>Search input</description>
+      <name>query</name>
+      <link>https://example.com/search</link>
+    </textInput>
+    <item>
+      <title>One</title>
+      <guid>image-block-one</guid>
+      <enclosure url="https://example.com/one.mp3" type="audio/mpeg" />
+    </item>
+  </channel>
+</rss>

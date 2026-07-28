@@ -78,6 +78,14 @@ final class EpisodeTranscriptionStore {
         try await stateChanges.wait(after: sequence)
     }
 
+    func waitForActiveJobToStop(episodeID: String) async throws {
+        while activeEpisodeID == episodeID, let activeTask {
+            try Task.checkCancellation()
+            await activeTask.value
+        }
+        try Task.checkCancellation()
+    }
+
     func load(modelContext: ModelContext) {
         priorCompletedTranscriptSnapshot = nil
         do {

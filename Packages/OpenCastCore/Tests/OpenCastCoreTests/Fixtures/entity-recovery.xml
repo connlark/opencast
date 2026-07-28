@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Entity Recovery</title>
+    <link>https://example.com/entities</link>
+    <item>
+      <title>Before Recovery</title>
+      <guid>entity-one</guid>
+      <description><![CDATA[Rock & Roll keeps &future; literal.]]></description>
+      <enclosure url="https://example.com/one.mp3" type="audio/mpeg" />
+    </item>
+    <item>
+      <title>Space&nbsp;Oddity & Beyond &future; &mdash; More&hellip;</title>
+      <guid>entity-two</guid>
+      <enclosure url="https://example.com/two.mp3" type="audio/mpeg" />
+    </item>
+  </channel>
+</rss>

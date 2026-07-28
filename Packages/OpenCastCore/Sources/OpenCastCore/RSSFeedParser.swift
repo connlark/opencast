@@ -4,6 +4,30 @@ public struct RSSFeedParser: Sendable {
     public init() {}
 
     public func parse(data: Data, feedURL: URL) throws -> FeedSnapshot {
+        let (delegate, originalError) = parseXML(data: data, feedURL: feedURL)
+        if let delegate {
+            return try delegate.snapshot()
+        }
+
+        guard
+            let originalError,
+            let recoveredData = RSSFeedRecovery.recoveredData(from: data)
+        else {
+            throw originalError ?? OpenCastCoreError.emptyFeed
+        }
+
+        let (recoveredDelegate, _) = parseXML(data: recoveredData, feedURL: feedURL)
+        guard let recoveredDelegate else {
+            throw originalError
+        }
+
+        return try recoveredDelegate.snapshot()
+    }
+
+    private func parseXML(
+        data: Data,
+        feedURL: URL
+    ) -> (delegate: FeedXMLParserDelegate?, error: (any Error)?) {
         let delegate = FeedXMLParserDelegate(feedURL: feedURL)
         let parser = XMLParser(data: data)
         parser.delegate = delegate
@@ -12,10 +36,10 @@ public struct RSSFeedParser: Sendable {
         parser.shouldResolveExternalEntities = false
 
         guard parser.parse() else {
-            throw parser.parserError ?? OpenCastCoreError.emptyFeed
+            return (nil, parser.parserError ?? OpenCastCoreError.emptyFeed)
         }
 
-        return try delegate.snapshot()
+        return (delegate, nil)
     }
 }
 
@@ -92,7 +116,7 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         case "item":
             currentItem = ItemAccumulator()
         case "enclosure":
-            currentItem?.audioURL = attributeDict.caseInsensitiveValue(for: "url").flatMap(URL.init(string:))
+            captureEnclosure(attributes: attributeDict)
         case "itunes:image":
             if let url = attributeDict.caseInsensitiveValue(for: "href").flatMap(URL.init(string:)) {
                 if currentItem == nil {
@@ -153,13 +177,13 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
 
     private func applyChannelValue(name: String, value: String) {
         switch name {
-        case "title":
+        case "title" where !isInsideChannelMetadataContainer:
             channel.title = value
         case "description", "itunes:summary":
             if channel.summary.nilIfBlank == nil {
                 channel.summary = value
             }
-        case "link":
+        case "link" where !isInsideChannelMetadataContainer:
             channel.websiteURL = URL(string: value)
         case "itunes:author", "author":
             channel.author = value
@@ -170,6 +194,30 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         default:
             break
         }
+    }
+
+    private var isInsideChannelMetadataContainer: Bool {
+        elementStack.contains("image") || elementStack.contains("textinput")
+    }
+
+    private func captureEnclosure(attributes: [String: String]) {
+        guard
+            currentItem != nil,
+            let audioURL = attributes.caseInsensitiveValue(for: "url").flatMap(URL.init(string:))
+        else {
+            return
+        }
+
+        let enclosureType = attributes.caseInsensitiveValue(for: "type")?.lowercased()
+        let candidateIsAudio = enclosureType?.hasPrefix("audio/") == true
+        let currentIsAudio = currentItem?.enclosureType?.hasPrefix("audio/") == true
+
+        guard currentItem?.audioURL == nil || (candidateIsAudio && !currentIsAudio) else {
+            return
+        }
+
+        currentItem?.audioURL = audioURL
+        currentItem?.enclosureType = enclosureType
     }
 
     private func applyItemValue(name: String, value: String) {
@@ -215,6 +263,7 @@ private struct ItemAccumulator {
     var publishedAt: Date?
     var duration: TimeInterval?
     var audioURL: URL?
+    var enclosureType: String?
     var artworkURL: URL?
 }
 

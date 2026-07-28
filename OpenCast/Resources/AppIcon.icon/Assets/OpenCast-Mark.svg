@@ -3,16 +3,16 @@
   xmlns="http://www.w3.org/2000/svg"
   width="1024"
   height="1024"
-  viewBox="0 0 1023 1023"
+  viewBox="0 0 1024 1024"
 >
   <defs>
     <linearGradient
       id="mark-gradient"
       gradientUnits="userSpaceOnUse"
       x1="166.105469"
-      y1="509.798213"
+      y1="509.934420"
       x2="873.043715"
-      y2="510.070627"
+      y2="509.934420"
     >
       <stop offset="0" stop-color="#F9730E"/>
       <stop offset="1" stop-color="#FEC44C"/>

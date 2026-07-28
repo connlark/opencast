@@ -338,10 +338,7 @@ final class EpisodeTranscriptionRequestCoordinator {
     }
 
     private func waitForTranscriptionToStop(episodeID: String) async throws {
-        while transcriptions.isActivelyTranscribing(episodeID: episodeID) {
-            let sequence = transcriptions.changeSequence
-            try await transcriptions.waitForChange(after: sequence)
-        }
+        try await transcriptions.waitForActiveJobToStop(episodeID: episodeID)
     }
 
     private func finishRequest(id: UUID) {

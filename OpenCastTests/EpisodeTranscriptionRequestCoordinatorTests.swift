@@ -128,11 +128,16 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         )
         #expect(await waitUntil {
             harness.coordinator.request?.phase == .transcribingAppleSpeech
+                && harness.transcriptions.isActivelyTranscribing(
+                    episodeID: harness.episode.episodeID
+                )
+                && harness.transcriptions.record(for: harness.episode.episodeID)?.state == .running
         })
 
         harness.coordinator.prepareForLifecycleExit(modelContext: harness.context)
 
         #expect(await waitUntil { harness.coordinator.request?.phase == .interrupted })
+        #expect(!harness.transcriptions.hasActiveJob)
         #expect(harness.coordinator.request?.canResumeFromCheckpoint == false)
         #expect(transcriber.requests.map(\.engine) == [.appleSpeech])
         #expect(harness.transcriptions.record(for: harness.episode.episodeID)?.state == .interrupted)

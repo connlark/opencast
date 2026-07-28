@@ -9,10 +9,12 @@
 # Balanced by measured per-test wall-clock (log 'passed (N seconds)' lines), NOT the
 # .xcresult duration field — that reports 0.0s for screenshot-matrix tests. Regenerate
 # with scripts/gen-ui-test-shards.py <run-dir> after a fresh run.
-# shard1 est 960s (34 tests) | shard2 est 984s (34 tests) | serial 37s
+# Measured baseline: shard1 960s + 2 unmeasured (36 tests) |
+# shard2 984s + 1 unmeasured (35 tests) | serial 37s + 1 unmeasured
 
-# --- shard1 (est 960s) ---
+# --- shard1 (est 960s + 2 unmeasured) ---
 shard1 OpenCastUITests/OpenCastUITests/testAddPodcastRSSClipboardPrefillScreenshots
+shard1 OpenCastUITests/OpenCastUITests/testCloudUnavailableDetectPassOffersOneTapOnDeviceFallback
 shard1 OpenCastUITests/OpenCastUITests/testEpisodeMenuShowsRemoteSurfacesOnFreshLaunchWithoutSettings
 shard1 OpenCastUITests/OpenCastUITests/testFirstTimeOnboardingNotificationPageDismissesOnboarding
 shard1 OpenCastUITests/OpenCastUITests/testNowPlayingVoiceBoostCanToggleWithScreenshots
@@ -27,6 +29,7 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededAutoSkipToggleOffLeavesZonesVis
 shard1 OpenCastUITests/OpenCastUITests/testSeededBadAudioURLShowsPlaybackFailedAlert
 shard1 OpenCastUITests/OpenCastUITests/testSeededCompactLibraryEpisodeBackReturnsToPodcast
 shard1 OpenCastUITests/OpenCastUITests/testSeededCompletedDownloadSmokeScreenshots
+shard1 OpenCastUITests/OpenCastUITests/testSeededCompletedTranscriptSoundLabOpensTranscript
 shard1 OpenCastUITests/OpenCastUITests/testSeededDownloadsTabLocalPlaybackAndEditSelection
 shard1 OpenCastUITests/OpenCastUITests/testSeededEpisodeProgressRestoresMiniPlayerAndShowsRows
 shard1 OpenCastUITests/OpenCastUITests/testSeededEpisodeTapWhileListeningPlaysAndExpandsNowPlaying
@@ -47,8 +50,9 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededTranscriptAndSpeechModelSmoke
 shard1 OpenCastUITests/OpenCastUITests/testSettingsDebugRunOnboardingScreenshotsAndKeepsSubscriptions
 shard1 OpenCastUITests/OpenCastUITests/testSettingsShowsRemoteTranscriptionUnavailableRetry
 
-# --- shard2 (est 984s) ---
+# --- shard2 (est 984s + 1 unmeasured) ---
 shard2 OpenCastUITests/OpenCastUITests/testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty
+shard2 OpenCastUITests/OpenCastUITests/testDetectAdsFirstTapPromptsForModeAndRemembersOnDeviceChoice
 shard2 OpenCastUITests/OpenCastUITests/testEpisodeActionsMarkPlayedAndClearProgress
 shard2 OpenCastUITests/OpenCastUITests/testEpisodeDetailSupportsAccessibilityDynamicType
 shard2 OpenCastUITests/OpenCastUITests/testFirstLaunchOnboardingScreenshotsOPMLSkipAndPodcastSetup
@@ -85,6 +89,7 @@ shard2 OpenCastUITests/OpenCastUITests/testVoiceBoostDiagnosticsSectionCanBeShow
 
 # --- serial tail (timing-sensitive; runs alone) ---
 serial OpenCastUITests/OpenCastUITests/testNowPlayingFramePacing
+serial OpenCastUITests/OpenCastUITests/testSeededSoundLabAdActionAcknowledgesBeforeHeldLaunchPreparation
 
 # --- excluded from routine iPhone lane (opt-in / live / device / AirPlay) ---
 exclude OpenCastUITests/OpenCastUITests/testOptInDebugBearerAdAnalysisRoundTripsAgainstDevWorker

@@ -152,12 +152,12 @@ enum SyncDuplicateRepairer {
         _ candidate: EpisodeProgressRecord,
         than current: EpisodeProgressRecord
     ) -> Bool {
-        if candidate.isPlayed != current.isPlayed {
-            return candidate.isPlayed
-        }
-
         if candidate.updatedAt != current.updatedAt {
             return candidate.updatedAt > current.updatedAt
+        }
+
+        if candidate.isPlayed != current.isPlayed {
+            return candidate.isPlayed
         }
 
         let candidateDuration = candidate.duration ?? 0
