@@ -1,0 +1,272 @@
+name: Apple CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app-unit-tests:
+    name: App Unit Tests
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select an iOS 26 simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          simulator_udid="$(
+            xcrun simctl list devices available --json | python3 -c '
+          import json
+          import re
+          import sys
+
+          payload = json.load(sys.stdin)
+          candidates = []
+          for runtime_identifier, devices in payload["devices"].items():
+              match = re.search(r"iOS-(26(?:-\d+)*)$", runtime_identifier)
+              if match is None:
+                  continue
+              version = tuple(int(component) for component in match.group(1).split("-"))
+              for device in devices:
+                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+                      candidates.append((version, device["name"], device["udid"]))
+
+          if not candidates:
+              print("No available iPhone simulator with an iOS 26 runtime was found.", file=sys.stderr)
+              sys.exit(1)
+
+          candidates.sort(reverse=True)
+          print(candidates[0][2])
+          '
+          )"
+          echo "Selected iOS 26 simulator: ${simulator_udid}"
+          echo "udid=${simulator_udid}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run app and notification-service unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          xcodebuild \
+            -project OpenCast.xcodeproj \
+            -scheme OpenCast \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-device-destinations 1 \
+            -resultBundlePath artifacts/app-unit-tests.xcresult \
+            -only-testing:OpenCastTests \
+            -only-testing:OpenCastNotificationServiceTests \
+            test 2>&1 | tee artifacts/app-unit-tests.log
+
+      - name: Publish app unit-test summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ ! -d artifacts/app-unit-tests.xcresult ]]; then
+            echo "### App Unit Tests" >> "${GITHUB_STEP_SUMMARY}"
+            echo "No result bundle was produced." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          xcrun xcresulttool get test-results summary \
+            --path artifacts/app-unit-tests.xcresult \
+            --format json > artifacts/app-unit-tests-summary.json
+          SUMMARY_PATH=artifacts/app-unit-tests-summary.json python3 <<'PY'
+          import json
+          import os
+
+          with open(os.environ["SUMMARY_PATH"], encoding="utf-8") as source:
+              summary = json.load(source)
+
+          rows = (
+              ("Result", "result"),
+              ("Passed", "passedTests"),
+              ("Failed", "failedTests"),
+              ("Skipped", "skippedTests"),
+              ("Expected failures", "expectedFailures"),
+          )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write("### App Unit Tests\n\n| Measure | Value |\n| --- | ---: |\n")
+              for label, key in rows:
+                  output.write(f"| {label} | {summary.get(key, 'n/a')} |\n")
+          PY
+
+      - name: Upload app unit-test failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: app-unit-test-failure-${{ github.run_attempt }}
+          path: |
+            artifacts/app-unit-tests.log
+            artifacts/app-unit-tests-summary.json
+            artifacts/app-unit-tests.xcresult
+          if-no-files-found: warn
+          retention-days: 7
+
+  core-flow-ui-smoke:
+    name: Core Flow UI Smoke
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select an iOS 26 simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          simulator_udid="$(
+            xcrun simctl list devices available --json | python3 -c '
+          import json
+          import re
+          import sys
+
+          payload = json.load(sys.stdin)
+          candidates = []
+          for runtime_identifier, devices in payload["devices"].items():
+              match = re.search(r"iOS-(26(?:-\d+)*)$", runtime_identifier)
+              if match is None:
+                  continue
+              version = tuple(int(component) for component in match.group(1).split("-"))
+              for device in devices:
+                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+                      candidates.append((version, device["name"], device["udid"]))
+
+          if not candidates:
+              print("No available iPhone simulator with an iOS 26 runtime was found.", file=sys.stderr)
+              sys.exit(1)
+
+          candidates.sort(reverse=True)
+          print(candidates[0][2])
+          '
+          )"
+          echo "Selected iOS 26 simulator: ${simulator_udid}"
+          echo "udid=${simulator_udid}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run seeded Inbox-to-Now-Playing smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          xcodebuild \
+            -project OpenCast.xcodeproj \
+            -scheme OpenCast \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-device-destinations 1 \
+            -resultBundlePath artifacts/core-flow-ui-smoke.xcresult \
+            -only-testing:OpenCastUITests/OpenCastUITests/testSeededInboxEpisodeTapPlaysAndExpandsNowPlaying \
+            test 2>&1 | tee artifacts/core-flow-ui-smoke.log
+
+      - name: Publish UI-smoke summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ ! -d artifacts/core-flow-ui-smoke.xcresult ]]; then
+            echo "### Core Flow UI Smoke" >> "${GITHUB_STEP_SUMMARY}"
+            echo "No result bundle was produced." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          xcrun xcresulttool get test-results summary \
+            --path artifacts/core-flow-ui-smoke.xcresult \
+            --format json > artifacts/core-flow-ui-smoke-summary.json
+          SUMMARY_PATH=artifacts/core-flow-ui-smoke-summary.json python3 <<'PY'
+          import json
+          import os
+
+          with open(os.environ["SUMMARY_PATH"], encoding="utf-8") as source:
+              summary = json.load(source)
+
+          rows = (
+              ("Result", "result"),
+              ("Passed", "passedTests"),
+              ("Failed", "failedTests"),
+              ("Skipped", "skippedTests"),
+              ("Expected failures", "expectedFailures"),
+          )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write("### Core Flow UI Smoke\n\n| Measure | Value |\n| --- | ---: |\n")
+              for label, key in rows:
+                  output.write(f"| {label} | {summary.get(key, 'n/a')} |\n")
+          PY
+
+      - name: Upload UI-smoke failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: core-flow-ui-smoke-failure-${{ github.run_attempt }}
+          path: |
+            artifacts/core-flow-ui-smoke.log
+            artifacts/core-flow-ui-smoke-summary.json
+            artifacts/core-flow-ui-smoke.xcresult
+          if-no-files-found: warn
+          retention-days: 7
+
+  swift-packages:
+    name: Swift Packages (${{ matrix.name }})
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Core
+            directory: Packages/OpenCastCore
+          - name: Playback
+            directory: Packages/OpenCastPlayback
+          - name: Transcription
+            directory: Packages/OpenCastTranscription
+          - name: VoiceBoost
+            directory: Packages/OpenCastVoiceBoost
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run package tests
+        working-directory: ${{ matrix.directory }}
+        run: swift test
+
+  apple-ci:
+    name: Apple CI
+    if: always()
+    needs:
+      - app-unit-tests
+      - core-flow-ui-smoke
+      - swift-packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require every Apple lane to pass
+        shell: bash
+        run: |
+          if [[ "${{ needs.app-unit-tests.result }}" != "success" ||
+                "${{ needs.core-flow-ui-smoke.result }}" != "success" ||
+                "${{ needs.swift-packages.result }}" != "success" ]]; then
+            echo "One or more Apple CI lanes did not pass."
+            exit 1
+          fi
+          echo "All Apple CI lanes passed."
