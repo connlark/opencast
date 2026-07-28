@@ -192,7 +192,7 @@ jobs:
   services:
     name: Service (${{ matrix.name }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     permissions:
       contents: read
     strategy:
@@ -201,10 +201,13 @@ jobs:
         include:
           - name: PurchaseWorker
             directory: Server/PurchaseWorker
+            timeout_minutes: 35
           - name: TranscriptionMediaWorker
             directory: Server/TranscriptionMediaWorker
+            timeout_minutes: 50
           - name: Website
             directory: Server/Website
+            timeout_minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -229,8 +232,20 @@ jobs:
         if: matrix.name == 'TranscriptionMediaWorker'
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes ffmpeg
+          sudo apt-get \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            update
+
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            install --yes --no-install-recommends ffmpeg
+
+          ffmpeg -hide_banner -version
+          ffprobe -hide_banner -version
 
       - name: Prepare PurchaseWorker public test configuration
         if: matrix.name == 'PurchaseWorker'
