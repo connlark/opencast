@@ -1,13 +1,11 @@
 import { screenshotAssets } from "@/lib/screenshots.generated";
 
-export const appStoreURL = "https://apps.apple.com/app/opencast/id6766770733";
 export const testFlightURL = "https://testflight.apple.com/join/3WtxfvfF";
 export const supportEmail = "support@opencast.mobile";
 export const githubURL = "https://github.com/connlark/opencast";
 export const githubIssueURL = `${githubURL}/issues/new`;
 export const marketingURL = "https://opencast.mobile";
 export const supportHost = "support.opencast.mobile";
-export const privacyURL = `https://${supportHost}/privacy`;
 
 function screenshot<ID extends keyof typeof screenshotAssets>(id: ID, alt: string) {
   return { id, ...screenshotAssets[id], alt };

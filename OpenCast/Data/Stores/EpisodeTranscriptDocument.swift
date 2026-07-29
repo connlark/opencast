@@ -36,15 +36,4 @@ nonisolated struct EpisodeTranscriptDocument: Codable, Sendable, Equatable {
     var normalizedTranscriptSHA256: String? = nil
     var remoteJobProvenanceToken: String? = nil
     var remoteSourceMatchMode: String? = nil
-
-    /// Explicit engine when the document recorded one (schema 3+), otherwise
-    /// inferred from the model identifier the way pre-3 readers did.
-    var resolvedEngineProvenance: EpisodeTranscriptEngineProvenance {
-        transcriptionEngine.flatMap(EpisodeTranscriptEngineProvenance.init(rawValue:))
-            ?? .inferred(fromModelIdentifier: modelIdentifier)
-    }
-
-    var resolvedSourceMatchMode: EpisodeRemoteTranscriptSourceMatchMode? {
-        remoteSourceMatchMode.flatMap(EpisodeRemoteTranscriptSourceMatchMode.init(rawValue:))
-    }
 }

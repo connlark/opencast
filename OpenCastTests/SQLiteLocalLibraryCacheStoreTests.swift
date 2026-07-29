@@ -1,5 +1,6 @@
 import Foundation
 import OpenCastCore
+import SQLite3
 import Testing
 @testable import OpenCast
 
@@ -361,6 +362,86 @@ struct SQLiteLocalLibraryCacheStoreTests {
         let library = try await secondStore.loadLibrary(activePodcastIDs: [Self.feedURL])
         #expect(library.podcastsByFeedURL[Self.feedURL]?.title == "Cached Show")
         #expect(library.episodes.map(\.episodeID) == ["ep-file"])
+    }
+
+    @Test("Reopening a pre-existing cache drops the legacy published index")
+    func reopeningPreExistingCacheDropsLegacyPublishedIndex() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "SQLiteLocalLibraryCacheStoreTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
+
+        let firstStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        try await firstStore.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(id: "ep-idx", title: "Indexed Episode", publishedAt: Date(timeIntervalSince1970: 1_700_000_200))
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
+        )
+        // Installed devices created this index before it left schemaSQL.
+        try execRawSQL(
+            "CREATE INDEX IF NOT EXISTS episode_cache_published_idx ON episode_cache(published_at DESC)",
+            databaseURL: databaseURL
+        )
+        #expect(try indexNames(databaseURL: databaseURL).contains("episode_cache_published_idx"))
+
+        let secondStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        _ = try await secondStore.loadLibrary(activePodcastIDs: [Self.feedURL])
+
+        let names = try indexNames(databaseURL: databaseURL)
+        #expect(!names.contains("episode_cache_published_idx"))
+        #expect(names.contains("episode_cache_podcast_published_idx"))
+    }
+
+    private func execRawSQL(_ sql: String, databaseURL: URL) throws {
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(
+            databaseURL.path(percentEncoded: false),
+            &handle,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        ) == SQLITE_OK, let handle else {
+            throw LocalLibraryCacheStoreError(operation: "test open", message: "unable to open database")
+        }
+        defer { sqlite3_close_v2(handle) }
+        guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else {
+            throw LocalLibraryCacheStoreError(operation: "test exec", message: String(cString: sqlite3_errmsg(handle)))
+        }
+    }
+
+    private func indexNames(databaseURL: URL) throws -> Set<String> {
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(
+            databaseURL.path(percentEncoded: false),
+            &handle,
+            SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX,
+            nil
+        ) == SQLITE_OK, let handle else {
+            throw LocalLibraryCacheStoreError(operation: "test open", message: "unable to open database")
+        }
+        defer { sqlite3_close_v2(handle) }
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            handle,
+            "SELECT name FROM sqlite_master WHERE type = 'index'",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK, let statement else {
+            throw LocalLibraryCacheStoreError(operation: "test prepare", message: String(cString: sqlite3_errmsg(handle)))
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var names: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let name = sqlite3_column_text(statement, 0) {
+                names.insert(String(cString: name))
+            }
+        }
+        return names
     }
 
     private func seedTwoFeeds(in store: SQLiteLocalLibraryCacheStore) async throws {

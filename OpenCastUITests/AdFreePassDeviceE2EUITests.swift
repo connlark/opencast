@@ -15,7 +15,6 @@ import XCTest
 /// owns distinct episodes from the fixture feed.
 final class AdFreePassDeviceE2EUITests: XCTestCase {
     private static let optInEnvironmentKey = "OPENCAST_DEVICE_E2E"
-    private static let showTitle = "Example Device E2E Show"
 
     // Batch and cancel use distinct titles. Persistence and foreground-only
     // can reuse duplicate episodes through the disambiguation below.

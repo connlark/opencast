@@ -194,10 +194,6 @@ public actor OpenCastTranscriptionService {
         }
     }
 
-    nonisolated func mappedSegment(_ segment: TranscriptionSegment, id: Int) -> OpenCastTranscriptSegment {
-        Self.mappedSegment(segment, id: id, clipStart: 0)
-    }
-
     nonisolated static func mappedSegment(
         _ segment: TranscriptionSegment,
         id: Int,

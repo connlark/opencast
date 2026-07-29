@@ -855,6 +855,97 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededPodcastPullDownOpensSearch() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+
+        let hero = app.descendants(matching: .any)["Podcast Hero Header"]
+        assertExists(hero, named: "podcast hero before pull-down search")
+        assertDoesNotExist(app.searchFields.firstMatch, named: "podcast search field before pull-down")
+
+        pullDownToSearch(in: app)
+
+        let searchField = app.searchFields.firstMatch
+        assertExists(searchField, named: "podcast search field after pull-down")
+        XCTAssertTrue(hero.waitForNonExistence(timeout: 5), "podcast hero should hide when pull-down opens search")
+
+        searchField.typeText("Deterministic UI Episode")
+        assertHittable(seededEpisodeRow(in: app), named: "pull-down search result without scrolling")
+
+        let closeButton = app.buttons["Close"].firstMatch
+        assertExists(closeButton, named: "podcast search close button after pull-down")
+        closeButton.tap()
+        assertExists(hero, named: "podcast hero after canceling pull-down search")
+        assertDoesNotExist(app.searchFields.firstMatch, named: "podcast search field after canceling pull-down")
+    }
+
+    @MainActor
+    func testSeededPodcastSearchKeepsResultsFrontAndCenter() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+
+        let hero = app.descendants(matching: .any)["Podcast Hero Header"]
+        assertExists(hero, named: "podcast hero before search")
+        assertDoesNotExist(app.searchFields.firstMatch, named: "inactive podcast search field")
+
+        let actionsButton = app.buttons["Podcast Actions"]
+        assertExists(actionsButton, named: "podcast actions menu")
+        actionsButton.tap()
+        app.buttons["Search"].firstMatch.tap()
+
+        let searchField = app.searchFields.firstMatch
+        assertExists(searchField, named: "podcast episode search field")
+        XCTAssertTrue(hero.waitForNonExistence(timeout: 5))
+
+        searchField.typeText("Deterministic UI Episode")
+        let result = seededEpisodeRow(in: app)
+        assertHittable(result, named: "podcast episode search result without scrolling")
+
+        let closeButton = app.buttons["Close"].firstMatch
+        assertExists(closeButton, named: "podcast search close button with query")
+        closeButton.tap()
+        assertExists(hero, named: "podcast hero after closing populated search")
+        assertDoesNotExist(app.searchFields.firstMatch, named: "podcast search field after populated close")
+        assertHittable(actionsButton, named: "podcast actions after closing populated search")
+
+        actionsButton.tap()
+        app.buttons["Search"].firstMatch.tap()
+
+        let reopenedSearchField = app.searchFields.firstMatch
+        assertExists(reopenedSearchField, named: "reopened podcast episode search field")
+        reopenedSearchField.typeText("Deterministic")
+        reopenedSearchField.tap()
+        let clearButton = reopenedSearchField.buttons["Clear text"].firstMatch
+        assertExists(clearButton, named: "podcast search clear button")
+        clearButton.tap()
+        assertDoesNotExist(hero, named: "podcast hero after clearing search")
+
+        let clearedSearchCloseButton = app.buttons["Close"].firstMatch
+        assertExists(clearedSearchCloseButton, named: "podcast search close button after clearing")
+        clearedSearchCloseButton.tap()
+        assertExists(hero, named: "podcast hero after canceling search")
+        assertDoesNotExist(app.searchFields.firstMatch, named: "podcast search field after cleared close")
+        assertExists(
+            app.buttons["Sort Episodes, Newest First"],
+            named: "podcast sort control after canceling search"
+        )
+        assertExists(
+            app.buttons["Filter Episodes, All Episodes"],
+            named: "podcast filter control after canceling search"
+        )
+    }
+
+    @MainActor
     func testSeededPodcastAutoDetectToggleConfirmsAndEnables() throws {
         let app = makeSeededApp()
         app.launch()
@@ -3604,6 +3695,13 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     private func seededSubscriptionRow(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: Self.seededSubscriptionRowIdentifier).firstMatch
+    }
+
+    @MainActor
+    private func pullDownToSearch(in app: XCUIApplication) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+        start.press(forDuration: 0.05, thenDragTo: end)
     }
 
     private func requireArtifactPath(environmentKey: String) throws -> String {

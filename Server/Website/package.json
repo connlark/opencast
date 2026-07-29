@@ -7,6 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "sync-screenshots": "node scripts/sync-screenshots.mjs",
+    "sync-brand-assets": "node scripts/sync-brand-assets.mjs",
     "preview": "next build && wrangler dev",
     "deploy": "yarn sync-screenshots && next build && wrangler deploy",
     "lint": "eslint",

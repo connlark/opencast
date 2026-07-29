@@ -20,7 +20,6 @@ struct DownloadsView: View {
     @State private var isConfirmingEditRemovePlayed = false
 
     let onOpenEpisode: (String) -> Void
-    var selectsEpisodeDetailOnPlay = false
 
     var body: some View {
         let allDownloads = DownloadsListModel.make(
@@ -241,8 +240,7 @@ struct DownloadsView: View {
                 item: item,
                 searchResult: searchResult,
                 onSelect: dismissSearchKeyboard,
-                onOpenEpisode: onOpenEpisode,
-                selectsEpisodeDetailOnPlay: selectsEpisodeDetailOnPlay
+                onOpenEpisode: onOpenEpisode
             )
         }
     }

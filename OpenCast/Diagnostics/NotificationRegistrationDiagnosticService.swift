@@ -100,7 +100,7 @@ struct NotificationRegistrationDiagnosticService {
 
     private func registerDevice(
         deviceToken: String,
-        credential: NotificationSecurityCredential
+        credential: AppAttestCredential
     ) async throws -> String {
         let response = try await secureClient.sendJSONPayload(
             path: "/v1/devices/register",
@@ -112,13 +112,13 @@ struct NotificationRegistrationDiagnosticService {
                 appVersion: appVersion,
                 appBuild: appBuild
             ),
-            response: NotificationSecurityMessageResponse.self
+            response: AppAttestMessageResponse.self
         )
         return response.message
     }
 
     private func sendTestPush(
-        credential: NotificationSecurityCredential
+        credential: AppAttestCredential
     ) async throws -> NotificationTestPushResponse {
         try await secureClient.sendJSONPayload(
             path: "/v1/debug/send-test-push",

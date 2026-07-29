@@ -526,6 +526,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             // Pre-language databases: CREATE TABLE IF NOT EXISTS leaves the
             // existing schema untouched, so add the column when missing.
             try? exec("ALTER TABLE podcast_cache ADD COLUMN language TEXT", operation: "schema migration", db: handle)
+            // Installed caches created the index before it was removed from
+            // schemaSQL; no query shape ever chooses it.
+            try? exec("DROP INDEX IF EXISTS episode_cache_published_idx", operation: "schema migration", db: handle)
         } catch {
             sqlite3_close_v2(handle)
             throw error
@@ -589,9 +592,6 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
 
     CREATE INDEX IF NOT EXISTS episode_cache_podcast_published_idx
     ON episode_cache(podcast_id, published_at DESC);
-
-    CREATE INDEX IF NOT EXISTS episode_cache_published_idx
-    ON episode_cache(published_at DESC);
 
     CREATE INDEX IF NOT EXISTS refresh_log_feed_started_idx
     ON refresh_log(feed_url, started_at DESC);

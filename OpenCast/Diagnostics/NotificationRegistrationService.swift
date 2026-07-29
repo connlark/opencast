@@ -58,7 +58,7 @@ struct NotificationRegistrationService {
             installID: credential.installID,
             keyID: credential.keyID,
             payload: payload,
-            response: NotificationSecurityMessageResponse.self
+            response: AppAttestMessageResponse.self
         )
         UIApplication.shared.unregisterForRemoteNotifications()
         tokenStore.clearLatestToken()
@@ -88,7 +88,7 @@ struct NotificationRegistrationService {
 
     private func sendRegisterDeviceRequest(
         deviceToken: String,
-        credential: NotificationSecurityCredential
+        credential: AppAttestCredential
     ) async throws {
         let bundle = Bundle.main
         let payload = NotificationDeviceRegistrationPayload(
@@ -102,7 +102,7 @@ struct NotificationRegistrationService {
             installID: credential.installID,
             keyID: credential.keyID,
             payload: payload,
-            response: NotificationSecurityMessageResponse.self
+            response: AppAttestMessageResponse.self
         )
     }
 }

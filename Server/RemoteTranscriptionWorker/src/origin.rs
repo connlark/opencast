@@ -70,11 +70,6 @@ pub fn validate_origin_url(raw: &str) -> Result<Url, OriginUrlError> {
 pub const MEDIA_ACCEPT_ENCODING: &str = "identity";
 pub const MEDIA_USER_AGENT: &str = "OpenCast-Media/1 (+https://opencast.mobile)";
 
-pub fn keyed_url_sha256(url: &str) -> String {
-    use sha2::{Digest, Sha256};
-    hex::encode(Sha256::digest(url.as_bytes()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

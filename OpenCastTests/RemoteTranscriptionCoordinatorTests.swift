@@ -364,7 +364,7 @@ struct EpisodeRemoteTranscriptMapperTests {
         )
 
         #expect(document.schemaVersion == EpisodeTranscriptDocument.currentSchemaVersion)
-        #expect(document.resolvedEngineProvenance == .remoteWhisper)
+        #expect(document.transcriptionEngine == EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue)
         #expect(document.providerModelIdentifier == RemoteFixtures.model)
         #expect(document.modelIdentifier == RemoteFixtures.model)
         #expect(document.modelTreeSHA256.isEmpty)

@@ -20,14 +20,21 @@ export function SiteHeader() {
           className="site-brand flex min-w-0 items-center gap-2.5 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           aria-label="opencast home"
         >
-          {/* eslint-disable-next-line @next/next/no-img-element -- static export serves plain assets */}
-          <img
-            src="/app-icon.png"
-            alt=""
-            width={42}
-            height={42}
-            className="site-brand__icon size-[42px] shrink-0 rounded-[13px]"
-          />
+          {/* The app icon's Default and Dark renditions, matched to the
+              system appearance. Both come from `yarn sync-brand-assets`. */}
+          <picture>
+            <source
+              srcSet="/brand/icon-dark-192.png"
+              media="(prefers-color-scheme: dark)"
+            />
+            <img
+              src="/brand/icon-light-192.png"
+              alt=""
+              width={42}
+              height={42}
+              className="site-brand__icon size-[42px] shrink-0 rounded-[13px]"
+            />
+          </picture>
           <span className="truncate text-base font-semibold tracking-[-0.025em] text-foreground">
             opencast
           </span>

@@ -80,8 +80,4 @@ final class EpisodeTranscriptRecord {
     var isAppleSpeechTranscript: Bool {
         engineProvenance == .appleSpeech
     }
-
-    var isRemoteTranscript: Bool {
-        engineProvenance == .remoteWhisper
-    }
 }

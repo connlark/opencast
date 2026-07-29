@@ -7,14 +7,6 @@ struct EpisodeProgressSummary: Equatable {
     let remaining: TimeInterval?
     let isCompleted: Bool
 
-    static let notStarted = EpisodeProgressSummary(
-        position: 0,
-        duration: nil,
-        fractionCompleted: 0,
-        remaining: nil,
-        isCompleted: false
-    )
-
     var hasVisibleProgress: Bool {
         guard !isCompleted, position >= 1 else {
             return false

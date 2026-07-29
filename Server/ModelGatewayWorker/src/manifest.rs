@@ -86,11 +86,6 @@ pub fn generate_manifest(input: &ManifestInput) -> io::Result<RemoteModelManifes
     })
 }
 
-pub fn write_manifest(path: &Path, manifest: &RemoteModelManifest) -> io::Result<()> {
-    let data = manifest_json_bytes(manifest)?;
-    write_manifest_bytes(path, &data)
-}
-
 /// Reads a model manifest from JSON on disk.
 ///
 /// # Errors

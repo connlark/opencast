@@ -1,6 +1,10 @@
 import SwiftUI
 
 struct PodcastDetailView: View {
+    /// Overscroll past a search-bar's worth of travel opens search; the list has no
+    /// pull-to-refresh so the gesture is unambiguous.
+    private static let pullToSearchDistance: Double = 72
+
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.modelContext) private var modelContext
@@ -9,6 +13,7 @@ struct PodcastDetailView: View {
     @State private var isConfirmingMarkAllPlayed = false
     @State private var isConfirmingDeleteAllDownloads = false
     @State private var searchQuery = ""
+    @State private var isSearchVisible = false
     @State private var isSearchPresented = false
     @State private var searchMode: EpisodeSearchMode = .episodes
     @State private var searchSession = EpisodeSearchSession()
@@ -77,32 +82,33 @@ struct PodcastDetailView: View {
         Group {
             if let subscription {
                 List {
-                    Section {
-                        VStack(spacing: 16) {
-                            PodcastHeroHeaderView(
-                                subscription: subscription,
-                                podcast: podcastCache,
-                                episodeCount: allEpisodes.count,
-                                unplayedCount: unplayedEpisodeCount,
-                                isRefreshing: isRefreshing,
-                                refreshErrorMessage: refreshErrorMessage,
-                                primaryAction: primaryAction,
-                                onPlay: playPrimaryAction,
-                                onPreviewResolved: updatePodcastArtworkPreview
-                            )
-                            if !hasSearchQuery {
+                    if !isSearchVisible {
+                        Section {
+                            VStack(spacing: 16) {
+                                PodcastHeroHeaderView(
+                                    subscription: subscription,
+                                    podcast: podcastCache,
+                                    episodeCount: allEpisodes.count,
+                                    unplayedCount: unplayedEpisodeCount,
+                                    isRefreshing: isRefreshing,
+                                    refreshErrorMessage: refreshErrorMessage,
+                                    primaryAction: primaryAction,
+                                    onPlay: playPrimaryAction,
+                                    onPreviewResolved: updatePodcastArtworkPreview
+                                )
                                 PodcastEpisodeListControlsView(
                                     sortOrder: sortOrderBinding,
                                     filter: filterBinding,
                                     podcastID: feedURL
                                 )
                             }
+                            .frame(maxWidth: 600)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .accessibilityIdentifier("Podcast Hero Header")
                         }
-                        .frame(maxWidth: 600)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
                     }
 
                     Section("Episodes") {
@@ -154,8 +160,12 @@ struct PodcastDetailView: View {
                 .contentMargins(.bottom, 72, for: .scrollContent)
                 .animation(listAnimation, value: model.animationKey)
                 .animation(listAnimation, value: appModel.library.state)
-                .refreshable {
-                    await appModel.library.refresh(feedURL: feedURL, modelContext: modelContext)
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentOffset.y + geometry.contentInsets.top < -Self.pullToSearchDistance
+                } action: { _, isPulledPastSearchThreshold in
+                    if isPulledPastSearchThreshold {
+                        showSearch()
+                    }
                 }
             } else {
                 ContentUnavailableView(
@@ -167,9 +177,19 @@ struct PodcastDetailView: View {
         }
         .navigationTitle(subscription?.title ?? "Podcast")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchQuery, isPresented: $isSearchPresented, prompt: searchPrompt)
-        .searchScopes($searchMode) {
-            EpisodeSearchScopePicker()
+        .modifier(
+            EpisodeSearchPresentationModifier(
+                isSearchVisible: isSearchVisible,
+                prompt: searchPrompt,
+                searchQuery: $searchQuery,
+                isSearchPresented: $isSearchPresented,
+                searchMode: $searchMode
+            )
+        )
+        .onChange(of: isSearchPresented) { _, isPresented in
+            if !isPresented {
+                hideSearch()
+            }
         }
         .task(id: searchTaskKey) {
             let library = appModel.library
@@ -277,7 +297,21 @@ struct PodcastDetailView: View {
     }
 
     private func showSearch() {
+        guard !isSearchVisible else {
+            return
+        }
+        searchQuery = ""
+        searchMode = .episodes
+        searchSession.clear()
+        isSearchVisible = true
         isSearchPresented = true
+    }
+
+    private func hideSearch() {
+        isSearchVisible = false
+        searchQuery = ""
+        searchMode = .episodes
+        searchSession.clear()
     }
 
     private func dismissSearchKeyboard() {

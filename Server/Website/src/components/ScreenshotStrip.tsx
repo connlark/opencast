@@ -16,7 +16,6 @@ export function ScreenshotStrip() {
               srcSet={shot.webpSrcSet}
               sizes="(min-width: 900px) 276px, (min-width: 480px) 260px, 72vw"
             />
-            {/* eslint-disable-next-line @next/next/no-img-element -- static export serves pre-optimized assets */}
             <img
               src={shot.src}
               alt={shot.alt}

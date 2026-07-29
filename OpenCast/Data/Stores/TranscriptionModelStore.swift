@@ -51,6 +51,7 @@ final class TranscriptionModelStore {
         }
     }
 
+    // Test seam — no production callers (dead-code audit Low 40).
     var canStartTranscription: Bool {
         if case .installed = state {
             true
@@ -67,6 +68,7 @@ final class TranscriptionModelStore {
         try await stateChanges.wait(after: sequence)
     }
 
+    // Test seam — no production callers (dead-code audit Low 40).
     func loadLocalStatus() {
         state = localStatus()
     }

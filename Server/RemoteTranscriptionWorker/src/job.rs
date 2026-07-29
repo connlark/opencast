@@ -572,7 +572,6 @@ mod tests {
             duration_seconds: None,
             entity_tag: None,
             last_modified: None,
-            final_url_sha256: None,
         }
     }
 

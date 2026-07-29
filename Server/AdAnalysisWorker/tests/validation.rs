@@ -7,9 +7,7 @@ use opencast_ad_analysis_worker::types::{
     MAX_TRANSCRIPT_TEXT_CHARS, SCHEMA_VERSION,
 };
 use opencast_ad_analysis_worker::usage::{
-    admit_subject_then_global, admitted_usage, admitted_usage_with_profile,
-    global_usage_object_name, parse_daily_usage, usage_object_name, SpendCapScope,
-    UsageLimitProfile,
+    global_usage_object_name, usage_object_name, UsageLimitProfile,
 };
 use opencast_ad_analysis_worker::validation::{
     decode_and_validate_request, validate_content_length, validate_model_output, validate_request,
@@ -840,20 +838,10 @@ fn daily_usage_caps_requests_and_tokens() {
     );
     assert!(usage.admitting(50).unwrap().estimated_input_tokens == 150);
     assert!(usage.admitting(50).unwrap().admitting(1).is_err());
-
-    let raw = serde_json::to_string(&DailyUsage {
-        request_count: 1,
-        estimated_input_tokens: BEARER_DAILY_ESTIMATED_INPUT_TOKEN_CAP - 1,
-    })
-    .unwrap();
-    assert!(admitted_usage(Some(&raw), 2).is_err());
 }
 
 #[test]
-fn daily_usage_defaults_malformed_kv_values_and_preserves_key_scope() {
-    assert_eq!(parse_daily_usage(None), DailyUsage::default());
-    assert_eq!(parse_daily_usage(Some("not-json")), DailyUsage::default());
-
+fn usage_object_names_preserve_key_scope() {
     let current_day_key = usage_object_name("token-hash-a", 20_123);
     let next_day_key = usage_object_name("token-hash-a", 20_124);
     let other_token_key = usage_object_name("token-hash-b", 20_123);
@@ -905,12 +893,9 @@ fn app_attest_and_global_profiles_use_public_caps_and_global_error_code() {
         estimated_input_tokens: 0,
     };
     assert_eq!(
-        admitted_usage_with_profile(
-            Some(&serde_json::to_string(&app_key_usage).unwrap()),
-            1,
-            UsageLimitProfile::AppAttestKey
-        )
-        .unwrap_err(),
+        app_key_usage
+            .admitting_with_limits(1, UsageLimitProfile::AppAttestKey.limits())
+            .unwrap_err(),
         CapError::DailyRequestsExceeded
     );
 
@@ -919,12 +904,9 @@ fn app_attest_and_global_profiles_use_public_caps_and_global_error_code() {
         estimated_input_tokens: 0,
     };
     assert_eq!(
-        admitted_usage_with_profile(
-            Some(&serde_json::to_string(&global_usage).unwrap()),
-            1,
-            UsageLimitProfile::Global
-        )
-        .unwrap_err(),
+        global_usage
+            .admitting_with_limits(1, UsageLimitProfile::Global.limits())
+            .unwrap_err(),
         CapError::GlobalCapacityExhausted
     );
     assert_eq!(
@@ -945,12 +927,9 @@ fn transcription_account_profile_uses_app_attest_scale_caps_and_shares_the_globa
         estimated_input_tokens: 0,
     };
     assert_eq!(
-        admitted_usage_with_profile(
-            Some(&serde_json::to_string(&full_account).unwrap()),
-            1,
-            UsageLimitProfile::TranscriptionAccount
-        )
-        .unwrap_err(),
+        full_account
+            .admitting_with_limits(1, UsageLimitProfile::TranscriptionAccount.limits())
+            .unwrap_err(),
         CapError::DailyRequestsExceeded
     );
 
@@ -959,96 +938,30 @@ fn transcription_account_profile_uses_app_attest_scale_caps_and_shares_the_globa
         estimated_input_tokens: TRANSCRIPTION_ACCOUNT_DAILY_ESTIMATED_INPUT_TOKEN_CAP,
     };
     assert_eq!(
-        admitted_usage_with_profile(
-            Some(&serde_json::to_string(&token_capped).unwrap()),
-            1,
-            UsageLimitProfile::TranscriptionAccount
-        )
-        .unwrap_err(),
+        token_capped
+            .admitting_with_limits(1, UsageLimitProfile::TranscriptionAccount.limits())
+            .unwrap_err(),
         CapError::DailyEstimatedInputTokensExceeded
     );
 
-    // The internal profile admits against the SAME global usage state public
-    // traffic fills: a public-exhausted global day rejects internal traffic.
+    // The internal profile shares the SAME global limits table public traffic
+    // fills: a public-exhausted global day rejects internal traffic too.
     let publicly_exhausted_global = DailyUsage {
         request_count: GLOBAL_DAILY_REQUEST_CAP,
         estimated_input_tokens: 0,
     };
-    let rejection = admit_subject_then_global(
-        &DailyUsage::default(),
-        UsageLimitProfile::TranscriptionAccount,
-        &publicly_exhausted_global,
-        1,
-    )
-    .expect_err("shared global cap should reject internal traffic too");
-    assert_eq!(rejection.scope, SpendCapScope::Global);
-    assert_eq!(rejection.error, CapError::GlobalCapacityExhausted);
+    assert_eq!(
+        publicly_exhausted_global
+            .admitting_with_limits(1, UsageLimitProfile::Global.limits())
+            .unwrap_err(),
+        CapError::GlobalCapacityExhausted
+    );
 
     // Wire form is stable snake_case for the DO submit payload.
     assert_eq!(
         serde_json::to_string(&UsageLimitProfile::TranscriptionAccount).unwrap(),
         "\"transcription_account\""
     );
-}
-
-#[test]
-fn spend_caps_reject_subject_before_consuming_global_capacity() {
-    let full_subject_usage = DailyUsage {
-        request_count: APP_ATTEST_KEY_DAILY_REQUEST_CAP,
-        estimated_input_tokens: 0,
-    };
-    let global_usage = DailyUsage::default();
-
-    let rejection = admit_subject_then_global(
-        &full_subject_usage,
-        UsageLimitProfile::AppAttestKey,
-        &global_usage,
-        1,
-    )
-    .expect_err("subject cap should reject before global admission");
-
-    assert_eq!(rejection.scope, SpendCapScope::Subject);
-    assert_eq!(rejection.error, CapError::DailyRequestsExceeded);
-    assert_eq!(global_usage, DailyUsage::default());
-}
-
-#[test]
-fn spend_caps_reject_global_after_subject_admission() {
-    let subject_usage = DailyUsage::default();
-    let full_global_usage = DailyUsage {
-        request_count: GLOBAL_DAILY_REQUEST_CAP,
-        estimated_input_tokens: 0,
-    };
-
-    let rejection = admit_subject_then_global(
-        &subject_usage,
-        UsageLimitProfile::AppAttestKey,
-        &full_global_usage,
-        1,
-    )
-    .expect_err("global cap should reject after subject admission");
-
-    assert_eq!(rejection.scope, SpendCapScope::Global);
-    assert_eq!(rejection.error, CapError::GlobalCapacityExhausted);
-}
-
-#[test]
-fn spend_caps_success_increments_subject_and_global_usage() {
-    let subject_usage = DailyUsage::default();
-    let global_usage = DailyUsage::default();
-
-    let admitted = admit_subject_then_global(
-        &subject_usage,
-        UsageLimitProfile::AppAttestKey,
-        &global_usage,
-        42,
-    )
-    .expect("both caps should admit");
-
-    assert_eq!(admitted.subject.request_count, 1);
-    assert_eq!(admitted.subject.estimated_input_tokens, 42);
-    assert_eq!(admitted.global.request_count, 1);
-    assert_eq!(admitted.global.estimated_input_tokens, 42);
 }
 
 #[test]

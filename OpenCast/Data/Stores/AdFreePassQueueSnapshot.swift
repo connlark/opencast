@@ -13,8 +13,4 @@ struct AdFreePassQueueSnapshot: Equatable {
     var outcomes: [AdFreePassQueueItemOutcome] = []
     var pendingItems: [AdFreePassQueueItem] = []
     var pendingModelConsentByteCount: Int64?
-
-    var hasRemainingItems: Bool {
-        activeEpisodeID != nil || !pendingItems.isEmpty
-    }
 }

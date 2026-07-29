@@ -9,23 +9,19 @@ public struct OpenCastRemoteTranscriptionSourceIdentity: Codable, Sendable, Equa
     public var durationSeconds: Double?
     public var entityTag: String?
     public var lastModified: String?
-    /// SHA-256 of the final (post-redirect) URL string; raw URLs stay off the wire.
-    public var finalURLSHA256: String?
 
     public init(
         sha256: String,
         byteCount: Int64,
         durationSeconds: Double? = nil,
         entityTag: String? = nil,
-        lastModified: String? = nil,
-        finalURLSHA256: String? = nil
+        lastModified: String? = nil
     ) {
         self.sha256 = sha256
         self.byteCount = byteCount
         self.durationSeconds = durationSeconds
         self.entityTag = entityTag
         self.lastModified = lastModified
-        self.finalURLSHA256 = finalURLSHA256
     }
 
     enum CodingKeys: String, CodingKey {
@@ -34,6 +30,5 @@ public struct OpenCastRemoteTranscriptionSourceIdentity: Codable, Sendable, Equa
         case durationSeconds = "duration_seconds"
         case entityTag = "entity_tag"
         case lastModified = "last_modified"
-        case finalURLSHA256 = "final_url_sha256"
     }
 }

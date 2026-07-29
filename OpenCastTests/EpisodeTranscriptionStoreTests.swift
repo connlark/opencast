@@ -1031,12 +1031,13 @@ struct EpisodeTranscriptionStoreTests {
         let whisperDocument = try fileStore.read(relativePath: relativePath)
         #expect(whisperDocument.schemaVersion == 2)
         #expect(whisperDocument.transcriptionEngine == nil)
-        #expect(whisperDocument.resolvedEngineProvenance == .localWhisper)
-        #expect(whisperDocument.resolvedSourceMatchMode == nil)
+        #expect(whisperDocument.modelIdentifier == "openai_whisper-tiny.en")
+        #expect(whisperDocument.remoteSourceMatchMode == nil)
 
         try v2JSON(modelIdentifier: "apple-speech-transcriber.en-US").write(to: fileURL, options: .atomic)
         let appleDocument = try fileStore.read(relativePath: relativePath)
-        #expect(appleDocument.resolvedEngineProvenance == .appleSpeech)
+        #expect(appleDocument.transcriptionEngine == nil)
+        #expect(appleDocument.modelIdentifier == "apple-speech-transcriber.en-US")
     }
 
     @Test("Round-trips schema 3 remote provenance fields")
@@ -1076,12 +1077,12 @@ struct EpisodeTranscriptionStoreTests {
 
         let decoded = try fileStore.read(relativePath: relativePath)
         #expect(decoded.schemaVersion == 3)
-        #expect(decoded.resolvedEngineProvenance == .remoteWhisper)
+        #expect(decoded.transcriptionEngine == EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue)
         #expect(decoded.providerModelIdentifier == "@cf/openai/whisper-large-v3-turbo")
         #expect(decoded.providerModelRevision == nil)
         #expect(decoded.remoteChunkManifestSHA256 == "bb")
         #expect(decoded.normalizedTranscriptSHA256 == "cc")
-        #expect(decoded.resolvedSourceMatchMode == .serverDeviceHashMatch)
+        #expect(decoded.remoteSourceMatchMode == EpisodeRemoteTranscriptSourceMatchMode.serverDeviceHashMatch.rawValue)
         #expect(decoded.modelTreeSHA256.isEmpty)
     }
 
@@ -1129,7 +1130,6 @@ struct EpisodeTranscriptionStoreTests {
         record.modelIdentifier = "openai_whisper-tiny.en"
         #expect(record.engineProvenance == .localWhisper)
         #expect(!record.isAppleSpeechTranscript)
-        #expect(!record.isRemoteTranscript)
 
         record.modelIdentifier = "apple-speech-transcriber.en-US"
         #expect(record.engineProvenance == .appleSpeech)
@@ -1137,7 +1137,6 @@ struct EpisodeTranscriptionStoreTests {
 
         record.transcriptionEngineRawValue = EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue
         #expect(record.engineProvenance == .remoteWhisper)
-        #expect(record.isRemoteTranscript)
         #expect(!record.isAppleSpeechTranscript)
     }
 

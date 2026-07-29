@@ -25,7 +25,6 @@ function AppScreenshot({ shot, eager = false }: { shot: Screenshot; eager?: bool
     <picture>
       <source type="image/avif" srcSet={shot.avifSrcSet} sizes="(min-width: 760px) 290px, 64vw" />
       <source type="image/webp" srcSet={shot.webpSrcSet} sizes="(min-width: 760px) 290px, 64vw" />
-      {/* eslint-disable-next-line @next/next/no-img-element -- static export serves pre-optimized assets */}
       <img
         src={shot.src}
         alt={shot.alt}
@@ -135,7 +134,7 @@ export default function HomePage() {
             <div className="feature-grid">
               <article className="feature-panel feature-panel--library">
                 <div className="feature-panel__copy">
-                  <span className="feature-icon feature-icon--orange">
+                  <span className="feature-icon feature-icon--library">
                     <Rss aria-hidden="true" />
                   </span>
                   <p className="feature-label">Library + Inbox</p>
@@ -171,7 +170,7 @@ export default function HomePage() {
 
               <article className="feature-panel feature-panel--playback">
                 <div className="feature-panel__copy">
-                  <span className="feature-icon feature-icon--violet">
+                  <span className="feature-icon feature-icon--playback">
                     <Headphones aria-hidden="true" />
                   </span>
                   <p className="feature-label">Streaming playback</p>
@@ -198,7 +197,7 @@ export default function HomePage() {
 
               <article className="feature-panel feature-panel--transcript">
                 <div className="feature-panel__copy">
-                  <span className="feature-icon feature-icon--mint">
+                  <span className="feature-icon feature-icon--transcript">
                     <AudioLines aria-hidden="true" />
                   </span>
                   <p className="feature-label">Flexible transcripts</p>

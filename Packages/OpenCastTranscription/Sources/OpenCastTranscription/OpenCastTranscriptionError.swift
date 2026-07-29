@@ -1,7 +1,6 @@
 import Foundation
 
 public enum OpenCastTranscriptionError: Error, LocalizedError, Equatable, Sendable {
-    case missingResource(String)
     case audioFileNotFound(URL)
     case invalidClipStart(TimeInterval)
     case invalidClipDuration(TimeInterval)
@@ -21,8 +20,6 @@ public enum OpenCastTranscriptionError: Error, LocalizedError, Equatable, Sendab
 
     public var errorDescription: String? {
         switch self {
-        case let .missingResource(resource):
-            "Missing bundled transcription resource: \(resource)"
         case let .audioFileNotFound(url):
             "Audio file does not exist: \(url.path)"
         case let .invalidClipStart(start):

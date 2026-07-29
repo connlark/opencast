@@ -4,10 +4,9 @@ public final class URLSessionOpenCastHTTPClient: OpenCastHTTPClient, @unchecked 
     private let session: URLSession
 
     public convenience init(
-        configuration: URLSessionConfiguration = OpenCastURLSessionFactory.sharedConfiguration(),
-        metricsRecorder: OpenCastHTTPTaskMetricsRecorder? = nil
+        configuration: URLSessionConfiguration = OpenCastURLSessionFactory.sharedConfiguration()
     ) {
-        self.init(session: URLSession(configuration: configuration, delegate: metricsRecorder, delegateQueue: nil))
+        self.init(session: URLSession(configuration: configuration))
     }
 
     public init(session: URLSession) {

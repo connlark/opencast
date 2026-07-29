@@ -12,11 +12,9 @@
       "!/_next/*",
       "!/screenshots/*",
       "!/badges/*",
+      "!/brand/*",
       "!/favicon.ico",
-      "!/app-icon.png",
-      "!/opengraph-image.jpg",
-      "!/icon.png",
-      "!/apple-icon.png"
+      "!/opengraph-image.jpg"
     ]
   },
   "observability": { "enabled": true },

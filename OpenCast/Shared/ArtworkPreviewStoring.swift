@@ -55,39 +55,6 @@ extension ArtworkPreviewStoring {
         return true
     }
 
-    @discardableResult
-    func clearArtworkPreview() -> Bool {
-        guard artworkPreviewVersion != nil
-                || artworkPreviewCanonicalURLKey != nil
-                || artworkPreviewSourceHash != nil
-                || artworkPreviewPixelWidth != nil
-                || artworkPreviewPixelHeight != nil
-                || artworkPreviewRGBData != nil
-        else {
-            return false
-        }
-
-        artworkPreviewVersion = nil
-        artworkPreviewCanonicalURLKey = nil
-        artworkPreviewSourceHash = nil
-        artworkPreviewPixelWidth = nil
-        artworkPreviewPixelHeight = nil
-        artworkPreviewRGBData = nil
-        return true
-    }
-
-    @discardableResult
-    func clearArtworkPreviewIfURLChanged(to artworkURLString: String?) -> Bool {
-        guard let artworkPreviewCanonicalURLKey else {
-            return false
-        }
-
-        guard artworkPreviewCanonicalURLKey != ArtworkPreview.canonicalArtworkURLKey(for: artworkURLString) else {
-            return false
-        }
-
-        return clearArtworkPreview()
-    }
 }
 
 extension PodcastCacheRecord: ArtworkPreviewStoring {}

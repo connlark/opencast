@@ -12,7 +12,6 @@ pub const ERROR_UNSUPPORTED_MEDIA_TYPE: &str = "unsupported_media_type";
 pub const ERROR_SOURCE_TOO_LARGE: &str = "source_too_large";
 pub const ERROR_DURATION_TOO_LONG: &str = "duration_too_long";
 pub const ERROR_ORIGIN_FETCH_FAILED: &str = "origin_fetch_failed";
-pub const ERROR_INSUFFICIENT_CREDITS: &str = "insufficient_credits";
 pub const ERROR_DEADLINE_EXPIRED: &str = "deadline_expired";
 pub const ERROR_JOB_NOT_FOUND: &str = "job_not_found";
 pub const ERROR_ACCOUNT_MISMATCH: &str = "account_mismatch";
@@ -69,8 +68,6 @@ pub struct SourceIdentity {
     pub entity_tag: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub final_url_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

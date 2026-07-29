@@ -38,14 +38,14 @@ struct NotificationSubscriptionSyncService {
             installID: credential.installID,
             keyID: credential.keyID,
             payload: NotificationEmptyPayload(),
-            response: NotificationSecurityMessageResponse.self
+            response: AppAttestMessageResponse.self
         )
         try credentialService.deleteCachedCredential()
     }
 
     private func sendSyncRequest(
         activePodcastIDs: Set<String>,
-        credential: NotificationSecurityCredential
+        credential: AppAttestCredential
     ) async throws -> NotificationSubscriptionSyncResponse {
         let payload = NotificationSubscriptionSyncPayload(
             subscriptions: activePodcastIDs

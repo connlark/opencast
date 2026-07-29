@@ -733,11 +733,11 @@ impl TranscriptionJob {
                 Ok(())
             }
             job::STATE_SOURCE_MATCHED | job::STATE_PROBING => {
-                self.step_probe(record, &config).await
+                self.step_probe(&config).await
             }
             job::STATE_AWAITING_CREDITS => self.step_reserve(record, &config).await,
-            job::STATE_RESERVED => self.step_chunk(record, &config).await,
-            job::STATE_CHUNKING => self.step_chunk(record, &config).await,
+            job::STATE_RESERVED => self.step_chunk(&config).await,
+            job::STATE_CHUNKING => self.step_chunk(&config).await,
             job::STATE_TRANSCRIBING => self.step_transcribe_wave(record, &config).await,
             job::STATE_STITCHING => self.step_stitch(record, &config).await,
             job::STATE_DETECTING_ADS => self.step_detect_ads(record, &config).await,
@@ -873,7 +873,7 @@ impl TranscriptionJob {
         }
     }
 
-    async fn step_probe(&self, record: JobRecord, config: &AppConfig) -> Result<()> {
+    async fn step_probe(&self, config: &AppConfig) -> Result<()> {
         let updated = self
             .update_record(|record| {
                 record.state = job::STATE_PROBING.to_string();
@@ -984,7 +984,7 @@ impl TranscriptionJob {
         }
     }
 
-    async fn step_chunk(&self, record: JobRecord, config: &AppConfig) -> Result<()> {
+    async fn step_chunk(&self, config: &AppConfig) -> Result<()> {
         let record = self
             .update_record(|record| {
                 record.state = job::STATE_CHUNKING.to_string();

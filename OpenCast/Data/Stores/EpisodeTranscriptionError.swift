@@ -5,7 +5,6 @@ enum EpisodeTranscriptionError: LocalizedError, Equatable {
     case mismatchedDownloadRecord
     case missingDownloadedFile
     case missingSpeechModel
-    case modelUnavailable
     case anotherJobActive
     case invalidAudioDuration
     case transcriptDocumentMissing
@@ -20,8 +19,6 @@ enum EpisodeTranscriptionError: LocalizedError, Equatable {
             "The downloaded audio file is missing."
         case .missingSpeechModel:
             "Install the speech model before generating a transcript."
-        case .modelUnavailable:
-            "The speech model is busy or needs repair."
         case .anotherJobActive:
             "Another transcript is already being generated."
         case .invalidAudioDuration:

@@ -7,17 +7,17 @@ import Testing
 struct NotificationSecurityRequestBindingTests {
     @Test("Secure hello client data hash matches Worker binding fixture")
     func secureHelloClientDataHashMatchesWorkerBindingFixture() {
-        let hash = NotificationSecurityRequestBinding.clientDataHash(
+        let hash = AppAttestRequestBinding.clientDataHash(
             method: "POST",
             path: "/v1/secure/hello",
             payload: "hello world"
         )
 
         let expectedHash = "ccb815d6ea147edd6476b79589162789924e74220cfe95c0adadf89ac4a45d7b"
-        let payloadHash = NotificationSecurityRequestBinding.sha256Hex(Data("hello world".utf8))
+        let payloadHash = AppAttestRequestBinding.sha256Hex(Data("hello world".utf8))
         let binding = "POST\n/v1/secure/hello\n\(payloadHash)"
 
-        #expect(NotificationSecurityRequestBinding.sha256Hex(Data(binding.utf8)) == expectedHash)
+        #expect(AppAttestRequestBinding.sha256Hex(Data(binding.utf8)) == expectedHash)
         #expect(
             hash == Data([
                 0xcc, 0xb8, 0x15, 0xd6, 0xea, 0x14, 0x7e, 0xdd,

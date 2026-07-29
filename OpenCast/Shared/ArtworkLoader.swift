@@ -46,10 +46,6 @@ actor ArtworkLoader {
         memoryCache.bestImage(for: request)
     }
 
-    nonisolated func removeCachedImages() {
-        memoryCache.removeAll()
-    }
-
     func image(
         for artworkURL: URL,
         targetPixelSize: CGSize,

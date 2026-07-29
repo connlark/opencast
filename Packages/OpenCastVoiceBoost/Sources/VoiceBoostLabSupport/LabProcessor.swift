@@ -10,10 +10,6 @@ struct ProcessResult {
 }
 
 enum LabProcessor {
-    static func process(_ audio: WAVAudio, preset: VoiceBoostPreset) -> ProcessResult {
-        process(audio, configuration: preset.configuration)
-    }
-
     static func process(_ audio: WAVAudio, configuration: VoiceBoostConfiguration) -> ProcessResult {
         var processed = audio.samples
         let processor = VoiceBoostProcessor(

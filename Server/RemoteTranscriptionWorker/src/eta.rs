@@ -293,7 +293,6 @@ mod tests {
             duration_seconds: Some(900.0),
             entity_tag: None,
             last_modified: None,
-            final_url_sha256: None,
         });
         record.chunk_work = job::init_chunk_work(4, 0);
         assert_eq!(self_remaining_seconds(&record, 4, now), Some(19));

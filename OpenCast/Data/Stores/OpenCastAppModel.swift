@@ -838,13 +838,6 @@ final class OpenCastAppModel {
         }
     }
 
-    func adAnalysisZoneTiers(
-        for episode: EpisodeListItemSnapshot,
-        duration: TimeInterval?
-    ) -> EpisodeAdAnalysisZoneTiers {
-        currentAdAnalysisZoneTiers(episodeID: episode.episodeID, duration: duration)
-    }
-
     func armBackgroundContinuationForActiveQueue() {
         guard adFreePass.queueState == .running,
               !adFreePassBackgroundSession.isArmed,

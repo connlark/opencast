@@ -7,7 +7,7 @@ import Testing
 struct OnboardingPageTests {
     @Test("Every device sees the Tiny Whisper page")
     func standardPagesAlwaysIncludeWhisperStep() {
-        let pages = OnboardingPage.standard
+        let pages = OnboardingPage.allCases
 
         #expect(pages == [.welcome, .importOPML, .podcastSetup, .transcriptionModelSetup, .notificationSetup])
         #expect(OnboardingPage.podcastSetup.next(in: pages) == .transcriptionModelSetup)

@@ -94,6 +94,7 @@ final class EpisodeAdAnalysisStore {
         try await stateChanges.wait(after: sequence)
     }
 
+    // Test seam — no production callers (dead-code audit Low 40).
     func cancelActiveJob() {
         activeTask?.cancel()
     }

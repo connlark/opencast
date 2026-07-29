@@ -10,7 +10,6 @@ struct DownloadedEpisodeRowButton: View {
     var searchResult: EpisodeSearchResult?
     var onSelect: () -> Void = {}
     let onOpenEpisode: (String) -> Void
-    var selectsEpisodeDetailOnPlay = false
 
     private var isPlayed: Bool {
         appModel.library.progressRecord(for: item.id)?.isPlayed == true
@@ -61,9 +60,6 @@ struct DownloadedEpisodeRowButton: View {
                 modelContext: modelContext
             )
             playFeedback += 1
-            if selectsEpisodeDetailOnPlay {
-                onOpenEpisode(item.id)
-            }
         } catch {
             appModel.lastPlaybackError = error.localizedDescription
         }

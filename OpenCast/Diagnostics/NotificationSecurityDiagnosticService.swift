@@ -11,7 +11,9 @@ struct NotificationSecurityDiagnosticService {
     init(
         appAttestService: any AppAttestServiceProtocol = DeviceCheckAppAttestService.shared,
         apiClient: NotificationSecurityAPIClient = NotificationSecurityAPIClient(),
-        keychain: NotificationSecurityKeychain = NotificationSecurityKeychain()
+        keychain: AppAttestKeychain = AppAttestKeychain(
+            service: NotificationBackendConfiguration.current.keychainService
+        )
     ) {
         self.appAttestService = appAttestService
         self.apiClient = apiClient
@@ -52,7 +54,7 @@ struct NotificationSecurityDiagnosticService {
                 payload: Self.diagnosticPayload,
                 assertion: nil
             )
-        } catch let error as NotificationSecurityHTTPError
+        } catch let error as AppAttestHTTPError
             where error.statusCode == 401 || error.statusCode == 403 {
             return "goodbye world"
         }
