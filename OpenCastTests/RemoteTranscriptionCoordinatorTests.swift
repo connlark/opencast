@@ -585,6 +585,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         var api: FakeRemoteTranscriptionAPI
         var store: RemoteTranscriptionJobStore
         var transcriptions: EpisodeTranscriptionStore
+        var downloads: DownloadStore
         var context: ModelContext
         var episode: EpisodeListItemSnapshot
         var identity: OpenCastRemoteTranscriptionSourceIdentity
@@ -665,6 +666,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             api: api,
             store: store,
             transcriptions: transcriptions,
+            downloads: downloads,
             context: context,
             episode: episode,
             identity: identity
@@ -1134,6 +1136,23 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
 
         #expect(environment.store.phase == .failed(.missingAudio))
         #expect(api.createRequests.isEmpty)
+    }
+
+    @Test("A completed download whose file is gone fails the job and marks the record missing")
+    func missingDownloadedFileFailsJobAndMarksRecordMissing() async throws {
+        let api = FakeRemoteTranscriptionAPI(pollStates: [
+            OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .created),
+        ])
+        let environment = try makeEnvironment(api: api, episodeID: "ep-missing-file")
+        let record = try #require(environment.downloads.record(for: environment.episode.episodeID))
+        let fileURL = try #require(environment.downloads.localFileURL(for: record))
+        try FileManager.default.removeItem(at: fileURL)
+
+        environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
+
+        #expect(await waitUntil { environment.store.phase == .failed(.downloadFailed) })
+        #expect(environment.downloads.record(for: environment.episode.episodeID)?.state == .missing)
+        #expect(api.resultCallCount == 0)
     }
 
     @Test("A completed transcript prevents a second remote transcription job")

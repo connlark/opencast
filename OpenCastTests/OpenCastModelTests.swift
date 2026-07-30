@@ -1400,9 +1400,28 @@ struct OpenCastModelTests {
         let result = try store.reloadSyncedUserData(modelContext: context)
 
         #expect(result.progressRecordsChanged)
-        #expect(!result.shouldProcessImportedSubscriptions)
+        // Progress-only imports reach the imported-subscription processing
+        // path so duplicate repair runs mid-session (Phase 2 A2).
+        #expect(result.shouldProcessImportedSubscriptions)
         #expect(store.progressRecords.first?.position == 78)
         #expect(await service.requestedURLStrings().isEmpty)
+    }
+
+    @Test("Progress-only reload results process imported subscriptions")
+    func progressOnlyReloadResultProcessesImportedSubscriptions() {
+        let progressOnly = SyncedUserDataReloadResult(
+            activePodcastIDsChanged: false,
+            activeSubscriptionRecordsChanged: false,
+            progressRecordsChanged: true
+        )
+        let unchanged = SyncedUserDataReloadResult(
+            activePodcastIDsChanged: false,
+            activeSubscriptionRecordsChanged: false,
+            progressRecordsChanged: false
+        )
+
+        #expect(progressOnly.shouldProcessImportedSubscriptions)
+        #expect(!unchanged.shouldProcessImportedSubscriptions)
     }
 
     @Test("Synced data reload hides episodes for archived remote subscriptions")

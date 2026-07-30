@@ -1,13 +1,11 @@
 pub mod ad_analysis;
 pub mod ai;
-pub mod auth;
-pub mod challenge_limits;
+pub use opencast_app_attest_core::auth;
+pub use opencast_app_attest_core::challenge_limits;
 pub mod config;
 #[cfg(target_arch = "wasm32")]
 pub mod credit;
 pub mod crypto;
-#[cfg(any(target_arch = "wasm32", test))]
-mod d1_changes;
 pub mod eta;
 pub mod job;
 pub mod limiter;

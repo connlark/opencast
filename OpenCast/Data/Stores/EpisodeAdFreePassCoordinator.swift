@@ -1391,38 +1391,21 @@ final class EpisodeAdFreePassCoordinator {
         downloads: DownloadStore,
         modelContext: ModelContext
     ) async throws -> EpisodeDownloadRecord {
-        var didStartDownload = false
         setStage(.downloadingEpisode)
 
-        while true {
-            try Task.checkCancellation()
-
-            if let record = downloads.record(for: episode.episodeID) {
-                switch record.state {
-                case .completed:
-                    guard downloads.downloadedFileExists(for: record) else {
-                        try? downloads.markDownloadedFileMissing(record, modelContext: modelContext)
-                        throw EpisodeDownloadError.missingDownloadedFile
-                    }
-                    return record
-                case .downloading:
-                    try await downloads.waitForDownload(episodeID: episode.episodeID)
-                case .paused, .failed, .missing:
-                    guard !didStartDownload else {
-                        let message = record.state == .paused
-                            ? "Download paused."
-                            : record.errorMessage ?? EpisodeDownloadError.missingDownloadedFile.localizedDescription
-                        throw PassFailure(message)
-                    }
-                    downloads.startDownload(for: episode, modelContext: modelContext)
-                    didStartDownload = true
-                    try await downloads.waitForDownload(episodeID: episode.episodeID)
-                }
-            } else {
-                downloads.startDownload(for: episode, modelContext: modelContext)
-                didStartDownload = true
-                try await downloads.waitForDownload(episodeID: episode.episodeID)
-            }
+        do {
+            return try await downloads.ensureCompletedDownload(
+                for: episode,
+                modelContext: modelContext,
+                onWaitStarted: { try Task.checkCancellation() }
+            )
+        } catch DownloadStore.CompletedDownloadError.fileMissing {
+            throw EpisodeDownloadError.missingDownloadedFile
+        } catch let DownloadStore.CompletedDownloadError.notCompleted(state, errorMessage) {
+            let message = state == .paused
+                ? "Download paused."
+                : errorMessage ?? EpisodeDownloadError.missingDownloadedFile.localizedDescription
+            throw PassFailure(message)
         }
     }
 

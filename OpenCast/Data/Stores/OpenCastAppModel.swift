@@ -78,6 +78,10 @@ final class OpenCastAppModel {
     @ObservationIgnored private(set) var playbackSurfaceRestorationCount = 0
     @ObservationIgnored private var progressPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var progressBoundaryPersistenceTask: Task<Void, Never>?
+    // The 5-second flush calls rememberLastPlaybackEpisode every tick; the
+    // cached record makes the unchanged-episode tick a pure no-op instead of
+    // a refetch plus a guaranteed dirty save.
+    @ObservationIgnored private var lastPlaybackEpisodeRecordCache: LocalPreferenceRecord?
     @ObservationIgnored private let siriMediaDiscovery: SiriMediaDiscovery
     @ObservationIgnored private var siriMediaUserContextObservationTask: Task<Void, Never>?
     @ObservationIgnored private var hasRunVoiceBoostDeviceProbe = false
@@ -798,13 +802,15 @@ final class OpenCastAppModel {
     }
 
     /// First-tap dialog choice: remember the mode device-locally, then run
-    /// the pass it selected.
+    /// the pass it selected. A failed preference save never blocks the pass
+    /// — the mode travels explicitly below, the Settings section renders the
+    /// store's error, and the next tap simply prompts again.
     func chooseAdDetectionMode(
         _ mode: AdDetectionMode,
         for episode: EpisodeListItemSnapshot,
         modelContext: ModelContext
     ) {
-        adDetectionSettings.setMode(mode, modelContext: modelContext)
+        _ = adDetectionSettings.setMode(mode, modelContext: modelContext)
         startAdFreePass(for: episode, modelContext: modelContext, mode: mode)
     }
 
@@ -1598,6 +1604,7 @@ final class OpenCastAppModel {
         playback.unload()
         isNowPlayingPresented = false
         lastPlaybackError = nil
+        lastPlaybackEpisodeRecordCache = nil
         library.resetAfterDataNuke()
         downloads.load(modelContext: modelContext)
         transcriptions.load(modelContext: modelContext)
@@ -1807,8 +1814,18 @@ final class OpenCastAppModel {
     }
 
     private func rememberLastPlaybackEpisode(_ episodeID: String, modelContext: ModelContext) {
+        if lastPlaybackEpisodeRecordCache?.value == episodeID {
+            return
+        }
+
         let record: LocalPreferenceRecord
-        if let existingRecord = lastPlaybackEpisodePreference(modelContext: modelContext) {
+        if let cachedRecord = lastPlaybackEpisodeRecordCache {
+            record = cachedRecord
+        } else if let existingRecord = lastPlaybackEpisodePreference(modelContext: modelContext) {
+            lastPlaybackEpisodeRecordCache = existingRecord
+            guard existingRecord.value != episodeID else {
+                return
+            }
             record = existingRecord
         } else {
             record = LocalPreferenceRecord(
@@ -1816,6 +1833,7 @@ final class OpenCastAppModel {
                 value: episodeID
             )
             modelContext.insert(record)
+            lastPlaybackEpisodeRecordCache = record
         }
 
         record.value = episodeID
@@ -1824,6 +1842,7 @@ final class OpenCastAppModel {
     }
 
     private func clearLastPlaybackEpisode(modelContext: ModelContext) {
+        lastPlaybackEpisodeRecordCache = nil
         let records = lastPlaybackEpisodePreferences(modelContext: modelContext)
         guard !records.isEmpty else {
             return

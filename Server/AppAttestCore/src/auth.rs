@@ -18,7 +18,7 @@ pub fn bearer_token(header: Option<&str>) -> Option<&str> {
 pub fn token_matches(provided: &str, expected: &str) -> bool {
     let provided_hash = Sha256::digest(provided.as_bytes());
     let expected_hash = Sha256::digest(expected.as_bytes());
-    constant_time_eq::constant_time_eq(provided_hash.as_slice(), expected_hash.as_slice())
+    constant_time_eq::constant_time_eq(&provided_hash, &expected_hash)
 }
 
 pub fn token_hash(token: &str) -> String {

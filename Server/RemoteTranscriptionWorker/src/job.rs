@@ -30,6 +30,37 @@ pub const STATE_CANCELLING: &str = "cancelling";
 pub const STATE_CANCELLED: &str = "cancelled";
 pub const STATE_FAILED: &str = "failed";
 
+/// Every job state, in rough lifecycle order. When adding a `STATE_*`
+/// constant, add it here too: `storage`'s classification tests force an
+/// explicit decision about whether the new state counts against
+/// `MAX_ACTIVE_JOBS_PER_ACCOUNT` (`ACTIVE_JOB_COUNT_SQL`) instead of letting
+/// it silently default to active and rate-limit the account. The state
+/// strings are also repeated literally in
+/// `migrations/0005_index_stale_job_sweeper.sql` (SQLite cannot reference
+/// Rust constants, and the applied migration stays untouched); storage's
+/// byte-identity test keeps the Rust-side SQL pinned to those predicates.
+pub const ALL_STATES: [&str; 19] = [
+    STATE_CREATED,
+    STATE_STAGING_ORIGIN,
+    STATE_WAITING_FOR_DEVICE_SOURCE,
+    STATE_SOURCE_MATCHED,
+    STATE_EXACT_UPLOAD_REQUIRED,
+    STATE_EXACT_UPLOADING,
+    STATE_PROBING,
+    STATE_AWAITING_CREDITS,
+    STATE_RESERVED,
+    STATE_CHUNKING,
+    STATE_TRANSCRIBING,
+    STATE_STITCHING,
+    STATE_DETECTING_ADS,
+    STATE_RESULT_READY,
+    STATE_DELIVERED,
+    STATE_ACKNOWLEDGED,
+    STATE_CANCELLING,
+    STATE_CANCELLED,
+    STATE_FAILED,
+];
+
 pub const CHUNK_SECONDS: f64 = 300.0;
 pub const OVERLAP_SECONDS: f64 = 2.0;
 pub const STEP_SECONDS: f64 = 298.0;

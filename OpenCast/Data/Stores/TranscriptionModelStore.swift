@@ -162,13 +162,7 @@ final class TranscriptionModelStore {
         }
 
         operationTask = Task {
-            state = .deleting
-            do {
-                try installer.deleteInstalledModel(model: selectedModel, version: selectedVersion)
-                state = localStatus()
-            } catch {
-                state = .failed(error.localizedDescription)
-            }
+            try? performDeleteInstalledModel()
             operationTask = nil
         }
     }
@@ -177,10 +171,25 @@ final class TranscriptionModelStore {
         operationTask?.cancel()
         operationTask = nil
         activeInstallOperationID = nil
-        state = .deleting
-        try installer.deleteInstalledModel(model: selectedModel, version: selectedVersion)
+        try performDeleteInstalledModel()
         selectedChoice = .defaultChoice
         state = localStatus()
+    }
+
+    /// Deliberately synchronous and main-actor: the data-nuke ordering
+    /// guarantee beside `resetRuntimeStateAfterDataNuke` depends on the
+    /// removal completing before the nuke proceeds. The catch keeps any
+    /// throw from stranding `.deleting` — the Settings section renders that
+    /// state as a bare spinner with no way out.
+    private func performDeleteInstalledModel() throws {
+        state = .deleting
+        do {
+            try installer.deleteInstalledModel(model: selectedModel, version: selectedVersion)
+            state = localStatus()
+        } catch {
+            state = .failed(error.localizedDescription)
+            throw error
+        }
     }
 
     func resetAfterDataNuke() {

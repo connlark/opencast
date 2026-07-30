@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import UserNotifications
 
 /// Posts the local "ad detection finished" notification when a queue drain
@@ -7,6 +8,8 @@ import UserNotifications
 /// never reach `add`.
 struct AdFreePassCompletionNotificationScheduler {
     static let threadIdentifier = "opencast-ad-free-pass-completion"
+
+    private static let logger = Logger(subsystem: "com.connor.opencast", category: "AdFreePassBackground")
 
     var center: any AdFreePassNotificationCenter = UNUserNotificationCenter.current()
 
@@ -31,7 +34,9 @@ struct AdFreePassCompletionNotificationScheduler {
             try await center.add(request)
             AdFreePassBackgroundRunLog.record("completion notification scheduled title=\(content.title)")
         } catch {
+            // The run log is DEBUG-only; the logger line is the Release artifact.
             AdFreePassBackgroundRunLog.record("completion notification add failed error=\(error)")
+            Self.logger.error("ad-free pass completion notification add failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

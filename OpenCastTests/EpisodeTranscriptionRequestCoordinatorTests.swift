@@ -60,6 +60,36 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         #expect(models.canStartTranscription)
     }
 
+    @Test("A completed download whose file is gone fails the request and marks the record missing")
+    func missingDownloadedFileFailsRequestAndMarksRecordMissing() async throws {
+        let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
+            completedStream(for: request)
+        }
+        let harness = try makeHarness(transcriber: transcriber)
+        let record = try #require(harness.downloads.record(for: harness.episode.episodeID))
+        let fileURL = try #require(harness.downloads.localFileURL(for: record))
+        try FileManager.default.removeItem(at: fileURL)
+
+        harness.coordinator.start(
+            episode: harness.episode,
+            modelContext: harness.context
+        )
+
+        #expect(await waitUntil {
+            if case .failed = harness.coordinator.request?.phase {
+                return true
+            }
+            return false
+        })
+        guard case .failed(let message) = harness.coordinator.request?.phase else {
+            Issue.record("Expected the missing-file request to fail.")
+            return
+        }
+        #expect(message == EpisodeTranscriptionError.missingDownloadedFile.localizedDescription)
+        #expect(harness.downloads.record(for: harness.episode.episodeID)?.state == .missing)
+        #expect(transcriber.requests.isEmpty)
+    }
+
     @Test("Model install that never becomes resolvable fails instead of spinning")
     func unresolvableModelInstallFailsInsteadOfSpinning() async throws {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
@@ -455,6 +485,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         transcriptFiles: EpisodeTranscriptFileStore,
         transcriptions: EpisodeTranscriptionStore,
         engineSettings: TranscriptionEngineSettingsStore,
+        downloads: DownloadStore,
         coordinator: EpisodeTranscriptionRequestCoordinator
     ) {
         try makeHarness(transcriber: transcriber, prefersAppleSpeech: false)
@@ -470,6 +501,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         transcriptFiles: EpisodeTranscriptFileStore,
         transcriptions: EpisodeTranscriptionStore,
         engineSettings: TranscriptionEngineSettingsStore,
+        downloads: DownloadStore,
         coordinator: EpisodeTranscriptionRequestCoordinator
     ) {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -516,7 +548,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
             appleSpeechAssets: installedAppleSpeechAssetStore(),
             transcriptions: transcriptions
         )
-        return (context, episode, transcriptFiles, transcriptions, engineSettings, coordinator)
+        return (context, episode, transcriptFiles, transcriptions, engineSettings, downloads, coordinator)
     }
 
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {

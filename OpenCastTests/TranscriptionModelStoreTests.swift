@@ -235,6 +235,40 @@ struct TranscriptionModelStoreTests {
         })
     }
 
+    @Test("A throwing delete leaves failed, not a stranded deleting spinner")
+    func throwingDeleteLeavesFailedState() async {
+        let installer = FakeTranscriptionModelInstaller(isInstalled: true)
+        installer.deleteError = CocoaError(.fileWriteNoPermission)
+        let store = TranscriptionModelStore(installer: installer)
+        store.loadLocalStatus()
+
+        store.deleteInstalledModel()
+
+        #expect(await waitUntil {
+            if case .failed = store.state {
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    @Test("A throwing immediate delete rethrows and leaves failed, not deleting")
+    func throwingImmediateDeleteRethrowsAndLeavesFailedState() {
+        let installer = FakeTranscriptionModelInstaller(isInstalled: true)
+        installer.deleteError = CocoaError(.fileWriteNoPermission)
+        let store = TranscriptionModelStore(installer: installer)
+        store.loadLocalStatus()
+
+        #expect(throws: CocoaError.self) {
+            try store.deleteInstalledModelImmediately()
+        }
+        guard case .failed = store.state else {
+            Issue.record("Expected failed state, got \(store.state)")
+            return
+        }
+    }
+
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
         for _ in 0..<100 {
             if condition() {
@@ -290,6 +324,7 @@ struct TranscriptionModelStoreTests {
 
 private final class FakeTranscriptionModelInstaller: TranscriptionModelInstalling, @unchecked Sendable {
     var isInstalled: Bool
+    var deleteError: Error?
     let summary: OpenCastWhisperModelInstalledSummary
     let manifestSummary: OpenCastWhisperModelInstalledSummary
     var installRequestCount = 0
@@ -378,6 +413,9 @@ private final class FakeTranscriptionModelInstaller: TranscriptionModelInstallin
     }
 
     func deleteInstalledModel(model: OpenCastWhisperModel, version: String) throws {
+        if let deleteError {
+            throw deleteError
+        }
         isInstalled = false
     }
 

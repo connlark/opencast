@@ -1,8 +1,11 @@
 import Foundation
+import OSLog
 import UserNotifications
 
 struct TranscriptionInterruptedNotificationScheduler {
     static let threadIdentifier = "opencast-transcription-interrupted"
+
+    private static let logger = Logger(subsystem: "com.connor.opencast", category: "TranscriptGenerationBackground")
 
     var center: any AdFreePassNotificationCenter = UNUserNotificationCenter.current()
 
@@ -27,7 +30,9 @@ struct TranscriptionInterruptedNotificationScheduler {
             try await center.add(request)
             AdFreePassBackgroundRunLog.record("transcription interruption notification scheduled title=\(content.title)")
         } catch {
+            // The run log is DEBUG-only; the logger line is the Release artifact.
             AdFreePassBackgroundRunLog.record("transcription interruption notification add failed error=\(error)")
+            Self.logger.error("transcription interruption notification add failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

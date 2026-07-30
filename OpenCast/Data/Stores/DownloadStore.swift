@@ -503,6 +503,59 @@ final class DownloadStore {
         }
     }
 
+    enum CompletedDownloadError: Error, Equatable {
+        case fileMissing
+        case notCompleted(state: EpisodeDownloadState, errorMessage: String?)
+    }
+
+    /// One shared "make this episode's download completed" wait loop for the
+    /// ad-free pass, transcription-request, and remote-job coordinators.
+    /// `onWaitStarted` runs at the top of every iteration — it injects the
+    /// caller's cancellation check (plain `Task.checkCancellation` versus a
+    /// request-scoped variant) plus any per-iteration phase update, and its
+    /// errors propagate unmapped. A `.completed` record whose file is gone is
+    /// flipped to `.missing` before this throws, so the store self-heals
+    /// instead of handing a caller a URL with no file behind it.
+    func ensureCompletedDownload(
+        for episode: EpisodeListItemSnapshot,
+        modelContext: ModelContext,
+        onWaitStarted: () throws -> Void
+    ) async throws -> EpisodeDownloadRecord {
+        var didStartDownload = false
+
+        while true {
+            try onWaitStarted()
+
+            guard let record = record(for: episode.episodeID) else {
+                startDownload(for: episode, modelContext: modelContext)
+                didStartDownload = true
+                try await waitForDownload(episodeID: episode.episodeID)
+                continue
+            }
+
+            switch record.state {
+            case .completed:
+                guard downloadedFileExists(for: record) else {
+                    try? markDownloadedFileMissing(record, modelContext: modelContext)
+                    throw CompletedDownloadError.fileMissing
+                }
+                return record
+            case .downloading:
+                try await waitForDownload(episodeID: episode.episodeID)
+            case .paused, .failed, .missing:
+                guard !didStartDownload else {
+                    throw CompletedDownloadError.notCompleted(
+                        state: record.state,
+                        errorMessage: record.errorMessage
+                    )
+                }
+                startDownload(for: episode, modelContext: modelContext)
+                didStartDownload = true
+                try await waitForDownload(episodeID: episode.episodeID)
+            }
+        }
+    }
+
     private func startDownload(
         episodeID: String,
         podcastID: String,

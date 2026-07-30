@@ -1,4 +1,4 @@
-pub(crate) fn changed_exactly_one_row(changes: Option<usize>) -> bool {
+pub fn changed_exactly_one_row(changes: Option<usize>) -> bool {
     changes == Some(1)
 }
 

@@ -138,9 +138,9 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
 name = "constant_time_eq"
-version = "0.3.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "cpufeatures"
@@ -704,14 +704,12 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "opencast-ad-analysis-worker"
 version = "0.1.0"
 dependencies = [
- "constant_time_eq",
  "futures-util",
  "hex",
  "opencast-app-attest-core",
  "rusqlite",
  "serde",
  "serde_json",
- "sha2",
  "worker",
  "worker-macros",
 ]
@@ -722,12 +720,17 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "byteorder",
+ "constant_time_eq",
+ "futures-util",
  "getrandom",
  "hex",
  "minicbor",
  "p256",
  "p384",
+ "serde",
+ "serde_json",
  "sha2",
+ "worker",
  "x509-parser",
 ]
 

@@ -23,6 +23,7 @@ struct OpenCastRootView: View {
     @State private var isInitialSetupComplete = false
     @State private var hasFlushedProgressForLifecycleExit = false
     @State private var importedDataRefreshTask: Task<Void, Never>?
+    @State private var remoteStoreChangeArbiter = SyncedStoreRemoteChangeArbiter()
     @State private var remoteStoreChangeReloadTask: Task<Void, Never>?
     @State private var emptyImportPollingTask: Task<Void, Never>?
     @State private var importedSubscriptionsNotificationDismissalTask: Task<Void, Never>?
@@ -236,23 +237,25 @@ struct OpenCastRootView: View {
 
     private func observeRemoteStoreChanges() async {
         // Both stores post remote-change notifications for every transaction,
-        // including this process's own local-store saves. Only the synced
-        // store's changes warrant the synced-data refetch; reloading on
-        // local-store churn (download/transcription commits) re-ran the full
-        // subscriptions + progress refetch throughout every download.
+        // including this process's own saves. Only genuinely remote
+        // synced-store changes warrant the synced-data refetch: local-store
+        // churn (download/transcription commits) is excluded by store URL,
+        // and the app's own progress saves — one per 5-second playback flush
+        // — are consumed as self-save credits by the arbiter, since they
+        // already updated in-memory state on the way to the store.
         let syncedStoreURL = modelContext.container.configurations
             .first { $0.name == OpenCastModelContainerFactory.syncedConfigurationName }?
             .url.standardizedFileURL
         for await notification in NotificationCenter.default.notifications(
             named: Notification.Name.NSPersistentStoreRemoteChange
         ) {
-            guard let syncedStoreURL else {
-                scheduleRemoteStoreChangeReload()
-                continue
-            }
             let changedStoreURL = (notification.userInfo?[NSPersistentStoreURLKey] as? URL)?
                 .standardizedFileURL
-            if changedStoreURL == nil || changedStoreURL == syncedStoreURL {
+            if remoteStoreChangeArbiter.shouldScheduleReload(
+                changedStoreURL: changedStoreURL,
+                syncedStoreURL: syncedStoreURL,
+                selfSaveCount: appModel.library.syncedStoreSelfSaveCount
+            ) {
                 scheduleRemoteStoreChangeReload()
             }
         }

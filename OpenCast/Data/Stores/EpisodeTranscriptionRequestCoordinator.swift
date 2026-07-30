@@ -220,37 +220,21 @@ final class EpisodeTranscriptionRequestCoordinator {
         requestID: UUID,
         modelContext: ModelContext
     ) async throws -> EpisodeDownloadRecord {
-        var didStartDownload = false
-
-        while true {
-            try ensureCurrentRequest(id: requestID)
-            updatePhase(.downloading, requestID: requestID)
-
-            if let record = downloads.record(for: episode.episodeID) {
-                switch record.state {
-                case .completed:
-                    guard downloads.downloadedFileExists(for: record) else {
-                        try? downloads.markDownloadedFileMissing(record, modelContext: modelContext)
-                        throw EpisodeTranscriptionError.missingDownloadedFile
-                    }
-                    return record
-                case .downloading:
-                    try await downloads.waitForDownload(episodeID: episode.episodeID)
-                case .paused, .failed, .missing:
-                    guard !didStartDownload else {
-                        throw EpisodeTranscriptionRequestError.operationFailed(
-                            record.errorMessage ?? "The episode download did not complete."
-                        )
-                    }
-                    downloads.startDownload(for: episode, modelContext: modelContext)
-                    didStartDownload = true
-                    try await downloads.waitForDownload(episodeID: episode.episodeID)
+        do {
+            return try await downloads.ensureCompletedDownload(
+                for: episode,
+                modelContext: modelContext,
+                onWaitStarted: {
+                    try ensureCurrentRequest(id: requestID)
+                    updatePhase(.downloading, requestID: requestID)
                 }
-            } else {
-                downloads.startDownload(for: episode, modelContext: modelContext)
-                didStartDownload = true
-                try await downloads.waitForDownload(episodeID: episode.episodeID)
-            }
+            )
+        } catch DownloadStore.CompletedDownloadError.fileMissing {
+            throw EpisodeTranscriptionError.missingDownloadedFile
+        } catch let DownloadStore.CompletedDownloadError.notCompleted(_, errorMessage) {
+            throw EpisodeTranscriptionRequestError.operationFailed(
+                errorMessage ?? "The episode download did not complete."
+            )
         }
     }
 

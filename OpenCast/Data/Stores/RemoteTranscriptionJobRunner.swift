@@ -232,32 +232,20 @@ final class RemoteTranscriptionJobRunner {
         episode: EpisodeListItemSnapshot,
         modelContext: ModelContext
     ) async throws -> URL {
-        var didStartDownload = false
-        while true {
-            try Task.checkCancellation()
-            if let record = downloads.record(for: episode.episodeID) {
-                switch record.state {
-                case .completed:
-                    guard let fileURL = downloads.localFileURL(for: record) else {
-                        throw RemoteTranscriptionJobRunError.downloadFailed
-                    }
-                    return fileURL
-                case .downloading:
-                    try await downloads.waitForDownload(episodeID: episode.episodeID)
-                case .paused, .failed, .missing:
-                    guard !didStartDownload else {
-                        throw RemoteTranscriptionJobRunError.downloadFailed
-                    }
-                    downloads.startDownload(for: episode, modelContext: modelContext)
-                    didStartDownload = true
-                    try await downloads.waitForDownload(episodeID: episode.episodeID)
-                }
-            } else {
-                downloads.startDownload(for: episode, modelContext: modelContext)
-                didStartDownload = true
-                try await downloads.waitForDownload(episodeID: episode.episodeID)
-            }
+        let record: EpisodeDownloadRecord
+        do {
+            record = try await downloads.ensureCompletedDownload(
+                for: episode,
+                modelContext: modelContext,
+                onWaitStarted: { try Task.checkCancellation() }
+            )
+        } catch is DownloadStore.CompletedDownloadError {
+            throw RemoteTranscriptionJobRunError.downloadFailed
         }
+        guard let fileURL = downloads.localFileURL(for: record) else {
+            throw RemoteTranscriptionJobRunError.downloadFailed
+        }
+        return fileURL
     }
 
     /// Drives the exact-device upload session and cleans its part files on

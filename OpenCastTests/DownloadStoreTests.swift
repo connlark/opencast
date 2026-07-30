@@ -35,6 +35,41 @@ struct DownloadStoreTests {
         #expect(fileStore.fileExists(relativePath: relativePath) == false)
     }
 
+    @Test("ensureCompletedDownload returns a completed record and self-heals a missing file")
+    func ensureCompletedDownloadSelfHealsMissingFile() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
+        let downloader = ChunkedEpisodeAudioDownloader(chunks: [Data("abc".utf8)])
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "ensure-missing-file")
+
+        store.startDownload(for: episode, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+        let record = try #require(store.record(for: episode.episodeID))
+        #expect(record.state == .completed)
+
+        let ensured = try await store.ensureCompletedDownload(
+            for: episode,
+            modelContext: context,
+            onWaitStarted: { try Task.checkCancellation() }
+        )
+        #expect(ensured === record)
+
+        let relativePath = try #require(record.localRelativePath)
+        try FileManager.default.removeItem(at: fileStore.fileURL(relativePath: relativePath))
+
+        await #expect(throws: DownloadStore.CompletedDownloadError.fileMissing) {
+            _ = try await store.ensureCompletedDownload(
+                for: episode,
+                modelContext: context,
+                onWaitStarted: { try Task.checkCancellation() }
+            )
+        }
+        #expect(store.record(for: episode.episodeID)?.state == .missing)
+    }
+
     @Test("Cancel removes the download record and partial file")
     func cancelRemovesRecordAndPartialFile() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

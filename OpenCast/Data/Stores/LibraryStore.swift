@@ -30,6 +30,11 @@ final class LibraryStore {
     private(set) var subscriptionAddedToken = 0
     private(set) var refreshCompletedToken = 0
 
+    /// Counts this store's own synced-store progress saves so the
+    /// remote-change observer can skip the reload each one would otherwise
+    /// trigger (one credit per save; see `SyncedStoreRemoteChangeArbiter`).
+    @ObservationIgnored private(set) var syncedStoreSelfSaveCount = 0
+
     @ObservationIgnored private let feedService: any FeedService
     @ObservationIgnored private let localCache: any LocalLibraryCacheStore
     @ObservationIgnored private var writeGeneration = 0
@@ -693,6 +698,7 @@ final class LibraryStore {
             }
 
             try modelContext.save()
+            syncedStoreSelfSaveCount += 1
             progressRecords = try modelContext.fetch(allProgressRecordsDescriptor())
             rebuildProgressByEpisodeID()
             lastErrorMessage = nil
@@ -807,6 +813,7 @@ final class LibraryStore {
             }
 
             try modelContext.save()
+            syncedStoreSelfSaveCount += 1
             if refreshObservableProgress {
                 updateProgressSnapshot(with: updatedRecord)
             }
@@ -837,6 +844,7 @@ final class LibraryStore {
             }
 
             try modelContext.save()
+            syncedStoreSelfSaveCount += 1
             try reloadProgressRecords(modelContext: modelContext)
             return true
         } catch {

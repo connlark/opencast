@@ -212,6 +212,7 @@ final class RemoteTranscriptionPurchaseStore {
         await reconcile(all)
         mergeRefundCandidates(all)
         await refreshBalance()
+        dismissPurchasePhase()
     }
 
     func refreshBalance() async {
@@ -234,8 +235,16 @@ final class RemoteTranscriptionPurchaseStore {
         refundCandidates.removeAll { $0.id == transactionID }
     }
 
+    /// Clears a terminal purchase row (`completed`/`failed`). In-flight
+    /// phases stay put: `purchasing` guards against a double-buy and
+    /// `pendingApproval` is resolved by the transaction-updates listener.
     func dismissPurchasePhase() {
-        purchasePhase = .idle
+        switch purchasePhase {
+        case .completed, .failed:
+            purchasePhase = .idle
+        case .idle, .purchasing, .pendingApproval:
+            break
+        }
     }
 
     #if DEBUG

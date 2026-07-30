@@ -304,6 +304,44 @@ struct DataNukeTests {
         #expect(!appModel.isNukingData)
     }
 
+    @Test("A failing model delete surfaces the nuke error without stranding deleting")
+    func failingModelDeleteSurfacesNukeErrorWithoutStrandingDeleting() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let transcriptionModels = TranscriptionModelStore(
+            installer: ThrowingDeleteTranscriptionModelInstaller()
+        )
+        transcriptionModels.loadLocalStatus()
+        let appModel = OpenCastAppModel(
+            cacheController: OpenCastCacheController(
+                rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+            ),
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(
+                fileStore: EpisodeDownloadFileStore(
+                    baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+                )
+            ),
+            transcriptionModels: transcriptionModels,
+            syncStatus: SyncStatusStore(
+                accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
+            ),
+            allowsAutomaticFeedRefresh: false
+        )
+
+        await #expect(throws: (any Error).self) {
+            try await appModel.nukeAllData(modelContext: context)
+        }
+
+        #expect(appModel.lastDataNukeErrorMessage != nil)
+        guard case .failed = transcriptionModels.state else {
+            Issue.record("Expected failed model state, got \(transcriptionModels.state)")
+            return
+        }
+        #expect(!appModel.isNukingData)
+    }
+
     private func seedAllData(
         fileStore: EpisodeDownloadFileStore,
         transcriptFileStore: EpisodeTranscriptFileStore? = nil,
@@ -658,5 +696,33 @@ private final class DataNukeAdFreePassScheduler: AdFreePassContinuedTaskScheduli
 
     func cancel(identifier: String) {
         cancelledIdentifiers.append(identifier)
+    }
+}
+
+private final class ThrowingDeleteTranscriptionModelInstaller: TranscriptionModelInstalling, @unchecked Sendable {
+    func installedSummary(model: OpenCastWhisperModel, version: String) throws -> OpenCastWhisperModelInstalledSummary {
+        OpenCastWhisperModelInstalledSummary(
+            modelIdentifier: model.rawValue,
+            version: version,
+            totalByteCount: 10,
+            treeSHA256: String(repeating: "a", count: 64)
+        )
+    }
+
+    func fetchManifest() async throws -> RemoteWhisperModelManifest {
+        RemoteWhisperModelManifest(schemaVersion: 1, generatedAt: "2026-06-29T00:00:00Z", models: [])
+    }
+
+    func install(
+        manifest: RemoteWhisperModelManifest,
+        model: OpenCastWhisperModel,
+        version: String,
+        progress: OpenCastWhisperModelInstallProgressHandler?
+    ) async throws -> OpenCastWhisperModelInstalledSummary {
+        throw CocoaError(.featureUnsupported)
+    }
+
+    func deleteInstalledModel(model: OpenCastWhisperModel, version: String) throws {
+        throw CocoaError(.fileWriteNoPermission)
     }
 }

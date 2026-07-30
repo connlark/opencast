@@ -51,7 +51,16 @@ struct SettingsAdDetectionSection: View {
                 }
             }
             .onChange(of: choice) { _, newChoice in
-                appModel.adDetectionSettings.setMode(newChoice.mode, modelContext: modelContext)
+                applyChoice(newChoice)
+            }
+            .onChange(of: appModel.adDetectionSettings.mode) { _, storeMode in
+                syncChoice(with: storeMode)
+            }
+
+            if let message = appModel.adDetectionSettings.lastErrorMessage {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
             }
         } footer: {
             if choice == .cloud, let balance = appModel.remoteTranscriptionPurchases.balance {
@@ -71,5 +80,24 @@ struct SettingsAdDetectionSection: View {
         appModel.remoteTranscriptionPurchases.isSurfaceVisible
             ? ModeChoice.allCases
             : [.ask, .onDevice]
+    }
+
+    private func applyChoice(_ newChoice: ModeChoice) {
+        guard !appModel.adDetectionSettings.setMode(newChoice.mode, modelContext: modelContext) else {
+            return
+        }
+
+        // The store reverted; pull the picker back so the control and the
+        // persisted preference cannot silently diverge.
+        choice = ModeChoice(mode: appModel.adDetectionSettings.mode)
+    }
+
+    private func syncChoice(with storeMode: AdDetectionMode?) {
+        let storeChoice = ModeChoice(mode: storeMode)
+        guard choice != storeChoice else {
+            return
+        }
+
+        choice = storeChoice
     }
 }

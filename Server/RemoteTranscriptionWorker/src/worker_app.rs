@@ -1,18 +1,15 @@
 use futures_util::StreamExt;
 use opencast_app_attest_core::{
-    app_attest::{
-        canonical_key_id, challenge_hash, request_client_data_hash, verify_assertion,
-        verify_attestation,
-    },
+    app_attest::{canonical_key_id, challenge_hash, verify_attestation},
+    app_attest_envelope::{self, AuthFailure},
     random,
 };
-use sha2::{Digest, Sha256};
 use worker::{Env, Headers, Method, Request, RequestInit, Response, Result};
 
 use crate::auth::{bearer_token, token_hash, token_matches, AUTHORIZATION_HEADER};
 use crate::challenge_limits::{
     challenge_bucket_start, challenge_source_hash_key_for_environment,
-    global_challenge_allows_insert, install_challenge_allows_insert,
+    global_challenge_allows_insert, install_challenge_allows_insert, keyed_source_token,
     source_challenge_allows_after_increment, APP_ATTEST_KEY_LIMIT_WINDOW_SECONDS,
     CHALLENGE_LIMIT_WINDOW_SECONDS, CHALLENGE_RETENTION_SECONDS,
     CHALLENGE_SOURCE_BUCKET_RETENTION_SECONDS, CHALLENGE_TTL_SECONDS,
@@ -35,6 +32,8 @@ use crate::types::{
 pub const TRANSCRIPTION_DB: &str = "TRANSCRIPTION_DB";
 const DEV_BEARER_TOKEN: &str = "DEV_BEARER_TOKEN";
 const CHALLENGE_SOURCE_HASH_KEY: &str = "CHALLENGE_SOURCE_HASH_KEY";
+const DEVELOPMENT_CHALLENGE_SOURCE_HASH_KEY: &str =
+    "opencast-remote-transcription-development-challenge-source-key";
 const PUBLIC_REMOTE_TRANSCRIPTION_ENABLED: &str = "PUBLIC_REMOTE_TRANSCRIPTION_ENABLED";
 const REGISTER_PURPOSE: &str = "register";
 const MAX_CHALLENGE_REQUEST_BODY_BYTES: usize = 1024;
@@ -91,17 +90,6 @@ struct Authenticated {
     payload: String,
 }
 
-struct AuthFailure {
-    status: u16,
-    code: &'static str,
-}
-
-impl AuthFailure {
-    fn new(status: u16, code: &'static str) -> Self {
-        Self { status, code }
-    }
-}
-
 /// Authenticate a request either with the dev bearer (development lane only)
 /// or the App Attest envelope with exact method/path/payload binding.
 async fn authenticate(
@@ -137,17 +125,22 @@ async fn authenticate(
         }));
     }
 
-    authenticate_envelope(
+    Ok(app_attest_envelope::authenticate_envelope(
         req,
         db,
-        config,
+        &config.app_id,
+        &config.app_attest_environment,
         now_seconds(),
         "POST",
         path,
         types::MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES,
         types::MAX_PAYLOAD_BYTES,
     )
-    .await
+    .await?
+    .map(|authenticated| Authenticated {
+        install_id: authenticated.install_id,
+        payload: authenticated.payload,
+    }))
 }
 
 /// The subset of PurchaseWorker's bootstrap response the gateway re-shapes
@@ -644,14 +637,6 @@ struct RegisterRequest {
     attestation_object: String,
 }
 
-#[derive(serde::Deserialize)]
-struct AuthenticatedEnvelope {
-    install_id: Option<String>,
-    key_id: Option<String>,
-    payload: Option<String>,
-    assertion: Option<String>,
-}
-
 async fn handle_challenge(
     req: &mut Request,
     env: &Env,
@@ -810,88 +795,6 @@ async fn handle_register(
     json_success(200, &serde_json::json!({ "message": "registered" }))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn authenticate_envelope(
-    req: &mut Request,
-    db: &worker::D1Database,
-    config: &AppConfig,
-    now: i64,
-    method: &str,
-    path: &str,
-    max_body_bytes: usize,
-    max_payload_bytes: usize,
-) -> Result<std::result::Result<Authenticated, AuthFailure>> {
-    let body = match read_limited_json::<AuthenticatedEnvelope>(req, max_body_bytes).await? {
-        Ok(body) => body,
-        Err(response) => {
-            return Ok(Err(AuthFailure::new(
-                response.status_code(),
-                if response.status_code() == 413 {
-                    "payload_too_large"
-                } else {
-                    "invalid_json"
-                },
-            )))
-        }
-    };
-    let payload = body.payload.unwrap_or_default();
-    if payload.len() > max_payload_bytes {
-        return Ok(Err(AuthFailure::new(413, "payload_too_large")));
-    }
-    let Some(assertion) = body.assertion.as_deref() else {
-        return Ok(Err(AuthFailure::new(401, "missing_assertion")));
-    };
-    let (Some(install_id), Some(raw_key_id)) = (body.install_id.as_deref(), body.key_id.as_deref())
-    else {
-        return Ok(Err(AuthFailure::new(401, "unknown_key")));
-    };
-    let key_id = match canonical_key_id(raw_key_id) {
-        Ok(key_id) => key_id,
-        Err(error) => return Ok(Err(AuthFailure::new(401, error.code()))),
-    };
-
-    let Some(key) = storage::key(db, install_id, &key_id).await? else {
-        return Ok(Err(AuthFailure::new(401, "unknown_key")));
-    };
-
-    if key.app_id != config.app_id {
-        return Ok(Err(AuthFailure::new(401, "invalid_app_id")));
-    }
-
-    if key.environment != config.app_attest_environment {
-        return Ok(Err(AuthFailure::new(401, "invalid_environment")));
-    }
-
-    let previous_counter = match u32::try_from(key.sign_counter) {
-        Ok(counter) => counter,
-        Err(_) => return Ok(Err(AuthFailure::new(401, "invalid_counter"))),
-    };
-    let client_data_hash = request_client_data_hash(method, path, &payload);
-
-    let verified = match verify_assertion(
-        assertion,
-        &client_data_hash,
-        &config.app_id,
-        &key.public_key,
-        previous_counter,
-    ) {
-        Ok(verified) => verified,
-        Err(error) => return Ok(Err(AuthFailure::new(401, error.code()))),
-    };
-
-    let next_counter = i64::from(verified.sign_counter);
-    if !storage::update_key_counter(db, install_id, &key_id, key.sign_counter, next_counter, now)
-        .await?
-    {
-        return Ok(Err(AuthFailure::new(401, "invalid_counter")));
-    }
-
-    Ok(Ok(Authenticated {
-        install_id: install_id.to_string(),
-        payload,
-    }))
-}
-
 // --- Shared helpers ---
 
 fn required_d1(env: &Env) -> std::result::Result<worker::D1Database, ErrorResponse> {
@@ -980,8 +883,11 @@ fn challenge_source_token(headers: &Headers, env: &Env) -> Result<Option<String>
         .var("APP_ATTEST_ENVIRONMENT")
         .map(|value| value.to_string())
         .unwrap_or_default();
-    let Some(key) = challenge_source_hash_key_for_environment(secret.as_deref(), &environment)
-    else {
+    let Some(key) = challenge_source_hash_key_for_environment(
+        secret.as_deref(),
+        &environment,
+        DEVELOPMENT_CHALLENGE_SOURCE_HASH_KEY,
+    ) else {
         return Err(worker::Error::RustError(
             "CHALLENGE_SOURCE_HASH_KEY is required".to_string(),
         ));
@@ -999,14 +905,6 @@ fn challenge_source_signal(headers: &Headers) -> Result<Option<String>> {
         }
     }
     Ok(None)
-}
-
-fn keyed_source_token(key: &str, source_signal: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(key.as_bytes());
-    hasher.update([0]);
-    hasher.update(source_signal.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 fn internal_post(url: &str, body: String) -> Result<Request> {

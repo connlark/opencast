@@ -10,7 +10,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 aes-gcm = "0.10"
 base64 = "0.22"
-constant_time_eq = "0.4"
 futures-util = "0.3"
 hex = "0.4"
 hmac = "0.12"

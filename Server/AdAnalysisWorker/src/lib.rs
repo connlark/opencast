@@ -1,16 +1,14 @@
 #[cfg(target_arch = "wasm32")]
 mod analysis;
-pub mod auth;
-pub mod challenge_limits;
-#[cfg(any(target_arch = "wasm32", test))]
-mod d1_changes;
+pub use opencast_app_attest_core::auth;
+pub use opencast_app_attest_core::challenge_limits;
 pub mod gemini;
 pub mod job;
 pub mod prompt;
 pub mod retry;
 pub mod route;
 #[cfg(any(target_arch = "wasm32", test))]
-pub mod storage;
+pub use opencast_app_attest_core::app_attest_storage as storage;
 pub mod types;
 pub mod usage;
 pub mod validation;

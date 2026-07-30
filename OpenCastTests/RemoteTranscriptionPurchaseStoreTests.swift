@@ -283,6 +283,47 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(store.purchasePhase == .idle)
     }
 
+    @Test("Refresh Purchases clears a terminal phase")
+    func refreshPurchasesClearsTerminalPhase() async {
+        let api = FakePurchaseAPI()
+        let storeKit = FakeStoreKitClient()
+        storeKit.purchaseResult = .unverified
+        let store = Self.makeStore(api: api, storeKit: storeKit)
+
+        await store.prepare()
+        await store.purchase(store.products[0])
+        guard case .failed = store.purchasePhase else {
+            Issue.record("expected failed phase, got \(store.purchasePhase)")
+            return
+        }
+
+        await store.refreshPurchases()
+
+        #expect(store.purchasePhase == .idle)
+    }
+
+    @Test("dismissPurchasePhase clears terminal rows but leaves pending approval")
+    func dismissPurchasePhaseClearsTerminalOnly() async {
+        let api = FakePurchaseAPI()
+        let storeKit = FakeStoreKitClient()
+        storeKit.purchaseResult = .pending
+        let store = Self.makeStore(api: api, storeKit: storeKit)
+
+        await store.prepare()
+        await store.purchase(store.products[0])
+        #expect(store.purchasePhase == .pendingApproval)
+
+        store.dismissPurchasePhase()
+        #expect(store.purchasePhase == .pendingApproval)
+
+        storeKit.purchaseResult = .success(Self.transaction(id: 41))
+        await store.purchase(store.products[0])
+        #expect(store.purchasePhase == .completed(creditedSeconds: 72_000))
+
+        store.dismissPurchasePhase()
+        #expect(store.purchasePhase == .idle)
+    }
+
     @Test("App Review fixture derives ordered identity and grants from the embedded catalog")
     func reviewFixtureMatchesEmbeddedCatalog() {
         let store = Self.makeStore(api: FakePurchaseAPI(), storeKit: FakeStoreKitClient())

@@ -1,29 +1,18 @@
 #![cfg_attr(all(test, not(target_arch = "wasm32")), allow(dead_code))]
 
-use opencast_app_attest_core::app_attest::challenge_hash;
 use serde::Deserialize;
 use worker::{D1Database, D1Type, Result};
 
-use crate::d1_changes::changed_exactly_one_row;
+// App Attest challenge/key storage lives in the shared core crate
+// (one copy for AdAnalysisWorker, NotificationsWorker, and this worker).
+pub use opencast_app_attest_core::app_attest_storage::{
+    app_attest_key_count_since, challenge, challenge_count_since, global_challenge_count_since,
+    increment_challenge_source_bucket, insert_challenge, key, mark_challenge_consumed,
+    prune_challenge_source_buckets_before, prune_challenges_before, update_key_counter,
+    upsert_key, AppAttestKeyRow, ChallengeRow,
+};
 
 const MAX_EXACT_F64_INTEGER: i64 = 9_007_199_254_740_991;
-
-#[derive(Debug, Deserialize)]
-pub struct ChallengeRow {
-    pub challenge_hash: String,
-    pub purpose: String,
-    pub install_id: String,
-    pub expires_at: i64,
-    pub consumed_at: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AppAttestKeyRow {
-    pub public_key: Vec<u8>,
-    pub sign_counter: i64,
-    pub app_id: String,
-    pub environment: String,
-}
 
 #[derive(Debug, Deserialize)]
 struct CountRow {
@@ -62,273 +51,103 @@ struct StaleJobRow {
     job_id: String,
 }
 
-const STALE_JOB_IDS_SQL: &str = "SELECT job_id FROM jobs WHERE \
-     ((state IN ('created', 'staging_origin') AND updated_at <= ?1) OR \
-      (state = 'waiting_for_device_source' AND updated_at <= ?2) OR \
-      (state = 'awaiting_credits' AND updated_at <= ?3) OR \
-      (state = 'exact_upload_required' AND updated_at <= ?4) OR \
-      (state = 'exact_uploading' AND updated_at <= ?5) OR \
-      (state = 'detecting_ads' AND updated_at <= ?6) OR \
-      (state IN ('result_ready', 'delivered') AND updated_at <= ?7)) \
-     ORDER BY updated_at ASC, job_id ASC LIMIT ?8";
+// Both job-state SQL constants are assembled at compile time from
+// `job::STATE_*`, so a renamed or retyped state cannot silently diverge
+// from the SQL. Migration 0005's partial indexes were built against these
+// exact predicates (the migration repeats the strings literally and stays
+// untouched); the byte-identity test below pins the assembled SQL to those
+// bytes, and the EXPLAIN QUERY PLAN tests prove the indexes still serve it.
+const fn concat_len(parts: &[&str]) -> usize {
+    let mut length = 0;
+    let mut index = 0;
+    while index < parts.len() {
+        length += parts[index].len();
+        index += 1;
+    }
+    length
+}
+
+const fn concat_bytes<const N: usize>(parts: &[&str]) -> [u8; N] {
+    let mut out = [0_u8; N];
+    let mut offset = 0;
+    let mut index = 0;
+    while index < parts.len() {
+        let bytes = parts[index].as_bytes();
+        let mut byte_index = 0;
+        while byte_index < bytes.len() {
+            out[offset] = bytes[byte_index];
+            offset += 1;
+            byte_index += 1;
+        }
+        index += 1;
+    }
+    out
+}
+
+const fn concat_str(bytes: &[u8]) -> &str {
+    match std::str::from_utf8(bytes) {
+        Ok(sql) => sql,
+        Err(_) => panic!("assembled job-state SQL must be UTF-8"),
+    }
+}
+
+const STALE_JOB_IDS_SQL_PARTS: &[&str] = &[
+    "SELECT job_id FROM jobs WHERE ((state IN ('",
+    crate::job::STATE_CREATED,
+    "', '",
+    crate::job::STATE_STAGING_ORIGIN,
+    "') AND updated_at <= ?1) OR (state = '",
+    crate::job::STATE_WAITING_FOR_DEVICE_SOURCE,
+    "' AND updated_at <= ?2) OR (state = '",
+    crate::job::STATE_AWAITING_CREDITS,
+    "' AND updated_at <= ?3) OR (state = '",
+    crate::job::STATE_EXACT_UPLOAD_REQUIRED,
+    "' AND updated_at <= ?4) OR (state = '",
+    crate::job::STATE_EXACT_UPLOADING,
+    "' AND updated_at <= ?5) OR (state = '",
+    crate::job::STATE_DETECTING_ADS,
+    "' AND updated_at <= ?6) OR (state IN ('",
+    crate::job::STATE_RESULT_READY,
+    "', '",
+    crate::job::STATE_DELIVERED,
+    "') AND updated_at <= ?7)) ORDER BY updated_at ASC, job_id ASC LIMIT ?8",
+];
+const STALE_JOB_IDS_SQL_BYTES: [u8; concat_len(STALE_JOB_IDS_SQL_PARTS)] =
+    concat_bytes(STALE_JOB_IDS_SQL_PARTS);
+const STALE_JOB_IDS_SQL: &str = concat_str(&STALE_JOB_IDS_SQL_BYTES);
+
+/// The states `ACTIVE_JOB_COUNT_SQL` excludes; every other `job::ALL_STATES`
+/// entry counts as active (the classification-completeness test forces an
+/// explicit decision for each new state).
+const ACTIVE_JOB_COUNT_EXCLUDED_STATES: [&str; 5] = [
+    crate::job::STATE_ACKNOWLEDGED,
+    crate::job::STATE_CANCELLED,
+    crate::job::STATE_FAILED,
+    crate::job::STATE_RESULT_READY,
+    crate::job::STATE_DELIVERED,
+];
 
 // Parked results ('result_ready'/'delivered') are excluded: the cap bounds
 // concurrent processing, and a finished result waiting for pickup consumes
 // no compute. Counting it let one unacknowledged result (client killed
 // before ack) hold the account slot for the full 7-day result TTL — every
 // new create 429'd as rate_limited.
-const ACTIVE_JOB_COUNT_SQL: &str = "SELECT COUNT(*) AS count FROM jobs \
-     WHERE account_id = ?1 \
-     AND state NOT IN ('acknowledged', 'cancelled', 'failed', 'result_ready', 'delivered')";
-
-// --- App Attest challenge/key storage (mirrors AdAnalysisWorker) ---
-
-pub async fn insert_challenge(
-    db: &D1Database,
-    challenge_id: &str,
-    challenge: &str,
-    purpose: &str,
-    install_id: &str,
-    created_at: i64,
-    expires_at: i64,
-) -> Result<()> {
-    let hash = challenge_hash(challenge);
-    let args = [
-        D1Type::Text(challenge_id),
-        D1Type::Text(&hash),
-        D1Type::Text(purpose),
-        D1Type::Text(install_id),
-        d1_i64(created_at)?,
-        d1_i64(expires_at)?,
-    ];
-
-    db.prepare(
-        "INSERT INTO app_attest_challenges \
-         (challenge_id, challenge_hash, purpose, install_id, created_at, expires_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-
-    Ok(())
-}
-
-pub async fn challenge(db: &D1Database, challenge_id: &str) -> Result<Option<ChallengeRow>> {
-    let args = [D1Type::Text(challenge_id)];
-    db.prepare(
-        "SELECT challenge_hash, purpose, install_id, expires_at, consumed_at \
-         FROM app_attest_challenges \
-         WHERE challenge_id = ?1 \
-         LIMIT 1",
-    )
-    .bind_refs(&args)?
-    .first::<ChallengeRow>(None)
-    .await
-}
-
-pub async fn challenge_count_since(db: &D1Database, install_id: &str, since: i64) -> Result<i64> {
-    let args = [D1Type::Text(install_id), d1_i64(since)?];
-    count(
-        db,
-        "SELECT COUNT(*) AS count \
-         FROM app_attest_challenges \
-         WHERE install_id = ?1 AND created_at >= ?2",
-        &args,
-    )
-    .await
-}
-
-pub async fn global_challenge_count_since(db: &D1Database, since: i64) -> Result<i64> {
-    let args = [d1_i64(since)?];
-    count(
-        db,
-        "SELECT COUNT(*) AS count FROM app_attest_challenges WHERE created_at >= ?1",
-        &args,
-    )
-    .await
-}
-
-pub async fn increment_challenge_source_bucket(
-    db: &D1Database,
-    source_token: &str,
-    window_start: i64,
-    now: i64,
-) -> Result<i64> {
-    let args = [
-        D1Type::Text(source_token),
-        d1_i64(window_start)?,
-        d1_i64(now)?,
-    ];
-    db.prepare(
-        "INSERT INTO app_attest_challenge_source_buckets \
-         (source_token, window_start, request_count, updated_at) \
-         VALUES (?1, ?2, 1, ?3) \
-         ON CONFLICT(source_token, window_start) DO UPDATE SET \
-         request_count = app_attest_challenge_source_buckets.request_count + 1, \
-         updated_at = excluded.updated_at",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-
-    let row = db
-        .prepare(
-            "SELECT request_count AS count \
-             FROM app_attest_challenge_source_buckets \
-             WHERE source_token = ?1 AND window_start = ?2 \
-             LIMIT 1",
-        )
-        .bind_refs(&args[..2])?
-        .first::<CountRow>(None)
-        .await?;
-
-    Ok(row.map(|row| row.count).unwrap_or(0))
-}
-
-pub async fn prune_challenge_source_buckets_before(db: &D1Database, cutoff: i64) -> Result<()> {
-    let args = [d1_i64(cutoff)?];
-    db.prepare("DELETE FROM app_attest_challenge_source_buckets WHERE updated_at < ?1")
-        .bind_refs(&args)?
-        .run()
-        .await?;
-
-    Ok(())
-}
-
-pub async fn prune_challenges_before(db: &D1Database, cutoff: i64) -> Result<()> {
-    let args = [d1_i64(cutoff)?];
-    db.prepare("DELETE FROM app_attest_challenges WHERE created_at < ?1")
-        .bind_refs(&args)?
-        .run()
-        .await?;
-
-    Ok(())
-}
-
-pub async fn mark_challenge_consumed(
-    db: &D1Database,
-    challenge_id: &str,
-    consumed_at: i64,
-) -> Result<bool> {
-    let args = [d1_i64(consumed_at)?, D1Type::Text(challenge_id)];
-    let result = db
-        .prepare(
-            "UPDATE app_attest_challenges \
-             SET consumed_at = ?1 \
-             WHERE challenge_id = ?2 AND consumed_at IS NULL",
-        )
-        .bind_refs(&args)?
-        .run()
-        .await?;
-
-    Ok(changed_exactly_one_row(
-        result.meta()?.and_then(|meta| meta.changes),
-    ))
-}
-
-pub async fn upsert_key(
-    db: &D1Database,
-    install_id: &str,
-    key_id: &str,
-    public_key: &[u8],
-    app_id: &str,
-    environment: &str,
-    now: i64,
-) -> Result<()> {
-    let sign_counter = 0_i64;
-    let args = [
-        D1Type::Text(install_id),
-        D1Type::Text(key_id),
-        D1Type::Blob(public_key),
-        d1_i64(sign_counter)?,
-        D1Type::Text(app_id),
-        D1Type::Text(environment),
-        d1_i64(now)?,
-        d1_i64(now)?,
-    ];
-
-    db.prepare(
-        "INSERT INTO app_attest_keys \
-         (install_id, key_id, public_key, sign_counter, app_id, environment, created_at, last_used_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-         ON CONFLICT(install_id, key_id) DO UPDATE SET \
-         public_key = excluded.public_key, \
-         sign_counter = MAX(app_attest_keys.sign_counter, excluded.sign_counter), \
-         app_id = excluded.app_id, \
-         environment = excluded.environment, \
-         last_used_at = excluded.last_used_at",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-
-    Ok(())
-}
-
-pub async fn key(
-    db: &D1Database,
-    install_id: &str,
-    key_id: &str,
-) -> Result<Option<AppAttestKeyRow>> {
-    let args = [D1Type::Text(install_id), D1Type::Text(key_id)];
-    db.prepare(
-        "SELECT public_key, sign_counter, app_id, environment \
-         FROM app_attest_keys \
-         WHERE install_id = ?1 AND key_id = ?2 \
-         LIMIT 1",
-    )
-    .bind_refs(&args)?
-    .first::<AppAttestKeyRow>(None)
-    .await
-}
-
-pub async fn app_attest_key_count_since(
-    db: &D1Database,
-    install_id: &str,
-    since: i64,
-) -> Result<i64> {
-    let args = [D1Type::Text(install_id), d1_i64(since)?];
-    count(
-        db,
-        "SELECT COUNT(*) AS count \
-         FROM app_attest_keys \
-         WHERE install_id = ?1 AND created_at >= ?2",
-        &args,
-    )
-    .await
-}
-
-pub async fn update_key_counter(
-    db: &D1Database,
-    install_id: &str,
-    key_id: &str,
-    previous_counter: i64,
-    next_counter: i64,
-    now: i64,
-) -> Result<bool> {
-    let args = [
-        d1_i64(next_counter)?,
-        d1_i64(now)?,
-        D1Type::Text(install_id),
-        D1Type::Text(key_id),
-        d1_i64(previous_counter)?,
-    ];
-
-    let result = db
-        .prepare(
-            "UPDATE app_attest_keys \
-             SET sign_counter = ?1, last_used_at = ?2 \
-             WHERE install_id = ?3 AND key_id = ?4 AND sign_counter = ?5",
-        )
-        .bind_refs(&args)?
-        .run()
-        .await?;
-
-    Ok(changed_exactly_one_row(
-        result.meta()?.and_then(|meta| meta.changes),
-    ))
-}
+const ACTIVE_JOB_COUNT_SQL_PARTS: &[&str] = &[
+    "SELECT COUNT(*) AS count FROM jobs WHERE account_id = ?1 AND state NOT IN ('",
+    ACTIVE_JOB_COUNT_EXCLUDED_STATES[0],
+    "', '",
+    ACTIVE_JOB_COUNT_EXCLUDED_STATES[1],
+    "', '",
+    ACTIVE_JOB_COUNT_EXCLUDED_STATES[2],
+    "', '",
+    ACTIVE_JOB_COUNT_EXCLUDED_STATES[3],
+    "', '",
+    ACTIVE_JOB_COUNT_EXCLUDED_STATES[4],
+    "')",
+];
+const ACTIVE_JOB_COUNT_SQL_BYTES: [u8; concat_len(ACTIVE_JOB_COUNT_SQL_PARTS)] =
+    concat_bytes(ACTIVE_JOB_COUNT_SQL_PARTS);
+const ACTIVE_JOB_COUNT_SQL: &str = concat_str(&ACTIVE_JOB_COUNT_SQL_BYTES);
 
 // --- Accounts (pass 0: keyed by registered App Attest install) ---
 
@@ -717,10 +536,83 @@ fn d1_i64(value: i64) -> Result<D1Type<'static>> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use super::{ACTIVE_JOB_COUNT_SQL, STALE_JOB_IDS_SQL};
+    use super::{ACTIVE_JOB_COUNT_EXCLUDED_STATES, ACTIVE_JOB_COUNT_SQL, STALE_JOB_IDS_SQL};
+    use crate::job;
     use rusqlite::{params, Connection};
 
     const NOW: i64 = 1_784_000_000;
+
+    /// Migration 0005's partial indexes were built against exactly these
+    /// predicates; the assembled constants must never drift from them.
+    #[test]
+    fn assembled_job_state_sql_is_byte_identical_to_the_migration_0005_literals() {
+        assert_eq!(
+            STALE_JOB_IDS_SQL,
+            "SELECT job_id FROM jobs WHERE \
+             ((state IN ('created', 'staging_origin') AND updated_at <= ?1) OR \
+             (state = 'waiting_for_device_source' AND updated_at <= ?2) OR \
+             (state = 'awaiting_credits' AND updated_at <= ?3) OR \
+             (state = 'exact_upload_required' AND updated_at <= ?4) OR \
+             (state = 'exact_uploading' AND updated_at <= ?5) OR \
+             (state = 'detecting_ads' AND updated_at <= ?6) OR \
+             (state IN ('result_ready', 'delivered') AND updated_at <= ?7)) \
+             ORDER BY updated_at ASC, job_id ASC LIMIT ?8"
+        );
+        assert_eq!(
+            ACTIVE_JOB_COUNT_SQL,
+            "SELECT COUNT(*) AS count FROM jobs WHERE account_id = ?1 AND state \
+             NOT IN ('acknowledged', 'cancelled', 'failed', 'result_ready', 'delivered')"
+        );
+    }
+
+    /// Every declared job state must be explicitly classified for the
+    /// active-job cap: either in `ACTIVE_JOB_COUNT_EXCLUDED_STATES` or in
+    /// the expected-active list below. A 20th state added to
+    /// `job::ALL_STATES` fails here until it is classified, instead of
+    /// silently counting as active and rate-limiting the account
+    /// (`max_active_jobs_per_account` defaults to 1).
+    #[test]
+    fn every_job_state_is_classified_for_the_active_job_count() {
+        const EXPECTED_ACTIVE_STATES: [&str; 14] = [
+            job::STATE_CREATED,
+            job::STATE_STAGING_ORIGIN,
+            job::STATE_WAITING_FOR_DEVICE_SOURCE,
+            job::STATE_SOURCE_MATCHED,
+            job::STATE_EXACT_UPLOAD_REQUIRED,
+            job::STATE_EXACT_UPLOADING,
+            job::STATE_PROBING,
+            job::STATE_AWAITING_CREDITS,
+            job::STATE_RESERVED,
+            job::STATE_CHUNKING,
+            job::STATE_TRANSCRIBING,
+            job::STATE_STITCHING,
+            job::STATE_DETECTING_ADS,
+            job::STATE_CANCELLING,
+        ];
+
+        for state in ACTIVE_JOB_COUNT_EXCLUDED_STATES {
+            assert!(
+                job::ALL_STATES.contains(&state),
+                "excluded state {state:?} is not a declared job state"
+            );
+        }
+
+        let derived_active: Vec<&str> = job::ALL_STATES
+            .iter()
+            .copied()
+            .filter(|state| !ACTIVE_JOB_COUNT_EXCLUDED_STATES.contains(state))
+            .collect();
+        assert_eq!(
+            derived_active, EXPECTED_ACTIVE_STATES,
+            "every job state must be explicitly active or excluded for \
+             ACTIVE_JOB_COUNT_SQL"
+        );
+
+        let mut deduplicated: Vec<&str> = job::ALL_STATES.to_vec();
+        deduplicated.sort_unstable();
+        deduplicated.dedup();
+        assert_eq!(deduplicated.len(), job::ALL_STATES.len());
+    }
 
     fn setup_db() -> Connection {
         let db = Connection::open_in_memory().expect("open in-memory sqlite");

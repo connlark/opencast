@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OpenCastTranscription
+import OSLog
 
 /// Apple Speech asset lifecycle for the resolver, onboarding, and settings:
 /// per-locale status, install-with-progress, and locale reservation. The
@@ -8,6 +9,8 @@ import OpenCastTranscription
 @Observable
 final class AppleSpeechAssetStore {
     private static let localeLastUsedDefaultsKey = "appleSpeech.localeLastUsedAt"
+
+    private static let logger = Logger(subsystem: "com.connor.opencast", category: "AppleSpeechAssets")
 
     private(set) var state: AppleSpeechAssetState = .unknown
 
@@ -184,9 +187,12 @@ final class AppleSpeechAssetStore {
             do {
                 try await provider.reserveLocale(localeIdentifier)
             } catch {
+                // The run log is DEBUG-only; the logger line is the Release
+                // artifact for a reservation that silently never happened.
                 AdFreePassBackgroundRunLog.record(
                     "apple assets reserve retry failed locale=\(localeIdentifier) error=\(error.localizedDescription)"
                 )
+                Self.logger.error("apple speech locale reserve retry failed for \(localeIdentifier, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
 

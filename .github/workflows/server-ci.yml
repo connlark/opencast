@@ -70,7 +70,7 @@ jobs:
         run: |
           cargo test --locked \
             --lib \
-            --test challenge_limits \
+            --test app_attest_migrations \
             --test gemini_retry \
             --test job_state \
             --test prompt \

@@ -1016,6 +1016,40 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(fixture.coordinator.drainFailedCount == 0)
     }
 
+    @Test("A completed download whose file is gone fails the pass and marks the record missing")
+    func missingDownloadedFileFailsPassAndMarksRecordMissing() async throws {
+        let fixture = try makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            loadsStores: false
+        )
+        let episode = makeEpisode(episodeID: "pass-missing-file")
+        let record = try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context
+        )
+        fixture.loadStores()
+        // After load (reconcile sees the file), the file disappears — the
+        // delete-races-a-job case reconcile cannot catch.
+        let relativePath = try #require(record.localRelativePath)
+        try FileManager.default.removeItem(
+            at: fixture.downloadFileStore.fileURL(relativePath: relativePath)
+        )
+
+        fixture.enqueue(episode)
+
+        #expect(await waitUntil {
+            fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1
+        })
+        let outcome = try #require(fixture.coordinator.drainOutcomes.first)
+        guard case .failed(message: let message) = outcome.kind else {
+            Issue.record("Expected the missing-file pass item to fail.")
+            return
+        }
+        #expect(message == EpisodeDownloadError.missingDownloadedFile.localizedDescription)
+        #expect(fixture.downloads.record(for: episode.episodeID)?.state == .missing)
+    }
+
     @Test("Pausing again while a pass waits fails that item and drains the queue")
     func repausingDuringPassFailsItemAndDrains() async throws {
         let fixture = try makeFixture(

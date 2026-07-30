@@ -18,6 +18,7 @@ struct SettingsRemoteTranscriptionSection: View {
                     self.retryRequestID = nil
                 }
             }
+            .onDisappear(perform: dismissPurchasePhase)
     }
 
     private var section: some View {
@@ -89,5 +90,9 @@ struct SettingsRemoteTranscriptionSection: View {
 
     private func retryPreparation() {
         retryRequestID = UUID()
+    }
+
+    private func dismissPurchasePhase() {
+        appModel.remoteTranscriptionPurchases.dismissPurchasePhase()
     }
 }

@@ -1,6 +1,21 @@
-use crate::app_attest::{
-    canonical_key_id, challenge_hash, request_client_data_hash, verify_assertion,
-    verify_attestation,
+use crate::app_attest::{canonical_key_id, challenge_hash, verify_attestation};
+use crate::challenge_limits::{
+    challenge_bucket_start, challenge_source_hash_key_for_environment,
+    global_challenge_allows_insert, install_challenge_allows_insert, keyed_source_token,
+    source_challenge_allows_after_increment, APP_ATTEST_KEY_LIMIT_WINDOW_SECONDS,
+    CHALLENGE_LIMIT_WINDOW_SECONDS, CHALLENGE_RETENTION_SECONDS,
+    CHALLENGE_SOURCE_BUCKET_RETENTION_SECONDS, CHALLENGE_TTL_SECONDS,
+    MAX_APP_ATTEST_KEYS_PER_INSTALL_PER_DAY, MAX_CHALLENGES_PER_SOURCE_PER_HOUR,
+    MAX_GLOBAL_CHALLENGES_PER_HOUR,
+};
+use crate::poll_decisions::{
+    changed_episode_should_notify, episode_should_notify_subscription, latest_polled_episode,
+};
+use crate::route::{
+    content_length_exceeds, diagnostic_endpoint_path, parse_env_flag, public_write_endpoint,
+    ADMIN_TEST_POLL_FEED_PATH, DEBUG_POLL_SUBSCRIPTIONS_PATH, DEBUG_SEND_TEST_PUSH_PATH,
+    DEVICES_REGISTER_PATH, DEVICES_UNREGISTER_PATH, INSTALL_DELETE_PATH, SECURE_HELLO_PATH,
+    SUBSCRIPTIONS_SYNC_PATH,
 };
 use crate::{
     apns, feed_admission,
@@ -16,9 +31,11 @@ use crate::{
     },
 };
 use futures_util::StreamExt;
+use opencast_app_attest_core::app_attest_envelope::{
+    self, AuthFailure, AuthenticatedPayload,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use worker::{
     Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response, Result,
@@ -26,21 +43,9 @@ use worker::{
 
 const APP_ATTEST_DB: &str = "APP_ATTEST_DB";
 const APNS_CERT_BINDING: &str = "APNS_CERT";
-const CHALLENGE_TTL_SECONDS: i64 = 10 * 60;
 const REGISTER_PURPOSE: &str = "register";
-const SECURE_HELLO_PATH: &str = "/v1/secure/hello";
-const DEVICES_REGISTER_PATH: &str = "/v1/devices/register";
-const DEVICES_UNREGISTER_PATH: &str = "/v1/devices/unregister";
-const INSTALL_DELETE_PATH: &str = "/v1/install/delete";
-const DEBUG_SEND_TEST_PUSH_PATH: &str = "/v1/debug/send-test-push";
-const SUBSCRIPTIONS_SYNC_PATH: &str = "/v1/subscriptions/sync";
-const DEBUG_POLL_SUBSCRIPTIONS_PATH: &str = "/v1/debug/poll-subscriptions";
-const ADMIN_TEST_POLL_FEED_PATH: &str = "/v1/admin/test/poll-feed";
 const CHALLENGE_SOURCE_HASH_KEY: &str = "CHALLENGE_SOURCE_HASH_KEY";
-const CHALLENGE_LIMIT_WINDOW_SECONDS: i64 = 60 * 60;
-const CHALLENGE_RETENTION_SECONDS: i64 = 24 * 60 * 60;
-const CHALLENGE_SOURCE_BUCKET_RETENTION_SECONDS: i64 = 2 * CHALLENGE_LIMIT_WINDOW_SECONDS;
-const APP_ATTEST_KEY_LIMIT_WINDOW_SECONDS: i64 = 24 * 60 * 60;
+const DEVELOPMENT_CHALLENGE_SOURCE_HASH_KEY: &str = "opencast-development-challenge-source-key";
 const SECURE_ATTEMPT_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 const FEED_ATTEMPT_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 const MAX_SUBSCRIPTION_SYNC_PAYLOAD_BYTES: usize = 48 * 1024;
@@ -50,10 +55,6 @@ const MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES: usize =
     MAX_SUBSCRIPTION_SYNC_PAYLOAD_BYTES + 16 * 1024;
 const MAX_SMALL_AUTHENTICATED_PAYLOAD_BYTES: usize = 4 * 1024;
 const MAX_ADMIN_TEST_POLL_FEED_REQUEST_BODY_BYTES: usize = 4 * 1024;
-const MAX_CHALLENGES_PER_INSTALL_PER_HOUR: i64 = 20;
-const MAX_CHALLENGES_PER_SOURCE_PER_HOUR: i64 = 300;
-const MAX_GLOBAL_CHALLENGES_PER_HOUR: i64 = 10_000;
-const MAX_APP_ATTEST_KEYS_PER_INSTALL_PER_DAY: i64 = 10;
 const MAX_DEVICES_PER_INSTALL: i64 = 5;
 const FEED_POLL_INTERVAL_SECONDS: i64 = poll_scheduling::HOT_INTERVAL_SECONDS;
 const MAX_FEEDS_PER_SCHEDULED_RUN: i64 = 50;
@@ -120,52 +121,6 @@ struct RegisterRequest {
     challenge_id: String,
     challenge: String,
     attestation_object: String,
-}
-
-#[derive(Deserialize)]
-struct AuthenticatedEnvelope {
-    install_id: Option<String>,
-    key_id: Option<String>,
-    payload: Option<String>,
-    assertion: Option<String>,
-}
-
-struct AuthenticatedPayload {
-    install_id: String,
-    key_id: String,
-    payload: String,
-}
-
-struct AuthFailure {
-    status: u16,
-    code: &'static str,
-    install_id: Option<String>,
-    key_id: Option<String>,
-}
-
-impl AuthFailure {
-    fn new(status: u16, code: &'static str) -> Self {
-        Self {
-            status,
-            code,
-            install_id: None,
-            key_id: None,
-        }
-    }
-
-    fn with_ids(
-        status: u16,
-        code: &'static str,
-        install_id: impl Into<String>,
-        key_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            status,
-            code,
-            install_id: Some(install_id.into()),
-            key_id: Some(key_id.into()),
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -439,19 +394,19 @@ async fn handle_challenge(
         now,
     )
     .await?;
-    if source_challenge_count > MAX_CHALLENGES_PER_SOURCE_PER_HOUR {
+    if !source_challenge_allows_after_increment(source_challenge_count) {
         return json_error(429, "challenge_rate_limited");
     }
 
     let global_challenge_count =
         storage::global_challenge_count_since(db, challenge_window_start).await?;
-    if global_challenge_count >= MAX_GLOBAL_CHALLENGES_PER_HOUR {
+    if !global_challenge_allows_insert(global_challenge_count) {
         return json_error(429, "challenge_rate_limited");
     }
 
     let challenge_count =
         storage::challenge_count_since(db, &body.install_id, challenge_window_start).await?;
-    if challenge_count >= MAX_CHALLENGES_PER_INSTALL_PER_HOUR {
+    if !install_challenge_allows_insert(challenge_count) {
         return json_error(429, "challenge_rate_limited");
     }
 
@@ -1375,42 +1330,6 @@ async fn poll_one_feed(
     }
 }
 
-fn changed_episode_should_notify(feed: &storage::FeedPollRow, latest: &rss::ParsedEpisode) -> bool {
-    let changed = feed
-        .latest_episode_id
-        .as_deref()
-        .map(|known| known != latest.id)
-        .unwrap_or(false);
-    if !changed {
-        return false;
-    }
-
-    if let Some(previous_title) = feed.latest_episode_title.as_deref() {
-        let previous_title = feed_identity::normalized_title_for_episode_identity(previous_title);
-        let latest_title = feed_identity::normalized_title_for_episode_identity(&latest.title);
-        if previous_title == latest_title && feed.latest_episode_published_at == latest.published_at
-        {
-            return false;
-        }
-    }
-
-    let Some(published_at) = latest.published_at else {
-        return false;
-    };
-    if let Some(baseline) = feed.baseline_established_at {
-        if published_at <= baseline {
-            return false;
-        }
-    }
-    if let Some(previous_published_at) = feed.latest_episode_published_at {
-        if published_at < previous_published_at {
-            return false;
-        }
-    }
-
-    true
-}
-
 async fn fetch_feed(
     source_url: &str,
     etag: Option<&str>,
@@ -1494,15 +1413,6 @@ async fn fetch_feed(
     }
 
     Err(FeedFetchError::TooManyRedirects)
-}
-
-fn latest_polled_episode(
-    parsed: &rss::ParsedFeed,
-) -> std::result::Result<&rss::ParsedEpisode, &'static str> {
-    parsed
-        .episodes
-        .first()
-        .ok_or(rss::RSSParseError::EmptyFeed.code())
 }
 
 fn feed_publish_cadence_seconds(parsed: &rss::ParsedFeed) -> Option<i64> {
@@ -1648,16 +1558,6 @@ async fn send_episode_notifications(
     Ok(counts)
 }
 
-fn episode_should_notify_subscription(
-    episode: &rss::ParsedEpisode,
-    subscription_created_at: i64,
-) -> bool {
-    episode
-        .published_at
-        .map(|published_at| published_at > subscription_created_at)
-        .unwrap_or(false)
-}
-
 async fn record_feed_poll_failure(
     db: &worker::D1Database,
     feed: &storage::FeedPollRow,
@@ -1732,111 +1632,18 @@ async fn authenticate_envelope(
     path: &'static str,
     max_payload_bytes: usize,
 ) -> Result<std::result::Result<AuthenticatedPayload, AuthFailure>> {
-    let body = match read_limited_json::<AuthenticatedEnvelope>(
+    app_attest_envelope::authenticate_envelope(
         req,
-        MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES,
-    )
-    .await?
-    {
-        Ok(body) => body,
-        Err(response) => {
-            return Ok(Err(AuthFailure::new(
-                response.status_code(),
-                if response.status_code() == 413 {
-                    "payload_too_large"
-                } else {
-                    "invalid_json"
-                },
-            )))
-        }
-    };
-    let payload = body.payload.unwrap_or_default();
-    if payload.len() > max_payload_bytes {
-        return Ok(Err(AuthFailure::new(413, "payload_too_large")));
-    }
-    let Some(assertion) = body.assertion.as_deref() else {
-        return Ok(Err(AuthFailure::new(401, "missing_assertion")));
-    };
-    let (Some(install_id), Some(raw_key_id)) = (body.install_id.as_deref(), body.key_id.as_deref())
-    else {
-        return Ok(Err(AuthFailure::new(401, "unknown_key")));
-    };
-    let key_id = match canonical_key_id(raw_key_id) {
-        Ok(key_id) => key_id,
-        Err(error) => return Ok(Err(AuthFailure::new(401, error.code()))),
-    };
-
-    let Some(key) = storage::key(db, install_id, &key_id).await? else {
-        return Ok(Err(AuthFailure::new(401, "unknown_key")));
-    };
-
-    if key.app_id != config.app_id {
-        return Ok(Err(AuthFailure::with_ids(
-            401,
-            "invalid_app_id",
-            install_id,
-            key_id.as_str(),
-        )));
-    }
-
-    if key.environment != config.app_attest_environment {
-        return Ok(Err(AuthFailure::with_ids(
-            401,
-            "invalid_environment",
-            install_id,
-            key_id.as_str(),
-        )));
-    }
-
-    let previous_counter = match u32::try_from(key.sign_counter) {
-        Ok(counter) => counter,
-        Err(_) => {
-            return Ok(Err(AuthFailure::with_ids(
-                401,
-                "invalid_counter",
-                install_id,
-                key_id.as_str(),
-            )))
-        }
-    };
-    let client_data_hash = request_client_data_hash(method, path, &payload);
-
-    let verified = match verify_assertion(
-        assertion,
-        &client_data_hash,
+        db,
         &config.app_id,
-        &key.public_key,
-        previous_counter,
-    ) {
-        Ok(verified) => verified,
-        Err(error) => {
-            return Ok(Err(AuthFailure::with_ids(
-                401,
-                error.code(),
-                install_id,
-                key_id.as_str(),
-            )))
-        }
-    };
-
-    let next_counter = i64::from(verified.sign_counter);
-
-    if !storage::update_key_counter(db, install_id, &key_id, key.sign_counter, next_counter, now)
-        .await?
-    {
-        return Ok(Err(AuthFailure::with_ids(
-            401,
-            "invalid_counter",
-            install_id,
-            key_id.as_str(),
-        )));
-    }
-
-    Ok(Ok(AuthenticatedPayload {
-        install_id: install_id.to_string(),
-        key_id,
-        payload,
-    }))
+        &config.app_attest_environment,
+        now,
+        method,
+        path,
+        MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES,
+        max_payload_bytes,
+    )
+    .await
 }
 
 async fn respond_to_auth_failure(
@@ -1875,28 +1682,6 @@ fn env_flag(env: &Env, name: &str, default_value: bool) -> bool {
         env.var(name).ok().map(|value| value.to_string()),
         default_value,
     )
-}
-
-fn parse_env_flag(value: Option<String>, default_value: bool) -> bool {
-    value.map(|value| value == "true").unwrap_or(default_value)
-}
-
-fn diagnostic_endpoint_path(path: &str) -> bool {
-    matches!(
-        path,
-        SECURE_HELLO_PATH | DEBUG_SEND_TEST_PUSH_PATH | DEBUG_POLL_SUBSCRIPTIONS_PATH
-    )
-}
-
-fn public_write_endpoint(method: &str, path: &str) -> bool {
-    method == "POST"
-        && matches!(
-            path,
-            "/v1/app-attest/challenge"
-                | "/v1/app-attest/register"
-                | DEVICES_REGISTER_PATH
-                | SUBSCRIPTIONS_SYNC_PATH
-        )
 }
 
 fn admin_request_is_authorized(req: &Request, env: &Env) -> Result<bool> {
@@ -1957,13 +1742,6 @@ fn request_content_length_exceeds(headers: &Headers, max_bytes: usize) -> Result
     ))
 }
 
-fn content_length_exceeds(content_length: Option<&str>, max_bytes: usize) -> bool {
-    content_length
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .map(|length| length > max_bytes)
-        .unwrap_or(false)
-}
-
 fn challenge_source_token(headers: &Headers, env: &Env) -> Result<Option<String>> {
     let Some(signal) = challenge_source_signal(headers)? else {
         return Ok(None);
@@ -1999,25 +1777,11 @@ fn challenge_source_hash_key(env: &Env) -> Result<Option<String>> {
         .var("APP_ATTEST_ENVIRONMENT")
         .map(|value| value.to_string())
         .unwrap_or_default();
-    if environment == "development" {
-        return Ok(Some(
-            "opencast-development-challenge-source-key".to_string(),
-        ));
-    }
-
-    Ok(None)
-}
-
-fn keyed_source_token(key: &str, source_signal: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(key.as_bytes());
-    hasher.update([0]);
-    hasher.update(source_signal.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
-fn challenge_bucket_start(now: i64) -> i64 {
-    now.saturating_sub(now.rem_euclid(CHALLENGE_LIMIT_WINDOW_SECONDS))
+    Ok(challenge_source_hash_key_for_environment(
+        None,
+        &environment,
+        DEVELOPMENT_CHALLENGE_SOURCE_HASH_KEY,
+    ))
 }
 
 fn decode_payload<T: for<'de> Deserialize<'de>>(
@@ -2240,184 +2004,4 @@ fn static_json_response(status: u16, body: &'static str) -> Result<Response> {
     Ok(Response::from_bytes(body.as_bytes().to_vec())?
         .with_status(status)
         .with_headers(headers))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn latest_polled_episode_rejects_empty_parsed_feed() {
-        let parsed = rss::ParsedFeed {
-            title: "Empty".to_string(),
-            website_url: None,
-            artwork_url: None,
-            episodes: Vec::new(),
-        };
-
-        assert_eq!(latest_polled_episode(&parsed), Err("empty_feed"));
-    }
-
-    #[test]
-    fn changed_episode_should_notify_skips_backfilled_episode_before_baseline() {
-        let feed = feed_poll_row_with_latest(
-            Some("known-episode"),
-            Some("486 - Pod Session"),
-            Some(1_781_265_600),
-            Some(1_781_989_485),
-        );
-        let latest = parsed_episode("new-id", "487 - Pride Loveline", Some(1_781_870_400));
-
-        assert!(!changed_episode_should_notify(&feed, &latest));
-    }
-
-    #[test]
-    fn changed_episode_should_notify_allows_newer_episode_after_baseline() {
-        let feed = feed_poll_row_with_latest(
-            Some("known-episode"),
-            Some("486 - Pod Session"),
-            Some(1_781_265_600),
-            Some(1_781_989_485),
-        );
-        let latest = parsed_episode("new-id", "487 - Pride Loveline", Some(1_782_075_600));
-
-        assert!(changed_episode_should_notify(&feed, &latest));
-    }
-
-    #[test]
-    fn changed_episode_should_notify_skips_missing_pubdate() {
-        let feed = feed_poll_row_with_latest(
-            Some("known-episode"),
-            Some("486 - Pod Session"),
-            Some(1_781_265_600),
-            Some(1_781_989_485),
-        );
-        let latest = parsed_episode("new-id", "487 - Pride Loveline", None);
-
-        assert!(!changed_episode_should_notify(&feed, &latest));
-    }
-
-    #[test]
-    fn changed_episode_should_notify_skips_visible_identity_churn() {
-        let feed = feed_poll_row_with_latest(
-            Some("old-guid-id"),
-            Some(" 487   - Pride Loveline "),
-            Some(1_781_870_400),
-            Some(1_781_800_000),
-        );
-        let latest = parsed_episode("new-guid-id", "487 - Pride Loveline", Some(1_781_870_400));
-
-        assert!(!changed_episode_should_notify(&feed, &latest));
-    }
-
-    #[test]
-    fn episode_should_notify_subscription_skips_episode_published_before_subscription() {
-        let episode = parsed_episode("new-id", "487 - Pride Loveline", Some(1_781_870_400));
-
-        assert!(!episode_should_notify_subscription(&episode, 1_782_036_569));
-    }
-
-    #[test]
-    fn episode_should_notify_subscription_allows_episode_published_after_subscription() {
-        let episode = parsed_episode("new-id", "488 - New Episode", Some(1_782_075_600));
-
-        assert!(episode_should_notify_subscription(&episode, 1_782_036_569));
-    }
-
-    #[test]
-    fn episode_should_notify_subscription_skips_missing_pubdate() {
-        let episode = parsed_episode("new-id", "Undated Episode", None);
-
-        assert!(!episode_should_notify_subscription(&episode, 1_782_036_569));
-    }
-
-    fn feed_poll_row_with_latest(
-        latest_episode_id: Option<&str>,
-        latest_episode_title: Option<&str>,
-        latest_episode_published_at: Option<i64>,
-        baseline_established_at: Option<i64>,
-    ) -> storage::FeedPollRow {
-        storage::FeedPollRow {
-            feed_url: "https://example.com/feed.xml".to_string(),
-            source_url: "https://example.com/feed.xml".to_string(),
-            etag: None,
-            last_modified: None,
-            latest_episode_id: latest_episode_id.map(str::to_string),
-            latest_episode_title: latest_episode_title.map(str::to_string),
-            latest_episode_published_at,
-            baseline_established_at,
-            consecutive_failures: 0,
-            publish_cadence_seconds: None,
-        }
-    }
-
-    fn parsed_episode(id: &str, title: &str, published_at: Option<i64>) -> rss::ParsedEpisode {
-        rss::ParsedEpisode {
-            id: id.to_string(),
-            title: title.to_string(),
-            summary: None,
-            show_notes_html: None,
-            guid: None,
-            published_at,
-            duration_seconds: None,
-            audio_url: None,
-            artwork_url: None,
-        }
-    }
-
-    #[test]
-    fn diagnostic_endpoint_classification_keeps_production_surface_small() {
-        assert!(diagnostic_endpoint_path(SECURE_HELLO_PATH));
-        assert!(diagnostic_endpoint_path(DEBUG_SEND_TEST_PUSH_PATH));
-        assert!(diagnostic_endpoint_path(DEBUG_POLL_SUBSCRIPTIONS_PATH));
-        assert!(!diagnostic_endpoint_path(DEVICES_REGISTER_PATH));
-        assert!(!diagnostic_endpoint_path(SUBSCRIPTIONS_SYNC_PATH));
-    }
-
-    #[test]
-    fn public_kill_switch_only_blocks_public_write_setup_paths() {
-        assert!(public_write_endpoint("POST", "/v1/app-attest/challenge"));
-        assert!(public_write_endpoint("POST", "/v1/app-attest/register"));
-        assert!(public_write_endpoint("POST", DEVICES_REGISTER_PATH));
-        assert!(public_write_endpoint("POST", SUBSCRIPTIONS_SYNC_PATH));
-        assert!(!public_write_endpoint("POST", DEVICES_UNREGISTER_PATH));
-        assert!(!public_write_endpoint("POST", INSTALL_DELETE_PATH));
-        assert!(!public_write_endpoint("GET", "/v1/app-attest/challenge"));
-        assert!(!public_write_endpoint("POST", DEBUG_SEND_TEST_PUSH_PATH));
-    }
-
-    #[test]
-    fn missing_sensitive_env_flags_fail_closed() {
-        assert!(!parse_env_flag(None, false));
-        assert!(parse_env_flag(Some("true".to_string()), false));
-        assert!(!parse_env_flag(Some("false".to_string()), true));
-    }
-
-    #[test]
-    fn body_content_length_cap_rejects_only_oversized_lengths() {
-        assert!(content_length_exceeds(Some("1025"), 1024));
-        assert!(!content_length_exceeds(Some("1024"), 1024));
-        assert!(!content_length_exceeds(Some("not-a-number"), 1024));
-        assert!(!content_length_exceeds(None, 1024));
-    }
-
-    #[test]
-    fn challenge_source_token_is_keyed_and_does_not_store_raw_source() {
-        let first = keyed_source_token("key-a", "203.0.113.7");
-        let second = keyed_source_token("key-a", "203.0.113.7");
-        let different_key = keyed_source_token("key-b", "203.0.113.7");
-
-        assert_eq!(first, second);
-        assert_ne!(first, different_key);
-        assert!(!first.contains("203.0.113.7"));
-        assert_eq!(first.len(), 64);
-    }
-
-    #[test]
-    fn challenge_bucket_start_uses_hour_windows() {
-        assert_eq!(challenge_bucket_start(0), 0);
-        assert_eq!(challenge_bucket_start(3_599), 0);
-        assert_eq!(challenge_bucket_start(3_600), 3_600);
-        assert_eq!(challenge_bucket_start(3_601), 3_600);
-    }
 }

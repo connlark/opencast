@@ -367,7 +367,7 @@ impl TranscriptionJob {
     }
 
     async fn handle_ack(&self, req: &mut Request) -> Result<Response> {
-        let _message: AckMessage = match req.json().await {
+        let message: AckMessage = match req.json().await {
             Ok(message) => message,
             Err(_) => return json_error(400, types::ERROR_INVALID_REQUEST),
         };
@@ -378,6 +378,27 @@ impl TranscriptionJob {
             job::STATE_RESULT_READY | job::STATE_DELIVERED => {}
             job::STATE_ACKNOWLEDGED => return self.status_response(&record, None),
             _ => return json_error(409, types::ERROR_INVALID_REQUEST),
+        }
+
+        // Cross-stack normalization tripwire: the client sends the hash of
+        // the transcript it imported; compare against the stitched hash on
+        // the record and count mismatches (content-free: job id + truncated
+        // hashes only). The ack still proceeds either way — refusing would
+        // hand a misbehaving client a lever to pin results/{job}/ for the
+        // full result TTL.
+        if let (Some(client_hash), Some(server_hash)) = (
+            message.normalized_transcript_sha256.as_deref(),
+            record.normalized_transcript_sha256.as_deref(),
+        ) {
+            if client_hash != server_hash {
+                worker::console_warn!(
+                    "job {} ack hash mismatch: client {}.. server {}..",
+                    record.job_id,
+                    client_hash.chars().take(8).collect::<String>(),
+                    server_hash.chars().take(8).collect::<String>()
+                );
+                self.bump("ack_hash_mismatch", 1).await;
+            }
         }
 
         // Ack deletes the result object immediately; the app only acks after
