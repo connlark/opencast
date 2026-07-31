@@ -4,6 +4,7 @@ import Foundation
 nonisolated struct NotificationSubscriptionSyncDiagnosticResult: Sendable {
     let syncStatus: String
     let acceptedCount: Int
+    let pendingCount: Int
     let rejectedCount: Int
     let rejectedSummary: String
     let detail: String

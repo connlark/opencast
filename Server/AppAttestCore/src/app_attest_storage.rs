@@ -164,6 +164,25 @@ pub async fn prune_challenges_before(db: &D1Database, cutoff: i64) -> Result<()>
     Ok(())
 }
 
+/// Deletes an install's App Attest identity rows (challenges and keys) in
+/// one atomic batch. Challenge source buckets are keyed by hashed source
+/// token, not install, and age out via their prune.
+pub async fn delete_install_rows(db: &D1Database, install_id: &str) -> Result<()> {
+    let args = [D1Type::Text(install_id)];
+    db.batch(
+        [
+            "DELETE FROM app_attest_challenges WHERE install_id = ?1",
+            "DELETE FROM app_attest_keys WHERE install_id = ?1",
+        ]
+        .into_iter()
+        .map(|statement| db.prepare(statement).bind_refs(&args))
+        .collect::<Result<Vec<_>>>()?,
+    )
+    .await?;
+
+    Ok(())
+}
+
 pub async fn mark_challenge_consumed(
     db: &D1Database,
     challenge_id: &str,

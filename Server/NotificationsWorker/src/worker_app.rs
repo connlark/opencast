@@ -9,7 +9,8 @@ use crate::challenge_limits::{
     MAX_GLOBAL_CHALLENGES_PER_HOUR,
 };
 use crate::poll_decisions::{
-    changed_episode_should_notify, episode_should_notify_subscription, latest_polled_episode,
+    episode_should_notify_subscription, episodes_to_notify, feed_poll_chunks, fetch_with_deadline,
+    jittered_backoff_seconds, latest_polled_episode, FEED_FETCH_TIMEOUT_SECONDS,
 };
 use crate::route::{
     content_length_exceeds, diagnostic_endpoint_path, parse_env_flag, public_write_endpoint,
@@ -25,18 +26,20 @@ use crate::{
     },
     feed_identity, notification_retry, poll_scheduling, random, route, rss, storage,
     subscription_admission::{
-        feed_admission_error, subscription_count_error, FeedAdmissionStatus,
+        admit_pending_enqueue, stale_subscription_urls, subscription_count_error,
         MAX_EXPECTED_PUBLIC_ROLLOUT_INSTALLS_PER_DAY, MAX_GLOBAL_NEW_FEED_ADMISSIONS_PER_DAY,
         MAX_SUBSCRIPTIONS_PER_INSTALL,
     },
 };
+use futures_util::future::join_all;
 use futures_util::StreamExt;
 use opencast_app_attest_core::app_attest_envelope::{self, AuthFailure, AuthenticatedPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 use worker::{
-    Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response, Result,
+    Delay, Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response, Result,
 };
 
 const APP_ATTEST_DB: &str = "APP_ATTEST_DB";
@@ -46,7 +49,18 @@ const CHALLENGE_SOURCE_HASH_KEY: &str = "CHALLENGE_SOURCE_HASH_KEY";
 const DEVELOPMENT_CHALLENGE_SOURCE_HASH_KEY: &str = "opencast-development-challenge-source-key";
 const SECURE_ATTEMPT_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 const FEED_ATTEMPT_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
-const MAX_SUBSCRIPTION_SYNC_PAYLOAD_BYTES: usize = 48 * 1024;
+// APNs debugging value decays in days; the attempts table exists for
+// diagnosis, not audit.
+const PUSH_SEND_ATTEMPT_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+const DELETED_SUBSCRIPTION_RETENTION_SECONDS: i64 = 90 * 24 * 60 * 60;
+const UNSUBSCRIBED_FEED_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+const MAX_FEED_GC_PER_SCHEDULED_RUN: i64 = 50;
+// A DoS bound on an authenticated endpoint, not a quota: 96 KiB covers the
+// full 200-subscription set at ~490-byte URLs. The sync is a full-set
+// declaration (any absent subscription is marked deleted), so client-side
+// chunking is never an option — a chunked request would mass-unsubscribe
+// everything outside its chunk. Raise this cap instead.
+const MAX_SUBSCRIPTION_SYNC_PAYLOAD_BYTES: usize = 96 * 1024;
 const MAX_CHALLENGE_REQUEST_BODY_BYTES: usize = 1024;
 const MAX_REGISTER_REQUEST_BODY_BYTES: usize = 48 * 1024;
 const MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES: usize =
@@ -155,6 +169,7 @@ struct SyncSubscriptionsResponse {
     message: &'static str,
     accepted: Vec<AcceptedSubscription>,
     rejected: Vec<RejectedSubscription>,
+    pending: Vec<PendingSubscription>,
 }
 
 #[derive(Serialize)]
@@ -167,6 +182,11 @@ struct AcceptedSubscription {
 struct RejectedSubscription {
     feed_url: String,
     error: &'static str,
+}
+
+#[derive(Serialize)]
+struct PendingSubscription {
+    feed_url: String,
 }
 
 #[derive(Deserialize)]
@@ -344,7 +364,23 @@ pub async fn handle_scheduled(env: Env) -> Result<()> {
             MAX_FEEDS_PER_SCHEDULED_RUN
         );
     }
-    let summary = poll_feeds(feeds, &env, &db, &config, now).await?;
+    // Optimistic per-feed claims keep an overlapping invocation (a tick that
+    // ran long) from double-fetching the same due rows. Manual/debug polls
+    // deliberately bypass the claim: they poll regardless of dueness.
+    let mut claimed = Vec::with_capacity(feeds.len());
+    for feed in feeds {
+        if storage::claim_due_feed(
+            &db,
+            &feed.feed_url,
+            now,
+            now.saturating_add(FEED_POLL_INTERVAL_SECONDS),
+        )
+        .await?
+        {
+            claimed.push(feed);
+        }
+    }
+    let summary = poll_feeds(claimed, &env, &db, &config, now).await?;
     worker::console_log!(
         "scheduled poll: polled={} changed={} sends={}",
         summary.feeds_polled,
@@ -360,6 +396,50 @@ pub async fn handle_scheduled(env: Env) -> Result<()> {
     )
     .await
     .ok();
+    // Retention lives on the cron path so a quiet request lane still prunes.
+    // The admission/secure prunes also keep their request-time call sites.
+    // Best-effort like the challenge prunes above; counts are logged so the
+    // post-deploy cron watch can verify the sweeps run and settle.
+    let push_attempts_pruned = storage::prune_push_send_attempts_before(
+        &db,
+        now.saturating_sub(PUSH_SEND_ATTEMPT_RETENTION_SECONDS),
+    )
+    .await
+    .unwrap_or(0);
+    let admission_attempts_pruned = storage::prune_feed_admission_attempts_before(
+        &db,
+        now.saturating_sub(FEED_ATTEMPT_RETENTION_SECONDS),
+    )
+    .await
+    .unwrap_or(0);
+    let secure_attempts_pruned = storage::prune_secure_attempts_before(
+        &db,
+        now.saturating_sub(SECURE_ATTEMPT_RETENTION_SECONDS),
+    )
+    .await
+    .unwrap_or(0);
+    let subscriptions_gcd = storage::gc_deleted_subscriptions_before(
+        &db,
+        now.saturating_sub(DELETED_SUBSCRIPTION_RETENTION_SECONDS),
+    )
+    .await
+    .unwrap_or(0);
+    let feed_gc = storage::gc_unsubscribed_feeds(
+        &db,
+        now.saturating_sub(UNSUBSCRIBED_FEED_RETENTION_SECONDS),
+        MAX_FEED_GC_PER_SCHEDULED_RUN,
+    )
+    .await
+    .unwrap_or_default();
+    worker::console_log!(
+        "scheduled retention: push_attempts={} admission_attempts={} secure_attempts={} deleted_subscriptions={} feeds={} feed_sends={}",
+        push_attempts_pruned,
+        admission_attempts_pruned,
+        secure_attempts_pruned,
+        subscriptions_gcd,
+        feed_gc.feeds_deleted,
+        feed_gc.sends_deleted
+    );
     Ok(())
 }
 
@@ -598,7 +678,7 @@ async fn handle_register_device(
         if enabled_count >= MAX_DEVICES_PER_INSTALL {
             worker::console_warn!(
                 "device register rejected: device_limit_exceeded install={} enabled_devices={}",
-                authenticated.install_id,
+                logged_install_id(&authenticated.install_id),
                 enabled_count
             );
             return json_error(429, "device_limit_exceeded");
@@ -827,6 +907,7 @@ async fn handle_sync_subscriptions(
     }
 
     let mut accepted = Vec::new();
+    let mut pending = Vec::new();
     let mut accepted_urls = BTreeSet::new();
     let day_start = now.saturating_sub(24 * 60 * 60);
     let mut accepted_new_feeds =
@@ -853,7 +934,7 @@ async fn handle_sync_subscriptions(
             continue;
         }
 
-        let host_accepted_count =
+        let mut host_accepted_count =
             if let Some(count) = accepted_new_feeds_by_host.get(&admitted.host) {
                 *count
             } else {
@@ -863,37 +944,38 @@ async fn handle_sync_subscriptions(
                 accepted_new_feeds_by_host.insert(admitted.host.clone(), count);
                 count
             };
-        if let Some(error) = feed_admission_error(
-            FeedAdmissionStatus::New,
-            accepted_new_feeds,
-            host_accepted_count,
-            accepted_new_feeds_globally,
-        ) {
-            record_feed_admission_attempt(
-                db,
-                &authenticated.install_id,
-                &authenticated.key_id,
-                Some(&admitted.host),
-                false,
-                Some(error),
-                now,
-            )
-            .await
-            .ok();
-            rejected.push(RejectedSubscription {
-                feed_url: admitted.source_url,
-                error,
-            });
-            continue;
-        }
 
-        match admit_new_feed(db, &authenticated, &admitted, now).await {
-            Ok(title) => {
-                accepted_new_feeds += 1;
-                accepted_new_feeds_globally += 1;
-                if let Some(count) = accepted_new_feeds_by_host.get_mut(&admitted.host) {
-                    *count += 1;
-                }
+        // Unknown feeds admit lazily: the enqueue consumes admission budget
+        // and writes the subscription plus a baseline-less feed row now, and
+        // the scheduled tick performs the real admission fetch on its first
+        // pass. That keeps a large first sync fast instead of running one
+        // live RSS fetch per new feed against the client's timeout.
+        match admit_pending_enqueue(
+            &mut accepted_new_feeds,
+            &mut host_accepted_count,
+            &mut accepted_new_feeds_globally,
+        ) {
+            Ok(()) => {
+                accepted_new_feeds_by_host.insert(admitted.host.clone(), host_accepted_count);
+                storage::insert_pending_feed(
+                    db,
+                    &admitted.canonical_url,
+                    &admitted.source_url,
+                    FEED_POLL_INTERVAL_SECONDS,
+                    now,
+                )
+                .await?;
+                record_feed_admission_attempt(
+                    db,
+                    &authenticated.install_id,
+                    &authenticated.key_id,
+                    Some(&admitted.host),
+                    true,
+                    None,
+                    now,
+                )
+                .await
+                .ok();
                 storage::upsert_feed_subscription(
                     db,
                     &authenticated.install_id,
@@ -903,9 +985,8 @@ async fn handle_sync_subscriptions(
                 )
                 .await?;
                 accepted_urls.insert(admitted.canonical_url.clone());
-                accepted.push(AcceptedSubscription {
+                pending.push(PendingSubscription {
                     feed_url: admitted.canonical_url,
-                    title: Some(title),
                 });
             }
             Err(error) => {
@@ -930,16 +1011,13 @@ async fn handle_sync_subscriptions(
 
     let existing_subscriptions =
         storage::install_subscription_feed_urls(db, &authenticated.install_id).await?;
-    for subscription in existing_subscriptions {
-        if !accepted_urls.contains(&subscription.feed_url) {
-            storage::mark_subscription_deleted(
-                db,
-                &authenticated.install_id,
-                &subscription.feed_url,
-                now,
-            )
-            .await?;
-        }
+    for feed_url in stale_subscription_urls(
+        existing_subscriptions
+            .into_iter()
+            .map(|subscription| subscription.feed_url),
+        &accepted_urls,
+    ) {
+        storage::mark_subscription_deleted(db, &authenticated.install_id, &feed_url, now).await?;
     }
 
     storage::prune_feed_admission_attempts_before(
@@ -955,6 +1033,7 @@ async fn handle_sync_subscriptions(
             message: "synced",
             accepted,
             rejected,
+            pending,
         },
     )
 }
@@ -1044,63 +1123,6 @@ async fn handle_admin_test_poll_feed(
     json_response(200, &response)
 }
 
-async fn admit_new_feed(
-    db: &worker::D1Database,
-    authenticated: &AuthenticatedPayload,
-    admitted: &AdmittedSubscription,
-    now: i64,
-) -> std::result::Result<String, &'static str> {
-    let fetched = match fetch_feed(&admitted.source_url, None, None).await {
-        Ok(FeedFetchOutcome::Fetched(fetched)) => fetched,
-        Ok(FeedFetchOutcome::NotModified { .. }) => return Err("unexpected_not_modified"),
-        Err(error) => return Err(error.code()),
-    };
-    let feed =
-        rss::parse_rss(&fetched.body, &admitted.canonical_url).map_err(|error| error.code())?;
-    let latest = feed.episodes.first();
-    let publish_cadence_seconds = feed_publish_cadence_seconds(&feed);
-    let latest_episode_published_at = latest.and_then(|episode| episode.published_at);
-    let poll_interval_seconds = poll_scheduling::poll_interval_seconds(
-        publish_cadence_seconds,
-        latest_episode_published_at,
-        now,
-    );
-
-    storage::upsert_feed_baseline(
-        db,
-        storage::FeedBaselineUpsert {
-            feed_url: &admitted.canonical_url,
-            source_url: &admitted.source_url,
-            title: Some(&feed.title),
-            website_url: feed.website_url.as_deref(),
-            etag: fetched.etag.as_deref(),
-            last_modified: fetched.last_modified.as_deref(),
-            latest_episode_id: latest.map(|episode| episode.id.as_str()),
-            latest_episode_title: latest.map(|episode| episode.title.as_str()),
-            latest_episode_published_at,
-            poll_interval_seconds,
-            publish_cadence_seconds,
-            now,
-        },
-    )
-    .await
-    .map_err(|_| "database_error")?;
-
-    record_feed_admission_attempt(
-        db,
-        &authenticated.install_id,
-        &authenticated.key_id,
-        Some(&admitted.host),
-        true,
-        None,
-        now,
-    )
-    .await
-    .ok();
-
-    Ok(feed.title)
-}
-
 async fn poll_feeds(
     feeds: Vec<storage::FeedPollRow>,
     env: &Env,
@@ -1113,20 +1135,28 @@ async fn poll_feeds(
         ..PollSubscriptionsResponse::default()
     };
 
-    for feed in feeds {
-        response.feeds_polled += 1;
-        match poll_one_feed(feed, env, db, config, now).await {
-            Ok(counts) => {
-                if counts.changed {
-                    response.feeds_changed += 1;
+    for chunk in feed_poll_chunks(feeds) {
+        let results = join_all(
+            chunk
+                .into_iter()
+                .map(|feed| poll_one_feed(feed, env, db, config, now)),
+        )
+        .await;
+        for result in results {
+            response.feeds_polled += 1;
+            match result {
+                Ok(counts) => {
+                    if counts.changed {
+                        response.feeds_changed += 1;
+                    }
+                    response.notifications_attempted += counts.sends.attempted;
+                    response.apns_200_count += counts.sends.apns_200;
+                    response.deduped_count += counts.sends.deduped;
                 }
-                response.notifications_attempted += counts.sends.attempted;
-                response.apns_200_count += counts.sends.apns_200;
-                response.deduped_count += counts.sends.deduped;
-            }
-            Err(error) => {
-                if response.first_error.is_none() {
-                    response.first_error = Some(error);
+                Err(error) => {
+                    if response.first_error.is_none() {
+                        response.first_error = Some(error);
+                    }
                 }
             }
         }
@@ -1155,10 +1185,14 @@ async fn poll_one_feed(
     now: i64,
 ) -> std::result::Result<PollOneFeedResult, String> {
     let started_at = now_seconds();
-    match fetch_feed(
-        &feed.source_url,
-        feed.etag.as_deref(),
-        feed.last_modified.as_deref(),
+    match fetch_with_deadline(
+        fetch_feed(
+            &feed.source_url,
+            feed.etag.as_deref(),
+            feed.last_modified.as_deref(),
+        ),
+        Delay::from(Duration::from_secs(FEED_FETCH_TIMEOUT_SECONDS)),
+        FeedFetchError::FetchFailed,
     )
     .await
     {
@@ -1231,35 +1265,41 @@ async fn poll_one_feed(
                 .as_deref()
                 .map(|known| known != latest.id)
                 .unwrap_or(false);
-            let should_notify = changed && changed_episode_should_notify(&feed, latest);
-            let sends = if should_notify {
+            // Oldest-first so devices receive a catch-up burst in
+            // chronological order; each episode takes its own send-ledger
+            // claims and per-device gate, and J's per-episode collapse IDs
+            // keep the burst individually visible.
+            let mut sends = EpisodeSendCounts::default();
+            for episode in episodes_to_notify(&feed, &parsed) {
                 let episode_fingerprint = feed_identity::episode_notification_fingerprint(
                     feed_identity::EpisodeNotificationFingerprintInput {
-                        title: &latest.title,
-                        guid: latest.guid.as_deref(),
-                        audio_url: latest.audio_url.as_deref(),
-                        duration_seconds: latest.duration_seconds,
-                        summary: latest.summary.as_deref(),
-                        show_notes_html: latest.show_notes_html.as_deref(),
-                        episode_id: &latest.id,
+                        title: &episode.title,
+                        guid: episode.guid.as_deref(),
+                        audio_url: episode.audio_url.as_deref(),
+                        duration_seconds: episode.duration_seconds,
+                        summary: episode.summary.as_deref(),
+                        show_notes_html: episode.show_notes_html.as_deref(),
+                        episode_id: &episode.id,
                     },
                 );
-                send_episode_notifications(
+                let episode_sends = send_episode_notifications(
                     env,
                     db,
                     config,
                     &feed.feed_url,
                     &parsed.title,
                     parsed.artwork_url.as_deref(),
-                    latest,
+                    episode,
                     episode_fingerprint.as_deref(),
                     now,
                 )
                 .await
-                .map_err(|error| error.to_string())?
-            } else {
-                EpisodeSendCounts::default()
-            };
+                .map_err(|error| error.to_string())?;
+                sends.attempted += episode_sends.attempted;
+                sends.apns_200 += episode_sends.apns_200;
+                sends.deduped += episode_sends.deduped;
+                sends.retryable_failures += episode_sends.retryable_failures;
+            }
             let publish_cadence_seconds = feed_publish_cadence_seconds(&parsed);
             let poll_interval_seconds = poll_scheduling::poll_interval_seconds(
                 publish_cadence_seconds,
@@ -1304,6 +1344,15 @@ async fn poll_one_feed(
             )
             .await
             .map_err(|error| error.to_string())?;
+            if feed.baseline_established_at.is_none() {
+                // First successful poll of a pending-admission feed: arm the
+                // back-catalog guard. Admission never notifies — `changed`
+                // is structurally false while no latest_episode_id was
+                // stored, so this pass only establishes the baseline.
+                storage::establish_feed_baseline(db, &feed.feed_url, now)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
             record_feed_poll_attempt(
                 db,
                 &feed.feed_url,
@@ -1340,6 +1389,14 @@ async fn fetch_feed(
         let parsed_current_url =
             url::Url::parse(&current_url).map_err(|_| FeedFetchError::FetchFailed)?;
         let headers = Headers::new();
+        // UA-less fetches trip host WAFs into 403 -> six-hour backoff; one
+        // unconditional identity serves both the poll and admission paths.
+        headers
+            .set(
+                "user-agent",
+                "OpenCast-Notifications/1 (+https://opencast.mobile)",
+            )
+            .map_err(|_| FeedFetchError::FetchFailed)?;
         if same_origin(&parsed_current_url, &original_url) {
             if let Some(etag) = etag {
                 headers
@@ -1469,7 +1526,7 @@ async fn send_episode_notifications(
             continue;
         }
 
-        let request = match apns::episode_push_request(
+        let request = match apns::episode_delivery_push_request(
             &device.device_token,
             &config.bundle_id,
             config.apns_environment,
@@ -1484,6 +1541,7 @@ async fn send_episode_notifications(
                 feed_url,
                 episode_id: &episode.id,
             },
+            now,
         ) {
             Ok(request) => request,
             Err(_) => continue,
@@ -1616,9 +1674,17 @@ async fn record_feed_poll_attempt(
 
 fn backoff_seconds(failures: i64) -> i64 {
     let exponent = u32::try_from(failures.saturating_sub(1).min(8)).unwrap_or(0);
-    FEED_POLL_INTERVAL_SECONDS
+    let base = FEED_POLL_INTERVAL_SECONDS
         .saturating_mul(2_i64.saturating_pow(exponent))
-        .min(MAX_BACKOFF_SECONDS)
+        .min(MAX_BACKOFF_SECONDS);
+    jittered_backoff_seconds(base, MAX_BACKOFF_SECONDS, worker::js_sys::Math::random())
+}
+
+/// The logging convention for install identity: a 16-hex SHA-256 prefix —
+/// enough to correlate log lines, never the raw install id.
+fn logged_install_id(install_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(&Sha256::digest(install_id.as_bytes())[..8])
 }
 
 async fn authenticate_envelope(

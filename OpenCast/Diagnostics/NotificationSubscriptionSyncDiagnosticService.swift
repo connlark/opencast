@@ -18,6 +18,7 @@ struct NotificationSubscriptionSyncDiagnosticService {
             return NotificationSubscriptionSyncDiagnosticResult(
                 syncStatus: "Not Run",
                 acceptedCount: 0,
+                pendingCount: 0,
                 rejectedCount: 0,
                 rejectedSummary: "None",
                 detail: "App Attest is unavailable on this device."
@@ -46,6 +47,7 @@ struct NotificationSubscriptionSyncDiagnosticService {
         return NotificationSubscriptionSyncDiagnosticResult(
             syncStatus: response.message,
             acceptedCount: response.accepted.count,
+            pendingCount: response.pending.count,
             rejectedCount: response.rejected.count,
             rejectedSummary: Self.rejectedSummary(response.rejected),
             detail: credential.detail

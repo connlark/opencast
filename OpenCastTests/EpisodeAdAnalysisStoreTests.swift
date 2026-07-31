@@ -967,6 +967,30 @@ struct EpisodeAdAnalysisStoreTests {
         }
     }
 
+    @Test("A response containing an unknown span kind fails cleanly, never a trusted skip")
+    func unknownSpanKindFailsCleanlyInsteadOfTrustedSkip() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let client = FakeEpisodeAdAnalysisClient()
+        client.spanKind = .unknown
+        let store = EpisodeAdAnalysisStore(
+            client: client,
+            fileStore: EpisodeAdAnalysisFileStore(baseDirectory: temporaryDirectory)
+        )
+        let transcript = makeTranscriptDocument(episodeID: "ad-unknown-kind")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+
+        #expect(await waitUntil {
+            store.record(for: transcript.episodeID)?.state == .failed
+        })
+        let record = try #require(store.record(for: transcript.episodeID))
+        #expect(record.failureKind == .generic)
+        #expect(record.errorMessage == EpisodeAdAnalysisError.unrecognizedSpanKind.localizedDescription)
+        #expect(store.document(for: transcript.episodeID) == nil)
+    }
+
     @Test("A successful rerun clears the stored failure kind")
     func successfulRerunClearsFailureKind() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -1055,6 +1079,48 @@ struct EpisodeAdAnalysisStoreTests {
         #expect(decodedRequest.transcript.state == "completed")
         #expect(response.spans.first?.kind == .insertedAd)
         #expect(response.usage?.totalTokenCount == 168)
+    }
+
+    @Test("URLSession client decodes an unknown span kind as .unknown instead of throwing")
+    func urlSessionClientDecodesUnknownSpanKind() async throws {
+        let responseBody = Data("""
+        {
+          "schema_version": 1,
+          "request_id": "client-unknown-kind",
+          "model": "gemini-2.5-flash-lite",
+          "policy": "ads_only",
+          "spans": [
+            {
+              "kind": "subliminal_ad",
+              "label": "Future Kind",
+              "start_segment_id": 4,
+              "end_segment_id": 6,
+              "start_time": 10.5,
+              "end_time": 21.25,
+              "confidence": 0.91,
+              "evidence_quote": "sponsor read"
+            }
+          ],
+          "warnings": [],
+          "usage": null
+        }
+        """.utf8)
+        let transport = FakeEpisodeAdAnalysisHTTPTransport(statusCode: 200, body: responseBody)
+        let client = URLSessionEpisodeAdAnalysisClient(
+            configuration: AdAnalysisBackendConfiguration(
+                workerBaseURL: URL(string: "https://worker.example")!,
+                authentication: .bearer(clientToken: "test-token"),
+                isEnabled: true
+            ),
+            transport: transport
+        )
+
+        let outcome = try await client.analyze(makeAPIRequest(requestID: "client-unknown-kind"))
+        guard case .completed(let response) = outcome else {
+            Issue.record("Expected a synchronous response.")
+            return
+        }
+        #expect(response.spans.first?.kind == .unknown)
     }
 
     @Test("URLSession bearer client decodes accepted submit and running poll")
@@ -1552,6 +1618,7 @@ private final class ThrowingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @u
 
 private final class FakeEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @unchecked Sendable {
     var lastRequest: EpisodeAdAnalysisAPIRequest?
+    var spanKind: EpisodeAdAnalysisSpanKind = .hostReadAd
 
     func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
         lastRequest = request
@@ -1562,7 +1629,7 @@ private final class FakeEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @unche
             policy: EpisodeAdAnalysisContract.expectedPolicy,
             spans: [
                 EpisodeAdAnalysisAPIAdSpan(
-                    kind: .hostReadAd,
+                    kind: spanKind,
                     label: "Example Sponsor",
                     startSegmentID: 1,
                     endSegmentID: 1,

@@ -4,6 +4,7 @@ pub const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 pub const HEALTH_PATH: &str = "/health";
 pub const APP_ATTEST_CHALLENGE_PATH: &str = "/v1/app-attest/challenge";
 pub const APP_ATTEST_REGISTER_PATH: &str = "/v1/app-attest/register";
+pub const INSTALL_DELETE_PATH: &str = "/v1/install/delete";
 pub const ANALYZE_TRANSCRIPT_PATH: &str = "/v1/ad-analysis/transcript";
 pub const AD_ANALYSIS_JOBS_PREFIX: &str = "/v1/ad-analysis/jobs/";
 
@@ -33,6 +34,7 @@ pub enum RouteAction {
     Static(StaticResponse),
     AppAttestChallenge,
     AppAttestRegister,
+    InstallDelete,
     AnalyzeTranscript,
     PollJob { job_id: String },
     InternalAnalyze,
@@ -64,6 +66,10 @@ pub fn route_request(
 
     if path == APP_ATTEST_REGISTER_PATH {
         return handle_app_attest_write(method, enabled, RouteAction::AppAttestRegister);
+    }
+
+    if path == INSTALL_DELETE_PATH {
+        return handle_app_attest_write(method, enabled, RouteAction::InstallDelete);
     }
 
     if path == ANALYZE_TRANSCRIPT_PATH {

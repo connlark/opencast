@@ -7,6 +7,7 @@ enum EpisodeAdAnalysisError: LocalizedError, Sendable, Equatable {
     case analysisDocumentMissing
     case anotherJobActive
     case analysisTimedOut
+    case unrecognizedSpanKind
 
     var errorDescription: String? {
         switch self {
@@ -22,6 +23,8 @@ enum EpisodeAdAnalysisError: LocalizedError, Sendable, Equatable {
             "Finish the active promo/ad analysis before starting another one."
         case .analysisTimedOut:
             "Promo/ad analysis took too long. Try again."
+        case .unrecognizedSpanKind:
+            "Promo/ad analysis returned a span kind this version of OpenCast doesn't recognize."
         }
     }
 }

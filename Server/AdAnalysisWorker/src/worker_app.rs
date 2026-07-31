@@ -18,7 +18,7 @@ use crate::challenge_limits::{
 use crate::job::{job_object_name, valid_job_id, JobPollRequest, JobSubmitRequest, JOB_BINDING};
 use crate::route::{
     json_response as static_json_response, route_request, Header as StaticHeader, RouteAction,
-    StaticResponse, ANALYZE_TRANSCRIPT_PATH, INTERNAL_HOST, JSON_CONTENT_TYPE,
+    StaticResponse, ANALYZE_TRANSCRIPT_PATH, INSTALL_DELETE_PATH, INTERNAL_HOST, JSON_CONTENT_TYPE,
 };
 use crate::storage;
 use crate::types::{
@@ -91,6 +91,7 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
             };
             handle_register(&mut req, &db, &config, now_seconds()).await
         }
+        RouteAction::InstallDelete => handle_install_delete(&mut req, &env).await,
         RouteAction::AnalyzeTranscript => analyze_transcript(&mut req, &env).await,
         RouteAction::PollJob { job_id } => poll_job(&mut req, &env, &path, &job_id).await,
         RouteAction::InternalAnalyze => handle_internal_analyze(&mut req, &env).await,
@@ -575,6 +576,41 @@ async fn poll_job_with_envelope(
     forward_job_poll(env, job_id).await
 }
 
+async fn handle_install_delete(req: &mut Request, env: &Env) -> Result<Response> {
+    let db = match required_d1(env, AD_ANALYSIS_DB) {
+        Ok(db) => db,
+        Err(error) => return json_error(503, error),
+    };
+    let config = match AppConfig::from_env(env) {
+        Ok(config) => config,
+        Err(error) => return json_error(503, error),
+    };
+    let authenticated = match authenticate_envelope(
+        req,
+        &db,
+        &config.app_id,
+        &config.app_attest_environment,
+        now_seconds(),
+        "POST",
+        INSTALL_DELETE_PATH,
+        MAX_JOB_POLL_BODY_BYTES,
+        MAX_JOB_POLL_BODY_BYTES,
+    )
+    .await?
+    {
+        Ok(authenticated) => authenticated,
+        Err(failure) => return json_error_code(failure.status, failure.code),
+    };
+
+    // The install's deletable D1 surface is its App Attest identity rows.
+    // Day-keyed usage DOs are unreachable by design (named by hashed key
+    // subject and day index, never addressed after their day) and self-wipe
+    // via their cleanup alarms, so there is nothing to purge there.
+    storage::delete_install_rows(&db, &authenticated.install_id).await?;
+
+    json_success(200, &serde_json::json!({ "message": "deleted" }))
+}
+
 async fn forward_job_poll(env: &Env, job_id: &str) -> Result<Response> {
     let namespace = env.durable_object(JOB_BINDING)?;
     let stub = namespace.get_by_name(&job_object_name(job_id))?;
@@ -660,8 +696,17 @@ async fn admit_usage(
     )?))
 }
 
-#[durable_object(fetch)]
+/// Objects are minted per subject and day and never addressed again once
+/// their day passes, so each schedules its own storage wipe: an alarm ~48 h
+/// after the first write (safely past any timezone or day-boundary read)
+/// deletes everything, mirroring the transcription job DO's cleanup. Pure
+/// GC — the object name is never reused, so live limits cannot change.
+const USAGE_LIMITER_CLEANUP_DELAY: std::time::Duration =
+    std::time::Duration::from_secs(48 * 60 * 60);
+
+#[durable_object(alarm)]
 pub struct AdAnalysisUsageLimiter {
+    state: State,
     sql: SqlStorage,
 }
 
@@ -677,7 +722,7 @@ impl DurableObject for AdAnalysisUsageLimiter {
             None,
         )
         .expect("create usage limiter table");
-        Self { sql }
+        Self { state, sql }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
@@ -698,11 +743,32 @@ impl DurableObject for AdAnalysisUsageLimiter {
             Err(error) => return json_error(429, ErrorResponse::new(error.code())),
         };
         self.write_usage(&next_usage)?;
+        self.schedule_cleanup().await?;
         json_success(200, &next_usage)
+    }
+
+    async fn alarm(&self) -> Result<Response> {
+        // DROP first: delete_all clears the object's storage, and dropping
+        // the table explicitly keeps the wipe complete even if the SQLite
+        // backend's delete_all semantics ever exclude SQL tables.
+        self.sql.exec("DROP TABLE IF EXISTS daily_usage;", None)?;
+        self.state.storage().delete_all().await?;
+        self.state.storage().delete_alarm().await?;
+        Response::ok("")
     }
 }
 
 impl AdAnalysisUsageLimiter {
+    async fn schedule_cleanup(&self) -> Result<()> {
+        if self.state.storage().get_alarm().await?.is_none() {
+            self.state
+                .storage()
+                .set_alarm(USAGE_LIMITER_CLEANUP_DELAY)
+                .await?;
+        }
+        Ok(())
+    }
+
     fn current_usage(&self) -> Result<DailyUsage> {
         let rows: Vec<DailyUsageRow> = self
             .sql

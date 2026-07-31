@@ -163,7 +163,48 @@ pub fn diagnostic_push_request(
     Ok(push_request(token, bundle_id, environment, body))
 }
 
-pub fn episode_push_request(
+/// Seconds an episode-release alert stays deliverable: older than a day it
+/// is noise, and APNs drops it rather than delivering stale to a device that
+/// was offline for days.
+const EPISODE_NOTIFICATION_TTL_SECONDS: i64 = 24 * 60 * 60;
+
+pub fn episode_notification_expiration(now: i64) -> i64 {
+    now.saturating_add(EPISODE_NOTIFICATION_TTL_SECONDS)
+}
+
+/// Per-episode APNs collapse key. Contract: repeat sends of the *same*
+/// episode share the ID so APNs self-dedupes (complementing the send
+/// ledger), while *distinct* episodes never share one — load-bearing for
+/// multi-episode catch-up, whose burst must stay individually visible.
+/// SHA-256 hex of the send ledger's episode identity is deterministic and
+/// exactly APNs' 64-byte header limit.
+pub fn episode_collapse_id(episode_id: &str) -> String {
+    sha256_hex(episode_id.as_bytes())
+}
+
+/// The full episode-release push request: payload plus the delivery headers
+/// (24 h `apns-expiration`, per-episode `apns-collapse-id`). The only public
+/// episode entry point, so no caller can forget the delivery headers.
+pub fn episode_delivery_push_request(
+    device_token: &str,
+    bundle_id: &str,
+    environment: ApnsEnvironment,
+    notification: EpisodeNotification<'_>,
+    now: i64,
+) -> Result<PushRequest, PushRequestError> {
+    let episode_id = notification.episode_id;
+    let mut request = episode_push_request(device_token, bundle_id, environment, notification)?;
+    request.headers.push((
+        "apns-expiration",
+        episode_notification_expiration(now).to_string(),
+    ));
+    request
+        .headers
+        .push(("apns-collapse-id", episode_collapse_id(episode_id)));
+    Ok(request)
+}
+
+fn episode_push_request(
     device_token: &str,
     bundle_id: &str,
     environment: ApnsEnvironment,
@@ -773,6 +814,53 @@ mod tests {
             "sandbox",
             ApnsEnvironment::Development
         ));
+    }
+
+    #[test]
+    fn episode_delivery_headers_pin_expiration_and_collapse_contract() {
+        let notification = EpisodeNotification {
+            podcast_title: "Podcast Title",
+            episode_title: "Episode Title",
+            episode_summary: None,
+            show_notes_html: None,
+            duration_seconds: None,
+            podcast_artwork_url: None,
+            episode_artwork_url: None,
+            feed_url: "https://example.com/feed.xml",
+            episode_id: "episode-a",
+        };
+        let now = 1_780_000_000;
+        let request = episode_delivery_push_request(
+            DEVICE_TOKEN,
+            "com.connor.opencast",
+            ApnsEnvironment::Development,
+            notification,
+            now,
+        )
+        .expect("request should build");
+
+        // Expiration is send time + 24 h, and the base header set survives.
+        assert!(request
+            .headers
+            .contains(&("apns-expiration", "1780086400".to_string())));
+        assert!(request
+            .headers
+            .contains(&("apns-push-type", "alert".to_string())));
+
+        let collapse_id = request
+            .headers
+            .iter()
+            .find(|(name, _)| *name == "apns-collapse-id")
+            .map(|(_, value)| value.clone())
+            .expect("collapse id header");
+        // At most 64 bytes (the APNs header limit), same episode -> same ID,
+        // distinct episodes -> distinct IDs.
+        assert_eq!(collapse_id.len(), 64);
+        assert_eq!(collapse_id, episode_collapse_id("episode-a"));
+        assert_ne!(
+            episode_collapse_id("episode-a"),
+            episode_collapse_id("episode-b")
+        );
     }
 
     #[test]

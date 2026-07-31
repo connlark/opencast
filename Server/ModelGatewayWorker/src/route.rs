@@ -91,6 +91,20 @@ pub fn route_request(
     RouteAction::Static(json_response(404, NOT_FOUND_JSON))
 }
 
+/// Evaluates an `If-None-Match` request header against an object's entity
+/// tag using strong comparison: `*` matches any existing object, quoted and
+/// bare forms are tolerated, and weak (`W/`-prefixed) candidates never match.
+pub fn if_none_match_matches(header: Option<&str>, etag: &str) -> bool {
+    let Some(header) = header else {
+        return false;
+    };
+    let entity_tag = etag.trim().trim_matches('"');
+    header.split(',').map(str::trim).any(|candidate| {
+        candidate == "*"
+            || (!candidate.starts_with("W/") && candidate.trim_matches('"') == entity_tag)
+    })
+}
+
 pub fn parse_range_header(
     header: Option<&str>,
     object_size: u64,

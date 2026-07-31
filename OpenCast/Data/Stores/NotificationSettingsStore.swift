@@ -362,7 +362,9 @@ final class NotificationSettingsStore {
 
     private func recordSync(_ response: NotificationSubscriptionSyncResponse) {
         lastSyncedAt = .now
-        lastSyncMessage = "\(response.accepted.count) synced"
+        lastSyncMessage = response.pending.isEmpty
+            ? "\(response.accepted.count) synced"
+            : "\(response.accepted.count) synced, \(response.pending.count) syncing"
         if !response.rejected.isEmpty {
             lastErrorMessage = "\(response.rejected.count) feed(s) rejected by notification validation."
         }

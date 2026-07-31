@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use futures_util::future::join_all;
+use futures_util::future::{join_all, select, Either};
 use worker::{console_error, Delay, Fetch, Headers, Method, Request, RequestInit, Response};
 
 use crate::gemini::{parse_error_envelope, parse_generate_content_response};
@@ -14,6 +14,11 @@ use crate::validation::{combine_warnings, validate_model_output, ModelOutput};
 use crate::windowing::analysis_windows;
 
 const MAX_GEMINI_ATTEMPTS: usize = 5;
+/// Model calls are slower than feed fetches; 30 s bounds each attempt (and
+/// therefore also the malformed-parse re-prompt in `analyze_window`) without
+/// tripping on a healthy long generation. The retry ladder is unchanged —
+/// a timed-out attempt backs off and retries like any transport failure.
+const GEMINI_CALL_TIMEOUT_SECONDS: u64 = 30;
 
 pub(crate) struct UpstreamError {
     pub status: u16,
@@ -37,7 +42,10 @@ pub(crate) async fn run_windows_analysis(
     let mut combined_usage = None;
     let mut gemini_warnings = Vec::new();
     // At most four windows run concurrently, under the runtime's six-connection
-    // cap. Folding in window order preserves the synchronous response contract.
+    // cap: MAX_SEGMENTS (6_000, types.rs) over 2_000-segment windows with 200
+    // overlap is a structural <=4-window bound — raising MAX_SEGMENTS must
+    // revisit this concurrency. Folding in window order preserves the
+    // synchronous response contract.
     let window_outcomes = join_all(
         analysis_windows(&request)
             .into_iter()
@@ -196,7 +204,18 @@ async fn call_gemini_once(
         .with_body(Some(payload_string.into()));
 
     let request = Request::new_with_init(gemini_url, &init).map_err(worker_error)?;
-    Fetch::Request(request).send().await.map_err(worker_error)
+    let fetch = Fetch::Request(request);
+    let fetch = std::pin::pin!(fetch.send());
+    let deadline = std::pin::pin!(Delay::from(Duration::from_secs(
+        GEMINI_CALL_TIMEOUT_SECONDS
+    )));
+    match select(fetch, deadline).await {
+        Either::Left((result, _)) => result.map_err(worker_error),
+        Either::Right(((), _)) => Err(UpstreamError {
+            status: 503,
+            body: ErrorResponse::new("gemini_timeout"),
+        }),
+    }
 }
 
 fn worker_error(error: worker::Error) -> UpstreamError {

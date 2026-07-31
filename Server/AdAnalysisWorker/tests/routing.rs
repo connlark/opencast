@@ -1,9 +1,37 @@
 use opencast_ad_analysis_worker::auth::{bearer_token, token_hash, token_matches};
 use opencast_ad_analysis_worker::route::{
     route_request, RouteAction, AD_ANALYSIS_JOBS_PREFIX, ANALYZE_TRANSCRIPT_PATH,
-    APP_ATTEST_CHALLENGE_PATH, APP_ATTEST_REGISTER_PATH, HEALTH_PATH, INTERNAL_ANALYZE_PATH,
-    INTERNAL_JOBS_PREFIX, JSON_CONTENT_TYPE,
+    APP_ATTEST_CHALLENGE_PATH, APP_ATTEST_REGISTER_PATH, HEALTH_PATH, INSTALL_DELETE_PATH,
+    INTERNAL_ANALYZE_PATH, INTERNAL_JOBS_PREFIX, JSON_CONTENT_TYPE,
 };
+
+#[test]
+fn install_delete_requires_post_and_enabled_feature() {
+    let wrong_method = static_response(route_request(
+        "GET",
+        INSTALL_DELETE_PATH,
+        true,
+        false,
+        false,
+    ));
+    assert_eq!(wrong_method.status, 405);
+    assert_header(&wrong_method, "allow", "POST");
+
+    let disabled = static_response(route_request(
+        "POST",
+        INSTALL_DELETE_PATH,
+        false,
+        false,
+        false,
+    ));
+    assert_eq!(disabled.status, 503);
+    assert_eq!(disabled.body, r#"{"error":"ad_analysis_disabled"}"#);
+
+    assert!(matches!(
+        route_request("POST", INSTALL_DELETE_PATH, true, false, false),
+        RouteAction::InstallDelete
+    ));
+}
 
 #[test]
 fn health_returns_ok_without_auth() {

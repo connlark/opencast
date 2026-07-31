@@ -771,6 +771,13 @@ final class EpisodeAdAnalysisStore {
             throw CancellationError()
         }
 
+        // Same philosophy as EpisodeRemoteAdAnalysisMapper: a span kind this
+        // build doesn't recognize means the response cannot be trusted to
+        // skip audio. Fail cleanly so callers fall back to a fresh analysis.
+        guard !response.spans.contains(where: { $0.kind == .unknown }) else {
+            throw EpisodeAdAnalysisError.unrecognizedSpanKind
+        }
+
         try fileStore.write(document, relativePath: relativePath)
         record.state = .completed
         record.analysisRelativePath = relativePath

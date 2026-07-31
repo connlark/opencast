@@ -1,10 +1,10 @@
 use crate::route::{
-    content_range_header, json_response as static_json_response, parse_range_header, route_request,
-    unsatisfied_content_range_header, Header as StaticHeader, RangeError, RangeSelection,
-    RouteAction, StaticResponse, JSON_CONTENT_TYPE, OBJECT_NOT_FOUND_JSON,
-    RANGE_NOT_SATISFIABLE_JSON,
+    content_range_header, if_none_match_matches, json_response as static_json_response,
+    parse_range_header, route_request, unsatisfied_content_range_header, Header as StaticHeader,
+    RangeError, RangeSelection, RouteAction, StaticResponse, JSON_CONTENT_TYPE,
+    OBJECT_NOT_FOUND_JSON, RANGE_NOT_SATISFIABLE_JSON,
 };
-use worker::{console_error, Env, Headers, Method, Request, Response, Result};
+use worker::{console_error, Cache, Env, Headers, Method, Request, Response, Result};
 
 const MODEL_BUCKET: &str = "MODEL_BUCKET";
 const MODEL_OBJECT_PREFIX: &str = "MODEL_OBJECT_PREFIX";
@@ -30,6 +30,7 @@ pub async fn handle_request(req: Request, env: Env) -> Result<Response> {
     let method = req.method();
     let path = req.path();
     let config = GatewayConfig::from_env(&env)?;
+    let conditional = RequestConditions::from_request(&req)?;
 
     match route_request(
         method.as_ref(),
@@ -38,14 +39,15 @@ pub async fn handle_request(req: Request, env: Env) -> Result<Response> {
         &config.object_prefix,
     ) {
         RouteAction::Static(response) => static_response(response),
-        RouteAction::Manifest { object_key, head } => serve_manifest(&env, &object_key, head).await,
-        RouteAction::ManifestSignature { object_key, head } => {
-            serve_manifest(&env, &object_key, head).await
+        RouteAction::Manifest { object_key, head }
+        | RouteAction::ManifestSignature { object_key, head } => {
+            serve_manifest(&env, &conditional, &object_key, head).await
         }
         RouteAction::Asset { route, head } => {
             serve_asset(
                 &env,
                 &req,
+                &conditional,
                 method,
                 &route.object_key,
                 route.content_type,
@@ -56,37 +58,61 @@ pub async fn handle_request(req: Request, env: Env) -> Result<Response> {
     }
 }
 
-async fn serve_manifest(env: &Env, object_key: &str, head: bool) -> Result<Response> {
-    let bucket = env.bucket(MODEL_BUCKET)?;
-    let object = if head {
-        bucket.head(object_key).await?
-    } else {
-        bucket.get(object_key).execute().await?
-    };
-    let Some(object) = object else {
-        return json_error(404, OBJECT_NOT_FOUND_JSON);
-    };
+/// The request-derived state conditional serving needs: the `If-None-Match`
+/// header and the edge-cache key (the request URL).
+struct RequestConditions {
+    if_none_match: Option<String>,
+    cache_url: String,
+}
 
-    let headers = object_headers(&object, JSON_CONTENT_TYPE, object.size(), None)?;
+impl RequestConditions {
+    fn from_request(req: &Request) -> Result<Self> {
+        Ok(Self {
+            if_none_match: req.headers().get("if-none-match")?,
+            cache_url: req.url()?.to_string(),
+        })
+    }
+
+    fn matches(&self, etag: &str) -> bool {
+        if_none_match_matches(self.if_none_match.as_deref(), etag)
+    }
+}
+
+fn not_modified(headers: Headers) -> Result<Response> {
+    Ok(Response::builder()
+        .with_status(304)
+        .with_headers(headers)
+        .empty())
+}
+
+async fn serve_manifest(
+    env: &Env,
+    conditional: &RequestConditions,
+    object_key: &str,
+    head: bool,
+) -> Result<Response> {
     if head {
+        let bucket = env.bucket(MODEL_BUCKET)?;
+        let Some(object) = bucket.head(object_key).await? else {
+            return json_error(404, OBJECT_NOT_FOUND_JSON);
+        };
+        let headers = object_headers(&object, JSON_CONTENT_TYPE, object.size(), None)?;
+        if conditional.matches(&object.http_etag()) {
+            return not_modified(headers);
+        }
         return Ok(Response::builder()
             .with_status(200)
             .with_headers(headers)
             .empty());
     }
 
-    let Some(body) = object.body() else {
-        return json_error(404, OBJECT_NOT_FOUND_JSON);
-    };
-    Ok(Response::builder()
-        .with_status(200)
-        .with_headers(headers)
-        .body(body.response_body()?))
+    serve_cached_full_body(env, conditional, object_key, JSON_CONTENT_TYPE).await
 }
 
 async fn serve_asset(
     env: &Env,
     req: &Request,
+    conditional: &RequestConditions,
     method: Method,
     object_key: &str,
     content_type: &'static str,
@@ -100,6 +126,12 @@ async fn serve_asset(
             return json_error(404, OBJECT_NOT_FOUND_JSON);
         };
         let size = metadata.size();
+        // If-None-Match is evaluated before Range: a matching validator
+        // means the client's copy is current, whole or sliced.
+        if conditional.matches(&metadata.http_etag()) {
+            let headers = object_headers(&metadata, content_type, size, None)?;
+            return not_modified(headers);
+        }
         let selection = match parse_range_header(range_header.as_deref(), size) {
             Ok(selection) => selection,
             Err(RangeError::Invalid | RangeError::NotSatisfiable) => {
@@ -116,7 +148,7 @@ async fn serve_asset(
                         .with_headers(headers)
                         .empty())
                 } else {
-                    serve_full_asset(env, object_key, content_type).await
+                    serve_cached_full_body(env, conditional, object_key, content_type).await
                 }
             }
             RangeSelection::Partial(range) => {
@@ -160,26 +192,50 @@ async fn serve_asset(
         return json_error(405, crate::route::METHOD_NOT_ALLOWED_JSON);
     }
 
-    serve_full_asset(env, object_key, content_type).await
+    serve_cached_full_body(env, conditional, object_key, content_type).await
 }
 
-async fn serve_full_asset(
+/// GET path for the manifest and whole assets: fronted by the edge Cache API
+/// (keyed on the request URL; the stored response's max-age governs expiry),
+/// with `If-None-Match` evaluated on both hit and miss. The range path stays
+/// direct-R2 — caching sliced bodies is complexity without demonstrated
+/// need; revisit if telemetry shows hot ranges.
+async fn serve_cached_full_body(
     env: &Env,
+    conditional: &RequestConditions,
     object_key: &str,
     content_type: &'static str,
 ) -> Result<Response> {
+    let cache = Cache::default();
+    if let Some(cached) = cache.get(conditional.cache_url.as_str(), false).await? {
+        if let Some(etag) = cached.headers().get("etag")? {
+            if conditional.matches(&etag) {
+                return not_modified(cached.headers().clone());
+            }
+        }
+        return Ok(cached);
+    }
+
     let bucket = env.bucket(MODEL_BUCKET)?;
     let Some(object) = bucket.get(object_key).execute().await? else {
         return json_error(404, OBJECT_NOT_FOUND_JSON);
     };
+    let etag = object.http_etag();
     let headers = object_headers(&object, content_type, object.size(), None)?;
     let Some(body) = object.body() else {
         return json_error(404, OBJECT_NOT_FOUND_JSON);
     };
-    Ok(Response::builder()
+    let mut response = Response::builder()
         .with_status(200)
         .with_headers(headers)
-        .body(body.response_body()?))
+        .body(body.response_body()?);
+    cache
+        .put(conditional.cache_url.as_str(), response.cloned()?)
+        .await?;
+    if conditional.matches(&etag) {
+        return not_modified(response.headers().clone());
+    }
+    Ok(response)
 }
 
 fn object_headers(

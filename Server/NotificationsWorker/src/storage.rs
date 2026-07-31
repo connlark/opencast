@@ -76,21 +76,6 @@ pub struct FeedPollSuccess<'a> {
     pub now: i64,
 }
 
-pub struct FeedBaselineUpsert<'a> {
-    pub feed_url: &'a str,
-    pub source_url: &'a str,
-    pub title: Option<&'a str>,
-    pub website_url: Option<&'a str>,
-    pub etag: Option<&'a str>,
-    pub last_modified: Option<&'a str>,
-    pub latest_episode_id: Option<&'a str>,
-    pub latest_episode_title: Option<&'a str>,
-    pub latest_episode_published_at: Option<i64>,
-    pub poll_interval_seconds: i64,
-    pub publish_cadence_seconds: Option<i64>,
-    pub now: i64,
-}
-
 pub struct DeviceUpsert<'a> {
     pub install_id: &'a str,
     pub key_id: &'a str,
@@ -156,10 +141,85 @@ pub struct EpisodeNotificationSendOutcome<'a> {
 const MAX_STORED_FEED_TITLE_CHARS: usize = 512;
 const MAX_STORED_EPISODE_TITLE_CHARS: usize = 512;
 
-const DUE_FEED_ROWS_SQL: &str = "SELECT feed_url, source_url, etag, last_modified, latest_episode_id, latest_episode_title, latest_episode_published_at, baseline_established_at, consecutive_failures, publish_cadence_seconds \
+const INSERT_PENDING_FEED_SQL: &str = "INSERT INTO feeds \
+         (feed_url, source_url, poll_interval_seconds, consecutive_failures, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, 0, ?4, ?4) \
+         ON CONFLICT(feed_url) DO NOTHING";
+
+const ESTABLISH_FEED_BASELINE_SQL: &str =
+    "UPDATE feeds SET baseline_established_at = ?1 WHERE feed_url = ?2 AND baseline_established_at IS NULL";
+
+const PRUNE_PUSH_SEND_ATTEMPTS_SQL: &str = "DELETE FROM push_send_attempts WHERE created_at < ?1";
+
+const GC_DELETED_SUBSCRIPTIONS_SQL: &str =
+    "DELETE FROM feed_subscriptions WHERE deleted_at IS NOT NULL AND deleted_at < ?1";
+
+// A feed is GC-eligible only while no live (deleted_at IS NULL) subscription
+// row references it, regardless of that subscription's notification flag —
+// a disabled subscription can re-enable and still needs its feed.
+const UNSUBSCRIBED_FEED_GC_CANDIDATES_SQL: &str = "SELECT feed_url FROM feeds \
+         WHERE updated_at < ?1 \
+           AND NOT EXISTS ( \
+             SELECT 1 \
+             FROM feed_subscriptions \
+             WHERE feed_subscriptions.feed_url = feeds.feed_url \
+               AND feed_subscriptions.deleted_at IS NULL \
+           ) \
+         ORDER BY updated_at \
+         LIMIT ?2";
+
+const DELETE_SENDS_FOR_FEED_SQL: &str =
+    "DELETE FROM episode_notification_sends WHERE feed_url = ?1";
+
+const DELETE_FEED_ROW_SQL: &str = "DELETE FROM feeds WHERE feed_url = ?1";
+
+// The scheduled drain's optimistic per-feed claim reuses `next_poll_at` as a
+// lease, so the claim's WHERE clause must byte-match the due scan's
+// dueness predicate — both branches, including the IS NULL never-polled arm.
+// Both SQL constants are assembled at compile time from the shared predicate
+// so they cannot silently diverge; the identity test below pins it.
+const DUE_FEED_PREDICATE_SQL: &str = "(next_poll_at IS NULL OR next_poll_at <= ?1)";
+
+const fn concat_len(parts: &[&str]) -> usize {
+    let mut length = 0;
+    let mut index = 0;
+    while index < parts.len() {
+        length += parts[index].len();
+        index += 1;
+    }
+    length
+}
+
+const fn concat_bytes<const N: usize>(parts: &[&str]) -> [u8; N] {
+    let mut out = [0_u8; N];
+    let mut offset = 0;
+    let mut index = 0;
+    while index < parts.len() {
+        let bytes = parts[index].as_bytes();
+        let mut byte_index = 0;
+        while byte_index < bytes.len() {
+            out[offset] = bytes[byte_index];
+            offset += 1;
+            byte_index += 1;
+        }
+        index += 1;
+    }
+    out
+}
+
+const fn concat_str(bytes: &[u8]) -> &str {
+    match std::str::from_utf8(bytes) {
+        Ok(sql) => sql,
+        Err(_) => panic!("assembled feed-poll SQL must be UTF-8"),
+    }
+}
+
+const DUE_FEED_ROWS_SQL_PARTS: &[&str] = &[
+    "SELECT feed_url, source_url, etag, last_modified, latest_episode_id, latest_episode_title, latest_episode_published_at, baseline_established_at, consecutive_failures, publish_cadence_seconds \
          FROM feeds \
-         WHERE (next_poll_at IS NULL OR next_poll_at <= ?1) \
-           AND EXISTS ( \
+         WHERE ",
+    DUE_FEED_PREDICATE_SQL,
+    " AND EXISTS ( \
              SELECT 1 \
              FROM feed_subscriptions \
              WHERE feed_subscriptions.feed_url = feeds.feed_url \
@@ -174,7 +234,19 @@ const DUE_FEED_ROWS_SQL: &str = "SELECT feed_url, source_url, etag, last_modifie
                ) \
            ) \
          ORDER BY COALESCE(next_poll_at, 0), updated_at \
-         LIMIT ?3";
+         LIMIT ?3",
+];
+const DUE_FEED_ROWS_SQL_BYTES: [u8; concat_len(DUE_FEED_ROWS_SQL_PARTS)] =
+    concat_bytes(DUE_FEED_ROWS_SQL_PARTS);
+const DUE_FEED_ROWS_SQL: &str = concat_str(&DUE_FEED_ROWS_SQL_BYTES);
+
+const CLAIM_DUE_FEED_SQL_PARTS: &[&str] = &[
+    "UPDATE feeds SET next_poll_at = ?2 WHERE feed_url = ?3 AND ",
+    DUE_FEED_PREDICATE_SQL,
+];
+const CLAIM_DUE_FEED_SQL_BYTES: [u8; concat_len(CLAIM_DUE_FEED_SQL_PARTS)] =
+    concat_bytes(CLAIM_DUE_FEED_SQL_PARTS);
+const CLAIM_DUE_FEED_SQL: &str = concat_str(&CLAIM_DUE_FEED_SQL_BYTES);
 
 const ENABLED_DEVICES_FOR_FEED_SQL: &str = "SELECT devices.install_id, devices.device_token, devices.device_token_hash, feed_subscriptions.created_at AS subscription_created_at \
          FROM devices \
@@ -249,14 +321,15 @@ pub async fn insert_secure_attempt(
     Ok(())
 }
 
-pub async fn prune_secure_attempts_before(db: &D1Database, cutoff: i64) -> Result<()> {
+pub async fn prune_secure_attempts_before(db: &D1Database, cutoff: i64) -> Result<usize> {
     let args = [d1_i64(cutoff)];
-    db.prepare("DELETE FROM secure_hello_attempts WHERE created_at < ?1")
+    let result = db
+        .prepare("DELETE FROM secure_hello_attempts WHERE created_at < ?1")
         .bind_refs(&args)?
         .run()
         .await?;
 
-    Ok(())
+    Ok(result.meta()?.and_then(|meta| meta.changes).unwrap_or(0))
 }
 
 pub async fn upsert_device(db: &D1Database, device: DeviceUpsert<'_>) -> Result<()> {
@@ -484,81 +557,40 @@ pub async fn global_accepted_admission_count_since(db: &D1Database, since: i64) 
     Ok(row.map(|row| row.count).unwrap_or(0))
 }
 
-pub async fn upsert_feed_baseline(db: &D1Database, baseline: FeedBaselineUpsert<'_>) -> Result<()> {
-    let title = baseline
-        .title
-        .map(|value| truncated_chars(value, MAX_STORED_FEED_TITLE_CHARS));
-    let latest_episode_title = baseline
-        .latest_episode_title
-        .map(|value| truncated_chars(value, MAX_STORED_EPISODE_TITLE_CHARS));
-    let title = title.as_deref().map(D1Type::Text).unwrap_or(D1Type::Null);
-    let website_url = baseline
-        .website_url
-        .map(D1Type::Text)
-        .unwrap_or(D1Type::Null);
-    let etag = baseline.etag.map(D1Type::Text).unwrap_or(D1Type::Null);
-    let last_modified = baseline
-        .last_modified
-        .map(D1Type::Text)
-        .unwrap_or(D1Type::Null);
-    let latest_episode_id = baseline
-        .latest_episode_id
-        .map(D1Type::Text)
-        .unwrap_or(D1Type::Null);
-    let latest_episode_title = latest_episode_title
-        .as_deref()
-        .map(D1Type::Text)
-        .unwrap_or(D1Type::Null);
-    let latest_episode_published_at = baseline
-        .latest_episode_published_at
-        .map(d1_i64)
-        .unwrap_or(D1Type::Null);
-    let publish_cadence_seconds = baseline
-        .publish_cadence_seconds
-        .map(d1_i64)
-        .unwrap_or(D1Type::Null);
+/// Enqueues a pending-admission feed: a row with no fetched baseline
+/// (`baseline_established_at` and `next_poll_at` both NULL), which the
+/// scheduled tick admits with its first real fetch — NULL sorts ahead of
+/// every scheduled feed in the due scan's COALESCE order. Racing enqueues
+/// (or an already-admitted feed) leave the existing row untouched.
+pub async fn insert_pending_feed(
+    db: &D1Database,
+    feed_url: &str,
+    source_url: &str,
+    poll_interval_seconds: i64,
+    now: i64,
+) -> Result<()> {
     let args = [
-        D1Type::Text(baseline.feed_url),
-        D1Type::Text(baseline.source_url),
-        title,
-        website_url,
-        etag,
-        last_modified,
-        latest_episode_id,
-        latest_episode_title,
-        latest_episode_published_at,
-        d1_i64(baseline.now),
-        d1_i64(baseline.now.saturating_add(baseline.poll_interval_seconds)),
-        d1_i64(baseline.poll_interval_seconds),
-        publish_cadence_seconds,
-        d1_i64(baseline.now),
-        d1_i64(baseline.now),
+        D1Type::Text(feed_url),
+        D1Type::Text(source_url),
+        d1_i64(poll_interval_seconds),
+        d1_i64(now),
     ];
+    db.prepare(INSERT_PENDING_FEED_SQL)
+        .bind_refs(&args)?
+        .run()
+        .await?;
 
-    db.prepare(
-        "INSERT INTO feeds \
-         (feed_url, source_url, title, website_url, etag, last_modified, latest_episode_id, latest_episode_title, latest_episode_published_at, baseline_established_at, next_poll_at, poll_interval_seconds, publish_cadence_seconds, consecutive_failures, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14, ?15) \
-         ON CONFLICT(feed_url) DO UPDATE SET \
-         source_url = excluded.source_url, \
-         title = excluded.title, \
-         website_url = excluded.website_url, \
-         etag = excluded.etag, \
-         last_modified = excluded.last_modified, \
-         latest_episode_id = COALESCE(feeds.latest_episode_id, excluded.latest_episode_id), \
-         latest_episode_title = COALESCE(feeds.latest_episode_title, excluded.latest_episode_title), \
-         latest_episode_published_at = COALESCE(feeds.latest_episode_published_at, excluded.latest_episode_published_at), \
-         baseline_established_at = COALESCE(feeds.baseline_established_at, excluded.baseline_established_at), \
-         next_poll_at = excluded.next_poll_at, \
-         poll_interval_seconds = excluded.poll_interval_seconds, \
-         publish_cadence_seconds = excluded.publish_cadence_seconds, \
-         consecutive_failures = 0, \
-         last_error = NULL, \
-         updated_at = excluded.updated_at",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
+    Ok(())
+}
+
+/// Arms the back-catalog guard after a pending feed's first successful
+/// admission poll; feeds with an established baseline are untouched.
+pub async fn establish_feed_baseline(db: &D1Database, feed_url: &str, now: i64) -> Result<()> {
+    let args = [d1_i64(now), D1Type::Text(feed_url)];
+    db.prepare(ESTABLISH_FEED_BASELINE_SQL)
+        .bind_refs(&args)?
+        .run()
+        .await?;
 
     Ok(())
 }
@@ -688,14 +720,91 @@ pub async fn insert_feed_admission_attempt(
     Ok(())
 }
 
-pub async fn prune_feed_admission_attempts_before(db: &D1Database, cutoff: i64) -> Result<()> {
+pub async fn prune_feed_admission_attempts_before(db: &D1Database, cutoff: i64) -> Result<usize> {
     let args = [d1_i64(cutoff)];
-    db.prepare("DELETE FROM feed_admission_attempts WHERE created_at < ?1")
+    let result = db
+        .prepare("DELETE FROM feed_admission_attempts WHERE created_at < ?1")
         .bind_refs(&args)?
         .run()
         .await?;
 
-    Ok(())
+    Ok(result.meta()?.and_then(|meta| meta.changes).unwrap_or(0))
+}
+
+pub async fn prune_push_send_attempts_before(db: &D1Database, cutoff: i64) -> Result<usize> {
+    let args = [d1_i64(cutoff)];
+    let result = db
+        .prepare(PRUNE_PUSH_SEND_ATTEMPTS_SQL)
+        .bind_refs(&args)?
+        .run()
+        .await?;
+
+    Ok(result.meta()?.and_then(|meta| meta.changes).unwrap_or(0))
+}
+
+/// Hard-deletes subscription rows soft-deleted before `cutoff`. Resubscribing
+/// after the GC is free: the feed row survives (only zero-subscriber feeds
+/// age out separately), so sync re-accepts without a new-feed admission.
+pub async fn gc_deleted_subscriptions_before(db: &D1Database, cutoff: i64) -> Result<usize> {
+    let args = [d1_i64(cutoff)];
+    let result = db
+        .prepare(GC_DELETED_SUBSCRIPTIONS_SQL)
+        .bind_refs(&args)?
+        .run()
+        .await?;
+
+    Ok(result.meta()?.and_then(|meta| meta.changes).unwrap_or(0))
+}
+
+#[derive(Default)]
+pub struct UnsubscribedFeedGcCounts {
+    pub feeds_deleted: usize,
+    pub sends_deleted: usize,
+}
+
+/// Deletes stale zero-subscriber feed rows in bounded batches, sweeping each
+/// GC'd feed's episode_notification_sends rows in the same atomic batch.
+/// The sends sweep is scoped to the feeds GC'd in this pass — never
+/// age-based — because send rows are the notification dedupe ledger and must
+/// outlive any feed that can still notify.
+pub async fn gc_unsubscribed_feeds(
+    db: &D1Database,
+    cutoff: i64,
+    limit: i64,
+) -> Result<UnsubscribedFeedGcCounts> {
+    #[derive(Deserialize)]
+    struct FeedUrlRow {
+        feed_url: String,
+    }
+
+    let args = [d1_i64(cutoff), d1_i64(limit)];
+    let candidates: Vec<FeedUrlRow> = db
+        .prepare(UNSUBSCRIBED_FEED_GC_CANDIDATES_SQL)
+        .bind_refs(&args)?
+        .all()
+        .await?
+        .results()?;
+    let mut counts = UnsubscribedFeedGcCounts::default();
+    if candidates.is_empty() {
+        return Ok(counts);
+    }
+
+    let mut statements = Vec::with_capacity(candidates.len() * 2);
+    for row in &candidates {
+        let url_arg = [D1Type::Text(&row.feed_url)];
+        statements.push(db.prepare(DELETE_SENDS_FOR_FEED_SQL).bind_refs(&url_arg)?);
+        statements.push(db.prepare(DELETE_FEED_ROW_SQL).bind_refs(&url_arg)?);
+    }
+    for (index, result) in db.batch(statements).await?.iter().enumerate() {
+        let changes = result.meta()?.and_then(|meta| meta.changes).unwrap_or(0);
+        if index % 2 == 0 {
+            counts.sends_deleted += changes;
+        } else {
+            counts.feeds_deleted += changes;
+        }
+    }
+
+    Ok(counts)
 }
 
 pub async fn prune_feed_poll_attempts_before(db: &D1Database, cutoff: i64) -> Result<()> {
@@ -720,6 +829,29 @@ pub async fn due_feed_rows(
         .all()
         .await?
         .results::<FeedPollRow>()
+}
+
+/// Optimistically claims a due feed for one scheduled invocation by leasing
+/// `next_poll_at` forward. Exactly one overlapping invocation wins
+/// (`rows_written == 1`); losers skip the feed. Every completion path
+/// overwrites the lease with the real schedule, and a claimed-then-crashed
+/// feed self-heals when the lease expires one poll interval later.
+pub async fn claim_due_feed(
+    db: &D1Database,
+    feed_url: &str,
+    now: i64,
+    lease_until: i64,
+) -> Result<bool> {
+    let args = [d1_i64(now), d1_i64(lease_until), D1Type::Text(feed_url)];
+    let result = db
+        .prepare(CLAIM_DUE_FEED_SQL)
+        .bind_refs(&args)?
+        .run()
+        .await?;
+
+    Ok(changed_exactly_one_row(
+        result.meta()?.and_then(|meta| meta.changes),
+    ))
 }
 
 pub async fn subscribed_feed_rows(db: &D1Database, install_id: &str) -> Result<Vec<FeedPollRow>> {
@@ -1494,6 +1626,313 @@ mod tests {
                 "https://example.com/old.xml"
             ]
         );
+    }
+
+    #[test]
+    fn claim_predicate_byte_matches_the_due_scan_predicate() {
+        // Both constants are assembled from DUE_FEED_PREDICATE_SQL, so this
+        // pins the shared bytes (and both dueness arms) against manual edits
+        // to either SQL string.
+        assert!(DUE_FEED_ROWS_SQL.contains(DUE_FEED_PREDICATE_SQL));
+        assert!(CLAIM_DUE_FEED_SQL.contains(DUE_FEED_PREDICATE_SQL));
+        assert!(DUE_FEED_PREDICATE_SQL.contains("next_poll_at IS NULL"));
+        assert!(DUE_FEED_PREDICATE_SQL.contains("next_poll_at <= ?1"));
+    }
+
+    #[test]
+    fn due_feed_claim_wins_once_and_releases_when_the_lease_expires() {
+        let db = setup_db();
+        let feed_url = "https://example.com/claim.xml";
+        insert_feed(&db, feed_url, Some(NOW - 1), NOW);
+        activate_feed(&db, feed_url, "install-a");
+
+        let claimed = db
+            .execute(CLAIM_DUE_FEED_SQL, params![NOW, NOW + 900, feed_url])
+            .expect("first claim");
+        assert_eq!(claimed, 1);
+
+        let overlapped = db
+            .execute(CLAIM_DUE_FEED_SQL, params![NOW, NOW + 900, feed_url])
+            .expect("overlapping claim");
+        assert_eq!(overlapped, 0);
+
+        // The leased feed also disappears from an overlapping tick's due scan,
+        // and self-heals into both the scan and the claim once the lease ends.
+        assert!(due_feed_urls(&db, NOW, 50, CURRENT_APNS_ENVIRONMENT).is_empty());
+        assert_eq!(
+            due_feed_urls(&db, NOW + 900, 50, CURRENT_APNS_ENVIRONMENT),
+            vec![feed_url.to_string()]
+        );
+        let reclaimed = db
+            .execute(CLAIM_DUE_FEED_SQL, params![NOW + 900, NOW + 1800, feed_url])
+            .expect("post-lease claim");
+        assert_eq!(reclaimed, 1);
+    }
+
+    #[test]
+    fn due_feed_claim_covers_the_never_polled_null_arm() {
+        let db = setup_db();
+        let feed_url = "https://example.com/never-polled.xml";
+        insert_feed(&db, feed_url, None, NOW);
+        activate_feed(&db, feed_url, "install-a");
+
+        let claimed = db
+            .execute(CLAIM_DUE_FEED_SQL, params![NOW, NOW + 900, feed_url])
+            .expect("claim never-polled feed");
+        assert_eq!(claimed, 1);
+    }
+
+    fn insert_push_send_attempt_row(db: &Connection, attempt_id: &str, created_at: i64) {
+        db.execute(
+            "INSERT INTO push_send_attempts \
+             (attempt_id, install_id, apns_environment, created_at) \
+             VALUES (?1, 'install-a', 'production', ?2)",
+            params![attempt_id, created_at],
+        )
+        .expect("insert push send attempt");
+    }
+
+    fn insert_send_for_feed(db: &Connection, send_id: &str, feed_url: &str) {
+        db.execute(
+            "INSERT INTO episode_notification_sends \
+             (send_id, install_id, device_token_hash, feed_url, episode_id, apns_environment, created_at, updated_at) \
+             VALUES (?1, 'install-a', 'token-a', ?2, 'episode-1', 'production', ?3, ?3)",
+            params![send_id, feed_url, NOW],
+        )
+        .expect("insert episode send for feed");
+    }
+
+    fn gc_unsubscribed_feeds_sync(db: &Connection, cutoff: i64, limit: i64) -> (usize, usize) {
+        let mut statement = db
+            .prepare(UNSUBSCRIBED_FEED_GC_CANDIDATES_SQL)
+            .expect("prepare feed GC candidates");
+        let candidates = statement
+            .query_map(params![cutoff, limit], |row| row.get::<_, String>(0))
+            .expect("query feed GC candidates")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read feed GC candidates");
+
+        let mut feeds_deleted = 0;
+        let mut sends_deleted = 0;
+        for feed_url in &candidates {
+            sends_deleted += db
+                .execute(DELETE_SENDS_FOR_FEED_SQL, params![feed_url])
+                .expect("sweep sends for GC'd feed");
+            feeds_deleted += db
+                .execute(DELETE_FEED_ROW_SQL, params![feed_url])
+                .expect("delete GC'd feed");
+        }
+        (feeds_deleted, sends_deleted)
+    }
+
+    fn remaining_feed_urls(db: &Connection) -> Vec<String> {
+        let mut statement = db
+            .prepare("SELECT feed_url FROM feeds ORDER BY feed_url")
+            .expect("prepare remaining feeds");
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query remaining feeds")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read remaining feeds")
+    }
+
+    #[test]
+    fn pending_feed_sorts_ahead_of_scheduled_feeds_in_the_due_scan() {
+        let db = setup_db();
+        insert_feed(&db, "https://example.com/scheduled.xml", Some(NOW - 1), NOW);
+        activate_feed(&db, "https://example.com/scheduled.xml", "install-a");
+        db.execute(
+            INSERT_PENDING_FEED_SQL,
+            params![
+                "https://example.com/pending.xml",
+                "https://example.com/pending.xml",
+                900,
+                NOW
+            ],
+        )
+        .expect("insert pending feed");
+        activate_feed(&db, "https://example.com/pending.xml", "install-b");
+
+        assert_eq!(
+            due_feed_urls(&db, NOW, 50, CURRENT_APNS_ENVIRONMENT),
+            vec![
+                "https://example.com/pending.xml",
+                "https://example.com/scheduled.xml"
+            ]
+        );
+    }
+
+    #[test]
+    fn pending_feed_insert_never_touches_an_existing_feed_row() {
+        let db = setup_db();
+        let feed_url = "https://example.com/existing.xml";
+        insert_feed(&db, feed_url, Some(NOW + 500), NOW - 50);
+
+        let inserted = db
+            .execute(
+                INSERT_PENDING_FEED_SQL,
+                params![feed_url, feed_url, 900, NOW],
+            )
+            .expect("conflicting pending insert");
+
+        assert_eq!(inserted, 0);
+        let (next_poll_at, updated_at): (Option<i64>, i64) = db
+            .query_row(
+                "SELECT next_poll_at, updated_at FROM feeds WHERE feed_url = ?1",
+                params![feed_url],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read existing feed row");
+        assert_eq!(next_poll_at, Some(NOW + 500));
+        assert_eq!(updated_at, NOW - 50);
+    }
+
+    #[test]
+    fn feed_baseline_establishes_once_and_only_when_absent() {
+        let db = setup_db();
+        let feed_url = "https://example.com/baseline.xml";
+        db.execute(
+            INSERT_PENDING_FEED_SQL,
+            params![feed_url, feed_url, 900, NOW],
+        )
+        .expect("insert pending feed");
+
+        let armed = db
+            .execute(ESTABLISH_FEED_BASELINE_SQL, params![NOW + 10, feed_url])
+            .expect("establish baseline");
+        assert_eq!(armed, 1);
+
+        let rearmed = db
+            .execute(ESTABLISH_FEED_BASELINE_SQL, params![NOW + 99, feed_url])
+            .expect("re-establish baseline");
+        assert_eq!(rearmed, 0);
+        let baseline: i64 = db
+            .query_row(
+                "SELECT baseline_established_at FROM feeds WHERE feed_url = ?1",
+                params![feed_url],
+                |row| row.get(0),
+            )
+            .expect("read baseline");
+        assert_eq!(baseline, NOW + 10);
+    }
+
+    #[test]
+    fn push_send_attempt_prune_honors_the_retention_boundary() {
+        let db = setup_db();
+        insert_push_send_attempt_row(&db, "attempt-old", NOW - 10);
+        insert_push_send_attempt_row(&db, "attempt-boundary", NOW - 5);
+        insert_push_send_attempt_row(&db, "attempt-fresh", NOW - 1);
+
+        let pruned = db
+            .execute(PRUNE_PUSH_SEND_ATTEMPTS_SQL, params![NOW - 5])
+            .expect("prune push send attempts");
+
+        assert_eq!(pruned, 1);
+        let remaining: i64 = db
+            .query_row("SELECT COUNT(*) FROM push_send_attempts", [], |row| {
+                row.get(0)
+            })
+            .expect("count remaining push send attempts");
+        assert_eq!(remaining, 2);
+    }
+
+    #[test]
+    fn deleted_subscription_gc_honors_boundary_and_spares_live_rows() {
+        let db = setup_db();
+        let feed_url = "https://example.com/sub-gc.xml";
+        insert_feed(&db, feed_url, Some(NOW - 1), NOW);
+        insert_subscription(&db, "install-live", feed_url, true, None);
+        insert_subscription(&db, "install-old", feed_url, false, Some(NOW - 10));
+        insert_subscription(&db, "install-boundary", feed_url, false, Some(NOW - 5));
+
+        let collected = db
+            .execute(GC_DELETED_SUBSCRIPTIONS_SQL, params![NOW - 5])
+            .expect("gc soft-deleted subscriptions");
+
+        assert_eq!(collected, 1);
+        let remaining: Vec<String> = {
+            let mut statement = db
+                .prepare("SELECT install_id FROM feed_subscriptions ORDER BY install_id")
+                .expect("prepare remaining subscriptions");
+            statement
+                .query_map([], |row| row.get(0))
+                .expect("query remaining subscriptions")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("read remaining subscriptions")
+        };
+        assert_eq!(remaining, vec!["install-boundary", "install-live"]);
+    }
+
+    #[test]
+    fn unsubscribed_feed_gc_spares_live_and_recent_feeds_and_sweeps_only_gcd_sends() {
+        let db = setup_db();
+        // Stale with no subscriptions at all: GC'd, sends swept.
+        insert_feed(&db, "https://example.com/stale.xml", None, NOW - 100);
+        insert_send_for_feed(&db, "send-stale", "https://example.com/stale.xml");
+        // Stale but still referenced by a live (even disabled) subscription.
+        insert_feed(&db, "https://example.com/live-sub.xml", None, NOW - 100);
+        insert_subscription(
+            &db,
+            "install-a",
+            "https://example.com/live-sub.xml",
+            false,
+            None,
+        );
+        insert_send_for_feed(&db, "send-live", "https://example.com/live-sub.xml");
+        // Zero subscribers but recently updated.
+        insert_feed(&db, "https://example.com/recent.xml", None, NOW - 1);
+        // Stale and only referenced by a soft-deleted subscription: GC'd.
+        insert_feed(&db, "https://example.com/soft-deleted.xml", None, NOW - 100);
+        insert_subscription(
+            &db,
+            "install-b",
+            "https://example.com/soft-deleted.xml",
+            false,
+            Some(NOW - 1),
+        );
+
+        let (feeds_deleted, sends_deleted) = gc_unsubscribed_feeds_sync(&db, NOW - 50, 10);
+
+        assert_eq!(feeds_deleted, 2);
+        assert_eq!(sends_deleted, 1);
+        assert_eq!(
+            remaining_feed_urls(&db),
+            vec![
+                "https://example.com/live-sub.xml",
+                "https://example.com/recent.xml"
+            ]
+        );
+        // The dedupe ledger for the surviving feed is untouched.
+        let remaining_sends: Vec<String> = {
+            let mut statement = db
+                .prepare("SELECT send_id FROM episode_notification_sends")
+                .expect("prepare remaining sends");
+            statement
+                .query_map([], |row| row.get(0))
+                .expect("query remaining sends")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("read remaining sends")
+        };
+        assert_eq!(remaining_sends, vec!["send-live"]);
+    }
+
+    #[test]
+    fn unsubscribed_feed_gc_drains_a_backlog_in_bounded_oldest_first_batches() {
+        let db = setup_db();
+        insert_feed(&db, "https://example.com/oldest.xml", None, NOW - 300);
+        insert_feed(&db, "https://example.com/older.xml", None, NOW - 200);
+        insert_feed(&db, "https://example.com/old.xml", None, NOW - 100);
+
+        let (first_pass, _) = gc_unsubscribed_feeds_sync(&db, NOW - 50, 2);
+        assert_eq!(first_pass, 2);
+        assert_eq!(
+            remaining_feed_urls(&db),
+            vec!["https://example.com/old.xml"]
+        );
+
+        let (second_pass, _) = gc_unsubscribed_feeds_sync(&db, NOW - 50, 2);
+        assert_eq!(second_pass, 1);
+        assert!(remaining_feed_urls(&db).is_empty());
     }
 
     #[test]

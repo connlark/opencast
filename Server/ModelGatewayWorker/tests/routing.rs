@@ -1,9 +1,37 @@
 use opencast_model_gateway_worker::route::{
-    content_range_header, manifest_object_key, manifest_signature_object_key, parse_range_header,
-    route_request, unsatisfied_content_range_header, ByteRange, Header, RangeError, RangeSelection,
-    RouteAction, BAD_PATH_JSON, GATEWAY_DISABLED_JSON, HEALTH_JSON, JSON_CONTENT_TYPE,
-    METHOD_NOT_ALLOWED_JSON, NOT_FOUND_JSON,
+    content_range_header, if_none_match_matches, manifest_object_key,
+    manifest_signature_object_key, parse_range_header, route_request,
+    unsatisfied_content_range_header, ByteRange, Header, RangeError, RangeSelection, RouteAction,
+    BAD_PATH_JSON, GATEWAY_DISABLED_JSON, HEALTH_JSON, JSON_CONTENT_TYPE, METHOD_NOT_ALLOWED_JSON,
+    NOT_FOUND_JSON,
 };
+
+#[test]
+fn if_none_match_strong_compares_quoted_and_bare_forms() {
+    assert!(if_none_match_matches(Some("\"abc123\""), "\"abc123\""));
+    assert!(if_none_match_matches(Some("abc123"), "\"abc123\""));
+    assert!(if_none_match_matches(Some("\"abc123\""), "abc123"));
+    assert!(!if_none_match_matches(Some("\"other\""), "\"abc123\""));
+    assert!(!if_none_match_matches(None, "\"abc123\""));
+}
+
+#[test]
+fn if_none_match_star_matches_any_existing_object() {
+    assert!(if_none_match_matches(Some("*"), "\"abc123\""));
+}
+
+#[test]
+fn if_none_match_scans_candidate_lists_and_rejects_weak_tags() {
+    assert!(if_none_match_matches(
+        Some("\"first\", \"abc123\" , \"last\""),
+        "\"abc123\""
+    ));
+    assert!(!if_none_match_matches(Some("W/\"abc123\""), "\"abc123\""));
+    assert!(!if_none_match_matches(
+        Some("\"first\", \"second\""),
+        "\"abc123\""
+    ));
+}
 
 #[test]
 fn health_returns_ok() {
