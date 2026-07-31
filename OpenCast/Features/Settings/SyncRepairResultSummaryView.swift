@@ -26,6 +26,11 @@ struct SyncRepairResultSummaryView: View {
             } label: {
                 Label("Deleted Rows", systemImage: "trash")
             }
+            LabeledContent {
+                Text("\(result.tombstonedRecordsDeleted)")
+            } label: {
+                Label("Deletions Enforced", systemImage: "checkmark.shield")
+            }
         }
     }
 }

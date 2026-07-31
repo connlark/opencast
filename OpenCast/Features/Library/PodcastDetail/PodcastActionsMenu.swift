@@ -113,9 +113,10 @@ struct PodcastActionsMenu: View {
             titleVisibility: .visible
         ) {
             Button("Unsubscribe", role: .destructive, action: unsubscribe)
+            Button("Unsubscribe & Clear History", role: .destructive, action: unsubscribeAndClearHistory)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Cached episodes, progress, refresh logs, and local downloads for this podcast will be removed.")
+            Text("Downloads and cached episodes for this podcast will be removed. Listening history is kept unless you clear it.")
         }
     }
 
@@ -160,8 +161,20 @@ struct PodcastActionsMenu: View {
     }
 
     private func unsubscribe() {
+        unsubscribe(clearListeningHistory: false)
+    }
+
+    private func unsubscribeAndClearHistory() {
+        unsubscribe(clearListeningHistory: true)
+    }
+
+    private func unsubscribe(clearListeningHistory: Bool) {
         Task {
-            await appModel.unsubscribe(feedURL: subscription.feedURL, modelContext: modelContext)
+            await appModel.unsubscribe(
+                feedURL: subscription.feedURL,
+                modelContext: modelContext,
+                clearListeningHistory: clearListeningHistory
+            )
             dismiss()
         }
     }

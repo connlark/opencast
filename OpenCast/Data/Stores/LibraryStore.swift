@@ -8,6 +8,8 @@ final class LibraryStore {
     static let refreshLogRetentionLimit = 50
     static let completedEpisodeRemainingThreshold: TimeInterval = 60
     static let foregroundRefreshInterval: TimeInterval = 60 * 60
+    static let trivialProgressPrunableMaxPosition: TimeInterval = 60
+    static let trivialProgressPrunableMinAge: TimeInterval = 90 * 24 * 60 * 60
 
     enum State: Equatable {
         case idle
@@ -26,6 +28,7 @@ final class LibraryStore {
     private(set) var visibleEpisodeIDs: Set<String> = []
     private(set) var podcastCacheByFeedURL: [String: PodcastCacheSnapshot] = [:]
     private(set) var latestRefreshLogByFeedURL: [String: RefreshLogSnapshot] = [:]
+    private(set) var latestSuccessfulRefreshByFeedURL: [String: Date] = [:]
     private(set) var lastErrorMessage: String?
     private(set) var subscriptionAddedToken = 0
     private(set) var refreshCompletedToken = 0
@@ -34,6 +37,7 @@ final class LibraryStore {
     /// remote-change observer can skip the reload each one would otherwise
     /// trigger (one credit per save; see `SyncedStoreRemoteChangeArbiter`).
     @ObservationIgnored private(set) var syncedStoreSelfSaveCount = 0
+    @ObservationIgnored private var hasPrunedTrivialProgressThisLaunch = false
 
     @ObservationIgnored private let feedService: any FeedService
     @ObservationIgnored private let localCache: any LocalLibraryCacheStore
@@ -329,26 +333,29 @@ final class LibraryStore {
     func unsubscribe(
         feedURL: String,
         modelContext: ModelContext,
-        downloadStore: DownloadStore? = nil
+        downloadStore: DownloadStore? = nil,
+        clearListeningHistory: Bool = false
     ) async {
         do {
             try downloadStore?.deleteDownloads(forPodcastID: feedURL, modelContext: modelContext)
 
             let targetFeedURL = feedURL
-            let subscriptions = try modelContext.fetch(
-                FetchDescriptor<SubscriptionRecord>(
-                    predicate: #Predicate { record in
-                        record.feedURL == targetFeedURL
-                    }
+            let canonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: feedURL)
+            // The subscription table is small; matching on the canonical form
+            // also catches legacy copies whose raw URL drifted.
+            let subscriptions = try modelContext.fetch(FetchDescriptor<SubscriptionRecord>())
+                .filter { URLCanonicalizer.canonicalString(forRawString: $0.feedURL) == canonicalFeedURL }
+            // Progress records are kept by default so played/position state
+            // survives unsubscribe (and resubscribe) on every device.
+            let progressRecords = clearListeningHistory
+                ? try modelContext.fetch(
+                    FetchDescriptor<EpisodeProgressRecord>(
+                        predicate: #Predicate { record in
+                            record.podcastID == targetFeedURL
+                        }
+                    )
                 )
-            )
-            let progressRecords = try modelContext.fetch(
-                FetchDescriptor<EpisodeProgressRecord>(
-                    predicate: #Predicate { record in
-                        record.podcastID == targetFeedURL
-                    }
-                )
-            )
+                : []
             // Legacy local cache rows linger only until the one-time SQLite
             // import has run; delete them so a later import cannot resurrect
             // this feed's cache.
@@ -390,7 +397,22 @@ final class LibraryStore {
                 modelContext.delete(record)
             }
 
+            // Local deletes alone don't stick: a CloudKit copy this device
+            // hasn't imported yet would re-sync and resurrect the feed on
+            // every device. Tombstones make the delete authoritative;
+            // repair enforces them at import on all peers.
+            let deletedAt = Date.now
+            modelContext.insert(
+                SyncTombstoneRecord(scope: .subscription, feedURL: canonicalFeedURL, deletedAt: deletedAt)
+            )
+            if clearListeningHistory {
+                modelContext.insert(
+                    SyncTombstoneRecord(scope: .feedProgress, feedURL: canonicalFeedURL, deletedAt: deletedAt)
+                )
+            }
+
             try modelContext.save()
+            syncedStoreSelfSaveCount += 1
             try await localCache.deleteCache(forPodcastID: feedURL)
             try await reloadFromStore(modelContext: modelContext)
             state = .idle
@@ -417,12 +439,16 @@ final class LibraryStore {
         guard let subscription = subscriptions.first(where: { $0.feedURL == feedURL }) else {
             return false
         }
+        guard subscription.isAdAutoDetectEnabled != isEnabled else {
+            return true
+        }
 
         let previousValue = subscription.isAdAutoDetectEnabled
         subscription.isAdAutoDetectEnabled = isEnabled
 
         do {
             try modelContext.save()
+            syncedStoreSelfSaveCount += 1
             lastErrorMessage = nil
             return true
         } catch {
@@ -441,7 +467,13 @@ final class LibraryStore {
     }
 
     func repairSyncDuplicates(modelContext: ModelContext) async throws -> SyncRepairResult {
-        let result = try SyncDuplicateRepairer.repair(modelContext: modelContext)
+        let result = try SyncDuplicateRepairer.repair(
+            modelContext: modelContext,
+            claimedFeedURLsByEpisodeID: claimedFeedURLsByEpisodeID()
+        )
+        if result.hasChanges {
+            syncedStoreSelfSaveCount += 1
+        }
         if result.hasIssues {
             try await reloadFromStore(modelContext: modelContext)
         }
@@ -472,6 +504,7 @@ final class LibraryStore {
         visibleEpisodeIDs.removeAll()
         podcastCacheByFeedURL.removeAll()
         latestRefreshLogByFeedURL.removeAll()
+        latestSuccessfulRefreshByFeedURL.removeAll()
         episodeIndexByID.removeAll()
         episodeIndicesByPodcastID.removeAll()
         progressByEpisodeID.removeAll()
@@ -534,6 +567,15 @@ final class LibraryStore {
 
     func latestRefreshLog(feedURL: String) -> RefreshLogSnapshot? {
         latestRefreshLogByFeedURL[feedURL]
+    }
+
+    /// Refresh recency for display: the newest local successful refresh,
+    /// falling back to the synced `lastRefreshAt` snapshot (frozen after the
+    /// initial subscribe) for feeds this device hasn't refreshed yet.
+    func lastRefreshedAt(for subscription: SubscriptionRecord) -> Date? {
+        [latestSuccessfulRefreshByFeedURL[subscription.feedURL], subscription.lastRefreshAt]
+            .compactMap(\.self)
+            .max()
     }
 
     func domainEpisode(for episode: EpisodeListItemSnapshot) -> Episode {
@@ -824,6 +866,89 @@ final class LibraryStore {
         }
     }
 
+    /// Once-per-launch cleanup of progress rows that are preview taps someone
+    /// never returned to — unsubscribed, unplayed, under a minute in, and
+    /// untouched for months. Deliberately narrow: played episodes and real
+    /// positions are kept forever regardless of subscription, so unsubscribe's
+    /// history-keeping promise stays intact.
+    @discardableResult
+    func pruneTrivialUnsubscribedProgressRecords(
+        modelContext: ModelContext,
+        now: Date = .now
+    ) -> Int {
+        guard !hasPrunedTrivialProgressThisLaunch else {
+            return 0
+        }
+
+        hasPrunedTrivialProgressThisLaunch = true
+        // No tombstones: a feed-level tombstone would also kill the
+        // non-trivial history this prune deliberately keeps. Unseen copies of
+        // pruned rows can resurrect, but every device prunes them again at
+        // launch, so the cleanup converges on its own.
+        return deleteUnsubscribedProgressRecords(
+            modelContext: modelContext,
+            writingTombstonesAt: nil
+        ) { record in
+            !record.isPlayed
+                && record.position < Self.trivialProgressPrunableMaxPosition
+                && now.timeIntervalSince(record.updatedAt) > Self.trivialProgressPrunableMinAge
+        }
+    }
+
+    /// User-initiated bulk clear of all played/position state for shows with
+    /// no subscription record. Syncs to other devices like any progress delete.
+    @discardableResult
+    func clearProgressForUnsubscribedShows(modelContext: ModelContext) -> Int {
+        deleteUnsubscribedProgressRecords(
+            modelContext: modelContext,
+            writingTombstonesAt: .now
+        ) { _ in true }
+    }
+
+    private func deleteUnsubscribedProgressRecords(
+        modelContext: ModelContext,
+        writingTombstonesAt tombstoneDate: Date?,
+        matching isPrunable: (EpisodeProgressRecord) -> Bool
+    ) -> Int {
+        do {
+            // Archived subscriptions still mark a show as deliberately kept;
+            // only shows with no subscription record at all are candidates.
+            let subscribedFeedURLs = Set(
+                try modelContext.fetch(FetchDescriptor<SubscriptionRecord>()).map(\.feedURL)
+            )
+            let prunableRecords = try modelContext.fetch(allProgressRecordsDescriptor())
+                .filter { record in
+                    !subscribedFeedURLs.contains(record.podcastID) && isPrunable(record)
+                }
+            guard !prunableRecords.isEmpty else {
+                return 0
+            }
+
+            for record in prunableRecords {
+                modelContext.delete(record)
+            }
+
+            if let tombstoneDate {
+                let clearedFeedURLs = Set(
+                    prunableRecords.map { URLCanonicalizer.canonicalString(forRawString: $0.podcastID) }
+                )
+                for feedURL in clearedFeedURLs {
+                    modelContext.insert(
+                        SyncTombstoneRecord(scope: .feedProgress, feedURL: feedURL, deletedAt: tombstoneDate)
+                    )
+                }
+            }
+
+            try modelContext.save()
+            syncedStoreSelfSaveCount += 1
+            try reloadProgressRecords(modelContext: modelContext)
+            return prunableRecords.count
+        } catch {
+            recordFailure(error)
+            return 0
+        }
+    }
+
     @discardableResult
     func clearProgress(
         for episode: EpisodeListItemSnapshot,
@@ -842,6 +967,13 @@ final class LibraryStore {
             for record in records {
                 modelContext.delete(record)
             }
+            modelContext.insert(
+                SyncTombstoneRecord(
+                    scope: .episodeProgress,
+                    feedURL: URLCanonicalizer.canonicalString(forRawString: episode.podcastID),
+                    episodeID: episode.episodeID
+                )
+            )
 
             try modelContext.save()
             syncedStoreSelfSaveCount += 1
@@ -1101,6 +1233,27 @@ final class LibraryStore {
         rebuildLatestRefreshLogByFeedURL()
     }
 
+    /// Which canonical feed each cached episode belongs to, for repair's
+    /// variant-key normalization. Episode IDs claimed by more than one feed
+    /// (same audio syndicated across shows) are excluded as ambiguous.
+    private func claimedFeedURLsByEpisodeID() -> [String: String] {
+        var claims: [String: String] = [:]
+        claims.reserveCapacity(episodes.count)
+        var ambiguousEpisodeIDs: Set<String> = []
+        for episode in episodes {
+            let feedURL = URLCanonicalizer.canonicalString(forRawString: episode.podcastID)
+            if let existing = claims[episode.episodeID], existing != feedURL {
+                ambiguousEpisodeIDs.insert(episode.episodeID)
+            } else {
+                claims[episode.episodeID] = feedURL
+            }
+        }
+        for episodeID in ambiguousEpisodeIDs {
+            claims.removeValue(forKey: episodeID)
+        }
+        return claims
+    }
+
     private func activeSubscriptionFeedURLs(modelContext: ModelContext) throws -> Set<String> {
         let fetchedSubscriptions = try modelContext.fetch(FetchDescriptor<SubscriptionRecord>())
         return Set(fetchedSubscriptions.filter { !$0.isArchived }.map(\.feedURL))
@@ -1358,12 +1511,15 @@ final class LibraryStore {
 
         try await localCache.upsertCache(from: snapshot, refreshedAt: now)
 
+        // Synced-record writes are held to actual changes: every dirtied
+        // field exports a CKRecord and round-trips through every device, and
+        // routine refreshes used to re-write identical metadata for the whole
+        // library. Refresh recency itself is deliberately device-local (the
+        // refresh logs) — syncing it starved other devices' own refreshes and
+        // kept every subscription record permanently churning.
+        var hasSyncedChanges = false
         if let existingSubscription = try modelContext.fetch(subscriptionDescriptor).first {
-            existingSubscription.title = snapshot.podcast.title
-            existingSubscription.author = snapshot.podcast.author
-            existingSubscription.artworkURL = snapshot.podcast.artworkURL?.absoluteString
-            existingSubscription.lastRefreshAt = now
-            existingSubscription.isArchived = false
+            hasSyncedChanges = update(existingSubscription, from: snapshot)
         } else if subscribe {
             modelContext.insert(
                 SubscriptionRecord(
@@ -1374,6 +1530,7 @@ final class LibraryStore {
                     lastRefreshAt: now
                 )
             )
+            hasSyncedChanges = true
         } else {
             // The feed was unsubscribed while its refresh was in flight;
             // remove the just-written local cache so the unsubscribe stays complete.
@@ -1381,8 +1538,33 @@ final class LibraryStore {
             return false
         }
 
-        try modelContext.save()
+        if hasSyncedChanges {
+            try modelContext.save()
+            syncedStoreSelfSaveCount += 1
+        }
         return true
+    }
+
+    private func update(_ subscription: SubscriptionRecord, from snapshot: FeedSnapshot) -> Bool {
+        var hasChanges = false
+        if subscription.title != snapshot.podcast.title {
+            subscription.title = snapshot.podcast.title
+            hasChanges = true
+        }
+        if subscription.author != snapshot.podcast.author {
+            subscription.author = snapshot.podcast.author
+            hasChanges = true
+        }
+        let artworkURL = snapshot.podcast.artworkURL?.absoluteString
+        if subscription.artworkURL != artworkURL {
+            subscription.artworkURL = artworkURL
+            hasChanges = true
+        }
+        if subscription.isArchived {
+            subscription.isArchived = false
+            hasChanges = true
+        }
+        return hasChanges
     }
 
     private func staleFeedURLStrings(now: Date) -> [String] {
@@ -1493,6 +1675,15 @@ final class LibraryStore {
     private func rebuildLatestRefreshLogByFeedURL() {
         latestRefreshLogByFeedURL = Dictionary(
             refreshLogs.map { ($0.feedURL, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        latestSuccessfulRefreshByFeedURL = Dictionary(
+            refreshLogs.compactMap { log -> (String, Date)? in
+                guard (log.errorMessage ?? "").isEmpty, let finishedAt = log.finishedAt else {
+                    return nil
+                }
+                return (log.feedURL, finishedAt)
+            },
             uniquingKeysWith: { first, _ in first }
         )
     }

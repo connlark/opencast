@@ -5,10 +5,15 @@ import UserNotificationsUI
 
 final class NotificationViewController: UIViewController, UNNotificationContentExtension {
     private var hostingController: UIHostingController<EpisodeNotificationCardView>?
+    private var artworkLoadTask: Task<Void, Never>?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
+    }
+
+    deinit {
+        artworkLoadTask?.cancel()
     }
 
     override func viewDidLayoutSubviews() {
@@ -17,7 +22,29 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
     }
 
     func didReceive(_ notification: UNNotification) {
-        let viewModel = EpisodeNotificationViewModel(notification: notification)
+        artworkLoadTask?.cancel()
+
+        let initialViewModel = EpisodeNotificationViewModel(notification: notification)
+        display(initialViewModel)
+
+        guard initialViewModel.artworkImage == nil, initialViewModel.hasArtworkAttachments else {
+            return
+        }
+
+        artworkLoadTask = Task { [weak self] in
+            guard let artworkImage = await initialViewModel.artworkImageAfterRetry(),
+                  !Task.isCancelled
+            else {
+                return
+            }
+
+            var updatedViewModel = initialViewModel
+            updatedViewModel.artworkImage = artworkImage
+            self?.display(updatedViewModel)
+        }
+    }
+
+    private func display(_ viewModel: EpisodeNotificationViewModel) {
         let cardView = EpisodeNotificationCardView(viewModel: viewModel)
 
         if let hostingController {

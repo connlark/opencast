@@ -100,9 +100,7 @@ mod tests {
     const NOW: i64 = 1_780_000_000;
 
     fn weekly_pubdates(count: usize) -> Vec<i64> {
-        (0..count)
-            .map(|index| NOW - WEEK * index as i64)
-            .collect()
+        (0..count).map(|index| NOW - WEEK * index as i64).collect()
     }
 
     #[test]
@@ -145,10 +143,7 @@ mod tests {
         assert_eq!(publish_cadence_seconds(&mut vec![]), None);
         assert_eq!(publish_cadence_seconds(&mut vec![NOW]), None);
         assert_eq!(publish_cadence_seconds(&mut weekly_pubdates(3)), None);
-        assert_eq!(
-            publish_cadence_seconds(&mut weekly_pubdates(4)),
-            Some(WEEK)
-        );
+        assert_eq!(publish_cadence_seconds(&mut weekly_pubdates(4)), Some(WEEK));
     }
 
     #[test]

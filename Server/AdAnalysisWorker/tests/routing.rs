@@ -16,12 +16,24 @@ fn health_returns_ok_without_auth() {
 
 #[test]
 fn analysis_requires_post_enabled_and_auth() {
-    let wrong_method = static_response(route_request("GET", ANALYZE_TRANSCRIPT_PATH, true, false, false));
+    let wrong_method = static_response(route_request(
+        "GET",
+        ANALYZE_TRANSCRIPT_PATH,
+        true,
+        false,
+        false,
+    ));
     assert_eq!(wrong_method.status, 405);
     assert_header(&wrong_method, "allow", "POST");
     assert_eq!(wrong_method.body, r#"{"error":"method_not_allowed"}"#);
 
-    let disabled = static_response(route_request("POST", ANALYZE_TRANSCRIPT_PATH, false, false, false));
+    let disabled = static_response(route_request(
+        "POST",
+        ANALYZE_TRANSCRIPT_PATH,
+        false,
+        false,
+        false,
+    ));
     assert_eq!(disabled.status, 503);
     assert_header(&disabled, "content-type", JSON_CONTENT_TYPE);
     assert_eq!(disabled.body, r#"{"error":"ad_analysis_disabled"}"#);
@@ -34,11 +46,23 @@ fn analysis_requires_post_enabled_and_auth() {
 
 #[test]
 fn app_attest_setup_routes_require_post_and_enabled_feature() {
-    let wrong_method = static_response(route_request("GET", APP_ATTEST_CHALLENGE_PATH, true, false, false));
+    let wrong_method = static_response(route_request(
+        "GET",
+        APP_ATTEST_CHALLENGE_PATH,
+        true,
+        false,
+        false,
+    ));
     assert_eq!(wrong_method.status, 405);
     assert_header(&wrong_method, "allow", "POST");
 
-    let disabled = static_response(route_request("POST", APP_ATTEST_REGISTER_PATH, false, false, false));
+    let disabled = static_response(route_request(
+        "POST",
+        APP_ATTEST_REGISTER_PATH,
+        false,
+        false,
+        false,
+    ));
     assert_eq!(disabled.status, 503);
     assert_eq!(disabled.body, r#"{"error":"ad_analysis_disabled"}"#);
 
@@ -128,7 +152,13 @@ fn internal_host_resolves_only_the_two_binding_paths() {
 
     // POST only; nothing else resolves on the internal host — not even the
     // public routes or health.
-    let wrong_method = static_response(route_request("GET", INTERNAL_ANALYZE_PATH, true, true, true));
+    let wrong_method = static_response(route_request(
+        "GET",
+        INTERNAL_ANALYZE_PATH,
+        true,
+        true,
+        true,
+    ));
     assert_eq!(wrong_method.status, 405);
     assert_header(&wrong_method, "allow", "POST");
     for path in [

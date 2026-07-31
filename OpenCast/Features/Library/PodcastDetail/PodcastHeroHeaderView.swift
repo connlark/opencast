@@ -5,6 +5,7 @@ struct PodcastHeroHeaderView: View {
     let podcast: PodcastCacheSnapshot?
     let episodeCount: Int
     let unplayedCount: Int
+    let lastRefreshedAt: Date?
     let isRefreshing: Bool
     let refreshErrorMessage: String?
     let primaryAction: PodcastPrimaryAction?
@@ -44,6 +45,7 @@ struct PodcastHeroHeaderView: View {
                 subscription: subscription,
                 episodeCount: episodeCount,
                 unplayedCount: unplayedCount,
+                lastRefreshedAt: lastRefreshedAt,
                 isRefreshing: isRefreshing,
                 refreshErrorMessage: refreshErrorMessage
             )

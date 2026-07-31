@@ -485,7 +485,7 @@ describe("bearer bridge", () => {
 });
 
 describe("async jobs", () => {
-  it("submits, attaches without new model calls, polls to folded spans, then deletes", async () => {
+  it("submits, attaches without new model calls, then serves folded spans idempotently", async () => {
     const { request, firstEvidence, secondEvidence } = makeLongRequest();
     const first = mockGeminiDeferred(geminiResponseForSpan(2, firstEvidence));
     const second = mockGeminiDeferred(
@@ -534,11 +534,11 @@ describe("async jobs", () => {
       total_token_count: 320,
     });
 
-    const alreadyFetched = await postPoll(request.transcript.fingerprint, {
+    const repeated = await postPoll(request.transcript.fingerprint, {
       authorization: `Bearer ${BEARER}`,
     });
-    expect(alreadyFetched.status).toBe(404);
-    expect((await alreadyFetched.json()).error).toBe("job_not_found");
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toEqual(result);
   });
 
   it("serves a completed unfetched job directly from a repeated submit", async () => {
@@ -555,12 +555,14 @@ describe("async jobs", () => {
 
     const completed = await waitForCompletedResubmit(request);
     expect(completed.status).toBe(200);
-    expect((await completed.json()).spans).toHaveLength(2);
+    const result = await completed.json();
+    expect(result.spans).toHaveLength(2);
 
-    const deleted = await postPoll(request.transcript.fingerprint, {
+    const repeated = await postPoll(request.transcript.fingerprint, {
       authorization: `Bearer ${BEARER}`,
     });
-    expect(deleted.status).toBe(404);
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toEqual(result);
   });
 
   it("turns an evicted running job into a transient failure on its alarm", async () => {
@@ -593,7 +595,7 @@ describe("async jobs", () => {
     second.release();
   });
 
-  it("keeps legacy multi-window and opted-in single-window requests synchronous", async () => {
+  it("keeps legacy requests synchronous and runs opted-in single-window requests asynchronously", async () => {
     const legacy = makeLongRequest({
       fingerprint: "d".repeat(64),
     });
@@ -612,8 +614,15 @@ describe("async jobs", () => {
     const singleResponse = await postAnalyze(JSON.stringify(singleWindow), {
       authorization: `Bearer ${BEARER}`,
     });
-    expect(singleResponse.status).toBe(200);
-    expect((await singleResponse.json()).spans).toHaveLength(1);
+    expect(singleResponse.status).toBe(202);
+    expect((await singleResponse.json()).job_id).toBe(
+      singleWindow.transcript.fingerprint,
+    );
+    const completedSingleWindow = await waitForTerminalPoll(
+      singleWindow.transcript.fingerprint,
+    );
+    expect(completedSingleWindow.status).toBe(200);
+    expect((await completedSingleWindow.json()).spans).toHaveLength(1);
   });
 
   it("authenticates the exact dynamic poll path before rejecting a payload mismatch", async () => {
@@ -841,9 +850,10 @@ describe("internal transcription surface", () => {
     expect(result.spans).toHaveLength(1);
     expect(result.spans[0].start_segment_id).toBe(2);
 
-    // Serve-once: the completed record purges after the fetch.
-    const afterFetch = await postInternalPoll(fingerprint);
-    expect(afterFetch.status).toBe(404);
+    // Completion stays idempotently readable until the TTL alarm purges it.
+    const repeated = await postInternalPoll(fingerprint);
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toEqual(result);
   });
 
   it("404s an unknown internal job id", async () => {

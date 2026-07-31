@@ -33,7 +33,8 @@ struct OpenCastModelTests {
         let schema = OpenCastModelContainerFactory.syncedSchema
         let syncedEntities = [
             try #require(schema.entity(for: SubscriptionRecord.self)),
-            try #require(schema.entity(for: EpisodeProgressRecord.self))
+            try #require(schema.entity(for: EpisodeProgressRecord.self)),
+            try #require(schema.entity(for: SyncTombstoneRecord.self))
         ]
 
         for entity in syncedEntities {
@@ -948,8 +949,36 @@ struct OpenCastModelTests {
         #expect(appModel.playback.currentEpisode == nil)
     }
 
-    @Test("Unsubscribe deletes all per-feed records")
-    func unsubscribeDeletesAllPerFeedRecords() async throws {
+    @Test("Unsubscribe keeps listening history by default")
+    func unsubscribeKeepsListeningHistoryByDefault() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let feedURL = "https://example.com/feed.xml"
+        let episodeID = "example-episode"
+
+        insertFeedRecords(feedURL: feedURL, title: "Example Show", episodeID: episodeID, in: context)
+        try context.save()
+        await store.load(modelContext: context)
+
+        await store.unsubscribe(feedURL: feedURL, modelContext: context)
+
+        #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
+        let survivingProgress = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        #expect(survivingProgress.map(\.episodeID) == [episodeID])
+        #expect(survivingProgress.first?.position == 30)
+        #expect(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<EpisodeCacheRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<RefreshLogRecord>()).isEmpty)
+        #expect(store.subscriptions.isEmpty)
+        #expect(store.episodes.isEmpty)
+        #expect(store.podcastCache(for: feedURL) == nil)
+        #expect(store.refreshLogs.isEmpty)
+        #expect(store.progressRecord(for: episodeID)?.position == 30)
+    }
+
+    @Test("Unsubscribe with clear history deletes all per-feed records")
+    func unsubscribeWithClearHistoryDeletesAllPerFeedRecords() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
@@ -959,7 +988,7 @@ struct OpenCastModelTests {
         try context.save()
         await store.load(modelContext: context)
 
-        await store.unsubscribe(feedURL: feedURL, modelContext: context)
+        await store.unsubscribe(feedURL: feedURL, modelContext: context, clearListeningHistory: true)
 
         #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).isEmpty)
@@ -967,6 +996,141 @@ struct OpenCastModelTests {
         #expect(store.episodes.isEmpty)
         #expect(store.podcastCache(for: feedURL) == nil)
         #expect(store.refreshLogs.isEmpty)
+    }
+
+    @Test("Automatic prune deletes only trivial stale unsubscribed progress")
+    func pruneDeletesOnlyTrivialStaleUnsubscribedProgress() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let subscribedFeedURL = "https://example.com/subscribed.xml"
+        let archivedFeedURL = "https://example.com/archived.xml"
+        let unsubscribedFeedURL = "https://example.com/unsubscribed.xml"
+        let now = Date.now
+        let staleDate = now.addingTimeInterval(-LibraryStore.trivialProgressPrunableMinAge - 60 * 60)
+        let recentDate = now.addingTimeInterval(-60 * 60)
+
+        context.insert(SubscriptionRecord(feedURL: subscribedFeedURL, title: "Subscribed"))
+        context.insert(SubscriptionRecord(feedURL: archivedFeedURL, title: "Archived", isArchived: true))
+        let records: [(String, String, TimeInterval, Bool, Date)] = [
+            ("subscribed-trivial", subscribedFeedURL, 10, false, staleDate),
+            ("archived-trivial", archivedFeedURL, 10, false, staleDate),
+            ("unsubscribed-played", unsubscribedFeedURL, 10, true, staleDate),
+            ("unsubscribed-deep", unsubscribedFeedURL, 61, false, staleDate),
+            ("unsubscribed-recent", unsubscribedFeedURL, 10, false, recentDate),
+            ("unsubscribed-trivial-stale", unsubscribedFeedURL, 10, false, staleDate)
+        ]
+        for (episodeID, podcastID, position, isPlayed, updatedAt) in records {
+            context.insert(
+                EpisodeProgressRecord(
+                    episodeID: episodeID,
+                    podcastID: podcastID,
+                    position: position,
+                    duration: 3600,
+                    isPlayed: isPlayed,
+                    updatedAt: updatedAt
+                )
+            )
+        }
+        try context.save()
+
+        let prunedCount = store.pruneTrivialUnsubscribedProgressRecords(modelContext: context, now: now)
+
+        let survivors = try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).map(\.episodeID)
+        #expect(prunedCount == 1)
+        #expect(survivors.sorted() == [
+            "archived-trivial",
+            "subscribed-trivial",
+            "unsubscribed-deep",
+            "unsubscribed-played",
+            "unsubscribed-recent"
+        ])
+        #expect(store.syncedStoreSelfSaveCount == 1)
+    }
+
+    @Test("Automatic prune is a no-op on a second run in the same launch")
+    func pruneIsNoOpOnSecondRunSameLaunch() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let now = Date.now
+        let staleDate = now.addingTimeInterval(-LibraryStore.trivialProgressPrunableMinAge - 60 * 60)
+
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "first-prunable",
+                podcastID: "https://example.com/gone.xml",
+                position: 5,
+                duration: 3600,
+                isPlayed: false,
+                updatedAt: staleDate
+            )
+        )
+        try context.save()
+
+        #expect(store.pruneTrivialUnsubscribedProgressRecords(modelContext: context, now: now) == 1)
+
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "second-prunable",
+                podcastID: "https://example.com/gone.xml",
+                position: 5,
+                duration: 3600,
+                isPlayed: false,
+                updatedAt: staleDate
+            )
+        )
+        try context.save()
+
+        #expect(store.pruneTrivialUnsubscribedProgressRecords(modelContext: context, now: now) == 0)
+        #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).map(\.episodeID) == ["second-prunable"])
+        #expect(store.syncedStoreSelfSaveCount == 1)
+    }
+
+    @Test("Manual clear removes exactly the unfollowed-show history")
+    func clearProgressForUnsubscribedShowsRemovesExactlyUnfollowedSet() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let subscribedFeedURL = "https://example.com/followed.xml"
+        let unsubscribedFeedURL = "https://example.com/unfollowed.xml"
+
+        context.insert(SubscriptionRecord(feedURL: subscribedFeedURL, title: "Followed"))
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "followed-played",
+                podcastID: subscribedFeedURL,
+                position: 3600,
+                duration: 3600,
+                isPlayed: true
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "unfollowed-played",
+                podcastID: unsubscribedFeedURL,
+                position: 3600,
+                duration: 3600,
+                isPlayed: true
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "unfollowed-in-progress",
+                podcastID: unsubscribedFeedURL,
+                position: 1800,
+                duration: 3600,
+                isPlayed: false
+            )
+        )
+        try context.save()
+
+        #expect(store.clearProgressForUnsubscribedShows(modelContext: context) == 2)
+        #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).map(\.episodeID) == ["followed-played"])
+        #expect(store.syncedStoreSelfSaveCount == 1)
+
+        #expect(store.clearProgressForUnsubscribedShows(modelContext: context) == 0)
+        #expect(store.syncedStoreSelfSaveCount == 1)
     }
 
     @Test("Inactive feed caches stay out of library episode surfaces")
@@ -1237,7 +1401,7 @@ struct OpenCastModelTests {
         try context.save()
         await store.load(modelContext: context)
 
-        await store.unsubscribe(feedURL: removedFeedURL, modelContext: context)
+        await store.unsubscribe(feedURL: removedFeedURL, modelContext: context, clearListeningHistory: true)
 
         #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).map(\.feedURL) == [keptFeedURL])
         #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).map(\.podcastID) == [keptFeedURL])

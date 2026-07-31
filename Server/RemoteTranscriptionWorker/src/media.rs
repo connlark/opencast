@@ -4,9 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{
-    ERROR_DURATION_TOO_LONG, ERROR_SOURCE_TOO_LARGE, ERROR_UNSUPPORTED_MEDIA_TYPE,
-};
+use crate::types::{ERROR_DURATION_TOO_LONG, ERROR_SOURCE_TOO_LARGE, ERROR_UNSUPPORTED_MEDIA_TYPE};
 
 const MANIFEST_TIMING_TOLERANCE_SECONDS: f64 = 0.001;
 const FINAL_COVERAGE_TOLERANCE_SECONDS: f64 = 0.1;
@@ -163,8 +161,7 @@ pub fn validate_chunks(
             || !chunk.actual_duration_seconds.is_finite()
             || chunk.actual_duration_seconds <= 0.0
             || (position > 0
-                && previous_valid_end + MANIFEST_TIMING_TOLERANCE_SECONDS
-                    < ownership_boundary)
+                && previous_valid_end + MANIFEST_TIMING_TOLERANCE_SECONDS < ownership_boundary)
             || chunk.sha256.len() != 64
             || !chunk.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
@@ -282,7 +279,10 @@ mod tests {
         );
         // Cold starts, missing propagation, stub 501s, 5xx: retryable.
         for status in [404u16, 500, 501, 502, 503] {
-            assert_eq!(classify_media_failure(status, None), MediaCallFailure::Retryable);
+            assert_eq!(
+                classify_media_failure(status, None),
+                MediaCallFailure::Retryable
+            );
         }
     }
 
@@ -320,13 +320,7 @@ mod tests {
         let mut out_of_order = entry;
         out_of_order.index = 1;
         assert_eq!(
-            validate_chunks(
-                &[out_of_order],
-                5 * 1024 * 1024,
-                300.0,
-                300.0,
-                298.0,
-            ),
+            validate_chunks(&[out_of_order], 5 * 1024 * 1024, 300.0, 300.0, 298.0,),
             Err(crate::types::ERROR_INTERNAL)
         );
 

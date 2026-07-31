@@ -4,6 +4,7 @@ struct PodcastHeaderMetadataView: View {
     let subscription: SubscriptionRecord
     let episodeCount: Int
     let unplayedCount: Int
+    let lastRefreshedAt: Date?
     let isRefreshing: Bool
     let refreshErrorMessage: String?
 
@@ -16,9 +17,9 @@ struct PodcastHeaderMetadataView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if let lastRefreshAt = subscription.lastRefreshAt {
+            if let lastRefreshedAt {
                 HStack(spacing: 6) {
-                    Text("Refreshed \(lastRefreshAt.formatted(.relative(presentation: .named)))")
+                    Text("Refreshed \(lastRefreshedAt.formatted(.relative(presentation: .named)))")
                     if isRefreshing {
                         ProgressView()
                             .controlSize(.small)

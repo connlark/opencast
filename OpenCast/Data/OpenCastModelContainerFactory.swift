@@ -9,7 +9,8 @@ enum OpenCastModelContainerFactory {
     static var syncedSchema: Schema {
         Schema([
             SubscriptionRecord.self,
-            EpisodeProgressRecord.self
+            EpisodeProgressRecord.self,
+            SyncTombstoneRecord.self
         ])
     }
 
@@ -30,6 +31,7 @@ enum OpenCastModelContainerFactory {
         Schema([
             SubscriptionRecord.self,
             EpisodeProgressRecord.self,
+            SyncTombstoneRecord.self,
             PodcastCacheRecord.self,
             EpisodeCacheRecord.self,
             RefreshLogRecord.self,

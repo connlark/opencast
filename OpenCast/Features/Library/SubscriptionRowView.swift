@@ -48,8 +48,8 @@ struct SubscriptionRowView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                if let lastRefreshAt = subscription.lastRefreshAt {
-                    Text("Refreshed \(lastRefreshAt.formatted(.relative(presentation: .named)))")
+                if let lastRefreshedAt = appModel.library.lastRefreshedAt(for: subscription) {
+                    Text("Refreshed \(lastRefreshedAt.formatted(.relative(presentation: .named)))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

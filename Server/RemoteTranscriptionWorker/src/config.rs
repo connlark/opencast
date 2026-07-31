@@ -105,8 +105,8 @@ impl AppConfig {
         // rate-limit headroom is measured; misconfiguration clamps, never
         // fails, because it only shrinks capacity.
         let max_slots = (8 / chunk_ai_concurrency).max(1);
-        let global_inference_concurrency = int_var(env, "GLOBAL_INFERENCE_CONCURRENCY", 2)
-            .clamp(1, i64::from(max_slots)) as u32;
+        let global_inference_concurrency =
+            int_var(env, "GLOBAL_INFERENCE_CONCURRENCY", 2).clamp(1, i64::from(max_slots)) as u32;
 
         Ok(Self {
             app_id: format!("{team_id}.{bundle_id}"),
@@ -165,19 +165,14 @@ impl AppConfig {
                 14_400,
             )
             .clamp(60, 14_400) as u32,
-            staging_origin_deadline_seconds: int_var(
-                env,
-                "STAGING_ORIGIN_DEADLINE_SECONDS",
-                3_600,
-            ),
+            staging_origin_deadline_seconds: int_var(env, "STAGING_ORIGIN_DEADLINE_SECONDS", 3_600),
             origin_fetch_max_redirects: int_var(env, "ORIGIN_FETCH_MAX_REDIRECTS", 5) as u32,
             origin_fetch_wall_seconds: int_var(env, "ORIGIN_FETCH_WALL_SECONDS", 900) as u64,
             poll_after_seconds: int_var(env, "POLL_AFTER_SECONDS", 5) as u32,
             ad_analysis_enabled: optional_var(env, "AD_ANALYSIS_ENABLED")
                 .map(|value| value == "true")
                 .unwrap_or(false),
-            ad_analysis_deadline_seconds: int_var(env, "AD_ANALYSIS_DEADLINE_SECONDS", 900)
-                .max(1),
+            ad_analysis_deadline_seconds: int_var(env, "AD_ANALYSIS_DEADLINE_SECONDS", 900).max(1),
             ad_analysis_poll_seconds: int_var(env, "AD_ANALYSIS_POLL_SECONDS", 5).max(1) as u64,
             ad_analysis_max_submit_attempts: int_var(env, "AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS", 3)
                 .clamp(1, 10) as u32,
@@ -317,10 +312,22 @@ mod tests {
 
     #[test]
     fn development_lane_allows_bearer_only_with_flag_and_secret() {
-        assert_eq!(validate_lane("development", "development", true, true), Ok(true));
-        assert_eq!(validate_lane("development", "development", true, false), Ok(false));
-        assert_eq!(validate_lane("development", "development", false, true), Ok(false));
-        assert_eq!(validate_lane("development", "development", false, false), Ok(false));
+        assert_eq!(
+            validate_lane("development", "development", true, true),
+            Ok(true)
+        );
+        assert_eq!(
+            validate_lane("development", "development", true, false),
+            Ok(false)
+        );
+        assert_eq!(
+            validate_lane("development", "development", false, true),
+            Ok(false)
+        );
+        assert_eq!(
+            validate_lane("development", "development", false, false),
+            Ok(false)
+        );
     }
 
     #[test]
@@ -333,7 +340,10 @@ mod tests {
         assert!(validate_lane("production", "production", true, false).is_err());
         assert!(validate_lane("production", "production", false, true).is_err());
         assert!(validate_lane("prod-staging", "production", true, true).is_err());
-        assert_eq!(validate_lane("production", "production", false, false), Ok(false));
+        assert_eq!(
+            validate_lane("production", "production", false, false),
+            Ok(false)
+        );
     }
 
     #[test]

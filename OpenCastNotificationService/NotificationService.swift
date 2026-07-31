@@ -1,10 +1,15 @@
 import Foundation
+import OSLog
 import UserNotifications
 
 // UNNotificationServiceExtension is Objective-C managed. The mutable state that
 // crosses system timeout and URLSession callbacks is guarded by stateLock.
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
     private static let maxArtworkBytes = 10 * 1024 * 1024
+    private static let artworkLogger = Logger(
+        subsystem: "com.connor.opencast",
+        category: "NotificationServiceArtwork"
+    )
 
     private let stateLock = NSLock()
     private var contentHandler: ((UNNotificationContent) -> Void)?
@@ -25,6 +30,9 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         storePending(content: content, contentHandler: contentHandler)
 
         let artworkRequests = Self.artworkRequests(from: request.content.userInfo)
+        Self.artworkLogger.notice(
+            "Received notification with \(artworkRequests.count, privacy: .public) artwork request(s)."
+        )
         guard !artworkRequests.isEmpty else {
             deliverPendingContent(attachments: [])
             return
@@ -58,6 +66,9 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
 
         for artworkRequest in artworkRequests {
             fetchArtworkAttachment(for: artworkRequest) { [weak self] attachment in
+                Self.artworkLogger.notice(
+                    "Artwork request completed; attachment created: \(attachment != nil, privacy: .public)."
+                )
                 guard let attachments = accumulator.complete(
                     identifier: artworkRequest.identifier,
                     attachment: attachment
@@ -89,6 +100,13 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
                   let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode)
             else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                Self.artworkLogger.error(
+                    """
+                    Artwork download failed; HTTP status: \(statusCode, privacy: .public), \
+                    URL session error present: \(error != nil, privacy: .public).
+                    """
+                )
                 completion(nil)
                 return
             }
@@ -157,6 +175,9 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     }
 
     private func deliverPendingContent(attachments: [UNNotificationAttachment]) {
+        Self.artworkLogger.notice(
+            "Delivering notification with \(attachments.count, privacy: .public) artwork attachment(s)."
+        )
         stateLock.lock()
         guard !didDeliver, let content = bestAttemptContent else {
             stateLock.unlock()

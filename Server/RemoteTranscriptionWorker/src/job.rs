@@ -87,11 +87,7 @@ pub fn upload_part_count(byte_count: i64, part_bytes: i64) -> Option<u16> {
 }
 
 /// Exact byte range of one 1-based part under the uniform geometry.
-pub fn upload_part_range(
-    byte_count: i64,
-    part_bytes: i64,
-    part_number: u16,
-) -> Option<(i64, i64)> {
+pub fn upload_part_range(byte_count: i64, part_bytes: i64, part_number: u16) -> Option<(i64, i64)> {
     let count = upload_part_count(byte_count, part_bytes)?;
     if part_number == 0 || part_number > count {
         return None;
@@ -479,8 +475,7 @@ pub fn compare_identities(
     else {
         return IdentityComparison::Waiting;
     };
-    if device.sha256.eq_ignore_ascii_case(server_sha256) && device.byte_count == server_byte_count
-    {
+    if device.sha256.eq_ignore_ascii_case(server_sha256) && device.byte_count == server_byte_count {
         IdentityComparison::Matched
     } else {
         IdentityComparison::Mismatched
@@ -501,8 +496,7 @@ pub fn reserved_seconds_for_duration(canonical_duration_seconds: f64) -> Option<
 /// short episode legitimately exceeds a bare 1.20 multiplier.
 pub fn retry_audio_ceiling_seconds(canonical_duration_seconds: f64, chunk_count: u32) -> f64 {
     let overlap_baseline = OVERLAP_SECONDS * chunk_count.saturating_sub(1) as f64;
-    (1.20 * canonical_duration_seconds)
-        .max(canonical_duration_seconds + 2.0 * CHUNK_SECONDS)
+    (1.20 * canonical_duration_seconds).max(canonical_duration_seconds + 2.0 * CHUNK_SECONDS)
         + overlap_baseline
 }
 
@@ -651,12 +645,18 @@ mod tests {
 
     #[test]
     fn deadlines_only_for_waiting_states() {
-        assert_eq!(state_deadline_seconds(STATE_STAGING_ORIGIN, 1, 2, 3), Some(1));
+        assert_eq!(
+            state_deadline_seconds(STATE_STAGING_ORIGIN, 1, 2, 3),
+            Some(1)
+        );
         assert_eq!(
             state_deadline_seconds(STATE_WAITING_FOR_DEVICE_SOURCE, 1, 2, 3),
             Some(2)
         );
-        assert_eq!(state_deadline_seconds(STATE_AWAITING_CREDITS, 1, 2, 3), Some(3));
+        assert_eq!(
+            state_deadline_seconds(STATE_AWAITING_CREDITS, 1, 2, 3),
+            Some(3)
+        );
         assert_eq!(state_deadline_seconds(STATE_TRANSCRIBING, 1, 2, 3), None);
         assert_eq!(state_deadline_seconds(STATE_RESULT_READY, 1, 2, 3), None);
     }
@@ -707,7 +707,9 @@ mod tests {
     fn init_chunk_work_migrates_pass0_walk_position() {
         let fresh = init_chunk_work(3, 0);
         assert_eq!(fresh.len(), 3);
-        assert!(fresh.iter().all(|work| !work.completed && work.failed_attempts == 0));
+        assert!(fresh
+            .iter()
+            .all(|work| !work.completed && work.failed_attempts == 0));
 
         // An in-flight pass-0 record with next_chunk_index = 2 resumes at 2.
         let migrated = init_chunk_work(3, 2);
@@ -792,7 +794,11 @@ mod tests {
 
     #[test]
     fn select_wave_budgets_the_whole_wave_against_the_retry_ceiling() {
-        let chunks = vec![work(0, false, None), work(1, false, None), work(2, false, None)];
+        let chunks = vec![
+            work(0, false, None),
+            work(1, false, None),
+            work(2, false, None),
+        ];
         let durations = [300.0, 300.0, 300.0];
         // 700 already requested, ceiling 1400: chunks 0 and 1 fit (1300),
         // chunk 2 would cross — the wave is trimmed, never failed.
@@ -820,15 +826,27 @@ mod tests {
         let none = BTreeSet::new();
 
         // Capacity cap, lowest index first.
-        assert_eq!(select_overlap(&discovered, &none, 2, 0.0, 10_000.0), vec![0, 1]);
+        assert_eq!(
+            select_overlap(&discovered, &none, 2, 0.0, 10_000.0),
+            vec![0, 1]
+        );
         // Exclusions (completed / in-flight / already attempted) are skipped.
         let excluded: BTreeSet<u32> = [0, 2].into();
-        assert_eq!(select_overlap(&discovered, &excluded, 4, 0.0, 10_000.0), vec![1, 3, 4]);
+        assert_eq!(
+            select_overlap(&discovered, &excluded, 4, 0.0, 10_000.0),
+            vec![1, 3, 4]
+        );
         // Zero capacity issues nothing.
-        assert_eq!(select_overlap(&discovered, &none, 0, 0.0, 10_000.0), Vec::<u32>::new());
+        assert_eq!(
+            select_overlap(&discovered, &none, 0, 0.0, 10_000.0),
+            Vec::<u32>::new()
+        );
         // Ceiling budgeting at the requested chunk duration: 700 budgeted,
         // ceiling 1400 fits two more 300 s estimates, not three.
-        assert_eq!(select_overlap(&discovered, &none, 4, 700.0, 1400.0), vec![0, 1]);
+        assert_eq!(
+            select_overlap(&discovered, &none, 4, 700.0, 1400.0),
+            vec![0, 1]
+        );
     }
 
     #[test]
@@ -858,7 +876,10 @@ mod tests {
             None,
             1_784_000_000,
         );
-        assert_eq!(record.phase_timestamps.get(STATE_CREATED), Some(&1_784_000_000));
+        assert_eq!(
+            record.phase_timestamps.get(STATE_CREATED),
+            Some(&1_784_000_000)
+        );
         let json = serde_json::to_string(&record).expect("serialize");
         let decoded: JobRecord = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded.phase_timestamps.len(), 1);

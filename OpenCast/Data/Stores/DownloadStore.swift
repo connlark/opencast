@@ -1256,6 +1256,11 @@ final class DownloadStore {
         if changed {
             try modelContext.save()
         }
+
+        try fileStore.removeUnclaimedFiles(
+            claimedRelativePaths: fetchedRecords.compactMap(\.localRelativePath),
+            claimedEpisodeIDs: fetchedRecords.map(\.episodeID)
+        )
     }
 
     private func upsertRecord(

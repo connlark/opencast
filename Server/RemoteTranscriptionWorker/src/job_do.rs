@@ -245,9 +245,7 @@ impl TranscriptionJob {
                     .as_deref(),
                 config.is_development_lane(),
             )
-            .map_err(|_| {
-                worker::Error::RustError("url encryption key unavailable".to_string())
-            })?;
+            .map_err(|_| worker::Error::RustError("url encryption key unavailable".to_string()))?;
             let mut nonce = [0u8; 12];
             getrandom::getrandom(&mut nonce)
                 .map_err(|error| worker::Error::RustError(error.to_string()))?;
@@ -438,7 +436,9 @@ impl TranscriptionJob {
             .expect("record existed above");
         // Run the cleanup inline so cancellation is prompt and idempotent;
         // alarms re-run it if we're evicted mid-way.
-        let record = self.finish_terminal(updated, job::STATE_CANCELLED, types::ERROR_CANCELLED, None).await?;
+        let record = self
+            .finish_terminal(updated, job::STATE_CANCELLED, types::ERROR_CANCELLED, None)
+            .await?;
         self.status_response(&record, None)
     }
 
@@ -621,11 +621,10 @@ impl TranscriptionJob {
             return json_error(400, types::ERROR_INVALID_REQUEST);
         }
         let expires = self.upload_url_expiry(&config, message.for_background);
-        let parts =
-            match self.presign_parts(&record, &upload_id, &message.part_numbers, expires) {
-                Ok(parts) => parts,
-                Err(code) => return json_error(503, code),
-            };
+        let parts = match self.presign_parts(&record, &upload_id, &message.part_numbers, expires) {
+            Ok(parts) => parts,
+            Err(code) => return json_error(503, code),
+        };
         json_success(
             200,
             &types::UploadGrantResponse {
@@ -725,9 +724,7 @@ impl TranscriptionJob {
             if !job::is_terminal(&record.state) && now_seconds() >= deadline {
                 if record.state == job::STATE_DETECTING_ADS {
                     return self
-                        .finalize_ad_phase(ad_analysis::failure_block(
-                            ad_analysis::MARKER_TIMEOUT,
-                        ))
+                        .finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_TIMEOUT))
                         .await;
                 }
                 self.finish_terminal(
@@ -744,7 +741,9 @@ impl TranscriptionJob {
         match record.state.as_str() {
             job::STATE_CREATED => self.step_staging(record, &config).await,
             job::STATE_STAGING_ORIGIN => self.step_staging(record, &config).await,
-            job::STATE_WAITING_FOR_DEVICE_SOURCE => self.step_evaluate_identities(record, &config).await,
+            job::STATE_WAITING_FOR_DEVICE_SOURCE => {
+                self.step_evaluate_identities(record, &config).await
+            }
             job::STATE_EXACT_UPLOAD_REQUIRED | job::STATE_EXACT_UPLOADING => {
                 // Nothing to drive server-side: the app owns the upload. The
                 // alarm exists only so the state deadline fires.
@@ -753,9 +752,7 @@ impl TranscriptionJob {
                 }
                 Ok(())
             }
-            job::STATE_SOURCE_MATCHED | job::STATE_PROBING => {
-                self.step_probe(&config).await
-            }
+            job::STATE_SOURCE_MATCHED | job::STATE_PROBING => self.step_probe(&config).await,
             job::STATE_AWAITING_CREDITS => self.step_reserve(record, &config).await,
             job::STATE_RESERVED => self.step_chunk(&config).await,
             job::STATE_CHUNKING => self.step_chunk(&config).await,
@@ -807,9 +804,8 @@ impl TranscriptionJob {
                         record.server_byte_count = Some(byte_count);
                         record.enclosure_url_ciphertext = None;
                         record.state = job::STATE_WAITING_FOR_DEVICE_SOURCE.to_string();
-                        record.state_deadline_at = Some(
-                            now_seconds() + config.waiting_for_device_source_deadline_seconds,
-                        );
+                        record.state_deadline_at =
+                            Some(now_seconds() + config.waiting_for_device_source_deadline_seconds);
                     })
                     .await?
                     .expect("record exists");
@@ -967,7 +963,12 @@ impl TranscriptionJob {
         };
         let credit = self.credit(config)?;
         match credit
-            .reserve(&record.account_id, &record.job_id, reserved_seconds, now_seconds())
+            .reserve(
+                &record.account_id,
+                &record.job_id,
+                reserved_seconds,
+                now_seconds(),
+            )
             .await
         {
             Ok(_) => {
@@ -1099,8 +1100,7 @@ impl TranscriptionJob {
                 record.chunk_audio_profile = chunk_response.chunk_audio_profile.clone();
                 // Preserve overlap outcomes; entries the driver never
                 // touched start fresh.
-                let mut chunk_work =
-                    job::init_chunk_work(chunk_response.chunks.len() as u32, 0);
+                let mut chunk_work = job::init_chunk_work(chunk_response.chunks.len() as u32, 0);
                 for existing in &record.chunk_work {
                     if let Some(slot) = chunk_work.get_mut(existing.index as usize) {
                         *slot = existing.clone();
@@ -1237,10 +1237,8 @@ impl TranscriptionJob {
                                             requested_start_seconds: index as f64
                                                 * job::STEP_SECONDS,
                                             actual_duration_seconds: job::CHUNK_SECONDS,
-                                            valid_start_seconds: index as f64
-                                                * job::STEP_SECONDS,
-                                            valid_end_seconds: ((index as f64
-                                                * job::STEP_SECONDS)
+                                            valid_start_seconds: index as f64 * job::STEP_SECONDS,
+                                            valid_end_seconds: ((index as f64 * job::STEP_SECONDS)
                                                 + job::CHUNK_SECONDS)
                                                 .min(
                                                     record
@@ -1361,8 +1359,11 @@ impl TranscriptionJob {
                             work.ai_ended_at = Some(outcome.ai_ended_at);
                         }
                     });
-                    record.next_chunk_index =
-                        record.chunk_work.iter().filter(|work| work.completed).count() as u32;
+                    record.next_chunk_index = record
+                        .chunk_work
+                        .iter()
+                        .filter(|work| work.completed)
+                        .count() as u32;
                 })
                 .await?;
             }
@@ -1561,7 +1562,8 @@ impl TranscriptionJob {
                         }
                     })
                     .await?;
-                    if class == AiFailureClass::Fatal || failed_attempts >= config.max_chunk_attempts
+                    if class == AiFailureClass::Fatal
+                        || failed_attempts >= config.max_chunk_attempts
                     {
                         fatal = Some(types::ERROR_TRANSCRIPTION_FAILED);
                     }
@@ -1692,7 +1694,10 @@ impl TranscriptionJob {
                 let persisted: Result<()> = async {
                     let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
                     bucket
-                        .put(&job::r2_response_key(&record.job_id, chunk.index), response_json)
+                        .put(
+                            &job::r2_response_key(&record.job_id, chunk.index),
+                            response_json,
+                        )
                         .execute()
                         .await?;
                     // Chunk audio is deleted only after its response is durable.
@@ -1747,10 +1752,9 @@ impl TranscriptionJob {
             let bytes = body.bytes().await?;
             let response: ai::WhisperResponse = serde_json::from_slice(&bytes)
                 .map_err(|error| worker::Error::RustError(format!("response decode: {error}")))?;
-            chunk_transcriptions.push(response.to_chunk_transcription(
-                chunk.valid_start_seconds,
-                chunk.valid_end_seconds,
-            ));
+            chunk_transcriptions.push(
+                response.to_chunk_transcription(chunk.valid_start_seconds, chunk.valid_end_seconds),
+            );
         }
 
         let stitched = match stitch::stitch(&chunk_transcriptions, job::OVERLAP_SECONDS, canonical)
@@ -1910,8 +1914,11 @@ impl TranscriptionJob {
             .settle(&record.job_id, now_seconds())
             .await
             .map_err(|error| worker::Error::RustError(format!("settle failed: {error:?}")))?;
-        self.bump("settled_seconds", record.reserved_seconds.unwrap_or_default())
-            .await;
+        self.bump(
+            "settled_seconds",
+            record.reserved_seconds.unwrap_or_default(),
+        )
+        .await;
         self.bump("results_ready", 1).await;
 
         let normalized = stitch::normalized_transcript_sha256(
@@ -1946,7 +1953,8 @@ impl TranscriptionJob {
         if updated.state == job::STATE_DETECTING_ADS {
             self.schedule(Duration::from_secs(0)).await
         } else {
-            self.schedule_at(updated.state_deadline_at.expect("just set")).await
+            self.schedule_at(updated.state_deadline_at.expect("just set"))
+                .await
         }
     }
 
@@ -2019,9 +2027,7 @@ impl TranscriptionJob {
             Ok((status, body)) => ad_analysis::classify_analyze_response(status, &body),
             Err(AdAnalysisCallFailure::BindingMissing) => {
                 return self
-                    .finalize_ad_phase(ad_analysis::failure_block(
-                        ad_analysis::MARKER_UNAVAILABLE,
-                    ))
+                    .finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_UNAVAILABLE))
                     .await;
             }
             Err(AdAnalysisCallFailure::Transport) => ad_analysis::AnalyzeOutcome::Retryable,
@@ -2121,7 +2127,8 @@ impl TranscriptionJob {
             .expect("record existed above");
         self.sync_index(&updated).await;
         self.bump("ad_analysis_finalized", 1).await;
-        self.schedule_at(updated.state_deadline_at.expect("just set")).await
+        self.schedule_at(updated.state_deadline_at.expect("just set"))
+            .await
     }
 
     async fn read_result_envelope(&self, job_id: &str) -> Result<Option<Vec<u8>>> {
@@ -2271,7 +2278,10 @@ impl TranscriptionJob {
                 upload.abort().await.ok();
             }
         }
-        bucket.delete(&job::r2_result_key(&record.job_id)).await.ok();
+        bucket
+            .delete(&job::r2_result_key(&record.job_id))
+            .await
+            .ok();
         self.delete_job_prefixes(&record.job_id).await?;
 
         let error_code = error_code.to_string();
@@ -2346,7 +2356,9 @@ impl TranscriptionJob {
             headers
                 .set("accept-encoding", crate::origin::MEDIA_ACCEPT_ENCODING)
                 .ok();
-            headers.set("user-agent", crate::origin::MEDIA_USER_AGENT).ok();
+            headers
+                .set("user-agent", crate::origin::MEDIA_USER_AGENT)
+                .ok();
             let mut init = RequestInit::new();
             init.with_method(Method::Get)
                 .with_headers(headers)
@@ -2359,12 +2371,7 @@ impl TranscriptionJob {
                 .map_err(|_| types::ERROR_ORIGIN_FETCH_FAILED)?;
             let status = fetched.status_code();
             if (301..=308).contains(&status) {
-                let Some(location) = fetched
-                    .headers()
-                    .get("location")
-                    .ok()
-                    .flatten()
-                else {
+                let Some(location) = fetched.headers().get("location").ok().flatten() else {
                     return Err(types::ERROR_ORIGIN_FETCH_FAILED);
                 };
                 let next = current
@@ -2407,7 +2414,9 @@ impl TranscriptionJob {
         let mut part_number: u16 = 1;
         let mut buffer: Vec<u8> = Vec::with_capacity(R2_PART_BYTES);
         let mut parts = Vec::new();
-        let mut stream = response.stream().map_err(|_| types::ERROR_ORIGIN_FETCH_FAILED)?;
+        let mut stream = response
+            .stream()
+            .map_err(|_| types::ERROR_ORIGIN_FETCH_FAILED)?;
 
         let failure = 'stream: loop {
             let chunk = match stream.next().await {
@@ -2475,9 +2484,7 @@ impl TranscriptionJob {
                 .await
                 .map_err(|_| media::MediaCallFailure::Retryable)?
                 .ok_or(media::MediaCallFailure::Retryable)?;
-            let body = object
-                .body()
-                .ok_or(media::MediaCallFailure::Retryable)?;
+            let body = object.body().ok_or(media::MediaCallFailure::Retryable)?;
             let bytes = body
                 .bytes()
                 .await
@@ -2592,7 +2599,9 @@ impl TranscriptionJob {
             let sha256 = hex::encode(Sha256::digest(slice));
             manifest_hasher.update(sha256.as_bytes());
             let requested_start = index as f64 * job::STEP_SECONDS;
-            let actual = (duration - requested_start).min(job::CHUNK_SECONDS).max(1.0);
+            let actual = (duration - requested_start)
+                .min(job::CHUNK_SECONDS)
+                .max(1.0);
             chunks.push(media::MediaChunkEntry {
                 index: index as u32,
                 key,
@@ -2648,13 +2657,10 @@ impl TranscriptionJob {
             ));
         let request = Request::new_with_init(&format!("{MEDIA_INTERNAL_ORIGIN}{path}"), &init)
             .map_err(|_| media::MediaCallFailure::Fatal(types::ERROR_INTERNAL))?;
-        let mut response = service
-            .fetch_request(request)
-            .await
-            .map_err(|error| {
-                worker::console_error!("media {path} transport error: {error:?}");
-                media::MediaCallFailure::Retryable
-            })?;
+        let mut response = service.fetch_request(request).await.map_err(|error| {
+            worker::console_error!("media {path} transport error: {error:?}");
+            media::MediaCallFailure::Retryable
+        })?;
         let status = response.status_code();
         if status != 200 {
             worker::console_error!("media {path} status {status}");
@@ -3106,10 +3112,7 @@ fn decode_limiter_state(payload: &str) -> Result<crate::limiter::LimiterState> {
     })
 }
 
-fn write_limiter_row(
-    sql: &worker::SqlStorage,
-    state: &crate::limiter::LimiterState,
-) -> Result<()> {
+fn write_limiter_row(sql: &worker::SqlStorage, state: &crate::limiter::LimiterState) -> Result<()> {
     sql.exec(
         "INSERT INTO limiter_state (id, payload) VALUES (1, ?) \
          ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",

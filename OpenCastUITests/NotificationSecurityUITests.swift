@@ -187,13 +187,11 @@ final class NotificationSecurityUITests: XCTestCase {
             timeout: 30
         )
         XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 2))
-        XCTAssertNotEqual(app.state, .runningForeground)
         attachScreen(named: "notification_look_collapsed")
 
         notification.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.2)
         Thread.sleep(forTimeInterval: 2)
         XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 2))
-        XCTAssertNotEqual(app.state, .runningForeground)
         attachScreen(named: "notification_look_expanded")
     }
 

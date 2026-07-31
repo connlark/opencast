@@ -13,6 +13,10 @@ export default defineConfig(async () => {
   return {
     plugins: [
       cloudflareTest({
+        // The Wrangler config contains a Workers AI binding, which defaults
+        // to a remote proxy. Tests short-circuit AI through FAKE_AI, so keep
+        // the entire suite local and credential-free.
+        remoteBindings: false,
         wrangler: { configPath: "./wrangler.toml" },
         miniflare: {
           bindings: {

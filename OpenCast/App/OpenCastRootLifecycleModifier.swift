@@ -18,6 +18,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     private static let foregroundSyncedDataRefreshInterval: Duration = .seconds(60)
 
     let performInitialSetup: () async -> Void
+    let shouldRunForegroundMaintenance: () -> Bool
     let refreshImportedData: () async -> Void
     let refreshSyncedUserData: () async -> Void
     let runVoiceBoostDeviceProbeIfActive: () async -> Void
@@ -151,9 +152,13 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         appModel.refreshCurrentVoiceBoostSetting(modelContext: modelContext)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         foregroundMaintenanceTask = Task {
-            await refreshImportedData()
-            guard !Task.isCancelled else {
-                return
+            // Only the reload + duplicate-repair pass is gated; the cheaper,
+            // internally throttled refreshes below always run on activation.
+            if shouldRunForegroundMaintenance() {
+                await refreshImportedData()
+                guard !Task.isCancelled else {
+                    return
+                }
             }
             await appModel.refreshLibraryIfStale(modelContext: modelContext)
             guard !Task.isCancelled else {

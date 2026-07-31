@@ -75,7 +75,10 @@ pub fn object_is_orphan(key: &str, uploaded_seconds: i64, now_seconds: i64) -> b
 pub fn job_id_from_object_key(key: &str) -> Option<String> {
     let mut parts = key.split('/');
     let prefix = parts.next()?;
-    if !matches!(prefix, "raw" | "uploads" | "chunks" | "responses" | "results") {
+    if !matches!(
+        prefix,
+        "raw" | "uploads" | "chunks" | "responses" | "results"
+    ) {
         return None;
     }
     let job_id = parts.next()?;
@@ -107,15 +110,10 @@ mod runtime {
         let now_seconds = now_seconds();
         let now_millis = now_seconds.saturating_mul(1_000);
 
-        let max_stale_jobs = usize_var(env, "ORPHAN_SWEEP_MAX_STALE_JOBS", DEFAULT_MAX_STALE_JOBS)
-            .clamp(1, 1_000);
-        let (stale_job_ids, stale_truncated) = storage::stale_job_ids(
-            &db,
-            &config,
-            now_seconds,
-            max_stale_jobs,
-        )
-        .await?;
+        let max_stale_jobs =
+            usize_var(env, "ORPHAN_SWEEP_MAX_STALE_JOBS", DEFAULT_MAX_STALE_JOBS).clamp(1, 1_000);
+        let (stale_job_ids, stale_truncated) =
+            storage::stale_job_ids(&db, &config, now_seconds, max_stale_jobs).await?;
 
         let max_r2_objects = usize_var(env, "ORPHAN_SWEEP_MAX_R2_OBJECTS", DEFAULT_MAX_R2_OBJECTS)
             .clamp(100, 10_000);
@@ -197,8 +195,8 @@ mod runtime {
                 let objects = listed.objects();
                 scanned += objects.len();
                 for object in objects {
-                    let uploaded_seconds = i64::try_from(object.uploaded().as_millis() / 1_000)
-                        .unwrap_or(i64::MAX);
+                    let uploaded_seconds =
+                        i64::try_from(object.uploaded().as_millis() / 1_000).unwrap_or(i64::MAX);
                     if object_is_orphan(&object.key(), uploaded_seconds, now_millis / 1_000) {
                         orphan_count += 1;
                         if let Some(job_id) = job_id_from_object_key(&object.key()) {
@@ -277,22 +275,39 @@ mod tests {
 
     #[test]
     fn lifecycle_windows_include_cloudflare_deletion_grace() {
-        assert_eq!(expected_deletion_seconds("raw/job/source"), Some(2 * 86_400));
-        assert_eq!(expected_deletion_seconds("results/job/transcript.json"), Some(8 * 86_400));
+        assert_eq!(
+            expected_deletion_seconds("raw/job/source"),
+            Some(2 * 86_400)
+        );
+        assert_eq!(
+            expected_deletion_seconds("results/job/transcript.json"),
+            Some(8 * 86_400)
+        );
         assert_eq!(expected_deletion_seconds("debug/job/0.json"), None);
     }
 
     #[test]
     fn orphan_boundary_is_inclusive_and_unknown_prefixes_are_ignored() {
         let uploaded = 1_000;
-        assert!(!object_is_orphan("raw/job/source", uploaded, uploaded + 2 * 86_400 - 1));
-        assert!(object_is_orphan("raw/job/source", uploaded, uploaded + 2 * 86_400));
+        assert!(!object_is_orphan(
+            "raw/job/source",
+            uploaded,
+            uploaded + 2 * 86_400 - 1
+        ));
+        assert!(object_is_orphan(
+            "raw/job/source",
+            uploaded,
+            uploaded + 2 * 86_400
+        ));
         assert!(!object_is_orphan("debug/job/0.json", 0, i64::MAX));
     }
 
     #[test]
     fn object_keys_only_surface_valid_job_ids() {
-        assert_eq!(job_id_from_object_key("chunks/job-abc_1/0.mp3").as_deref(), Some("job-abc_1"));
+        assert_eq!(
+            job_id_from_object_key("chunks/job-abc_1/0.mp3").as_deref(),
+            Some("job-abc_1")
+        );
         assert_eq!(job_id_from_object_key("raw/../../secret"), None);
         assert_eq!(job_id_from_object_key("unknown/job/source"), None);
     }

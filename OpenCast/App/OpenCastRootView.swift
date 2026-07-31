@@ -24,6 +24,7 @@ struct OpenCastRootView: View {
     @State private var hasFlushedProgressForLifecycleExit = false
     @State private var importedDataRefreshTask: Task<Void, Never>?
     @State private var remoteStoreChangeArbiter = SyncedStoreRemoteChangeArbiter()
+    @State private var foregroundMaintenanceGate = ForegroundMaintenanceGate()
     @State private var remoteStoreChangeReloadTask: Task<Void, Never>?
     @State private var emptyImportPollingTask: Task<Void, Never>?
     @State private var importedSubscriptionsNotificationDismissalTask: Task<Void, Never>?
@@ -59,6 +60,7 @@ struct OpenCastRootView: View {
             OpenCastRootLifecycleModifier(
                 hasFlushedProgressForLifecycleExit: $hasFlushedProgressForLifecycleExit,
                 performInitialSetup: performInitialSetup,
+                shouldRunForegroundMaintenance: shouldRunForegroundMaintenance,
                 refreshImportedData: refreshImportedData,
                 refreshSyncedUserData: refreshSyncedUserData,
                 runVoiceBoostDeviceProbeIfActive: runVoiceBoostDeviceProbeIfActive
@@ -256,6 +258,7 @@ struct OpenCastRootView: View {
                 syncedStoreURL: syncedStoreURL,
                 selfSaveCount: appModel.library.syncedStoreSelfSaveCount
             ) {
+                foregroundMaintenanceGate.recordRemoteChange()
                 scheduleRemoteStoreChangeReload()
             }
         }
@@ -414,6 +417,12 @@ struct OpenCastRootView: View {
         presentImportedSubscriptionsNotificationIfNeeded(
             addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeReload)
         )
+        appModel.library.pruneTrivialUnsubscribedProgressRecords(modelContext: modelContext)
+        foregroundMaintenanceGate.recordCompletedPass()
+    }
+
+    private func shouldRunForegroundMaintenance() -> Bool {
+        foregroundMaintenanceGate.shouldRunMaintenancePass()
     }
 
     private func processImportedSubscriptionChanges(addedFeedURLStrings: Set<String>) async {

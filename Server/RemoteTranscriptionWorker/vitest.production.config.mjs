@@ -13,6 +13,9 @@ export default defineConfig(async () => {
   return {
     plugins: [
       cloudflareTest({
+        // Production-posture tests must remain local and credential-free;
+        // none of their assertions require the configured Workers AI binding.
+        remoteBindings: false,
         wrangler: {
           configPath: "./wrangler.toml",
           environment: "production",
@@ -26,6 +29,11 @@ export default defineConfig(async () => {
             DEV_BEARER_TOKEN: "",
           },
           serviceBindings: {
+            AD_ANALYSIS_WORKER() {
+              return new Response("ad analysis worker must not be reached", {
+                status: 501,
+              });
+            },
             PURCHASE_WORKER() {
               return new Response("purchase worker must not be reached", {
                 status: 501,

@@ -342,6 +342,9 @@ final class EpisodeTranscriptionStore {
                 try fileStore.delete(relativePath: record.transcriptRelativePath)
                 modelContext.delete(record)
             }
+            // Sweep the per-episode directory like the ad-analysis twin so
+            // unrecorded leftovers cannot outlive the delete.
+            try fileStore.deleteTranscripts(forEpisodeID: episodeID)
             try modelContext.save()
             clearTransientProgress(episodeID: episodeID)
             try reload(modelContext: modelContext)
@@ -404,6 +407,7 @@ final class EpisodeTranscriptionStore {
                 activeTask?.cancel()
             }
             try fileStore.delete(relativePath: record.transcriptRelativePath)
+            try fileStore.deleteTranscripts(forEpisodeID: record.episodeID)
             modelContext.delete(record)
         }
         if !records.isEmpty {

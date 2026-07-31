@@ -1,10 +1,10 @@
 pub mod apns;
 pub use opencast_app_attest_core::app_attest;
 pub use opencast_app_attest_core::challenge_limits;
-#[cfg(target_arch = "wasm32")]
-pub use opencast_app_attest_core::random;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) use opencast_app_attest_core::d1_changes;
+#[cfg(target_arch = "wasm32")]
+pub use opencast_app_attest_core::random;
 pub mod feed_admission;
 #[cfg(any(target_arch = "wasm32", test))]
 mod feed_fetch;

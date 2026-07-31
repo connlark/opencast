@@ -15,9 +15,9 @@ pub mod result_validation;
 pub mod route;
 pub mod sigv4;
 pub mod stitch;
-pub mod sweeper;
 #[cfg(any(target_arch = "wasm32", test))]
 pub mod storage;
+pub mod sweeper;
 pub mod types;
 
 #[cfg(target_arch = "wasm32")]

@@ -604,12 +604,7 @@ mod tests {
         let tickets = vec![ticket("job-c", 50), ticket("job-d", 20)];
 
         assert_eq!(
-            projected_queue_wait_seconds(
-                &active,
-                &tickets,
-                2,
-                DEFAULT_QUEUE_REMAINING_SECONDS,
-            ),
+            projected_queue_wait_seconds(&active, &tickets, 2, DEFAULT_QUEUE_REMAINING_SECONDS,),
             90
         );
     }

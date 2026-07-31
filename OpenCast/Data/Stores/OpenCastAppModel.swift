@@ -458,7 +458,11 @@ final class OpenCastAppModel {
         try play(episode, source: .downloaded(downloadRecord), modelContext: modelContext)
     }
 
-    func unsubscribe(feedURL: String, modelContext: ModelContext) async {
+    func unsubscribe(
+        feedURL: String,
+        modelContext: ModelContext,
+        clearListeningHistory: Bool = false
+    ) async {
         let podcastID = PodcastID(rawValue: feedURL)
         if playback.currentEpisode?.podcastID == podcastID {
             playback.unload()
@@ -477,7 +481,12 @@ final class OpenCastAppModel {
         ) {
             lastPlaybackError = podcastEpisodeListSettings.lastErrorMessage
         }
-        await library.unsubscribe(feedURL: feedURL, modelContext: modelContext, downloadStore: downloads)
+        await library.unsubscribe(
+            feedURL: feedURL,
+            modelContext: modelContext,
+            downloadStore: downloads,
+            clearListeningHistory: clearListeningHistory
+        )
         guard !library.isActivelySubscribed(to: feedURL) else {
             return
         }
@@ -1580,6 +1589,7 @@ final class OpenCastAppModel {
     private func deleteAllModelRows(modelContext: ModelContext) throws {
         try deleteAll(SubscriptionRecord.self, modelContext: modelContext)
         try deleteAll(EpisodeProgressRecord.self, modelContext: modelContext)
+        try deleteAll(SyncTombstoneRecord.self, modelContext: modelContext)
         try deleteAll(PodcastCacheRecord.self, modelContext: modelContext)
         try deleteAll(EpisodeCacheRecord.self, modelContext: modelContext)
         try deleteAll(RefreshLogRecord.self, modelContext: modelContext)

@@ -88,7 +88,9 @@ impl DevCreditAuthority {
         now: i64,
     ) -> Result<Balance, CreditError> {
         if seconds <= 0 {
-            return Err(CreditError::Conflict("seconds must be positive".to_string()));
+            return Err(CreditError::Conflict(
+                "seconds must be positive".to_string(),
+            ));
         }
         if let Some(existing) = storage::dev_credit_reservation(&self.db, job_id)
             .await
@@ -203,9 +205,9 @@ struct PurchaseErrorBody {
 
 impl PurchaseAuthority {
     pub fn from_env(env: &Env) -> std::result::Result<Self, CreditError> {
-        let fetcher = env.service(PURCHASE_WORKER_BINDING).map_err(|_| {
-            CreditError::Internal("PURCHASE_WORKER binding missing".to_string())
-        })?;
+        let fetcher = env
+            .service(PURCHASE_WORKER_BINDING)
+            .map_err(|_| CreditError::Internal("PURCHASE_WORKER binding missing".to_string()))?;
         Ok(Self { fetcher })
     }
 
@@ -218,10 +220,7 @@ impl PurchaseAuthority {
         init.with_method(Method::Post)
             .with_headers(headers)
             .with_body(Some(body.into()));
-        let request = Request::new_with_init(
-            &format!("{PURCHASE_INTERNAL_ORIGIN}{path}"),
-            &init,
-        )?;
+        let request = Request::new_with_init(&format!("{PURCHASE_INTERNAL_ORIGIN}{path}"), &init)?;
         self.fetcher.fetch_request(request).await
     }
 
@@ -321,10 +320,7 @@ pub enum CreditAuthority {
 }
 
 impl CreditAuthority {
-    pub fn from_env(
-        env: &Env,
-        config: &crate::config::AppConfig,
-    ) -> worker::Result<Self> {
+    pub fn from_env(env: &Env, config: &crate::config::AppConfig) -> worker::Result<Self> {
         match config.credit_backend {
             crate::config::CreditBackend::Dev => {
                 // Defense in depth: config validation already forbids this

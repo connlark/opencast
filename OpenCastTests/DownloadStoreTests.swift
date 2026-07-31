@@ -747,6 +747,56 @@ struct DownloadStoreTests {
         #expect(store.record(for: "missing-paused")?.errorMessage == EpisodeDownloadError.interrupted.localizedDescription)
     }
 
+    @Test("Reconcile deletes files no download record claims")
+    func reconcileDeletesUnclaimedFiles() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
+        let claimedAudioURL = URL(string: "https://example.com/claimed-episode.mp3")!
+        _ = try insertCompletedDownload(
+            episodeID: "claimed-episode",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: claimedAudioURL,
+            fileStore: fileStore,
+            context: context
+        )
+        context.insert(EpisodeDownloadRecord(
+            episodeID: "claimed-paused",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: "https://example.com/claimed-paused.mp3",
+            state: .paused,
+            bytesReceived: 14,
+            bytesExpected: 100
+        ))
+        try Data("stable partial".utf8).write(
+            to: fileStore.pausedPartialFileURL(episodeID: "claimed-paused"),
+            options: .atomic
+        )
+        let orphanAudioURL = fileStore.fileURL(
+            relativePath: "\(EpisodeDownloadFileStore.directoryName)/orphan-episode.mp3"
+        )
+        try Data("orphan audio".utf8).write(to: orphanAudioURL, options: .atomic)
+        let orphanPartialURL = fileStore.temporaryFileURL(episodeID: "orphan-episode", token: "stranded")
+        try Data("orphan partial".utf8).write(to: orphanPartialURL, options: .atomic)
+        try context.save()
+
+        let store = DownloadStore(fileStore: fileStore)
+        store.load(modelContext: context)
+
+        let claimedPath = fileStore.relativePath(
+            episodeID: "claimed-episode",
+            sourceAudioURL: claimedAudioURL
+        )
+        #expect(store.lastErrorMessage == nil)
+        #expect(fileStore.fileExists(relativePath: claimedPath))
+        #expect(FileManager.default.fileExists(
+            atPath: fileStore.pausedPartialFileURL(episodeID: "claimed-paused").path
+        ))
+        #expect(!FileManager.default.fileExists(atPath: orphanAudioURL.path))
+        #expect(!FileManager.default.fileExists(atPath: orphanPartialURL.path))
+    }
+
     @Test("Reconcile preserves a paused partial when its size cannot be read")
     func reconcilePreservesUnreadablePausedPartial() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

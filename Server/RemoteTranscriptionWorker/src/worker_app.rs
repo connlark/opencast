@@ -180,10 +180,8 @@ async fn handle_bootstrap(
                 Some(account_id) => account_id,
                 None => return json_error_code(403, types::ERROR_BOOTSTRAP_REQUIRED),
             };
-            let credit = DevCreditAuthority::new(
-                env.d1(TRANSCRIPTION_DB)?,
-                config.dev_credit_grant_seconds,
-            );
+            let credit =
+                DevCreditAuthority::new(env.d1(TRANSCRIPTION_DB)?, config.dev_credit_grant_seconds);
             let balance = match credit.bootstrap(&account_id, now_seconds()).await {
                 Ok(balance) => balance,
                 Err(error) => {
@@ -406,7 +404,8 @@ async fn handle_create_job(
     // duplicate clientRequestID still attaches below.
     let candidate_job_id = format!(
         "job-{}",
-        random::random_urlsafe_token(16).map_err(|error| worker::Error::RustError(error.to_string()))?
+        random::random_urlsafe_token(16)
+            .map_err(|error| worker::Error::RustError(error.to_string()))?
     );
     let existing_active = storage::active_job_count(db, &account_id).await?;
     let canonical_job_id = storage::insert_job_mapping(
@@ -607,7 +606,8 @@ async fn resolve_account(
     }
     let candidate = format!(
         "acct-{}",
-        random::random_urlsafe_token(12).map_err(|error| worker::Error::RustError(error.to_string()))?
+        random::random_urlsafe_token(12)
+            .map_err(|error| worker::Error::RustError(error.to_string()))?
     );
     storage::ensure_account(db, install_id, &candidate, now_seconds())
         .await
@@ -669,9 +669,13 @@ async fn handle_challenge(
         Ok(None) => return json_error_code(400, "missing_challenge_source"),
         Err(_) => return json_error_code(500, "challenge_source_unavailable"),
     };
-    let source_challenge_count =
-        storage::increment_challenge_source_bucket(db, &source_token, challenge_bucket_start(now), now)
-            .await?;
+    let source_challenge_count = storage::increment_challenge_source_bucket(
+        db,
+        &source_token,
+        challenge_bucket_start(now),
+        now,
+    )
+    .await?;
     if !source_challenge_allows_after_increment(source_challenge_count) {
         return json_error_code(429, "challenge_rate_limited");
     }

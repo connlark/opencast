@@ -175,6 +175,58 @@ struct EpisodeDownloadFileStore: Sendable {
         try removeItemIfPresent(at: downloadsDirectory)
     }
 
+    /// Deletes downloads-directory files no record claims — strandings from a
+    /// crash window between a file move and its record save. Claims are
+    /// deliberately broad (any record's path or episode stem, in any state);
+    /// over-claiming keeps a file another path deletes later, under-claiming
+    /// would destroy real audio.
+    @discardableResult
+    nonisolated func removeUnclaimedFiles(
+        claimedRelativePaths: [String],
+        claimedEpisodeIDs: [String]
+    ) throws -> Int {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: downloadsDirectory.path) else {
+            return 0
+        }
+
+        // Protect the top-level entry each claimed path passes through, so a
+        // record pointing into a subdirectory keeps that whole subtree.
+        let claimedFileNames = Set(claimedRelativePaths.compactMap { relativePath -> String? in
+            let components = relativePath.split(separator: "/")
+            guard components.first.map(String.init) == Self.directoryName, components.count >= 2 else {
+                return nil
+            }
+            return String(components[1])
+        })
+        let claimedStems = Set(claimedEpisodeIDs.map { safeStem(episodeID: $0) })
+        var removedCount = 0
+        for fileURL in try fileManager.contentsOfDirectory(
+            at: downloadsDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            let name = fileURL.lastPathComponent
+            guard !claimedFileNames.contains(name) else {
+                continue
+            }
+            // Stems never contain "." so the leading dot-free run is the stem
+            // for `<stem>.<ext>` / `<stem>.partial`; `<stem>-<token>.partial`
+            // temporary files need the prefix scan.
+            let stemCandidate = String(name.prefix { $0 != "." })
+            guard !claimedStems.contains(stemCandidate) else {
+                continue
+            }
+            if name.hasSuffix(".partial"),
+               claimedStems.contains(where: { stemCandidate.hasPrefix("\($0)-") }) {
+                continue
+            }
+            try removeItemIfPresent(at: fileURL)
+            removedCount += 1
+        }
+        return removedCount
+    }
+
     nonisolated func safeStem(episodeID: String) -> String {
         let allowedScalars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         var value = ""

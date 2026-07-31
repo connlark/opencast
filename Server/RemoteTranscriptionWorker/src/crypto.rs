@@ -19,7 +19,10 @@ pub enum CryptoError {
     DecryptFailed,
 }
 
-pub fn resolve_key(secret_hex: Option<&str>, is_development_lane: bool) -> Result<[u8; 32], CryptoError> {
+pub fn resolve_key(
+    secret_hex: Option<&str>,
+    is_development_lane: bool,
+) -> Result<[u8; 32], CryptoError> {
     if let Some(secret_hex) = secret_hex {
         let bytes = hex::decode(secret_hex.trim()).map_err(|_| CryptoError::InvalidKey)?;
         return bytes.try_into().map_err(|_| CryptoError::InvalidKey);
@@ -30,7 +33,11 @@ pub fn resolve_key(secret_hex: Option<&str>, is_development_lane: bool) -> Resul
     Err(CryptoError::InvalidKey)
 }
 
-pub fn encrypt_string(plaintext: &str, key: &[u8; 32], nonce_bytes: &[u8; 12]) -> Result<String, CryptoError> {
+pub fn encrypt_string(
+    plaintext: &str,
+    key: &[u8; 32],
+    nonce_bytes: &[u8; 12],
+) -> Result<String, CryptoError> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let nonce = Nonce::from_slice(nonce_bytes);
     let ciphertext = cipher
@@ -72,7 +79,10 @@ mod tests {
             "https://example.com/feed.mp3?tok=s3cret"
         );
         let other = resolve_key(Some(&"ab".repeat(32)), false).expect("hex key");
-        assert_eq!(decrypt_string(&encrypted, &other), Err(CryptoError::DecryptFailed));
+        assert_eq!(
+            decrypt_string(&encrypted, &other),
+            Err(CryptoError::DecryptFailed)
+        );
     }
 
     #[test]

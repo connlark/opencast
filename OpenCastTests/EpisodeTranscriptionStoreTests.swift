@@ -67,6 +67,59 @@ struct EpisodeTranscriptionStoreTests {
         #expect(document.segments.map(\.start) == [0, 2])
     }
 
+    @Test("Deleting a transcript sweeps the per-episode directory like the ad-analysis twin")
+    func deleteTranscriptSweepsPerEpisodeDirectory() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let audioURL = try writeAudioPlaceholder(in: temporaryDirectory, contents: "audio")
+        let fileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        let store = EpisodeTranscriptionStore(
+            transcriber: FakeEpisodeTranscriber(),
+            fileStore: fileStore
+        )
+        let deletedEpisode = makeEpisode(episodeID: "sweep-deleted")
+        let keptEpisode = makeEpisode(episodeID: "sweep-kept")
+        let deletedRecord = completedDownloadRecord(episode: deletedEpisode)
+        let keptRecord = completedDownloadRecord(episode: keptEpisode)
+        context.insert(deletedRecord)
+        context.insert(keptRecord)
+
+        store.startTranscription(
+            deletedEpisode,
+            downloadRecord: deletedRecord,
+            localFileURL: audioURL,
+            modelSummary: modelSummary(),
+            modelContext: context
+        )
+        #expect(await waitUntil {
+            store.record(for: deletedEpisode.episodeID)?.state == .completed && !store.hasActiveJob
+        })
+        store.startTranscription(
+            keptEpisode,
+            downloadRecord: keptRecord,
+            localFileURL: audioURL,
+            modelSummary: modelSummary(),
+            modelContext: context
+        )
+        #expect(await waitUntil {
+            store.record(for: keptEpisode.episodeID)?.state == .completed && !store.hasActiveJob
+        })
+
+        let deletedEpisodeDirectory = temporaryDirectory
+            .appending(path: EpisodeTranscriptFileStore.directoryName, directoryHint: .isDirectory)
+            .appending(path: fileStore.safeStem(deletedEpisode.episodeID), directoryHint: .isDirectory)
+        let orphanURL = deletedEpisodeDirectory.appending(path: "orphan.json")
+        try Data("{}".utf8).write(to: orphanURL, options: .atomic)
+        let keptPath = try #require(store.record(for: keptEpisode.episodeID)?.transcriptRelativePath)
+
+        store.deleteTranscript(episodeID: deletedEpisode.episodeID, modelContext: context)
+
+        #expect(store.record(for: deletedEpisode.episodeID) == nil)
+        #expect(!FileManager.default.fileExists(atPath: deletedEpisodeDirectory.path))
+        #expect(fileStore.documentExists(relativePath: keptPath))
+    }
+
     @Test("Persists requested engine identity and does not reuse it for another engine")
     func persistsRequestedEngineIdentityAndDoesNotReuseItForAnotherEngine() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

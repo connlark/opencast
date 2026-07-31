@@ -104,15 +104,13 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
 /// count. Usage is capped per transcription account plus the same global
 /// daily object public traffic uses.
 async fn handle_internal_analyze(req: &mut Request, env: &Env) -> Result<Response> {
-    let body = match read_limited_json::<InternalAnalyzeRequest>(
-        req,
-        MAX_INTERNAL_ANALYZE_BODY_BYTES,
-    )
-    .await?
-    {
-        Ok(body) => body,
-        Err(response) => return Ok(response),
-    };
+    let body =
+        match read_limited_json::<InternalAnalyzeRequest>(req, MAX_INTERNAL_ANALYZE_BODY_BYTES)
+            .await?
+        {
+            Ok(body) => body,
+            Err(response) => return Ok(response),
+        };
     if body.schema_version != SCHEMA_VERSION || body.account_id.trim().is_empty() {
         return json_error_code(400, "invalid_internal_request");
     }

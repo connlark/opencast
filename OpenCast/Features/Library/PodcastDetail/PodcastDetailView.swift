@@ -90,6 +90,7 @@ struct PodcastDetailView: View {
                                     podcast: podcastCache,
                                     episodeCount: allEpisodes.count,
                                     unplayedCount: unplayedEpisodeCount,
+                                    lastRefreshedAt: appModel.library.lastRefreshedAt(for: subscription),
                                     isRefreshing: isRefreshing,
                                     refreshErrorMessage: refreshErrorMessage,
                                     primaryAction: primaryAction,

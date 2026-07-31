@@ -26,8 +26,7 @@ struct SubscriptionRemovalModifier: ViewModifier {
                     isPresented: $isConfirmingRemoval,
                     titleVisibility: .visible
                 ) {
-                    Button("Remove Podcast", role: .destructive, action: removePodcast)
-                    Button("Cancel", role: .cancel) {}
+                    removalDialogButtons
                 } message: {
                     removalMessage
                 }
@@ -41,8 +40,7 @@ struct SubscriptionRemovalModifier: ViewModifier {
                     isPresented: $isConfirmingRemoval,
                     titleVisibility: .visible
                 ) {
-                    Button("Remove Podcast", role: .destructive, action: removePodcast)
-                    Button("Cancel", role: .cancel) {}
+                    removalDialogButtons
                 } message: {
                     removalMessage
                 }
@@ -56,8 +54,7 @@ struct SubscriptionRemovalModifier: ViewModifier {
                     isPresented: $isConfirmingRemoval,
                     titleVisibility: .visible
                 ) {
-                    Button("Remove Podcast", role: .destructive, action: removePodcast)
-                    Button("Cancel", role: .cancel) {}
+                    removalDialogButtons
                 } message: {
                     removalMessage
                 }
@@ -68,8 +65,7 @@ struct SubscriptionRemovalModifier: ViewModifier {
                     isPresented: $isConfirmingRemoval,
                     titleVisibility: .visible
                 ) {
-                    Button("Remove Podcast", role: .destructive, action: removePodcast)
-                    Button("Cancel", role: .cancel) {}
+                    removalDialogButtons
                 } message: {
                     removalMessage
                 }
@@ -85,8 +81,15 @@ struct SubscriptionRemovalModifier: ViewModifier {
         Button("Remove Podcast", systemImage: "trash", role: .destructive, action: confirmRemoval)
     }
 
+    @ViewBuilder
+    private var removalDialogButtons: some View {
+        Button("Remove Podcast", role: .destructive, action: removePodcast)
+        Button("Remove & Clear History", role: .destructive, action: removePodcastAndClearHistory)
+        Button("Cancel", role: .cancel) {}
+    }
+
     private var removalMessage: Text {
-        Text("Cached episodes, progress, refresh logs, and local downloads for this podcast will be removed.")
+        Text("Downloads and cached episodes for this podcast will be removed. Listening history is kept unless you clear it.")
     }
 
     private func confirmRemoval() {
@@ -94,8 +97,20 @@ struct SubscriptionRemovalModifier: ViewModifier {
     }
 
     private func removePodcast() {
+        removePodcast(clearListeningHistory: false)
+    }
+
+    private func removePodcastAndClearHistory() {
+        removePodcast(clearListeningHistory: true)
+    }
+
+    private func removePodcast(clearListeningHistory: Bool) {
         Task {
-            await appModel.unsubscribe(feedURL: subscription.feedURL, modelContext: modelContext)
+            await appModel.unsubscribe(
+                feedURL: subscription.feedURL,
+                modelContext: modelContext,
+                clearListeningHistory: clearListeningHistory
+            )
         }
     }
 }

@@ -1,16 +1,27 @@
 import Foundation
 import ImageIO
+import OSLog
 import UIKit
 import UserNotifications
 
 struct EpisodeNotificationViewModel {
     private static let artworkThumbnailMaxPixelSize = 306
+    private static let artworkRetryDelays: [Duration] = [
+        .milliseconds(100),
+        .milliseconds(250),
+        .milliseconds(500),
+    ]
+    private static let artworkLogger = Logger(
+        subsystem: "com.connor.opencast",
+        category: "NotificationContentArtwork"
+    )
 
     let podcastTitle: String
     let episodeTitle: String
     let durationText: String?
     let summaryText: String?
-    let artworkImage: UIImage?
+    var artworkImage: UIImage?
+    private let artworkAttachments: [UNNotificationAttachment]
 
     init(notification: UNNotification) {
         self.init(content: notification.request.content)
@@ -32,7 +43,36 @@ struct EpisodeNotificationViewModel {
             ?? legacyBody.durationText
         summaryText = Self.payloadSummaryText(payload?["episode_summary"], episodeTitle: resolvedEpisodeTitle)
             ?? Self.legacySummaryText(legacyBody.summarySource, episodeTitle: resolvedEpisodeTitle)
-        artworkImage = Self.preferredArtworkAttachment(from: content.attachments).flatMap(Self.image)
+        artworkAttachments = content.attachments
+        artworkImage = Self.image(from: content.attachments, attempt: 1)
+    }
+
+    var hasArtworkAttachments: Bool {
+        !artworkAttachments.isEmpty
+    }
+
+    func artworkImageAfterRetry() async -> UIImage? {
+        if let artworkImage {
+            return artworkImage
+        }
+
+        guard !artworkAttachments.isEmpty else {
+            return nil
+        }
+
+        for (index, delay) in Self.artworkRetryDelays.enumerated() {
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return nil
+            }
+
+            if let image = Self.image(from: artworkAttachments, attempt: index + 2) {
+                return image
+            }
+        }
+
+        return nil
     }
 
     var accessibilityLabel: String {
@@ -337,13 +377,48 @@ struct EpisodeNotificationViewModel {
         collapseWhitespace(lhs).lowercased() == collapseWhitespace(rhs).lowercased()
     }
 
-    private static func preferredArtworkAttachment(
+    private static func preferredArtworkAttachments(
         from attachments: [UNNotificationAttachment]
-    ) -> UNNotificationAttachment? {
-        attachments.first { $0.identifier == NotificationArtworkAttachmentIdentifier.episode } ?? attachments.first
+    ) -> [UNNotificationAttachment] {
+        guard let episodeArtworkIndex = attachments.firstIndex(where: {
+            $0.identifier == NotificationArtworkAttachmentIdentifier.episode
+        }) else {
+            return attachments
+        }
+
+        var orderedAttachments = attachments
+        let episodeArtwork = orderedAttachments.remove(at: episodeArtworkIndex)
+        orderedAttachments.insert(episodeArtwork, at: 0)
+        return orderedAttachments
     }
 
-    private static func image(from attachment: UNNotificationAttachment) -> UIImage? {
+    private static func image(
+        from attachments: [UNNotificationAttachment],
+        attempt: Int
+    ) -> UIImage? {
+        artworkLogger.notice(
+            "Decode attempt \(attempt, privacy: .public) received \(attachments.count, privacy: .public) attachment(s)."
+        )
+
+        for (index, attachment) in preferredArtworkAttachments(from: attachments).enumerated() {
+            if let image = image(from: attachment, position: index + 1, attempt: attempt) {
+                return image
+            }
+        }
+
+        if !attachments.isEmpty {
+            artworkLogger.error(
+                "Decode attempt \(attempt, privacy: .public) could not decode any attachment."
+            )
+        }
+        return nil
+    }
+
+    private static func image(
+        from attachment: UNNotificationAttachment,
+        position: Int,
+        attempt: Int
+    ) -> UIImage? {
         let url = attachment.url
         let isSecurityScoped = url.startAccessingSecurityScopedResource()
         defer {
@@ -352,10 +427,29 @@ struct EpisodeNotificationViewModel {
             }
         }
 
+        let data: Data
+        do {
+            data = try Data(contentsOf: url, options: [.mappedIfSafe, .uncached])
+        } catch {
+            artworkLogger.error(
+                """
+                Decode attempt \(attempt, privacy: .public) could not read attachment \
+                \(position, privacy: .public); security scope granted: \(isSecurityScoped, privacy: .public).
+                """
+            )
+            return nil
+        }
+
         let sourceOptions = [
             kCGImageSourceShouldCache: false
         ] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+            artworkLogger.error(
+                """
+                Decode attempt \(attempt, privacy: .public) could not create an image source for attachment \
+                \(position, privacy: .public) with \(data.count, privacy: .public) byte(s).
+                """
+            )
             return nil
         }
 
@@ -366,9 +460,22 @@ struct EpisodeNotificationViewModel {
             kCGImageSourceThumbnailMaxPixelSize: artworkThumbnailMaxPixelSize
         ] as CFDictionary
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
+            artworkLogger.error(
+                """
+                Decode attempt \(attempt, privacy: .public) could not create a thumbnail for attachment \
+                \(position, privacy: .public) with \(data.count, privacy: .public) byte(s).
+                """
+            )
             return nil
         }
 
+        artworkLogger.notice(
+            """
+            Decode attempt \(attempt, privacy: .public) loaded attachment \
+            \(position, privacy: .public) with \(data.count, privacy: .public) byte(s); \
+            security scope granted: \(isSecurityScoped, privacy: .public).
+            """
+        )
         return UIImage(cgImage: image)
     }
 }

@@ -1060,10 +1060,14 @@ mod tests {
             "../migrations/0008_cleanup_superseded_device_tokens.sql"
         ))
         .expect("cleanup superseded devices");
-        db.execute_batch(include_str!("../migrations/0009_delete_dead_device_rows.sql"))
-            .expect("delete dead device rows");
-        db.execute_batch(include_str!("../migrations/0010_index_feeds_next_poll_at.sql"))
-            .expect("index feed poll schedule");
+        db.execute_batch(include_str!(
+            "../migrations/0009_delete_dead_device_rows.sql"
+        ))
+        .expect("delete dead device rows");
+        db.execute_batch(include_str!(
+            "../migrations/0010_index_feeds_next_poll_at.sql"
+        ))
+        .expect("index feed poll schedule");
         db.execute_batch(include_str!("../migrations/0011_feed_publish_cadence.sql"))
             .expect("add publish cadence column");
         db.execute_batch(include_str!("../migrations/0012_admin_history_indexes.sql"))
@@ -1496,8 +1500,10 @@ mod tests {
     fn feed_poll_schedule_index_migration_is_idempotent() {
         let db = setup_db();
 
-        db.execute_batch(include_str!("../migrations/0010_index_feeds_next_poll_at.sql"))
-            .expect("reapply feed poll schedule index");
+        db.execute_batch(include_str!(
+            "../migrations/0010_index_feeds_next_poll_at.sql"
+        ))
+        .expect("reapply feed poll schedule index");
 
         let index_count: i64 = db
             .query_row(
@@ -1723,7 +1729,13 @@ mod tests {
         for index in 0..4 {
             insert_rotated_away_device(&db, "install-a", &format!("dead-{index}"));
         }
-        insert_device(&db, "install-a", "live-token", CURRENT_APNS_ENVIRONMENT, true);
+        insert_device(
+            &db,
+            "install-a",
+            "live-token",
+            CURRENT_APNS_ENVIRONMENT,
+            true,
+        );
 
         let total_rows: i64 = db
             .query_row(
@@ -1743,9 +1755,21 @@ mod tests {
     #[test]
     fn enabled_device_count_scopes_install_environment_and_bundle() {
         let db = setup_db();
-        insert_device(&db, "install-a", "prod-token", CURRENT_APNS_ENVIRONMENT, true);
+        insert_device(
+            &db,
+            "install-a",
+            "prod-token",
+            CURRENT_APNS_ENVIRONMENT,
+            true,
+        );
         insert_device(&db, "install-a", "dev-token", OTHER_APNS_ENVIRONMENT, true);
-        insert_device(&db, "install-b", "other-install", CURRENT_APNS_ENVIRONMENT, true);
+        insert_device(
+            &db,
+            "install-b",
+            "other-install",
+            CURRENT_APNS_ENVIRONMENT,
+            true,
+        );
         insert_device_row(
             &db,
             "install-a",
@@ -1776,7 +1800,13 @@ mod tests {
             NOW - 60,
         );
         insert_device(&db, "install-a", "dev-token", OTHER_APNS_ENVIRONMENT, true);
-        insert_device(&db, "install-b", "other-install", CURRENT_APNS_ENVIRONMENT, true);
+        insert_device(
+            &db,
+            "install-b",
+            "other-install",
+            CURRENT_APNS_ENVIRONMENT,
+            true,
+        );
 
         insert_device_seen(
             &db,
@@ -1835,15 +1865,31 @@ mod tests {
         for index in 0..4 {
             insert_rotated_away_device(&db, "install-a", &format!("dead-{index}"));
         }
-        insert_device(&db, "install-a", "live-token", CURRENT_APNS_ENVIRONMENT, true);
+        insert_device(
+            &db,
+            "install-a",
+            "live-token",
+            CURRENT_APNS_ENVIRONMENT,
+            true,
+        );
         // Disabled row that still holds a raw token: outside the migration's
         // blank-token predicate, so it must survive.
-        insert_device(&db, "install-b", "held-token", CURRENT_APNS_ENVIRONMENT, false);
+        insert_device(
+            &db,
+            "install-b",
+            "held-token",
+            CURRENT_APNS_ENVIRONMENT,
+            false,
+        );
 
-        db.execute_batch(include_str!("../migrations/0009_delete_dead_device_rows.sql"))
-            .expect("first delete");
-        db.execute_batch(include_str!("../migrations/0009_delete_dead_device_rows.sql"))
-            .expect("second delete");
+        db.execute_batch(include_str!(
+            "../migrations/0009_delete_dead_device_rows.sql"
+        ))
+        .expect("first delete");
+        db.execute_batch(include_str!(
+            "../migrations/0009_delete_dead_device_rows.sql"
+        ))
+        .expect("second delete");
 
         assert_eq!(
             device_hashes_for_scope(&db, "install-a", CURRENT_APNS_ENVIRONMENT, TEST_BUNDLE_ID),

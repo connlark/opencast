@@ -59,6 +59,9 @@ export async function makePurchaseConfig({ include, extraBindings = {} }) {
   return {
     plugins: [
       cloudflareTest({
+        // The gateway's Workers AI binding is unused under FAKE_AI. Disable
+        // remote proxies so these contract suites require no Cloudflare auth.
+        remoteBindings: false,
         wrangler: { configPath: "./wrangler.toml" },
         miniflare: {
           serviceBindings: {

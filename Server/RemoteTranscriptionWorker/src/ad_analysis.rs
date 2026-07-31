@@ -432,8 +432,13 @@ mod tests {
     #[test]
     fn build_request_maps_record_and_envelope() {
         let bytes = serde_json::to_vec(&envelope()).expect("serialize");
-        let request = build_request(&record(), &bytes, "@cf/openai/whisper-large-v3-turbo", 1_784_000_100)
-            .expect("build");
+        let request = build_request(
+            &record(),
+            &bytes,
+            "@cf/openai/whisper-large-v3-turbo",
+            1_784_000_100,
+        )
+        .expect("build");
         assert_eq!(request.schema_version, 1);
         assert_eq!(request.account_id, "acct-1");
         assert_eq!(request.transcription_job_id.as_deref(), Some("job-ad-1"));
@@ -472,8 +477,7 @@ mod tests {
             { "id": 3, "start": 9.4, "end": 11.0, "text": "tail", "words": [] },
         ]);
         let bytes = serde_json::to_vec(&envelope).expect("serialize");
-        let request =
-            build_request(&record(), &bytes, "m", 1_784_000_100).expect("build");
+        let request = build_request(&record(), &bytes, "m", 1_784_000_100).expect("build");
 
         let clamped: Vec<(i64, f64, f64)> = request
             .request
@@ -483,12 +487,7 @@ mod tests {
             .collect();
         assert_eq!(
             clamped,
-            vec![
-                (0, 0.0, 5.2),
-                (1, 5.2, 9.0),
-                (2, 9.0, 9.0),
-                (3, 9.4, 11.0),
-            ]
+            vec![(0, 0.0, 5.2), (1, 5.2, 9.0), (2, 9.0, 9.0), (3, 9.4, 11.0),]
         );
         let mut previous_end = f64::NEG_INFINITY;
         for segment in &request.request.segments {
@@ -535,14 +534,29 @@ mod tests {
             classify_analyze_response(200, b"not json"),
             AnalyzeOutcome::Rejected
         );
-        assert_eq!(classify_analyze_response(202, b"{}"), AnalyzeOutcome::Running);
-        assert_eq!(classify_analyze_response(404, b"{}"), AnalyzeOutcome::NotFound);
-        assert_eq!(classify_analyze_response(429, b"{}"), AnalyzeOutcome::Capacity);
+        assert_eq!(
+            classify_analyze_response(202, b"{}"),
+            AnalyzeOutcome::Running
+        );
+        assert_eq!(
+            classify_analyze_response(404, b"{}"),
+            AnalyzeOutcome::NotFound
+        );
+        assert_eq!(
+            classify_analyze_response(429, b"{}"),
+            AnalyzeOutcome::Capacity
+        );
         for status in [400u16, 401, 403, 411, 413, 422] {
-            assert_eq!(classify_analyze_response(status, b"{}"), AnalyzeOutcome::Rejected);
+            assert_eq!(
+                classify_analyze_response(status, b"{}"),
+                AnalyzeOutcome::Rejected
+            );
         }
         for status in [500u16, 502, 503] {
-            assert_eq!(classify_analyze_response(status, b"{}"), AnalyzeOutcome::Retryable);
+            assert_eq!(
+                classify_analyze_response(status, b"{}"),
+                AnalyzeOutcome::Retryable
+            );
         }
     }
 
@@ -603,8 +617,7 @@ mod tests {
 
         // Removing the injected key reproduces the original bytes exactly —
         // the sorted-map + float_roundtrip pin that keeps `result` stable.
-        let mut reparsed: serde_json::Value =
-            serde_json::from_slice(&after).expect("decode");
+        let mut reparsed: serde_json::Value = serde_json::from_slice(&after).expect("decode");
         reparsed
             .as_object_mut()
             .expect("object")

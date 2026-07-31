@@ -90,11 +90,20 @@ mod tests {
         let cases = [
             ("http://example.com/a.mp3", OriginUrlError::NotHttps),
             ("ftp://example.com/a.mp3", OriginUrlError::NotHttps),
-            ("https://user:pw@example.com/a.mp3", OriginUrlError::HasUserinfo),
-            ("https://user@example.com/a.mp3", OriginUrlError::HasUserinfo),
+            (
+                "https://user:pw@example.com/a.mp3",
+                OriginUrlError::HasUserinfo,
+            ),
+            (
+                "https://user@example.com/a.mp3",
+                OriginUrlError::HasUserinfo,
+            ),
             ("https://192.168.1.10/a.mp3", OriginUrlError::IpLiteralHost),
             ("https://[::1]/a.mp3", OriginUrlError::IpLiteralHost),
-            ("https://example.com:8443/a.mp3", OriginUrlError::UnusualPort),
+            (
+                "https://example.com:8443/a.mp3",
+                OriginUrlError::UnusualPort,
+            ),
             ("https://localhost/a.mp3", OriginUrlError::ForbiddenHost),
             ("https://printer.local/a.mp3", OriginUrlError::ForbiddenHost),
             ("https://intranet/a.mp3", OriginUrlError::ForbiddenHost),

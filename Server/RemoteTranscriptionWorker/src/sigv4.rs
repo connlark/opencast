@@ -84,7 +84,8 @@ fn signing_key(secret: &str, date: &str, region: &str, string_to_sign: &str) -> 
 
 fn hmac_sha256(key: &[u8], message: &[u8]) -> Vec<u8> {
     use hmac::Mac;
-    let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(key).expect("hmac accepts any key size");
+    let mut mac =
+        <HmacSha256 as hmac::Mac>::new_from_slice(key).expect("hmac accepts any key size");
     mac.update(message);
     mac.finalize().into_bytes().to_vec()
 }
@@ -139,9 +140,12 @@ mod tests {
             timestamp: 1_369_353_600, // 2013-05-24T00:00:00Z
             expires_seconds: 86_400,
         });
-        assert!(url.contains(
-            "X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
-        ), "unexpected URL: {url}");
+        assert!(
+            url.contains(
+                "X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+            ),
+            "unexpected URL: {url}"
+        );
     }
 
     #[test]
@@ -159,6 +163,8 @@ mod tests {
         });
         assert!(url.contains("partNumber=2"));
         assert!(url.contains("uploadId=abc%2Bdef%2F123%3D%3D"));
-        assert!(url.starts_with("https://account.r2.cloudflarestorage.com/bucket/uploads/probe-1/source?"));
+        assert!(url.starts_with(
+            "https://account.r2.cloudflarestorage.com/bucket/uploads/probe-1/source?"
+        ));
     }
 }

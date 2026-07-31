@@ -189,6 +189,27 @@ struct EpisodeNotificationViewModelTests {
         #expect(image.size.height == 1)
     }
 
+    @Test("Unreadable episode artwork falls back to podcast artwork")
+    func unreadableEpisodeArtworkFallsBackToPodcastArtwork() throws {
+        let podcastArtwork = try Self.pngAttachment(
+            identifier: NotificationArtworkAttachmentIdentifier.podcast,
+            base64EncodedPNG: Self.onePixelPNG
+        )
+        let unreadableEpisodeArtwork = try Self.pngAttachment(
+            identifier: NotificationArtworkAttachmentIdentifier.episode,
+            base64EncodedPNG: Self.twoPixelPNG
+        )
+        try FileManager.default.removeItem(at: unreadableEpisodeArtwork.url)
+
+        let content = UNMutableNotificationContent()
+        content.attachments = [podcastArtwork, unreadableEpisodeArtwork]
+
+        let image = try #require(EpisodeNotificationViewModel(content: content).artworkImage)
+
+        #expect(image.size.width == 1)
+        #expect(image.size.height == 1)
+    }
+
     private static let onePixelPNG =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
     private static let twoPixelPNG =

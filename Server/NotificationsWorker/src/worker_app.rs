@@ -31,9 +31,7 @@ use crate::{
     },
 };
 use futures_util::StreamExt;
-use opencast_app_attest_core::app_attest_envelope::{
-    self, AuthFailure, AuthenticatedPayload,
-};
+use opencast_app_attest_core::app_attest_envelope::{self, AuthFailure, AuthenticatedPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};

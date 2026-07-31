@@ -8,8 +8,8 @@ use worker::{D1Database, D1Type, Result};
 pub use opencast_app_attest_core::app_attest_storage::{
     app_attest_key_count_since, challenge, challenge_count_since, global_challenge_count_since,
     increment_challenge_source_bucket, insert_challenge, key, mark_challenge_consumed,
-    prune_challenge_source_buckets_before, prune_challenges_before, update_key_counter,
-    upsert_key, AppAttestKeyRow, ChallengeRow,
+    prune_challenge_source_buckets_before, prune_challenges_before, update_key_counter, upsert_key,
+    AppAttestKeyRow, ChallengeRow,
 };
 
 const MAX_EXACT_F64_INTEGER: i64 = 9_007_199_254_740_991;
@@ -279,12 +279,10 @@ pub async fn insert_job_mapping(
 }
 
 pub async fn job_index(db: &D1Database, job_id: &str) -> Result<Option<JobIndexRow>> {
-    db.prepare(
-        "SELECT job_id, account_id, episode_id, state FROM jobs WHERE job_id = ?1 LIMIT 1",
-    )
-    .bind_refs(&[D1Type::Text(job_id)])?
-    .first::<JobIndexRow>(None)
-    .await
+    db.prepare("SELECT job_id, account_id, episode_id, state FROM jobs WHERE job_id = ?1 LIMIT 1")
+        .bind_refs(&[D1Type::Text(job_id)])?
+        .first::<JobIndexRow>(None)
+        .await
 }
 
 pub async fn update_job_state(db: &D1Database, job_id: &str, state: &str, now: i64) -> Result<()> {
@@ -517,7 +515,11 @@ pub async fn increment_counter(db: &D1Database, name: &str, delta: i64, now: i64
 }
 
 async fn count(db: &D1Database, sql: &str, args: &[D1Type<'_>]) -> Result<i64> {
-    let row = db.prepare(sql).bind_refs(args)?.first::<CountRow>(None).await?;
+    let row = db
+        .prepare(sql)
+        .bind_refs(args)?
+        .first::<CountRow>(None)
+        .await?;
     Ok(row.map(|row| row.count).unwrap_or(0))
 }
 

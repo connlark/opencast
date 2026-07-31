@@ -60,6 +60,7 @@ struct SettingsView: View {
             OPMLSettingsSection()
 
             SettingsDangerZoneSection(
+                onClearUnfollowedHistory: clearUnfollowedHistory,
                 onNukeData: onPresentDataNukeConfirmation
             )
 
@@ -126,6 +127,10 @@ struct SettingsView: View {
 
     private func confirmDeleteAllDownloads() {
         isConfirmingDeleteAllDownloads = true
+    }
+
+    private func clearUnfollowedHistory() {
+        appModel.library.clearProgressForUnsubscribedShows(modelContext: modelContext)
     }
 
     private func deleteAllDownloads() {

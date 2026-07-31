@@ -229,8 +229,7 @@ mod tests {
         second.words[1].end = 1.6;
         invalid.segments.push(second);
         invalid.text = "hello world hello world".into();
-        invalid.normalized_transcript_sha256 =
-            stitch::normalized_transcript_sha256(&invalid.text);
+        invalid.normalized_transcript_sha256 = stitch::normalized_transcript_sha256(&invalid.text);
 
         assert_eq!(
             verify(&invalid, &context()),

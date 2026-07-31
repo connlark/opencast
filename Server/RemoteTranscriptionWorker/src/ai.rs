@@ -299,7 +299,11 @@ mod tests {
             "AiError: 3040: capacity temporarily exceeded",
             "Internal error occurred",
         ] {
-            assert_eq!(classify_ai_error(message), AiFailureClass::Retryable, "{message}");
+            assert_eq!(
+                classify_ai_error(message),
+                AiFailureClass::Retryable,
+                "{message}"
+            );
         }
     }
 
