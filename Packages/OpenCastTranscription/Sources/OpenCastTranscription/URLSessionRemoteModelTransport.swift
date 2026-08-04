@@ -1,6 +1,8 @@
 import Foundation
 
 struct URLSessionRemoteModelTransport: OpenCastRemoteModelTransport {
+    nonisolated private static let progressInterval: Duration = .milliseconds(250)
+
     var session: URLSession
 
     init(session: URLSession = .shared) {
@@ -19,73 +21,48 @@ struct URLSessionRemoteModelTransport: OpenCastRemoteModelTransport {
         from url: URL,
         to destinationURL: URL,
         expectedByteCount: Int64,
-        maximumByteCount: Int64
+        maximumByteCount: Int64,
+        progress: OpenCastRemoteModelDownloadProgressHandler?
     ) async throws -> OpenCastRemoteModelResponse {
-        try await Self.streamDownload(
+        try await Self.performDownload(
             session: session,
             url: url,
             destinationURL: destinationURL,
             expectedByteCount: expectedByteCount,
-            maximumByteCount: maximumByteCount
+            maximumByteCount: maximumByteCount,
+            progress: progress
         )
     }
 
     @concurrent
-    private static func streamDownload(
+    private static func performDownload(
         session: URLSession,
         url: URL,
         destinationURL: URL,
         expectedByteCount: Int64,
-        maximumByteCount: Int64
+        maximumByteCount: Int64,
+        progress: OpenCastRemoteModelDownloadProgressHandler?
     ) async throws -> OpenCastRemoteModelResponse {
         try Task.checkCancellation()
-        let (bytes, response) = try await session.bytes(from: url)
-        let modelResponse = OpenCastRemoteModelResponse(
-            statusCode: (response as? HTTPURLResponse)?.statusCode
+        let delegate = URLSessionRemoteModelDownloadDelegate(
+            url: url,
+            destinationURL: destinationURL,
+            expectedByteCount: expectedByteCount,
+            maximumByteCount: maximumByteCount,
+            progressInterval: progressInterval,
+            progress: progress
         )
-        guard modelResponse.isSuccessfulHTTPResponse else {
-            throw OpenCastTranscriptionError.remoteModelDownloadFailed(url)
-        }
-        if response.expectedContentLength > maximumByteCount {
-            throw OpenCastTranscriptionError.invalidRemoteManifest(
-                "declared content length for \(url.absoluteString) exceeds configured limits"
-            )
-        }
-
-        FileManager.default.createFile(atPath: destinationURL.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: destinationURL)
-        var buffer = Data()
-        buffer.reserveCapacity(64 * 1_024)
-        var byteCount: Int64 = 0
+        let task = session.dataTask(with: URLRequest(url: url))
+        task.delegate = delegate
 
         do {
-            defer {
-                try? handle.close()
-            }
-
-            for try await byte in bytes {
-                byteCount += 1
-                if byteCount > expectedByteCount || byteCount > maximumByteCount {
-                    throw OpenCastTranscriptionError.invalidRemoteManifest(
-                        "downloaded byte count for \(url.absoluteString) exceeded configured limits"
-                    )
-                }
-                buffer.append(byte)
-                if buffer.count >= 64 * 1_024 {
-                    try handle.write(contentsOf: buffer)
-                    buffer.removeAll(keepingCapacity: true)
-                    try Task.checkCancellation()
-                }
-            }
-
-            if !buffer.isEmpty {
-                try handle.write(contentsOf: buffer)
-            }
+            return try await delegate.awaitCompletion(of: task)
+        } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+            try? FileManager.default.removeItem(at: destinationURL)
+            throw CancellationError()
         } catch {
             try? FileManager.default.removeItem(at: destinationURL)
             throw error
         }
-
-        return modelResponse
     }
 }

@@ -7,6 +7,10 @@ export const SCHEMA_VERSION = 1;
 export const CREDIT_ERROR_INSUFFICIENT = 'insufficient_credits';
 export const CREDIT_ERROR_RESERVATION_NOT_FOUND = 'reservation_not_found';
 export const CREDIT_ERROR_CONFLICT = 'reservation_conflict';
+// PW-3: a reserve replay for an existing job carried different seconds — a
+// defect signal (job ids are single-use); internal RTW↔PW seam only, mapped
+// by the RTW caller and never surfaced to app clients.
+export const CREDIT_ERROR_SECONDS_MISMATCH = 'reservation_seconds_mismatch';
 export const CREDIT_ERROR_INTERNAL = 'credit_internal_error';
 
 export const ERROR_INVALID_REQUEST = 'invalid_request';

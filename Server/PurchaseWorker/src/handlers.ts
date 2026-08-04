@@ -43,6 +43,7 @@ import {
   ERROR_TOKEN_MISMATCH,
   ERROR_TRANSACTION_ACCOUNT_MISMATCH,
   ERROR_WORKER_MISCONFIGURED,
+  CREDIT_ERROR_CONFLICT,
   CREDIT_ERROR_RESERVATION_NOT_FOUND,
   SCHEMA_VERSION,
 } from './types';
@@ -218,11 +219,28 @@ export async function handleReserve(env: Env, request: Request): Promise<Respons
   ) {
     return errorJson(400, ERROR_INVALID_REQUEST);
   }
-  await d1.upsertReservationIndex(env.PURCHASE_DB, body.job_id, body.account_id, nowSeconds());
+  // PW-2: admit on the account DO first; only a successful reserve may pin
+  // the job_id → account index. The old upsert-before-admission pinned the
+  // job to the first caller even when its reserve was refused.
   const response = await doPost(accountStub(env, body.account_id), '/reserve', {
     job_id: body.job_id,
     seconds: body.seconds,
   });
+  if (response.ok) {
+    const owner = await d1.upsertReservationIndex(
+      env.PURCHASE_DB,
+      body.job_id,
+      body.account_id,
+      nowSeconds(),
+    );
+    if (owner !== body.account_id) {
+      // The job id is already pinned to a different account (requires a
+      // gateway defect to reach). Undo this account's admission so the
+      // reservation is not stranded, and refuse loudly.
+      await doPost(accountStub(env, body.account_id), '/release', { job_id: body.job_id });
+      return errorJson(409, CREDIT_ERROR_CONFLICT);
+    }
+  }
   return passthrough(response);
 }
 

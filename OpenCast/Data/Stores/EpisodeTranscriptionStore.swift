@@ -716,37 +716,82 @@ final class EpisodeTranscriptionStore {
             "transcription starting engine=\(engine.rawValue) model=\(modelIdentity.modelIdentifier) version=\(modelIdentity.version) language=\(languageCode) resume=\((resumeStart ?? 0).backgroundLogSeconds) audio=\(audioDuration.backgroundLogSeconds) sourceBytes=\(identity.byteCount) sourceSHA=\(identity.sha256)"
         )
 
-        for try await event in transcriber.transcribe(request) {
-            try Task.checkCancellation()
-            guard ownsActiveRun(episodeID: episode.episodeID, runID: runID) else {
-                throw CancellationError()
+        // Checkpoints are cumulative, so each full document rewrite persists
+        // every Nth one; the latest skipped checkpoint flushes on any exit so
+        // cancellation and interruption never lose transcribed audio. Resume
+        // stamps advance only with an actually-written document.
+        var checkpointEventCount = 0
+        var pendingCheckpoint: OpenCastLongFormTranscriptionCheckpoint?
+        do {
+            for try await event in transcriber.transcribe(request) {
+                try Task.checkCancellation()
+                guard ownsActiveRun(episodeID: episode.episodeID, runID: runID) else {
+                    throw CancellationError()
+                }
+                switch event {
+                case .progress(let progress):
+                    // Progress stays transient and rate-limited: Apple Speech emits
+                    // events every 40–100ms, and dirtying the record per event both
+                    // autosaves churn and invalidates every observer at event rate.
+                    // Checkpoints persist completedDuration durably.
+                    publishProgress(progress, episodeID: episode.episodeID)
+                case .checkpoint(let checkpoint):
+                    checkpointEventCount += 1
+                    if checkpointEventCount % Self.checkpointDocumentWriteInterval == 1 {
+                        try await persistCheckpoint(
+                            checkpoint,
+                            baseDocument: baseDocument,
+                            record: record,
+                            relativePath: relativePath,
+                            runID: runID,
+                            modelContext: modelContext
+                        )
+                        pendingCheckpoint = nil
+                    } else {
+                        pendingCheckpoint = checkpoint
+                    }
+                case .finished(let result):
+                    pendingCheckpoint = nil
+                    try await persistFinalResult(
+                        result,
+                        baseDocument: baseDocument,
+                        record: record,
+                        relativePath: relativePath,
+                        runID: runID,
+                        modelContext: modelContext
+                    )
+                }
             }
-            switch event {
-            case .progress(let progress):
-                // Progress stays transient and rate-limited: Apple Speech emits
-                // events every 40–100ms, and dirtying the record per event both
-                // autosaves churn and invalidates every observer at event rate.
-                // Checkpoints persist completedDuration durably.
-                publishProgress(progress, episodeID: episode.episodeID)
-            case .checkpoint(let checkpoint):
+            if let checkpoint = pendingCheckpoint {
                 try await persistCheckpoint(
                     checkpoint,
                     baseDocument: baseDocument,
                     record: record,
                     relativePath: relativePath,
                     runID: runID,
-                    modelContext: modelContext
-                )
-            case .finished(let result):
-                try await persistFinalResult(
-                    result,
-                    baseDocument: baseDocument,
-                    record: record,
-                    relativePath: relativePath,
-                    runID: runID,
-                    modelContext: modelContext
+                    modelContext: modelContext,
+                    ignoresCancellation: true
                 )
             }
+        } catch {
+            if let checkpoint = pendingCheckpoint {
+                do {
+                    try await persistCheckpoint(
+                        checkpoint,
+                        baseDocument: baseDocument,
+                        record: record,
+                        relativePath: relativePath,
+                        runID: runID,
+                        modelContext: modelContext,
+                        ignoresCancellation: true
+                    )
+                } catch {
+                    AdFreePassBackgroundRunLog.record(
+                        "transcription pending checkpoint flush failed episodeID=\(episode.episodeID) error=\(error.localizedDescription)"
+                    )
+                }
+            }
+            throw error
         }
     }
 
@@ -879,7 +924,8 @@ final class EpisodeTranscriptionStore {
         record: EpisodeTranscriptRecord,
         relativePath: String,
         runID: UUID,
-        modelContext: ModelContext
+        modelContext: ModelContext,
+        ignoresCancellation: Bool = false
     ) async throws {
         let prefixSegments = baseSegments(from: baseDocument, resumeStart: record.completedDuration)
         let segments = OpenCastTranscriptSegmentNormalizer.normalized(
@@ -904,8 +950,12 @@ final class EpisodeTranscriptionStore {
             timings: baseDocument?.timings ?? EpisodeTranscriptTimings(),
             createdAt: baseDocument?.createdAt ?? record.createdAt
         )
-        try await fileStore.writeOffCaller(document, relativePath: relativePath)
-        try Task.checkCancellation()
+        if ignoresCancellation {
+            try await fileStore.writeOffCallerIgnoringCancellation(document, relativePath: relativePath)
+        } else {
+            try await fileStore.writeOffCaller(document, relativePath: relativePath)
+            try Task.checkCancellation()
+        }
         guard ownsActiveRun(episodeID: record.episodeID, runID: runID) else {
             throw CancellationError()
         }
@@ -1663,6 +1713,12 @@ final class EpisodeTranscriptionStore {
         stateChanges.notify()
         onEpisodeStateChanged?(episodeID)
     }
+
+    /// Full document rewrites land on checkpoints 1, 6, 11, … — a rewrite is
+    /// the entire cumulative document (~20 MB total writes for a 1 h episode
+    /// when written every checkpoint), and the throttled tail is bounded by
+    /// the terminal flush.
+    static let checkpointDocumentWriteInterval = 5
 
     private static let minimumProgressPublicationInterval: TimeInterval = 0.5
 

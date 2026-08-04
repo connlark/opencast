@@ -25,6 +25,11 @@ const PURCHASE_INTERNAL_ORIGIN: &str = "https://opencast-purchase.internal";
 pub const CREDIT_ERROR_INSUFFICIENT: &str = "insufficient_credits";
 pub const CREDIT_ERROR_RESERVATION_NOT_FOUND: &str = "reservation_not_found";
 pub const CREDIT_ERROR_CONFLICT: &str = "reservation_conflict";
+/// PW-3: a reserve replay for an existing job carried different seconds — a
+/// defect signal (job ids are single-use). Internal RTW↔PurchaseWorker seam
+/// only; step_reserve maps it to the existing internal-failure path so no
+/// new shape ever reaches an app client.
+pub const CREDIT_ERROR_SECONDS_MISMATCH: &str = "reservation_seconds_mismatch";
 pub const CREDIT_ERROR_INTERNAL: &str = "credit_internal_error";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +37,7 @@ pub enum CreditError {
     Insufficient,
     ReservationNotFound,
     Conflict(String),
+    SecondsMismatch,
     Internal(String),
 }
 
@@ -41,6 +47,7 @@ impl CreditError {
             Self::Insufficient => CREDIT_ERROR_INSUFFICIENT,
             Self::ReservationNotFound => CREDIT_ERROR_RESERVATION_NOT_FOUND,
             Self::Conflict(_) => CREDIT_ERROR_CONFLICT,
+            Self::SecondsMismatch => CREDIT_ERROR_SECONDS_MISMATCH,
             Self::Internal(_) => CREDIT_ERROR_INTERNAL,
         }
     }
@@ -97,7 +104,15 @@ impl DevCreditAuthority {
             .map_err(internal)?
         {
             return match existing.state.as_str() {
-                "reserved" | "settled" => self.balance(account_id, now).await,
+                "reserved" | "settled" => {
+                    // PW-3 mirror of PurchaseWorker's ledger rule: a replay
+                    // carrying different seconds is a defect signal, never
+                    // silently honored on either side of the seam.
+                    if existing.reserved_seconds != seconds {
+                        return Err(CreditError::SecondsMismatch);
+                    }
+                    self.balance(account_id, now).await
+                }
                 other => Err(CreditError::Conflict(format!(
                     "reservation already {other}"
                 ))),
@@ -251,6 +266,7 @@ impl PurchaseAuthority {
             CREDIT_ERROR_CONFLICT => {
                 CreditError::Conflict(error.detail.unwrap_or_else(|| "conflict".to_string()))
             }
+            CREDIT_ERROR_SECONDS_MISMATCH => CreditError::SecondsMismatch,
             other => CreditError::Internal(format!("purchase {status}: {other}")),
         })
     }

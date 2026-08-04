@@ -96,6 +96,7 @@ export type LedgerErrorCode =
   | 'insufficient'
   | 'reservation_not_found'
   | 'conflict'
+  | 'seconds_mismatch'
   | 'internal';
 
 export class LedgerError extends Error {
@@ -336,6 +337,15 @@ export function reserve(
   const existing = state.reservations[jobId];
   if (existing) {
     if (existing.state === 'reserved' || existing.state === 'settled') {
+      // PW-3: job ids are single-use, so a replay carrying different
+      // seconds is a defect signal — fail loud rather than silently
+      // honoring either value. Mirrored by RTW's DevCreditAuthority.
+      if (existing.reservedSeconds !== seconds) {
+        throw new LedgerError(
+          'seconds_mismatch',
+          `reservation holds ${existing.reservedSeconds}s; replay requested ${seconds}s`,
+        );
+      }
       return { state: cloneState(state), entries: [], alreadyExisted: true };
     }
     throw new LedgerError('conflict', `reservation already ${existing.state}`);

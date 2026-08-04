@@ -18,18 +18,36 @@ public enum OpenCastURLSessionFactory {
     public static let downloadResourceTimeout: TimeInterval = 60 * 60
     public static let streamingRangeResourceTimeout: TimeInterval = 120
 
+    private static let urlCacheLock = NSLock()
+    nonisolated(unsafe) private static var urlCachesByDirectory: [String: URLCache] = [:]
+
     public static func sharedConfiguration(cacheDirectory: URL? = nil) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.default
         configuration.requestCachePolicy = .useProtocolCachePolicy
         configuration.timeoutIntervalForRequest = requestTimeout
         configuration.timeoutIntervalForResource = resourceTimeout
         configuration.httpAdditionalHeaders = ["User-Agent": userAgent]
-        configuration.urlCache = URLCache(
-            memoryCapacity: memoryCacheCapacity,
-            diskCapacity: diskCacheCapacity,
-            directory: cacheDirectory
-        )
+        configuration.urlCache = sharedURLCache(directory: cacheDirectory)
         return configuration
+    }
+
+    /// One `URLCache` per on-disk directory: independent instances over the
+    /// same store would keep separate in-memory indexes and eviction
+    /// accounting while contending for the same files.
+    private static func sharedURLCache(directory: URL?) -> URLCache {
+        let key = directory?.standardizedFileURL.path ?? ""
+        return urlCacheLock.withLock {
+            if let cache = urlCachesByDirectory[key] {
+                return cache
+            }
+            let cache = URLCache(
+                memoryCapacity: memoryCacheCapacity,
+                diskCapacity: diskCacheCapacity,
+                directory: directory
+            )
+            urlCachesByDirectory[key] = cache
+            return cache
+        }
     }
 
     public static func downloadConfiguration() -> URLSessionConfiguration {

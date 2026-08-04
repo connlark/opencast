@@ -124,6 +124,37 @@ describe('overdraft reserve admission', () => {
     expect(released.state.buckets.reserved).toBe(0);
     expect(() => reserve(released.state, 'job-1', 100, 4)).toThrowError(/released/);
   });
+
+  it('fails loud on a reserve replay whose seconds changed (PW-3, mirrored in RTW DevCreditAuthority)', () => {
+    const state = freshAccount();
+    const first = reserve(state, 'job-1', 100, 2);
+
+    // A reserved job replayed with different seconds is a defect signal,
+    // never silently honored on either side.
+    let thrown = null;
+    try {
+      reserve(first.state, 'job-1', 250, 3);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(LedgerError);
+    expect(thrown.code).toBe('seconds_mismatch');
+
+    // Same rule once settled: the recorded seconds still bind.
+    const settled = settle(first.state, 'job-1');
+    let settledThrown = null;
+    try {
+      reserve(settled.state, 'job-1', 99, 4);
+    } catch (error) {
+      settledThrown = error;
+    }
+    expect(settledThrown).toBeInstanceOf(LedgerError);
+    expect(settledThrown.code).toBe('seconds_mismatch');
+
+    // The matching replay still no-ops for both states.
+    expect(reserve(first.state, 'job-1', 100, 5).alreadyExisted).toBe(true);
+    expect(reserve(settled.state, 'job-1', 100, 6).alreadyExisted).toBe(true);
+  });
 });
 
 describe('settle and release', () => {

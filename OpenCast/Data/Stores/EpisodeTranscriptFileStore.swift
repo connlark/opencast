@@ -87,6 +87,16 @@ struct EpisodeTranscriptFileStore: Sendable {
         try Task.checkCancellation()
     }
 
+    /// Terminal-flush variant: a pending throttled checkpoint must still be
+    /// able to persist while the run's task is already cancelled.
+    @concurrent
+    func writeOffCallerIgnoringCancellation(
+        _ document: EpisodeTranscriptDocument,
+        relativePath: String
+    ) async throws {
+        try write(document, relativePath: relativePath)
+    }
+
     nonisolated func write(_ document: EpisodeTranscriptDocument, relativePath: String) throws {
         try prepareTranscriptsDirectory()
         let url = fileURL(relativePath: relativePath)

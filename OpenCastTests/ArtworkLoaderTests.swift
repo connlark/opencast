@@ -290,6 +290,37 @@ struct ArtworkLoaderTests {
         #expect(await probe.requestCount == 1)
     }
 
+    @Test("Memory cache hit reads metadata only, not the data file")
+    func memoryCacheHitReadsMetadataOnlyNotDataFile() async throws {
+        let directory = try makeTemporaryDirectory()
+        let data = try pngData(width: 400, height: 400)
+        let url = URL(string: "https://example.com/memory-metadata-only.png")!
+        let request = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 56, height: 56))
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
+        let loader = ArtworkLoader(
+            diskCache: ArtworkDiskCache(directory: directory),
+            dataLoader: probe.load
+        )
+
+        let networkResult = try #require(try await loader.loadResult(for: request))
+        // Deleting the data file while keeping the metadata sidecar makes any
+        // warm-path data read observable: a path through the data file loses
+        // the preview, the metadata-only path keeps it.
+        let dataFiles = try FileManager.default
+            .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "data" }
+        #expect(dataFiles.count == 1)
+        for file in dataFiles {
+            try FileManager.default.removeItem(at: file)
+        }
+
+        let memoryResult = try #require(try await loader.loadResult(for: request))
+
+        #expect(networkResult.preview != nil)
+        #expect(memoryResult.preview == networkResult.preview)
+        #expect(await probe.requestCount == 1)
+    }
+
     @Test("Memory cache hit backfills missing disk preview")
     func memoryCacheHitBackfillsMissingDiskPreview() async throws {
         let directory = try makeTemporaryDirectory()

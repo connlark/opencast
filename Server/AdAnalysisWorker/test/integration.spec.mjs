@@ -862,3 +862,67 @@ describe("internal transcription surface", () => {
     expect((await response.json()).error).toBe("job_not_found");
   });
 });
+
+// --- Phase 10.5 E (AA-5): an over-budget result fails with a stable code
+// instead of stranding the job. Pre-fix there was NO in-code size cap on
+// the result path: the post-paid-call record write died on the DO's
+// 128 KiB per-value platform limit, the error vanished into the spawn
+// catch, and the job sat Running for the full 600 s deadline.
+
+describe("result budget (AA-5)", () => {
+  it("fails an over-budget result with result_oversized instead of hanging", async () => {
+    const { request } = makeLongRequest({ fingerprint: "e".repeat(64) });
+    // Two windows → two Gemini calls. Each returns degenerate output whose
+    // huge unknown span kinds stay inside every span cap (30 ≤ 32 per
+    // window) but get echoed into validation warnings, pushing the
+    // assembled result_json far past MAX_RESULT_JSON_BYTES.
+    const degenerate = {
+      candidates: [
+        {
+          content: {
+            parts: [
+              {
+                text: JSON.stringify({
+                  spans: Array.from({ length: 30 }, (_, index) => ({
+                    kind: `degenerate-kind-${index}-${"x".repeat(4000)}`,
+                    label: "n/a",
+                    start_segment_id: 2,
+                    end_segment_id: 2,
+                    confidence: 0.5,
+                    evidence_quote: "n/a",
+                  })),
+                }),
+              },
+            ],
+          },
+          finishReason: "STOP",
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 100,
+        candidatesTokenCount: 10,
+        totalTokenCount: 110,
+      },
+    };
+    mockGeminiOnce(degenerate);
+    mockGeminiOnce(degenerate);
+
+    const submitted = await postAnalyze(JSON.stringify(request), {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(submitted.status).toBe(202);
+
+    let failed;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      failed = await postPoll(request.transcript.fingerprint, {
+        authorization: `Bearer ${BEARER}`,
+      });
+      if (failed.status !== 202) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(failed.status).toBe(502);
+    expect((await failed.json()).error).toBe("result_oversized");
+  });
+});

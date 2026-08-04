@@ -14,10 +14,7 @@ struct OpenCastRootView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab = AppSection.inbox
-    @State private var libraryNavigationPath: [AppRoute] = []
-    @State private var inboxNavigationPath: [AppRoute] = []
-    @State private var downloadsNavigationPath: [AppRoute] = []
-    @State private var searchNavigationPath: [AppRoute] = []
+    @State private var navigationPaths = AppNavigationPaths()
     @State private var sheetDestination: SheetDestination?
     @State private var isInitialSetupComplete = false
     @State private var initialSetupGate = InitialSetupGate()
@@ -46,10 +43,7 @@ struct OpenCastRootView: View {
         ) {
             OpenCastTabRootView(
                 selectedTab: $selectedTab,
-                libraryNavigationPath: $libraryNavigationPath,
-                inboxNavigationPath: $inboxNavigationPath,
-                downloadsNavigationPath: $downloadsNavigationPath,
-                searchNavigationPath: $searchNavigationPath,
+                navigationPaths: $navigationPaths,
                 isNowPlayingPresented: appModel.isNowPlayingPresented,
                 onAdd: presentAddPodcast,
                 onPresentDataNukeConfirmation: presentDataNukeConfirmation,
@@ -203,31 +197,18 @@ struct OpenCastRootView: View {
     }
 
     private func openRouteFromNowPlaying(_ route: AppRoute) {
-        switch selectedTab {
-        case .library:
-            if libraryNavigationPath.last != route {
-                libraryNavigationPath.append(route)
-            }
-        case .inbox:
-            if inboxNavigationPath.last != route {
-                inboxNavigationPath.append(route)
-            }
-        case .downloads:
-            if downloadsNavigationPath.last != route {
-                downloadsNavigationPath.append(route)
-            }
-        case .search:
-            if searchNavigationPath.last != route {
-                searchNavigationPath.append(route)
-            }
-        case .settings:
+        guard selectedTab != .settings else {
             openRouteInLibrary(route)
+            return
+        }
+        if navigationPaths[selectedTab].last != route {
+            navigationPaths[selectedTab].append(route)
         }
     }
 
     private func openRouteInLibrary(_ route: AppRoute) {
         selectedTab = .library
-        libraryNavigationPath = [route]
+        navigationPaths[.library] = [route]
     }
 
     private func consumeRemoteEpisodeNotificationRoutes() async {
@@ -606,7 +587,7 @@ struct OpenCastRootView: View {
 
     private func routeToInbox() {
         selectedTab = .inbox
-        inboxNavigationPath.removeAll()
+        navigationPaths[.inbox] = []
     }
 
     private func openExternalURL(_ url: URL) {
@@ -634,10 +615,7 @@ struct OpenCastRootView: View {
 
 
     private func pruneNavigationPaths() {
-        libraryNavigationPath.removeAll(where: isRouteInvalid)
-        inboxNavigationPath.removeAll(where: isRouteInvalid)
-        downloadsNavigationPath.removeAll(where: isRouteInvalid)
-        searchNavigationPath.removeAll(where: isRouteInvalid)
+        navigationPaths.removeAll(where: isRouteInvalid)
     }
 
     private func isRouteInvalid(_ route: AppRoute) -> Bool {
@@ -653,10 +631,7 @@ struct OpenCastRootView: View {
 
     private func resetAfterDataNuke() {
         selectedTab = .inbox
-        libraryNavigationPath.removeAll()
-        inboxNavigationPath.removeAll()
-        downloadsNavigationPath.removeAll()
-        searchNavigationPath.removeAll()
+        navigationPaths.removeAll()
         sheetDestination = nil
         presentOnboardingIfNeeded()
         dismissNowPlaying()

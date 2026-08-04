@@ -7,6 +7,7 @@ actor ArtworkDiskCache {
     private let fileManager: FileManager
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private var prepared = false
 
     init(
         directory: URL = OpenCastCacheController.defaultArtworkCacheDirectory(),
@@ -138,12 +139,18 @@ actor ArtworkDiskCache {
         removeCachedFiles(forKey: cacheKey(for: url))
     }
 
+    // One-shot: every cache operation prepares, and nothing in this cache
+    // ever deletes the directory itself (removeAll clears contents only).
     private func prepareDirectory() throws {
+        guard !prepared else {
+            return
+        }
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         var resourceValues = URLResourceValues()
         resourceValues.isExcludedFromBackup = true
         var mutableDirectory = directory
         try mutableDirectory.setResourceValues(resourceValues)
+        prepared = true
     }
 
     private func dataURL(forKey key: String) -> URL {

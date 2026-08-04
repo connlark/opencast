@@ -175,7 +175,15 @@ public struct OpenCastWhisperModelInstaller: Sendable {
                 from: sourceURL,
                 to: destination,
                 expectedByteCount: file.byteCount,
-                maximumByteCount: limits.maximumFileByteCount
+                maximumByteCount: limits.maximumFileByteCount,
+                progress: fileProgressHandler(
+                    for: file,
+                    remoteModel: remoteModel,
+                    completedFileCount: completedFileCount,
+                    totalFileCount: totalFileCount,
+                    completedByteCount: completedByteCount,
+                    progress: progress
+                )
             )
             guard response.isSuccessfulHTTPResponse else {
                 try? FileManager.default.removeItem(at: destination)
@@ -208,6 +216,32 @@ public struct OpenCastWhisperModelInstaller: Sendable {
                     completedFileCount: completedFileCount,
                     totalFileCount: totalFileCount,
                     completedByteCount: completedByteCount,
+                    totalByteCount: remoteModel.totalByteCount,
+                    currentFilePath: file.path
+                )
+            )
+        }
+    }
+
+    private func fileProgressHandler(
+        for file: RemoteWhisperModelFile,
+        remoteModel: RemoteWhisperModel,
+        completedFileCount: Int,
+        totalFileCount: Int,
+        completedByteCount: Int64,
+        progress: OpenCastWhisperModelInstallProgressHandler?
+    ) -> OpenCastRemoteModelDownloadProgressHandler? {
+        guard let progress else {
+            return nil
+        }
+        return { bytesReceived in
+            progress(
+                OpenCastWhisperModelInstallProgress(
+                    modelIdentifier: remoteModel.modelID,
+                    version: remoteModel.version,
+                    completedFileCount: completedFileCount,
+                    totalFileCount: totalFileCount,
+                    completedByteCount: completedByteCount + bytesReceived,
                     totalByteCount: remoteModel.totalByteCount,
                     currentFilePath: file.path
                 )
@@ -279,18 +313,11 @@ public struct OpenCastWhisperModelInstaller: Sendable {
         }
     }
 
-    @concurrent
-    private static func fileByteCount(at url: URL) async throws -> Int64 {
-        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-        guard values.isRegularFile == true,
-              let fileSize = values.fileSize,
-              fileSize >= 0 else {
+    private func fileByteCount(at url: URL) async throws -> Int64 {
+        do {
+            return try await OpenCastFileByteCount.byteCountOffCaller(at: url)
+        } catch is OpenCastFileByteCount.NotARegularFile {
             throw OpenCastTranscriptionError.invalidRemoteManifest("bad file metadata: \(url.path)")
         }
-        return Int64(fileSize)
-    }
-
-    private func fileByteCount(at url: URL) async throws -> Int64 {
-        try await Self.fileByteCount(at: url)
     }
 }

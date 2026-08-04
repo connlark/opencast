@@ -572,14 +572,11 @@ nonisolated struct TranscriptionProofRunner: Sendable {
     }
 
     private static func fileByteCount(at url: URL) throws -> Int64 {
-        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-        guard values.isRegularFile == true,
-              let fileSize = values.fileSize,
-              fileSize >= 0
-        else {
+        do {
+            return try OpenCastFileByteCount.byteCount(at: url)
+        } catch is OpenCastFileByteCount.NotARegularFile {
             return 0
         }
-        return Int64(fileSize)
     }
 
     private static func safeStem(_ rawValue: String) -> String {

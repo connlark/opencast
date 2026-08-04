@@ -27,6 +27,14 @@ const ORIGIN_REDIRECT_URL = `${ORIGIN_HOST}/redirect/audio.mp3`;
 const LARGE_ORIGIN_URL = `${ORIGIN_HOST}/large.mp3`;
 // Podtrac/mgln class: the origin refuses Workers fetches outright.
 const FAILING_ORIGIN_URL = `${ORIGIN_HOST}/blocked.mp3`;
+// In-flight-cancel staging hook (Phase 10.5 A): the streamed body delivers
+// one chunk, then parks on a test-controlled gate so stage_origin sits on
+// `stream.next().await` until the spec releases it. The gate is a plain
+// mutable flag polled with an in-context setTimeout — a promise resolved
+// from the test context would wake a continuation holding the job DO's I/O
+// objects and trip workerd's cross-Durable-Object I/O check.
+const GATED_ORIGIN_URL = `${ORIGIN_HOST}/gated.mp3`;
+const stagingGate = { released: false };
 // Fake S3 endpoint for presigned UploadPart PUTs (must match R2_S3_HOST /
 // R2_S3_BUCKET in vitest.config.mjs); the fetch mock below maps PUTs onto
 // the R2 binding's real multipart machinery.
@@ -119,6 +127,29 @@ globalThis.fetch = async (input, init) => {
       headers: {
         "content-type": "audio/mpeg",
         "content-length": String(LARGE_ORIGIN_TOTAL),
+      },
+    });
+  }
+  if (url === GATED_ORIGIN_URL) {
+    let sentFirst = false;
+    const stream = new ReadableStream({
+      async pull(controller) {
+        if (!sentFirst) {
+          sentFirst = true;
+          controller.enqueue(originBytes.subarray(0, 65_536));
+          return;
+        }
+        while (!stagingGate.released) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        "content-type": "audio/mpeg",
+        "content-length": String(originBytes.length),
       },
     });
   }
@@ -280,6 +311,35 @@ async function expectJobStorageEmpty(jobId) {
   ]) {
     expect(await bucketKeys(prefix), prefix).toEqual([]);
   }
+}
+
+// Poll variant for cleanup that lands asynchronously (a parked step's
+// bail-out re-deleting objects it re-created after resuming).
+async function waitForJobStorageEmpty(jobId, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const keys = [];
+    for (const prefix of [
+      `raw/${jobId}/`,
+      `uploads/${jobId}/`,
+      `chunks/${jobId}/`,
+      `responses/${jobId}/`,
+      `results/${jobId}/`,
+    ]) {
+      keys.push(...(await bucketKeys(prefix)));
+    }
+    if (keys.length === 0) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`job ${jobId} storage never emptied; still holds ${keys}`);
+    }
+    await sleep(250);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function deviceIdentity(durationSeconds) {
@@ -1356,5 +1416,289 @@ describe("remote transcription dev lane", () => {
     for (const job of [...parked, fresh]) {
       await ackJob(job.job_id);
     }
+  });
+
+  // --- Cancel/reset safety pass (Phase 10.5 A). The DO's input gate stays
+  // open across subrequest awaits, so /cancel runs its terminal cleanup
+  // while a step is parked mid-await; the resumed step must never resurrect
+  // the terminal record, re-arm the deleted alarm, or leave a charge. These
+  // run last and assert balances relative to their own start.
+
+  async function admitTwoFreshJobs(prefix) {
+    // MAX_ACTIVE_JOBS_PER_ACCOUNT=2 in this suite: two back-to-back admits
+    // prove no wedged record is pinning a slot.
+    for (const index of [1, 2]) {
+      const fresh = await createJob({
+        clientRequestId: `${prefix}-fresh-${index}`,
+        episodeId: `ep-${prefix}-fresh-${index}`,
+        durationSeconds: 60,
+      });
+      const freshCancel = await post(
+        `/v1/remote-transcription/jobs/${fresh.job_id}/cancel`,
+        { schema_version: 1 },
+      );
+      expect(freshCancel.status).toBe(200);
+    }
+  }
+
+  it("keeps a cancelled job terminal when a parked staging stream resumes", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const job = await createJob({
+      clientRequestId: "e2e-race-staging-1",
+      episodeId: "ep-race-staging-1",
+      durationSeconds: 300,
+      enclosureUrl: GATED_ORIGIN_URL,
+    });
+    await waitForState(job.job_id, ["staging_origin"]);
+    // Let stage_origin consume the first chunk and park on the gated pull.
+    await sleep(500);
+
+    const cancelResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/cancel`,
+      { schema_version: 1 },
+    );
+    expect((await cancelResponse.json()).job.state).toBe("cancelled");
+
+    // Release the gate: the parked step resumes, completes its multipart
+    // upload (re-creating raw/<job>/source after the cancel's cleanup), and
+    // must bail on the terminal record instead of resurrecting it to
+    // waiting_for_device_source.
+    stagingGate.released = true;
+    await sleep(1500);
+    expect((await pollJob(job.job_id)).job.state).toBe("cancelled");
+    await waitForJobStorageEmpty(job.job_id);
+
+    const after = (await bootstrapBalance()).balance;
+    expect(after.available_seconds).toBe(before.available_seconds);
+    expect(after.reserved_seconds).toBe(0);
+  });
+
+  it("cancels cleanly out of a parked ad-analysis submit", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const job = await runDetectJob({
+      clientRequestId: "e2e-race-adpark-1",
+      episodeId: "ep-race-adpark-1",
+      podcastId: "https://example.com/ad-park/feed.xml",
+    });
+    await waitForState(job.job_id, ["detecting_ads"]);
+
+    const cancelResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/cancel`,
+      { schema_version: 1 },
+    );
+    expect((await cancelResponse.json()).job.state).toBe("cancelled");
+
+    // Ride out the stub's parked submit response; the resumed turn must not
+    // re-arm the alarm the cancel deleted or touch the terminal record.
+    await sleep(5000);
+    expect((await pollJob(job.job_id)).job.state).toBe("cancelled");
+    await expectJobStorageEmpty(job.job_id);
+    await admitTwoFreshJobs("e2e-race-adpark");
+
+    // The transcript settled at stitch before the ad phase, so the charge
+    // stands (release-after-settle is a no-op) — but exactly once, with
+    // nothing left reserved.
+    const after = (await bootstrapBalance()).balance;
+    expect(after.available_seconds).toBe(before.available_seconds - 120);
+    expect(after.reserved_seconds).toBe(0);
+  });
+
+  it("fails a live detecting_ads job whose result object is lost instead of wedging the slot", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const job = await runDetectJob({
+      clientRequestId: "e2e-race-adlost-1",
+      episodeId: "ep-race-adlost-1",
+      podcastId: "https://example.com/ad-lost/feed.xml",
+    });
+    await waitForState(job.job_id, ["detecting_ads"]);
+    // Simulate the raced-cancel cleanup shape: the result object vanishes
+    // while the record is still live in detecting_ads. Pre-fix, the
+    // missing-envelope arm returned silently — no alarm, no deadline
+    // enforcement, the state still counting against the active cap — and
+    // the account's slot wedged forever.
+    await env.TRANSCRIPTION_AUDIO.delete(`results/${job.job_id}/transcript.json`);
+
+    const failed = await waitForState(job.job_id, ["failed"], 15_000);
+    expect(failed.job.error.code).toBe("internal_error");
+    await expectJobStorageEmpty(job.job_id);
+    await admitTwoFreshJobs("e2e-race-adlost");
+
+    // Settled at stitch; the terminal release is a no-op on the charge.
+    const after = (await bootstrapBalance()).balance;
+    expect(after.available_seconds).toBe(before.available_seconds - 120);
+    expect(after.reserved_seconds).toBe(0);
+  });
+
+  it("survives a settle failure mid-stitch: result kept, exactly one charge", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const job = await createJob({
+      clientRequestId: "e2e-stitch-reentry-1",
+      episodeId: "ep-stitch-reentry-1",
+      durationSeconds: 60,
+      languageCode: "fake:sfail=1",
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+    // The first stitch pass publishes the result and fails just before the
+    // settle; the alarm retry (1 s here) re-enters stitching, which must
+    // resume the idempotent post-publication steps instead of re-reading
+    // the already-deleted responses (pre-fix: release_and_fail destroyed
+    // the published result and refunded a delivered transcript).
+    await waitForState(job.job_id, ["result_ready"], 25_000);
+
+    const resultResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/result`,
+      { schema_version: 1 },
+    );
+    expect(resultResponse.status).toBe(200);
+    const payload = await resultResponse.json();
+    expect(payload.result.segments.length).toBeGreaterThan(0);
+    expect(payload.result.provenance.normalized_transcript_sha256).toMatch(
+      /^[0-9a-f]{64}$/,
+    );
+
+    const after = (await bootstrapBalance()).balance;
+    expect(after.available_seconds).toBe(before.available_seconds - 60);
+    expect(after.reserved_seconds).toBe(0);
+
+    await post(`/v1/remote-transcription/jobs/${job.job_id}/ack`, {
+      schema_version: 1,
+    });
+    await expectJobStorageEmpty(job.job_id);
+  });
+
+  // --- RTW-7 (Phase 10.5 D): the origin wall clock must bind the awaits
+  // themselves, not just fire after a chunk arrives.
+
+  it("fails a stalled origin stream at the wall budget instead of riding the staging deadline", async () => {
+    const before = (await bootstrapBalance()).balance;
+    stagingGate.released = false;
+    const job = await createJob({
+      clientRequestId: "e2e-stalled-origin-1",
+      episodeId: "ep-stalled-origin-1",
+      durationSeconds: 300,
+      enclosureUrl: GATED_ORIGIN_URL,
+    });
+    await waitForState(job.job_id, ["staging_origin"]);
+
+    // Never release the gate: the stalled-but-open body must trip the 4 s
+    // ORIGIN_FETCH_WALL_SECONDS budget (pre-fix, stream.next() parked
+    // unbounded and the job rode the 3600 s staging deadline) and route to
+    // the exact-upload fallback through the existing failure arm.
+    const routed = await waitForState(job.job_id, ["exact_upload_required"], 10_000);
+    expect(routed.job.error).toBeFalsy();
+
+    const cancelResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/cancel`,
+      { schema_version: 1 },
+    );
+    expect((await cancelResponse.json()).job.state).toBe("cancelled");
+    stagingGate.released = true;
+    await waitForJobStorageEmpty(job.job_id);
+
+    const after = (await bootstrapBalance()).balance;
+    expect(after.available_seconds).toBe(before.available_seconds);
+    expect(after.reserved_seconds).toBe(0);
+  });
+
+  // --- RTW-5 credit-release backstop (Phase 10.5 C): a terminal path that
+  // fails to release the reservation must never abandon it silently — the
+  // pending flag drives bounded alarm retries, and the counters are the
+  // operator signal.
+
+  async function counterValues(names) {
+    const rows = await env.TRANSCRIPTION_DB.prepare(
+      `SELECT name, value FROM counters WHERE name IN (${names.map(() => "?").join(",")})`,
+    )
+      .bind(...names)
+      .all();
+    return Object.fromEntries(rows.results.map(({ name, value }) => [name, Number(value)]));
+  }
+
+  it("retries a failed terminal credit release until it lands", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const job = await createJob({
+      clientRequestId: "e2e-release-retry-1",
+      episodeId: "ep-release-retry-1",
+      durationSeconds: 60,
+      // Park in transcribing (retryable chunk-0 failure) so the cancel has
+      // a live reservation; the first two release attempts fail (rfail).
+      languageCode: "fake:rfail=2;fail=0:first:429 rate limited",
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+    await waitForState(job.job_id, ["transcribing"]);
+    expect((await bootstrapBalance()).balance.reserved_seconds).toBe(60);
+
+    const cancelResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/cancel`,
+      { schema_version: 1 },
+    );
+    expect((await cancelResponse.json()).job.state).toBe("cancelled");
+
+    // The terminal-path release failed, so the reservation is still held
+    // and the alarm (1 s pacing here) retries until the third attempt
+    // succeeds — instead of the pre-fix silent .ok() that stranded the
+    // reservation until some other lane noticed.
+    const deadline = Date.now() + 10_000;
+    let balance;
+    for (;;) {
+      balance = (await bootstrapBalance()).balance;
+      if (balance.reserved_seconds === 0) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`release never landed: ${JSON.stringify(balance)}`);
+      }
+      await sleep(250);
+    }
+    expect(balance.available_seconds).toBe(before.available_seconds);
+    expect((await pollJob(job.job_id)).job.state).toBe("cancelled");
+
+    const counters = await counterValues(["credit_release_failed"]);
+    expect(counters.credit_release_failed).toBeGreaterThanOrEqual(1);
+  });
+
+  it("abandons a persistently failing release after the bounded budget", async () => {
+    // Deliberately the LAST test: the abandoned reservation stays held (60 s
+    // reserved on the shared dev account) by design — the counter, not a
+    // silent retry-forever loop, is the operator signal.
+    const failedBefore = (await counterValues(["credit_release_failed"]))
+      .credit_release_failed ?? 0;
+    const job = await createJob({
+      clientRequestId: "e2e-release-abandon-1",
+      episodeId: "ep-release-abandon-1",
+      durationSeconds: 60,
+      languageCode: "fake:rfail=99;fail=0:first:429 rate limited",
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+    await waitForState(job.job_id, ["transcribing"]);
+
+    const cancelResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/cancel`,
+      { schema_version: 1 },
+    );
+    expect((await cancelResponse.json()).job.state).toBe("cancelled");
+
+    // 1 terminal-path attempt + 3 bounded alarm retries all fail, then the
+    // budget exhausts into the abandoned counter.
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      const counters = await counterValues(["credit_release_abandoned"]);
+      if ((counters.credit_release_abandoned ?? 0) >= 1) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error("credit_release_abandoned never incremented");
+      }
+      await sleep(250);
+    }
+    const counters = await counterValues([
+      "credit_release_failed",
+      "credit_release_abandoned",
+    ]);
+    expect(counters.credit_release_failed).toBe(failedBefore + 1);
+    expect(counters.credit_release_abandoned).toBe(1);
+    // The reservation stays held — abandoned, not silently forgotten.
+    expect((await bootstrapBalance()).balance.reserved_seconds).toBe(60);
+    expect((await pollJob(job.job_id)).job.state).toBe("cancelled");
   });
 });

@@ -12,6 +12,9 @@ struct EpisodeTranscriptView: View {
     @State private var document: EpisodeTranscriptDocument?
     @State private var adAnalysisDocument: EpisodeAdAnalysisDocument?
     @State private var adSpanBySegmentID: [Int: EpisodeAdAnalysisSpan] = [:]
+    @State private var adAnalysisJobState: EpisodeAdAnalysisJobState = .unavailable("Transcript unavailable.")
+    @State private var plainTextExport = ""
+    @State private var timestampedTextExport = ""
     @State private var isLoadingDocument = true
     @State private var loadErrorMessage: String?
     @State private var timeline = TranscriptTimeline()
@@ -29,7 +32,7 @@ struct EpisodeTranscriptView: View {
                     timeline: timeline,
                     searchIndex: searchIndex,
                     adSpanBySegmentID: adSpanBySegmentID,
-                    adAnalysisState: adAnalysisState(for: document),
+                    adAnalysisState: adAnalysisJobState,
                     showsTimestamps: showsTimestamps,
                     isSearchPresented: $isSearchPresented
                 )
@@ -51,8 +54,9 @@ struct EpisodeTranscriptView: View {
                 ToolbarItem(placement: .primaryAction) {
                     EpisodeTranscriptMenu(
                         showsTimestamps: $showsTimestamps,
-                        segments: document.segments,
-                        adAnalysisState: adAnalysisState(for: document),
+                        plainTextExport: plainTextExport,
+                        timestampedTextExport: timestampedTextExport,
+                        adAnalysisState: adAnalysisJobState,
                         canAnalyze: appModel.adAnalyses.canStartAnalysis,
                         canImproveTranscript: canImproveTranscript(for: document),
                         onAnalyzeAds: analyzeAds,
@@ -69,6 +73,9 @@ struct EpisodeTranscriptView: View {
         .task(id: adAnalysisDocumentLoadIdentifier) {
             await loadAdAnalysisDocumentIfAvailable()
         }
+        .task(id: adAnalysisStateIdentifier) {
+            refreshAdAnalysisDerivedState()
+        }
     }
 
     // MARK: - Derived state
@@ -76,6 +83,14 @@ struct EpisodeTranscriptView: View {
     private var adAnalysisDocumentLoadIdentifier: String {
         let updatedAt = appModel.adAnalyses.record(for: episodeID)?.updatedAt.timeIntervalSince1970 ?? -1
         return "\(episodeID)|\(updatedAt)"
+    }
+
+    /// The cached job state feeds both the content view and the menu; it
+    /// recomputes (one fingerprint pass) only when a job or transcript state
+    /// actually changes, never per body evaluation.
+    private var adAnalysisStateIdentifier: String {
+        let transcriptState = appModel.transcriptions.record(for: episodeID)?.state.rawValue ?? "missing"
+        return "\(episodeID)|\(transcriptState)|\(appModel.adAnalyses.changeSequence)"
     }
 
     /// Reloads only when a completed transcript lands (initial open or an
@@ -128,11 +143,14 @@ struct EpisodeTranscriptView: View {
             let loaded = try await appModel.transcriptions.loadDocument(for: episodeID)
             let segments = loaded.segments
             let index = try await TranscriptSearchIndex.build(segments: segments)
+            let exports = await Self.buildExports(segments: segments)
             document = loaded
             timeline = TranscriptTimeline(segments: segments)
             searchIndex = index
+            plainTextExport = exports.plain
+            timestampedTextExport = exports.timestamped
             isLoadingDocument = false
-            refreshAdSpans()
+            refreshAdAnalysisDerivedState()
         } catch is CancellationError {
         } catch {
             // A running improve points the record at its in-progress
@@ -145,10 +163,13 @@ struct EpisodeTranscriptView: View {
             document = nil
             adAnalysisDocument = nil
             adSpanBySegmentID = [:]
+            plainTextExport = ""
+            timestampedTextExport = ""
             timeline = TranscriptTimeline()
             searchIndex = nil
             loadErrorMessage = error.localizedDescription
             isLoadingDocument = false
+            refreshAdAnalysisDerivedState()
         }
     }
 
@@ -166,20 +187,35 @@ struct EpisodeTranscriptView: View {
         } catch {
             adAnalysisDocument = nil
         }
-        refreshAdSpans()
+        refreshAdAnalysisDerivedState()
     }
 
-    private func refreshAdSpans() {
+    /// One jobState computation feeds the content view, the menu, and the
+    /// span lookup (perf 25's double-tax collapsed to a single pass).
+    private func refreshAdAnalysisDerivedState() {
         guard let document else {
+            adAnalysisJobState = .unavailable("Transcript unavailable.")
             adSpanBySegmentID = [:]
             return
         }
+        let state = adAnalysisState(for: document)
+        adAnalysisJobState = state
         adSpanBySegmentID = adSpanLookup(
             for: document,
             currentAdAnalysisDocument: loadedCurrentAdAnalysisDocument(
                 for: document,
-                state: adAnalysisState(for: document)
+                state: state
             )
+        )
+    }
+
+    @concurrent
+    private static func buildExports(
+        segments: [OpenCastTranscriptSegment]
+    ) async -> (plain: String, timestamped: String) {
+        (
+            TranscriptExportBuilder.plainText(from: segments),
+            TranscriptExportBuilder.timestampedText(from: segments)
         )
     }
 
@@ -227,6 +263,8 @@ struct EpisodeTranscriptView: View {
         document = nil
         adAnalysisDocument = nil
         adSpanBySegmentID = [:]
+        plainTextExport = ""
+        timestampedTextExport = ""
         timeline = TranscriptTimeline()
         searchIndex = nil
         loadErrorMessage = nil
@@ -238,15 +276,23 @@ struct EpisodeTranscriptView: View {
             return
         }
         appModel.analyzeEpisodeTranscript(document, modelContext: modelContext)
+        refreshAdAnalysisDerivedState()
     }
 
     private func improveTranscript() {
         appModel.improveTranscriptWithAppleSpeech(episodeID: episodeID, modelContext: modelContext)
+        refreshAdAnalysisDerivedState()
     }
 
+    // Mutating actions refresh the derived state synchronously: deleting the
+    // record destroys the very model object whose property reads back the
+    // task-id observation, so nothing else would invalidate this body. The
+    // task id still covers background transitions (poll completion mutates a
+    // live record's updatedAt, which body observes via the load identifiers).
     private func deleteAdAnalysis() {
         appModel.deleteEpisodeAdAnalysis(episodeID: episodeID, modelContext: modelContext)
         adAnalysisDocument = nil
         adSpanBySegmentID = [:]
+        refreshAdAnalysisDerivedState()
     }
 }

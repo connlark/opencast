@@ -6,10 +6,7 @@ struct OpenCastTabRootView: View {
     @State private var isSearchPresented = false
 
     @Binding var selectedTab: AppSection
-    @Binding var libraryNavigationPath: [AppRoute]
-    @Binding var inboxNavigationPath: [AppRoute]
-    @Binding var downloadsNavigationPath: [AppRoute]
-    @Binding var searchNavigationPath: [AppRoute]
+    @Binding var navigationPaths: AppNavigationPaths
     let isNowPlayingPresented: Bool
     let onAdd: () -> Void
     let onPresentDataNukeConfirmation: () -> Void
@@ -18,33 +15,27 @@ struct OpenCastTabRootView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab(AppSection.library.title, systemImage: AppSection.library.systemImage, value: AppSection.library) {
-                NavigationStack(path: $libraryNavigationPath) {
+                NavigationStack(path: $navigationPaths[.library]) {
                     LibraryView(
                         onAdd: onAdd
                     )
                     .withOpenCastDestinations(
-                        onOpenEpisode: { episodeID in
-                            libraryNavigationPath.append(.episodeDetail(id: episodeID))
-                        }
+                        onOpenEpisode: openEpisode(on: .library)
                     )
                 }
             }
 
             Tab(AppSection.inbox.title, systemImage: AppSection.inbox.systemImage, value: AppSection.inbox) {
-                NavigationStack(path: $inboxNavigationPath) {
+                NavigationStack(path: $navigationPaths[.inbox]) {
                     InboxView(
                         onAdd: onAdd,
-                        onOpenEpisode: { episodeID in
-                            inboxNavigationPath.append(.episodeDetail(id: episodeID))
-                        },
+                        onOpenEpisode: openEpisode(on: .inbox),
                         onOpenAdDetectionQueue: {
-                            inboxNavigationPath.append(.adDetectionQueue)
+                            navigationPaths[.inbox].append(.adDetectionQueue)
                         }
                     )
                     .withOpenCastDestinations(
-                        onOpenEpisode: { episodeID in
-                            inboxNavigationPath.append(.episodeDetail(id: episodeID))
-                        }
+                        onOpenEpisode: openEpisode(on: .inbox)
                     )
                 }
             }
@@ -54,16 +45,12 @@ struct OpenCastTabRootView: View {
                 systemImage: AppSection.downloads.systemImage,
                 value: AppSection.downloads
             ) {
-                NavigationStack(path: $downloadsNavigationPath) {
+                NavigationStack(path: $navigationPaths[.downloads]) {
                     DownloadsView(
-                        onOpenEpisode: { episodeID in
-                            downloadsNavigationPath.append(.episodeDetail(id: episodeID))
-                        }
+                        onOpenEpisode: openEpisode(on: .downloads)
                     )
                     .withOpenCastDestinations(
-                        onOpenEpisode: { episodeID in
-                            downloadsNavigationPath.append(.episodeDetail(id: episodeID))
-                        }
+                        onOpenEpisode: openEpisode(on: .downloads)
                     )
                 }
             }
@@ -83,21 +70,17 @@ struct OpenCastTabRootView: View {
                 value: AppSection.search,
                 role: .search
             ) {
-                NavigationStack(path: $searchNavigationPath) {
+                NavigationStack(path: $navigationPaths[.search]) {
                     SearchView(
                         directoryService: appModel.podcastDirectoryService,
                         isSearchPresented: $isSearchPresented,
-                        onOpenEpisode: { episodeID in
-                            searchNavigationPath.append(.episodeDetail(id: episodeID))
-                        },
+                        onOpenEpisode: openEpisode(on: .search),
                         onOpenPodcast: { feedURL in
-                            searchNavigationPath.append(.podcastDetail(feedURL: feedURL))
+                            navigationPaths[.search].append(.podcastDetail(feedURL: feedURL))
                         }
                     )
                     .withOpenCastDestinations(
-                        onOpenEpisode: { episodeID in
-                            searchNavigationPath.append(.episodeDetail(id: episodeID))
-                        }
+                        onOpenEpisode: openEpisode(on: .search)
                     )
                 }
             }
@@ -118,6 +101,12 @@ struct OpenCastTabRootView: View {
             isSearchPresented = selectedTab == .search
         }
         .focusedSceneValue(\.openCastCommandActions, commandActions)
+    }
+
+    private func openEpisode(on section: AppSection) -> (String) -> Void {
+        { episodeID in
+            navigationPaths[section].append(.episodeDetail(id: episodeID))
+        }
     }
 
     private var commandActions: OpenCastCommandActions {

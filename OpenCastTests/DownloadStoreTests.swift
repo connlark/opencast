@@ -993,7 +993,16 @@ struct DownloadStoreTests {
             fileStore: fileStore
         )
         let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
-        let appModel = OpenCastAppModel(library: library, downloads: downloadStore)
+        // The real BGTaskScheduler traps on a second same-identifier
+        // registration in one host process, and suites run twice per
+        // invocation — pass-arming tests must inject the fake scheduler.
+        let appModel = OpenCastAppModel(
+            library: library,
+            downloads: downloadStore,
+            adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession(
+                scheduler: FakeAdFreePassContinuedTaskScheduler()
+            )
+        )
         let queuedEpisode = makeEpisode(episodeID: "auto-delete-pass-queued")
         let blocker = makeEpisode(episodeID: "auto-delete-pass-blocker")
         _ = try insertCompletedDownload(

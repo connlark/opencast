@@ -105,6 +105,30 @@ pub fn is_cancellable(state: &str) -> bool {
     !is_terminal(state) && state != STATE_CANCELLING
 }
 
+/// Why a state transition must be refused (cancel/reset safety pass): the
+/// Durable Object's input gate stays open across subrequest awaits, so a
+/// `/cancel` can run its terminal cleanup while a step is parked mid-await.
+/// The resumed step must never mutate a record the terminal path owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionRefusal {
+    /// The record reached a terminal state; its cleanup (prefix deletes,
+    /// alarm delete, release) already ran or is authoritative.
+    Terminal,
+    /// A cancel is mid-flight; its inline `finish_terminal` finishes the job.
+    Cancelling,
+}
+
+/// A live record accepts transitions; a terminal or cancelling one refuses.
+pub fn transition_refusal(state: &str) -> Option<TransitionRefusal> {
+    if is_terminal(state) {
+        Some(TransitionRefusal::Terminal)
+    } else if state == STATE_CANCELLING {
+        Some(TransitionRefusal::Cancelling)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChunkRef {
     pub index: u32,
@@ -342,6 +366,16 @@ pub struct JobRecord {
     pub state_deadline_at: Option<i64>,
     #[serde(default)]
     pub cleanup_complete: bool,
+    /// RTW-5 backstop: a terminal path failed to release the credit
+    /// reservation. The alarm retries a bounded number of times
+    /// (`credit_release_attempts` counts failures, the terminal-path
+    /// attempt included) before abandoning with the
+    /// `credit_release_abandoned` counter as the operator signal. Additive
+    /// `#[serde(default)]`: old records deserialize unchanged.
+    #[serde(default)]
+    pub credit_release_pending: bool,
+    #[serde(default)]
+    pub credit_release_attempts: u32,
     /// Create-time policy rejection of the enclosure URL (http, userinfo,
     /// IP-literal, unusual port, forbidden host): the server never fetches;
     /// the job goes straight to the exact-device upload path (pass 2
@@ -430,6 +464,8 @@ impl JobRecord {
             error_message: None,
             state_deadline_at: None,
             cleanup_complete: false,
+            credit_release_pending: false,
+            credit_release_attempts: 0,
             origin_unsafe: false,
             upload_id: None,
             upload_part_size_bytes: None,
@@ -670,6 +706,31 @@ mod tests {
         assert!(!is_terminal(STATE_TRANSCRIBING));
         assert!(is_cancellable(STATE_TRANSCRIBING));
         assert!(!is_cancellable(STATE_CANCELLING));
+    }
+
+    #[test]
+    fn transition_refusal_classifies_every_state() {
+        for state in [STATE_ACKNOWLEDGED, STATE_CANCELLED, STATE_FAILED] {
+            assert_eq!(
+                transition_refusal(state),
+                Some(TransitionRefusal::Terminal),
+                "{state} must refuse as terminal"
+            );
+        }
+        assert_eq!(
+            transition_refusal(STATE_CANCELLING),
+            Some(TransitionRefusal::Cancelling)
+        );
+        for state in ALL_STATES {
+            if is_terminal(state) || state == STATE_CANCELLING {
+                continue;
+            }
+            assert_eq!(
+                transition_refusal(state),
+                None,
+                "{state} must accept transitions"
+            );
+        }
     }
 
     #[test]
@@ -944,6 +1005,10 @@ mod tests {
         assert!(!decoded.upload_completed);
         assert_eq!(decoded.upload_id, None);
         assert_eq!(decoded.upload_part_count, None);
+        // RTW-5 backstop fields are additive: old records decode with the
+        // backstop off.
+        assert!(!decoded.credit_release_pending);
+        assert_eq!(decoded.credit_release_attempts, 0);
     }
 
     #[test]

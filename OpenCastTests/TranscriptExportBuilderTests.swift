@@ -1,10 +1,34 @@
 import Foundation
 import OpenCastTranscription
+import SwiftUI
 import Testing
 @testable import OpenCast
 
-@Suite("Transcript export builder")
+@Suite("Transcript export builder", .serialized)
 struct TranscriptExportBuilderTests {
+    @MainActor
+    @Test("Menu body evaluation does not invoke the export builders")
+    func menuBodyEvaluationDoesNotInvokeExportBuilders() {
+        TranscriptExportBuilder.resetBuildCount()
+        let menu = EpisodeTranscriptMenu(
+            showsTimestamps: .constant(false),
+            plainTextExport: "plain",
+            timestampedTextExport: "timestamped",
+            adAnalysisState: .ready,
+            canAnalyze: true,
+            canImproveTranscript: true,
+            onAnalyzeAds: {},
+            onDeleteAdAnalysis: {},
+            onImproveTranscript: {},
+            onDeleteTranscript: {}
+        )
+
+        let renderer = ImageRenderer(content: menu)
+        _ = renderer.uiImage
+
+        #expect(TranscriptExportBuilder.buildCount == 0)
+    }
+
     @Test("Plain export joins segment texts line by line")
     func plainExportJoinsSegmentTextsLineByLine() {
         let text = TranscriptExportBuilder.plainText(from: [

@@ -177,9 +177,23 @@ impl AdAnalysisJob {
             let env = self.env.clone();
             let request = submit.request;
             let response_job_id = job_id.clone();
+            let recovery_state = self.state.clone();
+            let recovery_job_id = job_id.clone();
             worker::wasm_bindgen_futures::spawn_local(async move {
                 if let Err(error) = run_job(state, env, job_id, started_at, request).await {
                     console_error!("Ad-analysis job task failed: {error:?}");
+                    // AA-5: a paid model call whose bookkeeping failed (for
+                    // example the terminal record write) must not leave the
+                    // record Running until the 600 s deadline. Best-effort:
+                    // the failure record is small, so this write succeeds
+                    // even when the completed record's did not.
+                    if let Err(recovery_error) =
+                        terminalize_failed_run(&recovery_state, &recovery_job_id, started_at).await
+                    {
+                        console_error!(
+                            "Ad-analysis failed-run terminalization failed: {recovery_error:?}"
+                        );
+                    }
                 }
             });
 
@@ -247,9 +261,29 @@ async fn run_job(
                 .map(|value| value.to_string());
             let model = resolve_gemini_model(model_value.as_deref());
             match run_windows_analysis(&gemini_api_key, model, request).await {
-                Ok(response) => RunOutcome::Completed {
-                    result_json: serde_json::to_string(&response)?,
-                },
+                Ok(response) => {
+                    let result_json = serde_json::to_string(&response)?;
+                    // AA-5: a result over the named budget would only fail
+                    // later at the DO storage write (128 KiB per-value
+                    // platform limit), stranding the job as Running until
+                    // the 600 s deadline with the model spend discarded.
+                    // Validated spans and the echoed request_id are capped,
+                    // so over-budget means degenerate model output: fail
+                    // with a stable code instead. Content-free log: size
+                    // only.
+                    if result_json.len() > crate::types::MAX_RESULT_JSON_BYTES {
+                        console_error!(
+                            "Ad-analysis result over budget: {} bytes",
+                            result_json.len()
+                        );
+                        RunOutcome::FailedUpstream {
+                            status: 502,
+                            code: "result_oversized".to_string(),
+                        }
+                    } else {
+                        RunOutcome::Completed { result_json }
+                    }
+                }
                 Err(error) => RunOutcome::FailedUpstream {
                     status: error.status,
                     code: error.body.error,
@@ -296,6 +330,40 @@ async fn run_job(
             subjects,
             content_hash,
         },
+    };
+    write_record(&state.storage(), &record).await?;
+    set_alarm_at(&state.storage(), purge_at).await
+}
+
+/// AA-5 leg 3: turn a still-Running record whose run task errored into a
+/// terminal failure (same guard as run_job's own terminal write: only the
+/// exact run that started it may finish it).
+async fn terminalize_failed_run(
+    state: &Rc<State>,
+    job_id: &str,
+    started_at: i64,
+) -> Result<()> {
+    let current = read_record(&state.storage()).await?;
+    let Some(JobRecord::Running {
+        job_id: current_job_id,
+        started_at: current_started_at,
+        subjects,
+        content_hash,
+    }) = current
+    else {
+        return Ok(());
+    };
+    if current_job_id != job_id || current_started_at != started_at {
+        return Ok(());
+    }
+    let purge_at = now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS);
+    let record = JobRecord::FailedUpstream {
+        job_id: job_id.to_string(),
+        status: 500,
+        code: "job_task_failed".to_string(),
+        purge_at,
+        subjects,
+        content_hash,
     };
     write_record(&state.storage(), &record).await?;
     set_alarm_at(&state.storage(), purge_at).await

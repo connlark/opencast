@@ -553,6 +553,272 @@ struct EpisodeTranscriptionStoreTests {
         #expect(resumedDocument.checkpoints.last?.completedDuration == 30)
     }
 
+    @Test("Checkpoint rewrites are throttled to every fifth checkpoint plus final")
+    func checkpointRewritesAreThrottledToEveryFifthCheckpointPlusFinal() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let audioURL = try writeAudioPlaceholder(in: temporaryDirectory, contents: "throttle cadence audio")
+        let transcriber = ManualEpisodeTranscriber()
+        let store = EpisodeTranscriptionStore(
+            transcriber: transcriber,
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        )
+        let episode = EpisodeListItemSnapshot.fixture(
+            episodeID: "throttle-cadence",
+            duration: 100,
+            audioURL: "https://example.com/throttle-cadence.mp3",
+            guid: "throttle-cadence"
+        )
+        let record = completedDownloadRecord(episode: episode)
+        context.insert(record)
+
+        store.startTranscription(
+            episode,
+            downloadRecord: record,
+            localFileURL: audioURL,
+            modelSummary: modelSummary(),
+            modelContext: context
+        )
+        #expect(await waitUntil { transcriber.isStreaming })
+
+        transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 1, audioDuration: 100)))
+        #expect(await waitUntil { store.record(for: episode.episodeID)?.completedDuration == 10 })
+
+        // Skipped checkpoints must leave the durable stamps untouched; a
+        // broken throttle would advance completedDuration within this window.
+        transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 2, audioDuration: 100)))
+        transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 3, audioDuration: 100)))
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(store.record(for: episode.episodeID)?.completedDuration == 10)
+
+        for index in 4...6 {
+            transcriber.emit(.checkpoint(cumulativeCheckpoint(index: index, audioDuration: 100)))
+        }
+        #expect(await waitUntil { store.record(for: episode.episodeID)?.completedDuration == 60 })
+        let midRecord = try #require(store.record(for: episode.episodeID))
+        // Within one run each rewrite replaces the single in-run checkpoint
+        // entry, so the count stays 1 while the duration advances 10 → 60.
+        #expect(midRecord.checkpointCount == 1)
+        let midDocument = try #require(store.document(for: episode.episodeID))
+        #expect(midDocument.checkpoints.count == 1)
+        #expect(midDocument.checkpoints.last?.completedDuration == 60)
+        #expect(midDocument.segments.count == 6)
+
+        transcriber.emit(.finished(manualResult(segmentCount: 6)))
+        transcriber.finish()
+        #expect(await waitUntil { store.record(for: episode.episodeID)?.state == .completed })
+        let finalDocument = try #require(store.document(for: episode.episodeID))
+        #expect(finalDocument.segments.count == 6)
+    }
+
+    @Test(
+        "Kill at every checkpoint index leaves stamps and document consistent and resumes from the last written checkpoint",
+        arguments: 1...7
+    )
+    func killAtCheckpointIndexResumesFromLastWrittenCheckpoint(killIndex: Int) async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let audioURL = try writeAudioPlaceholder(in: temporaryDirectory, contents: "kill matrix audio \(killIndex)")
+        let fileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        let transcriber = ManualEpisodeTranscriber()
+        let store = EpisodeTranscriptionStore(transcriber: transcriber, fileStore: fileStore)
+        let episode = EpisodeListItemSnapshot.fixture(
+            episodeID: "kill-matrix-\(killIndex)",
+            duration: 100,
+            audioURL: "https://example.com/kill-matrix-\(killIndex).mp3",
+            guid: "kill-matrix-\(killIndex)"
+        )
+        let record = completedDownloadRecord(episode: episode)
+        context.insert(record)
+
+        store.startTranscription(
+            episode,
+            downloadRecord: record,
+            localFileURL: audioURL,
+            modelSummary: modelSummary(),
+            modelContext: context
+        )
+        #expect(await waitUntil { transcriber.isStreaming })
+        for index in 1...killIndex {
+            transcriber.emit(.checkpoint(cumulativeCheckpoint(index: index, audioDuration: 100)))
+        }
+        // Writes land at checkpoints 1 and 6; skipped checkpoints leave the
+        // stamps untouched, so the durable floor is deterministic per index.
+        // (Each in-run rewrite replaces the single run checkpoint entry, so
+        // checkpointCount stays 1 while completedDuration advances.)
+        let expectedWrittenIndex = killIndex >= 6 ? 6 : 1
+        let expectedDuration = TimeInterval(expectedWrittenIndex) * 10
+        #expect(await waitUntil {
+            store.record(for: episode.episodeID)?.checkpointCount == 1
+                && store.record(for: episode.episodeID)?.completedDuration == expectedDuration
+        })
+
+        // Simulated kill: the abandoned run never gets a terminal path; a
+        // fresh context and store model the relaunch reading committed state.
+        let relaunchContext = ModelContext(container)
+        let resumeTranscriber = ManualEpisodeTranscriber()
+        let relaunchStore = EpisodeTranscriptionStore(transcriber: resumeTranscriber, fileStore: fileStore)
+        relaunchStore.load(modelContext: relaunchContext)
+
+        let relaunchRecord = try #require(relaunchStore.record(for: episode.episodeID))
+        #expect(relaunchRecord.state == .interrupted)
+        #expect(relaunchRecord.checkpointCount == 1)
+        #expect(relaunchRecord.completedDuration == expectedDuration)
+        let killedDocument = try #require(relaunchStore.document(for: episode.episodeID))
+        #expect(killedDocument.checkpoints.count == relaunchRecord.checkpointCount)
+        #expect(killedDocument.checkpoints.last?.completedDuration == relaunchRecord.completedDuration)
+        #expect(killedDocument.segments.count == expectedWrittenIndex)
+
+        let relaunchDownload = try #require(
+            try relaunchContext.fetch(FetchDescriptor<EpisodeDownloadRecord>()).first
+        )
+        relaunchStore.startTranscription(
+            episode,
+            downloadRecord: relaunchDownload,
+            localFileURL: audioURL,
+            modelSummary: modelSummary(),
+            modelContext: relaunchContext
+        )
+        #expect(await waitUntil { resumeTranscriber.isStreaming })
+        #expect(resumeTranscriber.lastRequest?.resumeStart == expectedDuration)
+        resumeTranscriber.finish()
+    }
+
+    @Test("Resume after a throttled kill matches an uninterrupted run's final output")
+    func resumeAfterThrottledKillMatchesUninterruptedRun() async throws {
+        // Throttled lane: four checkpoints (write at 1; 2-4 skipped), killed,
+        // relaunched, resumed from 10s.
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let audioURL = try writeAudioPlaceholder(in: temporaryDirectory, contents: "equivalence audio")
+        let fileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        let transcriber = ManualEpisodeTranscriber()
+        let store = EpisodeTranscriptionStore(transcriber: transcriber, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "throttle-equivalence")
+        let record = completedDownloadRecord(episode: episode)
+        context.insert(record)
+
+        store.startTranscription(
+            episode,
+            downloadRecord: record,
+            localFileURL: audioURL,
+            modelSummary: modelSummary(),
+            modelContext: context
+        )
+        #expect(await waitUntil { transcriber.isStreaming })
+        for index in 1...4 {
+            transcriber.emit(.checkpoint(cumulativeCheckpoint(index: index, audioDuration: 60)))
+        }
+        #expect(await waitUntil {
+            store.record(for: episode.episodeID)?.checkpointCount == 1
+                && store.record(for: episode.episodeID)?.completedDuration == 10
+        })
+
+        let relaunchContext = ModelContext(container)
+        let resumeTranscriber = ManualEpisodeTranscriber()
+        let relaunchStore = EpisodeTranscriptionStore(transcriber: resumeTranscriber, fileStore: fileStore)
+        relaunchStore.load(modelContext: relaunchContext)
+        let relaunchDownload = try #require(
+            try relaunchContext.fetch(FetchDescriptor<EpisodeDownloadRecord>()).first
+        )
+        relaunchStore.startTranscription(
+            episode,
+            downloadRecord: relaunchDownload,
+            localFileURL: audioURL,
+            modelSummary: modelSummary(),
+            modelContext: relaunchContext
+        )
+        #expect(await waitUntil { resumeTranscriber.isStreaming })
+        #expect(resumeTranscriber.lastRequest?.resumeStart == 10)
+        resumeTranscriber.emit(.finished(manualResult(segmentRange: 1..<6)))
+        resumeTranscriber.finish()
+        #expect(await waitUntil { relaunchStore.record(for: episode.episodeID)?.state == .completed })
+        let resumedDocument = try #require(relaunchStore.document(for: episode.episodeID))
+
+        // Uninterrupted lane over its own container and directory.
+        let plainContainer = try OpenCastModelContainerFactory.make(inMemory: true)
+        let plainContext = ModelContext(plainContainer)
+        let plainDirectory = try makeTemporaryDirectory()
+        let plainAudioURL = try writeAudioPlaceholder(in: plainDirectory, contents: "equivalence audio")
+        let plainTranscriber = ManualEpisodeTranscriber()
+        let plainStore = EpisodeTranscriptionStore(
+            transcriber: plainTranscriber,
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: plainDirectory)
+        )
+        let plainRecord = completedDownloadRecord(episode: episode)
+        plainContext.insert(plainRecord)
+        plainStore.startTranscription(
+            episode,
+            downloadRecord: plainRecord,
+            localFileURL: plainAudioURL,
+            modelSummary: modelSummary(),
+            modelContext: plainContext
+        )
+        #expect(await waitUntil { plainTranscriber.isStreaming })
+        plainTranscriber.emit(.finished(manualResult(segmentRange: 0..<6)))
+        plainTranscriber.finish()
+        #expect(await waitUntil { plainStore.record(for: episode.episodeID)?.state == .completed })
+        let plainDocument = try #require(plainStore.document(for: episode.episodeID))
+
+        #expect(resumedDocument.text == plainDocument.text)
+        #expect(resumedDocument.segments.map(\.start) == plainDocument.segments.map(\.start))
+        #expect(resumedDocument.segments.map(\.end) == plainDocument.segments.map(\.end))
+        #expect(resumedDocument.segments.map(\.text) == plainDocument.segments.map(\.text))
+    }
+
+    private func tenSecondSegment(index: Int) -> OpenCastTranscriptSegment {
+        OpenCastTranscriptSegment(
+            id: index,
+            start: TimeInterval(index) * 10,
+            end: TimeInterval(index + 1) * 10,
+            text: "segment \(index)",
+            avgLogProbability: -0.1,
+            noSpeechProbability: 0.01
+        )
+    }
+
+    private func cumulativeCheckpoint(
+        index: Int,
+        audioDuration: TimeInterval
+    ) -> OpenCastLongFormTranscriptionCheckpoint {
+        let segments = (0..<index).map(tenSecondSegment)
+        return OpenCastLongFormTranscriptionCheckpoint(
+            index: index,
+            audioDuration: audioDuration,
+            completedDuration: TimeInterval(index) * 10,
+            segments: segments,
+            text: segments.map(\.text).joined(separator: " ")
+        )
+    }
+
+    private func manualResult(segmentCount: Int) -> OpenCastTranscriptionResult {
+        manualResult(segmentRange: 0..<segmentCount)
+    }
+
+    private func manualResult(segmentRange: Range<Int>) -> OpenCastTranscriptionResult {
+        let segments = segmentRange.map(tenSecondSegment)
+        return OpenCastTranscriptionResult(
+            modelIdentifier: OpenCastWhisperModel.largeV3.rawValue,
+            languageCode: "en",
+            text: segments.map(\.text).joined(separator: " "),
+            segments: segments,
+            timings: OpenCastTranscriptionTimings(
+                audioDuration: 60,
+                modelLoading: 1,
+                audioLoading: 1,
+                transcription: 2,
+                fullPipeline: 4,
+                realTimeFactor: 0.03,
+                decodingFallbackCount: 1,
+                decodingFallback: 0.5,
+                decodingWindowCount: 2
+            )
+        )
+    }
+
     @Test("Deleting source download preserves completed transcript")
     func deletingSourceDownloadPreservesCompletedTranscript() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -1583,6 +1849,44 @@ private final class FakeEpisodeTranscriber: EpisodeTranscribing, @unchecked Send
             )))
             continuation.finish()
         }
+    }
+
+    func unload() async {
+    }
+}
+
+/// Event pacing under test control: the stream stays open until the test
+/// finishes it, so checkpoint cadence and kill points are deterministic.
+private final class ManualEpisodeTranscriber: EpisodeTranscribing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error>.Continuation?
+    private var recordedRequests: [EpisodeTranscriptionRunRequest] = []
+
+    var isStreaming: Bool {
+        lock.withLock { continuation != nil }
+    }
+
+    var lastRequest: EpisodeTranscriptionRunRequest? {
+        lock.withLock { recordedRequests.last }
+    }
+
+    func transcribe(
+        _ request: EpisodeTranscriptionRunRequest
+    ) -> AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error> {
+        AsyncThrowingStream { continuation in
+            lock.withLock {
+                recordedRequests.append(request)
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func emit(_ event: EpisodeTranscriptionRunEvent) {
+        lock.withLock { continuation }?.yield(event)
+    }
+
+    func finish() {
+        lock.withLock { continuation }?.finish()
     }
 
     func unload() async {

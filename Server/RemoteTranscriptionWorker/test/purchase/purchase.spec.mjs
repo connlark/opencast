@@ -562,6 +562,49 @@ describe("gateway with the real PurchaseWorker credit backend", () => {
     });
   });
 
+  it("fails a job loud when a reserve replay carries mismatched seconds (PW-3 seam mapping)", async () => {
+    const identity = uid("apptx");
+    const account = await bootstrap(identity);
+
+    const tag = uid("mismatch");
+    const job = await createJob({
+      clientRequestId: `req-${tag}`,
+      episodeId: `ep-${tag}`,
+      durationSeconds: 350,
+    });
+    // Before /source (so the DO has not reserved yet), poison the seam:
+    // seed a reservation under the job's id with different seconds through
+    // the same internal surface RTW calls.
+    const seeded = await env.PURCHASE_WORKER.fetch(
+      "https://opencast-purchase.internal/internal/v1/reserve",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          schema_version: 1,
+          account_id: account.account_id,
+          job_id: job.job_id,
+          seconds: 1,
+        }),
+      },
+    );
+    expect(seeded.status).toBe(200);
+
+    await reportSource(job.job_id, 350);
+    // The DO's own reserve (350 s) now replays the job id with different
+    // seconds; PurchaseWorker answers 409 reservation_seconds_mismatch and
+    // the gateway maps it to release_and_fail on the existing internal
+    // shape — nothing new reaches the app client.
+    const failed = await waitForState(job.job_id, ["failed"]);
+    expect(failed.job.error.code).toBe("internal_error");
+    // release_and_fail also freed the poisoned reservation.
+    expect(await balanceOf(identity)).toEqual({
+      available_seconds: FREE,
+      reserved_seconds: 0,
+      debt_seconds: 0,
+    });
+  });
+
   it("releases the reservation through the seam when a job is cancelled", async () => {
     const identity = uid("apptx");
     await bootstrap(identity);

@@ -1621,8 +1621,7 @@ final class DownloadStore {
         errorMessage: String?,
         modelContext: ModelContext
     ) throws -> EpisodeDownloadRecord {
-        let matchingRecords = try fetchRecords(modelContext: modelContext)
-            .filter { $0.episodeID == episodeID }
+        let matchingRecords = try fetchAllRecords(episodeID: episodeID, modelContext: modelContext)
         let record: EpisodeDownloadRecord
         if let existingRecord = matchingRecords.first {
             record = existingRecord

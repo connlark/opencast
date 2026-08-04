@@ -71,6 +71,10 @@ pub struct AppConfig {
     pub ad_analysis_deadline_seconds: i64,
     pub ad_analysis_poll_seconds: u64,
     pub ad_analysis_max_submit_attempts: u32,
+    /// Alarm-turn retry delay after an `advance()` error. Production keeps
+    /// the historical 60 s pacing; workerd tests shrink it so re-entry paths
+    /// (e.g. stitch after a settle failure) run in test time.
+    pub alarm_retry_seconds: u64,
 }
 
 impl AppConfig {
@@ -178,6 +182,7 @@ impl AppConfig {
             ad_analysis_poll_seconds: int_var(env, "AD_ANALYSIS_POLL_SECONDS", 5).max(1) as u64,
             ad_analysis_max_submit_attempts: int_var(env, "AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS", 3)
                 .clamp(1, 10) as u32,
+            alarm_retry_seconds: int_var(env, "ALARM_RETRY_SECONDS", 60).max(1) as u64,
         })
     }
 

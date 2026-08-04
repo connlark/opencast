@@ -24,7 +24,8 @@ final class DictionaryRemoteModelTransport: OpenCastRemoteModelTransport, @unche
         from url: URL,
         to destinationURL: URL,
         expectedByteCount: Int64,
-        maximumByteCount: Int64
+        maximumByteCount: Int64,
+        progress: OpenCastRemoteModelDownloadProgressHandler?
     ) async throws -> OpenCastRemoteModelResponse {
         guard let data = downloadBodies[url] else {
             return OpenCastRemoteModelResponse(statusCode: 404)
@@ -41,6 +42,7 @@ final class DictionaryRemoteModelTransport: OpenCastRemoteModelTransport, @unche
             withIntermediateDirectories: true
         )
         try data.write(to: destinationURL)
+        progress?(byteCount)
         return OpenCastRemoteModelResponse(statusCode: 200)
     }
 }

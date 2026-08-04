@@ -65,6 +65,13 @@ export default defineConfig(async () => {
             AD_ANALYSIS_DEADLINE_SECONDS: "10",
             AD_ANALYSIS_POLL_SECONDS: "1",
             AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS: "3",
+            // Alarm-error retry in test time so re-entry paths (the stitch
+            // sfail hook) run inside test timeouts; production default is 60.
+            ALARM_RETRY_SECONDS: "1",
+            // Short origin wall so the stalled-stream test (RTW-7) runs in
+            // test time; live stagings here finish in well under a second,
+            // and the parked-staging race test stays inside this budget.
+            ORIGIN_FETCH_WALL_SECONDS: "4",
           },
           serviceBindings: {
             // FAKE_MEDIA short-circuits before the service binding; this stub
@@ -76,9 +83,12 @@ export default defineConfig(async () => {
             },
             // Stubbed AdAnalysisWorker internal surface. Scenario selection
             // rides the submitted podcast_id: "ad-cap" => 429 cap,
-            // "ad-transient" => 503 every submit, "ad-hang" => runs forever;
-            // anything else completes on the first poll with spans derived
-            // from the submitted segments.
+            // "ad-transient" => 503 every submit, "ad-hang" => runs forever,
+            // "ad-park" => the submit response parks ~4 s in flight (the
+            // in-flight-cancel race hook), "ad-lost" => submit accepted but
+            // every poll 404s (drives the resubmit path's missing-envelope
+            // arm); anything else completes on the first poll with spans
+            // derived from the submitted segments.
             AD_ANALYSIS_WORKER: (() => {
               const jobs = new Map();
               const json = (body, status) =>
@@ -102,6 +112,33 @@ export default defineConfig(async () => {
                     return json({ error: "job_failed_transient" }, 503);
                   }
                   const fingerprint = inner.transcript.fingerprint;
+                  if (podcast.includes("ad-park")) {
+                    // Park the submit in flight long enough for the spec to
+                    // cancel the job while the DO is awaiting this response.
+                    await new Promise((resolve) => setTimeout(resolve, 4000));
+                    jobs.set(fingerprint, { hang: true, request: inner });
+                    return json(
+                      {
+                        job_id: fingerprint,
+                        state: "running",
+                        poll_after_seconds: 1,
+                      },
+                      202,
+                    );
+                  }
+                  if (podcast.includes("ad-lost")) {
+                    // Accept the submit but never store the job: the next
+                    // poll 404s, clearing the DO's poll target so its next
+                    // turn re-reads the (test-deleted) result envelope.
+                    return json(
+                      {
+                        job_id: fingerprint,
+                        state: "running",
+                        poll_after_seconds: 1,
+                      },
+                      202,
+                    );
+                  }
                   jobs.set(fingerprint, {
                     hang: podcast.includes("ad-hang"),
                     request: inner,

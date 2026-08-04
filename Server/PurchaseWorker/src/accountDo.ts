@@ -31,6 +31,7 @@ import {
   CREDIT_ERROR_INSUFFICIENT,
   CREDIT_ERROR_INTERNAL,
   CREDIT_ERROR_RESERVATION_NOT_FOUND,
+  CREDIT_ERROR_SECONDS_MISMATCH,
 } from './types';
 
 const SCHEMA_VERSION = 2;
@@ -97,6 +98,8 @@ function errorResponse(error: unknown): Response {
         return json(404, { error: CREDIT_ERROR_RESERVATION_NOT_FOUND });
       case 'conflict':
         return json(409, { error: CREDIT_ERROR_CONFLICT, detail: error.message });
+      case 'seconds_mismatch':
+        return json(409, { error: CREDIT_ERROR_SECONDS_MISMATCH, detail: error.message });
       default:
         return json(500, { error: CREDIT_ERROR_INTERNAL, detail: error.message });
     }
@@ -111,8 +114,20 @@ export class PurchaseAccount {
   constructor(ctx: DurableObjectState, _env: unknown) {
     this.ctx = ctx;
     ctx.blockConcurrencyWhile(async () => {
-      this.migrate();
+      this.mutate(() => this.migrate());
     });
+  }
+
+  /**
+   * PW-1 atomicity: every money mutation (account_state, lots, reservations,
+   * and its ledger entries — plus adjacent transactions-table writes) commits
+   * or rolls back as one unit. Without this, a throw after the money writes
+   * (e.g. a ledger idempotency collision) was caught at fetch() while the
+   * already-executed SQL still committed at end of turn — money mutations
+   * with no ledger row, invisible to assertInvariants.
+   */
+  private mutate<T>(fn: () => T): T {
+    return this.ctx.storage.transactionSync(fn);
   }
 
   private get sql(): SqlStorage {
@@ -276,6 +291,32 @@ export class PurchaseAccount {
   }
 
   private persist(state: LedgerState, entries: LedgerEntryDraft[], now: number): void {
+    // Idempotency-first ordering (PW-1): the UNIQUE-keyed ledger INSERT runs
+    // before any money write, so a replayed event collides while the state
+    // is still untouched and the surrounding transaction rolls back clean.
+    for (const entry of entries) {
+      this.sql.exec(
+        `INSERT INTO ledger_entries (idempotency_key, operation, lot_id, transaction_id, job_id,
+           delta_available, delta_reserved, delta_consumed, delta_debt,
+           available_after, reserved_after, consumed_after, debt_after, reason_code, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        entry.idempotencyKey,
+        entry.operation,
+        entry.lotId,
+        entry.transactionId,
+        entry.jobId,
+        entry.delta.available,
+        entry.delta.reserved,
+        entry.delta.consumed,
+        entry.delta.debt,
+        entry.balanceAfter.available,
+        entry.balanceAfter.reserved,
+        entry.balanceAfter.consumed,
+        entry.balanceAfter.debt,
+        entry.reasonCode,
+        now,
+      );
+    }
     this.sql.exec(
       `UPDATE account_state SET available = ?, reserved = ?, consumed = ?, debt = ?, updated_at = ? WHERE id = 1`,
       state.buckets.available,
@@ -327,29 +368,6 @@ export class PurchaseAccount {
         now,
       );
     }
-    for (const entry of entries) {
-      this.sql.exec(
-        `INSERT INTO ledger_entries (idempotency_key, operation, lot_id, transaction_id, job_id,
-           delta_available, delta_reserved, delta_consumed, delta_debt,
-           available_after, reserved_after, consumed_after, debt_after, reason_code, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        entry.idempotencyKey,
-        entry.operation,
-        entry.lotId,
-        entry.transactionId,
-        entry.jobId,
-        entry.delta.available,
-        entry.delta.reserved,
-        entry.delta.consumed,
-        entry.delta.debt,
-        entry.balanceAfter.available,
-        entry.balanceAfter.reserved,
-        entry.balanceAfter.consumed,
-        entry.balanceAfter.debt,
-        entry.reasonCode,
-        now,
-      );
-    }
   }
 
   private balance(state: LedgerState): Balance {
@@ -384,29 +402,39 @@ export class PurchaseAccount {
     const now = Math.floor(Date.now() / 1000);
     try {
       switch (path) {
-        case '/init':
-          return this.handleInit((await request.json()) as InitMessage, now);
+        // Every mutating handler is synchronous after the body parse and
+        // runs under this.mutate (transactionSync) so its money writes,
+        // ledger inserts, and transactions-table updates commit or roll
+        // back together (PW-1).
+        case '/init': {
+          const body = (await request.json()) as InitMessage;
+          return this.mutate(() => this.handleInit(body, now));
+        }
         case '/balance':
           return this.handleBalance();
         case '/reserve': {
           const body = (await request.json()) as { job_id: string; seconds: number };
-          return this.handleReserve(body.job_id, body.seconds, now);
+          return this.mutate(() => this.handleReserve(body.job_id, body.seconds, now));
         }
         case '/settle': {
           const body = (await request.json()) as { job_id: string };
-          return this.handleSettle(body.job_id, now);
+          return this.mutate(() => this.handleSettle(body.job_id, now));
         }
         case '/release': {
           const body = (await request.json()) as { job_id: string };
-          return this.handleRelease(body.job_id, now);
+          return this.mutate(() => this.handleRelease(body.job_id, now));
         }
-        case '/credit':
-          return this.handleCredit((await request.json()) as CreditMessage, now);
-        case '/refund':
-          return this.handleRefund((await request.json()) as RefundMessage, now);
+        case '/credit': {
+          const body = (await request.json()) as CreditMessage;
+          return this.mutate(() => this.handleCredit(body, now));
+        }
+        case '/refund': {
+          const body = (await request.json()) as RefundMessage;
+          return this.mutate(() => this.handleRefund(body, now));
+        }
         case '/refund-reversed': {
           const body = (await request.json()) as { transaction_id: string };
-          return this.handleRefundReversed(body.transaction_id, now);
+          return this.mutate(() => this.handleRefundReversed(body.transaction_id, now));
         }
         case '/snapshot':
           return this.handleSnapshot();
@@ -590,6 +618,22 @@ export class PurchaseAccount {
       const state = this.loadState(account);
       return json(200, { applied: false, already_refunded: true, balance: this.balance(state) });
     }
+    // A `refund_reversed` transaction falls through DELIBERATELY, gated by
+    // the idempotency key (transaction_id + revocation_date): a replay of
+    // the already-applied revocation event collides here and no-ops, while
+    // a genuinely NEW revocation after a reversal mints a fresh key and
+    // must re-apply (PW-1 leg 3). The belt stays in persist(): the
+    // ledger-first INSERT under transactionSync rolls any missed replay
+    // back clean.
+    const idempotencyKey = `refund:txn:${message.transaction_id}:${message.revocation_date ?? 0}`;
+    const replayed =
+      this.sql
+        .exec(`SELECT 1 FROM ledger_entries WHERE idempotency_key = ?`, idempotencyKey)
+        .toArray().length > 0;
+    if (replayed) {
+      const state = this.loadState(account);
+      return json(200, { applied: false, already_refunded: true, balance: this.balance(state) });
+    }
 
     const credited = Number(row.credited_seconds);
     // Revocation math (parent plan): prorated consumables revoke
@@ -604,7 +648,7 @@ export class PurchaseAccount {
       lotId: String(row.lot_id),
       transactionId: message.transaction_id,
       revokeSeconds: revokeRequested,
-      idempotencyKey: `refund:txn:${message.transaction_id}:${message.revocation_date ?? 0}`,
+      idempotencyKey,
       reasonCode: message.revocation_type ?? 'REFUND',
     });
     const newState = result.revokedSeconds >= credited ? 'refunded' : 'partially_refunded';

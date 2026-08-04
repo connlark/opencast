@@ -58,10 +58,27 @@ pub(crate) async fn run_windows_analysis(
         gemini_warnings.extend(outcome.warnings);
         match outcome.output {
             Some(mut model_output) => {
-                combined_model_output.spans.append(&mut model_output.spans);
-                combined_model_output.malformed_span_count = combined_model_output
-                    .malformed_span_count
-                    .saturating_add(model_output.malformed_span_count);
+                // AA-6: enforce the span cap per window BEFORE merging — a
+                // degenerate window contributes nothing (its spans AND its
+                // malformed count stay out of the combined budget) instead
+                // of spending the whole request's allowance.
+                if !crate::validation::window_output_within_span_cap(
+                    model_output.spans.len(),
+                    model_output.malformed_span_count,
+                ) {
+                    gemini_warnings.push(format!(
+                        "degenerate_window_span_count:{}",
+                        model_output
+                            .spans
+                            .len()
+                            .saturating_add(model_output.malformed_span_count)
+                    ));
+                } else {
+                    combined_model_output.spans.append(&mut model_output.spans);
+                    combined_model_output.malformed_span_count = combined_model_output
+                        .malformed_span_count
+                        .saturating_add(model_output.malformed_span_count);
+                }
             }
             None => {
                 let code = outcome

@@ -40,6 +40,10 @@ use crate::types::{
 const RECORD_KEY: &str = "job";
 const RESULT_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const BUSY_RETRY_SECONDS: u64 = 10;
+/// RTW-5 backstop budget: the terminal-path release attempt plus three
+/// bounded alarm retries before `credit_release_abandoned` is the operator
+/// signal (paced by `alarm_retry_seconds`, 60 s in production).
+const CREDIT_RELEASE_MAX_ATTEMPTS: u32 = 4;
 const TRANSCRIPTION_BUCKET: &str = "TRANSCRIPTION_AUDIO";
 const R2_PART_BYTES: usize = 8 * 1024 * 1024;
 
@@ -133,7 +137,10 @@ impl DurableObject for TranscriptionJob {
         if let Err(error) = self.advance().await {
             worker::console_error!("transcription job alarm error: {error:?}");
             // Try again later rather than wedging the job.
-            self.schedule(Duration::from_secs(60)).await?;
+            let retry_seconds = AppConfig::from_env(&self.env)
+                .map(|config| config.alarm_retry_seconds)
+                .unwrap_or(60);
+            self.schedule(Duration::from_secs(retry_seconds)).await?;
         }
         Response::ok("")
     }
@@ -190,6 +197,39 @@ impl TranscriptionJob {
         record.updated_at = now;
         self.write_record(&record).await?;
         Ok(Some(record))
+    }
+
+    /// `update_record` that refuses to mutate a record the terminal path
+    /// owns (cancel/reset safety pass). Every step site whose write follows
+    /// a subrequest await — where the DO's input gate is open and a
+    /// concurrent `/cancel` can run `finish_terminal` inline — goes through
+    /// this instead of `update_record`, and its caller bails on refusal
+    /// (the `step_chunk`/`handle_source` precedent, generalized).
+    async fn update_record_if_live<F>(&self, mutate: F) -> Result<LiveUpdate>
+    where
+        F: FnOnce(&mut JobRecord),
+    {
+        let Some(mut record) = self.read_record().await? else {
+            return Ok(LiveUpdate::Missing);
+        };
+        match job::transition_refusal(&record.state) {
+            Some(job::TransitionRefusal::Terminal) => Ok(LiveUpdate::RefusedTerminal(record)),
+            Some(job::TransitionRefusal::Cancelling) => Ok(LiveUpdate::RefusedCancelling(record)),
+            None => {
+                let previous_state = record.state.clone();
+                mutate(&mut record);
+                let now = now_seconds();
+                if record.state != previous_state {
+                    record
+                        .phase_timestamps
+                        .entry(record.state.clone())
+                        .or_insert(now);
+                }
+                record.updated_at = now;
+                self.write_record(&record).await?;
+                Ok(LiveUpdate::Applied(record))
+            }
+        }
     }
 
     async fn schedule(&self, delay: Duration) -> Result<()> {
@@ -561,8 +601,8 @@ impl TranscriptionJob {
                     .await?;
                 let upload_id = upload.upload_id().await;
                 let deadline = now_seconds() + config.exact_uploading_deadline_seconds;
-                let updated = self
-                    .update_record(|record| {
+                let updated = match self
+                    .update_record_if_live(|record| {
                         record.upload_id = Some(upload_id.clone());
                         record.upload_part_size_bytes = Some(part_size);
                         record.upload_part_count = Some(part_count);
@@ -570,7 +610,21 @@ impl TranscriptionJob {
                         record.state_deadline_at = Some(deadline);
                     })
                     .await?
-                    .expect("record existed above");
+                {
+                    LiveUpdate::Applied(updated) => updated,
+                    // A cancel raced the multipart create (same RTW-1
+                    // family, fetch-route flavor): don't resurrect the
+                    // terminal record or re-arm its deleted alarm — abort
+                    // the upload we just opened and refuse.
+                    _ => {
+                        if let Ok(open) = bucket
+                            .resume_multipart_upload(&job::r2_upload_key(&record.job_id), &upload_id)
+                        {
+                            open.abort().await.ok();
+                        }
+                        return json_error(409, types::ERROR_INVALID_REQUEST);
+                    }
+                };
                 self.sync_index(&updated).await;
                 self.schedule_at(deadline).await?;
                 upload_id
@@ -700,14 +754,24 @@ impl TranscriptionJob {
             return json_error(400, types::ERROR_UPLOAD_IDENTITY_MISMATCH);
         }
 
-        let updated = self
-            .update_record(|record| {
+        let updated = match self
+            .update_record_if_live(|record| {
                 record.upload_completed = true;
                 record.state = job::STATE_SOURCE_MATCHED.to_string();
                 record.state_deadline_at = None;
             })
             .await?
-            .expect("record existed above");
+        {
+            LiveUpdate::Applied(updated) => updated,
+            // A cancel raced the multipart complete (same RTW-1 family,
+            // fetch-route flavor): the completed object re-appeared after
+            // the cancel's cleanup — re-delete and refuse instead of
+            // resurrecting the terminal record.
+            _ => {
+                self.delete_job_prefixes(&record.job_id).await.ok();
+                return json_error(409, types::ERROR_INVALID_REQUEST);
+            }
+        };
         self.sync_index(&updated).await;
         self.bump("exact_upload_completed", 1).await;
         self.schedule(Duration::from_secs(0)).await?;
@@ -723,6 +787,13 @@ impl TranscriptionJob {
         let config = self
             .config()
             .map_err(|error| worker::Error::RustError(error.error))?;
+
+        // RTW-5 backstop: the only alarm work a terminal record can carry
+        // is a pending credit release; everything else on a terminal record
+        // is a stale or redundant alarm turn.
+        if job::is_terminal(&record.state) {
+            return self.retry_pending_credit_release(record, &config).await;
+        }
 
         // Deadlines drive the normal cancellation path — except the ad
         // phase, whose transcript is already stitched and settled: a missed
@@ -808,19 +879,26 @@ impl TranscriptionJob {
         if record.state == job::STATE_CREATED && !self.fake_media_enabled(config) {
             self.media_wake().await;
         }
-        let record = self
-            .update_record(|record| {
+        let record = match self
+            .update_record_if_live(|record| {
                 record.state = job::STATE_STAGING_ORIGIN.to_string();
             })
             .await?
-            .expect("record exists");
+        {
+            LiveUpdate::Applied(record) => record,
+            LiveUpdate::RefusedTerminal(record) => {
+                self.delete_job_prefixes(&record.job_id).await.ok();
+                return Ok(());
+            }
+            LiveUpdate::RefusedCancelling(_) | LiveUpdate::Missing => return Ok(()),
+        };
         self.sync_index(&record).await;
 
         let outcome = self.stage_origin(&record, config).await;
         match outcome {
             Ok((sha256, byte_count)) => {
-                let updated = self
-                    .update_record(|record| {
+                let updated = match self
+                    .update_record_if_live(|record| {
                         record.server_sha256 = Some(sha256);
                         record.server_byte_count = Some(byte_count);
                         record.enclosure_url_ciphertext = None;
@@ -829,7 +907,18 @@ impl TranscriptionJob {
                             Some(now_seconds() + config.waiting_for_device_source_deadline_seconds);
                     })
                     .await?
-                    .expect("record exists");
+                {
+                    LiveUpdate::Applied(updated) => updated,
+                    LiveUpdate::RefusedTerminal(record)
+                    | LiveUpdate::RefusedCancelling(record) => {
+                        // stage_origin just completed the raw multipart — the
+                        // cancel's cleanup may already have swept the
+                        // prefixes, so re-delete on both refusal flavors.
+                        self.delete_job_prefixes(&record.job_id).await.ok();
+                        return Ok(());
+                    }
+                    LiveUpdate::Missing => return Ok(()),
+                };
                 self.sync_index(&updated).await;
                 self.step_evaluate_identities(updated, config).await
             }
@@ -860,14 +949,29 @@ impl TranscriptionJob {
             bucket.delete(&job::r2_raw_key(&record.job_id)).await.ok();
         }
         let deadline = now_seconds() + config.exact_upload_required_deadline_seconds;
-        let updated = self
-            .update_record(|record| {
+        let updated = match self
+            .update_record_if_live(|record| {
                 record.enclosure_url_ciphertext = None;
                 record.state = job::STATE_EXACT_UPLOAD_REQUIRED.to_string();
                 record.state_deadline_at = Some(deadline);
             })
             .await?
-            .expect("record exists");
+        {
+            LiveUpdate::Applied(updated) => updated,
+            // The terminal path owns the record (a cancel raced the staging
+            // or mismatch path that routed here): no schedule, no telemetry,
+            // hand the caller the record as-is.
+            LiveUpdate::RefusedTerminal(record) => {
+                self.delete_job_prefixes(&record.job_id).await.ok();
+                return Ok(record);
+            }
+            LiveUpdate::RefusedCancelling(record) => return Ok(record),
+            LiveUpdate::Missing => {
+                return Err(worker::Error::RustError(
+                    "job record missing entering upload path".to_string(),
+                ))
+            }
+        };
         // Alarm first, telemetry second: sync_index and bump are D1
         // subrequests, and a reset while parked on them would otherwise leave
         // this durable record with no alarm — the exact stranding RTW-4
@@ -894,13 +998,20 @@ impl TranscriptionJob {
                 Ok(())
             }
             job::IdentityComparison::Matched => {
-                let updated = self
-                    .update_record(|record| {
+                let updated = match self
+                    .update_record_if_live(|record| {
                         record.state = job::STATE_SOURCE_MATCHED.to_string();
                         record.state_deadline_at = None;
                     })
                     .await?
-                    .expect("record exists");
+                {
+                    LiveUpdate::Applied(updated) => updated,
+                    LiveUpdate::RefusedTerminal(record) => {
+                        self.delete_job_prefixes(&record.job_id).await.ok();
+                        return Ok(());
+                    }
+                    LiveUpdate::RefusedCancelling(_) | LiveUpdate::Missing => return Ok(()),
+                };
                 self.sync_index(&updated).await;
                 self.bump("source_matched", 1).await;
                 self.schedule(Duration::from_secs(0)).await
@@ -919,12 +1030,19 @@ impl TranscriptionJob {
     }
 
     async fn step_probe(&self, config: &AppConfig) -> Result<()> {
-        let updated = self
-            .update_record(|record| {
+        let updated = match self
+            .update_record_if_live(|record| {
                 record.state = job::STATE_PROBING.to_string();
             })
             .await?
-            .expect("record exists");
+        {
+            LiveUpdate::Applied(updated) => updated,
+            LiveUpdate::RefusedTerminal(record) => {
+                self.delete_job_prefixes(&record.job_id).await.ok();
+                return Ok(());
+            }
+            LiveUpdate::RefusedCancelling(_) | LiveUpdate::Missing => return Ok(()),
+        };
         self.sync_index(&updated).await;
 
         let probe = self.run_media_probe(&updated, config).await;
@@ -968,8 +1086,8 @@ impl TranscriptionJob {
             return Ok(());
         };
 
-        let updated = self
-            .update_record(|record| {
+        let updated = match self
+            .update_record_if_live(|record| {
                 // Pin the identity recomputed by the media worker from the
                 // same exact R2 object whose duration becomes canonical.
                 record.canonical_source_sha256 = Some(probe.sha256.clone());
@@ -979,7 +1097,16 @@ impl TranscriptionJob {
                 record.media_attempts = 0;
             })
             .await?
-            .expect("record exists");
+        {
+            LiveUpdate::Applied(updated) => updated,
+            // The media probe's await left the gate open; a raced cancel
+            // must not be followed by a reservation for a finished job.
+            LiveUpdate::RefusedTerminal(record) => {
+                self.delete_job_prefixes(&record.job_id).await.ok();
+                return Ok(());
+            }
+            LiveUpdate::RefusedCancelling(_) | LiveUpdate::Missing => return Ok(()),
+        };
         self.step_reserve(updated, config).await
     }
 
@@ -1000,19 +1127,34 @@ impl TranscriptionJob {
             .await
         {
             Ok(_) => {
-                let updated = self
-                    .update_record(|record| {
+                let updated = match self
+                    .update_record_if_live(|record| {
                         record.state = job::STATE_RESERVED.to_string();
                         record.state_deadline_at = None;
                     })
                     .await?
-                    .expect("record exists");
+                {
+                    LiveUpdate::Applied(updated) => updated,
+                    LiveUpdate::RefusedTerminal(current) => {
+                        // The cancel's release ran BEFORE this reservation
+                        // landed — nothing else will release it (the
+                        // charge-after-cancel half of RTW-1).
+                        credit.release(&record.job_id, now_seconds()).await.ok();
+                        self.delete_job_prefixes(&current.job_id).await.ok();
+                        return Ok(());
+                    }
+                    LiveUpdate::RefusedCancelling(_) => {
+                        credit.release(&record.job_id, now_seconds()).await.ok();
+                        return Ok(());
+                    }
+                    LiveUpdate::Missing => return Ok(()),
+                };
                 self.sync_index(&updated).await;
                 self.schedule(Duration::from_secs(0)).await
             }
             Err(CreditError::Insufficient) => {
-                let updated = self
-                    .update_record(|record| {
+                let updated = match self
+                    .update_record_if_live(|record| {
                         if record.state != job::STATE_AWAITING_CREDITS {
                             record.state = job::STATE_AWAITING_CREDITS.to_string();
                             record.state_deadline_at =
@@ -1020,13 +1162,34 @@ impl TranscriptionJob {
                         }
                     })
                     .await?
-                    .expect("record exists");
+                {
+                    LiveUpdate::Applied(updated) => updated,
+                    LiveUpdate::RefusedTerminal(current) => {
+                        self.delete_job_prefixes(&current.job_id).await.ok();
+                        return Ok(());
+                    }
+                    LiveUpdate::RefusedCancelling(_) | LiveUpdate::Missing => return Ok(()),
+                };
                 self.sync_index(&updated).await;
                 // Retry the reservation periodically, but never sleep past
                 // the state deadline that ends the wait.
                 let retry_at = now_seconds() + config.awaiting_credits_retry_seconds;
                 let deadline = updated.state_deadline_at.unwrap_or(retry_at);
                 self.schedule_at(retry_at.min(deadline)).await
+            }
+            Err(CreditError::SecondsMismatch) => {
+                // PW-3: job ids are single-use, so a reserve replay carrying
+                // different seconds is a defect signal. Fail the job loud on
+                // the existing internal shape (constraint: no new error
+                // surface reaches app clients) instead of retrying forever;
+                // release_and_fail also frees the mismatched reservation.
+                worker::console_error!(
+                    "job {} reserve replay seconds mismatch; failing",
+                    record.job_id
+                );
+                self.release_and_fail(record, config, types::ERROR_INTERNAL)
+                    .await?;
+                Ok(())
             }
             Err(error) => Err(worker::Error::RustError(format!(
                 "credit reserve failed: {error:?}"
@@ -1761,21 +1924,157 @@ impl TranscriptionJob {
 
     async fn step_stitch(&self, record: JobRecord, config: &AppConfig) -> Result<()> {
         let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
+        // RTW-3: re-entry after a mid-sequence failure (settle error, DO
+        // reset between the result put and the terminal bookkeeping) must
+        // never destroy the published result or double-charge. When the
+        // result object already exists, skip the stitch-input read — the
+        // responses are already deleted — and resume at the idempotent
+        // post-publication steps below.
+        let published = self.read_result_envelope(&record.job_id).await?;
+        let first_pass = published.is_none();
+        let normalized_sha256 = match published {
+            Some(envelope) => serde_json::from_slice::<serde_json::Value>(&envelope)
+                .ok()
+                .and_then(|value| {
+                    value["result"]["provenance"]["normalized_transcript_sha256"]
+                        .as_str()
+                        .map(str::to_string)
+                }),
+            None => {
+                match self
+                    .stitch_inputs_and_publish(&record, config, &bucket)
+                    .await?
+                {
+                    Some(normalized) => Some(normalized),
+                    // The stitch failed; release_and_fail already ran.
+                    None => return Ok(()),
+                }
+            }
+        };
+
+        // Result durable: delete responses and the source object (staged or
+        // uploaded — both keys, idempotently), release the inference slot,
+        // settle exactly the reservation. Everything from here to the
+        // transition re-runs on re-entry, so each step must stay
+        // individually idempotent.
+        for chunk in &record.chunks {
+            bucket
+                .delete(&job::r2_response_key(&record.job_id, chunk.index))
+                .await?;
+        }
+        bucket.delete(&job::r2_raw_key(&record.job_id)).await?;
+        bucket.delete(&job::r2_upload_key(&record.job_id)).await?;
+        if self.limiter_release(&record.job_id).await.is_err() {
+            self.bump("limiter_release_failed", 1).await;
+        }
+
+        // A cancel that raced the awaits above must win BEFORE the settle:
+        // once settled, the cancel's release is a no-op and the customer
+        // stays charged for a job they ended (the charge-after-cancel half
+        // of RTW-1). The terminal path owns the record; drop the result it
+        // deleted.
+        match self.read_record().await? {
+            Some(current) if job::transition_refusal(&current.state).is_none() => {}
+            Some(current) => {
+                bucket
+                    .delete(&job::r2_result_key(&current.job_id))
+                    .await
+                    .ok();
+                self.delete_job_prefixes(&current.job_id).await.ok();
+                return Ok(());
+            }
+            None => return Ok(()),
+        }
+
+        // Test hook (development lane, FAKE_AI only): fail exactly once
+        // between the result put and the settle so the workerd suite can
+        // drive the re-entry path deterministically.
+        if first_pass
+            && self.fake_ai_enabled(config)
+            && ai::parse_fake_hooks(record.language_code.as_deref()).settle_fail_once
+        {
+            return Err(worker::Error::RustError(
+                "injected settle failure (sfail hook)".to_string(),
+            ));
+        }
+
+        let credit = self.credit(config)?;
+        credit
+            .settle(&record.job_id, now_seconds())
+            .await
+            .map_err(|error| worker::Error::RustError(format!("settle failed: {error:?}")))?;
+        self.bump(
+            "settled_seconds",
+            record.reserved_seconds.unwrap_or_default(),
+        )
+        .await;
+        self.bump("results_ready", 1).await;
+
+        // Flag on → the ad phase runs before result_ready under its own
+        // deadline; flag off → today's result_ready transition unchanged.
+        let ad_deadline = now_seconds() + config.ad_analysis_deadline_seconds;
+        let updated = match self
+            .update_record_if_live(|record| {
+                if record.ad_analysis_requested {
+                    record.state = job::STATE_DETECTING_ADS.to_string();
+                    record.state_deadline_at = Some(ad_deadline);
+                } else {
+                    record.state = job::STATE_RESULT_READY.to_string();
+                    record.state_deadline_at = Some(now_seconds() + RESULT_TTL_SECONDS);
+                }
+                record.result_key = Some(job::r2_result_key(&record.job_id));
+                record.normalized_transcript_sha256 = normalized_sha256;
+            })
+            .await?
+        {
+            LiveUpdate::Applied(updated) => updated,
+            LiveUpdate::RefusedTerminal(current) | LiveUpdate::RefusedCancelling(current) => {
+                // A cancel landed during the settle window: keep the
+                // terminal verdict and drop the re-published result.
+                bucket
+                    .delete(&job::r2_result_key(&current.job_id))
+                    .await
+                    .ok();
+                self.delete_job_prefixes(&current.job_id).await.ok();
+                return Ok(());
+            }
+            LiveUpdate::Missing => return Ok(()),
+        };
+        self.sync_index(&updated).await;
+        if updated.state == job::STATE_DETECTING_ADS {
+            self.schedule(Duration::from_secs(0)).await
+        } else {
+            self.schedule_at(updated.state_deadline_at.expect("just set"))
+                .await
+        }
+    }
+
+    /// Read the chunk responses, stitch, verify, and publish the result
+    /// object. Returns the normalized transcript hash once the result is
+    /// durable, or `None` when the job was failed (`release_and_fail` has
+    /// already run). Split from `step_stitch` so re-entry can skip straight
+    /// to the idempotent post-publication steps (RTW-3).
+    async fn stitch_inputs_and_publish(
+        &self,
+        record: &JobRecord,
+        config: &AppConfig,
+        bucket: &worker::Bucket,
+    ) -> Result<Option<String>> {
         let canonical = record.canonical_duration_seconds.unwrap_or_default();
         let mut chunk_transcriptions = Vec::with_capacity(record.chunks.len());
         for chunk in &record.chunks {
             let key = job::r2_response_key(&record.job_id, chunk.index);
             let Some(object) = bucket.get(&key).execute().await? else {
                 worker::console_error!("stitch input missing: job {} key {key}", record.job_id);
-                self.release_and_fail(record, config, types::ERROR_INTERNAL)
+                self.release_and_fail(record.clone(), config, types::ERROR_INTERNAL)
                     .await?;
-                return Ok(());
+                return Ok(None);
             };
             let Some(body) = object.body() else {
                 worker::console_error!("stitch input empty body: job {} key {key}", record.job_id);
-                self.release_and_fail(record, config, types::ERROR_INTERNAL)
+                self.release_and_fail(record.clone(), config, types::ERROR_INTERNAL)
                     .await?;
-                return Ok(());
+                return Ok(None);
             };
             let bytes = body.bytes().await?;
             let response: ai::WhisperResponse = serde_json::from_slice(&bytes)
@@ -1793,10 +2092,10 @@ impl TranscriptionJob {
                     "stitch rejected transcript: job {} error {error:?}",
                     record.job_id
                 );
-                self.preserve_stitch_debug_responses(&record, config).await;
-                self.release_and_fail(record, config, types::ERROR_TRANSCRIPTION_FAILED)
+                self.preserve_stitch_debug_responses(record, config).await;
+                self.release_and_fail(record.clone(), config, types::ERROR_TRANSCRIPTION_FAILED)
                     .await?;
-                return Ok(());
+                return Ok(None);
             }
         };
         if stitched.interval_trimmed_word_count > 0 {
@@ -1848,10 +2147,10 @@ impl TranscriptionJob {
                 "result publication verification failed: job {} missing canonical source proof",
                 record.job_id
             );
-            self.preserve_stitch_debug_responses(&record, config).await;
-            self.release_and_fail(record, config, types::ERROR_TRANSCRIPTION_FAILED)
+            self.preserve_stitch_debug_responses(record, config).await;
+            self.release_and_fail(record.clone(), config, types::ERROR_TRANSCRIPTION_FAILED)
                 .await?;
-            return Ok(());
+            return Ok(None);
         };
         let verification_context = crate::result_validation::ResultVerificationContext {
             schema_version: SCHEMA_VERSION,
@@ -1866,12 +2165,13 @@ impl TranscriptionJob {
                 "result publication verification failed: job {} error {error:?}",
                 record.job_id
             );
-            self.preserve_stitch_debug_responses(&record, config).await;
-            self.release_and_fail(record, config, types::ERROR_TRANSCRIPTION_FAILED)
+            self.preserve_stitch_debug_responses(record, config).await;
+            self.release_and_fail(record.clone(), config, types::ERROR_TRANSCRIPTION_FAILED)
                 .await?;
-            return Ok(());
+            return Ok(None);
         }
         let language = record.language_code.clone().unwrap_or_else(|| "en".into());
+        let normalized_transcript_sha256 = stitched.normalized_transcript_sha256.clone();
         let result = serde_json::json!({
             "schema_version": SCHEMA_VERSION,
             "result": {
@@ -1924,66 +2224,7 @@ impl TranscriptionJob {
             )
             .execute()
             .await?;
-
-        // Result durable: delete responses and the source object (staged or
-        // uploaded — both keys, idempotently), release the inference slot,
-        // settle exactly the reservation.
-        for chunk in &record.chunks {
-            bucket
-                .delete(&job::r2_response_key(&record.job_id, chunk.index))
-                .await?;
-        }
-        bucket.delete(&job::r2_raw_key(&record.job_id)).await?;
-        bucket.delete(&job::r2_upload_key(&record.job_id)).await?;
-        self.limiter_release(&record.job_id).await.ok();
-
-        let credit = self.credit(config)?;
-        credit
-            .settle(&record.job_id, now_seconds())
-            .await
-            .map_err(|error| worker::Error::RustError(format!("settle failed: {error:?}")))?;
-        self.bump(
-            "settled_seconds",
-            record.reserved_seconds.unwrap_or_default(),
-        )
-        .await;
-        self.bump("results_ready", 1).await;
-
-        let normalized = stitch::normalized_transcript_sha256(
-            &chunk_transcriptions
-                .iter()
-                .flat_map(|chunk| chunk.segments.iter())
-                .flat_map(|segment| segment.words.iter())
-                .map(|word| word.text.clone())
-                .collect::<Vec<_>>()
-                .join(" "),
-        );
-        let _ = normalized;
-        // Flag on → the ad phase runs before result_ready under its own
-        // deadline; flag off → today's result_ready transition unchanged.
-        let ad_deadline = now_seconds() + config.ad_analysis_deadline_seconds;
-        let updated = self
-            .update_record(|record| {
-                if record.ad_analysis_requested {
-                    record.state = job::STATE_DETECTING_ADS.to_string();
-                    record.state_deadline_at = Some(ad_deadline);
-                } else {
-                    record.state = job::STATE_RESULT_READY.to_string();
-                    record.state_deadline_at = Some(now_seconds() + RESULT_TTL_SECONDS);
-                }
-                record.result_key = Some(job::r2_result_key(&record.job_id));
-                record.normalized_transcript_sha256 =
-                    Some(stitched.normalized_transcript_sha256.clone());
-            })
-            .await?
-            .expect("record exists");
-        self.sync_index(&updated).await;
-        if updated.state == job::STATE_DETECTING_ADS {
-            self.schedule(Duration::from_secs(0)).await
-        } else {
-            self.schedule_at(updated.state_deadline_at.expect("just set"))
-                .await
-        }
+        Ok(Some(normalized_transcript_sha256))
     }
 
     /// One ad-phase alarm turn: poll the fingerprint-keyed internal job when
@@ -2011,8 +2252,25 @@ impl TranscriptionJob {
                 .await;
         }
         let Some(envelope) = self.read_result_envelope(&record.job_id).await? else {
-            // The result object is gone mid-phase (a raced cancel's cleanup);
-            // the terminal path owns the record now.
+            // The result object is gone mid-phase. When a raced cancel's
+            // terminal path owns the record now, stay out of its way. But a
+            // record still LIVE in detecting_ads with no result object means
+            // the published result was genuinely lost: fail the job instead
+            // of returning silently — a silent return leaves no alarm and no
+            // deadline enforcement while detecting_ads still counts against
+            // the account's active-job cap, wedging the slot forever.
+            let Some(current) = self.read_record().await? else {
+                return Ok(());
+            };
+            if current.state != job::STATE_DETECTING_ADS {
+                return Ok(());
+            }
+            worker::console_error!(
+                "job {} result object missing in detecting_ads; failing instead of wedging",
+                current.job_id
+            );
+            self.release_and_fail(current, config, types::ERROR_INTERNAL)
+                .await?;
             return Ok(());
         };
         let request =
@@ -2029,12 +2287,19 @@ impl TranscriptionJob {
                 }
             };
         // Count the attempt before the call so a crash mid-submit stays
-        // bounded; a duplicate submit attaches server-side.
-        self.update_record(|record| {
-            record.ad_analysis_attempts += 1;
-            record.ad_analysis_submitted_at = Some(now_seconds());
-        })
-        .await?;
+        // bounded; a duplicate submit attaches server-side. Guarded: the
+        // envelope read above left the gate open, and a job a raced cancel
+        // finished must not spend a submit.
+        match self
+            .update_record_if_live(|record| {
+                record.ad_analysis_attempts += 1;
+                record.ad_analysis_submitted_at = Some(now_seconds());
+            })
+            .await?
+        {
+            LiveUpdate::Applied(_) => {}
+            _ => return Ok(()),
+        }
         self.bump("ad_analysis_submits", 1).await;
         let response = self
             .ad_analysis_post(
@@ -2051,6 +2316,16 @@ impl TranscriptionJob {
         config: &AppConfig,
         response: std::result::Result<(u16, Vec<u8>), AdAnalysisCallFailure>,
     ) -> Result<()> {
+        // The submit/poll subrequest just awaited leaves the input gate
+        // open; a cancel may have finished the job meanwhile. Act on the
+        // outcome only for a live record — otherwise the Running/Retryable
+        // arms would re-arm the alarm the cancel deleted.
+        let Some(current) = self.read_record().await? else {
+            return Ok(());
+        };
+        if job::transition_refusal(&current.state).is_some() {
+            return Ok(());
+        }
         let outcome = match response {
             Ok((status, body)) => ad_analysis::classify_analyze_response(status, &body),
             Err(AdAnalysisCallFailure::BindingMissing) => {
@@ -2146,13 +2421,28 @@ impl TranscriptionJob {
                 }
             }
         }
-        let updated = self
-            .update_record(|record| {
+        let updated = match self
+            .update_record_if_live(|record| {
                 record.state = job::STATE_RESULT_READY.to_string();
                 record.state_deadline_at = Some(now_seconds() + RESULT_TTL_SECONDS);
             })
             .await?
-            .expect("record existed above");
+        {
+            LiveUpdate::Applied(updated) => updated,
+            LiveUpdate::RefusedTerminal(current) | LiveUpdate::RefusedCancelling(current) => {
+                // A cancel raced the envelope injection above: keep the
+                // terminal verdict and drop the result object this turn may
+                // have re-published after the cancel's cleanup.
+                let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
+                bucket
+                    .delete(&job::r2_result_key(&current.job_id))
+                    .await
+                    .ok();
+                self.delete_job_prefixes(&current.job_id).await.ok();
+                return Ok(());
+            }
+            LiveUpdate::Missing => return Ok(()),
+        };
         self.sync_index(&updated).await;
         self.bump("ad_analysis_finalized", 1).await;
         self.schedule_at(updated.state_deadline_at.expect("just set"))
@@ -2245,12 +2535,19 @@ impl TranscriptionJob {
                 Ok(())
             }
             media::MediaCallFailure::Retryable => {
-                let updated = self
-                    .update_record(|record| {
+                let updated = match self
+                    .update_record_if_live(|record| {
                         record.media_attempts += 1;
                     })
                     .await?
-                    .expect("record exists");
+                {
+                    LiveUpdate::Applied(updated) => updated,
+                    LiveUpdate::RefusedTerminal(record) => {
+                        self.delete_job_prefixes(&record.job_id).await.ok();
+                        return Ok(());
+                    }
+                    LiveUpdate::RefusedCancelling(_) | LiveUpdate::Missing => return Ok(()),
+                };
                 if updated.media_attempts >= media::MEDIA_MAX_ATTEMPTS {
                     self.release_and_fail(updated, config, types::ERROR_INTERNAL)
                         .await?;
@@ -2268,12 +2565,84 @@ impl TranscriptionJob {
         config: &AppConfig,
         code: &'static str,
     ) -> Result<()> {
-        let credit = self.credit(config)?;
-        credit.release(&record.job_id, now_seconds()).await.ok();
-        self.limiter_release(&record.job_id).await.ok();
+        // Best-effort here: finish_terminal owns the authoritative release
+        // and its RTW-5 pending/retry backstop.
+        if let Ok(credit) = self.credit(config) {
+            credit.release(&record.job_id, now_seconds()).await.ok();
+        }
+        if self.limiter_release(&record.job_id).await.is_err() {
+            self.bump("limiter_release_failed", 1).await;
+        }
         self.finish_terminal(record, job::STATE_FAILED, code, None)
             .await?;
         Ok(())
+    }
+
+    /// One credit-release attempt with the RTW-5 test hook: `rfail=N`
+    /// (development lane, FAKE_AI only) fails the first N attempts —
+    /// `credit_release_attempts` counts prior failures. Config or
+    /// credit-construction errors count as failed attempts too: the old
+    /// code silently skipped the release on those (the double-swallow).
+    async fn attempt_credit_release(&self, record: &JobRecord) -> bool {
+        let Ok(config) = self.config() else {
+            return false;
+        };
+        if self.fake_ai_enabled(&config) {
+            if let Some(fail_count) =
+                ai::parse_fake_hooks(record.language_code.as_deref()).release_fail_count
+            {
+                if record.credit_release_attempts < fail_count {
+                    return false;
+                }
+            }
+        }
+        match self.credit(&config) {
+            Ok(credit) => credit
+                .release(&record.job_id, now_seconds())
+                .await
+                .is_ok(),
+            Err(_) => false,
+        }
+    }
+
+    /// Alarm arm for a terminal record (RTW-5): retry a pending credit
+    /// release under the bounded budget. Invariant: a releasable
+    /// reservation is never abandoned without a counter increment.
+    async fn retry_pending_credit_release(
+        &self,
+        record: JobRecord,
+        config: &AppConfig,
+    ) -> Result<()> {
+        if !record.credit_release_pending {
+            return Ok(());
+        }
+        if self.attempt_credit_release(&record).await {
+            // Plain update_record on purpose: terminal records must accept
+            // this bookkeeping write (the live-guard would refuse it).
+            self.update_record(|record| {
+                record.credit_release_pending = false;
+            })
+            .await?;
+            self.state.storage().delete_alarm().await?;
+            return Ok(());
+        }
+        let updated = self
+            .update_record(|record| {
+                record.credit_release_attempts += 1;
+            })
+            .await?
+            .expect("record exists");
+        if updated.credit_release_attempts >= CREDIT_RELEASE_MAX_ATTEMPTS {
+            self.update_record(|record| {
+                record.credit_release_pending = false;
+            })
+            .await?;
+            self.bump("credit_release_abandoned", 1).await;
+            self.state.storage().delete_alarm().await?;
+            return Ok(());
+        }
+        self.schedule(Duration::from_secs(config.alarm_retry_seconds))
+            .await
     }
 
     /// Terminal transition shared by cancel, deadline expiry, and failures:
@@ -2286,17 +2655,42 @@ impl TranscriptionJob {
         error_code: &str,
         error_message: Option<String>,
     ) -> Result<JobRecord> {
+        // First terminal writer wins: a parked step that resolves to a
+        // failure after a concurrent cancel (or deadline) already finished
+        // the job must not overwrite the terminal verdict or re-run the
+        // release/limiter calls. Re-delete the result and prefixes so
+        // anything the parked step re-created after the first cleanup is
+        // swept (idempotent).
+        if let Some(current) = self.read_record().await? {
+            if job::is_terminal(&current.state) {
+                if let Ok(bucket) = self.env.bucket(TRANSCRIPTION_BUCKET) {
+                    bucket
+                        .delete(&job::r2_result_key(&current.job_id))
+                        .await
+                        .ok();
+                }
+                self.delete_job_prefixes(&current.job_id).await.ok();
+                return Ok(current);
+            }
+        }
         // Content-free: job id, terminal state, and stable code only.
         worker::console_log!(
             "job {} terminal {terminal_state} code {error_code}",
             record.job_id
         );
-        if let Ok(config) = self.config() {
-            if let Ok(credit) = self.credit(&config) {
-                credit.release(&record.job_id, now_seconds()).await.ok();
-            }
+        // RTW-5: a failed (or config-blocked) release is never silently
+        // abandoned — the record carries a pending flag, the counter is the
+        // telemetry signal, and the alarm below retries under a bounded
+        // budget instead of being deleted with the reservation still held.
+        let released = self.attempt_credit_release(&record).await;
+        if !released {
+            self.bump("credit_release_failed", 1).await;
         }
-        self.limiter_release(&record.job_id).await.ok();
+        if self.limiter_release(&record.job_id).await.is_err() {
+            // The limiter DO's slot math self-corrects on the next terminal
+            // transition; a counter is the cheap honest half here.
+            self.bump("limiter_release_failed", 1).await;
+        }
 
         let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
         // Abort an open exact-device multipart upload so its parts don't
@@ -2326,6 +2720,10 @@ impl TranscriptionJob {
                 record.state_deadline_at = None;
                 record.cleanup_complete = true;
                 record.enclosure_url_ciphertext = None;
+                if !released {
+                    record.credit_release_pending = true;
+                    record.credit_release_attempts = 1;
+                }
             })
             .await?
             .expect("record exists");
@@ -2339,7 +2737,15 @@ impl TranscriptionJob {
             1,
         )
         .await;
-        self.state.storage().delete_alarm().await?;
+        if released {
+            self.state.storage().delete_alarm().await?;
+        } else {
+            let retry_seconds = self
+                .config()
+                .map(|config| config.alarm_retry_seconds)
+                .unwrap_or(60);
+            self.schedule(Duration::from_secs(retry_seconds)).await?;
+        }
         Ok(updated)
     }
 
@@ -2396,10 +2802,16 @@ impl TranscriptionJob {
                 .with_redirect(RequestRedirect::Manual);
             let request = Request::new_with_init(current.as_str(), &init)
                 .map_err(|_| types::ERROR_ORIGIN_FETCH_FAILED)?;
-            let fetched = Fetch::Request(request)
-                .send()
-                .await
-                .map_err(|_| types::ERROR_ORIGIN_FETCH_FAILED)?;
+            let fetched = match race_origin_wall_budget(
+                Fetch::Request(request).send(),
+                started,
+                config.origin_fetch_wall_seconds,
+            )
+            .await
+            {
+                Some(result) => result.map_err(|_| types::ERROR_ORIGIN_FETCH_FAILED)?,
+                None => return Err(types::ERROR_ORIGIN_FETCH_FAILED),
+            };
             let status = fetched.status_code();
             if (301..=308).contains(&status) {
                 let Some(location) = fetched.headers().get("location").ok().flatten() else {
@@ -2450,10 +2862,22 @@ impl TranscriptionJob {
             .map_err(|_| types::ERROR_ORIGIN_FETCH_FAILED)?;
 
         let failure = 'stream: loop {
-            let chunk = match stream.next().await {
-                Some(Ok(chunk)) => chunk,
-                Some(Err(_)) => break Some(types::ERROR_ORIGIN_FETCH_FAILED),
-                None => break None,
+            // RTW-7: the await itself is raced against the remaining wall
+            // budget — the in-loop check below only ran AFTER a chunk
+            // arrived, so a stalled-but-open origin body parked this step
+            // for the whole staging deadline (and interacted with a raced
+            // cancel exactly like the RTW-1 parked-step family).
+            let chunk = match race_origin_wall_budget(
+                stream.next(),
+                started,
+                config.origin_fetch_wall_seconds,
+            )
+            .await
+            {
+                Some(Some(Ok(chunk))) => chunk,
+                Some(Some(Err(_))) => break Some(types::ERROR_ORIGIN_FETCH_FAILED),
+                Some(None) => break None,
+                None => break Some(types::ERROR_ORIGIN_FETCH_FAILED),
             };
             hasher.update(&chunk);
             total += chunk.len() as i64;
@@ -2881,6 +3305,17 @@ enum AdAnalysisCallFailure {
     Transport,
 }
 
+/// Outcome of a guarded record write (`update_record_if_live`). Refusals
+/// carry the current record so the caller can run its bail-out cleanup
+/// (best-effort prefix re-deletes for terminal, stand-aside for cancelling)
+/// without another read.
+enum LiveUpdate {
+    Applied(JobRecord),
+    RefusedTerminal(JobRecord),
+    RefusedCancelling(JobRecord),
+    Missing,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LimiterOutcome {
     Admitted,
@@ -2988,6 +3423,25 @@ pub fn job_status(
         created_at: Some(job::iso8601(record.created_at)),
         updated_at: Some(job::iso8601(record.updated_at)),
         phase_timestamps,
+    }
+}
+
+/// Race a staging await against the remaining origin wall budget (RTW-7).
+/// `None` means the budget expired before the future completed; the raced
+/// future is dropped, which cancels the underlying fetch/stream read.
+async fn race_origin_wall_budget<F, T>(future: F, started: i64, wall_seconds: u64) -> Option<T>
+where
+    F: std::future::Future<Output = T>,
+{
+    let elapsed = now_seconds().saturating_sub(started).max(0) as u64;
+    let Some(remaining) = wall_seconds.checked_sub(elapsed) else {
+        return None;
+    };
+    let deadline = worker::Delay::from(Duration::from_secs(remaining.max(1)));
+    futures_util::pin_mut!(future, deadline);
+    match futures_util::future::select(future, deadline).await {
+        futures_util::future::Either::Left((value, _)) => Some(value),
+        futures_util::future::Either::Right(_) => None,
     }
 }
 

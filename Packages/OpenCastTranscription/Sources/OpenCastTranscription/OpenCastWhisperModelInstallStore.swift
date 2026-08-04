@@ -167,7 +167,7 @@ public struct OpenCastWhisperModelInstallStore: Sendable, Equatable {
             ) else {
                 return nil
             }
-            guard let actualByteCount = try? Self.fileByteCount(at: fileURL),
+            guard let actualByteCount = try? OpenCastFileByteCount.byteCount(at: fileURL),
                   actualByteCount == file.byteCount else {
                 return nil
             }
@@ -186,16 +186,6 @@ public struct OpenCastWhisperModelInstallStore: Sendable, Equatable {
 
     private func receiptURL(in directory: URL) -> URL {
         directory.appending(path: Self.receiptFileName)
-    }
-
-    private static func fileByteCount(at url: URL) throws -> Int64 {
-        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-        guard values.isRegularFile == true,
-              let fileSize = values.fileSize,
-              fileSize >= 0 else {
-            throw OpenCastTranscriptionError.invalidRemoteManifest("bad installed file metadata")
-        }
-        return Int64(fileSize)
     }
 
     static func excludeFromBackup(at url: URL) throws {

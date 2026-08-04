@@ -177,6 +177,12 @@ pub struct FakeAiHooks {
     pub concurrency_override: Option<u32>,
     pub latency_ms: Option<u64>,
     pub media_chunk_latency_ms: Option<u64>,
+    /// `sfail=1`: the first stitch pass fails just before settle, after the
+    /// result object is durable — drives the stitch re-entry invariant test.
+    pub settle_fail_once: bool,
+    /// `rfail=N`: the first N credit-release attempts fail — drives the
+    /// RTW-5 terminal-path release backstop tests.
+    pub release_fail_count: Option<u32>,
     pub failure: Option<FakeAiFailureRule>,
 }
 
@@ -234,6 +240,8 @@ pub fn parse_fake_hooks(language_code: Option<&str>) -> FakeAiHooks {
                 "conc" => hooks.concurrency_override = value.parse().ok(),
                 "latency" => hooks.latency_ms = value.parse().ok(),
                 "mlat" => hooks.media_chunk_latency_ms = value.parse().ok(),
+                "sfail" => hooks.settle_fail_once = value == "1",
+                "rfail" => hooks.release_fail_count = value.parse().ok(),
                 _ => {}
             }
         }
@@ -373,6 +381,15 @@ mod tests {
         let latency_only = parse_fake_hooks(Some("fake:latency=1500"));
         assert_eq!(latency_only.latency_ms, Some(1500));
         assert_eq!(latency_only.failure, None);
+
+        let settle_fail = parse_fake_hooks(Some("fake:sfail=1"));
+        assert!(settle_fail.settle_fail_once);
+        assert!(!parse_fake_hooks(Some("fake:sfail=0")).settle_fail_once);
+        assert!(!latency_only.settle_fail_once);
+
+        let release_fail = parse_fake_hooks(Some("fake:rfail=2"));
+        assert_eq!(release_fail.release_fail_count, Some(2));
+        assert_eq!(latency_only.release_fail_count, None);
     }
 
     #[test]

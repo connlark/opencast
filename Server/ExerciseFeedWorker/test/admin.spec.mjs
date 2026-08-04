@@ -4,7 +4,7 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { adminTokenMatches } from "../src/index.js";
+import worker, { adminTokenMatches } from "../src/index.js";
 
 // The worker routes purely by pathname, so the tests use a neutral origin.
 const ORIGIN = "https://exercise-feed.test";
@@ -71,5 +71,31 @@ describe("HEAD /feed.xml", () => {
     expect(response.headers.get("Content-Type")).toContain("application/rss+xml");
     expect(response.headers.get("ETag")).toBeTruthy();
     expect(await response.text()).toBe("");
+  });
+});
+
+describe("unset ADMIN_TOKEN", () => {
+  it("fails closed on the flip endpoint when no admin token is configured", async () => {
+    // The only previously untested arm of the auth guard (Phase 10.5 G):
+    // a lane with no ADMIN_TOKEN binding must 403 every flip — including a
+    // caller presenting an empty bearer against an empty configured token,
+    // which the constant-time compare alone would accept.
+    for (const env of [{}, { ADMIN_TOKEN: undefined }, { ADMIN_TOKEN: "" }]) {
+      for (const headers of [
+        {},
+        { Authorization: `Bearer ${TOKEN}` },
+        { Authorization: "Bearer " },
+      ]) {
+        const response = await worker.fetch(
+          new Request("https://exercise-feed.test/state/v2", {
+            method: "POST",
+            headers,
+          }),
+          env,
+        );
+        expect(response.status).toBe(403);
+        expect(await response.text()).toBe("forbidden");
+      }
+    }
   });
 });

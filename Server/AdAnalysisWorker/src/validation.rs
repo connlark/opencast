@@ -9,7 +9,8 @@ use crate::types::{
     BEARER_DAILY_ESTIMATED_INPUT_TOKEN_CAP, BEARER_DAILY_REQUEST_CAP,
     GLOBAL_DAILY_ESTIMATED_INPUT_TOKEN_CAP, GLOBAL_DAILY_REQUEST_CAP, MAX_BODY_BYTES,
     MAX_EPISODE_ID_CHARS, MAX_ESTIMATED_INPUT_TOKENS_PER_REQUEST, MAX_LANGUAGE_CODE_CHARS,
-    MAX_PODCAST_ID_CHARS, MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS, MAX_TITLE_CHARS,
+    MAX_PODCAST_ID_CHARS, MAX_REQUEST_ID_CHARS, MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS,
+    MAX_TITLE_CHARS,
     MAX_TRANSCRIPT_TEXT_CHARS, SCHEMA_VERSION,
     TRANSCRIPTION_ACCOUNT_DAILY_ESTIMATED_INPUT_TOKEN_CAP, TRANSCRIPTION_ACCOUNT_DAILY_REQUEST_CAP,
 };
@@ -299,7 +300,8 @@ pub fn validate_request(request: AdAnalysisRequest) -> Result<ValidatedRequest, 
     // feed-derived GUID cannot inflate the prompt past the spend caps it
     // escapes (AA-2). Titles are optional; when absent build_prompt falls
     // back to the id, which is itself bounded here.
-    if request.episode_id.chars().count() > MAX_EPISODE_ID_CHARS
+    if request.request_id.chars().count() > MAX_REQUEST_ID_CHARS
+        || request.episode_id.chars().count() > MAX_EPISODE_ID_CHARS
         || request.podcast_id.chars().count() > MAX_PODCAST_ID_CHARS
         || request.transcript.language_code.chars().count() > MAX_LANGUAGE_CODE_CHARS
         || request
@@ -395,6 +397,15 @@ pub const EVIDENCE_PROBE_WORDS: usize = 6;
 pub const EVIDENCE_MIN_WORDS_ACCEPT: usize = 2;
 pub const EVIDENCE_MIN_WORDS_REANCHOR: usize = 3;
 pub const MAX_RAW_SPANS_PER_WINDOW: usize = 32;
+
+/// AA-6 pre-merge gate: the degeneracy cap is per WINDOW — the documented
+/// contract — so one degenerate window contributes nothing instead of
+/// spending the whole request's combined span budget
+/// (`validate_model_output`'s request-wide check stays as belt). Counts
+/// well-formed and malformed spans together, mirroring the combined check.
+pub fn window_output_within_span_cap(span_count: usize, malformed_span_count: usize) -> bool {
+    span_count.saturating_add(malformed_span_count) <= MAX_RAW_SPANS_PER_WINDOW
+}
 
 /// Lowercase; non-alphanumeric -> boundary; collapse runs.
 pub fn normalize_words(text: &str) -> Vec<String> {

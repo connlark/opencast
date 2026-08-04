@@ -1,9 +1,9 @@
-import OpenCastTranscription
 import SwiftUI
 
 struct EpisodeTranscriptMenu: View {
     @Binding var showsTimestamps: Bool
-    let segments: [OpenCastTranscriptSegment]
+    let plainTextExport: String
+    let timestampedTextExport: String
     let adAnalysisState: EpisodeAdAnalysisJobState
     let canAnalyze: Bool
     let canImproveTranscript: Bool
@@ -20,10 +20,10 @@ struct EpisodeTranscriptMenu: View {
             Toggle("Show Timestamps", systemImage: "clock", isOn: $showsTimestamps)
 
             Section {
-                ShareLink(item: TranscriptExportBuilder.plainText(from: segments)) {
+                ShareLink(item: plainTextExport) {
                     Label("Share Transcript", systemImage: "square.and.arrow.up")
                 }
-                ShareLink(item: TranscriptExportBuilder.timestampedText(from: segments)) {
+                ShareLink(item: timestampedTextExport) {
                     Label("Share with Timestamps", systemImage: "square.and.arrow.up.on.square")
                 }
             }

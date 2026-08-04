@@ -143,7 +143,7 @@ export async function upsertReservationIndex(
   jobId: string,
   accountId: string,
   now: number,
-): Promise<void> {
+): Promise<string> {
   await db
     .prepare(
       `INSERT INTO reservation_index (job_id, account_id, created_at)
@@ -152,6 +152,14 @@ export async function upsertReservationIndex(
     )
     .bind(jobId, accountId, now)
     .run();
+  // Read back the owner: DO NOTHING keeps the first writer, so a caller
+  // must learn when the job id is already pinned to a different account
+  // (PW-2) instead of silently routing settle/release to the first writer.
+  const row = await db
+    .prepare(`SELECT account_id FROM reservation_index WHERE job_id = ?1`)
+    .bind(jobId)
+    .first<{ account_id: string }>();
+  return row?.account_id ?? accountId;
 }
 
 export async function accountForReservation(

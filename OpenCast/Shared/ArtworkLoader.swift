@@ -65,8 +65,11 @@ actor ArtworkLoader {
         try Task.checkCancellation()
 
         if let cachedImage = memoryCache.image(for: request) {
-            let preview = await cachedOrBackfilledPreview(for: request)
-            await scheduleRevalidationIfNeeded(for: request.url, cacheKind: cacheKind)
+            let metadata = try? await diskCache.metadata(for: request.url)
+            let preview = await cachedOrBackfilledPreview(for: request, metadata: metadata)
+            if let metadata, metadata.isStale(for: cacheKind) {
+                scheduleRevalidation(for: request.url, metadata: metadata)
+            }
             return ArtworkLoadResult(image: cachedImage, preview: preview)
         }
 
@@ -137,11 +140,21 @@ actor ArtworkLoader {
         }
     }
 
-    private func cachedOrBackfilledPreview(for request: ArtworkRequest) async -> ArtworkPreview? {
+    private func cachedOrBackfilledPreview(
+        for request: ArtworkRequest,
+        metadata: ArtworkDiskCacheMetadata?
+    ) async -> ArtworkPreview? {
+        guard let metadata else {
+            return nil
+        }
+        if let preview = metadata.preview {
+            return preview
+        }
+
+        // Backfill is the only warm-hit reason to read the data file.
         guard let diskEntry = try? await diskCache.cachedEntry(for: request.url) else {
             return nil
         }
-
         return await preview(for: diskEntry, request: request)
     }
 
@@ -190,21 +203,6 @@ actor ArtworkLoader {
         }
 
         inFlightLoads[canonicalURLString] = nil
-    }
-
-    private func scheduleRevalidationIfNeeded(for artworkURL: URL, cacheKind: ArtworkCacheKind) async {
-        let canonicalURLString = URLCanonicalizer.canonicalString(for: artworkURL)
-        guard revalidationTasks[canonicalURLString] == nil else {
-            return
-        }
-
-        guard let metadata = try? await diskCache.metadata(for: artworkURL),
-              metadata.isStale(for: cacheKind)
-        else {
-            return
-        }
-
-        scheduleRevalidation(for: artworkURL, metadata: metadata)
     }
 
     private func scheduleRevalidation(for artworkURL: URL, metadata: ArtworkDiskCacheMetadata) {

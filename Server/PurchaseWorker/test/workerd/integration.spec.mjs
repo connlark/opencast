@@ -673,3 +673,201 @@ describe('operations floor', () => {
     expect(Number(maintainedAccountCount.value)).toBe(Number(rawAccountCount.count));
   });
 });
+
+// --- Phase 10.5 B: money-store correctness (PW-1/2/3) -----------------------
+
+describe('money-store correctness (PW-1/2/3)', () => {
+  it('no-ops a REFUND replay after REFUND_REVERSED; a fresh revocation re-applies (PW-1)', async () => {
+    const identity = uid('apptx');
+    const account = await bootstrap(identity);
+    const transactionId = uid('txn');
+    await post('/internal/v1/redeem', {
+      schema_version: 1,
+      account_id: account.account_id,
+      transaction_jws: transactionJws({
+        transactionId,
+        appAccountToken: account.app_account_token,
+        appTransactionId: identity,
+      }),
+    });
+    expect((await snapshot(account.account_id)).buckets.available).toBe(75_600);
+
+    // One revocation event, reused verbatim for the replay: the idempotency
+    // key is transaction_id + revocationDate.
+    const revocationDate = Date.now();
+    const refundJws = transactionJws({
+      transactionId,
+      appAccountToken: account.app_account_token,
+      extra: { revocationDate, revocationReason: 0 },
+    });
+    await sendNotification('REFUND', uid('uuid'), refundJws);
+    expect((await snapshot(account.account_id)).buckets.available).toBe(3_600);
+    await sendNotification('REFUND_REVERSED', uid('uuid'), refundJws);
+    expect((await snapshot(account.account_id)).buckets.available).toBe(75_600);
+
+    // The replayed event (fresh notification UUID, same revocation) must
+    // no-op: pre-fix it fell through the refund_reversed state and revoked
+    // the restored lot a second time, half-committing on the ledger
+    // collision.
+    await sendNotification('REFUND', uid('uuid'), refundJws);
+    const afterReplay = await snapshot(account.account_id);
+    expect(afterReplay.buckets.available).toBe(75_600);
+    expect(afterReplay.buckets.debt).toBe(0);
+    expect(
+      afterReplay.transactions.find((txn) => txn.transaction_id === transactionId).state,
+    ).toBe('refund_reversed');
+    expect(afterReplay.ledger.filter((entry) => entry.operation === 'refund')).toHaveLength(1);
+
+    // A genuinely NEW revocation after the reversal mints a fresh key and
+    // must apply.
+    const freshRefundJws = transactionJws({
+      transactionId,
+      appAccountToken: account.app_account_token,
+      extra: { revocationDate: revocationDate + 60_000, revocationReason: 0 },
+    });
+    await sendNotification('REFUND', uid('uuid'), freshRefundJws);
+    const afterFresh = await snapshot(account.account_id);
+    expect(afterFresh.buckets.available).toBe(3_600);
+    expect(
+      afterFresh.transactions.find((txn) => txn.transaction_id === transactionId).state,
+    ).toBe('refunded');
+    expect(afterFresh.ledger.filter((entry) => entry.operation === 'refund')).toHaveLength(2);
+  });
+
+  it('rolls back a ledger idempotency collision with no half-committed money state (PW-1 atomicity)', async () => {
+    const identity = uid('apptx');
+    const account = await bootstrap(identity);
+    const jobId = uid('job');
+    expect(
+      (
+        await post('/internal/v1/reserve', {
+          account_id: account.account_id,
+          job_id: jobId,
+          seconds: 500,
+        })
+      ).status,
+    ).toBe(200);
+
+    // Force the settle's ledger INSERT to collide before any money write.
+    const stub = env.PURCHASE_ACCOUNT.get(env.PURCHASE_ACCOUNT.idFromName(account.account_id));
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO ledger_entries (idempotency_key, operation, lot_id, transaction_id, job_id,
+           delta_available, delta_reserved, delta_consumed, delta_debt,
+           available_after, reserved_after, consumed_after, debt_after, reason_code, created_at)
+         VALUES ('settle:${jobId}', 'settle', NULL, NULL, '${jobId}', 0, 0, 0, 0, 0, 0, 0, 0, NULL, 0)`,
+      );
+    });
+
+    const before = await snapshot(account.account_id);
+    const collided = await post('/internal/v1/settle', { job_id: jobId });
+    expect(collided.status).toBe(500);
+
+    // transactionSync + ledger-first ordering: the whole turn rolled back —
+    // money state is byte-identical and the reservation still stands.
+    const after = await snapshot(account.account_id);
+    expect(after.buckets).toEqual(before.buckets);
+    expect(after.lots).toEqual(before.lots);
+    expect(after.reservations).toEqual(before.reservations);
+    expect(after.reservations.find((entry) => entry.jobId === jobId).state).toBe('reserved');
+
+    // Clear the seeded collision: the retried settle lands cleanly.
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `DELETE FROM ledger_entries WHERE idempotency_key = 'settle:${jobId}' AND created_at = 0`,
+      );
+    });
+    expect((await post('/internal/v1/settle', { job_id: jobId })).status).toBe(200);
+    expect((await snapshot(account.account_id)).buckets.reserved).toBe(0);
+  });
+
+  it('pins the reservation index only after a successful admission (PW-2)', async () => {
+    const failed = await bootstrap(uid('apptx'));
+    const winner = await bootstrap(uid('apptx'));
+    const jobId = uid('job');
+
+    // A refused reserve (beyond the 14,400 s free-grant headroom) must not
+    // pin the job id to its caller.
+    const refused = await post('/internal/v1/reserve', {
+      account_id: failed.account_id,
+      job_id: jobId,
+      seconds: 999_999,
+    });
+    expect(refused.status).toBe(409);
+
+    expect(
+      (
+        await post('/internal/v1/reserve', {
+          account_id: winner.account_id,
+          job_id: jobId,
+          seconds: 100,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await post('/internal/v1/settle', { job_id: jobId })).status).toBe(200);
+    expect((await snapshot(winner.account_id)).buckets.consumed).toBe(100);
+    expect((await snapshot(failed.account_id)).buckets.consumed).toBe(0);
+  });
+
+  it('refuses a reserve whose job id is pinned to a different account (PW-2)', async () => {
+    const first = await bootstrap(uid('apptx'));
+    const second = await bootstrap(uid('apptx'));
+    const jobId = uid('job');
+
+    expect(
+      (
+        await post('/internal/v1/reserve', {
+          account_id: first.account_id,
+          job_id: jobId,
+          seconds: 100,
+        })
+      ).status,
+    ).toBe(200);
+
+    const conflicted = await post('/internal/v1/reserve', {
+      account_id: second.account_id,
+      job_id: jobId,
+      seconds: 100,
+    });
+    expect(conflicted.status).toBe(409);
+    expect((await conflicted.json()).error).toBe('reservation_conflict');
+    // The second account's stranded admission was released, not kept.
+    expect((await snapshot(second.account_id)).buckets.reserved).toBe(0);
+
+    // settle still routes to the first writer.
+    expect((await post('/internal/v1/settle', { job_id: jobId })).status).toBe(200);
+    expect((await snapshot(first.account_id)).buckets.consumed).toBe(100);
+  });
+
+  it('409s a reserve replay whose seconds changed (PW-3)', async () => {
+    const account = await bootstrap(uid('apptx'));
+    const jobId = uid('job');
+    expect(
+      (
+        await post('/internal/v1/reserve', {
+          account_id: account.account_id,
+          job_id: jobId,
+          seconds: 100,
+        })
+      ).status,
+    ).toBe(200);
+
+    const mismatched = await post('/internal/v1/reserve', {
+      account_id: account.account_id,
+      job_id: jobId,
+      seconds: 250,
+    });
+    expect(mismatched.status).toBe(409);
+    expect((await mismatched.json()).error).toBe('reservation_seconds_mismatch');
+
+    // The matching replay still attaches idempotently.
+    const matching = await post('/internal/v1/reserve', {
+      account_id: account.account_id,
+      job_id: jobId,
+      seconds: 100,
+    });
+    expect(matching.status).toBe(200);
+    expect((await matching.json()).already_existed).toBe(true);
+    expect((await snapshot(account.account_id)).buckets.reserved).toBe(100);
+  });
+});

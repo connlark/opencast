@@ -12,6 +12,7 @@ struct EpisodeDetailView: View {
 
     @State private var showNotes: EpisodeShowNotesContent = .empty
     @State private var transcriptSnippet: String?
+    @State private var loadedTextContentIdentity: TextContentIdentity?
     @State private var adAnalysisTranscriptDocument: EpisodeTranscriptDocument?
     @State private var adAnalysisDocument: EpisodeAdAnalysisDocument?
     @State private var adAnalysisState: EpisodeAdAnalysisJobState = .unavailable("Transcript unavailable.")
@@ -86,8 +87,10 @@ struct EpisodeDetailView: View {
             SheetDestinationView(destination: destination, onDismiss: dismissSheet)
         }
         .task(id: TextContentTaskKey(
-            episodeID: episode?.episodeID,
-            transcriptCompletedAt: completedTranscriptUpdatedAt(for: episode?.episodeID),
+            identity: TextContentIdentity(
+                episodeID: episode?.episodeID,
+                transcriptCompletedAt: completedTranscriptUpdatedAt(for: episode?.episodeID)
+            ),
             isNowPlayingPresented: appModel.isNowPlayingPresented
         )) {
             let episode = episode
@@ -426,9 +429,21 @@ struct EpisodeDetailView: View {
     }
 
     private func updateTextContent(for episode: EpisodeListItemSnapshot?) async {
+        // The task key deliberately includes isNowPlayingPresented (defer
+        // while covered, refresh on dismissal); the identity memo makes that
+        // refresh a cache hit when the content is unchanged.
+        let identity = TextContentIdentity(
+            episodeID: episode?.episodeID,
+            transcriptCompletedAt: completedTranscriptUpdatedAt(for: episode?.episodeID)
+        )
+        guard identity != loadedTextContentIdentity else {
+            return
+        }
+
         guard let episode else {
             showNotes = .empty
             transcriptSnippet = nil
+            loadedTextContentIdentity = identity
             return
         }
 
@@ -464,6 +479,7 @@ struct EpisodeDetailView: View {
             return
         }
         transcriptSnippet = snippet(from: transcriptDocument)
+        loadedTextContentIdentity = identity
     }
 
     private func updateAdAnalysisContent(
@@ -565,11 +581,15 @@ struct EpisodeDetailView: View {
     }
 
     private func snippet(from document: EpisodeTranscriptDocument?) -> String? {
-        guard let text = document?.text
+        // 2 000 source chars amply cover a 220-char snippet after whitespace
+        // collapsing; keeps the regex off 100-400 KB transcripts.
+        guard let document else {
+            return nil
+        }
+        let text = String(document.text.prefix(2_000))
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !text.isEmpty
-        else {
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
             return nil
         }
 
@@ -578,9 +598,13 @@ struct EpisodeDetailView: View {
 }
 
 private struct TextContentTaskKey: Equatable {
+    let identity: TextContentIdentity
+    let isNowPlayingPresented: Bool
+}
+
+private struct TextContentIdentity: Equatable {
     let episodeID: String?
     let transcriptCompletedAt: Date?
-    let isNowPlayingPresented: Bool
 }
 
 /// Reads live download byte progress in its own body so per-tick progress

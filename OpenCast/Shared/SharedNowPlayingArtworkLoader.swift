@@ -18,7 +18,12 @@ nonisolated final class SharedNowPlayingArtworkLoader: NowPlayingArtworkLoading,
     ) {
         self.artworkLoader = artworkLoader
         self.targetPixelSize = targetPixelSize
+        // The entries wrap the same UIImage instances as ArtworkLoader's
+        // capped memory cache — the cost bounded here is lifetime extension
+        // past that cache's eviction (~4 MB per 1024×1024 entry), with the
+        // count limit kept as belt.
         cache.countLimit = 16
+        cache.totalCostLimit = 32 * 1_024 * 1_024
 
         memoryWarningObserver = MemoryWarningObserver(
             notificationCenter: notificationCenter,
@@ -43,7 +48,7 @@ nonisolated final class SharedNowPlayingArtworkLoader: NowPlayingArtworkLoading,
         }
 
         let artwork = Self.makeArtwork(from: image)
-        cache.setObject(artwork, forKey: request.imageKey as NSString)
+        cache.setObject(artwork, forKey: request.imageKey as NSString, cost: Self.pixelByteCost(of: image))
         return artwork
     }
 
@@ -58,7 +63,7 @@ nonisolated final class SharedNowPlayingArtworkLoader: NowPlayingArtworkLoading,
         }
 
         let artwork = Self.makeArtwork(from: image)
-        cache.setObject(artwork, forKey: request.imageKey as NSString)
+        cache.setObject(artwork, forKey: request.imageKey as NSString, cost: Self.pixelByteCost(of: image))
         return artwork
     }
 
@@ -66,5 +71,12 @@ nonisolated final class SharedNowPlayingArtworkLoader: NowPlayingArtworkLoading,
         MPMediaItemArtwork(boundsSize: image.size) { _ in
             image
         }
+    }
+
+    private nonisolated static func pixelByteCost(of image: UIImage) -> Int {
+        if let cgImage = image.cgImage {
+            return cgImage.bytesPerRow * cgImage.height
+        }
+        return Int(image.size.width * image.scale * image.size.height * image.scale * 4)
     }
 }

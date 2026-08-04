@@ -5,14 +5,16 @@ use opencast_ad_analysis_worker::types::{
     GLOBAL_DAILY_ESTIMATED_INPUT_TOKEN_CAP, GLOBAL_DAILY_REQUEST_CAP,
     MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES, MAX_BODY_BYTES, MAX_EPISODE_ID_CHARS,
     MAX_LANGUAGE_CODE_CHARS, MAX_PODCAST_ID_CHARS, MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS,
-    MAX_TITLE_CHARS, MAX_TRANSCRIPT_TEXT_CHARS, SCHEMA_VERSION,
+    MAX_REQUEST_ID_CHARS, MAX_RESULT_JSON_BYTES, MAX_TITLE_CHARS, MAX_TRANSCRIPT_TEXT_CHARS,
+    SCHEMA_VERSION,
 };
 use opencast_ad_analysis_worker::usage::{
     global_usage_object_name, usage_object_name, UsageLimitProfile,
 };
 use opencast_ad_analysis_worker::validation::{
     decode_and_validate_request, validate_content_length, validate_model_output, validate_request,
-    CapError, ContentLengthError, DailyUsage, ModelOutput, ModelSpan, ValidationError,
+    window_output_within_span_cap, CapError, ContentLengthError, DailyUsage, ModelOutput,
+    ModelSpan, ValidationError,
     AD_BUDGET_EPISODE_FRACTION, AD_BUDGET_FLOOR_SECONDS, EVIDENCE_MIN_WORDS_ACCEPT,
     EVIDENCE_MIN_WORDS_REANCHOR, EVIDENCE_PROBE_WORDS, MAX_RAW_SPANS_PER_WINDOW,
     MAX_SPAN_DURATION_SECONDS, MAX_SPAN_REQUEST_COVERAGE, MIN_BREAK_DURATION_SECONDS,
@@ -261,14 +263,53 @@ fn oversized_header_fields_are_rejected_before_the_spend_estimate() {
     request.transcript.language_code = "x".repeat(MAX_LANGUAGE_CODE_CHARS + 1);
     over(request);
 
+    // AA-5: request_id was the one prompt-adjacent field missing from these
+    // caps — ~1.5 MB of it passed validation, got echoed into the result
+    // envelope, and stranded the job on the DO's 128 KiB per-value write
+    // limit after the paid model call. Both real producers are UUID-shaped
+    // (app UUID().uuidString = 36 chars; RTW's chained job id ≈ 26 chars),
+    // so 256 has comfortable headroom.
+    let mut request = sample_request();
+    request.request_id = "r".repeat(MAX_REQUEST_ID_CHARS + 1);
+    over(request);
+
     // At the caps, a request still validates.
     let mut request = sample_request();
     request.episode_title = Some("t".repeat(MAX_TITLE_CHARS));
     request.podcast_title = Some("t".repeat(MAX_TITLE_CHARS));
     request.episode_id = "e".repeat(MAX_EPISODE_ID_CHARS);
     request.podcast_id = "p".repeat(MAX_PODCAST_ID_CHARS);
+    request.request_id = "r".repeat(MAX_REQUEST_ID_CHARS);
     request.transcript.language_code = "en-US".to_string();
     assert!(validate_request(request).is_ok());
+}
+
+#[test]
+fn result_budget_leaves_headroom_under_the_do_write_limit() {
+    // AA-5: the terminal record wraps result_json with bounded bookkeeping
+    // (ids, hashes, subject sets); the budget must leave real slack under
+    // the DO storage 128 KiB per-value platform limit or an in-budget
+    // result could still strand the job at the write.
+    assert!(MAX_RESULT_JSON_BYTES + 16 * 1024 < 128 * 1024);
+}
+
+#[test]
+fn degeneracy_cap_is_enforced_per_window() {
+    // AA-6: one degenerate window must not spend the whole request's span
+    // budget (the request-wide check in validate_model_output stays as
+    // belt). Boundary: exactly the cap merges; one over contributes
+    // nothing; malformed spans count toward the same cap.
+    assert!(window_output_within_span_cap(MAX_RAW_SPANS_PER_WINDOW, 0));
+    assert!(!window_output_within_span_cap(MAX_RAW_SPANS_PER_WINDOW + 1, 0));
+    assert!(window_output_within_span_cap(
+        MAX_RAW_SPANS_PER_WINDOW - 4,
+        4
+    ));
+    assert!(!window_output_within_span_cap(
+        MAX_RAW_SPANS_PER_WINDOW - 4,
+        5
+    ));
+    assert!(window_output_within_span_cap(0, 0));
 }
 
 #[test]

@@ -45,9 +45,28 @@ pub const MAX_ESTIMATED_INPUT_TOKENS_PER_REQUEST: u64 = 120_000;
 // clears any plausible real URL while still bounding the field to noise
 // against the spend caps; the allowance pin test renders this worst case.
 pub const MAX_EPISODE_ID_CHARS: usize = 128;
+// AA-5: request_id was conspicuously absent from these caps, so up to
+// ~1.5 MB (MAX_BODY_BYTES) of request_id sailed through validation and got
+// echoed into the result envelope — whose post-paid-call DO write then
+// failed on the platform's 128 KiB per-value limit, stranding the job as
+// Running for the full 600 s deadline with the model spend discarded. Both
+// real producers are UUID-shaped: the shipped app sends UUID().uuidString
+// (36 chars, EpisodeAdAnalysisStore.swift:639) and the chained RTW path
+// sends its own job id ("job-" + 22-char token,
+// RemoteTranscriptionWorker/src/ad_analysis.rs:196). 256 clears both with
+// comfortable headroom.
+pub const MAX_REQUEST_ID_CHARS: usize = 256;
 pub const MAX_PODCAST_ID_CHARS: usize = 2_048;
 pub const MAX_TITLE_CHARS: usize = 512;
 pub const MAX_LANGUAGE_CODE_CHARS: usize = 40;
+// AA-5: named result budget with headroom under the DO storage 128 KiB
+// per-value platform limit — the terminal record wraps result_json with
+// bounded bookkeeping (ids, hashes, subjects), so an in-budget result
+// always fits the platform write. Over budget means degenerate model
+// output (validated spans are capped; the echoed request_id is capped
+// above): fail the job with a stable code instead of hanging it on the
+// platform rejection.
+pub const MAX_RESULT_JSON_BYTES: usize = 100_000;
 // Spend caps scaled to ~= $15/day worst case (step-4 PLAN §A6).
 pub const BEARER_DAILY_REQUEST_CAP: u64 = 40;
 pub const BEARER_DAILY_ESTIMATED_INPUT_TOKEN_CAP: u64 = 2_000_000;

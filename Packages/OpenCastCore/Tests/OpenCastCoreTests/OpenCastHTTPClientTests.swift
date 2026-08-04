@@ -297,6 +297,21 @@ struct OpenCastHTTPClientTests {
         #expect(streamingRangeConfiguration.httpAdditionalHeaders?["User-Agent"] as? String == OpenCastURLSessionFactory.userAgent)
     }
 
+    @Test("Shared configurations for one cache directory share one URLCache")
+    func sharedConfigurationsForOneCacheDirectoryShareOneURLCache() throws {
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "OpenCastHTTPClientTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let otherDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "OpenCastHTTPClientTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+
+        let first = try #require(OpenCastURLSessionFactory.sharedConfiguration(cacheDirectory: cacheDirectory).urlCache)
+        let second = try #require(OpenCastURLSessionFactory.sharedConfiguration(cacheDirectory: cacheDirectory).urlCache)
+        let other = try #require(OpenCastURLSessionFactory.sharedConfiguration(cacheDirectory: otherDirectory).urlCache)
+
+        #expect(first === second)
+        #expect(first !== other)
+    }
+
     @Test("URLSession HTTP client sends shared user agent")
     func urlSessionHTTPClientSendsSharedUserAgent() async throws {
         RecordingURLProtocol.requestStore.reset()
