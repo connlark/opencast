@@ -1,13 +1,26 @@
 import Foundation
 
 enum AdFreePassBackgroundRunLog {
+    #if DEBUG
+    /// One rotation generation keeps total disk use bounded at ~2× this cap.
+    static let defaultMaximumByteCount = 512 * 1024
+
     static func record(_ message: String) {
-        #if DEBUG
+        record(message, logURL: logURL)
+    }
+
+    /// Test seam: explicit log URL and cap.
+    static func record(
+        _ message: String,
+        logURL: URL,
+        maximumByteCount: Int = defaultMaximumByteCount
+    ) {
         let line = "\(Date.now) \(sanitize(message))\n"
         let data = Data(line.utf8)
         do {
             let directory = logURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            rotateIfNeeded(logURL: logURL, incomingByteCount: data.count, maximumByteCount: maximumByteCount)
             if !FileManager.default.fileExists(atPath: logURL.path) {
                 FileManager.default.createFile(atPath: logURL.path, contents: nil)
             }
@@ -18,10 +31,23 @@ enum AdFreePassBackgroundRunLog {
         } catch {
             assertionFailure("Ad-free pass background log failed: \(error.localizedDescription)")
         }
-        #endif
     }
 
-    #if DEBUG
+    private static func rotateIfNeeded(logURL: URL, incomingByteCount: Int, maximumByteCount: Int) {
+        // FileManager attributes, not URL.resourceValues: NSURL caches
+        // resource values per instance, so a reused URL would report a
+        // stale size and the rotation would never trigger.
+        let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path)
+        let currentByteCount = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+        guard currentByteCount + incomingByteCount > maximumByteCount else {
+            return
+        }
+
+        let previousURL = logURL.appendingPathExtension("previous")
+        try? FileManager.default.removeItem(at: previousURL)
+        try? FileManager.default.moveItem(at: logURL, to: previousURL)
+    }
+
     private static var logURL: URL {
         URL.documentsDirectory.appending(path: "adfreepass-bg-session.log")
     }
@@ -31,6 +57,8 @@ enum AdFreePassBackgroundRunLog {
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
     }
+    #else
+    static func record(_ message: String) {}
     #endif
 }
 

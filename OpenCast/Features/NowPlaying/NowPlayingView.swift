@@ -16,6 +16,7 @@ struct NowPlayingView: View {
     @State private var showsAutoSkipPill = false
     @State private var displayedAutoSkipEventSequence = 0
     @State private var remoteEstimateRequest: RemoteTranscriptionStartPreviewRequest?
+    @State private var remoteTranscriptionStartErrorMessage: String?
     @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
 
     let bottomContentPadding: CGFloat
@@ -49,7 +50,7 @@ struct NowPlayingView: View {
                                 voiceBoostControlEnabled: appModel.playbackSettings.canChangeCurrentEpisodeVoiceBoost,
                                 onAdFreePassAction: startAdFreePass,
                                 onTranscribeRemotely: presentRemoteTranscriptionEstimate,
-                                onShowTranscript: performTranscriptAction,
+                                onTranscriptAction: performTranscriptAction,
                                 onAdFreePassBackgroundProbe: startAdFreePassBackgroundProbe,
                                 isSoundLabInteractionActive: $isSoundLabInteractionActive,
                                 isCardDismissDragActive: isTrackingDismissDrag
@@ -122,6 +123,7 @@ struct NowPlayingView: View {
                             skipBackwardInterval: appModel.playbackSettings.skipBackwardOption.seconds,
                             skipForwardInterval: appModel.playbackSettings.skipForwardOption.seconds,
                             showsPauseButton: showsPauseButton,
+                            showsLoadingIndicator: appModel.playback.state.showsLoadingIndicator,
                             playbackStateText: appModel.playback.state.accessibilityDescription,
                             onSkipBackward: skipBackward,
                             onTogglePlayPause: togglePlayPause,
@@ -258,6 +260,18 @@ struct NowPlayingView: View {
                 .environment(appModel)
                 .modelContext(modelContext)
             }
+            // Alert has no item overload for a non-Identifiable String.
+            .alert(
+                "Couldn’t Start Transcription",
+                isPresented: Binding(
+                    get: { remoteTranscriptionStartErrorMessage != nil },
+                    set: { if !$0 { remoteTranscriptionStartErrorMessage = nil } }
+                ),
+                presenting: remoteTranscriptionStartErrorMessage
+            ) { _ in
+            } message: { message in
+                Text(message)
+            }
             .onAppear {
                 showAutoSkipPillIfNeeded(for: appModel.playback.lastAutoSkipEvent)
             }
@@ -302,9 +316,7 @@ struct NowPlayingView: View {
     }
 
     private var showsPauseButton: Bool {
-        appModel.playback.state == .playing
-            || appModel.playback.state == .buffering
-            || appModel.playback.state == .loading
+        appModel.playback.state.showsPauseButton
     }
 
     private var isPlaybackFailed: Bool {
@@ -545,11 +557,12 @@ struct NowPlayingView: View {
     }
 
     private func startRemoteTranscription(for request: RemoteTranscriptionStartPreviewRequest) {
-        guard request.episodeID == currentEpisodeID else {
-            return
+        switch appModel.confirmRemoteTranscriptionStart(request, modelContext: modelContext) {
+        case .started:
+            break
+        case .unavailable(let message):
+            remoteTranscriptionStartErrorMessage = message
         }
-
-        appModel.startRemoteTranscriptionForCurrentEpisode(modelContext: modelContext)
     }
 
     private func startAdFreePassBackgroundProbe() {
@@ -576,7 +589,7 @@ struct NowPlayingView: View {
 
     private func showAutoSkipPill() {
         autoSkipFeedback += 1
-        UIAccessibility.post(notification: .announcement, argument: "Skipped promo")
+        AccessibilityNotification.Announcement("Skipped promo").post()
         withAnimation(.easeOut(duration: 0.16)) {
             showsAutoSkipPill = true
         }

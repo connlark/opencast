@@ -200,8 +200,7 @@ final class CarPlayInterfaceCoordinator {
     }
 
     private func cycleRate() {
-        let playback = appModel.playback
-        playback.setRate(PlaybackRateSteps.next(after: playback.rate))
+        appModel.cyclePlaybackRate(modelContext: modelContext)
     }
 
     private func toggleVoiceBoost() {

@@ -33,7 +33,9 @@ enum CarPlayBrowseModelBuilder {
             )
         }
 
-        let latestRows = library.inboxEpisodes.map { episode in
+        // Visible list + continuation never consume more than 2x the item
+        // cap; don't build rows for an unbounded inbox (perf 29).
+        let latestRows = library.inboxEpisodes.prefix(limits.maximumItemCount * 2).map { episode in
             CarPlayListRow.episode(
                 episodeRow(
                     for: episode,
@@ -65,7 +67,7 @@ enum CarPlayBrowseModelBuilder {
         isLoading: Bool,
         limits: CarPlayListLimits
     ) -> CarPlayBrowseSnapshot {
-        let rows = subscriptions.map { subscription in
+        let rows = subscriptions.prefix(limits.maximumItemCount * 2).map { subscription in
             CarPlayListRow.podcast(
                 CarPlayPodcastRow(
                     feedURL: subscription.feedURL,
@@ -94,8 +96,8 @@ enum CarPlayBrowseModelBuilder {
         isLoading: Bool,
         limits: CarPlayListLimits
     ) -> CarPlayBrowseSnapshot {
-        let model = DownloadsListModel.make(records: records, library: library, showsUnplayedOnly: false)
-        let rows = model.downloaded.map { item in
+        let model = DownloadsListModel.make(records: records, library: library)
+        let rows = model.downloaded.prefix(limits.maximumItemCount * 2).map { item in
             CarPlayListRow.episode(
                 episodeRow(
                     for: item.episode,
@@ -137,7 +139,7 @@ enum CarPlayBrowseModelBuilder {
             downloadRecords: downloadRecords
         )
         let downloadedEpisodeIDs = completedDownloadEpisodeIDs(in: downloadRecords)
-        let rows = model.episodes.map { episode in
+        let rows = model.episodes.prefix(limits.maximumItemCount * 2).map { episode in
             CarPlayListRow.episode(
                 episodeRow(
                     for: episode,

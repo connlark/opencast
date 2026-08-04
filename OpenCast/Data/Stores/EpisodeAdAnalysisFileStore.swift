@@ -93,6 +93,29 @@ struct EpisodeAdAnalysisFileStore: Sendable {
         try removeItemIfPresent(at: analysesDirectory.appending(path: safeStem(episodeID)))
     }
 
+    /// Renames the per-episode directory when an episode's identity migrates.
+    /// If the successor already has a directory, files merge into it and
+    /// name-conflicting leftovers (already present there) are dropped.
+    nonisolated func migrateAnalyses(fromEpisodeID oldEpisodeID: String, to newEpisodeID: String) throws {
+        let fileManager = FileManager.default
+        let sourceURL = analysesDirectory.appending(path: safeStem(oldEpisodeID), directoryHint: .isDirectory)
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            return
+        }
+        let destinationURL = analysesDirectory.appending(path: safeStem(newEpisodeID), directoryHint: .isDirectory)
+        guard fileManager.fileExists(atPath: destinationURL.path) else {
+            try fileManager.moveItem(at: sourceURL, to: destinationURL)
+            return
+        }
+        for fileURL in try fileManager.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil) {
+            let targetURL = destinationURL.appending(path: fileURL.lastPathComponent)
+            if !fileManager.fileExists(atPath: targetURL.path) {
+                try fileManager.moveItem(at: fileURL, to: targetURL)
+            }
+        }
+        try removeItemIfPresent(at: sourceURL)
+    }
+
     nonisolated func deleteAllAnalyses() throws {
         try removeItemIfPresent(at: analysesDirectory)
     }

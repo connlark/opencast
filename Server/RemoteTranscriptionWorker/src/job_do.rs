@@ -273,14 +273,21 @@ impl TranscriptionJob {
         record.podcast_title = message.podcast_title;
         record.state_deadline_at = Some(now + config.staging_origin_deadline_seconds);
         self.write_record(&record).await?;
-        self.bump("jobs_created", 1).await;
+        // Arm the alarm before the counter bump: a reset between write_record
+        // and the alarm must not leave a durable job with no alarm, since
+        // nothing re-arms a stranded job and it pins the account's active-job
+        // slot (Phase 10 review RTW-4). The `jobs_created` D1 subrequest was
+        // that gap; it now runs after the alarm exists. On the origin_unsafe
+        // path enter_upload_path arms its own alarm at its tail.
         if message.origin_unsafe {
             // The server will never fetch this origin: skip staging entirely
             // and wait for the device's exact copy.
             let record = self.enter_upload_path(&config).await?;
+            self.bump("jobs_created", 1).await;
             return self.status_response(&record, None);
         }
         self.schedule(Duration::from_secs(0)).await?;
+        self.bump("jobs_created", 1).await;
         self.status_response(&record, None)
     }
 
@@ -761,14 +768,28 @@ impl TranscriptionJob {
             job::STATE_DETECTING_ADS => self.step_detect_ads(record, &config).await,
             job::STATE_RESULT_READY | job::STATE_DELIVERED => {
                 // Result TTL backstop: settled either way; content is removed.
-                self.finish_terminal(
-                    record,
-                    job::STATE_FAILED,
-                    types::ERROR_DEADLINE_EXPIRED,
-                    Some("result expired unacknowledged".to_string()),
-                )
-                .await?;
-                Ok(())
+                // These states are non-terminal, so the top deadline gate only
+                // fires at genuine expiry; an early alarm here (at-least-once
+                // redelivery, or the alarm() catch's 60 s retry after a
+                // post-write error) must NOT destroy an unexpired, already
+                // settled+published result — re-arm at the deadline instead
+                // (Phase 10 review RTW-2).
+                match record.state_deadline_at {
+                    Some(deadline) if now_seconds() < deadline => {
+                        self.schedule_at(deadline).await?;
+                        Ok(())
+                    }
+                    _ => {
+                        self.finish_terminal(
+                            record,
+                            job::STATE_FAILED,
+                            types::ERROR_DEADLINE_EXPIRED,
+                            Some("result expired unacknowledged".to_string()),
+                        )
+                        .await?;
+                        Ok(())
+                    }
+                }
             }
             job::STATE_CANCELLING => {
                 self.finish_terminal(record, job::STATE_CANCELLED, types::ERROR_CANCELLED, None)
@@ -847,9 +868,16 @@ impl TranscriptionJob {
             })
             .await?
             .expect("record exists");
+        // Alarm first, telemetry second: sync_index and bump are D1
+        // subrequests, and a reset while parked on them would otherwise leave
+        // this durable record with no alarm — the exact stranding RTW-4
+        // closed on the create paths (schedule_at is a storage op, so the
+        // record write and the alarm arm commit as one gated stretch).
+        // Phase 10 re-review: the original RTW-4 fix reordered handle_create
+        // but left this interior gap.
+        self.schedule_at(deadline).await?;
         self.sync_index(&updated).await;
         self.bump("exact_upload_required", 1).await;
-        self.schedule_at(deadline).await?;
         Ok(updated)
     }
 
@@ -2166,7 +2194,10 @@ impl TranscriptionJob {
     /// terminal cleanup keeps them for fixture extraction. Never in the
     /// production lane: response content must not outlive its job there.
     async fn preserve_stitch_debug_responses(&self, record: &JobRecord, config: &AppConfig) {
-        if config.lane == "production" {
+        // LANE is validated against the known set at config time (config.rs
+        // validate_lane), so this exact-string compare can no longer be
+        // reached with a typo'd lane that would fail open.
+        if config.lane == crate::config::LANE_PRODUCTION {
             return;
         }
         let Ok(bucket) = self.env.bucket(TRANSCRIPTION_BUCKET) else {
@@ -2455,7 +2486,16 @@ impl TranscriptionJob {
                 }
             }
         }
-        if upload.complete(parts).await.is_err() {
+        // complete() consumes the multipart handle, so capture the id first:
+        // on failure the still-open upload must be aborted like every other
+        // exit does, or up to 512 MiB of parts linger until the 24 h
+        // lifecycle backstop (and trip the orphan-sweeper alert). The id is
+        // never persisted, so resume-by-id here is the only chance (RTW-6).
+        let upload_id = upload.upload_id().await;
+        if let Err(_error) = upload.complete(parts).await {
+            if let Ok(resumed) = bucket.resume_multipart_upload(&raw_key, upload_id) {
+                resumed.abort().await.ok();
+            }
             return Err(types::ERROR_INTERNAL);
         }
         if total == 0 {

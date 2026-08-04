@@ -1,6 +1,6 @@
 # Media Container SBOM
 
-Generated 2026-07-19 from a linux/amd64 image.
+Generated 2026-07-19 from a linux/amd64 image; re-verified 2026-08-04 with the same base pin and Debian trixie ffmpeg 7:7.1.5-0+deb13u1 after the latest media-server changes.
 
 - Image: registry.cloudflare.com/REPLACE_WITH_ACCOUNT_HASH/your-transcription-media-container:REPLACE_WITH_TAG@sha256:REPLACE_WITH_IMAGE_DIGEST
 - Base: docker.io/library/python:3.12-slim@sha256:cab2dbf575e971934a81e4622f5aba17aa7929719bd7e31033a3a83b97fd0464

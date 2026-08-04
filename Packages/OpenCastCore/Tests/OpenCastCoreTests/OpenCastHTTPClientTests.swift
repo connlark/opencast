@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenCastCore
 import Testing
@@ -54,6 +55,156 @@ struct OpenCastHTTPClientTests {
         #expect(request.cachePolicy == .reloadRevalidatingCacheData)
     }
 
+    @Test("Feed requests send the RSS Accept header")
+    func feedRequestsSendRSSAcceptHeader() async throws {
+        let feedURL = URL(string: "https://example.com/feed.xml")!
+        let fixtureURL = try #require(Bundle.module.url(forResource: "examplecurrentaffairs", withExtension: "xml"))
+        let data = try Data(contentsOf: fixtureURL)
+        let client = RecordingHTTPClient(results: [
+            OpenCastHTTPResult(
+                data: data,
+                response: OpenCastHTTPResponse(
+                    url: feedURL,
+                    mimeType: "application/rss+xml",
+                    expectedContentLength: Int64(data.count),
+                    statusCode: 200,
+                    headers: [:]
+                )
+            )
+        ])
+
+        _ = try await DefaultFeedService(httpClient: client).fetchFeed(at: feedURL)
+
+        let request = try #require(await client.requestedRequests.first)
+        #expect(
+            request.value(forHTTPHeaderField: "Accept")
+                == "application/rss+xml, application/xml;q=0.9, */*;q=0.8"
+        )
+    }
+
+    @Test("Oversized feed bodies are rejected before the parse")
+    func oversizedFeedBodiesAreRejected() async throws {
+        let feedURL = URL(string: "https://example.com/feed.xml")!
+        let oversized = Data(count: DefaultFeedService.maximumFeedBodyByteCount + 1)
+        let client = RecordingHTTPClient(results: [
+            OpenCastHTTPResult(
+                data: oversized,
+                response: OpenCastHTTPResponse(
+                    url: feedURL,
+                    mimeType: "application/rss+xml",
+                    expectedContentLength: Int64(oversized.count),
+                    statusCode: 200,
+                    headers: [:]
+                )
+            )
+        ])
+
+        await #expect(throws: OpenCastCoreError.feedTooLarge(byteLimit: DefaultFeedService.maximumFeedBodyByteCount)) {
+            try await DefaultFeedService(httpClient: client).fetchFeed(at: feedURL)
+        }
+    }
+
+    @Test("Feed service sends owned validators and bypasses URLCache")
+    func feedServiceSendsOwnedValidators() async throws {
+        let feedURL = URL(string: "https://example.com/feed.xml")!
+        let client = RecordingHTTPClient(results: [
+            OpenCastHTTPResult(
+                data: Data(),
+                response: OpenCastHTTPResponse(
+                    url: feedURL,
+                    mimeType: nil,
+                    expectedContentLength: 0,
+                    statusCode: 304,
+                    headers: [:]
+                )
+            )
+        ])
+        let service = DefaultFeedService(httpClient: client)
+
+        let outcome = try await service.fetchFeedOutcome(
+            at: feedURL,
+            validators: FeedValidators(entityTag: "\"tag-1\"", lastModified: "Wed, 08 Apr 2026 12:00:00 GMT", bodyHash: "abc")
+        )
+
+        let request = try #require(await client.requestedRequests.first)
+        #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
+        #expect(request.value(forHTTPHeaderField: "If-None-Match") == "\"tag-1\"")
+        #expect(request.value(forHTTPHeaderField: "If-Modified-Since") == "Wed, 08 Apr 2026 12:00:00 GMT")
+        #expect(outcome.snapshot == nil)
+        #expect(outcome.validators?.entityTag == "\"tag-1\"")
+        #expect(outcome.validators?.bodyHash == "abc")
+    }
+
+    @Test("A matching body hash short-circuits before the parse")
+    func matchingBodyHashShortCircuitsBeforeParse() async throws {
+        let feedURL = URL(string: "https://example.com/feed.xml")!
+        // Deliberately unparseable: reaching the parser would throw, so a
+        // nil-snapshot outcome proves the short-circuit happened first.
+        let body = Data("not xml at all".utf8)
+        let bodyHash = sha256Hex(body)
+        let client = RecordingHTTPClient(results: [
+            OpenCastHTTPResult(
+                data: body,
+                response: OpenCastHTTPResponse(
+                    url: feedURL,
+                    mimeType: "application/rss+xml",
+                    expectedContentLength: Int64(body.count),
+                    statusCode: 200,
+                    headers: ["etag": "\"tag-2\""]
+                )
+            )
+        ])
+        let service = DefaultFeedService(httpClient: client)
+
+        let outcome = try await service.fetchFeedOutcome(
+            at: feedURL,
+            validators: FeedValidators(lastModified: "Wed, 08 Apr 2026 12:00:00 GMT", bodyHash: bodyHash)
+        )
+
+        #expect(outcome.snapshot == nil)
+        #expect(outcome.validators?.entityTag == "\"tag-2\"")
+        #expect(outcome.validators?.bodyHash == bodyHash)
+    }
+
+    @Test("A changed body parses and returns fresh validators")
+    func changedBodyParsesAndReturnsFreshValidators() async throws {
+        let feedURL = URL(string: "https://example.com/feed.xml")!
+        let fixtureURL = try #require(Bundle.module.url(forResource: "examplecurrentaffairs", withExtension: "xml"))
+        let data = try Data(contentsOf: fixtureURL)
+        let client = RecordingHTTPClient(results: [
+            OpenCastHTTPResult(
+                data: data,
+                response: OpenCastHTTPResponse(
+                    url: feedURL,
+                    mimeType: "application/rss+xml",
+                    expectedContentLength: Int64(data.count),
+                    statusCode: 200,
+                    headers: ["etag": "\"tag-3\"", "last-modified": "Thu, 09 Apr 2026 12:00:00 GMT"]
+                )
+            )
+        ])
+        let service = DefaultFeedService(httpClient: client)
+
+        let outcome = try await service.fetchFeedOutcome(
+            at: feedURL,
+            validators: FeedValidators(entityTag: "\"stale\"", bodyHash: "stale-hash")
+        )
+
+        #expect(outcome.snapshot?.podcast.title == "Example Current Affairs")
+        #expect(outcome.validators?.entityTag == "\"tag-3\"")
+        #expect(outcome.validators?.lastModified == "Thu, 09 Apr 2026 12:00:00 GMT")
+        #expect(outcome.validators?.bodyHash?.isEmpty == false)
+        #expect(outcome.validators?.bodyHash != "stale-hash")
+    }
+
+    /// Mirrors the service's body hashing.
+    private func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { byte in
+            let hex = String(byte, radix: 16)
+            return hex.count == 1 ? "0\(hex)" : hex
+        }.joined()
+    }
+
     @Test("Directory service uses injected HTTP client")
     func directoryServiceUsesInjectedHTTPClient() async throws {
         let data = Data(
@@ -90,6 +241,39 @@ struct OpenCastHTTPClientTests {
 
         #expect(results.map(\.title) == ["Example Podcast"])
         #expect(await client.requestedURLs.first?.host == "itunes.apple.com")
+    }
+
+    @Test("Directory search includes the storefront country only when known")
+    func directorySearchIncludesStorefrontCountryOnlyWhenKnown() async throws {
+        let emptyResults = Data(#"{ "results": [] }"#.utf8)
+        func makeClient() -> RecordingHTTPClient {
+            RecordingHTTPClient(results: [
+                OpenCastHTTPResult(
+                    data: emptyResults,
+                    response: OpenCastHTTPResponse(
+                        url: URL(string: "https://itunes.apple.com/search")!,
+                        mimeType: "application/json",
+                        expectedContentLength: Int64(emptyResults.count),
+                        statusCode: 200,
+                        headers: [:]
+                    )
+                )
+            ])
+        }
+
+        let regionalClient = makeClient()
+        _ = try await ITunesPodcastDirectoryService(httpClient: regionalClient, countryCode: "DE")
+            .search(query: "beispiel")
+        let regionalURL = try #require(await regionalClient.requestedURLs.first)
+        let regionalItems = URLComponents(url: regionalURL, resolvingAgainstBaseURL: false)?.queryItems
+        #expect(regionalItems?.contains(URLQueryItem(name: "country", value: "DE")) == true)
+
+        let unknownRegionClient = makeClient()
+        _ = try await ITunesPodcastDirectoryService(httpClient: unknownRegionClient, countryCode: nil)
+            .search(query: "example")
+        let unknownRegionURL = try #require(await unknownRegionClient.requestedURLs.first)
+        let unknownRegionItems = URLComponents(url: unknownRegionURL, resolvingAgainstBaseURL: false)?.queryItems
+        #expect(unknownRegionItems?.contains { $0.name == "country" } == false)
     }
 
     @Test("Shared and download session policies are distinct")

@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import MediaPlayer
+import OpenCastCore
 
 #if os(macOS)
 import AppKit
@@ -37,7 +38,9 @@ public final class DefaultNowPlayingArtworkLoader: NowPlayingArtworkLoading {
         let data = try await artworkData(from: url)
         try Task.checkCancellation()
 
-        guard let image = NowPlayingArtworkImage(data: data) else {
+        // Downsampled ImageIO decode to the largest rendered edge — never a
+        // full-size image construction (security triage P1 #4).
+        guard let image = NowPlayingArtworkDecoding.downsampledImage(from: data) else {
             throw NowPlayingArtworkError.invalidImageData
         }
 
@@ -59,6 +62,9 @@ public final class DefaultNowPlayingArtworkLoader: NowPlayingArtworkLoading {
         if let httpResponse = response as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode) {
             throw NowPlayingArtworkError.unsuccessfulResponse(httpResponse.statusCode)
+        }
+        guard ArtworkTransferPolicy.admitsByteCount(data.count) else {
+            throw NowPlayingArtworkError.invalidImageData
         }
 
         return data

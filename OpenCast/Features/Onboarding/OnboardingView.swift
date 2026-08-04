@@ -295,10 +295,9 @@ struct OnboardingView: View {
         whisperModelInstallToastFeedbackToken += 1
         isWhisperModelInstallToastPresented = true
 
-        UIAccessibility.post(
-            notification: .announcement,
-            argument: WhisperModelInstallToast.accessibilityAnnouncement
-        )
+        AccessibilityNotification.Announcement(
+            WhisperModelInstallToast.accessibilityAnnouncement
+        ).post()
     }
 
     private func dismissWhisperModelInstallToastAfterDelay() async {
@@ -361,10 +360,9 @@ struct OnboardingView: View {
         }
 
         announcedImportedNotificationID = id
-        UIAccessibility.post(
-            notification: .announcement,
-            argument: "\(notification.title). \(notification.detail)"
-        )
+        AccessibilityNotification.Announcement(
+            "\(notification.title). \(notification.detail)"
+        ).post()
     }
 
     private func handleDisappear() {

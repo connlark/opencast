@@ -1,11 +1,12 @@
 #if DEBUG
 import Foundation
+import OpenCastCore
 import SwiftData
 
 enum AppStoreScreenshotSeedData {
     private static let artworkSubdirectory = "AppStoreScreenshots/Artwork"
 
-    static func seed(in container: ModelContainer) throws {
+    static func seed(in container: ModelContainer, cacheStore: SQLiteLocalLibraryCacheStore) throws {
         let context = ModelContext(container)
         let refreshedAt = Date(timeIntervalSince1970: 1_779_814_800)
         let audioURL = try AppStoreScreenshotSeedAudio.write().absoluteString
@@ -22,36 +23,33 @@ enum AppStoreScreenshotSeedData {
                     lastRefreshAt: refreshedAt
                 )
             )
-            context.insert(
-                PodcastCacheRecord(
-                    feedURL: podcast.id,
-                    title: podcast.title,
-                    author: podcast.author,
-                    summary: podcast.summary,
-                    websiteURL: podcast.websiteURL,
-                    artworkURL: artworkURL,
-                    updatedAt: refreshedAt
-                )
-            )
-
-            for episode in podcast.episodes {
-                context.insert(
-                    EpisodeCacheRecord(
-                        episodeID: episode.id,
-                        podcastID: podcast.id,
+            try OpenCastUITestSeedData.upsertSeedFeed(
+                into: cacheStore,
+                feedURL: podcast.id,
+                title: podcast.title,
+                author: podcast.author,
+                summary: podcast.summary,
+                websiteURL: podcast.websiteURL,
+                artworkURL: artworkURL,
+                episodes: podcast.episodes.map { episode in
+                    Episode(
+                        id: EpisodeID(rawValue: episode.id),
+                        podcastID: PodcastID(rawValue: podcast.id),
                         podcastTitle: podcast.title,
                         title: episode.title,
                         summary: episode.summary,
                         showNotesHTML: episode.showNotesHTML,
                         publishedAt: episode.publishedAt,
                         duration: episode.duration,
-                        audioURL: audioURL,
-                        artworkURL: artworkURL,
-                        guid: episode.id,
-                        cachedAt: refreshedAt
+                        audioURL: URL(string: audioURL),
+                        artworkURL: URL(string: artworkURL),
+                        guid: episode.id
                     )
-                )
+                },
+                refreshedAt: refreshedAt
+            )
 
+            for episode in podcast.episodes {
                 if let position = episode.position {
                     context.insert(
                         EpisodeProgressRecord(

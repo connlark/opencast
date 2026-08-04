@@ -21,7 +21,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.startAnalysis(transcript: transcript, modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: transcript.episodeID)?.state == .completed
         })
         let record = try #require(store.record(for: transcript.episodeID))
@@ -48,7 +48,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.startAnalysis(transcript: transcript, modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: transcript.episodeID)?.state == .completed
         })
         let counts = await client.counts()
@@ -73,7 +73,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.startAnalysis(transcript: transcript, modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: transcript.episodeID)?.state == .failed
         })
         let record = try #require(store.record(for: transcript.episodeID))
@@ -98,7 +98,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.startAnalysis(transcript: transcript, modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: transcript.episodeID)?.state == .failed
         })
         #expect(store.record(for: transcript.episodeID)?.failureKind == .capExceeded)
@@ -122,7 +122,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.startAnalysis(transcript: transcript, modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: transcript.episodeID)?.state == .completed
         })
         let record = try #require(store.record(for: transcript.episodeID))
@@ -148,7 +148,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.startAnalysis(transcript: transcript, modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: transcript.episodeID)?.state == .completed
         })
         let counts = await client.counts()
@@ -174,7 +174,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.startAnalysis(transcript: transcript, modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: transcript.episodeID)?.state == .failed
         })
         let record = try #require(store.record(for: transcript.episodeID))
@@ -203,7 +203,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.startAnalysis(transcript: transcript, modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: transcript.episodeID)?.state == .completed
         })
         #expect((await client.counts()).poll == 4)
@@ -231,7 +231,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.cancelActiveJob()
 
-        #expect(await waitUntil { !store.hasActiveJob })
+        #expect(await waitUntil(store) { !store.hasActiveJob })
         let cancelledRecord = try #require(store.record(for: transcript.episodeID))
         #expect(cancelledRecord.state == .running)
         #expect(cancelledRecord.jobAcceptedAt != nil)
@@ -265,7 +265,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.load(modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: record.episodeID)?.state == .completed
         })
         let document = try #require(store.document(for: record.episodeID))
@@ -350,7 +350,7 @@ struct EpisodeAdAnalysisPollingTests {
 
         store.load(modelContext: context)
 
-        #expect(await waitUntil {
+        #expect(await waitUntil(store) {
             store.record(for: record.episodeID)?.state == .failed
         })
         let failedRecord = try #require(store.record(for: record.episodeID))
@@ -373,6 +373,33 @@ struct EpisodeAdAnalysisPollingTests {
             resumeInitialPollAfter: 0,
             pollingSleep: { _ in }
         )
+    }
+
+    @Test("record(for:) matches a linear scan after load")
+    func recordLookupMatchesLinearScan() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        for index in 1...3 {
+            context.insert(makeRunningRecord(
+                episodeID: "index-eq-\(index)",
+                fingerprint: "index-eq-fp-\(index)",
+                relativePath: "AdAnalysis/index-eq-\(index)/result.json",
+                jobAcceptedAt: nil,
+                state: .failed
+            ))
+        }
+        try context.save()
+        let store = makeStore(
+            client: PollingEpisodeAdAnalysisClient(submitSteps: [], pollSteps: []),
+            directory: directory
+        )
+
+        store.load(modelContext: context)
+
+        for episodeID in ["index-eq-1", "index-eq-2", "index-eq-3", "index-eq-missing"] {
+            #expect(store.record(for: episodeID) === store.records.first { $0.episodeID == episodeID })
+        }
     }
 
     private func makeRunningRecord(
@@ -443,14 +470,31 @@ struct EpisodeAdAnalysisPollingTests {
         return url
     }
 
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<100 {
-            if condition() {
-                return true
+    /// Signal-driven: wakes on every store change instead of a fixed poll
+    /// budget, so load cannot outrun the wait. The backstop only trips on a
+    /// real regression.
+    private func waitUntil(
+        _ store: EpisodeAdAnalysisStore,
+        _ condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(10))
+        while !condition() {
+            guard clock.now < deadline else {
+                return false
             }
-            try? await Task.sleep(for: .milliseconds(20))
+            let sequence = store.changeSequence
+            let waitTask = Task { @MainActor in
+                try? await store.waitForChange(after: sequence)
+            }
+            let backstop = Task {
+                try? await Task.sleep(until: deadline, clock: clock)
+                waitTask.cancel()
+            }
+            await waitTask.value
+            backstop.cancel()
         }
-        return condition()
+        return true
     }
 }
 
@@ -475,6 +519,7 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     private var pollCount = 0
     private var submittedFingerprint: String?
     private var polledJobIDs: [String] = []
+    private var pollWaiters: [UUID: (threshold: Int, continuation: CheckedContinuation<Void, Never>)] = [:]
 
     init(submitSteps: [PollingSubmitStep], pollSteps: [PollingPollStep]) {
         self.submitSteps = submitSteps
@@ -500,6 +545,7 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
 
     func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
         pollCount += 1
+        resumeSatisfiedPollWaiters()
         polledJobIDs.append(id)
         guard !pollSteps.isEmpty else {
             throw EpisodeAdAnalysisHTTPError(statusCode: 500, code: "unexpected_poll", detail: nil)
@@ -515,8 +561,9 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
         case .urlError(let code):
             throw URLError(code)
         case .suspend:
+            // Parked: cancellation of the polling task is the only exit.
             while true {
-                try await Task.sleep(for: .seconds(1))
+                try await Task.sleep(for: .seconds(3600))
             }
         }
     }
@@ -529,14 +576,44 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
         (submittedFingerprint, polledJobIDs)
     }
 
+    /// Signal-driven: each `pollJob` arrival resumes satisfied waiters, so
+    /// there is no polling budget to race. The backstop only trips on a real
+    /// regression.
     func waitForPollCount(_ expectedCount: Int) async -> Bool {
-        for _ in 0..<100 {
-            if pollCount >= expectedCount {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(20))
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.pollCountReached(expectedCount) }
+            group.addTask { try? await Task.sleep(for: .seconds(10)) }
+            await group.next()
+            group.cancelAll()
         }
         return pollCount >= expectedCount
+    }
+
+    private func pollCountReached(_ threshold: Int) async {
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if pollCount >= threshold || Task.isCancelled {
+                    continuation.resume()
+                    return
+                }
+                pollWaiters[waiterID] = (threshold, continuation)
+            }
+        } onCancel: {
+            Task { await self.cancelPollWaiter(waiterID) }
+        }
+    }
+
+    private func cancelPollWaiter(_ waiterID: UUID) {
+        pollWaiters.removeValue(forKey: waiterID)?.continuation.resume()
+    }
+
+    private func resumeSatisfiedPollWaiters() {
+        let ready = pollWaiters.filter { $0.value.threshold <= pollCount }
+        for (waiterID, waiter) in ready {
+            pollWaiters.removeValue(forKey: waiterID)
+            waiter.continuation.resume()
+        }
     }
 
     private static func response(requestID: String) -> EpisodeAdAnalysisAPIResponse {

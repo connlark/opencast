@@ -291,7 +291,10 @@ enum SyncDuplicateRepairer {
         }
     }
 
-    private static func mergeProgressGroup(
+    /// Internal (not private): episode-identity reconciliation re-keys an
+    /// old-ID progress record onto its successor ID and reuses this merge
+    /// when a record already exists under the new ID.
+    static func mergeProgressGroup(
         _ records: [EpisodeProgressRecord],
         key: EpisodeKey,
         modelContext: ModelContext,
@@ -455,7 +458,7 @@ enum SyncDuplicateRepairer {
             .max()
     }
 
-    private struct EpisodeKey: Hashable {
+    struct EpisodeKey: Hashable {
         let canonicalFeedURL: String
         let episodeID: String
     }

@@ -82,11 +82,41 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             episodes.sort(by: EpisodeListItemSnapshot.newestFirst)
         }
 
+        // Per-feed projection: routine reloads only feed recency lookups
+        // (latest log, latest success), so loading every retained log row
+        // (50 x feed count) here paid for history nobody read. The full
+        // history stays behind allRefreshLogs() for diagnostics.
+        // The UNION sits inside a subquery because a compound SELECT's ORDER
+        // BY may only name result columns; the expression ordering lives on
+        // the plain outer SELECT.
         var refreshLogs: [RefreshLogSnapshot] = []
         try query(
             """
             SELECT refresh_id, feed_url, started_at, finished_at, error_message
-            FROM refresh_log
+            FROM (
+                SELECT refresh_id, feed_url, started_at, finished_at, error_message
+                FROM (
+                    SELECT refresh_id, feed_url, started_at, finished_at, error_message,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY feed_url
+                               ORDER BY started_at DESC, (finished_at IS NULL) ASC,
+                                        finished_at DESC, refresh_id ASC
+                           ) AS recency_rank
+                    FROM refresh_log
+                ) WHERE recency_rank = 1
+                UNION
+                SELECT refresh_id, feed_url, started_at, finished_at, error_message
+                FROM (
+                    SELECT refresh_id, feed_url, started_at, finished_at, error_message,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY feed_url
+                               ORDER BY started_at DESC, (finished_at IS NULL) ASC,
+                                        finished_at DESC, refresh_id ASC
+                           ) AS recency_rank
+                    FROM refresh_log
+                    WHERE IFNULL(error_message, '') = '' AND finished_at IS NOT NULL
+                ) WHERE recency_rank = 1
+            )
             ORDER BY started_at DESC, (finished_at IS NULL) ASC, finished_at DESC,
                      feed_url ASC, refresh_id ASC
             """,
@@ -101,6 +131,24 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             episodes: episodes,
             refreshLogs: refreshLogs
         )
+    }
+
+    func allRefreshLogs() throws -> [RefreshLogSnapshot] {
+        let db = try database()
+        var refreshLogs: [RefreshLogSnapshot] = []
+        try query(
+            """
+            SELECT refresh_id, feed_url, started_at, finished_at, error_message
+            FROM refresh_log
+            ORDER BY started_at DESC, (finished_at IS NULL) ASC, finished_at DESC,
+                     feed_url ASC, refresh_id ASC
+            """,
+            operation: "refresh log history load",
+            db: db
+        ) { statement in
+            refreshLogs.append(refreshLogSnapshot(from: statement))
+        }
+        return refreshLogs
     }
 
     func episodeDetail(episodeID: String) throws -> EpisodeDetailSnapshot? {
@@ -162,6 +210,11 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             let feedURL = podcast.id.rawValue
             let podcastArtworkURL = podcast.artworkURL?.absoluteString
 
+            // The DO UPDATE WHERE clauses compare content only (never the
+            // refresh timestamp), so a refresh that returns identical data
+            // writes nothing: no WAL churn, and the timestamps keep meaning
+            // "content last changed" — which is what the search-corpus cache
+            // key needs to stop flushing on every refresh.
             try run(
                 """
                 INSERT INTO podcast_cache (feed_url, title, author, summary, website_url, artwork_url, updated_at, language)
@@ -174,6 +227,12 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     artwork_url = excluded.artwork_url,
                     updated_at = excluded.updated_at,
                     language = excluded.language
+                WHERE title IS NOT excluded.title
+                   OR author IS NOT excluded.author
+                   OR summary IS NOT excluded.summary
+                   OR website_url IS NOT excluded.website_url
+                   OR artwork_url IS NOT excluded.artwork_url
+                   OR language IS NOT excluded.language
                 """,
                 operation: operation,
                 db: db
@@ -221,6 +280,16 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     artwork_url = excluded.artwork_url,
                     guid = excluded.guid,
                     cached_at = excluded.cached_at
+                WHERE podcast_id IS NOT excluded.podcast_id
+                   OR podcast_title IS NOT excluded.podcast_title
+                   OR title IS NOT excluded.title
+                   OR summary IS NOT excluded.summary
+                   OR show_notes_html IS NOT excluded.show_notes_html
+                   OR published_at IS NOT excluded.published_at
+                   OR duration IS NOT excluded.duration
+                   OR audio_url IS NOT excluded.audio_url
+                   OR artwork_url IS NOT excluded.artwork_url
+                   OR guid IS NOT excluded.guid
                 """,
                 operation: operation,
                 db: db
@@ -344,6 +413,135 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         }
     }
 
+    func feedValidators(forPodcastID podcastID: String) throws -> FeedValidators? {
+        let db = try database()
+        var validators: FeedValidators?
+        try query(
+            "SELECT etag, last_modified, body_hash FROM podcast_cache WHERE feed_url = ?",
+            operation: "feed validators load",
+            db: db,
+            bindings: { statement in
+                try bind(podcastID, at: 1, statement: statement, db: db, operation: "feed validators load")
+            }
+        ) { statement in
+            let loaded = FeedValidators(
+                entityTag: columnText(statement, 0),
+                lastModified: columnText(statement, 1),
+                bodyHash: columnText(statement, 2)
+            )
+            validators = loaded.isEmpty ? nil : loaded
+        }
+        return validators
+    }
+
+    /// Touches only the validator columns: `updated_at` keeps meaning
+    /// "content last changed" and must not move for an unchanged feed.
+    func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) throws {
+        let operation = "feed validators update"
+        let db = try database()
+        try run(
+            "UPDATE podcast_cache SET etag = ?, last_modified = ?, body_hash = ? WHERE feed_url = ?",
+            operation: operation,
+            db: db
+        ) { statement in
+            try bind(validators.entityTag, at: 1, statement: statement, db: db, operation: operation)
+            try bind(validators.lastModified, at: 2, statement: statement, db: db, operation: operation)
+            try bind(validators.bodyHash, at: 3, statement: statement, db: db, operation: operation)
+            try bind(podcastID, at: 4, statement: statement, db: db, operation: operation)
+        }
+    }
+
+    func cachedEpisodes(forPodcastID podcastID: String) throws -> [EpisodeListItemSnapshot] {
+        let db = try database()
+        var episodes: [EpisodeListItemSnapshot] = []
+        try query(
+            """
+            SELECT \(Self.episodeListColumns)
+            FROM episode_cache
+            WHERE podcast_id = ?
+            """,
+            operation: "cached episode load",
+            db: db,
+            bindings: { statement in
+                try bind(podcastID, at: 1, statement: statement, db: db, operation: "cached episode load")
+            }
+        ) { statement in
+            episodes.append(episodeListItemSnapshot(from: statement))
+        }
+        return episodes
+    }
+
+    func deleteEpisodes(episodeIDs: [String]) throws {
+        guard !episodeIDs.isEmpty else {
+            return
+        }
+        let operation = "episode delete"
+        let db = try database()
+        try run(
+            "DELETE FROM episode_cache WHERE episode_id IN (SELECT value FROM json_each(?))",
+            operation: operation,
+            db: db
+        ) { statement in
+            try bind(jsonArray(episodeIDs), at: 1, statement: statement, db: db, operation: operation)
+        }
+    }
+
+    func replaceNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) throws {
+        try inTransaction("notification feed health replace") { db in
+            let operation = "notification feed health replace"
+            try exec("DELETE FROM notification_feed_health", operation: operation, db: db)
+            guard !records.isEmpty else {
+                return
+            }
+
+            let insert = try prepare(
+                """
+                INSERT OR REPLACE INTO notification_feed_health
+                (feed_url, consecutive_failures, last_http_status, last_error, last_polled_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                operation: operation,
+                db: db
+            )
+            defer {
+                sqlite3_finalize(insert)
+            }
+            for record in records {
+                try bind(record.feedURL, at: 1, statement: insert, db: db, operation: operation)
+                try bind(record.health.consecutiveFailures, at: 2, statement: insert, db: db, operation: operation)
+                try bind(record.health.lastHTTPStatus, at: 3, statement: insert, db: db, operation: operation)
+                try bind(record.health.lastError, at: 4, statement: insert, db: db, operation: operation)
+                try bind(record.health.lastPolledAtEpochSeconds, at: 5, statement: insert, db: db, operation: operation)
+                try step(insert, operation: operation, db: db)
+                try reset(insert, operation: operation, db: db)
+            }
+        }
+    }
+
+    func notificationFeedHealthByFeedURL() throws -> [String: NotificationFeedHealth] {
+        let db = try database()
+        var healthByFeedURL: [String: NotificationFeedHealth] = [:]
+        try query(
+            """
+            SELECT feed_url, consecutive_failures, last_http_status, last_error, last_polled_at
+            FROM notification_feed_health
+            """,
+            operation: "notification feed health load",
+            db: db
+        ) { statement in
+            guard let feedURL = columnText(statement, 0) else {
+                return
+            }
+            healthByFeedURL[feedURL] = NotificationFeedHealth(
+                consecutiveFailures: columnInt(statement, 1) ?? 0,
+                lastHTTPStatus: columnInt(statement, 2),
+                lastError: columnText(statement, 3),
+                lastPolledAtEpochSeconds: columnInt(statement, 4)
+            )
+        }
+        return healthByFeedURL
+    }
+
     func deleteCache(forPodcastID podcastID: String) throws {
         try inTransaction("feed cache delete") { db in
             let operation = "feed cache delete"
@@ -365,6 +563,25 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             try exec("DELETE FROM podcast_cache", operation: "local cache delete", db: db)
             try exec("DELETE FROM refresh_log", operation: "local cache delete", db: db)
         }
+    }
+
+    /// Cumulative SQLite row changes on this connection. Test hook for
+    /// asserting the change-detecting upsert skips unchanged rows.
+    func totalRowChangeCount() throws -> Int {
+        Int(sqlite3_total_changes64(try database()))
+    }
+
+    /// Current PRAGMA user_version. Test hook for the versioned migrations.
+    func currentSchemaVersion() throws -> Int {
+        try schemaVersion(db: try database())
+    }
+
+    private func schemaVersion(db: OpaquePointer) throws -> Int {
+        var version = 0
+        try query("PRAGMA user_version", operation: "schema version", db: db) { statement in
+            version = Int(sqlite3_column_int64(statement, 0))
+        }
+        return version
     }
 
     func hasCompletedLegacyImport() throws -> Bool {
@@ -529,6 +746,16 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             // Installed caches created the index before it was removed from
             // schemaSQL; no query shape ever chooses it.
             try? exec("DROP INDEX IF EXISTS episode_cache_published_idx", operation: "schema migration", db: handle)
+            // Versioned migrations start here (PRAGMA user_version; version 0
+            // predates versioning). The try?-ALTER pattern keeps version 1
+            // idempotent for fresh databases whose CREATE TABLE already has
+            // the columns.
+            if try schemaVersion(db: handle) < 1 {
+                try? exec("ALTER TABLE podcast_cache ADD COLUMN etag TEXT", operation: "schema migration", db: handle)
+                try? exec("ALTER TABLE podcast_cache ADD COLUMN last_modified TEXT", operation: "schema migration", db: handle)
+                try? exec("ALTER TABLE podcast_cache ADD COLUMN body_hash TEXT", operation: "schema migration", db: handle)
+                try exec("PRAGMA user_version = 1", operation: "schema migration", db: handle)
+            }
         } catch {
             sqlite3_close_v2(handle)
             throw error
@@ -553,7 +780,10 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
       artwork_preview_pixel_height INTEGER,
       artwork_preview_rgb_data BLOB,
       updated_at REAL NOT NULL,
-      language TEXT
+      language TEXT,
+      etag TEXT,
+      last_modified TEXT,
+      body_hash TEXT
     );
 
     CREATE TABLE IF NOT EXISTS episode_cache (
@@ -588,6 +818,14 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     CREATE TABLE IF NOT EXISTS local_cache_meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_feed_health (
+      feed_url TEXT PRIMARY KEY,
+      consecutive_failures INTEGER NOT NULL,
+      last_http_status INTEGER,
+      last_error TEXT,
+      last_polled_at INTEGER
     );
 
     CREATE INDEX IF NOT EXISTS episode_cache_podcast_published_idx
@@ -764,7 +1002,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         LocalLibraryCacheStoreError(operation: operation, message: String(cString: sqlite3_errmsg(db)))
     }
 
-    private func jsonArray(_ values: Set<String>) throws -> String {
+    private func jsonArray(_ values: some Collection<String>) throws -> String {
         String(decoding: try JSONEncoder().encode(values.sorted()), as: UTF8.self)
     }
 

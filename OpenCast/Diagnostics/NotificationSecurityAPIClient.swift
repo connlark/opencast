@@ -5,14 +5,14 @@ nonisolated struct NotificationSecurityAPIClient: Sendable {
 
     init(
         baseURL: URL = NotificationBackendConfiguration.current.workerBaseURL,
-        session: URLSession = .shared
+        transport: any AppAttestHTTPTransport = URLSession.shared
     ) {
         self.appAttestClient = AppAttestAPIClient(
             configuration: AppAttestClientConfiguration(
                 baseURL: baseURL,
                 keychainService: NotificationBackendConfiguration.current.keychainService
             ),
-            transport: session
+            transport: transport
         )
     }
 

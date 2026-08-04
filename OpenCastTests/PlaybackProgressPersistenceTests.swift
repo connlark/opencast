@@ -78,6 +78,45 @@ struct PlaybackProgressPersistenceTests {
         #expect(preferencesAfterSecondFlush.count == preferences.count)
     }
 
+    /// The periodic synced flush only covers hard-crash loss; deliberate
+    /// exits flush through boundaries, so the cadence stays coarse.
+    @Test("Periodic synced flush runs on a minute cadence")
+    func periodicFlushRunsOnMinuteCadence() {
+        #expect(OpenCastAppModel.playbackProgressPersistenceInterval == .seconds(60))
+    }
+
+    @Test("A seek boundary flushes immediately regardless of tick phase")
+    func seekBoundaryFlushesImmediately() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let appModel = OpenCastAppModel(
+            localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory(),
+            allowsAutomaticFeedRefresh: false
+        )
+        let episode = Episode(
+            id: EpisodeID(rawValue: "seek-boundary-episode"),
+            podcastID: PodcastID(rawValue: "https://example.com/feed.xml"),
+            podcastTitle: "Example Show",
+            title: "Example Episode",
+            duration: 600,
+            audioURL: URL(string: "https://example.com/seek-boundary-episode.mp3")
+        )
+
+        appModel.startPlaybackProgressPersistence(modelContext: context)
+        try appModel.playback.load(episode, startPosition: 42)
+        appModel.playback.seek(to: 100)
+
+        // The wait ceiling is a few seconds - far below the periodic
+        // interval, so only the boundary flush can satisfy it.
+        #expect(
+            await waitUntil {
+                (try? context.fetch(FetchDescriptor<EpisodeProgressRecord>()))?
+                    .first { $0.episodeID == episode.id.rawValue }?
+                    .position == 100
+            }
+        )
+    }
+
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
         for _ in 0..<120 {
             if condition() {

@@ -6,6 +6,7 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
     @Environment(\.modelContext) private var modelContext
 
     let episode: EpisodeListItemSnapshot
+    let showsGoToShow: Bool
     let onViewDetails: (EpisodeListItemSnapshot) -> Void
 
     @State private var modePromptEpisode: EpisodeListItemSnapshot?
@@ -17,6 +18,11 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
             .adDetectionModeDialog(episode: $modePromptEpisode)
             .contextMenu {
             Button("View Episode Details", systemImage: "info.circle", action: viewDetails)
+            if showsGoToShow {
+                NavigationLink(value: AppRoute.podcastDetail(feedURL: episode.podcastID)) {
+                    Label("Go to Show", systemImage: "rectangle.stack")
+                }
+            }
             Button(
                 isPlayed ? "Mark Unplayed" : "Mark Played",
                 systemImage: isPlayed ? "arrow.uturn.backward.circle" : "checkmark.circle",

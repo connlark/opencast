@@ -1,7 +1,15 @@
 import Foundation
 
 public enum OpenCastURLSessionFactory {
-    public static let userAgent = "OpenCast/1.0"
+    /// Set once at app startup (single-threaded launch window) before any
+    /// session configuration is built; the static default serves tests. The
+    /// media profile's user agent is a separate, byte-stable contract
+    /// (`OpenCastMediaRequestProfile`) and is never derived from this.
+    nonisolated(unsafe) public private(set) static var userAgent = "OpenCast/1.0 (+https://opencast.mobile)"
+
+    public static func setMarketingVersion(_ version: String) {
+        userAgent = "OpenCast/\(version) (+https://opencast.mobile)"
+    }
     public static let memoryCacheCapacity = 32 * 1_024 * 1_024
     public static let diskCacheCapacity = 128 * 1_024 * 1_024
     public static let requestTimeout: TimeInterval = 20

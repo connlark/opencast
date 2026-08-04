@@ -33,6 +33,21 @@ pub const MAX_SEGMENTS: usize = 6_000;
 pub const MAX_TRANSCRIPT_TEXT_CHARS: usize = 360_000;
 pub const MAX_SEGMENT_TEXT_CHARS: usize = 2_000;
 pub const MAX_ESTIMATED_INPUT_TOKENS_PER_REQUEST: u64 = 120_000;
+// Header metadata fields flow into the prompt (`build_prompt`) but not the
+// segment-text estimate, so they must be bounded or they silently defeat the
+// spend caps (Phase 10 review AA-2). Episode ids, titles, and language codes
+// mirror the gateway's caps (RemoteTranscriptionWorker episode_id ≤128,
+// titles ≤512): every chained request already satisfies them (bytes ≥ chars)
+// and the shipped app's direct path sends a 64-hex episode id and nil titles.
+// podcast_id CANNOT mirror the gateway's 256: on the direct path it is the
+// canonical feed URL, historically uncapped there, so 256 would reject
+// in-field apps subscribed to long-URL feeds (Phase 10 re-review). 2048
+// clears any plausible real URL while still bounding the field to noise
+// against the spend caps; the allowance pin test renders this worst case.
+pub const MAX_EPISODE_ID_CHARS: usize = 128;
+pub const MAX_PODCAST_ID_CHARS: usize = 2_048;
+pub const MAX_TITLE_CHARS: usize = 512;
+pub const MAX_LANGUAGE_CODE_CHARS: usize = 40;
 // Spend caps scaled to ~= $15/day worst case (step-4 PLAN §A6).
 pub const BEARER_DAILY_REQUEST_CAP: u64 = 40;
 pub const BEARER_DAILY_ESTIMATED_INPUT_TOKEN_CAP: u64 = 2_000_000;

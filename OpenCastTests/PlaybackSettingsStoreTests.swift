@@ -1,3 +1,4 @@
+import Foundation
 import SwiftData
 import Testing
 @testable import OpenCast
@@ -25,6 +26,46 @@ struct PlaybackSettingsStoreTests {
         #expect(playback.appliedSkipIntervals.first?.backward == 30)
         #expect(playback.appliedSkipIntervals.first?.forward == 15)
         #expect(playback.appliedAutoSkipValues == [true])
+        #expect(playback.appliedRates == [1])
+    }
+
+    @Test("Playback speed persists and restores through the shared settings path")
+    func playbackSpeedPersistsAndRestores() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+
+        store.load(modelContext: context, playback: playback)
+        #expect(store.setPlaybackRate(1.5, modelContext: context, playback: playback))
+
+        let reloadedPlayback = PlaybackVoiceBoostControllerSpy()
+        PlaybackSettingsStore().load(modelContext: context, playback: reloadedPlayback)
+
+        #expect(playback.appliedRates == [1, 1.5])
+        #expect(reloadedPlayback.appliedRates == [1.5])
+    }
+
+    @Test("A playback-speed save failure rolls playback back and stays visible")
+    func playbackSpeedFailureRollsBackAndSurfacesError() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore { _, _ in
+            throw PlaybackRatePersistenceFailure()
+        }
+        store.load(modelContext: context, playback: playback)
+
+        let didPersist = store.setPlaybackRate(
+            1.5,
+            modelContext: context,
+            playback: playback
+        )
+
+        #expect(!didPersist)
+        #expect(playback.rate == 1)
+        #expect(playback.appliedRates == [1, 1.5, 1])
+        #expect(store.lastErrorMessage?.contains("Unable to update playback speed") == true)
     }
 
     @Test("Global Voice Boost off persists and overrides the current episode")
@@ -176,5 +217,11 @@ struct PlaybackSettingsStoreTests {
         #expect(playback.appliedAutoSkipValues == [true, false])
         #expect(reloadedStore.isAutoSkipPromosAndAdsEnabled == false)
         #expect(reloadedPlayback.appliedAutoSkipValues == [false])
+    }
+}
+
+private struct PlaybackRatePersistenceFailure: LocalizedError {
+    var errorDescription: String? {
+        "Simulated preference save failure"
     }
 }

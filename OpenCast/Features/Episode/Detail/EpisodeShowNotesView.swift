@@ -6,12 +6,13 @@ struct EpisodeShowNotesView: View {
     let blocks: [AttributedString]
 
     var body: some View {
+        let identifiedBlocks = EpisodeShowNotesBlock.identify(blocks)
         LazyVStack(alignment: .leading, spacing: 10) {
             Text("Show Notes")
                 .font(.headline)
 
-            ForEach(blocks.indices, id: \.self) { index in
-                Text(blocks[index])
+            ForEach(identifiedBlocks) { block in
+                Text(block.content)
                     .font(.body)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)

@@ -73,19 +73,14 @@ struct PodcastPrimaryActionTests {
     }
 
     private func makeEpisode(id: String, publishedAt: TimeInterval) -> EpisodeListItemSnapshot {
-        EpisodeListItemSnapshot(
+        .fixture(
             episodeID: id,
-            podcastID: "https://example.com/feed.xml",
             podcastTitle: "Podcast",
             title: "Episode \(id)",
-            summary: nil,
             publishedAt: Date(timeIntervalSince1970: publishedAt),
             duration: 100,
             audioURL: "https://example.com/\(id).mp3",
-            artworkURL: nil,
-            artworkPreview: nil,
-            guid: id,
-            cachedAt: .now
+            guid: id
         )
     }
 }

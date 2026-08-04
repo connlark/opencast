@@ -117,6 +117,17 @@ struct OpenCastTabRootView: View {
         .onChange(of: selectedTab, initial: true) { _, selectedTab in
             isSearchPresented = selectedTab == .search
         }
+        .focusedSceneValue(\.openCastCommandActions, commandActions)
+    }
+
+    private var commandActions: OpenCastCommandActions {
+        OpenCastCommandActions.make(
+            playback: appModel.playback,
+            focusSearch: {
+                selectedTab = .search
+                isSearchPresented = true
+            }
+        )
     }
 
     private var tabBarMinimizeBehavior: TabBarMinimizeBehavior {

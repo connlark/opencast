@@ -1,10 +1,20 @@
 use serde_json::json;
 
-use crate::types::{AdAnalysisRequest, POLICY_NAME};
+use crate::types::{AdAnalysisRequest, TranscriptSegment, POLICY_NAME};
 
 /// Thinking models spend from this budget; 4 096 was the measured truncation
 /// trigger in production (step-4 research §3).
 pub const GEMINI_MAX_OUTPUT_TOKENS: u32 = 16_384;
+
+/// Chars the assembled prompt adds on top of raw transcript text from the
+/// non-segment side: the fixed instruction block in `build_prompt` plus the
+/// policy/episode/podcast/language/duration header. `validation.rs` folds
+/// this allowance into the token estimate ahead of the spend caps; the pin
+/// test in `tests/prompt.rs` renders the real template with an oversized
+/// header and fails the build if template growth pushes past the allowance
+/// (which would otherwise silently under-count spend). Per-segment framing
+/// chars ("[id | 0.000-0.000] ") are outside this allowance.
+pub const PROMPT_OVERHEAD_CHAR_ALLOWANCE: usize = 8_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeminiGenerationOptions {
@@ -98,6 +108,23 @@ pub fn build_prompt(request: &AdAnalysisRequest) -> String {
         ));
     }
     text
+}
+
+/// The non-text chars `build_prompt` emits for one segment line:
+/// `[{id} | {start:.3}-{end:.3}] ` plus the trailing `\n`, excluding the
+/// segment text. Rendered with the same format string `build_prompt` uses
+/// (the pin tests assert the two never drift), so the spend estimate is
+/// byte-exact by construction — arithmetic width prediction was retired
+/// after `{:.3}`'s rounding (9.9996 → "10.000") defeated it at power-of-ten
+/// boundaries (Phase 10 re-review). One short allocation per segment,
+/// still without rendering the whole prompt (AA-3).
+pub fn segment_framing_chars(segment: &TranscriptSegment) -> usize {
+    format!(
+        "[{} | {:.3}-{:.3}] \n",
+        segment.id, segment.start, segment.end
+    )
+    .chars()
+    .count()
 }
 
 pub fn gemini_request_payload(

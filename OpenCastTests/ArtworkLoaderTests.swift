@@ -582,6 +582,80 @@ struct ArtworkLoaderTests {
         #expect(await probe.requestCount == 1)
     }
 
+    @Test("An oversized payload is refused on receive and never cached")
+    func oversizedPayloadRefusedOnReceiveAndNeverCached() async throws {
+        let oversized = Data(repeating: 0xAB, count: ArtworkTransferPolicy.maximumByteCount + 1)
+        let probe = ArtworkDataLoaderProbe(responses: [(oversized, nil)])
+        let directory = try makeTemporaryDirectory()
+        let loader = ArtworkLoader(
+            diskCache: ArtworkDiskCache(directory: directory),
+            dataLoader: probe.load
+        )
+        let url = URL(string: "https://example.com/oversized.png")!
+
+        let image = try await loader.image(for: url, targetPixelSize: CGSize(width: 48, height: 48))
+
+        #expect(image == nil)
+        #expect(try cacheFile(in: directory, pathExtension: "png") == nil)
+    }
+
+    @Test("An extreme declared canvas is refused before decode and never cached")
+    func extremeDeclaredCanvasRefusedBeforeDecode() async throws {
+        let bomb = Self.syntheticPNGHeader(width: 100_000, height: 100_000)
+        let probe = ArtworkDataLoaderProbe(responses: [(bomb, nil)])
+        let directory = try makeTemporaryDirectory()
+        let loader = ArtworkLoader(
+            diskCache: ArtworkDiskCache(directory: directory),
+            dataLoader: probe.load
+        )
+        let url = URL(string: "https://example.com/bomb.png")!
+
+        let image = try await loader.image(for: url, targetPixelSize: CGSize(width: 48, height: 48))
+
+        #expect(image == nil)
+        #expect(try cacheFile(in: directory, pathExtension: "png") == nil)
+    }
+
+    /// A tiny synthetic payload whose IHDR declares an absurd canvas — the
+    /// compressed-bomb shape from the triage, without a large fixture.
+    private static func syntheticPNGHeader(width: UInt32, height: UInt32) -> Data {
+        var data = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        var chunk = Data("IHDR".utf8)
+        for value in [width, height] {
+            chunk.append(contentsOf: [
+                UInt8((value >> 24) & 0xFF),
+                UInt8((value >> 16) & 0xFF),
+                UInt8((value >> 8) & 0xFF),
+                UInt8(value & 0xFF),
+            ])
+        }
+        // bit depth 8, color type 6 (RGBA), compression 0, filter 0, interlace 0
+        chunk.append(contentsOf: [8, 6, 0, 0, 0])
+        let payloadLength = UInt32(chunk.count - 4)
+        data.append(contentsOf: [
+            UInt8((payloadLength >> 24) & 0xFF),
+            UInt8((payloadLength >> 16) & 0xFF),
+            UInt8((payloadLength >> 8) & 0xFF),
+            UInt8(payloadLength & 0xFF),
+        ])
+        data.append(chunk)
+        var crc: UInt32 = 0xFFFFFFFF
+        for byte in chunk {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 {
+                crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1
+            }
+        }
+        crc ^= 0xFFFFFFFF
+        data.append(contentsOf: [
+            UInt8((crc >> 24) & 0xFF),
+            UInt8((crc >> 16) & 0xFF),
+            UInt8((crc >> 8) & 0xFF),
+            UInt8(crc & 0xFF),
+        ])
+        return data
+    }
+
     private func pngData(width: Int, height: Int) throws -> Data {
         let bytesPerPixel = 4
         let bytesPerRow = width * bytesPerPixel

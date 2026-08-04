@@ -5,6 +5,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use opencast_app_attest_core::app_attest::challenge_hash;
+use opencast_app_attest_core::app_attest_storage::INSERT_CHALLENGE_WITHIN_LIMITS_SQL;
+use opencast_app_attest_core::challenge_limits::MAX_CHALLENGES_PER_INSTALL_PER_HOUR;
 use rusqlite::{params, Connection};
 
 const NOW: i64 = 1_780_000_000;
@@ -91,6 +93,100 @@ fn migration_supports_challenge_lifecycle_and_rate_queries() {
         .expect("count global challenges");
     assert_eq!(install_count, 1);
     assert_eq!(global_count, 1);
+}
+
+fn admit(
+    db: &Connection,
+    challenge_id: &str,
+    install_id: &str,
+    install_cap: i64,
+    global_cap: i64,
+) -> usize {
+    db.execute(
+        INSERT_CHALLENGE_WITHIN_LIMITS_SQL,
+        params![
+            challenge_id,
+            challenge_hash(challenge_id),
+            "register",
+            install_id,
+            NOW,
+            NOW + 600,
+            NOW - 3600,
+            install_cap,
+            global_cap
+        ],
+    )
+    .expect("run atomic admission statement")
+}
+
+/// The atomicity proof for triage P2 #5: cap checks and the insert are one
+/// statement (the exact production SQL), so admissions at the cap boundary
+/// admit exactly the cap — there is no read-then-insert window for
+/// concurrent requests to slip through.
+#[test]
+fn atomic_admission_admits_exactly_the_cap_at_both_boundaries() {
+    let db = setup_db();
+
+    // Per-install boundary, production cap: exactly cap admissions land.
+    for index in 0..MAX_CHALLENGES_PER_INSTALL_PER_HOUR {
+        assert_eq!(
+            admit(
+                &db,
+                &format!("install-cap-{index}"),
+                "install-a",
+                MAX_CHALLENGES_PER_INSTALL_PER_HOUR,
+                1_000,
+            ),
+            1,
+            "admission {index} under the cap must insert"
+        );
+    }
+    assert_eq!(
+        admit(
+            &db,
+            "install-cap-over",
+            "install-a",
+            MAX_CHALLENGES_PER_INSTALL_PER_HOUR,
+            1_000,
+        ),
+        0,
+        "admission at the cap must be held back"
+    );
+    let install_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM app_attest_challenges WHERE install_id = 'install-a'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count install rows");
+    assert_eq!(install_count, MAX_CHALLENGES_PER_INSTALL_PER_HOUR);
+
+    // A different install is unaffected by the full install bucket.
+    assert_eq!(admit(&db, "other-install", "install-b", 20, 1_000), 1);
+
+    // Global boundary (small synthetic cap, same statement).
+    let db = setup_db();
+    for index in 0..3 {
+        assert_eq!(
+            admit(
+                &db,
+                &format!("global-{index}"),
+                &format!("install-{index}"),
+                20,
+                3
+            ),
+            1
+        );
+    }
+    assert_eq!(admit(&db, "global-over", "install-fresh", 20, 3), 0);
+
+    // Rows outside the hourly window stop counting against the caps.
+    db.execute(
+        "UPDATE app_attest_challenges SET created_at = ?1",
+        params![NOW - 7_200],
+    )
+    .expect("age out existing rows");
+    assert_eq!(admit(&db, "post-window", "install-fresh", 20, 3), 1);
 }
 
 #[test]

@@ -63,6 +63,9 @@ struct AVFoundationPlaybackControllerTests {
         }
         #expect(message.contains("could not be played"))
         #expect(controller.snapshot.progressBoundaryID > 0)
+
+        controller.handleAudioSessionOldDeviceUnavailable()
+        #expect(controller.snapshot.state == state)
     }
 
     @Test
@@ -133,6 +136,375 @@ struct AVFoundationPlaybackControllerTests {
     }
 
     @Test
+    func oldDeviceUnavailablePausesAndDoesNotRequestResume() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+
+        try controller.load(episode(duration: 240))
+        controller.play()
+        controller.handleAudioSessionInterruptionBegan()
+        let boundaryBeforeRouteChange = controller.snapshot.progressBoundaryID
+        controller.handleAudioSessionOldDeviceUnavailable()
+
+        #expect(controller.snapshot.state == .paused)
+        #expect(controller.snapshot.progressBoundaryID == boundaryBeforeRouteChange + 1)
+
+        controller.handleAudioSessionInterruptionEnded(shouldResume: true)
+
+        #expect(controller.snapshot.state == .paused)
+    }
+
+    @Test
+    func explicitPauseDuringInterruptionRevokesResumeIntent() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+
+        try controller.load(episode(duration: 240))
+        controller.isAudioSessionActive = true
+        controller.play()
+        controller.handleAudioSessionInterruptionBegan()
+        controller.pause()
+        controller.handleAudioSessionInterruptionEnded(shouldResume: true)
+
+        #expect(controller.snapshot.state == .paused)
+    }
+
+    @Test(arguments: [true, false])
+    func bufferingInterruptionResumesOnlyWhenOperatingSystemRequestsIt(
+        operatingSystemShouldResume: Bool
+    ) async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let probe = AudioSessionActivationProbe(outcomes: [.success])
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await probe.activate() }
+        )
+        defer {
+            controller.unload()
+        }
+
+        try controller.load(episode(duration: 240))
+        controller.isAudioSessionActive = true
+        controller.play()
+        #expect(controller.snapshot.state == .buffering)
+
+        controller.handleAudioSessionInterruptionBegan()
+        #expect(controller.snapshot.state == .paused)
+
+        controller.handleAudioSessionInterruptionEnded(
+            shouldResume: operatingSystemShouldResume
+        )
+
+        if operatingSystemShouldResume {
+            try await waitForActivationCalls(1, probe: probe)
+            #expect(controller.snapshot.state == .loading)
+        } else {
+            #expect(controller.snapshot.state == .paused)
+            #expect(await probe.recordedCallCount() == 0)
+        }
+    }
+
+    @Test
+    func interruptionMarksAudioSessionInactive() {
+        let controller = AVFoundationPlaybackController()
+        controller.isAudioSessionActive = true
+
+        controller.handleAudioSessionInterruptionBegan()
+
+        #expect(!controller.isAudioSessionActive)
+    }
+
+    @Test
+    func playbackStallTransitionsToBufferingWithAutomaticWaitingEnabled() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let controller = AVFoundationPlaybackController()
+        var startBehaviors: [PlaybackStartBehavior] = []
+        controller.playbackStartBehaviorObserver = { startBehaviors.append($0) }
+        defer {
+            controller.unload()
+        }
+
+        try controller.load(episode(duration: 240))
+        controller.setRate(1.5)
+        controller.play()
+        controller.handleCurrentItemPlaybackStalled()
+
+        #expect(controller.snapshot.state == .buffering)
+        #expect(controller.automaticallyWaitsToMinimizeStalling)
+        #expect(controller.currentPlayerDefaultRate == 1.5)
+        #expect(startBehaviors.last == .automaticBufferWaiting)
+        #expect(!startBehaviors.dropLast().contains(.automaticBufferWaiting))
+    }
+
+    @Test(arguments: [true, false])
+    func playingInterruptionResumesOnlyWhenOperatingSystemRequestsIt(
+        operatingSystemShouldResume: Bool
+    ) async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 4
+        )
+        let probe = AudioSessionActivationProbe(outcomes: [.success])
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await probe.activate() }
+        )
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+
+        try controller.load(playbackEpisode(audioURL: fixtureURL))
+        controller.isAudioSessionActive = true
+        controller.play()
+        _ = try await waitForPlaybackState(in: controller) { $0 == .playing }
+
+        controller.handleAudioSessionInterruptionBegan()
+        controller.handleAudioSessionInterruptionEnded(
+            shouldResume: operatingSystemShouldResume
+        )
+
+        if operatingSystemShouldResume {
+            try await waitForActivationCalls(1, probe: probe)
+            await probe.releaseCalls(through: 1)
+            #expect(try await waitForPlaybackState(in: controller) { $0 == .playing } == .playing)
+        } else {
+            #expect(controller.snapshot.state == .paused)
+            #expect(await probe.recordedCallCount() == 0)
+        }
+    }
+
+    @Test(arguments: [true, false])
+    func pausedInterruptionNeverResumes(
+        operatingSystemShouldResume: Bool
+    ) async throws {
+        let probe = AudioSessionActivationProbe(outcomes: [.success])
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await probe.activate() }
+        )
+        defer {
+            controller.unload()
+        }
+
+        try controller.load(episode(duration: 240))
+        controller.handleAudioSessionInterruptionBegan()
+        controller.handleAudioSessionInterruptionEnded(
+            shouldResume: operatingSystemShouldResume
+        )
+
+        #expect(controller.snapshot.state == .paused)
+        #expect(await probe.recordedCallCount() == 0)
+    }
+
+    @Test
+    func audioSessionActivationCompletesBeforePlayerStarts() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 4
+        )
+        let probe = AudioSessionActivationProbe(outcomes: [.success])
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await probe.activate() }
+        )
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+
+        try controller.load(playbackEpisode(audioURL: fixtureURL))
+        controller.play()
+        try await waitForActivationCalls(1, probe: probe)
+
+        #expect(controller.snapshot.state == .loading)
+        #expect(controller.currentPlayerRate == 0)
+
+        await probe.releaseCalls(through: 1)
+        let state = try await waitForPlaybackState(in: controller) { $0 == .playing }
+
+        #expect(state == .playing)
+        #expect(controller.currentPlayerRate > 0)
+    }
+
+    @Test
+    func audioSessionActivationFailureCanRetryPlayback() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 4
+        )
+        let probe = AudioSessionActivationProbe(outcomes: [.failure, .success])
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await probe.activate() }
+        )
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+
+        try controller.load(playbackEpisode(audioURL: fixtureURL))
+        controller.play()
+        try await waitForActivationCalls(1, probe: probe)
+        await probe.releaseCalls(through: 1)
+
+        let failedState = try await waitForTerminalPlaybackState(in: controller)
+        guard case .failed = failedState else {
+            Issue.record("Expected activation failure, got \(failedState).")
+            return
+        }
+
+        controller.play()
+        try await waitForActivationCalls(2, probe: probe)
+        await probe.releaseCalls(through: 2)
+
+        let recoveredState = try await waitForPlaybackState(in: controller) { $0 == .playing }
+        #expect(recoveredState == .playing)
+    }
+
+    @Test(arguments: [true, false])
+    func loadingInterruptionResumesOnlyWhenOperatingSystemRequestsIt(
+        operatingSystemShouldResume: Bool
+    ) async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 4
+        )
+        let probe = AudioSessionActivationProbe(outcomes: [.success, .success])
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await probe.activate() }
+        )
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+
+        try controller.load(playbackEpisode(audioURL: fixtureURL))
+        controller.play()
+        try await waitForActivationCalls(1, probe: probe)
+
+        controller.handleAudioSessionInterruptionBegan()
+        #expect(controller.snapshot.state == .paused)
+        controller.handleAudioSessionInterruptionEnded(
+            shouldResume: operatingSystemShouldResume
+        )
+        if operatingSystemShouldResume {
+            try await waitForActivationCalls(2, probe: probe)
+            await probe.releaseCalls(through: 2)
+            let state = try await waitForPlaybackState(in: controller) { $0 == .playing }
+            #expect(state == .playing)
+        } else {
+            #expect(controller.snapshot.state == .paused)
+            #expect(await probe.recordedCallCount() == 1)
+        }
+    }
+
+    @Test
+    func toggleDuringActivationPausesWithoutLateStart() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 4
+        )
+        let probe = AudioSessionActivationProbe(outcomes: [.success])
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await probe.activate() }
+        )
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+
+        try controller.load(playbackEpisode(audioURL: fixtureURL))
+        controller.play()
+        try await waitForActivationCalls(1, probe: probe)
+        #expect(controller.snapshot.state == .loading)
+
+        controller.togglePlayPause()
+        await probe.releaseCalls(through: 1)
+        try await waitUntil { controller.isAudioSessionActive }
+
+        #expect(controller.snapshot.state == .paused)
+        #expect(controller.currentPlayerRate == 0)
+    }
+
+    @Test
+    func rateChangeDuringActivationDoesNotStartPlayer() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 4
+        )
+        let probe = AudioSessionActivationProbe(outcomes: [.success])
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await probe.activate() }
+        )
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+
+        try controller.load(playbackEpisode(audioURL: fixtureURL))
+        controller.play()
+        try await waitForActivationCalls(1, probe: probe)
+
+        controller.setRate(2)
+
+        #expect(controller.snapshot.rate == 2)
+        #expect(controller.currentPlayerRate == 0)
+
+        await probe.releaseCalls(through: 1)
+        let state = try await waitForPlaybackState(in: controller) { $0 == .playing }
+        #expect(state == .playing)
+        #expect(controller.currentPlayerRate == 2)
+    }
+
+    @Test
     func protectedPlaybackPositionRejectsStaleObservationUntilSeekTargetAppears() {
         var protection = PlaybackPositionProtection()
 
@@ -171,6 +543,180 @@ struct AVFoundationPlaybackControllerTests {
         #expect(!acceptsPreviousPositionAfterZeroSeek)
         let acceptsSettledZeroPosition = protection.acceptsObservedPosition(0.2)
         #expect(acceptsSettledZeroPosition)
+    }
+
+    @Test
+    func protectedPlaybackPositionExpiresAfterTenRejectedTicks() {
+        let start = ContinuousClock.now
+        var protection = PlaybackPositionProtection()
+        _ = protection.startSeek(to: 45, now: start)
+
+        for rejection in 1..<10 {
+            let accepted = protection.acceptsObservedPosition(
+                0,
+                now: start.advanced(by: .milliseconds(rejection * 100))
+            )
+            #expect(!accepted)
+        }
+
+        let acceptedAfterTenRejections = protection.acceptsObservedPosition(
+            0,
+            now: start.advanced(by: .seconds(1))
+        )
+        #expect(acceptedAfterTenRejections)
+        #expect(protection.position == nil)
+    }
+
+    @Test
+    func protectedPlaybackPositionExpiresAfterFiveSeconds() {
+        let start = ContinuousClock.now
+        var protection = PlaybackPositionProtection()
+        _ = protection.startSeek(to: 45, now: start)
+
+        let acceptedBeforeExpiry = protection.acceptsObservedPosition(
+            0,
+            now: start.advanced(by: .milliseconds(4_999))
+        )
+        #expect(!acceptedBeforeExpiry)
+        let acceptedAtExpiry = protection.acceptsObservedPosition(
+            0,
+            now: start.advanced(by: .seconds(5))
+        )
+        #expect(acceptedAtExpiry)
+    }
+
+    @Test
+    func protectedPlaybackPositionStillAcceptsNormalSettleBeforeExpiry() {
+        let start = ContinuousClock.now
+        var protection = PlaybackPositionProtection()
+        _ = protection.startSeek(to: 45, now: start)
+
+        let acceptedStalePosition = protection.acceptsObservedPosition(
+            0,
+            now: start.advanced(by: .milliseconds(4_900))
+        )
+        #expect(!acceptedStalePosition)
+        let acceptedSettledPosition = protection.acceptsObservedPosition(
+            45.4,
+            now: start.advanced(by: .milliseconds(4_950))
+        )
+        #expect(acceptedSettledPosition)
+        #expect(protection.position == nil)
+    }
+
+    @Test
+    func endOfEpisodeRemainingTimeTracksSeekAndRateWithoutWallClockDeadline() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 600))
+
+        let initialNow = Date(timeIntervalSince1970: 1_000)
+        controller.setSleepTimer(mode: .endOfEpisode, now: initialNow)
+
+        #expect(controller.sleepTimerMode == .endOfEpisode)
+        #expect(controller.sleepTimerEndsAt == nil)
+        #expect(controller.sleepTimerRemaining(at: initialNow) == 600)
+
+        controller.seek(to: 120)
+        #expect(controller.sleepTimerRemaining(at: initialNow) == 480)
+
+        controller.setRate(2)
+        #expect(controller.sleepTimerRemaining(at: initialNow) == 240)
+    }
+
+    @Test
+    func endOfEpisodeRemainsArmedWhilePausedPastItsInitialEstimate() async throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 0.02))
+        controller.setSleepTimer(mode: .endOfEpisode)
+
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(controller.sleepTimerMode == .endOfEpisode)
+        #expect(controller.sleepTimerRemaining() == 0.02)
+    }
+
+    @Test
+    func endOfEpisodeRemainsArmedAcrossBufferingAndInterruptionTime() async throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 0.02))
+        controller.isAudioSessionActive = true
+        controller.play()
+        #expect(controller.snapshot.state == .buffering)
+        controller.setSleepTimer(mode: .endOfEpisode)
+        controller.handleAudioSessionInterruptionBegan()
+
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(controller.sleepTimerMode == .endOfEpisode)
+        #expect(controller.sleepTimerRemaining() == 0.02)
+        controller.handleAudioSessionInterruptionEnded(shouldResume: false)
+        #expect(controller.sleepTimerMode == .endOfEpisode)
+    }
+
+    @Test
+    func fixedDurationTimerStillDrainsWhilePaused() async throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 60))
+        controller.setSleepTimer(mode: .duration(0.02))
+
+        try await waitUntil { controller.sleepTimerMode == .off }
+
+        #expect(controller.snapshot.state == .paused)
+    }
+
+    @Test
+    func naturalEpisodeCompletionClearsEndOfEpisodeTimer() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 60))
+        controller.setSleepTimer(mode: .endOfEpisode)
+
+        controller.handleCurrentItemDidPlayToEnd()
+
+        #expect(controller.sleepTimerMode == .off)
+        #expect(controller.sleepTimerRemaining() == nil)
+    }
+
+    @Test
+    func remoteRateChangeUsesInstalledPersistenceHandler() {
+        let controller = AVFoundationPlaybackController()
+        var requestedRate: Float?
+        controller.setRemotePlaybackRateChangeHandler { requestedRate = $0 }
+
+        controller.handleRemotePlaybackRateChange(1.5)
+
+        #expect(requestedRate == 1.5)
+        #expect(controller.snapshot.rate == 1)
+    }
+
+    @Test
+    func switchingEpisodesCancelsEndOfEpisodeSleepTimer() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(id: "first", duration: 600))
+        controller.setSleepTimer(mode: .endOfEpisode)
+        #expect(controller.sleepTimerMode == .endOfEpisode)
+
+        try controller.load(episode(id: "second", duration: 300))
+
+        #expect(controller.sleepTimerMode == .off)
+        #expect(controller.sleepTimerEndsAt == nil)
     }
 
     @Test
@@ -250,5 +796,38 @@ struct AVFoundationPlaybackControllerTests {
             try await Task.sleep(for: .milliseconds(50))
         }
         return controller.lastAutoSkipEvent
+    }
+
+    private func waitForActivationCalls(
+        _ expectedCount: Int,
+        probe: AudioSessionActivationProbe
+    ) async throws {
+        try await waitUntil {
+            await probe.recordedCallCount() >= expectedCount
+        }
+    }
+
+    private func waitUntil(
+        _ predicate: () async -> Bool
+    ) async throws {
+        let deadline = Date.now.addingTimeInterval(5)
+        while Date.now < deadline {
+            if await predicate() {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for playback test condition.")
+    }
+
+    private func playbackEpisode(audioURL: URL) -> Episode {
+        Episode(
+            id: EpisodeID(rawValue: "activation-fixture"),
+            podcastID: PodcastID(rawValue: "podcast"),
+            podcastTitle: "Podcast",
+            title: "Activation Fixture",
+            duration: 4,
+            audioURL: audioURL
+        )
     }
 }

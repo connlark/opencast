@@ -6,6 +6,7 @@ struct NowPlayingSoundLabToggle: View {
     let tint: Color
     let isEnabled: Bool
     let isIconOnly: Bool
+    let rowHeight: CGFloat
     @Binding var isOn: Bool
 
     var body: some View {
@@ -16,12 +17,13 @@ struct NowPlayingSoundLabToggle: View {
                     tint: tint
                 )
 
-                if !isIconOnly {
-                    Text(title)
-                        .font(.subheadline)
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                }
+                Text(title)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                    .frame(width: isIconOnly ? 0 : nil)
+                    .opacity(isIconOnly ? 0 : 1)
+                    .clipped()
             }
         }
         .toggleStyle(.switch)
@@ -34,8 +36,9 @@ struct NowPlayingSoundLabToggle: View {
         .padding(.trailing, NowPlayingSoundLabLayout.controlHorizontalPadding)
         .frame(
             maxWidth: .infinity,
-            minHeight: NowPlayingSoundLabLayout.controlRowHeight
+            minHeight: 44
         )
+        .frame(height: rowHeight)
         .contentShape(.capsule)
         .glassEffect(.regular.interactive(), in: .capsule)
         .disabled(!isEnabled)

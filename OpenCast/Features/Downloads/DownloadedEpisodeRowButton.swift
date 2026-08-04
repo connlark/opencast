@@ -31,6 +31,7 @@ struct DownloadedEpisodeRowButton: View {
         .modifier(
             EpisodeRowContextMenuModifier(
                 episode: item.episode,
+                showsGoToShow: true,
                 onViewDetails: viewEpisodeDetails
             )
         )

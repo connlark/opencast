@@ -3,15 +3,22 @@ import Foundation
 import Observation
 import OpenCastCore
 import OpenCastVoiceBoost
+import os
 
 typealias VoiceBoostAudioTapFactory = (
     VoiceBoostConfiguration,
     VoiceBoostAudioTapDiagnostics?
 ) throws -> VoiceBoostAudioTap
 
+public typealias PlaybackRateChangeRequestHandler = @MainActor (Float) -> Void
+
 @Observable
-public final class AVFoundationPlaybackController: PlaybackController {
+public final class AVFoundationPlaybackController {
     private static let autoSkipSettleTolerance: TimeInterval = 0.05
+    private static let logger = Logger(
+        subsystem: "OpenCastPlayback",
+        category: "AVFoundationPlaybackController"
+    )
 
     public private(set) var snapshot = PlaybackSnapshot()
     public private(set) var currentEpisode: Episode?
@@ -22,6 +29,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
     public private(set) var progressBoundaryID = 0
     public private(set) var rate: Float = 1
     public private(set) var sleepTimerEndsAt: Date?
+    public private(set) var sleepTimerMode = PlaybackSleepTimerMode.off
     public private(set) var skipZones: [PlaybackSkipZone] = []
     public private(set) var lastAutoSkipEvent: PlaybackAutoSkipEvent?
     public private(set) var skipBackwardInterval: TimeInterval = PlaybackSkipInterval.backward
@@ -48,18 +56,15 @@ public final class AVFoundationPlaybackController: PlaybackController {
     @ObservationIgnored private var voiceBoostTrackLoadTask: Task<Void, Never>?
     @ObservationIgnored private let voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics?
     @ObservationIgnored private let voiceBoostAudioTapFactory: VoiceBoostAudioTapFactory
-    @ObservationIgnored private let streamingAudioCacheConfiguration: StreamingAudioCacheConfiguration
-    @ObservationIgnored private let streamingAudioDiskCache: StreamingAudioDiskCache?
-    @ObservationIgnored private let streamingAudioRangeFetcher: any StreamingAudioHTTPRangeFetching
-    @ObservationIgnored private var currentStreamingResourceLoaderDelegate: StreamingAudioResourceLoaderDelegate?
-    @ObservationIgnored private weak var currentStreamingPlayerItem: AVPlayerItem?
-    @ObservationIgnored private var currentStreamingFallbackURL: URL?
-    @ObservationIgnored private var hasAttemptedStreamingCacheFallback = false
+    @ObservationIgnored private let audioSessionActivation: PlaybackAudioSessionActivation
     @ObservationIgnored private var voiceBoostConfiguration = VoiceBoostConfiguration.default
-    @ObservationIgnored private var isAudioSessionActive = false
+    @ObservationIgnored var isAudioSessionActive = false
+    @ObservationIgnored private var audioSessionActivationTask: Task<Void, Never>?
+    @ObservationIgnored private var audioSessionActivationGeneration = 0
     @ObservationIgnored private var isPlaybackRequested = false
     @ObservationIgnored private var shouldResumeAfterInterruption = false
     @ObservationIgnored private var sleepTimerTask: Task<Void, Never>?
+    @ObservationIgnored private var remotePlaybackRateChangeHandler: PlaybackRateChangeRequestHandler?
     @ObservationIgnored private var playbackPositionProtection = PlaybackPositionProtection()
     @ObservationIgnored private var playbackAdSkipPolicy = PlaybackAdSkipPolicy()
     @ObservationIgnored private var playbackFailureRecoveryPolicy = PlaybackFailureRecoveryPolicy()
@@ -67,18 +72,15 @@ public final class AVFoundationPlaybackController: PlaybackController {
     @ObservationIgnored private var pendingAutoSkipTarget: TimeInterval?
     @ObservationIgnored private var isPlaybackDiagnosticsEnabled = false
     @ObservationIgnored private var playbackDiagnosticsEvents: [String] = []
+    @ObservationIgnored var playbackStartBehaviorObserver: ((PlaybackStartBehavior) -> Void)?
 
     public convenience init(
         voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics? = nil,
-        nowPlayingArtworkLoader: (any NowPlayingArtworkLoading)? = nil,
-        streamingAudioCacheConfiguration: StreamingAudioCacheConfiguration = .disabled,
-        streamingAudioDiskCache: StreamingAudioDiskCache? = nil
+        nowPlayingArtworkLoader: (any NowPlayingArtworkLoading)? = nil
     ) {
         self.init(
             voiceBoostTapDiagnostics: voiceBoostTapDiagnostics,
             nowPlayingArtworkLoader: nowPlayingArtworkLoader,
-            streamingAudioCacheConfiguration: streamingAudioCacheConfiguration,
-            streamingAudioDiskCache: streamingAudioDiskCache,
             voiceBoostAudioTapFactory: {
                 try VoiceBoostAudioTap(configuration: $0, diagnostics: $1)
             }
@@ -88,8 +90,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
     init(
         voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics?,
         nowPlayingArtworkLoader: (any NowPlayingArtworkLoading)? = nil,
-        streamingAudioCacheConfiguration: StreamingAudioCacheConfiguration = .disabled,
-        streamingAudioDiskCache: StreamingAudioDiskCache? = nil,
+        audioSessionActivation: @escaping PlaybackAudioSessionActivation = {
+            try await activateSystemPlaybackAudioSession()
+        },
         voiceBoostAudioTapFactory: @escaping VoiceBoostAudioTapFactory = {
             try VoiceBoostAudioTap(configuration: $0, diagnostics: $1)
         }
@@ -99,11 +102,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         )
         self.voiceBoostTapDiagnostics = voiceBoostTapDiagnostics
         self.voiceBoostAudioTapFactory = voiceBoostAudioTapFactory
-        self.streamingAudioCacheConfiguration = streamingAudioCacheConfiguration
-        self.streamingAudioDiskCache = streamingAudioDiskCache ?? streamingAudioCacheConfiguration.directory.map {
-            StreamingAudioDiskCache(directory: $0)
-        }
-        self.streamingAudioRangeFetcher = URLSessionStreamingAudioRangeFetcher()
+        self.audioSessionActivation = audioSessionActivation
         installPeriodicTimeObserver()
         observePlayerTimeControlStatus()
         installAudioSessionObservers()
@@ -123,10 +122,10 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
         mediaClockContinuations.removeAll()
         removeCurrentItemObservations()
-        resetStreamingCachePlaybackState()
         playerTimeControlStatusObservation?.invalidate()
         removeAudioSessionObservers()
         voiceBoostTrackLoadTask?.cancel()
+        audioSessionActivationTask?.cancel()
         sleepTimerTask?.cancel()
         player.pause()
         player.replaceCurrentItem(with: nil)
@@ -146,7 +145,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
 
         removeCurrentItemObservations()
-        resetStreamingCachePlaybackState()
+        playbackPositionProtection.clear()
         voiceBoostTrackLoadTask?.cancel()
         voiceBoostTrackLoadTask = nil
         isPlaybackRequested = false
@@ -155,6 +154,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
         autoSkipEventSequence = 0
         lastAutoSkipEvent = nil
         pendingAutoSkipTarget = nil
+        if sleepTimerMode == .endOfEpisode {
+            clearSleepTimer()
+        }
 
         let episodeDuration = finitePositive(episode.duration)
         let initialPosition = clampPlaybackPosition(startPosition, to: episodeDuration)
@@ -168,7 +170,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
             progressBoundaryID: snapshot.progressBoundaryID
         ))
 
-        let playerItem = makePlayerItem(for: episode, audioURL: audioURL)
+        let playerItem = makeDirectPlayerItem(audioURL: audioURL)
         player.replaceCurrentItem(with: playerItem)
         observeCurrentItem(playerItem)
 
@@ -287,14 +289,12 @@ public final class AVFoundationPlaybackController: PlaybackController {
             return
         }
 
-        do {
-            try activateAudioSession()
-        } catch {
-            failPlayback(message: "Unable to activate audio session: \(error.localizedDescription)")
+        guard !isAudioSessionActive else {
+            requestPlaybackForCurrentItem()
             return
         }
 
-        requestPlaybackForCurrentItem()
+        beginAudioSessionActivation()
     }
 
     public func pause() {
@@ -303,6 +303,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
     private func pause(reason: String) {
         isPlaybackRequested = false
+        shouldResumeAfterInterruption = false
         player.pause()
         snapshot.state = snapshot.currentEpisode == nil ? .idle : .paused
         markProgressBoundary()
@@ -316,12 +317,11 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
         isPlaybackRequested = false
         shouldResumeAfterInterruption = false
+        invalidateAudioSessionActivation()
         removeCurrentItemObservations()
-        resetStreamingCachePlaybackState()
         voiceBoostTrackLoadTask?.cancel()
         voiceBoostTrackLoadTask = nil
-        sleepTimerTask?.cancel()
-        sleepTimerTask = nil
+        clearSleepTimer()
         player.pause()
         player.replaceCurrentItem(with: nil)
         currentVoiceBoostTap = nil
@@ -343,10 +343,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
     private func togglePlayPause(source: String) {
         recordDiagnosticsEvent("toggle play/pause source=\(source) state=\(snapshot.state.accessibilityDescription)")
-        switch snapshot.state {
-        case .playing, .buffering:
+        if snapshot.state.showsPauseButton {
             pause(reason: "toggle \(source)")
-        default:
+        } else {
             play(source: "toggle \(source)")
         }
     }
@@ -375,29 +374,78 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
     public func setRate(_ rate: Float) {
         snapshot.rate = clampedPlaybackRate(rate)
-        if isPlaybackRequested {
+        if isPlaybackRequested, isAudioSessionActive {
             player.rate = snapshot.rate
         }
         publishPlaybackState()
     }
 
+    public func setRemotePlaybackRateChangeHandler(
+        _ handler: PlaybackRateChangeRequestHandler?
+    ) {
+        remotePlaybackRateChangeHandler = handler
+    }
+
+    public func sleepTimerRemaining(at date: Date = .now) -> TimeInterval? {
+        switch sleepTimerMode {
+        case .off:
+            nil
+        case .duration:
+            snapshot.sleepTimerEndsAt.map { max(0, $0.timeIntervalSince(date)) }
+        case .endOfEpisode:
+            PlaybackEndOfEpisodeSleepTimer.remainingPlaybackDuration(
+                duration: resolvedDuration(),
+                position: snapshot.position,
+                rate: snapshot.rate
+            )
+        }
+    }
+
     public func setSleepTimer(duration: TimeInterval?) {
+        setSleepTimer(mode: duration.map(PlaybackSleepTimerMode.duration) ?? .off)
+    }
+
+    public func setSleepTimer(mode: PlaybackSleepTimerMode) {
+        setSleepTimer(mode: mode, now: .now)
+    }
+
+    func setSleepTimer(mode: PlaybackSleepTimerMode, now: Date) {
         sleepTimerTask?.cancel()
 
-        guard let duration, duration > 0 else {
+        switch mode {
+        case .off:
+            sleepTimerMode = .off
             snapshot.sleepTimerEndsAt = nil
             syncObservableState()
-            return
+        case .duration(let duration):
+            guard duration > 0 else {
+                sleepTimerMode = .off
+                snapshot.sleepTimerEndsAt = nil
+                syncObservableState()
+                return
+            }
+            sleepTimerMode = .duration(duration)
+            scheduleSleepTimer(after: duration, now: now)
+        case .endOfEpisode:
+            guard snapshot.currentEpisode != nil else {
+                sleepTimerMode = .off
+                snapshot.sleepTimerEndsAt = nil
+                syncObservableState()
+                return
+            }
+            sleepTimerMode = .endOfEpisode
+            snapshot.sleepTimerEndsAt = nil
+            syncObservableState()
         }
+    }
 
-        let endsAt = Date(timeIntervalSinceNow: duration)
+    private func scheduleSleepTimer(after duration: TimeInterval, now: Date) {
+        let endsAt = now.addingTimeInterval(duration)
         snapshot.sleepTimerEndsAt = endsAt
         syncObservableState()
         sleepTimerTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: .seconds(duration))
-            } catch is CancellationError {
-                return
             } catch {
                 return
             }
@@ -473,8 +521,10 @@ public final class AVFoundationPlaybackController: PlaybackController {
             forInterval: CMTime(seconds: interval, preferredTimescale: 600),
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, let sample = currentMediaClockSample() else {
+            // AVPlayer invokes this callback on the explicitly supplied main
+            // queue, so avoid allocating a MainActor hop at display cadence.
+            MainActor.assumeIsolated {
+                guard let self, let sample = self.currentMediaClockSample() else {
                     return
                 }
                 continuation.yield(sample)
@@ -502,9 +552,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
             return nil
         }
 
-        let kind: PlaybackItemSourceIdentity.Kind = if asset.url.scheme == StreamingAudioCacheURL.scheme {
-            .streamingCache
-        } else if asset.url.isFileURL {
+        let kind: PlaybackItemSourceIdentity.Kind = if asset.url.isFileURL {
             .localFile
         } else {
             .networkStream
@@ -565,7 +613,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
                 self?.seek(to: position, intent: .scrub)
             },
             changeRate: { [weak self] rate in
-                self?.setRate(rate)
+                self?.handleRemotePlaybackRateChange(rate)
             }
         ))
     }
@@ -576,6 +624,14 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
     private func skipBackward() {
         skip(by: -skipBackwardInterval)
+    }
+
+    func handleRemotePlaybackRateChange(_ rate: Float) {
+        if let remotePlaybackRateChangeHandler {
+            remotePlaybackRateChangeHandler(rate)
+        } else {
+            setRate(rate)
+        }
     }
 
     private func installAudioSessionObservers() {
@@ -651,6 +707,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
     }
 
     private func handleAudioSessionMediaServicesWereReset() {
+        invalidateAudioSessionActivation()
         isAudioSessionActive = false
         recordDiagnosticsEvent("audio session media services reset")
 
@@ -661,26 +718,33 @@ public final class AVFoundationPlaybackController: PlaybackController {
         play(source: "audio session media services reset")
     }
 
-    private func handleAudioSessionInterruptionBegan() {
-        shouldResumeAfterInterruption = isPlaybackRequested && snapshot.state == .playing
-        isPlaybackRequested = false
-        player.pause()
-
+    func handleAudioSessionInterruptionBegan() {
+        let recordedResumeIntent = PlaybackInterruptionResumePolicy.shouldRecordResumeIntent(
+            isPlaybackRequested: isPlaybackRequested,
+            state: snapshot.state
+        )
+        invalidateAudioSessionActivation()
+        isAudioSessionActive = false
         guard snapshot.currentEpisode != nil else {
+            isPlaybackRequested = false
+            player.pause()
+            shouldResumeAfterInterruption = false
             return
         }
-
-        snapshot.state = .paused
-        markProgressBoundary()
-        publishPlaybackState()
+        pause(reason: "audio session interruption began")
+        shouldResumeAfterInterruption = recordedResumeIntent
     }
 
-    private func handleAudioSessionInterruptionEnded(shouldResume: Bool) {
+    func handleAudioSessionInterruptionEnded(shouldResume: Bool) {
         defer {
             shouldResumeAfterInterruption = false
         }
 
-        guard shouldResume, shouldResumeAfterInterruption, snapshot.currentEpisode != nil else {
+        guard PlaybackInterruptionResumePolicy.shouldResume(
+            operatingSystemShouldResume: shouldResume,
+            recordedResumeIntent: shouldResumeAfterInterruption,
+            hasCurrentEpisode: snapshot.currentEpisode != nil
+        ) else {
             return
         }
 
@@ -697,39 +761,25 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
         switch reason {
         case .oldDeviceUnavailable:
-            if snapshot.currentEpisode != nil {
-                markProgressBoundary()
-                publishPlaybackState()
-            }
+            handleAudioSessionOldDeviceUnavailable()
         default:
             break
         }
         #endif
     }
 
-    private func makePlayerItem(for episode: Episode, audioURL: URL) -> AVPlayerItem {
-        guard StreamingAudioCachePolicy.isEligible(audioURL, configuration: streamingAudioCacheConfiguration),
-              let cache = streamingAudioDiskCache
-        else {
-            return makeDirectPlayerItem(audioURL: audioURL)
+    func handleAudioSessionOldDeviceUnavailable() {
+        guard snapshot.currentEpisode != nil else {
+            return
         }
 
-        let resourceLoaderDelegate = StreamingAudioResourceLoaderDelegate(
-            episodeID: episode.id.rawValue,
-            podcastID: episode.podcastID.rawValue,
-            originalURL: audioURL,
-            cache: cache,
-            fetcher: streamingAudioRangeFetcher,
-            byteBudget: streamingAudioCacheConfiguration.byteBudget
-        )
-        let asset = AVURLAsset(url: StreamingAudioCacheURL.url(for: audioURL))
-        resourceLoaderDelegate.install(on: asset)
-        let playerItem = configuredPlayerItem(asset: asset)
-        currentStreamingResourceLoaderDelegate = resourceLoaderDelegate
-        currentStreamingPlayerItem = playerItem
-        currentStreamingFallbackURL = audioURL
-        hasAttemptedStreamingCacheFallback = false
-        return playerItem
+        if case .failed = snapshot.state {
+            shouldResumeAfterInterruption = false
+            recordDiagnosticsEvent("old audio route unavailable while playback failed")
+            return
+        }
+
+        pause(reason: "old audio route unavailable")
     }
 
     private func makeDirectPlayerItem(audioURL: URL) -> AVPlayerItem {
@@ -749,15 +799,6 @@ public final class AVFoundationPlaybackController: PlaybackController {
         installVoiceBoostTap(on: playerItem)
         scheduleTrackBoundVoiceBoostTapInstall(for: playerItem, asset: asset)
         return playerItem
-    }
-
-    private func resetStreamingCachePlaybackState() {
-        currentStreamingResourceLoaderDelegate?.cancelAll()
-        currentStreamingResourceLoaderDelegate = nil
-        currentStreamingPlayerItem = nil
-        currentStreamingFallbackURL = nil
-        hasAttemptedStreamingCacheFallback = false
-        playbackPositionProtection.clear()
     }
 
     private func scheduleTrackBoundVoiceBoostTapInstall(for playerItem: AVPlayerItem, asset: AVURLAsset) {
@@ -932,7 +973,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
     }
 
     private func handlePlayerTimeControlStatusChanged() {
-        guard snapshot.currentEpisode != nil, isPlaybackRequested else {
+        guard snapshot.currentEpisode != nil, isPlaybackRequested, isAudioSessionActive else {
             return
         }
 
@@ -956,7 +997,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
         switch playerItem.status {
         case .unknown:
-            if isPlaybackRequested {
+            if isPlaybackRequested, isAudioSessionActive {
                 transitionToBuffering(reason: "item status unknown")
             }
         case .readyToPlay:
@@ -964,7 +1005,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
                 publishPlaybackState()
             }
             if isPlaybackRequested {
-                requestPlaybackForReadyItem(playerItem)
+                if isAudioSessionActive {
+                    requestPlaybackForReadyItem(playerItem)
+                }
             } else if snapshot.state == .loading || snapshot.state == .buffering {
                 snapshot.state = .paused
                 publishPlaybackState()
@@ -979,7 +1022,8 @@ public final class AVFoundationPlaybackController: PlaybackController {
     private func handleCurrentItemBufferingChanged(_ playerItem: AVPlayerItem) {
         guard player.currentItem === playerItem,
               playerItem.status == .readyToPlay,
-              isPlaybackRequested
+              isPlaybackRequested,
+              isAudioSessionActive
         else {
             return
         }
@@ -996,11 +1040,19 @@ public final class AVFoundationPlaybackController: PlaybackController {
             return
         }
 
+        handleCurrentItemPlaybackStalled()
+    }
+
+    func handleCurrentItemPlaybackStalled() {
         if isPlaybackRequested {
             recordDiagnosticsEvent("playback stalled at \(diagnosticsTime(snapshot.position))")
             transitionToBuffering(reason: "AVPlayerItemPlaybackStalled")
-            player.playImmediately(atRate: snapshot.rate)
+            resumeUsingAutomaticBufferWaiting()
         }
+    }
+
+    var automaticallyWaitsToMinimizeStalling: Bool {
+        player.automaticallyWaitsToMinimizeStalling
     }
 
     private func requestPlaybackForCurrentItem() {
@@ -1027,6 +1079,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
             return
         }
 
+        // This path follows an explicit user request, so immediate start is
+        // preferable to AVPlayer extending the tap-to-audio delay.
+        playbackStartBehaviorObserver?(.immediateUserRequest)
         player.playImmediately(atRate: snapshot.rate)
         switch player.timeControlStatus {
         case .playing:
@@ -1040,6 +1095,12 @@ public final class AVFoundationPlaybackController: PlaybackController {
             "requested ready item playback result=\(snapshot.state.accessibilityDescription) timeControlStatus=\(diagnosticsTimeControlStatus) waitingReason=\(player.reasonForWaitingToPlay?.rawValue ?? "nil")"
         )
         publishPlaybackState()
+    }
+
+    private func resumeUsingAutomaticBufferWaiting() {
+        playbackStartBehaviorObserver?(.automaticBufferWaiting)
+        player.defaultRate = snapshot.rate
+        player.play()
     }
 
     private var needsCurrentItemRebuildForPlaybackRetry: Bool {
@@ -1065,13 +1126,13 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
 
         removeCurrentItemObservations()
-        resetStreamingCachePlaybackState()
+        playbackPositionProtection.clear()
         voiceBoostTrackLoadTask?.cancel()
         voiceBoostTrackLoadTask = nil
         currentVoiceBoostTap = nil
         player.pause()
 
-        let retryItem = makePlayerItem(for: episode, audioURL: audioURL)
+        let retryItem = makeDirectPlayerItem(audioURL: audioURL)
         player.replaceCurrentItem(with: retryItem)
         observeCurrentItem(retryItem)
 
@@ -1085,45 +1146,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
         return true
     }
 
-    private func fallbackFromStreamingCacheIfNeeded(failedItem: AVPlayerItem) -> Bool {
-        guard currentStreamingPlayerItem === failedItem,
-              !hasAttemptedStreamingCacheFallback,
-              let fallbackURL = currentStreamingFallbackURL
-        else {
-            return false
-        }
-
-        hasAttemptedStreamingCacheFallback = true
-        currentStreamingResourceLoaderDelegate?.cancelAll()
-        currentStreamingResourceLoaderDelegate = nil
-        currentStreamingPlayerItem = nil
-        currentStreamingFallbackURL = nil
-        voiceBoostTrackLoadTask?.cancel()
-        voiceBoostTrackLoadTask = nil
-        removeCurrentItemObservations()
-
-        let fallbackItem = makeDirectPlayerItem(audioURL: fallbackURL)
-        player.replaceCurrentItem(with: fallbackItem)
-        observeCurrentItem(fallbackItem)
-
-        if snapshot.position > 0 {
-            seekPlayer(to: snapshot.position, mode: .restoredPosition)
-        }
-
-        recordDiagnosticsEvent("falling back from streaming cache to direct AVPlayer item")
-        if isPlaybackRequested {
-            requestPlaybackForCurrentItem()
-        } else {
-            snapshot.state = .paused
-            publishPlaybackState()
-        }
-        return true
-    }
-
     private func handleFailedCurrentItem(_ playerItem: AVPlayerItem) {
-        if fallbackFromStreamingCacheIfNeeded(failedItem: playerItem) {
-            return
-        }
         if recoverFromFailedCurrentItemIfNeeded(playerItem) {
             return
         }
@@ -1177,6 +1200,7 @@ public final class AVFoundationPlaybackController: PlaybackController {
 
     private func failPlayback(message: String) {
         isPlaybackRequested = false
+        shouldResumeAfterInterruption = false
         player.pause()
         let playerPosition = clampPlaybackPosition(player.currentTime().seconds, to: resolvedDuration())
         if playerPosition > snapshot.position {
@@ -1206,14 +1230,17 @@ public final class AVFoundationPlaybackController: PlaybackController {
         }
     }
 
-    private func handleCurrentItemDidPlayToEnd() {
-        currentStreamingResourceLoaderDelegate?.markCompleted()
+    func handleCurrentItemDidPlayToEnd() {
         isPlaybackRequested = false
+        shouldResumeAfterInterruption = false
         if let duration = resolvedDuration() {
             snapshot.duration = duration
             snapshot.position = duration
         }
         player.pause()
+        if sleepTimerMode == .endOfEpisode {
+            clearSleepTimer()
+        }
         snapshot.state = snapshot.currentEpisode == nil ? .idle : .paused
         markProgressBoundary()
         publishPlaybackState()
@@ -1407,6 +1434,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
     }
 
     private func clearSleepTimer() {
+        sleepTimerTask?.cancel()
+        sleepTimerTask = nil
+        sleepTimerMode = .off
         snapshot.sleepTimerEndsAt = nil
         syncObservableState()
     }
@@ -1434,9 +1464,13 @@ public final class AVFoundationPlaybackController: PlaybackController {
         remoteCommandController.updateAvailability(for: snapshot, resolvedDuration: duration)
     }
 
-    private func recordDiagnosticsEvent(_ event: String) {
+    private func recordDiagnosticsEvent(_ event: @autoclosure () -> String) {
+        guard isPlaybackDiagnosticsEnabled else {
+            return
+        }
+
         let timestamp = Date.now.formatted(.dateTime.hour().minute().second())
-        playbackDiagnosticsEvents.append("[\(timestamp)] \(event)")
+        playbackDiagnosticsEvents.append("[\(timestamp)] \(event())")
         if playbackDiagnosticsEvents.count > 80 {
             playbackDiagnosticsEvents.removeFirst(playbackDiagnosticsEvents.count - 80)
         }
@@ -1459,10 +1493,6 @@ public final class AVFoundationPlaybackController: PlaybackController {
             protectedPlaybackPosition: playbackPositionProtection.position,
             automaticTransientFailureRetryCount: playbackFailureRecoveryPolicy.automaticTransientFailureRetryCount,
             automaticTransientFailureRetryLimit: PlaybackFailureRecoveryPolicy.automaticTransientFailureRetryLimit,
-            streamingAudioCacheConfiguration: streamingAudioCacheConfiguration,
-            currentStreamingPlayerItem: currentStreamingPlayerItem,
-            currentStreamingFallbackURL: currentStreamingFallbackURL,
-            hasAttemptedStreamingCacheFallback: hasAttemptedStreamingCacheFallback,
             events: playbackDiagnosticsEvents
         )
         if playbackDiagnosticsText != text {
@@ -1478,38 +1508,83 @@ public final class AVFoundationPlaybackController: PlaybackController {
         AVFoundationPlaybackDiagnosticsFormatter.timeControlStatus(player.timeControlStatus)
     }
 
-    private func activateAudioSession() throws {
-        #if os(iOS) || os(tvOS) || os(visionOS)
-        let session = AVAudioSession.sharedInstance()
-        guard !isAudioSessionActive else {
+    private func beginAudioSessionActivation() {
+        guard audioSessionActivationTask == nil else {
             return
         }
 
-        do {
-            try activateAudioSessionOnce(session)
-            isAudioSessionActive = true
-        } catch {
-            isAudioSessionActive = false
-            recordDiagnosticsEvent("audio session activation failed: \(error.localizedDescription)")
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        audioSessionActivationGeneration += 1
+        let generation = audioSessionActivationGeneration
+        let activation = audioSessionActivation
+        snapshot.state = .loading
+        publishPlaybackState()
+
+        audioSessionActivationTask = Task { [weak self] in
             do {
-                try activateAudioSessionOnce(session)
-                isAudioSessionActive = true
-                recordDiagnosticsEvent("audio session activated after retry")
+                let didRetry = try await activation()
+                self?.completeAudioSessionActivation(
+                    generation: generation,
+                    didRetry: didRetry
+                )
+            } catch is CancellationError {
             } catch {
-                recordDiagnosticsEvent("audio session activation retry failed: \(error.localizedDescription)")
-                throw error
+                self?.completeAudioSessionActivation(
+                    generation: generation,
+                    error: error
+                )
             }
         }
-        #endif
     }
 
-    #if os(iOS) || os(tvOS) || os(visionOS)
-    private func activateAudioSessionOnce(_ session: AVAudioSession) throws {
-        try session.setCategory(.playback, mode: .spokenAudio, policy: .longFormAudio)
-        try session.setActive(true)
+    private func completeAudioSessionActivation(
+        generation: Int,
+        didRetry: Bool
+    ) {
+        guard generation == audioSessionActivationGeneration else {
+            return
+        }
+
+        audioSessionActivationTask = nil
+        isAudioSessionActive = true
+        if didRetry {
+            recordDiagnosticsEvent("audio session activated after retry")
+        }
+        guard isPlaybackRequested, snapshot.currentEpisode != nil else {
+            return
+        }
+        requestPlaybackForCurrentItem()
     }
-    #endif
+
+    private func completeAudioSessionActivation(
+        generation: Int,
+        error: any Error
+    ) {
+        guard generation == audioSessionActivationGeneration else {
+            return
+        }
+
+        audioSessionActivationTask = nil
+        isAudioSessionActive = false
+        recordDiagnosticsEvent("audio session activation retry failed: \(error.localizedDescription)")
+        guard isPlaybackRequested else {
+            return
+        }
+        failPlayback(message: "Unable to activate audio session: \(error.localizedDescription)")
+    }
+
+    private func invalidateAudioSessionActivation() {
+        audioSessionActivationGeneration += 1
+        audioSessionActivationTask?.cancel()
+        audioSessionActivationTask = nil
+    }
+
+    var currentPlayerRate: Float {
+        player.rate
+    }
+
+    var currentPlayerDefaultRate: Float {
+        player.defaultRate
+    }
 
     private func deactivateAudioSession() {
         #if os(iOS) || os(tvOS) || os(visionOS)
@@ -1521,6 +1596,9 @@ public final class AVFoundationPlaybackController: PlaybackController {
             try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             isAudioSessionActive = false
         } catch {
+            Self.logger.debug(
+                "Audio session deactivation failed: \(error.localizedDescription, privacy: .public)"
+            )
         }
         #endif
     }

@@ -11,10 +11,6 @@ enum AVFoundationPlaybackDiagnosticsFormatter {
         protectedPlaybackPosition: TimeInterval?,
         automaticTransientFailureRetryCount: Int,
         automaticTransientFailureRetryLimit: Int,
-        streamingAudioCacheConfiguration: StreamingAudioCacheConfiguration,
-        currentStreamingPlayerItem: AVPlayerItem?,
-        currentStreamingFallbackURL: URL?,
-        hasAttemptedStreamingCacheFallback: Bool,
         events: [String]
     ) -> String {
         var lines: [String] = [
@@ -39,11 +35,6 @@ enum AVFoundationPlaybackDiagnosticsFormatter {
             "",
             "playback.sourceMode: \(sourceModeDescription(for: item))",
             "playback.item.assetURL: \((item?.asset as? AVURLAsset)?.url.absoluteString ?? "nil")",
-            "streaming.mode: \(streamingModeDescription(for: item, currentStreamingPlayerItem: currentStreamingPlayerItem))",
-            "streaming.cache.enabled: \(streamingAudioCacheConfiguration.isEnabled)",
-            "streaming.cache.directory: \(streamingAudioCacheConfiguration.directory?.path ?? "nil")",
-            "streaming.cache.fallbackURL: \(currentStreamingFallbackURL?.absoluteString ?? "nil")",
-            "streaming.cache.attemptedFallback: \(hasAttemptedStreamingCacheFallback)",
             "",
             "player.timeControlStatus: \(timeControlStatus(player.timeControlStatus))",
             "player.reasonForWaitingToPlay: \(player.reasonForWaitingToPlay?.rawValue ?? "nil")",
@@ -179,21 +170,7 @@ enum AVFoundationPlaybackDiagnosticsFormatter {
         guard let asset = item?.asset as? AVURLAsset else {
             return "nil"
         }
-        if asset.url.scheme == StreamingAudioCacheURL.scheme {
-            return "streaming cache"
-        }
         return asset.url.isFileURL ? "local file" : "network stream"
-    }
-
-    private static func streamingModeDescription(
-        for item: AVPlayerItem?,
-        currentStreamingPlayerItem: AVPlayerItem?
-    ) -> String {
-        if let item, currentStreamingPlayerItem === item {
-            return "byte-range cache resource loader"
-        }
-
-        return "direct AVPlayer streaming"
     }
 
     private static func description(for state: PlaybackState) -> String {

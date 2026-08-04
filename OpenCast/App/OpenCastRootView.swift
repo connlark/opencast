@@ -19,8 +19,8 @@ struct OpenCastRootView: View {
     @State private var downloadsNavigationPath: [AppRoute] = []
     @State private var searchNavigationPath: [AppRoute] = []
     @State private var sheetDestination: SheetDestination?
-    @State private var isNowPlayingPresented = false
     @State private var isInitialSetupComplete = false
+    @State private var initialSetupGate = InitialSetupGate()
     @State private var hasFlushedProgressForLifecycleExit = false
     @State private var importedDataRefreshTask: Task<Void, Never>?
     @State private var remoteStoreChangeArbiter = SyncedStoreRemoteChangeArbiter()
@@ -39,7 +39,7 @@ struct OpenCastRootView: View {
 
     var body: some View {
         OpenCastRootLayerView(
-            isNowPlayingPresented: isNowPlayingPresented,
+            isNowPlayingPresented: appModel.isNowPlayingPresented,
             onDismissNowPlaying: dismissNowPlaying,
             onOpenCurrentEpisode: openCurrentEpisodeFromNowPlaying,
             onOpenCurrentPodcast: openCurrentPodcastFromNowPlaying
@@ -50,7 +50,7 @@ struct OpenCastRootView: View {
                 inboxNavigationPath: $inboxNavigationPath,
                 downloadsNavigationPath: $downloadsNavigationPath,
                 searchNavigationPath: $searchNavigationPath,
-                isNowPlayingPresented: isNowPlayingPresented,
+                isNowPlayingPresented: appModel.isNowPlayingPresented,
                 onAdd: presentAddPodcast,
                 onPresentDataNukeConfirmation: presentDataNukeConfirmation,
                 onPresentNowPlaying: presentNowPlaying
@@ -127,7 +127,6 @@ struct OpenCastRootView: View {
 
         nowPlayingProbeMark("present-requested")
         appModel.isNowPlayingPresented = true
-        isNowPlayingPresented = true
     }
 
     private func presentAddPodcast() {
@@ -173,6 +172,7 @@ struct OpenCastRootView: View {
         appModel.restorePlaybackSurfaceIfNeeded(modelContext: modelContext)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         isInitialSetupComplete = true
+        initialSetupGate.complete()
         await appModel.refreshLibraryIfStale(modelContext: modelContext)
         appModel.cacheController.pruneIfNeeded()
         await runVoiceBoostDeviceProbeIfActive()
@@ -184,7 +184,6 @@ struct OpenCastRootView: View {
 
     private func dismissNowPlaying() {
         appModel.isNowPlayingPresented = false
-        isNowPlayingPresented = false
     }
 
     private func openCurrentEpisodeFromNowPlaying() {
@@ -242,9 +241,9 @@ struct OpenCastRootView: View {
         // including this process's own saves. Only genuinely remote
         // synced-store changes warrant the synced-data refetch: local-store
         // churn (download/transcription commits) is excluded by store URL,
-        // and the app's own progress saves — one per 5-second playback flush
-        // — are consumed as self-save credits by the arbiter, since they
-        // already updated in-memory state on the way to the store.
+        // and the app's own progress saves — periodic and boundary playback
+        // flushes — are consumed as self-save credits by the arbiter, since
+        // they already updated in-memory state on the way to the store.
         let syncedStoreURL = modelContext.container.configurations
             .first { $0.name == OpenCastModelContainerFactory.syncedConfigurationName }?
             .url.standardizedFileURL
@@ -602,13 +601,7 @@ struct OpenCastRootView: View {
     }
 
     private func waitForInitialSetup() async {
-        while !isInitialSetupComplete && !Task.isCancelled {
-            do {
-                try await Task.sleep(for: .milliseconds(100))
-            } catch {
-                return
-            }
-        }
+        await initialSetupGate.wait()
     }
 
     private func routeToInbox() {

@@ -8,11 +8,12 @@ struct PodcastEpisodeSwipeActionsModifier: ViewModifier {
     let episode: EpisodeListItemSnapshot
 
     func body(content: Content) -> some View {
-        let isPlayed = appModel.library.progressRecord(for: episode.episodeID)?.isPlayed == true
-        let downloadState = appModel.downloadMenuState(for: episode)
-
+        // State reads live inside the swipe-action builders, which SwiftUI
+        // evaluates on reveal — the row body never pays the record lookup or
+        // the completed-download file stat (perf 21 / sync-data I).
         content
             .swipeActions(edge: .leading) {
+                let isPlayed = appModel.library.progressRecord(for: episode.episodeID)?.isPlayed == true
                 Button(
                     isPlayed ? "Mark Unplayed" : "Mark Played",
                     systemImage: isPlayed ? "arrow.uturn.backward.circle" : "checkmark.circle",
@@ -21,6 +22,7 @@ struct PodcastEpisodeSwipeActionsModifier: ViewModifier {
                 .tint(isPlayed ? .blue : .green)
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                let downloadState = appModel.downloadMenuState(for: episode)
                 if downloadState.showsDownloadAction {
                     Button("Download", systemImage: "arrow.down.circle", action: download)
                         .tint(.blue)

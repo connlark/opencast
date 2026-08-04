@@ -11,6 +11,13 @@ final class RemoteTranscriptionJobStore {
     /// the episode menu, consumed by the sheet's Start/Cancel.
     var startPreview: RemoteTranscriptionStartPreviewRequest?
 
+    func dismissStartPreview(ifMatching request: RemoteTranscriptionStartPreviewRequest) {
+        guard startPreview == request else {
+            return
+        }
+        startPreview = nil
+    }
+
     private static let referencesDefaultsKey = "remoteTranscription.jobReferences"
 
     private(set) var activeEpisodeID: String?

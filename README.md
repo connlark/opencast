@@ -4,9 +4,10 @@
 </p>
 
 <p align="center">
-  <img src="Screenshots/app_store_01_library_framed.png" alt="OpenCast library" width="150">
-  <img src="Screenshots/app_store_02_inbox_framed.png" alt="OpenCast inbox" width="150">
-  <img src="Screenshots/app_store_04_now_playing_framed.png" alt="OpenCast now playing" width="150">
-  <img src="Screenshots/app_store_05_sound_lab_framed.png" alt="OpenCast sound lab" width="150">
-  <img src="Screenshots/app_store_06_episode_detail_framed.png" alt="OpenCast episode detail" width="150">
+  <img src="Server/Website/public/screenshots/app_store_01_now_playing_framed.91d0fcf312.w464.png" alt="OpenCast now playing" width="150">
+  <img src="Server/Website/public/screenshots/app_store_02_transcript_framed.f180f07e5a.w464.png" alt="OpenCast transcript" width="150">
+  <img src="Server/Website/public/screenshots/app_store_03_notification_framed.e9279b5625.w464.png" alt="OpenCast notification" width="150">
+  <img src="Server/Website/public/screenshots/app_store_04_library_framed.3bb4225004.w464.png" alt="OpenCast library" width="150">
+  <img src="Server/Website/public/screenshots/app_store_05_podcast_detail_framed.84a8bb0090.w464.png" alt="OpenCast podcast detail" width="150">
+  <img src="Server/Website/public/screenshots/app_store_07_inbox_framed.e3201d6cd8.w464.png" alt="OpenCast inbox" width="150">
 </p>

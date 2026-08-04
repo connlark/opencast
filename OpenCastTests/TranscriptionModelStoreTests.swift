@@ -280,19 +280,10 @@ struct TranscriptionModelStoreTests {
     }
 
     private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
-        EpisodeListItemSnapshot(
+        .fixture(
             episodeID: episodeID,
-            podcastID: "https://example.com/feed.xml",
-            podcastTitle: "Example Show",
-            title: "Example Episode",
-            summary: nil,
-            publishedAt: nil,
-            duration: 60,
             audioURL: "https://example.com/\(episodeID).mp3",
-            artworkURL: nil,
-            artworkPreview: nil,
-            guid: episodeID,
-            cachedAt: .now
+            guid: episodeID
         )
     }
 

@@ -8,8 +8,7 @@ use worker::{Env, Headers, Method, Request, RequestInit, Response, Result};
 
 use crate::auth::{bearer_token, token_hash, token_matches, AUTHORIZATION_HEADER};
 use crate::challenge_limits::{
-    challenge_bucket_start, challenge_source_hash_key_for_environment,
-    global_challenge_allows_insert, install_challenge_allows_insert, keyed_source_token,
+    challenge_bucket_start, challenge_source_hash_key_for_environment, keyed_source_token,
     source_challenge_allows_after_increment, APP_ATTEST_KEY_LIMIT_WINDOW_SECONDS,
     CHALLENGE_LIMIT_WINDOW_SECONDS, CHALLENGE_RETENTION_SECONDS,
     CHALLENGE_SOURCE_BUCKET_RETENTION_SECONDS, CHALLENGE_TTL_SECONDS,
@@ -680,18 +679,6 @@ async fn handle_challenge(
         return json_error_code(429, "challenge_rate_limited");
     }
 
-    let global_challenge_count =
-        storage::global_challenge_count_since(db, challenge_window_start).await?;
-    if !global_challenge_allows_insert(global_challenge_count) {
-        return json_error_code(429, "challenge_rate_limited");
-    }
-
-    let challenge_count =
-        storage::challenge_count_since(db, &body.install_id, challenge_window_start).await?;
-    if !install_challenge_allows_insert(challenge_count) {
-        return json_error_code(429, "challenge_rate_limited");
-    }
-
     let challenge_id = random::random_urlsafe_token(16)
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
     let challenge = random::random_urlsafe_token(32)
@@ -699,7 +686,9 @@ async fn handle_challenge(
     let Some(expires_at) = now.checked_add(CHALLENGE_TTL_SECONDS) else {
         return json_error_code(500, "timestamp_overflow");
     };
-    storage::insert_challenge(
+    // Per-install and global hourly caps are predicates of this single
+    // atomic statement — concurrent requests cannot overshoot them.
+    let admitted = storage::insert_challenge_within_limits(
         db,
         &challenge_id,
         &challenge,
@@ -707,8 +696,12 @@ async fn handle_challenge(
         &body.install_id,
         now,
         expires_at,
+        challenge_window_start,
     )
     .await?;
+    if !admitted {
+        return json_error_code(429, "challenge_rate_limited");
+    }
 
     json_success(
         200,

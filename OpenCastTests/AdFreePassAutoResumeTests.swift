@@ -10,7 +10,7 @@ import Testing
 struct AdFreePassAutoResumeTests {
     @Test("Foreground maintenance resumes environmental interruptions for the current episode")
     func foregroundMaintenanceResumesEnvironmentalInterruptions() async throws {
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             episodeID: "auto-resume-environmental",
             errorMessage: EpisodeTranscriptionStore.environmentalInterruptMessage
         )
@@ -27,7 +27,7 @@ struct AdFreePassAutoResumeTests {
 
     @Test("Foreground maintenance does not resume plain user interruptions")
     func foregroundMaintenanceDoesNotResumePlainInterruptions() async throws {
-        let fixture = try makeFixture(episodeID: "auto-resume-plain", errorMessage: nil)
+        let fixture = try await makeFixture(episodeID: "auto-resume-plain", errorMessage: nil)
 
         fixture.appModel.resumeEnvironmentalAdFreePassIfNeeded(modelContext: fixture.context)
 
@@ -39,7 +39,7 @@ struct AdFreePassAutoResumeTests {
     private func makeFixture(
         episodeID: String,
         errorMessage: String?
-    ) throws -> AutoResumeFixture {
+    ) async throws -> AutoResumeFixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -81,7 +81,7 @@ struct AdFreePassAutoResumeTests {
             context: context,
             errorMessage: errorMessage
         )
-        downloads.load(modelContext: context)
+        await downloads.load(modelContext: context)
         transcriptionModels.load(modelContext: context)
         transcriptions.load(modelContext: context)
         adAnalyses.load(modelContext: context)
@@ -105,19 +105,10 @@ struct AdFreePassAutoResumeTests {
     }
 
     private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
-        EpisodeListItemSnapshot(
+        .fixture(
             episodeID: episodeID,
-            podcastID: "https://example.com/feed.xml",
-            podcastTitle: "Example Show",
-            title: "Example Episode",
-            summary: nil,
-            publishedAt: nil,
-            duration: 60,
             audioURL: "https://example.com/\(episodeID).mp3",
-            artworkURL: nil,
-            artworkPreview: nil,
-            guid: episodeID,
-            cachedAt: .now
+            guid: episodeID
         )
     }
 

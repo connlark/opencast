@@ -89,7 +89,7 @@ struct RemoteTranscriptionConsumptionPreviewSheet: View {
     }
 
     private func cancel() {
-        appModel.remoteTranscription.store.startPreview = nil
+        appModel.remoteTranscription.store.dismissStartPreview(ifMatching: request)
         dismiss()
     }
 }

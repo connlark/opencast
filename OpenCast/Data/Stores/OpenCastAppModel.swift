@@ -5,11 +5,19 @@ import OpenCastPlayback
 import OpenCastTranscription
 import SwiftData
 import UserNotifications
+import os
 
 @Observable
 final class OpenCastAppModel {
+    private static let logger = Logger(subsystem: "com.connor.opencast", category: "PlaybackRestoreState")
     private static let lastPlaybackEpisodeIDKey = "playback.lastEpisodeID"
-    private static let playbackProgressPersistenceInterval = Duration.seconds(5)
+    /// The periodic synced flush only guards against a hard crash mid-listen
+    /// (losing up to this much position is accepted); every deliberate exit -
+    /// pause, seek, skip, background, completion, dismiss, episode switch -
+    /// flushes through a boundary immediately. Writing the CloudKit-synced
+    /// progress record every 5 seconds kept the export machinery churning for
+    /// entire listening sessions.
+    static let playbackProgressPersistenceInterval = Duration.seconds(60)
 
     let cacheController: OpenCastCacheController
     let httpClient: any OpenCastHTTPClient
@@ -48,9 +56,14 @@ final class OpenCastAppModel {
     /// suppressed at scheduling time while the scene is active.
     var isSceneActive = true
     var nowPlayingPresentationRequest = 0
+    /// Single source of truth for Now Playing presentation; the root layer
+    /// and tab views read this directly.
     var isNowPlayingPresented = false
     var onboardingPresentationRequest = 0
     var lastPlaybackError: String?
+    /// Unsubscribe outcome surface, presented by the removal confirmation
+    /// surfaces; unsubscribe failures never route through the playback error.
+    var lastUnsubscribeErrorMessage: String?
     var importedSubscriptionsNotification: ImportedSubscriptionsNotification?
     var replacesNowPlayingArtworkWithPlaybackDiagnostics = false {
         didSet {
@@ -76,16 +89,22 @@ final class OpenCastAppModel {
     @ObservationIgnored private var playbackSurfaceHydrationTask: Task<Void, Never>?
     @ObservationIgnored private var hasRestoredPlaybackSurface = false
     @ObservationIgnored private(set) var playbackSurfaceRestorationCount = 0
+    @ObservationIgnored var playbackSurfaceRestorationObserver: ((Float) -> Void)?
     @ObservationIgnored private var progressPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var progressBoundaryPersistenceTask: Task<Void, Never>?
-    // The 5-second flush calls rememberLastPlaybackEpisode every tick; the
+    // The periodic flush calls rememberLastPlaybackEpisode every tick; the
     // cached record makes the unchanged-episode tick a pure no-op instead of
     // a refetch plus a guaranteed dirty save.
     @ObservationIgnored private var lastPlaybackEpisodeRecordCache: LocalPreferenceRecord?
+    @ObservationIgnored private var skipZoneRefreshTask: Task<Void, Never>?
+    /// Which episode the installed zone tiers describe, so a slow document
+    /// load can never install zones for a switched-away episode.
+    @ObservationIgnored private var installedSkipZoneEpisodeID: String?
     @ObservationIgnored private let siriMediaDiscovery: SiriMediaDiscovery
     @ObservationIgnored private var siriMediaUserContextObservationTask: Task<Void, Never>?
     @ObservationIgnored private var hasRunVoiceBoostDeviceProbe = false
     @ObservationIgnored private var importedSubscriptionsNotificationID = 0
+    @ObservationIgnored private let unsubscribeSidecarCleanupOverride: ((String, [String], ModelContext) throws -> Void)?
 
     init(
         cacheController: OpenCastCacheController = OpenCastCacheController(),
@@ -117,8 +136,14 @@ final class OpenCastAppModel {
         allowsAutomaticFeedRefresh: Bool = true,
         adFreePassPresentationOverride: EpisodeAdFreePassPresentation? = nil,
         adFreePassNotificationCenter: (any AdFreePassNotificationCenter)? = nil,
-        siriMediaDiscovery: SiriMediaDiscovery = SiriMediaDiscovery()
+        siriMediaDiscovery: SiriMediaDiscovery = SiriMediaDiscovery(),
+        unsubscribeSidecarCleanupOverride: ((String, [String], ModelContext) throws -> Void)? = nil
     ) {
+        // Before any session configuration is built: configurations capture
+        // the user agent at creation time.
+        if let marketingVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+            OpenCastURLSessionFactory.setMarketingVersion(marketingVersion)
+        }
         let resolvedHTTPClient = httpClient ?? URLSessionOpenCastHTTPClient(
             configuration: OpenCastURLSessionFactory.sharedConfiguration(
                 cacheDirectory: cacheController.httpCacheDirectory
@@ -178,6 +203,8 @@ final class OpenCastAppModel {
                 remoteTranscriptionPurchases.applyReviewScreenshotFixture()
             case .unavailable:
                 remoteTranscriptionPurchases.applyUnavailableFixture()
+            case .delayedAvailability:
+                remoteTranscriptionPurchases.applyDelayedAvailabilityFixture()
             }
         }
         if RemoteTranscriptionDevFlag.isEnabled,
@@ -189,6 +216,10 @@ final class OpenCastAppModel {
         }
         #endif
         self.adAnalyses = adAnalyses
+        resolvedLibrary.episodeSidecarMigrators = [downloads, transcriptions, adAnalyses]
+        notificationSettings.feedHealthRecorder = { [weak resolvedLibrary] records in
+            await resolvedLibrary?.recordNotificationFeedHealth(records)
+        }
         self.adFreePass = adFreePass
         self.adFreePassBackgroundSession = adFreePassBackgroundSession
         self.transcriptGenerationBackgroundSession = transcriptGenerationBackgroundSession
@@ -216,6 +247,7 @@ final class OpenCastAppModel {
         self.adFreePassPresentationOverride = adFreePassPresentationOverride
         self.adFreePassNotificationCenter = adFreePassNotificationCenter ?? UNUserNotificationCenter.current()
         self.siriMediaDiscovery = siriMediaDiscovery
+        self.unsubscribeSidecarCleanupOverride = unsubscribeSidecarCleanupOverride
         self.transcriptions.onEpisodeStateChanged = { [weak self] episodeID in
             self?.refreshPlaybackSkipZonesIfCurrentEpisode(episodeID: episodeID)
         }
@@ -274,6 +306,12 @@ final class OpenCastAppModel {
     }
 
     func ensureCoreStoresLoaded(modelContext: ModelContext) async {
+        playback.setRemotePlaybackRateChangeHandler { [weak self, weak modelContext] rate in
+            guard let self, let modelContext else {
+                return
+            }
+            self.setPlaybackRate(rate, modelContext: modelContext)
+        }
         if let coreStoresLoadTask {
             await coreStoresLoadTask.value
             return
@@ -281,7 +319,7 @@ final class OpenCastAppModel {
 
         let task = Task {
             await library.load(modelContext: modelContext)
-            downloads.load(modelContext: modelContext)
+            await downloads.load(modelContext: modelContext)
             playbackSettings.load(modelContext: modelContext, playback: playback)
             podcastEpisodeListSettings.load(modelContext: modelContext)
         }
@@ -332,6 +370,7 @@ final class OpenCastAppModel {
 
         hasRestoredPlaybackSurface = true
         playbackSurfaceRestorationCount += 1
+        playbackSurfaceRestorationObserver?(playback.rate)
         startPlaybackProgressPersistence(modelContext: modelContext)
         restorePreviousPlaybackIfAvailable(modelContext: modelContext)
         restoreAdFreePassQueue(modelContext: modelContext)
@@ -458,29 +497,25 @@ final class OpenCastAppModel {
         try play(episode, source: .downloaded(downloadRecord), modelContext: modelContext)
     }
 
+    @discardableResult
     func unsubscribe(
         feedURL: String,
         modelContext: ModelContext,
         clearListeningHistory: Bool = false
-    ) async {
+    ) async -> PodcastUnsubscribeOutcome {
+        lastUnsubscribeErrorMessage = nil
         let podcastID = PodcastID(rawValue: feedURL)
         if playback.currentEpisode?.podcastID == podcastID {
             playback.unload()
             clearLastPlaybackEpisode(modelContext: modelContext)
         }
 
-        do {
-            try adAnalyses.deleteAnalyses(forPodcastID: feedURL, modelContext: modelContext)
-            try transcriptions.deleteTranscripts(forPodcastID: feedURL, modelContext: modelContext)
-        } catch {
-            lastPlaybackError = error.localizedDescription
-        }
-        if !podcastEpisodeListSettings.removePreferences(
-            forPodcastID: feedURL,
-            modelContext: modelContext
-        ) {
-            lastPlaybackError = podcastEpisodeListSettings.lastErrorMessage
-        }
+        // Captured before the authoritative delete clears the feed's cache;
+        // the voice-boost sweep needs the episode IDs afterwards.
+        let episodeIDs = library.episodes(forPodcastID: feedURL).map(\.episodeID)
+
+        // The authoritative subscription delete runs first: a failure there
+        // must leave a still-subscribed feed with its sidecars intact.
         await library.unsubscribe(
             feedURL: feedURL,
             modelContext: modelContext,
@@ -488,9 +523,46 @@ final class OpenCastAppModel {
             clearListeningHistory: clearListeningHistory
         )
         guard !library.isActivelySubscribed(to: feedURL) else {
-            return
+            let message = library.lastErrorMessage
+                ?? "Unable to remove this podcast."
+            lastUnsubscribeErrorMessage = message
+            return .failed(message: message)
         }
+
+        // Sidecar cleanup is best-effort once the subscription is gone.
+        var sidecarErrorMessage: String?
+        if let unsubscribeSidecarCleanupOverride {
+            do {
+                try unsubscribeSidecarCleanupOverride(feedURL, episodeIDs, modelContext)
+            } catch {
+                sidecarErrorMessage = error.localizedDescription
+            }
+        } else {
+            do {
+                try adAnalyses.deleteAnalyses(forPodcastID: feedURL, modelContext: modelContext)
+                try transcriptions.deleteTranscripts(forPodcastID: feedURL, modelContext: modelContext)
+            } catch {
+                sidecarErrorMessage = error.localizedDescription
+            }
+            if !podcastEpisodeListSettings.removePreferences(
+                forPodcastID: feedURL,
+                modelContext: modelContext
+            ) {
+                sidecarErrorMessage = sidecarErrorMessage ?? podcastEpisodeListSettings.lastErrorMessage
+            }
+            if !playbackSettings.removeVoiceBoostPreferences(
+                forEpisodeIDs: episodeIDs,
+                modelContext: modelContext
+            ) {
+                sidecarErrorMessage = sidecarErrorMessage ?? playbackSettings.lastErrorMessage
+            }
+        }
+        let warning = sidecarErrorMessage.map {
+            "The podcast was removed, but some of its stored data could not be cleaned up: \($0)"
+        }
+        lastUnsubscribeErrorMessage = warning
         siriMediaDiscovery.deleteDonations(forPodcastID: feedURL)
+        return .removed(warning: warning)
     }
 
     func loadLocalTranscriptionState(modelContext: ModelContext) {
@@ -568,11 +640,20 @@ final class OpenCastAppModel {
             return
         }
 
+        let reservation: EpisodeTranscriptionWorkCoordinator.LocalReservation
+        switch transcriptions.reserveLocalWork(for: episode.episodeID) {
+        case .success(let value):
+            reservation = value
+        case .failure:
+            return
+        }
+
         Task {
             await transcribeDownloadedEpisodeResolvingEngine(
                 episode,
                 downloadRecord: downloadRecord,
                 localFileURL: localFileURL,
+                localReservation: reservation,
                 modelContext: modelContext
             )
         }
@@ -624,22 +705,38 @@ final class OpenCastAppModel {
         )
     }
 
-    func startRemoteTranscriptionForCurrentEpisode(modelContext: ModelContext) {
-        guard let episode = currentPlaybackEpisodeSnapshot,
-              !transcriptions.hasCompletedTranscript(for: episode.episodeID)
-        else {
-            return
+    @discardableResult
+    func confirmRemoteTranscriptionStart(
+        _ request: RemoteTranscriptionStartPreviewRequest,
+        modelContext: ModelContext
+    ) -> RemoteTranscriptionStartConfirmationOutcome {
+        remoteTranscription.store.dismissStartPreview(ifMatching: request)
+        guard let episode = episodeSnapshot(for: request.episodeID) else {
+            return .unavailable(
+                message: "This episode is no longer available. Refresh the podcast and try again."
+            )
         }
 
-        remoteTranscription.start(episode: episode, modelContext: modelContext)
+        switch remoteTranscription.start(episode: episode, modelContext: modelContext) {
+        case .started:
+            return .started(episodeID: episode.episodeID)
+        case .rejected(let message):
+            return .unavailable(
+                message: message
+            )
+        }
     }
 
     private func transcribeDownloadedEpisodeResolvingEngine(
         _ episode: EpisodeListItemSnapshot,
         downloadRecord: EpisodeDownloadRecord,
         localFileURL: URL,
+        localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation,
         modelContext: ModelContext
     ) async {
+        defer {
+            transcriptions.releaseLocalWork(localReservation)
+        }
         // Fresh Generate runs follow the global engine preference. An
         // interrupted Whisper checkpoint remains on Whisper so Resume keeps
         // its promise.
@@ -665,6 +762,7 @@ final class OpenCastAppModel {
                 modelIdentity: plan.modelIdentity,
                 languageCode: plan.languageCode,
                 runLanguageCode: plan.runLanguageCode,
+                localReservation: localReservation,
                 modelContext: modelContext
             )
         } catch {
@@ -793,7 +891,7 @@ final class OpenCastAppModel {
                 self?.armAdFreePassBackgroundSessionIfNeeded(episodeTitle: episode.title)
             },
             refreshSkipZones: { [weak self] in
-                self?.zoneCountAfterPass(for: episode) ?? 0
+                await self?.zoneCountAfterPass(for: episode) ?? 0
             }
         )
     }
@@ -886,7 +984,7 @@ final class OpenCastAppModel {
             remoteJobStore: remoteTranscription.store,
             remotePurchases: remoteTranscriptionPurchases,
             refreshSkipZones: { [weak self] episode in
-                self?.zoneCountAfterPass(for: episode) ?? 0
+                await self?.zoneCountAfterPass(for: episode) ?? 0
             }
         )
     }
@@ -996,31 +1094,54 @@ final class OpenCastAppModel {
         }
     }
 
-    private func zoneCountAfterPass(for episode: EpisodeListItemSnapshot) -> Int {
+    private func zoneCountAfterPass(for episode: EpisodeListItemSnapshot) async -> Int {
         if isCurrentEpisode(episode) {
             refreshPlaybackSkipZonesForCurrentEpisode()
+            await skipZoneRefreshTask?.value
             return playback.skipZones.count
         }
 
-        return currentAdAnalysisZoneTiers(
+        return await loadCurrentAdAnalysisZoneTiers(
             episodeID: episode.episodeID,
             duration: episode.duration
         ).autoSkip.count
     }
 
+    /// Zone installation is asynchronous: the transcript and analysis
+    /// documents load and fingerprint off the main actor, so `play()` never
+    /// blocks on the decode and zones attach a beat after playback starts.
     func refreshPlaybackSkipZonesForCurrentEpisode() {
+        skipZoneRefreshTask?.cancel()
         guard let episode = playback.currentEpisode else {
-            playback.setSkipZones([])
-            displayOnlySkipZones = []
+            skipZoneRefreshTask = nil
+            installSkipZones(.empty, forEpisodeID: nil)
             return
         }
 
-        let tiers = currentAdAnalysisZoneTiers(
-            episodeID: episode.id.rawValue,
-            duration: playback.duration ?? episode.duration
-        )
-        playback.setSkipZones(tiers.autoSkip)
-        displayOnlySkipZones = tiers.displayOnly
+        let episodeID = episode.id.rawValue
+        if installedSkipZoneEpisodeID != episodeID {
+            // `playback.load` already reset the auto-skip policy for a
+            // switched episode; reset the display tier with it so both tiers
+            // stay coherent while the new episode's documents load.
+            installSkipZones(.empty, forEpisodeID: episodeID)
+        }
+        let duration = playback.duration ?? episode.duration
+        skipZoneRefreshTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let tiers = await loadCurrentAdAnalysisZoneTiers(episodeID: episodeID, duration: duration)
+            guard !Task.isCancelled, playback.currentEpisode?.id.rawValue == episodeID else {
+                return
+            }
+            installSkipZones(tiers, forEpisodeID: episodeID)
+        }
+    }
+
+    /// Awaits the in-flight skip-zone refresh, if any. Test hook.
+    func waitForSkipZoneRefresh() async {
+        await skipZoneRefreshTask?.value
     }
 
     /// Pill undo: jump back to the start of the last auto-skipped zone with a
@@ -1169,77 +1290,6 @@ final class OpenCastAppModel {
         return episode
     }
 
-    /// Appended to the Now Playing diagnostics text so one report establishes
-    /// both source-identity invariants for the current episode: which bytes
-    /// the transcript and download recorded, which asset the live player item
-    /// actually loaded, whether their timelines agree, and the resulting
-    /// alignment verdict — plus the build that produced the report.
-    var playbackSourceIdentityDiagnostics: String {
-        guard let episodeID = playback.currentEpisode?.id.rawValue else {
-            return ""
-        }
-
-        let transcriptRecord = transcriptions.record(for: episodeID)
-        let downloadRecord = downloads.record(for: episodeID)
-        let itemIdentity = playback.currentItemSourceIdentity
-        let alignment = TranscriptSourceAlignment.resolve(
-            documentSHA256: transcriptRecord?.sourceFileSHA256 ?? "",
-            trustedDownloadSHA256: downloads.completedSourceIdentity(for: episodeID)?.sha256,
-            downloadFileURL: downloadRecord.flatMap(downloads.localFileURL(for:)),
-            playerItemURL: itemIdentity?.assetURL
-        )
-
-        return """
-
-
-        app.build: \(diagnosticsValue(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)) (\(diagnosticsValue(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)))
-        sourceIdentity.transcript.sha256: \(diagnosticsValue(transcriptRecord?.sourceFileSHA256))
-        sourceIdentity.transcript.audioDuration: \(diagnosticsSeconds(transcriptRecord?.audioDuration))
-        sourceIdentity.download.sha256: \(diagnosticsValue(downloadRecord?.sourceFileSHA256))
-        sourceIdentity.download.trusted.sha256: \(diagnosticsValue(downloads.completedSourceIdentity(for: episodeID)?.sha256))
-        sourceIdentity.player.assetURL: \(diagnosticsValue(itemIdentity?.assetURL.absoluteString))
-        sourceIdentity.player.kind: \(diagnosticsItemKind(itemIdentity?.kind))
-        sourceIdentity.player.itemDuration: \(diagnosticsSeconds(itemIdentity?.itemDuration))
-        sourceIdentity.alignment: \(diagnosticsAlignment(alignment))
-        """
-    }
-
-    private func diagnosticsValue(_ value: String?) -> String {
-        guard let value, !value.isEmpty else {
-            return "nil"
-        }
-        return value
-    }
-
-    private func diagnosticsSeconds(_ value: TimeInterval?) -> String {
-        guard let value, value.isFinite else {
-            return "nil"
-        }
-        return value.formatted(.number.precision(.fractionLength(3)))
-    }
-
-    private func diagnosticsItemKind(_ kind: PlaybackItemSourceIdentity.Kind?) -> String {
-        switch kind {
-        case .localFile:
-            "local file"
-        case .networkStream:
-            "network stream"
-        case .streamingCache:
-            "streaming cache"
-        case nil:
-            "nil"
-        }
-    }
-
-    private func diagnosticsAlignment(_ alignment: TranscriptSourceAlignment) -> String {
-        switch alignment {
-        case .verified:
-            "verified"
-        case .mismatched(let canSwitch):
-            "mismatched (switchable=\(canSwitch))"
-        }
-    }
-
     @discardableResult
     func flushPlaybackProgress(
         modelContext: ModelContext,
@@ -1376,14 +1426,14 @@ final class OpenCastAppModel {
             library.prepareForDataNuke()
             try await adAnalyses.nukeAllAnalyses(modelContext: modelContext)
             try await transcriptions.nukeAllTranscripts(modelContext: modelContext)
-            try downloads.nukeAllDownloads(modelContext: modelContext)
+            try await downloads.nukeAllDownloads(modelContext: modelContext)
             try transcriptionModels.deleteInstalledModelImmediately()
             let siriPodcastIDs = library.activePodcastIDs
             try deleteAllModelRows(modelContext: modelContext)
             siriMediaDiscovery.deleteDonations(forPodcastIDs: siriPodcastIDs)
             // Reset runtime state before any suspension so the UI never renders
             // the deleted-and-saved SwiftData records, even if a later step throws.
-            resetRuntimeStateAfterDataNuke(modelContext: modelContext)
+            await resetRuntimeStateAfterDataNuke(modelContext: modelContext)
             try await library.deleteAllLocalCache()
             try await cacheController.clearCachesNow()
             dataNukeCompletionID += 1
@@ -1470,6 +1520,26 @@ final class OpenCastAppModel {
         modelContext: ModelContext
     ) -> Bool {
         appearanceSettings.setMode(mode, modelContext: modelContext)
+    }
+
+    @discardableResult
+    func setPlaybackRate(
+        _ rate: Float,
+        modelContext: ModelContext
+    ) -> Bool {
+        playbackSettings.setPlaybackRate(
+            rate,
+            modelContext: modelContext,
+            playback: playback
+        )
+    }
+
+    @discardableResult
+    func cyclePlaybackRate(modelContext: ModelContext) -> Bool {
+        setPlaybackRate(
+            PlaybackRateSteps.next(after: playback.rate),
+            modelContext: modelContext
+        )
     }
 
     @discardableResult
@@ -1610,13 +1680,14 @@ final class OpenCastAppModel {
         }
     }
 
-    private func resetRuntimeStateAfterDataNuke(modelContext: ModelContext) {
+    private func resetRuntimeStateAfterDataNuke(modelContext: ModelContext) async {
         playback.unload()
         isNowPlayingPresented = false
         lastPlaybackError = nil
+        lastUnsubscribeErrorMessage = nil
         lastPlaybackEpisodeRecordCache = nil
         library.resetAfterDataNuke()
-        downloads.load(modelContext: modelContext)
+        await downloads.load(modelContext: modelContext)
         transcriptions.load(modelContext: modelContext)
         adAnalyses.load(modelContext: modelContext)
         adFreePass.reset()
@@ -1759,7 +1830,7 @@ final class OpenCastAppModel {
             remoteJobStore: remoteTranscription.store,
             remotePurchases: remoteTranscriptionPurchases,
             refreshSkipZones: { [weak self] in
-                self?.zoneCountAfterPass(for: episode) ?? 0
+                await self?.zoneCountAfterPass(for: episode) ?? 0
             }
         )
     }
@@ -1781,19 +1852,30 @@ final class OpenCastAppModel {
         refreshPlaybackSkipZonesForCurrentEpisode()
     }
 
-    private func currentAdAnalysisZoneTiers(
+    private func loadCurrentAdAnalysisZoneTiers(
         episodeID: String,
         duration: TimeInterval?
-    ) -> EpisodeAdAnalysisZoneTiers {
-        guard adAnalyses.record(for: episodeID)?.state == .completed,
-              let transcriptDocument = transcriptions.document(for: episodeID),
-              let analysisDocument = adAnalyses.document(for: episodeID),
-              adAnalyses.isCurrentAnalysisDocument(analysisDocument, for: transcriptDocument)
+    ) async -> EpisodeAdAnalysisZoneTiers {
+        guard adAnalyses.record(for: episodeID)?.state == .completed else {
+            return .empty
+        }
+        guard let transcriptDocument = try? await transcriptions.loadDocument(for: episodeID),
+              let analysisDocument = try? await adAnalyses.loadDocument(for: episodeID),
+              await adAnalyses.isCurrentAnalysisDocumentOffCaller(analysisDocument, for: transcriptDocument)
         else {
             return .empty
         }
 
         return EpisodeAdAnalysisZoneMapper.zoneTiers(for: analysisDocument, duration: duration)
+    }
+
+    private func installSkipZones(
+        _ tiers: EpisodeAdAnalysisZoneTiers,
+        forEpisodeID episodeID: String?
+    ) {
+        playback.setSkipZones(tiers.autoSkip)
+        displayOnlySkipZones = tiers.displayOnly
+        installedSkipZoneEpisodeID = episodeID
     }
 
     private var currentPlaybackEpisodeSnapshot: EpisodeListItemSnapshot? {
@@ -1848,7 +1930,11 @@ final class OpenCastAppModel {
 
         record.value = episodeID
         record.updatedAt = .now
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            Self.logger.error("Unable to persist the last-playback episode: \(error.localizedDescription)")
+        }
     }
 
     private func clearLastPlaybackEpisode(modelContext: ModelContext) {
@@ -1861,7 +1947,11 @@ final class OpenCastAppModel {
         for record in records {
             modelContext.delete(record)
         }
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+        } catch {
+            Self.logger.error("Unable to clear the last-playback episode: \(error.localizedDescription)")
+        }
     }
 
     private func storedLastPlaybackEpisodeID(modelContext: ModelContext) -> String? {
@@ -1880,21 +1970,12 @@ final class OpenCastAppModel {
             },
             sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
         )
-        return (try? modelContext.fetch(descriptor)) ?? []
+        do {
+            return try modelContext.fetch(descriptor)
+        } catch {
+            Self.logger.error("Unable to fetch the last-playback preference: \(error.localizedDescription)")
+            return []
+        }
     }
 
-    private func sanitizedPosition(_ position: TimeInterval, duration: TimeInterval?) -> TimeInterval {
-        let lowerBounded = position.isFinite ? max(0, position) : 0
-        guard let duration else {
-            return lowerBounded
-        }
-        return min(lowerBounded, duration)
-    }
-
-    private func sanitizedDuration(_ duration: TimeInterval?) -> TimeInterval? {
-        guard let duration, duration.isFinite, duration > 0 else {
-            return nil
-        }
-        return duration
-    }
 }

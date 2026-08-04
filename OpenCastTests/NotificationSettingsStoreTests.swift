@@ -31,7 +31,9 @@ struct NotificationSettingsStoreTests {
         store.scheduleSubscriptionSyncIfEnabled(
             activePodcastIDs: ["https://example.com/latest.xml"]
         )
-        try await Task.sleep(for: .milliseconds(20))
+        // Settle the debounced sync (it records the pending set against the
+        // busy window) before releasing registration — no grace sleep to race.
+        await store.awaitScheduledSubscriptionSync()
 
         registration.releaseRegister()
         await task.value
@@ -281,7 +283,7 @@ private final class MockNotificationSubscriptionSyncService: NotificationSubscri
             message: "synced",
             accepted: activePodcastIDs
                 .sorted()
-                .map { NotificationSubscriptionSyncAccepted(feedURL: $0, title: nil) },
+                .map { NotificationSubscriptionSyncAccepted(feedURL: $0, title: nil, health: nil) },
             rejected: []
         )
     }

@@ -86,7 +86,9 @@ struct EpisodeSearchTests {
         #expect(resultIDs(session.results) == ["keyboard"])
         #expect(session.isSearching == false)
 
+        var didStartSearchTask = false
         let searchTask = Task {
+            didStartSearchTask = true
             await session.update(
                 episodes: episodes,
                 query: "soldering",
@@ -103,7 +105,9 @@ struct EpisodeSearchTests {
             mode: .fullText
         )
 
-        try await Task.sleep(for: .milliseconds(80))
+        try await waitUntil("search task enters debounce") {
+            didStartSearchTask
+        }
 
         #expect(resultIDs(session.results) == ["keyboard"])
         #expect(resultIDs(session.displayedResults(for: pendingKey)) == ["keyboard"])

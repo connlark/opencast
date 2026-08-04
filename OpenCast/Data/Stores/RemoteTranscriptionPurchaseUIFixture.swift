@@ -6,6 +6,7 @@ import Foundation
 nonisolated enum RemoteTranscriptionPurchaseUIFixture: String {
     case reviewScreenshot = "review-screenshot"
     case unavailable
+    case delayedAvailability = "delayed-availability"
 
     static let launchArgument = "-OPENCAST_REMOTE_TRANSCRIPTION_PURCHASE_FIXTURE"
 

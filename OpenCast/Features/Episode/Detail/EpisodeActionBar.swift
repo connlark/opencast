@@ -10,6 +10,7 @@ struct EpisodeActionBar: View {
     @ScaledMetric(relativeTo: .body) private var sideIconSize: CGFloat = 26
     @ScaledMetric(relativeTo: .body) private var playIconSize: CGFloat = 32
     @ScaledMetric(relativeTo: .body) private var completionBadgeSize: CGFloat = 20
+    @State private var playFeedback = 0
     private let playIconOpticalOffset: CGFloat = 3
 
     let downloadRecord: EpisodeDownloadRecord?
@@ -56,10 +57,11 @@ struct EpisodeActionBar: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .sensoryFeedback(.impact(flexibility: .soft), trigger: playFeedback)
     }
 
     private var playButton: some View {
-        Button(action: onTogglePlayback) {
+        Button(action: togglePlayback) {
             Label {
                 Text(showsPauseButton ? "Pause Episode" : "Play Episode")
             } icon: {
@@ -82,6 +84,11 @@ struct EpisodeActionBar: View {
         .accessibilityLabel(showsPauseButton ? "Pause Episode" : "Play Episode")
         .accessibilityInputLabels(["Play Episode", "Pause Episode"])
         .accessibilityIdentifier("Episode Playback Control")
+    }
+
+    private func togglePlayback() {
+        onTogglePlayback()
+        playFeedback += 1
     }
 
     private var makeAdFreeButton: some View {

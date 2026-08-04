@@ -41,8 +41,21 @@ struct RSSDateParserTests {
         #expect(RSSDateParser.parse("Thu, 01 Jan 1960 00:00:00 GMT") == nil)
     }
 
-    @Test("Keeps ISO8601 fallback")
-    func keepsISO8601Fallback() {
-        #expect(RSSDateParser.parse("1994-11-06T08:49:37Z")?.timeIntervalSince1970 == 784_111_777)
+    @Test(
+        "Keeps ISO8601 fallback parity",
+        arguments: [
+            ("1994-11-06T08:49:37Z", 784_111_777),
+            ("2016-06-05T01:51:07-07:00", 1_465_116_667),
+            ("2026-04-08T12:00:00+00:00", 1_775_649_600)
+        ] as [(String, Double)]
+    )
+    func keepsISO8601FallbackParity(rawValue: String, expected: Double) {
+        #expect(RSSDateParser.parse(rawValue)?.timeIntervalSince1970 == expected)
+    }
+
+    @Test("Parses fractional-second ISO8601 dates")
+    func parsesFractionalSecondISO8601Dates() {
+        #expect(RSSDateParser.parse("1994-11-06T08:49:37.250Z")?.timeIntervalSince1970 == 784_111_777.25)
+        #expect(RSSDateParser.parse("2016-06-05T01:51:07.500-07:00")?.timeIntervalSince1970 == 1_465_116_667.5)
     }
 }

@@ -70,12 +70,7 @@ struct SearchDiscoverResultsSection: View {
     }
 
     private func isSubscribed(_ result: DirectoryPodcastResult) -> Bool {
-        guard let feedURLString = result.feedURLString else {
-            return false
-        }
-
-        let canonicalFeedURLString = URLCanonicalizer.canonicalString(forRawString: feedURLString)
-        return activePodcastIDs.contains(canonicalFeedURLString)
+        result.isSubscribed(activePodcastIDs: activePodcastIDs)
     }
 
     private func isSubscribing(_ result: DirectoryPodcastResult) -> Bool {

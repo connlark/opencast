@@ -45,11 +45,12 @@ struct OutputBackingsProbeTests {
         return (Int(stats.blocks_in_use), Int(stats.size_in_use))
     }
 
-    @Test("Decoder outputBackings identity and allocation probe", .timeLimit(.minutes(10)))
+    @Test(
+        "Decoder outputBackings identity and allocation probe",
+        .timeLimit(.minutes(10)),
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_OUTPUT_BACKINGS_PROBE"] == "1")
+    )
     func decoderOutputBackingsProbe() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_OUTPUT_BACKINGS_PROBE"] == "1" else {
-            return
-        }
 
         let location = try DownloadedWhisperModelLocator(model: .tinyEnglish).modelLocation()
         let decoderURL = location.modelFolder.appending(path: "TextDecoder.mlmodelc")

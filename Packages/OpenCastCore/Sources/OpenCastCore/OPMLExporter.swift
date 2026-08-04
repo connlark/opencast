@@ -4,8 +4,6 @@ public struct OPMLExporter: Sendable {
     public static let documentTitle = "opencast Subscriptions"
     public static let defaultFilename = "\(documentTitle).opml"
 
-    private static let timestampFormatter = OPMLTimestampFormatter()
-
     public init() {}
 
     public func export(
@@ -16,7 +14,7 @@ public struct OPMLExporter: Sendable {
             throw OPMLError.emptySubscriptionList
         }
 
-        let timestamp = Self.xmlEscaped(Self.timestampFormatter.string(from: generatedAt))
+        let timestamp = Self.xmlEscaped(generatedAt.formatted(.iso8601))
         var lines = [
             #"<?xml version="1.0" encoding="UTF-8"?>"#,
             #"<opml version="2.0">"#,

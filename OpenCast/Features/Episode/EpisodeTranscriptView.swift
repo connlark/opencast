@@ -127,9 +127,7 @@ struct EpisodeTranscriptView: View {
         do {
             let loaded = try await appModel.transcriptions.loadDocument(for: episodeID)
             let segments = loaded.segments
-            let index = await Task.detached(priority: .userInitiated) {
-                TranscriptSearchIndex(segments: segments)
-            }.value
+            let index = try await TranscriptSearchIndex.build(segments: segments)
             document = loaded
             timeline = TranscriptTimeline(segments: segments)
             searchIndex = index

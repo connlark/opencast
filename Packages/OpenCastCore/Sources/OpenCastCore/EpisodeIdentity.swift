@@ -33,10 +33,16 @@ public enum EpisodeIdentity {
             identityMaterial = "audio:\(URLCanonicalizer.canonicalString(for: audioURL))"
         } else {
             let timestamp = publishedAt.map { String(Int($0.timeIntervalSince1970)) } ?? "unknown-date"
-            identityMaterial = "title-date:\(title.normalizedForEpisodeIdentity)|\(timestamp)"
+            identityMaterial = "title-date:\(normalizedTitle(title))|\(timestamp)"
         }
 
         return EpisodeID(rawValue: sha256("\(canonicalFeedURL)|\(identityMaterial)"))
+    }
+
+    /// The whitespace/case normalization the title-date identity tier hashes.
+    /// Exposed so identity reconciliation matches titles by the same rules.
+    public static func normalizedTitle(_ title: String) -> String {
+        title.normalizedForEpisodeIdentity
     }
 
     private static func sha256(_ value: String) -> String {

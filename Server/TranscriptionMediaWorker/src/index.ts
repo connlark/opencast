@@ -5,6 +5,8 @@
 // gateway's media.rs): POST /probe and POST /chunk with JSON bodies.
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 
+import { isKeyAllowed, jobBindingError, SHIM_DEADLINE_MS } from "./keys";
+
 // Required by the outbound-handler machinery: the runtime instantiates this
 // proxy from the worker entrypoint to route container egress through
 // outboundByHost.
@@ -14,11 +16,6 @@ interface Env {
   MEDIA_CONTAINER: DurableObjectNamespace<TranscriptionMediaContainer>;
   TRANSCRIPTION_AUDIO: R2Bucket;
 }
-
-const ALLOWED_KEY_PATTERN = /^(raw|chunks)\/job-[A-Za-z0-9_-]+\//;
-// Exact-device uploads (pass 2) are probe/chunk inputs, never container
-// outputs: readable, not writable.
-const READ_ONLY_KEY_PATTERN = /^uploads\/job-[A-Za-z0-9_-]+\//;
 
 export class TranscriptionMediaContainer extends Container<Env> {
   defaultPort = 8080;
@@ -51,9 +48,16 @@ export class TranscriptionMediaContainer extends Container<Env> {
 // dispatch handlers and keeps host discovery working.
 TranscriptionMediaContainer.outboundByHost = {
   "r2.internal": async (request: Request, env: Env): Promise<Response> => {
-    const key = decodeURIComponent(new URL(request.url).pathname.slice(1));
-    const readable = ALLOWED_KEY_PATTERN.test(key) || READ_ONLY_KEY_PATTERN.test(key);
-    if (!readable || (request.method !== "GET" && !ALLOWED_KEY_PATTERN.test(key))) {
+    let key: string;
+    try {
+      key = decodeURIComponent(new URL(request.url).pathname.slice(1));
+    } catch {
+      // A malformed percent-escape must fail closed as a forbidden key, not
+      // throw a URIError out of the handler (which surfaces as a 5xx/network
+      // error instead of the intended 403). Phase 10 TMW-6.
+      return Response.json({ error: "forbidden_key" }, { status: 403 });
+    }
+    if (!isKeyAllowed(request.method, key)) {
       return Response.json({ error: "forbidden_key" }, { status: 403 });
     }
     if (request.method === "GET") {
@@ -84,13 +88,54 @@ export default {
     if (request.method !== "POST") {
       return Response.json({ error: "method_not_allowed" }, { status: 405 });
     }
-    if (url.pathname !== "/probe" && url.pathname !== "/chunk" && url.pathname !== "/wake") {
+    const deadlineMs = SHIM_DEADLINE_MS[url.pathname];
+    if (deadlineMs === undefined) {
       return Response.json({ error: "not_found" }, { status: 404 });
     }
+
+    // Bind the request's object keys to the job_id in its body before the
+    // container (one shared instance) can be steered at another job's audio
+    // (Phase 10 TMW-3). The container itself ignores job_id, so this is the
+    // only place the binding is enforced. Wake carries no body/keys.
+    let forwardBody: string | null = null;
+    if (url.pathname === "/probe" || url.pathname === "/chunk") {
+      const raw = await request.text();
+      let payload: unknown;
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        return Response.json({ error: "invalid_json" }, { status: 400 });
+      }
+      const bindingError = jobBindingError(url.pathname, payload);
+      if (bindingError !== null) {
+        return Response.json({ error: bindingError }, { status: 403 });
+      }
+      forwardBody = raw;
+    }
+
     // One small pinned instance; media work is sequential in pass 0. The
     // instance name tracks the image tag so an image rollout always gets a
     // fresh container instead of waiting out a sleepy old instance.
-    const response = await getContainer(env.MEDIA_CONTAINER, "media-pass0-6").fetch(request);
+    let response: Response;
+    try {
+      response = await getContainer(env.MEDIA_CONTAINER, "media-pass0-7").fetch(
+        new Request(url.toString(), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: forwardBody,
+          signal: AbortSignal.timeout(deadlineMs),
+        }),
+      );
+    } catch (error) {
+      // workerd may surface the aborted stub fetch as a plain Error rather
+      // than a DOMException, so key on the name, not the type (TMW-8).
+      const name = (error as { name?: string } | null)?.name;
+      if (name === "TimeoutError" || name === "AbortError") {
+        console.error(`container ${url.pathname} exceeded shim deadline ${deadlineMs}ms`);
+        return Response.json({ error: "media_shim_timeout" }, { status: 504 });
+      }
+      throw error;
+    }
     if (response.status >= 500) {
       const body = await response.clone().text();
       console.error(`container ${url.pathname} -> ${response.status}: ${body.slice(0, 300)}`);

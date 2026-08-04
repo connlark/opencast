@@ -13,7 +13,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
             completedStream(for: request)
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
         var phases: [EpisodeTranscriptionRequestPhase] = []
         harness.coordinator.onPhaseChange = { phases.append($0) }
 
@@ -41,7 +41,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
             installer: OpenCastUITestTranscriptionModelInstaller(isInstalled: false)
         )
         models.loadLocalStatus()
-        let harness = try makeHarness(
+        let harness = try await makeHarness(
             transcriber: transcriber,
             prefersAppleSpeech: false,
             transcriptionModels: models
@@ -65,7 +65,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
             completedStream(for: request)
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
         let record = try #require(harness.downloads.record(for: harness.episode.episodeID))
         let fileURL = try #require(harness.downloads.localFileURL(for: record))
         try FileManager.default.removeItem(at: fileURL)
@@ -100,7 +100,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         // the coordinator must surface a failure, not spin the main actor.
         let models = TranscriptionModelStore(installer: NeverResolvableModelInstaller())
         models.loadLocalStatus()
-        let harness = try makeHarness(
+        let harness = try await makeHarness(
             transcriber: transcriber,
             prefersAppleSpeech: false,
             transcriptionModels: models
@@ -125,7 +125,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
             completedStream(for: request)
         }
-        let harness = try makeHarness(
+        let harness = try await makeHarness(
             transcriber: transcriber,
             prefersAppleSpeech: true
         )
@@ -147,7 +147,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
             hangingProgressStream()
         }
-        let harness = try makeHarness(
+        let harness = try await makeHarness(
             transcriber: transcriber,
             prefersAppleSpeech: true
         )
@@ -178,7 +178,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
             failedStream(message: "Deterministic Whisper failure")
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
 
         harness.coordinator.start(
             episode: harness.episode,
@@ -207,7 +207,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
             cancelledStream()
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
 
         harness.coordinator.start(
             episode: harness.episode,
@@ -227,7 +227,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
                 ? checkpointThenHangStream()
                 : completedStream(for: request)
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
 
         harness.coordinator.start(
             episode: harness.episode,
@@ -275,7 +275,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
                 ? checkpointThenHangStream()
                 : completedStream(for: request)
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
 
         harness.coordinator.start(
             episode: harness.episode,
@@ -315,7 +315,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
             hangingProgressStream()
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
 
         harness.coordinator.start(
             episode: harness.episode,
@@ -336,7 +336,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
             completedStream(for: request)
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
 
         harness.coordinator.start(
             episode: harness.episode,
@@ -374,7 +374,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
             hangingProgressStream()
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
 
         harness.coordinator.start(
             episode: harness.episode,
@@ -397,7 +397,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
             hangingProgressStream()
         }
-        let harness = try makeHarness(transcriber: transcriber)
+        let harness = try await makeHarness(transcriber: transcriber)
 
         harness.coordinator.start(
             episode: harness.episode,
@@ -423,6 +423,189 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
             modelContext: harness.context
         )
         #expect(await waitUntil { !harness.transcriptions.hasActiveJob })
+    }
+
+    @Test("A same-episode store job attaches without starting a second transcription")
+    func sameEpisodeStoreJobAttachesWithoutDuplicateWork() async throws {
+        let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
+            hangingProgressStream()
+        }
+        let harness = try await makeHarness(transcriber: transcriber)
+        let downloadRecord = try #require(
+            harness.downloads.record(for: harness.episode.episodeID)
+        )
+        let localFileURL = try #require(harness.downloads.localFileURL(for: downloadRecord))
+        guard case .success(let ownerReservation) = harness.transcriptions.reserveLocalWork(
+            for: harness.episode.episodeID
+        ) else {
+            Issue.record("Expected the direct workflow to reserve local work")
+            return
+        }
+        #expect(harness.transcriptions.startTranscription(
+            harness.episode,
+            downloadRecord: downloadRecord,
+            localFileURL: localFileURL,
+            modelSummary: modelSummary(),
+            localReservation: ownerReservation,
+            modelContext: harness.context
+        ))
+        #expect(await waitUntil { transcriber.requests.count == 1 })
+
+        harness.coordinator.start(episode: harness.episode, modelContext: harness.context)
+
+        #expect(harness.coordinator.request?.phase == .transcribingWhisper)
+        #expect(transcriber.requests.count == 1)
+        harness.transcriptions.cancelTranscription(
+            episodeID: harness.episode.episodeID,
+            modelContext: harness.context
+        )
+        #expect(await waitUntil { harness.coordinator.request?.phase == .cancelled })
+        harness.transcriptions.releaseLocalWork(ownerReservation)
+    }
+
+    @Test("A request reservation rejects a direct store start before transcription begins")
+    func requestReservationRejectsDirectStoreStart() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try temporaryDirectory()
+        let downloader = RecordingHangingEpisodeAudioDownloader()
+        let downloads = DownloadStore(
+            downloader: downloader,
+            fileStore: EpisodeDownloadFileStore(baseDirectory: directory)
+        )
+        let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
+            hangingProgressStream()
+        }
+        let transcriptions = EpisodeTranscriptionStore(
+            transcriber: transcriber,
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: directory)
+        )
+        let coordinator = EpisodeTranscriptionRequestCoordinator(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: downloads,
+            transcriptionModels: installedTranscriptionModelStore(),
+            transcriptionEngineSettings: TranscriptionEngineSettingsStore(),
+            appleSpeechAssets: installedAppleSpeechAssetStore(),
+            transcriptions: transcriptions
+        )
+        coordinator.start(episode: makeEpisode(episodeID: "reserved"), modelContext: context)
+        #expect(await waitUntil { downloader.requestCount == 1 })
+
+        let directEpisode = makeEpisode(episodeID: "direct")
+        let directFileURL = directory.appending(path: "direct.mp3")
+        try Data("direct audio".utf8).write(to: directFileURL)
+        let didStart = transcriptions.startTranscription(
+            directEpisode,
+            downloadRecord: completedDownloadRecord(for: directEpisode),
+            localFileURL: directFileURL,
+            modelSummary: modelSummary(),
+            modelContext: context
+        )
+
+        #expect(!didStart)
+        #expect(transcriber.requests.isEmpty)
+        #expect(transcriptions.lastErrorMessage(for: directEpisode.episodeID)
+            == "Another transcription is in progress.")
+        coordinator.resetForDataNuke()
+    }
+
+    @Test("An other-episode store job rejects a request before download")
+    func otherEpisodeStoreJobRejectsBeforeDownload() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try temporaryDirectory()
+        let downloader = RecordingHangingEpisodeAudioDownloader()
+        let downloads = DownloadStore(
+            downloader: downloader,
+            fileStore: EpisodeDownloadFileStore(baseDirectory: directory)
+        )
+        let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
+            hangingProgressStream()
+        }
+        let transcriptions = EpisodeTranscriptionStore(
+            transcriber: transcriber,
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: directory)
+        )
+        let blocker = makeEpisode(episodeID: "blocker")
+        let blockerFileURL = directory.appending(path: "blocker.mp3")
+        try Data("blocker audio".utf8).write(to: blockerFileURL)
+        #expect(transcriptions.startTranscription(
+            blocker,
+            downloadRecord: EpisodeDownloadRecord(
+                episodeID: blocker.episodeID,
+                podcastID: blocker.podcastID,
+                sourceAudioURL: blocker.audioURL ?? "",
+                localRelativePath: "blocker.mp3",
+                state: .completed,
+                bytesReceived: 13,
+                bytesExpected: 13
+            ),
+            localFileURL: blockerFileURL,
+            modelSummary: modelSummary(),
+            modelContext: context
+        ))
+        #expect(await waitUntil {
+            transcriptions.activeEpisodeID == blocker.episodeID
+                && transcriber.requests.count == 1
+        })
+        let coordinator = EpisodeTranscriptionRequestCoordinator(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: downloads,
+            transcriptionModels: installedTranscriptionModelStore(),
+            transcriptionEngineSettings: TranscriptionEngineSettingsStore(),
+            appleSpeechAssets: installedAppleSpeechAssetStore(),
+            transcriptions: transcriptions
+        )
+
+        coordinator.start(episode: makeEpisode(episodeID: "requested"), modelContext: context)
+
+        #expect(coordinator.request?.phase == .failed("Another transcription is in progress."))
+        #expect(downloader.requestCount == 0)
+        #expect(transcriber.requests.count == 1)
+        transcriptions.cancelTranscription(episodeID: blocker.episodeID, modelContext: context)
+        #expect(await waitUntil { !transcriptions.hasActiveJob })
+    }
+
+    @Test("A remote reservation rejects a local request before download or model work")
+    func remoteReservationRejectsLocalRequestBeforeSideEffects() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try temporaryDirectory()
+        let downloader = RecordingHangingEpisodeAudioDownloader()
+        let downloads = DownloadStore(
+            downloader: downloader,
+            fileStore: EpisodeDownloadFileStore(baseDirectory: directory)
+        )
+        let transcriptions = EpisodeTranscriptionStore(
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: directory)
+        )
+        let episode = makeEpisode(episodeID: "remote-owned")
+        let reservationResult = transcriptions.workCoordinator.reserveRemote(
+            episodeID: episode.episodeID,
+            activeLocalEpisodeID: nil
+        )
+        guard case .success(let reservation) = reservationResult else {
+            Issue.record("Expected remote work to reserve the episode")
+            return
+        }
+        let coordinator = EpisodeTranscriptionRequestCoordinator(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: downloads,
+            transcriptionModels: installedTranscriptionModelStore(),
+            transcriptionEngineSettings: TranscriptionEngineSettingsStore(),
+            appleSpeechAssets: installedAppleSpeechAssetStore(),
+            transcriptions: transcriptions
+        )
+
+        coordinator.start(episode: episode, modelContext: context)
+
+        #expect(coordinator.request?.phase == .failed(
+            "A remote transcription of this episode is already in progress."
+        ))
+        #expect(coordinator.isPresented)
+        #expect(downloader.requestCount == 0)
+        #expect(!transcriptions.hasActiveJob)
+        transcriptions.workCoordinator.releaseRemote(reservation)
     }
 
     @Test("Data nuke cancels a waiting request without recreating download state")
@@ -479,7 +662,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
 
     private func makeHarness(
         transcriber: EpisodeTranscriptionRequestTestTranscriber
-    ) throws -> (
+    ) async throws -> (
         context: ModelContext,
         episode: EpisodeListItemSnapshot,
         transcriptFiles: EpisodeTranscriptFileStore,
@@ -488,14 +671,14 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         downloads: DownloadStore,
         coordinator: EpisodeTranscriptionRequestCoordinator
     ) {
-        try makeHarness(transcriber: transcriber, prefersAppleSpeech: false)
+        try await makeHarness(transcriber: transcriber, prefersAppleSpeech: false)
     }
 
     private func makeHarness(
         transcriber: EpisodeTranscriptionRequestTestTranscriber,
         prefersAppleSpeech: Bool,
         transcriptionModels: TranscriptionModelStore? = nil
-    ) throws -> (
+    ) async throws -> (
         context: ModelContext,
         episode: EpisodeListItemSnapshot,
         transcriptFiles: EpisodeTranscriptFileStore,
@@ -530,7 +713,7 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         try context.save()
 
         let downloads = DownloadStore(fileStore: downloadFiles)
-        downloads.load(modelContext: context)
+        await downloads.load(modelContext: context)
         let transcriptFiles = EpisodeTranscriptFileStore(baseDirectory: directory)
         let transcriptions = EpisodeTranscriptionStore(
             transcriber: transcriber,
@@ -559,6 +742,41 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
             try? await Task.sleep(for: .milliseconds(20))
         }
         return condition()
+    }
+
+    private func modelSummary() -> OpenCastWhisperModelInstalledSummary {
+        OpenCastWhisperModelInstalledSummary(
+            modelIdentifier: OpenCastWhisperModel.tinyEnglish.rawValue,
+            version: OpenCastWhisperModel.tinyEnglish.defaultRemoteVersion,
+            totalByteCount: 10,
+            treeSHA256: String(repeating: "b", count: 64)
+        )
+    }
+
+    private func completedDownloadRecord(
+        for episode: EpisodeListItemSnapshot
+    ) -> EpisodeDownloadRecord {
+        EpisodeDownloadRecord(
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            sourceAudioURL: episode.audioURL ?? "",
+            localRelativePath: "direct.mp3",
+            state: .completed,
+            bytesReceived: 12,
+            bytesExpected: 12
+        )
+    }
+
+    private func temporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "OpenCastTranscriptionCoordinationTests-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
     }
 }
 
@@ -624,19 +842,11 @@ private struct NeverResolvableModelInstaller: TranscriptionModelInstalling {
 }
 
 private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
-    EpisodeListItemSnapshot(
+    .fixture(
         episodeID: episodeID,
-        podcastID: "https://example.com/feed.xml",
-        podcastTitle: "Example Show",
         title: "Transcription Request",
-        summary: nil,
-        publishedAt: nil,
-        duration: 60,
         audioURL: "https://example.com/\(episodeID).mp3",
-        artworkURL: nil,
-        artworkPreview: nil,
-        guid: episodeID,
-        cachedAt: .now
+        guid: episodeID
     )
 }
 

@@ -7,10 +7,10 @@ struct NowPlayingSoundLabPanel: View {
     @Binding var voiceBoostEnabled: Bool
     let voiceBoostControlEnabled: Bool
     let adFreePassRow: NowPlayingSoundLabAdFreePassRowModel
-    let remoteTranscriptionRow: NowPlayingSoundLabRemoteTranscriptionRowModel?
+    let transcriptionRow: NowPlayingSoundLabTranscriptionRowModel?
     let onAdFreePassAction: () -> Void
     let onTranscribeRemotely: () -> Void
-    let onShowTranscript: () -> Void
+    let onTranscriptAction: () -> Void
     let onAdFreePassBackgroundProbe: () -> Void
 
     static func collapsesToIconOnly(rowAreaWidth: CGFloat, isAccessibilitySize: Bool) -> Bool {
@@ -24,7 +24,9 @@ struct NowPlayingSoundLabPanel: View {
         GeometryReader { proxy in
             let layout = NowPlayingSoundLabLayout(panelWidth: proxy.size.width)
             let protectedLeadingSpace = layout.artworkRailWidth + layout.artworkGutter
-            let rowSpacing = proxy.size.height > 290 ? 7.0 : 5.0
+            let usesConstrainedHeight = dynamicTypeSize.isAccessibilitySize || proxy.size.height < 250
+            let rowHeight = usesConstrainedHeight ? 44.0 : NowPlayingSoundLabLayout.controlRowHeight
+            let rowSpacing = usesConstrainedHeight ? 14.0 : (proxy.size.height > 290 ? 7.0 : 5.0)
             let isIconOnly = Self.collapsesToIconOnly(
                 rowAreaWidth: layout.rowAreaWidth,
                 isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
@@ -50,17 +52,19 @@ struct NowPlayingSoundLabPanel: View {
                 .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: rowSpacing) {
-                    Label {
-                        Text("Sound Lab")
-                    } icon: {
-                        Image(systemName: "sparkles")
-                            .foregroundStyle(.yellow)
-                            .shadow(color: .yellow.opacity(0.32), radius: 4)
+                    if !usesConstrainedHeight {
+                        Label {
+                            Text("Sound Lab")
+                        } icon: {
+                            Image(systemName: "sparkles")
+                                .foregroundStyle(.yellow)
+                                .shadow(color: .yellow.opacity(0.32), radius: 4)
+                        }
+                        .font(.headline)
+                        .lineLimit(1)
+                        .foregroundStyle(.primary)
+                        .padding(.bottom, 3)
                     }
-                    .font(.headline)
-                    .lineLimit(1)
-                    .foregroundStyle(.primary)
-                    .padding(.bottom, 3)
 
                     GlassEffectContainer(spacing: rowSpacing) {
                         VStack(spacing: rowSpacing) {
@@ -70,6 +74,7 @@ struct NowPlayingSoundLabPanel: View {
                                 tint: .cyan,
                                 isEnabled: voiceBoostControlEnabled,
                                 isIconOnly: isIconOnly,
+                                rowHeight: rowHeight,
                                 isOn: $voiceBoostEnabled
                             )
 
@@ -80,22 +85,24 @@ struct NowPlayingSoundLabPanel: View {
                                 phase: adFreePassRow.phase,
                                 isEnabled: adFreePassRow.isEnabled,
                                 isIconOnly: isIconOnly,
+                                rowHeight: rowHeight,
                                 accessibilityValueText: adFreePassRow.statusText,
                                 accessibilityID: "Skip Promos & Ads",
                                 action: onAdFreePassAction
                             )
 
-                            if let remoteTranscriptionRow {
+                            if let transcriptionRow {
                                 NowPlayingSoundLabActionRow(
-                                    title: remoteTranscriptionRow.title,
-                                    systemImage: remoteTranscriptionRow.systemImage,
+                                    title: transcriptionRow.title,
+                                    systemImage: transcriptionRow.systemImage,
                                     tint: .blue,
-                                    phase: remoteTranscriptionRow.phase,
-                                    isEnabled: remoteTranscriptionRow.isEnabled,
+                                    phase: transcriptionRow.phase,
+                                    isEnabled: transcriptionRow.isEnabled,
                                     isIconOnly: isIconOnly,
-                                    accessibilityValueText: remoteTranscriptionRow.accessibilityValue,
-                                    accessibilityID: remoteTranscriptionRow.title,
-                                    action: performRemoteTranscriptionAction
+                                    rowHeight: rowHeight,
+                                    accessibilityValueText: transcriptionRow.accessibilityValue,
+                                    accessibilityID: transcriptionRow.accessibilityIdentifier,
+                                    action: performTranscriptionAction
                                 )
                             }
                         }
@@ -134,12 +141,12 @@ struct NowPlayingSoundLabPanel: View {
         }
     }
 
-    private func performRemoteTranscriptionAction() {
-        switch remoteTranscriptionRow?.action {
+    private func performTranscriptionAction() {
+        switch transcriptionRow?.action {
         case .transcribe:
             onTranscribeRemotely()
-        case .showTranscript:
-            onShowTranscript()
+        case .transcribeLocally, .showTranscript:
+            onTranscriptAction()
         case nil:
             break
         }

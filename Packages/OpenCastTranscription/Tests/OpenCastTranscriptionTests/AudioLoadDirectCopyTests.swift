@@ -182,11 +182,13 @@ struct AudioLoadDirectCopyTests {
         expectBitIdentical(clipped, clippedReference, "44.1k stereo clipped")
     }
 
-    @Test("Opt-in: real episode multi-chunk load matches the upstream loader", .timeLimit(.minutes(10)))
+    @Test(
+        "Opt-in: real episode multi-chunk load matches the upstream loader",
+        .timeLimit(.minutes(10)),
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil)
+    )
     func realEpisodeMatchesReference() throws {
-        guard let audioPath = ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] else {
-            return
-        }
+        let audioPath = try #require(ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"])
 
         let full = try AudioProcessor.loadAudioAsFloatArray(fromPath: audioPath)
         let fullReference = try referenceLoadAudioAsFloatArray(fromPath: audioPath)
@@ -228,13 +230,15 @@ struct AudioLoadDirectCopyTests {
     /// reused, masking later peaks): set OPENCAST_AUDIO_LOAD_PROBE_VARIANT
     /// and OPENCAST_AUDIO_LOAD_PROBE_WORKLOAD for single-shot mode and drive
     /// fresh processes from the shell.
-    @Test("Opt-in: host timing/footprint probe, production vs upstream loader", .timeLimit(.minutes(15)))
+    @Test(
+        "Opt-in: host timing/footprint probe, production vs upstream loader",
+        .timeLimit(.minutes(15)),
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_AUDIO_LOAD_PROBE"] == "1"
+            && ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil)
+    )
     func hostLoadProbe() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["OPENCAST_AUDIO_LOAD_PROBE"] == "1",
-              let audioPath = environment["OPENCAST_TRANSCRIPTION_AUDIO"] else {
-            return
-        }
+        let audioPath = try #require(environment["OPENCAST_TRANSCRIPTION_AUDIO"])
 
         let allWorkloads: [(label: String, start: Double?, end: Double?)] = [
             ("clip30", 0, 30),

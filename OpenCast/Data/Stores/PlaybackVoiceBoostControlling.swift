@@ -6,6 +6,9 @@ protocol PlaybackVoiceBoostControlling: AnyObject {
 }
 
 protocol PlaybackSettingsControlling: PlaybackVoiceBoostControlling {
+    var rate: Float { get }
+
+    func setRate(_ rate: Float)
     func setSkipIntervals(backward: TimeInterval, forward: TimeInterval)
     func setAutoSkipEnabled(_ isEnabled: Bool)
 }

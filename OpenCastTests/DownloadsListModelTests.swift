@@ -31,8 +31,7 @@ struct DownloadsListModelTests {
 
         let model = DownloadsListModel.make(
             records: [failed, newerDownload, downloading, olderDownload, unknown, paused, missing],
-            library: library,
-            showsUnplayedOnly: false
+            library: library
         )
 
         #expect(model.downloading.map(\.id) == ["paused", "downloading"])
@@ -55,14 +54,15 @@ struct DownloadsListModelTests {
 
         #expect(library.markEpisodePlayed(playedEpisode, modelContext: context))
 
-        let model = DownloadsListModel.make(
+        let allDownloads = DownloadsListModel.make(
             records: [played, unplayed, failed],
-            library: library,
-            showsUnplayedOnly: true
+            library: library
         )
+        let model = allDownloads.filteringUnplayed(using: library)
 
         #expect(model.downloaded.map(\.id) == ["unplayed"])
         #expect(model.failed.map(\.id) == ["failed"])
+        #expect(allDownloads.downloaded.map(\.id) == ["played", "unplayed"])
     }
 
     @Test("Orphan fallback preserves metadata and humanizes a missing title")

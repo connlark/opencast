@@ -30,9 +30,5 @@ extension PlaybackSnapshot {
 }
 
 nonisolated func clampedPlaybackRate(_ rate: Float) -> Float {
-    guard rate.isFinite else {
-        return 1
-    }
-
-    return rate.clamped(to: 0.5...3)
+    PlaybackRateSteps.clamped(rate)
 }

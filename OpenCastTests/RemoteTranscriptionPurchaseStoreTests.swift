@@ -349,7 +349,10 @@ struct RemoteTranscriptionPurchaseStoreTests {
     func launchEnvironmentLookupIsBounded() async {
         let storeKit = FakeStoreKitClient()
         storeKit.environmentValue = .production
-        storeKit.environmentDelay = .milliseconds(500)
+        // Parked far beyond any load stall: the 30 ms timeout must win this
+        // race deterministically (a 500 ms delay lost it once under full-suite
+        // load, 2026-07-29).
+        storeKit.environmentDelay = .seconds(3600)
 
         let environment = await RemoteTranscriptionPurchaseStore.resolvedEnvironment(
             storeKit: storeKit,

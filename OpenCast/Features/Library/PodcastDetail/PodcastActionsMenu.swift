@@ -17,6 +17,10 @@ struct PodcastActionsMenu: View {
     @Binding var isConfirmingMarkAllPlayed: Bool
     @Binding var isConfirmingDeleteAllDownloads: Bool
     @Binding var isConfirmingUnsubscribe: Bool
+    @State private var stateChangeFeedback = 0
+    @State private var unsubscribeAlertTitle = ""
+    @State private var unsubscribeAlertMessage: String?
+    @State private var dismissesAfterUnsubscribeAlert = false
 
     private var websiteURL: URL? {
         podcast?.websiteURL.flatMap(URL.init(string:))
@@ -118,6 +122,24 @@ struct PodcastActionsMenu: View {
         } message: {
             Text("Downloads and cached episodes for this podcast will be removed. Listening history is kept unless you clear it.")
         }
+        .sensoryFeedback(.success, trigger: stateChangeFeedback)
+        // Alert has no item overload for a non-Identifiable String.
+        .alert(
+            unsubscribeAlertTitle,
+            isPresented: Binding(
+                get: { unsubscribeAlertMessage != nil },
+                set: { if !$0 { unsubscribeAlertMessage = nil } }
+            ),
+            presenting: unsubscribeAlertMessage
+        ) { _ in
+            Button("OK") {
+                if dismissesAfterUnsubscribeAlert {
+                    dismiss()
+                }
+            }
+        } message: { message in
+            Text(message)
+        }
     }
 
     private func refresh() {
@@ -143,6 +165,7 @@ struct PodcastActionsMenu: View {
             forPodcastID: subscription.feedURL,
             modelContext: modelContext
         )
+        stateChangeFeedback += 1
     }
 
     private func confirmDeleteAllDownloads() {
@@ -170,12 +193,23 @@ struct PodcastActionsMenu: View {
 
     private func unsubscribe(clearListeningHistory: Bool) {
         Task {
-            await appModel.unsubscribe(
+            let outcome = await appModel.unsubscribe(
                 feedURL: subscription.feedURL,
                 modelContext: modelContext,
                 clearListeningHistory: clearListeningHistory
             )
-            dismiss()
+            let decision = PodcastUnsubscribePresentationDecision.make(outcome: outcome)
+            if decision.emitsSuccessFeedback {
+                stateChangeFeedback += 1
+            }
+            if decision.dismissesImmediately {
+                dismiss()
+            } else if let title = decision.alertTitle,
+                      let message = decision.alertMessage {
+                dismissesAfterUnsubscribeAlert = decision.dismissesAfterAlert
+                unsubscribeAlertTitle = title
+                unsubscribeAlertMessage = message
+            }
         }
     }
 }

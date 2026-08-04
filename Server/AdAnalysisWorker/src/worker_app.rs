@@ -8,14 +8,16 @@ use opencast_app_attest_core::{
 use crate::analysis::run_windows_analysis;
 use crate::auth::{bearer_token, token_hash, token_matches, AUTHORIZATION_HEADER};
 use crate::challenge_limits::{
-    challenge_bucket_start, challenge_source_hash_key_for_environment,
-    global_challenge_allows_insert, install_challenge_allows_insert, keyed_source_token,
+    challenge_bucket_start, challenge_source_hash_key_for_environment, keyed_source_token,
     source_challenge_allows_after_increment, APP_ATTEST_KEY_LIMIT_WINDOW_SECONDS,
     CHALLENGE_LIMIT_WINDOW_SECONDS, CHALLENGE_RETENTION_SECONDS,
     CHALLENGE_SOURCE_BUCKET_RETENTION_SECONDS, CHALLENGE_TTL_SECONDS,
     MAX_APP_ATTEST_KEYS_PER_INSTALL_PER_DAY,
 };
-use crate::job::{job_object_name, valid_job_id, JobPollRequest, JobSubmitRequest, JOB_BINDING};
+use crate::job::{
+    app_attest_subject, bearer_subject, job_object_name, transcription_account_subject,
+    valid_job_id, JobDoPollRequest, JobPollRequest, JobSubmitRequest, JOB_BINDING,
+};
 use crate::route::{
     json_response as static_json_response, route_request, Header as StaticHeader, RouteAction,
     StaticResponse, ANALYZE_TRANSCRIPT_PATH, INSTALL_DELETE_PATH, INTERNAL_HOST, JSON_CONTENT_TYPE,
@@ -95,7 +97,9 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
         RouteAction::AnalyzeTranscript => analyze_transcript(&mut req, &env).await,
         RouteAction::PollJob { job_id } => poll_job(&mut req, &env, &path, &job_id).await,
         RouteAction::InternalAnalyze => handle_internal_analyze(&mut req, &env).await,
-        RouteAction::InternalPollJob { job_id } => forward_job_poll(&env, &job_id).await,
+        // The host gate is the trust boundary: internal polls carry no
+        // subject and may poll any job.
+        RouteAction::InternalPollJob { job_id } => forward_job_poll(&env, &job_id, None).await,
     }
 }
 
@@ -122,12 +126,14 @@ async fn handle_internal_analyze(req: &mut Request, env: &Env) -> Result<Respons
     if !valid_job_id(&validated.request.transcript.fingerprint) {
         return json_error_code(400, "invalid_fingerprint");
     }
-    let subject = format!("transcription-account:{}", token_hash(&body.account_id));
+    let subject = transcription_account_subject(&token_hash(&body.account_id));
     submit_async_job(
         env,
         validated,
         &usage_object_name(&subject, day_index()),
         UsageLimitProfile::TranscriptionAccount,
+        &subject,
+        true,
     )
     .await
 }
@@ -241,18 +247,6 @@ async fn handle_challenge(
         return json_error_code(429, "challenge_rate_limited");
     }
 
-    let global_challenge_count =
-        storage::global_challenge_count_since(db, challenge_window_start).await?;
-    if !global_challenge_allows_insert(global_challenge_count) {
-        return json_error_code(429, "challenge_rate_limited");
-    }
-
-    let challenge_count =
-        storage::challenge_count_since(db, &body.install_id, challenge_window_start).await?;
-    if !install_challenge_allows_insert(challenge_count) {
-        return json_error_code(429, "challenge_rate_limited");
-    }
-
     let challenge_id = random::random_urlsafe_token(16)
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
     let challenge = random::random_urlsafe_token(32)
@@ -260,7 +254,9 @@ async fn handle_challenge(
     let Some(expires_at) = now.checked_add(CHALLENGE_TTL_SECONDS) else {
         return json_error_code(500, "timestamp_overflow");
     };
-    storage::insert_challenge(
+    // Per-install and global hourly caps are predicates of this single
+    // atomic statement — concurrent requests cannot overshoot them.
+    let admitted = storage::insert_challenge_within_limits(
         db,
         &challenge_id,
         &challenge,
@@ -268,8 +264,12 @@ async fn handle_challenge(
         &body.install_id,
         now,
         expires_at,
+        challenge_window_start,
     )
     .await?;
+    if !admitted {
+        return json_error_code(429, "challenge_rate_limited");
+    }
 
     json_success(
         200,
@@ -399,6 +399,7 @@ async fn analyze_transcript_with_bearer(
         validated,
         &usage_object_name(&token_hash(provided_token), day_index()),
         UsageLimitProfile::Bearer,
+        &bearer_subject(&token_hash(provided_token)),
     )
     .await
 }
@@ -432,12 +433,13 @@ async fn analyze_transcript_with_envelope(req: &mut Request, env: &Env) -> Resul
         Ok(validated) => validated,
         Err(error) => return json_error(error.http_status(), ErrorResponse::new(error.code())),
     };
-    let subject = format!("app-attest-key:{}", token_hash(&authenticated.key_id));
+    let subject = app_attest_subject(&token_hash(&authenticated.key_id));
     analyze_validated_request(
         env,
         validated,
         &usage_object_name(&subject, day_index()),
         UsageLimitProfile::AppAttestKey,
+        &subject,
     )
     .await
 }
@@ -447,6 +449,7 @@ async fn analyze_validated_request(
     validated: ValidatedRequest,
     usage_object_name: &str,
     usage_profile: UsageLimitProfile,
+    subject: &str,
 ) -> Result<Response> {
     let gemini_api_key = match required_secret(env, GEMINI_API_KEY) {
         Ok(key) => key,
@@ -460,7 +463,15 @@ async fn analyze_validated_request(
     // path below survives only for legacy `async_supported: false` callers,
     // whose single exchange spans the whole model call.
     if validated.request.async_supported {
-        return submit_async_job(env, validated, usage_object_name, usage_profile).await;
+        return submit_async_job(
+            env,
+            validated,
+            usage_object_name,
+            usage_profile,
+            subject,
+            false,
+        )
+        .await;
     }
 
     if let Some(response) = admit_spend_caps(
@@ -492,6 +503,8 @@ async fn submit_async_job(
     validated: ValidatedRequest,
     usage_object_name: &str,
     usage_profile: UsageLimitProfile,
+    subject: &str,
+    internal: bool,
 ) -> Result<Response> {
     let job_id = &validated.request.transcript.fingerprint;
     if !valid_job_id(job_id) {
@@ -504,6 +517,8 @@ async fn submit_async_job(
         usage_object_name: usage_object_name.to_string(),
         usage_profile,
         estimated_input_tokens: validated.estimate.estimated_input_tokens,
+        subject: subject.to_string(),
+        internal,
         request: validated.request,
     })?;
     let request = internal_post("https://ad-analysis-job.opencast.internal/submit", body)?;
@@ -533,7 +548,12 @@ async fn poll_job_with_bearer(
     if !token_matches(provided_token, &client_token) {
         return json_error_code(401, "unauthorized");
     }
-    forward_job_poll(env, job_id).await
+    forward_job_poll(
+        env,
+        job_id,
+        Some(bearer_subject(&token_hash(provided_token))),
+    )
+    .await
 }
 
 async fn poll_job_with_envelope(
@@ -573,7 +593,12 @@ async fn poll_job_with_envelope(
     if poll_request.job_id != job_id {
         return json_error_code(400, "job_id_mismatch");
     }
-    forward_job_poll(env, job_id).await
+    forward_job_poll(
+        env,
+        job_id,
+        Some(app_attest_subject(&token_hash(&authenticated.key_id))),
+    )
+    .await
 }
 
 async fn handle_install_delete(req: &mut Request, env: &Env) -> Result<Response> {
@@ -611,11 +636,15 @@ async fn handle_install_delete(req: &mut Request, env: &Env) -> Result<Response>
     json_success(200, &serde_json::json!({ "message": "deleted" }))
 }
 
-async fn forward_job_poll(env: &Env, job_id: &str) -> Result<Response> {
+/// The DO poll body is constructed here from the authenticated lane —
+/// never from client payload fields — so a forged `subject` in a request
+/// body can never reach the authorization check.
+async fn forward_job_poll(env: &Env, job_id: &str, subject: Option<String>) -> Result<Response> {
     let namespace = env.durable_object(JOB_BINDING)?;
     let stub = namespace.get_by_name(&job_object_name(job_id))?;
-    let body = serde_json::to_string(&JobPollRequest {
+    let body = serde_json::to_string(&JobDoPollRequest {
         job_id: job_id.to_string(),
+        subject,
     })?;
     let request = internal_post("https://ad-analysis-job.opencast.internal/poll", body)?;
     stub.fetch_with_request(request).await

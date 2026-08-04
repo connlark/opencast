@@ -33,7 +33,7 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test("First tap downloads episode and parks at model consent; second tap finishes transcript and analysis")
     func consentThenCompletesOneTapPass() async throws {
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             modelInstalled: false
         )
@@ -79,7 +79,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("Queue drains FIFO with manual tail order, auto front insertion, and no preemption")
     func queueDrainsFIFOWithAutoFrontInsertion() async throws {
         let downloader = GatedEpisodeAudioDownloader()
-        let fixture = try makeFixture(downloader: downloader)
+        let fixture = try await makeFixture(downloader: downloader)
         let first = makeEpisode(episodeID: "queue-fifo-1")
         let second = makeEpisode(episodeID: "queue-fifo-2")
         let third = makeEpisode(episodeID: "queue-fifo-3")
@@ -123,7 +123,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("A per-episode failure records the outcome and the queue continues")
     func failureIsolationContinuesQueue() async throws {
         let analysisClient = AdFreePassAnalysisClient(failingRequestIndexes: [2])
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             analysisClient: analysisClient
         )
@@ -156,7 +156,7 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test("hasCurrentCompletedAnalysis caches an off-main verdict keyed by record stamps")
     func hasCurrentCompletedAnalysisCachesOffMainVerdict() async throws {
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
         )
         let episode = makeEpisode(episodeID: "ad-free-verdict-cache")
@@ -201,7 +201,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("Re-enqueueing an already queued or already active episode is idempotent")
     func enqueueIsIdempotentForQueuedAndActiveEpisodes() async throws {
         let downloader = GatedEpisodeAudioDownloader()
-        let fixture = try makeFixture(downloader: downloader)
+        let fixture = try await makeFixture(downloader: downloader)
         let first = makeEpisode(episodeID: "queue-idempotent-1")
         let second = makeEpisode(episodeID: "queue-idempotent-2")
         var prepareCount = 0
@@ -230,7 +230,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     func acceptancePrecedesLaunchPreparation() async throws {
         let gate = AsyncTestGate()
         let downloader = GatedEpisodeAudioDownloader()
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: downloader,
             launchPreparationGate: {
                 await gate.wait()
@@ -271,7 +271,7 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test("Auto enqueue skips episodes with a current completed analysis")
     func autoEnqueueSkipsAlreadyAnalyzedEpisodes() async throws {
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
         )
         let analyzed = makeEpisode(episodeID: "queue-auto-skip-analyzed")
@@ -301,7 +301,7 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test("Model consent pauses the whole queue and the consent tap resumes the drain")
     func consentPausesQueueAndResumes() async throws {
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             modelInstalled: false
         )
@@ -334,7 +334,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("Cancel interrupts the active item, pauses the queue, and a re-tap resumes from the front")
     func cancelPausesQueueAndRetapResumes() async throws {
         let downloader = GatedEpisodeAudioDownloader()
-        let fixture = try makeFixture(downloader: downloader)
+        let fixture = try await makeFixture(downloader: downloader)
         let first = makeEpisode(episodeID: "queue-cancel-1")
         let second = makeEpisode(episodeID: "queue-cancel-2")
         var stages: [EpisodeAdFreePassStage] = []
@@ -373,7 +373,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("Cancelling a single-item queue leaves an idle, re-tappable coordinator")
     func cancelSingleItemQueueReturnsToIdle() async throws {
         let downloader = GatedEpisodeAudioDownloader()
-        let fixture = try makeFixture(downloader: downloader)
+        let fixture = try await makeFixture(downloader: downloader)
         let episode = makeEpisode(episodeID: "queue-cancel-single")
 
         fixture.enqueue(episode)
@@ -398,7 +398,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("An environmental interrupt holds the item, pauses the queue, and the auto-resume seam drains it")
     func environmentalInterruptHoldsItemAndAutoResumeDrains() async throws {
         let transcriber = ComputeFailureEpisodeTranscriber(failingRequestCount: 2)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             transcriber: transcriber,
             failureEnvironment: EpisodeTranscriptionFailureEnvironment(
@@ -435,7 +435,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("A cpuOnly fallback inside a protected drain sticks for subsequent whisper items")
     func stickyDegradedComputeCarriesAcrossProtectedDrain() async throws {
         let transcriber = ComputeFailureEpisodeTranscriber(failsDefaultComputeOnly: true)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             transcriber: transcriber,
             failureEnvironment: EpisodeTranscriptionFailureEnvironment(
@@ -463,7 +463,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     func foregroundReturnResetsStickyComputeMidDrain() async throws {
         let downloader = GatedEpisodeAudioDownloader()
         let transcriber = ComputeFailureEpisodeTranscriber(failsDefaultComputeOnly: true)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: downloader,
             transcriber: transcriber,
             failureEnvironment: EpisodeTranscriptionFailureEnvironment(
@@ -501,7 +501,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
         let downloader = GatedEpisodeAudioDownloader()
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: downloader,
             container: container,
             context: context,
@@ -532,9 +532,13 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(persisted.count == 4)
 
         // Simulate relaunch: a fresh coordinator restores from the same store.
-        fixture.coordinator.reset()
+        // The original coordinator stays parked (a dead process runs no
+        // cancellation cleanup) — resetting it here would let its cancelled
+        // pass delete the active episode's queue record across the async
+        // fixture construction's suspension points. It is reset in the
+        // teardown below instead.
         let episodesByID = [first.episodeID: first, second.episodeID: second, third.episodeID: third]
-        let restored = try makeFixture(
+        let restored = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             container: container,
             context: context,
@@ -561,6 +565,9 @@ struct EpisodeAdFreePassCoordinatorTests {
         ])
         let remaining = try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
         #expect(remaining.isEmpty)
+
+        // Teardown: stop the original coordinator's parked pass.
+        fixture.coordinator.reset()
     }
 
     @Test("Restoring an already loaded queue item preserves one item and its durable record")
@@ -568,7 +575,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let downloader = GatedEpisodeAudioDownloader()
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: downloader,
             container: container,
             context: context
@@ -616,7 +623,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     func terminalItemsLeaveThePersistedQueue() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             container: container,
             context: context
@@ -634,7 +641,7 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test("Plain cancellation publishes an interrupted terminal stage")
     func plainCancellationPublishesInterruptedTerminalStage() async throws {
-        let fixture = try makeFixture(downloader: HangingEpisodeAudioDownloader())
+        let fixture = try await makeFixture(downloader: HangingEpisodeAudioDownloader())
         let episode = makeEpisode(episodeID: "ad-free-cancel")
         var stages: [EpisodeAdFreePassStage] = []
         fixture.coordinator.onStageChange = { stage, _ in stages.append(stage) }
@@ -659,7 +666,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
         let transcriber = CompletingEpisodeTranscriber()
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             transcriber: transcriber,
             container: container,
@@ -683,7 +690,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             fileStore: fixture.transcriptFileStore,
             context: context
         )
-        fixture.loadStores()
+        await fixture.loadStores()
 
         #expect(fixture.presentation(for: episode).stage == .interrupted)
 
@@ -702,7 +709,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             container: container,
             context: context,
@@ -726,7 +733,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             context: context,
             errorMessage: EpisodeTranscriptionStore.environmentalInterruptMessage
         )
-        fixture.loadStores()
+        await fixture.loadStores()
 
         let presentation = fixture.presentation(for: episode)
         #expect(presentation.stage == .interrupted)
@@ -737,7 +744,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("Non-cap analysis failures surface their message as a per-episode failure")
     func nonCapAnalysisFailureSurfacesMessage() async throws {
         let serverError = EpisodeAdAnalysisHTTPError(statusCode: 500, code: "internal", detail: nil)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             analysisClient: AdFreePassAnalysisClient(error: serverError)
         )
@@ -763,7 +770,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         let analysisClient = AdFreePassAnalysisClient(error: capError)
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             analysisClient: analysisClient,
             container: container,
@@ -801,7 +808,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             detail: nil
         )
         let analysisClient = AdFreePassAnalysisClient(error: capError)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             analysisClient: analysisClient
         )
@@ -838,7 +845,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             detail: nil
         )
         let analysisClient = AdFreePassAnalysisClient(error: capError)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             analysisClient: analysisClient
         )
@@ -867,7 +874,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         let analysisClient = AdFreePassAnalysisClient(error: capError)
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             analysisClient: analysisClient,
             container: container,
@@ -903,7 +910,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("Completed transcript is reused by the default path without re-transcribing or re-analyzing")
     func completedTranscriptIsReusedByDefaultPath() async throws {
         let transcriber = CompletingEpisodeTranscriber()
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             transcriber: transcriber
         )
@@ -937,7 +944,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         let transcriber = CompletingEpisodeTranscriber()
         // Apple available with installed assets: first create an Apple-identity
         // transcript, then the whisper override must re-run.
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             transcriber: transcriber,
             appleSpeechAvailable: true
@@ -969,7 +976,7 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test("A queue of one publishes the step-5 stage sequence with single-item queue context")
     func singleItemQueuePublishesStepFiveStageSequence() async throws {
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
         )
         let episode = makeEpisode(episodeID: "queue-single-parity")
@@ -991,13 +998,13 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("A pass resumes a paused download once and completes")
     func passResumesPausedDownloadAndCompletes() async throws {
         let contents = Data("downloaded audio".utf8)
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: contents),
             loadsStores: false
         )
         let episode = makeEpisode(episodeID: "pass-resume-paused")
         try insertPausedDownload(for: episode, partial: Data("part".utf8), fixture: fixture)
-        fixture.loadStores()
+        await fixture.loadStores()
 
         guard case .failed(message: let pausedMessage) = fixture.presentation(for: episode).stage else {
             Issue.record("Expected paused download presentation to fail with an actionable message.")
@@ -1018,7 +1025,7 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test("A completed download whose file is gone fails the pass and marks the record missing")
     func missingDownloadedFileFailsPassAndMarksRecordMissing() async throws {
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             loadsStores: false
         )
@@ -1028,7 +1035,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             fileStore: fixture.downloadFileStore,
             context: fixture.context
         )
-        fixture.loadStores()
+        await fixture.loadStores()
         // After load (reconcile sees the file), the file disappears — the
         // delete-races-a-job case reconcile cannot catch.
         let relativePath = try #require(record.localRelativePath)
@@ -1052,13 +1059,13 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test("Pausing again while a pass waits fails that item and drains the queue")
     func repausingDuringPassFailsItemAndDrains() async throws {
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: HangingEpisodeAudioDownloader(),
             loadsStores: false
         )
         let episode = makeEpisode(episodeID: "pass-repause")
         try insertPausedDownload(for: episode, partial: Data("part".utf8), fixture: fixture)
-        fixture.loadStores()
+        await fixture.loadStores()
 
         fixture.enqueue(episode)
         #expect(await waitUntil {
@@ -1085,7 +1092,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     @Test("removePendingItem removes a queued item, keeps the active pass, and drops the persisted record")
     func removePendingItemRemovesQueuedItemOnly() async throws {
         let downloader = GatedEpisodeAudioDownloader()
-        let fixture = try makeFixture(downloader: downloader)
+        let fixture = try await makeFixture(downloader: downloader)
         let first = makeEpisode(episodeID: "remove-pending-1")
         let second = makeEpisode(episodeID: "remove-pending-2")
         let third = makeEpisode(episodeID: "remove-pending-3")
@@ -1124,7 +1131,7 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test("Removing the last pending item returns a consent-paused queue to idle and clears consent state")
     func removePendingItemNormalizesPausedQueue() async throws {
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
             modelInstalled: false
         )
@@ -1161,9 +1168,9 @@ struct EpisodeAdFreePassCoordinatorTests {
         let analysisClient: AdFreePassAnalysisClient
         let modelInstaller: AdFreePassTranscriptionModelInstaller
 
-        func loadStores() {
+        func loadStores() async {
             transcriptionModels.load(modelContext: context)
-            downloads.load(modelContext: context)
+            await downloads.load(modelContext: context)
             transcriptions.load(modelContext: context)
             adAnalyses.load(modelContext: context)
         }
@@ -1218,7 +1225,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         temporaryDirectory: URL? = nil,
         loadsStores: Bool = true,
         launchPreparationGate: @escaping @Sendable () async -> Void = {}
-    ) throws -> QueueFixture {
+    ) async throws -> QueueFixture {
         let resolvedContainer = try container ?? OpenCastModelContainerFactory.make(inMemory: true)
         let resolvedContext = context ?? ModelContext(resolvedContainer)
         let directory = try temporaryDirectory ?? makeTemporaryDirectory()
@@ -1251,25 +1258,17 @@ struct EpisodeAdFreePassCoordinatorTests {
             modelInstaller: modelInstaller
         )
         if loadsStores {
-            fixture.loadStores()
+            await fixture.loadStores()
         }
         return fixture
     }
 
     private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
-        EpisodeListItemSnapshot(
+        .fixture(
             episodeID: episodeID,
-            podcastID: "https://example.com/feed.xml",
-            podcastTitle: "Example Show",
             title: "Example Episode \(episodeID)",
-            summary: nil,
-            publishedAt: nil,
-            duration: 60,
             audioURL: "https://example.com/\(episodeID).mp3",
-            artworkURL: nil,
-            artworkPreview: nil,
-            guid: episodeID,
-            cachedAt: .now
+            guid: episodeID
         )
     }
 

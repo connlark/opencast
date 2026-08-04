@@ -14,13 +14,9 @@ pub fn source_challenge_allows_after_increment(count_after_increment: i64) -> bo
     count_after_increment <= MAX_CHALLENGES_PER_SOURCE_PER_HOUR
 }
 
-pub fn install_challenge_allows_insert(count_before_insert: i64) -> bool {
-    count_before_insert < MAX_CHALLENGES_PER_INSTALL_PER_HOUR
-}
-
-pub fn global_challenge_allows_insert(count_before_insert: i64) -> bool {
-    count_before_insert < MAX_GLOBAL_CHALLENGES_PER_HOUR
-}
+// The per-install and global hourly caps have no read-then-check predicates
+// anymore: they are enforced inside the single atomic statement
+// `app_attest_storage::INSERT_CHALLENGE_WITHIN_LIMITS_SQL`.
 
 /// The development fallback is load-bearing: development lanes have no
 /// `CHALLENGE_SOURCE_HASH_KEY` secret and must still mint source tokens.

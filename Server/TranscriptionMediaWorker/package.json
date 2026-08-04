@@ -4,12 +4,16 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy:dry-run": "wrangler deploy --dry-run --outdir dist",
+    "deploy:dry-run:prod-staging": "wrangler deploy --dry-run --outdir dist-prod-staging -c wrangler.prod-staging.jsonc",
     "deploy": "WRANGLER_DOCKER_BIN=\"$(command -v podman)\" wrangler deploy",
+    "deploy:prod-staging": "wrangler deploy -c wrangler.prod-staging.jsonc",
     "deploy:production": "wrangler deploy -c wrangler.production.jsonc",
+    "test": "vitest run",
     "test:container": "python3 -m unittest discover -s container -p 'test_*.py'",
     "login": "wrangler login",
     "typecheck": "tsc --noEmit",
-    "build:image": "podman build -t opencast-transcription-media:dev container"
+    "build:image": "podman build --format=docker --platform=linux/amd64 -t opencast-transcription-media:dev container",
+    "push:image": "wrangler containers push --path-to-docker ./scripts/podman-docker-shim.sh"
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7"
@@ -17,6 +21,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4",
     "typescript": "^5.6.0",
+    "vitest": "^4.1.9",
     "wrangler": "4.111.0"
   },
   "packageManager": "yarn@1.22.22"

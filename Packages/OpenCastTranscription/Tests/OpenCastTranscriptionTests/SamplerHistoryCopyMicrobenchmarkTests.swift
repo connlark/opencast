@@ -12,11 +12,11 @@ struct SamplerHistoryCopyMicrobenchmarkTests {
     private static let logitsCount = 51864
     private static let maxContext = 448
 
-    @Test("Timing pass")
+    @Test(
+        "Timing pass",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_SAMPLER_MICROBENCH"] == "1")
+    )
     func timingPass() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_SAMPLER_MICROBENCH"] == "1" else {
-            return
-        }
 
         let logits = try MLMultiArray(
             shape: [1, 1, NSNumber(value: Self.logitsCount)],

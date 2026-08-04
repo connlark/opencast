@@ -1,6 +1,6 @@
 // Public self-hosting template for the isolated prod-staging media worker.
 // Its container reads through this worker's own R2 binding. Deploy with:
-//   yarn wrangler deploy -c wrangler.prod-staging.jsonc
+//   yarn deploy:prod-staging
 // It has no routes or workers.dev exposure.
 {
   "name": "your-transcription-media-worker-prod-staging",

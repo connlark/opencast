@@ -362,11 +362,11 @@ struct OpenCastRemoteModelTests {
         )
     }
 
-    @Test("Optional large-v3 signed remote install probe")
+    @Test(
+        "Optional large-v3 signed remote install probe",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_INSTALL_LARGE_V3"] == "1")
+    )
     func optionalLargeV3SignedRemoteInstallProbe() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_INSTALL_LARGE_V3"] == "1" else {
-            return
-        }
 
         let installer = OpenCastWhisperModelInstaller()
         let start = ContinuousClock().now
@@ -389,11 +389,11 @@ struct OpenCastRemoteModelTests {
         #expect(summary.totalByteCount > 0)
     }
 
-    @Test("Optional tiny signed remote install probe")
+    @Test(
+        "Optional tiny signed remote install probe",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_INSTALL_TINY"] == "1")
+    )
     func optionalTinySignedRemoteInstallProbe() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_INSTALL_TINY"] == "1" else {
-            return
-        }
 
         let installer = OpenCastWhisperModelInstaller()
         let start = ContinuousClock().now

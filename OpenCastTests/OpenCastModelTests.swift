@@ -180,6 +180,35 @@ struct OpenCastModelTests {
         #expect(store.state == .failed("Local cache upsert failed"))
     }
 
+    @Test("Subscribing to a feed with no episodes lands the subscription")
+    func subscribeToEmptyFeedLandsSubscription() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/empty-feed.xml"
+        let snapshot = FeedSnapshot(
+            podcast: Podcast(
+                id: PodcastID(rawValue: feedURL),
+                feedURL: URL(string: feedURL)!,
+                title: "Empty Show",
+                author: "Empty Author",
+                summary: "No episodes yet"
+            ),
+            episodes: []
+        )
+        let service = StubFeedService(responses: [feedURL: .success(snapshot)])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        try await store.subscribe(to: feedURL, modelContext: context)
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.count == 1)
+        #expect(subscriptions.first?.feedURL == feedURL)
+        #expect(subscriptions.first?.title == "Empty Show")
+        #expect(store.podcastCache(for: feedURL)?.title == "Empty Show")
+        #expect(store.episodes.isEmpty)
+        #expect(store.state == .idle)
+    }
+
     @Test("Imported subscriptions hydrate missing local feed cache")
     func importedSubscriptionsHydrateMissingLocalFeedCache() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -339,7 +368,8 @@ struct OpenCastModelTests {
             modelContext: context
         )
 
-        #expect(store.resumePosition(for: "episode-id") == 42)
+        // Fresh records resume through the tier-1 smart rewind (3 s).
+        #expect(store.resumePosition(for: "episode-id") == 39)
 
         store.updateProgress(
             episodeID: "episode-id",
@@ -474,7 +504,7 @@ struct OpenCastModelTests {
             duration: 1_000,
             modelContext: context
         )
-        #expect(store.resumePosition(for: "midpoint") == 500)
+        #expect(store.resumePosition(for: "midpoint") == 497)
         #expect(store.progressRecords.first { $0.episodeID == "midpoint" }?.isPlayed == false)
 
         store.updateProgress(
@@ -504,7 +534,7 @@ struct OpenCastModelTests {
             duration: 10_000,
             modelContext: context
         )
-        #expect(store.resumePosition(for: "past-ninety-five-percent-with-more-than-a-minute-left") == 9_501)
+        #expect(store.resumePosition(for: "past-ninety-five-percent-with-more-than-a-minute-left") == 9_498)
         #expect(store.progressRecords.first { $0.episodeID == "past-ninety-five-percent-with-more-than-a-minute-left" }?.isPlayed == false)
 
         store.updateProgress(
@@ -514,8 +544,63 @@ struct OpenCastModelTests {
             duration: nil,
             modelContext: context
         )
-        #expect(store.resumePosition(for: "unknown-duration") == 300)
+        #expect(store.resumePosition(for: "unknown-duration") == 297)
         #expect(store.progressRecords.first { $0.episodeID == "unknown-duration" }?.isPlayed == false)
+    }
+
+    @Test("Smart resume rewinds by staleness tier and clamps at zero")
+    func smartResumeRewindsByStalenessTier() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        // Under an hour: 3 s.
+        #expect(LibraryStore.smartResumePosition(
+            position: 500,
+            updatedAt: now.addingTimeInterval(-30 * 60),
+            now: now
+        ) == 497)
+        // Under a day: 10 s.
+        #expect(LibraryStore.smartResumePosition(
+            position: 500,
+            updatedAt: now.addingTimeInterval(-5 * 60 * 60),
+            now: now
+        ) == 490)
+        // Beyond a day: 20 s.
+        #expect(LibraryStore.smartResumePosition(
+            position: 500,
+            updatedAt: now.addingTimeInterval(-3 * 24 * 60 * 60),
+            now: now
+        ) == 480)
+        // The rewind clamps at the episode start.
+        #expect(LibraryStore.smartResumePosition(
+            position: 2,
+            updatedAt: now.addingTimeInterval(-3 * 24 * 60 * 60),
+            now: now
+        ) == 0)
+        // A zero position never rewinds.
+        #expect(LibraryStore.smartResumePosition(
+            position: 0,
+            updatedAt: now.addingTimeInterval(-3 * 24 * 60 * 60),
+            now: now
+        ) == 0)
+    }
+
+    @Test("Played episodes resume from zero regardless of rewind tier")
+    func playedEpisodesResumeFromZero() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+
+        store.updateProgress(
+            episodeID: "played-resume",
+            podcastID: "https://example.com/progress.xml",
+            position: 995,
+            duration: 1_000,
+            modelContext: context
+        )
+
+        #expect(store.progressRecords.first { $0.episodeID == "played-resume" }?.isPlayed == true)
+        #expect(store.resumePosition(for: "played-resume") == 0)
     }
 
     @Test("Duplicate progress updates are no-op saves")
@@ -838,7 +923,8 @@ struct OpenCastModelTests {
 
         #expect(firstFlushDidSave)
         #expect(!duplicateFlushDidSave)
-        #expect(appModel.library.resumePosition(for: "episode-id") == 88)
+        // 88 stored, minus the fresh-record tier-1 smart rewind (3 s).
+        #expect(appModel.library.resumePosition(for: "episode-id") == 85)
 
         appModel.playback.seek(to: 195)
         let seekFlushDidSave = appModel.flushPlaybackProgress(modelContext: context)
@@ -917,7 +1003,8 @@ struct OpenCastModelTests {
 
         #expect(appModel.playback.currentEpisode?.id.rawValue == episodeID)
         #expect(appModel.playback.state == .paused)
-        #expect(appModel.playback.position == 30)
+        // 30 stored, minus the fresh-record tier-1 smart rewind (3 s).
+        #expect(appModel.playback.position == 27)
 
         appModel.playback.unload()
     }
@@ -1571,6 +1658,74 @@ struct OpenCastModelTests {
         #expect(await service.requestedURLStrings().isEmpty)
     }
 
+    @Test("Synced-reload probe skips the progress refetch until the store changes")
+    func syncedReloadProbeSkipsUntilStoreChanges() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/probe.xml"
+        let episodeID = "probe-episode"
+        let service = StubFeedService(responses: [:])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        insertCachedFeed(feedURL: feedURL, title: "Probe", episodeID: episodeID, in: context)
+        context.insert(EpisodeProgressRecord(
+            episodeID: episodeID,
+            podcastID: feedURL,
+            position: 30,
+            duration: 120,
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_100)
+        ))
+        try context.save()
+        await store.load(modelContext: context)
+
+        // The first tick establishes the probe; the second skips the refetch.
+        _ = try store.reloadSyncedUserData(modelContext: context)
+        let skipsAfterFirstTick = store.syncedProgressProbeSkipCount
+        let idleResult = try store.reloadSyncedUserData(modelContext: context)
+        #expect(store.syncedProgressProbeSkipCount == skipsAfterFirstTick + 1)
+        #expect(!idleResult.progressRecordsChanged)
+
+        // Update in place: the mutated record is the same registered object
+        // the store already publishes, so nothing republishes — but the probe
+        // must notice the store moved and take the full-reload branch.
+        let record = try #require(context.fetch(FetchDescriptor<EpisodeProgressRecord>()).first)
+        record.position = 60
+        record.updatedAt = Date(timeIntervalSince1970: 1_700_000_200)
+        try context.save()
+        let skipsBeforeUpdateTick = store.syncedProgressProbeSkipCount
+        let updateResult = try store.reloadSyncedUserData(modelContext: context)
+        #expect(store.syncedProgressProbeSkipCount == skipsBeforeUpdateTick)
+        #expect(!updateResult.progressRecordsChanged)
+        #expect(store.progressRecords.first?.position == 60)
+
+        // Insert with an older stamp: the count moves even though max doesn't.
+        context.insert(EpisodeProgressRecord(
+            episodeID: "probe-episode-2",
+            podcastID: feedURL,
+            position: 10,
+            duration: 120,
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_150)
+        ))
+        try context.save()
+        let insertResult = try store.reloadSyncedUserData(modelContext: context)
+        #expect(insertResult.progressRecordsChanged)
+        #expect(store.progressRecords.count == 2)
+
+        // Delete: the count moves back.
+        for stored in try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        where stored.episodeID == "probe-episode-2" {
+            context.delete(stored)
+        }
+        try context.save()
+        let deleteResult = try store.reloadSyncedUserData(modelContext: context)
+        #expect(deleteResult.progressRecordsChanged)
+        #expect(store.progressRecords.count == 1)
+
+        // Settled again: the probe resumes skipping.
+        let skipsBeforeSettledTick = store.syncedProgressProbeSkipCount
+        _ = try store.reloadSyncedUserData(modelContext: context)
+        #expect(store.syncedProgressProbeSkipCount == skipsBeforeSettledTick + 1)
+    }
+
     @Test("Progress-only reload results process imported subscriptions")
     func progressOnlyReloadResultProcessesImportedSubscriptions() {
         let progressOnly = SyncedUserDataReloadResult(
@@ -1781,7 +1936,7 @@ struct OpenCastModelTests {
         #expect(store.subscriptions.first { $0.feedURL == feedB }?.title == "B Old")
         #expect(store.latestRefreshLog(feedURL: feedA)?.errorMessage == nil)
         #expect(store.latestRefreshLog(feedURL: feedB)?.errorMessage == "Feed B is unavailable")
-        #expect(store.latestRefreshFailure?.feedURL == feedB)
+        #expect(store.refreshLogs.contains { $0.feedURL == feedB && $0.errorMessage != nil })
         #expect(store.refreshingFeedURLs.isEmpty)
         #expect(store.state == .idle)
     }
@@ -1860,6 +2015,118 @@ struct OpenCastModelTests {
         #expect(cancelledStore.state == .idle)
     }
 
+    @Test("Global refresh fan-out stays within the concurrency bound")
+    func globalRefreshFanOutStaysWithinConcurrencyBound() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURLs = (0..<8).map { "https://example.com/width-\($0).xml" }
+        var responses: [String: StubFeedService.Response] = [:]
+        for (index, feedURL) in feedURLs.enumerated() {
+            responses[feedURL] = .delayedSuccess(
+                makeSnapshot(
+                    feedURL: feedURL,
+                    podcastTitle: "Width \(index) Updated",
+                    episodeID: "width-\(index)-new",
+                    episodeTitle: "Width \(index) New Episode"
+                ),
+                nanoseconds: 100_000_000
+            )
+        }
+        let service = StubFeedService(responses: responses)
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        for (index, feedURL) in feedURLs.enumerated() {
+            insertCachedFeed(
+                feedURL: feedURL,
+                title: "Width \(index) Old",
+                episodeID: "width-\(index)-old",
+                in: context
+            )
+        }
+        try context.save()
+        await store.load(modelContext: context)
+
+        await store.refreshAll(modelContext: context)
+
+        let maximumActiveRequestCount = await service.maximumActiveRequestCount()
+        #expect(maximumActiveRequestCount <= 4)
+        #expect(maximumActiveRequestCount >= 2)
+        #expect(Set(await service.requestedURLStrings()) == Set(feedURLs))
+        #expect(store.refreshingFeedURLs.isEmpty)
+        #expect(store.state == .idle)
+    }
+
+    @Test("Single-feed refresh resolves its record without a full library reload")
+    func singleFeedRefreshSkipsLeadingFullReload() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/no-full-reload.xml"
+        let service = StubFeedService(responses: [
+            feedURL: .success(
+                makeSnapshot(
+                    feedURL: feedURL,
+                    podcastTitle: "Updated",
+                    episodeID: "new",
+                    episodeTitle: "New Episode"
+                )
+            )
+        ])
+        let countingCache = InstrumentedCacheStore(wrapping: SQLiteLocalLibraryCacheStore.inMemory())
+        let store = LibraryStore(feedService: service, localCache: countingCache)
+        insertCachedFeed(feedURL: feedURL, title: "Old", episodeID: "old", in: context)
+        try context.save()
+        await store.load(modelContext: context)
+        let loadsAfterInitialLoad = await countingCache.loadLibraryCallCount()
+
+        await store.refresh(feedURL: feedURL, modelContext: context)
+
+        // Only the trailing reload, which applies results, pays a library load.
+        #expect(await countingCache.loadLibraryCallCount() == loadsAfterInitialLoad + 1)
+        #expect(store.subscriptions.first { $0.feedURL == feedURL }?.title == "Updated")
+        #expect(store.state == .idle)
+    }
+
+    @Test("Busy markers balance when the refresh-log write fails")
+    func busyMarkersBalanceWhenRefreshLogWriteFails() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedA = "https://example.com/log-fail-a.xml"
+        let feedB = "https://example.com/log-fail-b.xml"
+        let service = StubFeedService(responses: [
+            feedA: .success(
+                makeSnapshot(
+                    feedURL: feedA,
+                    podcastTitle: "A Updated",
+                    episodeID: "a-new",
+                    episodeTitle: "A New Episode"
+                )
+            ),
+            feedB: .success(
+                makeSnapshot(
+                    feedURL: feedB,
+                    podcastTitle: "B Updated",
+                    episodeID: "b-new",
+                    episodeTitle: "B New Episode"
+                )
+            )
+        ])
+        let cache = InstrumentedCacheStore(
+            wrapping: SQLiteLocalLibraryCacheStore.inMemory(),
+            failsRefreshLogWrites: true
+        )
+        let store = LibraryStore(feedService: service, localCache: cache)
+        insertCachedFeed(feedURL: feedA, title: "A Old", episodeID: "a-old", in: context)
+        insertCachedFeed(feedURL: feedB, title: "B Old", episodeID: "b-old", in: context)
+        try context.save()
+        await store.load(modelContext: context)
+
+        await store.refreshAll(modelContext: context)
+
+        #expect(store.refreshingFeedURLs.isEmpty)
+        #expect(store.isRefreshing(feedURL: feedA) == false)
+        #expect(store.isRefreshing(feedURL: feedB) == false)
+        #expect(store.lastErrorMessage != nil)
+    }
+
     @Test("Refresh log retention caps to 50 per feed")
     func refreshLogRetentionCapsPerFeed() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -1902,7 +2169,8 @@ struct OpenCastModelTests {
 
         await store.refresh(feedURL: feedURL, modelContext: context)
 
-        let logs = store.refreshLogs.filter { $0.feedURL == feedURL }
+        let allLogs = await store.loadAllRefreshLogs() ?? []
+        let logs = allLogs.filter { $0.feedURL == feedURL }
         let retainedOldOffsets = Set(
             logs.compactMap { log -> Int? in
                 guard log.refreshID.hasPrefix("old-") else {
@@ -1911,7 +2179,7 @@ struct OpenCastModelTests {
                 return Int(log.refreshID.replacingOccurrences(of: "old-", with: ""))
             }
         )
-        let otherLogs = store.refreshLogs.filter { $0.feedURL == otherFeedURL }
+        let otherLogs = allLogs.filter { $0.feedURL == otherFeedURL }
         #expect(logs.count == LibraryStore.refreshLogRetentionLimit)
         #expect(retainedOldOffsets.contains(0) == false)
         #expect(retainedOldOffsets.contains(5) == false)
@@ -1974,7 +2242,8 @@ struct OpenCastModelTests {
         #expect(store.subscriptions.first { $0.feedURL == feedURL }?.title == "Twice V2")
         #expect(cached.podcastsByFeedURL[feedURL]?.title == "Twice V2")
         #expect(store.podcastCache(for: feedURL)?.title == "Twice V2")
-        #expect(store.refreshLogs.filter { $0.feedURL == feedURL }.count == 2)
+        let allLogs = await store.loadAllRefreshLogs() ?? []
+        #expect(allLogs.filter { $0.feedURL == feedURL }.count == 2)
     }
 
     @Test("Duplicate subscriptions merge metadata into one canonical row")
@@ -2693,9 +2962,112 @@ private actor StubFeedService: FeedService {
     }
 }
 
+private actor InstrumentedCacheStore: LocalLibraryCacheStore {
+    private let wrapped: any LocalLibraryCacheStore
+    private let failsRefreshLogWrites: Bool
+    private var loadLibraryCalls = 0
+
+    init(wrapping wrapped: any LocalLibraryCacheStore, failsRefreshLogWrites: Bool = false) {
+        self.wrapped = wrapped
+        self.failsRefreshLogWrites = failsRefreshLogWrites
+    }
+
+    func loadLibraryCallCount() -> Int {
+        loadLibraryCalls
+    }
+
+    func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot {
+        loadLibraryCalls += 1
+        return try await wrapped.loadLibrary(activePodcastIDs: activePodcastIDs)
+    }
+
+    func allRefreshLogs() async throws -> [RefreshLogSnapshot] {
+        try await wrapped.allRefreshLogs()
+    }
+
+    func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot? {
+        try await wrapped.episodeDetail(episodeID: episodeID)
+    }
+
+    func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String] {
+        try await wrapped.showNotesHTMLByEpisodeID(activePodcastIDs: activePodcastIDs)
+    }
+
+    func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) async throws {
+        try await wrapped.upsertCache(from: snapshot, refreshedAt: refreshedAt)
+    }
+
+    func updateEpisodeArtworkPreview(_ preview: ArtworkPreview, episodeID: String, artworkURL: String?) async throws {
+        try await wrapped.updateEpisodeArtworkPreview(preview, episodeID: episodeID, artworkURL: artworkURL)
+    }
+
+    func updatePodcastArtworkPreview(_ preview: ArtworkPreview, feedURL: String, artworkURL: String?) async throws {
+        try await wrapped.updatePodcastArtworkPreview(preview, feedURL: feedURL, artworkURL: artworkURL)
+    }
+
+    func insertRefreshLog(_ log: RefreshLogSnapshot, prunedTo retentionLimit: Int) async throws {
+        if failsRefreshLogWrites {
+            throw StubFeedError(message: "Refresh log write failed")
+        }
+        try await wrapped.insertRefreshLog(log, prunedTo: retentionLimit)
+    }
+
+    func feedValidators(forPodcastID podcastID: String) async throws -> FeedValidators? {
+        try await wrapped.feedValidators(forPodcastID: podcastID)
+    }
+
+    func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) async throws {
+        try await wrapped.updateFeedValidators(validators, forPodcastID: podcastID)
+    }
+
+    func cachedEpisodes(forPodcastID podcastID: String) async throws -> [EpisodeListItemSnapshot] {
+        try await wrapped.cachedEpisodes(forPodcastID: podcastID)
+    }
+
+    func deleteEpisodes(episodeIDs: [String]) async throws {
+        try await wrapped.deleteEpisodes(episodeIDs: episodeIDs)
+    }
+
+    func deleteCache(forPodcastID podcastID: String) async throws {
+        try await wrapped.deleteCache(forPodcastID: podcastID)
+    }
+
+    func deleteAllLocalCache() async throws {
+        try await wrapped.deleteAllLocalCache()
+    }
+
+    func replaceNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) async throws {
+        try await wrapped.replaceNotificationFeedHealth(records)
+    }
+
+    func notificationFeedHealthByFeedURL() async throws -> [String: NotificationFeedHealth] {
+        try await wrapped.notificationFeedHealthByFeedURL()
+    }
+
+    func hasCompletedLegacyImport() async throws -> Bool {
+        try await wrapped.hasCompletedLegacyImport()
+    }
+
+    func importLegacyCache(
+        podcasts: [PodcastCacheSnapshot],
+        episodes: [EpisodeDetailSnapshot],
+        refreshLogs: [RefreshLogSnapshot]
+    ) async throws {
+        try await wrapped.importLegacyCache(
+            podcasts: podcasts,
+            episodes: episodes,
+            refreshLogs: refreshLogs
+        )
+    }
+}
+
 private struct FailingImportCacheStore: LocalLibraryCacheStore {
     func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot {
         .empty
+    }
+
+    func allRefreshLogs() async throws -> [RefreshLogSnapshot] {
+        []
     }
 
     func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot? {
@@ -2714,9 +3086,27 @@ private struct FailingImportCacheStore: LocalLibraryCacheStore {
 
     func insertRefreshLog(_ log: RefreshLogSnapshot, prunedTo retentionLimit: Int) async throws {}
 
+    func feedValidators(forPodcastID podcastID: String) async throws -> FeedValidators? {
+        nil
+    }
+
+    func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) async throws {}
+
+    func cachedEpisodes(forPodcastID podcastID: String) async throws -> [EpisodeListItemSnapshot] {
+        []
+    }
+
+    func deleteEpisodes(episodeIDs: [String]) async throws {}
+
     func deleteCache(forPodcastID podcastID: String) async throws {}
 
     func deleteAllLocalCache() async throws {}
+
+    func replaceNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) async throws {}
+
+    func notificationFeedHealthByFeedURL() async throws -> [String: NotificationFeedHealth] {
+        [:]
+    }
 
     func hasCompletedLegacyImport() async throws -> Bool {
         false
@@ -2734,6 +3124,10 @@ private struct FailingImportCacheStore: LocalLibraryCacheStore {
 private struct FailingUpsertCacheStore: LocalLibraryCacheStore {
     func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot {
         .empty
+    }
+
+    func allRefreshLogs() async throws -> [RefreshLogSnapshot] {
+        []
     }
 
     func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot? {
@@ -2754,9 +3148,27 @@ private struct FailingUpsertCacheStore: LocalLibraryCacheStore {
 
     func insertRefreshLog(_ log: RefreshLogSnapshot, prunedTo retentionLimit: Int) async throws {}
 
+    func feedValidators(forPodcastID podcastID: String) async throws -> FeedValidators? {
+        nil
+    }
+
+    func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) async throws {}
+
+    func cachedEpisodes(forPodcastID podcastID: String) async throws -> [EpisodeListItemSnapshot] {
+        []
+    }
+
+    func deleteEpisodes(episodeIDs: [String]) async throws {}
+
     func deleteCache(forPodcastID podcastID: String) async throws {}
 
     func deleteAllLocalCache() async throws {}
+
+    func replaceNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) async throws {}
+
+    func notificationFeedHealthByFeedURL() async throws -> [String: NotificationFeedHealth] {
+        [:]
+    }
 
     func hasCompletedLegacyImport() async throws -> Bool {
         true

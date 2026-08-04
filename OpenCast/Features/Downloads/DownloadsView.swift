@@ -24,19 +24,17 @@ struct DownloadsView: View {
     var body: some View {
         let allDownloads = DownloadsListModel.make(
             records: appModel.downloads.records,
-            library: appModel.library,
-            showsUnplayedOnly: false
+            library: appModel.library
         )
         let model = showsUnplayedOnly
-            ? DownloadsListModel.make(
-                records: appModel.downloads.records,
-                library: appModel.library,
-                showsUnplayedOnly: true
-            )
+            ? allDownloads.filteringUnplayed(using: appModel.library)
             : allDownloads
         let downloadedEpisodes = model.downloaded.map(\.episode)
+        // The model already uniques items per episode ID; uniquing again keeps
+        // bad persisted data from ever trapping the whole screen.
         let downloadedItemsByID = Dictionary(
-            uniqueKeysWithValues: model.downloaded.map { ($0.id, $0) }
+            model.downloaded.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
         let searchTaskKey = EpisodeSearchRequestKey(
             episodes: downloadedEpisodes,

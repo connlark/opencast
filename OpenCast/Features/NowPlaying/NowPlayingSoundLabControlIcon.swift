@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct NowPlayingSoundLabControlIcon: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let systemImage: String
     let tint: Color
 
@@ -11,6 +13,8 @@ struct NowPlayingSoundLabControlIcon: View {
             .scaledToFit()
             .foregroundStyle(.white)
             .frame(width: 14, height: 14)
+            .contentTransition(.symbolEffect(.replace))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: systemImage)
             .frame(
                 width: NowPlayingSoundLabLayout.controlIconDiameter,
                 height: NowPlayingSoundLabLayout.controlIconDiameter

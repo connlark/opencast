@@ -11,6 +11,10 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         category: "NotificationServiceArtwork"
     )
 
+    /// The system instantiates this class itself, so the session seam is a
+    /// property, not an init parameter; tests inject a stubbed session.
+    var artworkSession: URLSession = .shared
+
     private let stateLock = NSLock()
     private var contentHandler: ((UNNotificationContent) -> Void)?
     private var bestAttemptContent: UNMutableNotificationContent?
@@ -94,7 +98,12 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             forHTTPHeaderField: "Accept"
         )
 
-        let task = URLSession.shared.downloadTask(with: request) { [weak self] temporaryURL, response, error in
+        // Delegate-driven task, not a completion-handler one: convenience
+        // tasks never deliver progress callbacks, and the byte cap needs
+        // didWriteData to cancel oversized transfers mid-stream.
+        let byteCapDelegate = ArtworkDownloadByteCapDelegate(
+            maxArtworkBytes: Self.maxArtworkBytes
+        ) { [weak self] temporaryURL, response, error in
             guard error == nil,
                   let temporaryURL,
                   let httpResponse = response as? HTTPURLResponse,
@@ -118,6 +127,8 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
                 identifier: artworkRequest.identifier
             ))
         }
+        let task = artworkSession.downloadTask(with: request)
+        task.delegate = byteCapDelegate
         storeDownloadTask(task)
         task.resume()
     }

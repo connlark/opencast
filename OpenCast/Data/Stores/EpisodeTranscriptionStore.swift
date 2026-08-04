@@ -9,16 +9,32 @@ import UIKit
 final class EpisodeTranscriptionStore {
     static let environmentalInterruptMessage = "Paused in background - will resume."
 
-    private(set) var records: [EpisodeTranscriptRecord] = []
+    // The index rebuilds on every mutation (didSet), so per-row lookups stay
+    // O(1) and can never go stale; keep-first mirrors the replaced
+    // `records.first` lookup (house precedent: LibraryStore.episodeIndexByID).
+    private(set) var records: [EpisodeTranscriptRecord] = [] {
+        didSet {
+            recordsByEpisodeID = Dictionary(
+                records.map { ($0.episodeID, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+    }
+    @ObservationIgnored private var recordsByEpisodeID: [String: EpisodeTranscriptRecord] = [:]
     private(set) var progressByEpisodeID: [String: EpisodeTranscriptionProgress] = [:]
     private(set) var lastErrorMessage: String?
+    private(set) var activeEpisodeID: String?
     private var lastErrorEpisodeID: String?
+    /// Episode-ID groups that held more than one record and were collapsed to
+    /// a proven survivor, cumulative for this process (startup repair plus
+    /// migration collisions). Diagnostics-only; never names episodes.
+    private(set) var duplicateRepairCount = 0
 
     @ObservationIgnored private let transcriber: any EpisodeTranscribing
     @ObservationIgnored private let fileStore: EpisodeTranscriptFileStore
     @ObservationIgnored private let failureEnvironment: @MainActor () -> EpisodeTranscriptionFailureEnvironment
+    @ObservationIgnored let workCoordinator: EpisodeTranscriptionWorkCoordinator
     @ObservationIgnored private var activeTask: Task<Void, Never>?
-    @ObservationIgnored private var activeEpisodeID: String?
     @ObservationIgnored private var activeRunID: UUID?
     @ObservationIgnored private var activeSourceFileURL: URL?
     @ObservationIgnored private var activeEngine: EpisodeTranscriptionEngine?
@@ -41,10 +57,12 @@ final class EpisodeTranscriptionStore {
     init(
         transcriber: any EpisodeTranscribing = OpenCastEpisodeTranscriber(),
         fileStore: EpisodeTranscriptFileStore = EpisodeTranscriptFileStore(),
+        workCoordinator: EpisodeTranscriptionWorkCoordinator = EpisodeTranscriptionWorkCoordinator(),
         failureEnvironment: @escaping @MainActor () -> EpisodeTranscriptionFailureEnvironment = EpisodeTranscriptionFailureEnvironment.current
     ) {
         self.transcriber = transcriber
         self.fileStore = fileStore
+        self.workCoordinator = workCoordinator
         self.failureEnvironment = failureEnvironment
     }
 
@@ -54,6 +72,28 @@ final class EpisodeTranscriptionStore {
 
     func isActivelyTranscribing(episodeID: String) -> Bool {
         activeTask != nil && activeEpisodeID == episodeID
+    }
+
+    func reserveLocalWork(
+        for episodeID: String,
+        allowsSameEpisodeAttachment: Bool = false
+    ) -> Result<EpisodeTranscriptionWorkCoordinator.LocalReservation, EpisodeTranscriptionWorkCoordinator.Conflict> {
+        if activeTask != nil {
+            if allowsSameEpisodeAttachment, activeEpisodeID == episodeID {
+                return workCoordinator.joinLocal(episodeID: episodeID)
+            }
+            recordFailure(EpisodeTranscriptionError.anotherJobActive, episodeID: episodeID)
+            return .failure(.anotherLocalTranscription)
+        }
+        let result = workCoordinator.reserveLocal(episodeID: episodeID)
+        if case .failure(let conflict) = result {
+            recordFailure(conflict, episodeID: episodeID)
+        }
+        return result
+    }
+
+    func releaseLocalWork(_ reservation: EpisodeTranscriptionWorkCoordinator.LocalReservation) {
+        workCoordinator.releaseLocal(reservation)
     }
 
     func activeEngine(for episodeID: String) -> EpisodeTranscriptionEngine? {
@@ -99,7 +139,7 @@ final class EpisodeTranscriptionStore {
     }
 
     func record(for episodeID: String) -> EpisodeTranscriptRecord? {
-        records.first { $0.episodeID == episodeID }
+        recordsByEpisodeID[episodeID]
     }
 
     func lastErrorMessage(for episodeID: String) -> String? {
@@ -226,22 +266,9 @@ final class EpisodeTranscriptionStore {
         downloadRecord: EpisodeDownloadRecord,
         localFileURL: URL,
         modelSummary: OpenCastWhisperModelInstalledSummary,
+        localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation? = nil,
         modelContext: ModelContext
     ) -> Bool {
-        if let activeTask,
-           !(activeEpisodeID == episode.episodeID && activeTask.isCancelled) {
-            recordFailure(EpisodeTranscriptionError.anotherJobActive, episodeID: episode.episodeID)
-            return false
-        }
-
-        do {
-            try validate(downloadRecord: downloadRecord, episode: episode, localFileURL: localFileURL)
-        } catch {
-            recordFailure(error, episodeID: episode.episodeID)
-            return false
-        }
-
-        clearFailure(episodeID: episode.episodeID)
         let modelIdentity = EpisodeTranscriptionModelIdentity(summary: modelSummary)
         return startTranscription(
             episode,
@@ -250,6 +277,7 @@ final class EpisodeTranscriptionStore {
             engine: .whisper,
             modelIdentity: modelIdentity,
             languageCode: "en",
+            localReservation: localReservation,
             modelContext: modelContext
         )
     }
@@ -265,8 +293,16 @@ final class EpisodeTranscriptionStore {
         runLanguageCode: String? = nil,
         initialComputeProfile: OpenCastTranscriptionComputeProfile = .backgroundSafe,
         preservesPriorCompletedTranscript: Bool = false,
+        localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation? = nil,
         modelContext: ModelContext
     ) -> Bool {
+        if let conflict = workCoordinator.localStartConflict(
+            episodeID: episode.episodeID,
+            reservation: localReservation
+        ) {
+            recordFailure(conflict, episodeID: episode.episodeID)
+            return false
+        }
         if let activeTask,
            !(activeEpisodeID == episode.episodeID && activeTask.isCancelled) {
             recordFailure(EpisodeTranscriptionError.anotherJobActive, episodeID: episode.episodeID)
@@ -418,6 +454,46 @@ final class EpisodeTranscriptionStore {
         for record in records {
             notifyEpisodeStateChanged(record.episodeID)
         }
+    }
+
+    func migrateEpisodeSidecars(
+        from oldEpisodeID: String,
+        to newEpisodeID: String,
+        canonicalPodcastID: String,
+        modelContext: ModelContext
+    ) throws {
+        let migratingRecords = try fetchRecords(episodeID: oldEpisodeID, modelContext: modelContext)
+        guard !migratingRecords.isEmpty else {
+            return
+        }
+
+        let targetRecords = try fetchRecords(episodeID: newEpisodeID, modelContext: modelContext)
+        try fileStore.migrateTranscripts(fromEpisodeID: oldEpisodeID, to: newEpisodeID)
+        let newDirectory = "\(EpisodeTranscriptFileStore.directoryName)/\(fileStore.safeStem(newEpisodeID))"
+        for record in migratingRecords {
+            record.episodeID = newEpisodeID
+            record.podcastID = canonicalPodcastID
+            if let relativePath = record.transcriptRelativePath,
+               let fileName = relativePath.split(separator: "/").last {
+                record.transcriptRelativePath = "\(newDirectory)/\(fileName)"
+            }
+        }
+
+        guard !targetRecords.isEmpty else {
+            return
+        }
+        duplicateRepairCount += 1
+        let deletedRecords = collapseDuplicateRecords(
+            migratingRecords + targetRecords,
+            subscribedFeedURLs: EpisodeSidecarRepair.subscribedFeedURLs(modelContext: modelContext),
+            modelContext: modelContext
+        )
+        guard !deletedRecords.isEmpty else {
+            return
+        }
+        let deletedIdentities = Set(deletedRecords.map(ObjectIdentifier.init))
+        records.removeAll { deletedIdentities.contains(ObjectIdentifier($0)) }
+        notifyEpisodeStateChanged(newEpisodeID)
     }
 
     func nukeAllTranscripts(modelContext: ModelContext) async throws {
@@ -1160,8 +1236,14 @@ final class EpisodeTranscriptionStore {
     }
 
     private func reconcile(modelContext: ModelContext) throws {
-        let fetchedRecords = try fetchRecords(modelContext: modelContext)
+        var fetchedRecords = try fetchRecords(modelContext: modelContext)
         var changed = false
+
+        let repairedGroupCount = repairDuplicateRecordGroups(&fetchedRecords, modelContext: modelContext)
+        if repairedGroupCount > 0 {
+            duplicateRepairCount += repairedGroupCount
+            changed = true
+        }
 
         for record in fetchedRecords {
             switch record.state {
@@ -1185,6 +1267,133 @@ final class EpisodeTranscriptionStore {
         if changed {
             try modelContext.save()
         }
+    }
+
+    private func repairDuplicateRecordGroups(
+        _ fetchedRecords: inout [EpisodeTranscriptRecord],
+        modelContext: ModelContext
+    ) -> Int {
+        var groupsByEpisodeID: [String: [EpisodeTranscriptRecord]] = [:]
+        for record in fetchedRecords {
+            groupsByEpisodeID[record.episodeID, default: []].append(record)
+        }
+        let duplicateGroups = groupsByEpisodeID.values.filter { $0.count > 1 }
+        guard !duplicateGroups.isEmpty else {
+            return 0
+        }
+
+        let subscribedFeedURLs = EpisodeSidecarRepair.subscribedFeedURLs(modelContext: modelContext)
+        var removedIdentities = Set<ObjectIdentifier>()
+        for group in duplicateGroups {
+            for deleted in collapseDuplicateRecords(
+                group,
+                subscribedFeedURLs: subscribedFeedURLs,
+                modelContext: modelContext
+            ) {
+                removedIdentities.insert(ObjectIdentifier(deleted))
+            }
+        }
+        fetchedRecords.removeAll { removedIdentities.contains(ObjectIdentifier($0)) }
+        return duplicateGroups.count
+    }
+
+    /// Collapses one episode's transcript records to a single survivor. The
+    /// ladder prefers a completed record whose document decodes and whose
+    /// source hash matches the episode's proven download; a survivor that
+    /// contradicts a proven download is kept but failed so stale timings are
+    /// never presented. Loser documents are removed immediately — losing is
+    /// deterministic, so an interrupted save re-runs the same collapse.
+    private func collapseDuplicateRecords(
+        _ group: [EpisodeTranscriptRecord],
+        subscribedFeedURLs: Set<String>,
+        modelContext: ModelContext
+    ) -> [EpisodeTranscriptRecord] {
+        guard group.count > 1, let episodeID = group.first?.episodeID else {
+            return []
+        }
+
+        let downloadHash = provenDownloadHash(episodeID: episodeID, modelContext: modelContext)
+        let ordered = group
+            .map { record in
+                (record: record, score: repairScore(record, downloadHash: downloadHash))
+            }
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score {
+                    return lhs.score > rhs.score
+                }
+                if lhs.record.updatedAt != rhs.record.updatedAt {
+                    return lhs.record.updatedAt > rhs.record.updatedAt
+                }
+                if lhs.record.createdAt != rhs.record.createdAt {
+                    return lhs.record.createdAt > rhs.record.createdAt
+                }
+                return EpisodeSidecarRepair.stableOrderingKey(lhs.record)
+                    < EpisodeSidecarRepair.stableOrderingKey(rhs.record)
+            }
+        guard let winner = ordered.first else {
+            return []
+        }
+
+        if winner.score == 2 {
+            winner.record.state = .failed
+            winner.record.errorMessage = "Transcript no longer matches the downloaded audio."
+            winner.record.updatedAt = .now
+        }
+        if let podcastID = EpisodeSidecarRepair.preferredPodcastID(
+            orderedCandidates: ordered.map(\.record.podcastID),
+            subscribedFeedURLs: subscribedFeedURLs
+        ), winner.record.podcastID != podcastID {
+            winner.record.podcastID = podcastID
+            winner.record.updatedAt = .now
+        }
+
+        var deletedRecords: [EpisodeTranscriptRecord] = []
+        let winnerPath = winner.record.transcriptRelativePath
+        for loser in ordered.dropFirst() {
+            if let loserPath = loser.record.transcriptRelativePath, loserPath != winnerPath {
+                try? fileStore.delete(relativePath: loserPath)
+            }
+            modelContext.delete(loser.record)
+            deletedRecords.append(loser.record)
+        }
+        return deletedRecords
+    }
+
+    /// 4: completed, document decodes, hash matches the proven download.
+    /// 3: completed with a valid document and nothing to contradict it.
+    /// 2: completed with a valid document that contradicts the proven
+    ///    download — survives only when nothing better exists, and is failed.
+    /// 1: interrupted with a resumable whisper checkpoint. 0: everything else.
+    private func repairScore(_ record: EpisodeTranscriptRecord, downloadHash: String?) -> Int {
+        guard record.state == .completed,
+              let relativePath = record.transcriptRelativePath,
+              (try? fileStore.read(relativePath: relativePath)) != nil
+        else {
+            return record.state == .interrupted && hasWhisperResumeMetadata(record) ? 1 : 0
+        }
+        if let downloadHash, !record.sourceFileSHA256.isEmpty {
+            return record.sourceFileSHA256 == downloadHash ? 4 : 2
+        }
+        return 3
+    }
+
+    /// The one identity the episode's completed download proves, or nil when
+    /// there is no completed download or its rows disagree (mid-repair).
+    private func provenDownloadHash(episodeID: String, modelContext: ModelContext) -> String? {
+        let targetEpisodeID = episodeID
+        let downloadRecords = (try? modelContext.fetch(
+            FetchDescriptor<EpisodeDownloadRecord>(
+                predicate: #Predicate { record in
+                    record.episodeID == targetEpisodeID
+                }
+            )
+        )) ?? []
+        let completedHashes = Set(
+            downloadRecords
+                .filter { $0.state == .completed && !$0.sourceFileSHA256.isEmpty }
+                .map(\.sourceFileSHA256)
+        )
+        return completedHashes.count == 1 ? completedHashes.first : nil
     }
 
     private func validate(
@@ -1499,12 +1708,6 @@ final class EpisodeTranscriptionStore {
         )
     }
 
-    private func sanitizedDuration(_ duration: TimeInterval?) -> TimeInterval? {
-        guard let duration, duration.isFinite, duration > 0 else {
-            return nil
-        }
-        return duration
-    }
 }
 
 /// In-memory image of a completed transcript record taken before an improve

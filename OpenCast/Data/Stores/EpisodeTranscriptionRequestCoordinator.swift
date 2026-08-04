@@ -15,6 +15,7 @@ final class EpisodeTranscriptionRequestCoordinator {
     private let transcriptions: EpisodeTranscriptionStore
     @ObservationIgnored private var requestTask: Task<Void, Never>?
     @ObservationIgnored private var activeRequestID: UUID?
+    @ObservationIgnored private var localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation?
     @ObservationIgnored var onPhaseChange: ((EpisodeTranscriptionRequestPhase) -> Void)?
 
     init(
@@ -46,30 +47,67 @@ final class EpisodeTranscriptionRequestCoordinator {
         }
 
         guard requestTask == nil else {
-            request = EpisodeTranscriptionRequest(
-                episodeID: episode.episodeID,
-                episodeTitle: episode.title,
-                phase: .failed("Another transcript is already in progress.")
+            failRequest(
+                episode: episode,
+                message: EpisodeTranscriptionWorkCoordinator.Conflict.anotherLocalTranscription.localizedDescription
             )
-            isPresented = true
+            return
+        }
+
+        let reservation: EpisodeTranscriptionWorkCoordinator.LocalReservation
+        let reservationResult: Result<
+            EpisodeTranscriptionWorkCoordinator.LocalReservation,
+            EpisodeTranscriptionWorkCoordinator.Conflict
+        >
+        if transcriptions.hasActiveJob {
+            guard transcriptions.activeEpisodeID == episode.episodeID else {
+                failRequest(
+                    episode: episode,
+                    message: EpisodeTranscriptionWorkCoordinator.Conflict.anotherLocalTranscription.localizedDescription
+                )
+                return
+            }
+            reservationResult = transcriptions.workCoordinator.joinLocal(
+                episodeID: episode.episodeID
+            )
+        } else {
+            reservationResult = transcriptions.reserveLocalWork(for: episode.episodeID)
+        }
+        switch reservationResult {
+        case .success(let value):
+            reservation = value
+        case .failure(let conflict):
+            failRequest(episode: episode, message: conflict.localizedDescription)
             return
         }
 
         let newRequest = EpisodeTranscriptionRequest(
             episodeID: episode.episodeID,
             episodeTitle: episode.title,
-            phase: .downloading
+            phase: initialPhase(for: episode.episodeID)
         )
         request = newRequest
         isPresented = true
         activeRequestID = newRequest.id
-        prepareBackgroundSession?()
-        requestTask = Task { [weak self] in
-            await self?.run(
-                requestID: newRequest.id,
-                episode: episode,
-                modelContext: modelContext
-            )
+        localReservation = reservation
+
+        if transcriptions.isActivelyTranscribing(episodeID: episode.episodeID) {
+            requestTask = Task { [weak self] in
+                await self?.attach(
+                    requestID: newRequest.id,
+                    episodeID: episode.episodeID,
+                    modelContext: modelContext
+                )
+            }
+        } else {
+            prepareBackgroundSession?()
+            requestTask = Task { [weak self] in
+                await self?.run(
+                    requestID: newRequest.id,
+                    episode: episode,
+                    modelContext: modelContext
+                )
+            }
         }
     }
 
@@ -82,7 +120,11 @@ final class EpisodeTranscriptionRequestCoordinator {
 
     func resetForDataNuke() {
         let task = requestTask
+        if let localReservation {
+            transcriptions.releaseLocalWork(localReservation)
+        }
         activeRequestID = nil
+        localReservation = nil
         requestTask = nil
         request = nil
         isPresented = false
@@ -153,6 +195,7 @@ final class EpisodeTranscriptionRequestCoordinator {
                     modelIdentity: plan.modelIdentity,
                     languageCode: plan.languageCode,
                     runLanguageCode: plan.runLanguageCode,
+                    localReservation: localReservation,
                     modelContext: modelContext
                 ) else {
                     throw EpisodeTranscriptionRequestError.operationFailed(
@@ -206,7 +249,7 @@ final class EpisodeTranscriptionRequestCoordinator {
         episodeID: String,
         modelContext: ModelContext
     ) throws {
-        guard transcriptions.document(for: episodeID) != nil else {
+        guard transcriptions.hasCompletedDocument(for: episodeID) else {
             transcriptions.markTranscriptDocumentUnavailable(
                 episodeID: episodeID,
                 modelContext: modelContext
@@ -331,6 +374,67 @@ final class EpisodeTranscriptionRequestCoordinator {
         }
         activeRequestID = nil
         requestTask = nil
+        if let localReservation {
+            transcriptions.releaseLocalWork(localReservation)
+            self.localReservation = nil
+        }
+    }
+
+    private func attach(
+        requestID: UUID,
+        episodeID: String,
+        modelContext: ModelContext
+    ) async {
+        defer {
+            finishRequest(id: requestID)
+        }
+
+        do {
+            try await waitForTranscriptionToStop(episodeID: episodeID)
+            try ensureCurrentRequest(id: requestID)
+            guard let record = transcriptions.record(for: episodeID) else {
+                throw EpisodeTranscriptionRequestError.operationFailed(
+                    "Transcription stopped without saving its state."
+                )
+            }
+            switch record.state {
+            case .completed:
+                try requireCompletedDocument(episodeID: episodeID, modelContext: modelContext)
+                updatePhase(.completed, requestID: requestID)
+            case .interrupted:
+                updateInterruptedPhase(episodeID: episodeID, requestID: requestID)
+            case .failed:
+                throw EpisodeTranscriptionRequestError.operationFailed(
+                    record.errorMessage ?? "Transcription failed without an error message."
+                )
+            case .cancelled:
+                updatePhase(.cancelled, requestID: requestID)
+            case .queued, .running:
+                throw EpisodeTranscriptionRequestError.operationFailed(
+                    "Transcription stopped in an invalid state."
+                )
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            updatePhase(.failed(error.localizedDescription), requestID: requestID)
+        }
+    }
+
+    private func initialPhase(for episodeID: String) -> EpisodeTranscriptionRequestPhase {
+        guard let engine = transcriptions.activeEngine(for: episodeID) else {
+            return .downloading
+        }
+        return engine == .appleSpeech ? .transcribingAppleSpeech : .transcribingWhisper
+    }
+
+    private func failRequest(episode: EpisodeListItemSnapshot, message: String) {
+        request = EpisodeTranscriptionRequest(
+            episodeID: episode.episodeID,
+            episodeTitle: episode.title,
+            phase: .failed(message)
+        )
+        isPresented = true
     }
 
     private func ensureCurrentRequest(id: UUID) throws {

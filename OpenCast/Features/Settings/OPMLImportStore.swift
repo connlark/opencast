@@ -6,6 +6,9 @@ import SwiftData
 @Observable
 final class OPMLImportStore {
     private nonisolated static let maximumImportFileByteCount = 10 * 1_024 * 1_024
+    /// Hard cap on unique outlines per import; beyond it the import aborts
+    /// before subscribing anything (security triage P2).
+    nonisolated static let maximumImportedFeedCount = 300
 
     private(set) var state = OPMLImportState.idle
 
@@ -61,55 +64,55 @@ final class OPMLImportStore {
         modelContext: ModelContext
     ) async throws {
         let parseResult = try OPMLParser().parseResult(data: data)
+        guard parseResult.feedReferences.count <= Self.maximumImportedFeedCount else {
+            throw OPMLImportFileReadError.tooManyFeeds(
+                count: parseResult.feedReferences.count,
+                limit: Self.maximumImportedFeedCount
+            )
+        }
         await libraryStore.load(modelContext: modelContext)
 
-        var importedCount = 0
+        // Duplicate suppression is decided up front on the main actor, so the
+        // concurrent fetch window can never race two subscribes for one feed.
         var skippedDuplicateCount = parseResult.duplicateFeedReferenceCount
-        var failures: [OPMLImportFailure] = []
         // Defense if parser output ever stops being unique by canonical feed URL.
         var importedFeedURLs: Set<String> = []
-        var activeFeedURLs = libraryStore.activePodcastIDs
+        let activeFeedURLs = libraryStore.activePodcastIDs
+        var pendingReferences: [OPMLFeedReference] = []
 
         for reference in parseResult.feedReferences {
-            try Task.checkCancellation()
-
             let canonicalFeedURL = reference.canonicalFeedURL
-            guard importedFeedURLs.insert(canonicalFeedURL).inserted else {
+            guard importedFeedURLs.insert(canonicalFeedURL).inserted,
+                  !activeFeedURLs.contains(canonicalFeedURL)
+            else {
                 skippedDuplicateCount += 1
                 continue
             }
+            pendingReferences.append(reference)
+        }
 
-            guard !activeFeedURLs.contains(canonicalFeedURL) else {
-                skippedDuplicateCount += 1
-                continue
-            }
-
-            do {
-                try await libraryStore.subscribe(
-                    to: reference.feedURL.absoluteString,
-                    modelContext: modelContext,
-                    reloadAfter: false
-                )
-                importedCount += 1
-                activeFeedURLs.insert(canonicalFeedURL)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                failures.append(
-                    OPMLImportFailure(
-                        feedURL: canonicalFeedURL,
-                        title: reference.title,
-                        message: error.localizedDescription
-                    )
-                )
-            }
+        let referencesByFeedURLString = Dictionary(
+            pendingReferences.map { ($0.feedURL.absoluteString, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let batchResult = try await libraryStore.subscribeBatch(
+            to: pendingReferences.map(\.feedURL.absoluteString),
+            modelContext: modelContext
+        )
+        let failures = batchResult.failures.map { failure in
+            let reference = referencesByFeedURLString[failure.feedURLString]
+            return OPMLImportFailure(
+                feedURL: reference?.canonicalFeedURL ?? failure.feedURLString,
+                title: reference?.title,
+                message: failure.message
+            )
         }
 
         await libraryStore.load(modelContext: modelContext)
         state = .imported(
             OPMLImportResult(
                 totalFeedReferencesFound: parseResult.usableFeedReferenceCount,
-                importedCount: importedCount,
+                importedCount: batchResult.subscribedFeedURLStrings.count,
                 skippedDuplicateCount: skippedDuplicateCount,
                 failures: failures
             )

@@ -21,11 +21,18 @@ struct NotificationSubscriptionSyncService {
     }
 
     func syncIfRegistered(activePodcastIDs: Set<String>) async throws -> NotificationSubscriptionSyncResponse? {
-        guard let credential = try credentialService.loadRegisteredCredential() else {
+        // The guard keeps the "never registers a fresh install" contract;
+        // past it, recoverable credential failures re-attest and retry
+        // exactly like `sync` instead of failing with no recovery.
+        guard try credentialService.loadRegisteredCredential() != nil else {
             return nil
         }
 
-        return try await sendSyncRequest(activePodcastIDs: activePodcastIDs, credential: credential)
+        return try await credentialService.withFreshCredentialOnRecoverableFailure(
+            validateWithSecureHello: false
+        ) { credential in
+            try await sendSyncRequest(activePodcastIDs: activePodcastIDs, credential: credential)
+        }
     }
 
     func deleteInstallIfRegistered() async throws {

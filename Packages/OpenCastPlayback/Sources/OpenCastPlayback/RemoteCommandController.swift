@@ -1,8 +1,44 @@
 import Foundation
 @preconcurrency import MediaPlayer
 
+/// Seam over a command's enable flag so the availability matrix is testable
+/// without `MPRemoteCommandCenter.shared()` (process-global system state).
+protocol RemoteCommandToggling: AnyObject {
+    var isEnabled: Bool { get set }
+}
+
+extension MPRemoteCommand: RemoteCommandToggling {}
+
+/// The nine commands whose availability `updateAvailability` manages.
+struct RemoteCommandAvailabilitySurface {
+    let play: any RemoteCommandToggling
+    let pause: any RemoteCommandToggling
+    let togglePlayPause: any RemoteCommandToggling
+    let skipForward: any RemoteCommandToggling
+    let skipBackward: any RemoteCommandToggling
+    let nextTrack: any RemoteCommandToggling
+    let previousTrack: any RemoteCommandToggling
+    let changePlaybackRate: any RemoteCommandToggling
+    let changePlaybackPosition: any RemoteCommandToggling
+
+    static func live(_ commandCenter: MPRemoteCommandCenter) -> Self {
+        RemoteCommandAvailabilitySurface(
+            play: commandCenter.playCommand,
+            pause: commandCenter.pauseCommand,
+            togglePlayPause: commandCenter.togglePlayPauseCommand,
+            skipForward: commandCenter.skipForwardCommand,
+            skipBackward: commandCenter.skipBackwardCommand,
+            nextTrack: commandCenter.nextTrackCommand,
+            previousTrack: commandCenter.previousTrackCommand,
+            changePlaybackRate: commandCenter.changePlaybackRateCommand,
+            changePlaybackPosition: commandCenter.changePlaybackPositionCommand
+        )
+    }
+}
+
 final class RemoteCommandController {
     private let commandCenter: MPRemoteCommandCenter
+    private let availability: RemoteCommandAvailabilitySurface
     private let stateStore = RemoteCommandStateStore()
     private let positionHandler = RemoteCommandPositionHandler()
     private var targets: [RemoteCommandTarget] = []
@@ -11,8 +47,12 @@ final class RemoteCommandController {
     private var skipForwardInterval = PlaybackSkipInterval.forward
     private var skipBackwardInterval = PlaybackSkipInterval.backward
 
-    init(commandCenter: MPRemoteCommandCenter = .shared()) {
+    init(
+        commandCenter: MPRemoteCommandCenter = .shared(),
+        availabilitySurface: RemoteCommandAvailabilitySurface? = nil
+    ) {
         self.commandCenter = commandCenter
+        self.availability = availabilitySurface ?? .live(commandCenter)
     }
 
     isolated deinit {
@@ -104,15 +144,15 @@ final class RemoteCommandController {
             return
         }
 
-        commandCenter.playCommand.isEnabled = hasLoadedContent && !isPlaybackRequested
-        commandCenter.pauseCommand.isEnabled = hasLoadedContent && isPlaybackRequested
-        commandCenter.togglePlayPauseCommand.isEnabled = hasLoadedContent
-        commandCenter.skipForwardCommand.isEnabled = hasLoadedContent
-        commandCenter.skipBackwardCommand.isEnabled = hasLoadedContent
-        commandCenter.nextTrackCommand.isEnabled = hasLoadedContent
-        commandCenter.previousTrackCommand.isEnabled = hasLoadedContent
-        commandCenter.changePlaybackRateCommand.isEnabled = hasLoadedContent
-        commandCenter.changePlaybackPositionCommand.isEnabled = isSeekable
+        availability.play.isEnabled = hasLoadedContent && !isPlaybackRequested
+        availability.pause.isEnabled = hasLoadedContent && isPlaybackRequested
+        availability.togglePlayPause.isEnabled = hasLoadedContent
+        availability.skipForward.isEnabled = hasLoadedContent
+        availability.skipBackward.isEnabled = hasLoadedContent
+        availability.nextTrack.isEnabled = hasLoadedContent
+        availability.previousTrack.isEnabled = hasLoadedContent
+        availability.changePlaybackRate.isEnabled = hasLoadedContent
+        availability.changePlaybackPosition.isEnabled = isSeekable
 
         stateStore.update(state)
         latestState = state

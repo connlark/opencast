@@ -1,18 +1,23 @@
 import Foundation
+import OpenCastPlayback
 
 struct SleepTimerOption: Identifiable {
-    /// The sleep durations OpenCast offers: the phone's list and the order the
-    /// car's button cycles through.
+    /// The sleep choices offered from Now Playing.
     static let canonical: [SleepTimerOption] = [
-        SleepTimerOption(title: "Off", duration: nil),
-        SleepTimerOption(title: "15 Minutes", duration: 15 * 60),
-        SleepTimerOption(title: "30 Minutes", duration: 30 * 60),
-        SleepTimerOption(title: "45 Minutes", duration: 45 * 60),
-        SleepTimerOption(title: "1 Hour", duration: 60 * 60)
+        SleepTimerOption(title: "Off", mode: .off),
+        SleepTimerOption(title: "End of Episode", mode: .endOfEpisode),
+        SleepTimerOption(title: "15 Minutes", mode: .duration(15 * 60)),
+        SleepTimerOption(title: "30 Minutes", mode: .duration(30 * 60)),
+        SleepTimerOption(title: "45 Minutes", mode: .duration(45 * 60)),
+        SleepTimerOption(title: "1 Hour", mode: .duration(60 * 60))
     ]
 
     let title: String
-    let duration: TimeInterval?
+    let mode: PlaybackSleepTimerMode
+
+    var isEndOfEpisode: Bool {
+        mode == .endOfEpisode
+    }
 
     var id: String {
         title

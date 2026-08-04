@@ -12,14 +12,17 @@ import Testing
 /// OPENCAST_FULL_GATE_OUT=<output file>
 @Suite("Full episode deterministic gate")
 struct FullEpisodeDeterministicGateTests {
-    @Test("Zero-fallback full episode transcript dump", .timeLimit(.minutes(30)))
+    @Test(
+        "Zero-fallback full episode transcript dump",
+        .timeLimit(.minutes(30)),
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_FULL_GATE"] == "1"
+            && ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil
+            && ProcessInfo.processInfo.environment["OPENCAST_FULL_GATE_OUT"] != nil)
+    )
     func zeroFallbackFullEpisodeTranscriptDump() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["OPENCAST_FULL_GATE"] == "1",
-              let audioPath = environment["OPENCAST_TRANSCRIPTION_AUDIO"],
-              let outPath = environment["OPENCAST_FULL_GATE_OUT"] else {
-            return
-        }
+        let audioPath = try #require(environment["OPENCAST_TRANSCRIPTION_AUDIO"])
+        let outPath = try #require(environment["OPENCAST_FULL_GATE_OUT"])
 
         // Whisper-perf pass 5 (Q3): OPENCAST_GATE_MODEL_VERSION selects a
         // sideloaded candidate tree; unset runs the shipped default.

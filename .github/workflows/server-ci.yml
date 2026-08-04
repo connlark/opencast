@@ -15,6 +15,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  guards:
+    name: Repository guards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify cross-component server contracts
+        run: |
+          ./scripts/check-media-ua-pins.sh
+          ./scripts/check-wasm-only-test-gating.sh
+
   rust:
     name: Rust (${{ matrix.name }})
     runs-on: ubuntu-24.04
@@ -205,6 +220,9 @@ jobs:
           - name: TranscriptionMediaWorker
             directory: Server/TranscriptionMediaWorker
             timeout_minutes: 50
+          - name: ExerciseFeedWorker
+            directory: Server/ExerciseFeedWorker
+            timeout_minutes: 15
           - name: Website
             directory: Server/Website
             timeout_minutes: 35
@@ -268,6 +286,11 @@ jobs:
           )
           PY
 
+      - name: Prepare ExerciseFeedWorker public test configuration
+        if: matrix.name == 'ExerciseFeedWorker'
+        working-directory: ${{ matrix.directory }}
+        run: cp wrangler.example.toml wrangler.toml
+
       - name: Test and typecheck PurchaseWorker
         if: matrix.name == 'PurchaseWorker'
         working-directory: ${{ matrix.directory }}
@@ -283,6 +306,11 @@ jobs:
           yarn typecheck
           yarn test:container
 
+      - name: Check ExerciseFeedWorker
+        if: matrix.name == 'ExerciseFeedWorker'
+        working-directory: ${{ matrix.directory }}
+        run: yarn test
+
       - name: Verify Website
         if: matrix.name == 'Website'
         working-directory: ${{ matrix.directory }}
@@ -295,6 +323,7 @@ jobs:
     name: Server CI
     if: always()
     needs:
+      - guards
       - rust
       - deterministic-integration
       - services
@@ -306,7 +335,8 @@ jobs:
       - name: Require every server lane to pass
         shell: bash
         run: |
-          if [[ "${{ needs.rust.result }}" != "success" ||
+          if [[ "${{ needs.guards.result }}" != "success" ||
+                "${{ needs.rust.result }}" != "success" ||
                 "${{ needs.deterministic-integration.result }}" != "success" ||
                 "${{ needs.services.result }}" != "success" ]]; then
             echo "One or more Server CI lanes did not pass."

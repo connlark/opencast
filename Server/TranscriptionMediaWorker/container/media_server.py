@@ -22,6 +22,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -36,6 +38,16 @@ STREAM_COPY_PROFILE = "mp3-stream-copy-v1"
 NORMALIZED_PROFILE = "mp3-cbr-128k-mono-44100-v1"
 MIXED_PROFILE = "mp3-mixed-stream-copy-and-cbr-128k-mono-44100-v1"
 
+# Deadlines are deliberately generous — legitimate media runs long (hours of
+# audio up to the 512 MiB source cap) and the budgets exist to convert a hung
+# socket or wedged subprocess into a clean MediaError, never to police real
+# work. subprocess.run kills the child on expiry and every op runs inside a
+# TemporaryDirectory, so a timeout leaves no stray process or temp file.
+URLOPEN_TIMEOUT_SECONDS = 60.0  # socket connect/read inactivity
+DOWNLOAD_DEADLINE_SECONDS = 1800.0  # wall clock for a full 512 MiB source
+FFPROBE_TIMEOUT_SECONDS = 300.0
+FFMPEG_TIMEOUT_SECONDS = 900.0  # per invocation (one ~300 s window each)
+
 
 class MediaError(Exception):
     def __init__(self, status: int, code: str):
@@ -48,21 +60,54 @@ def quantized(value: float | str) -> float:
     return float(Decimal(str(value)).quantize(Decimal("0.001")))
 
 
+def timeout_shaped(error: urllib.error.URLError) -> bool:
+    return isinstance(getattr(error, "reason", None), TimeoutError)
+
+
 def download_source(source_key: str, destination: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
     total = 0
-    with urllib.request.urlopen(f"{R2_BASE}/{source_key}") as response, destination.open("wb") as out:
-        while True:
-            block = response.read(1024 * 1024)
-            if not block:
-                break
-            digest.update(block)
-            total += len(block)
-            if total > MAX_SOURCE_BYTES:
-                raise MediaError(413, "source_too_large")
-            out.write(block)
+    deadline = time.monotonic() + DOWNLOAD_DEADLINE_SECONDS
+    expected_length: int | None = None
+    try:
+        with urllib.request.urlopen(
+            f"{R2_BASE}/{source_key}", timeout=URLOPEN_TIMEOUT_SECONDS
+        ) as response, destination.open("wb") as out:
+            # The R2 outbound handler sets content-length from object.size, so
+            # a short read is a truncation, not the object's true length.
+            # CPython's bounded read() returns b"" on a premature EOF without
+            # raising, so without this check the truncated prefix's hash/count
+            # would be returned as the object identity and terminally blame a
+            # healthy device (source/upload identity mismatch). Phase 10 AA/TMW-1.
+            content_length = response.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    expected_length = int(content_length)
+                except ValueError:
+                    expected_length = None
+            while True:
+                if time.monotonic() > deadline:
+                    raise MediaError(504, "source_download_timeout")
+                block = response.read(1024 * 1024)
+                if not block:
+                    break
+                digest.update(block)
+                total += len(block)
+                if total > MAX_SOURCE_BYTES:
+                    raise MediaError(413, "source_too_large")
+                out.write(block)
+    except TimeoutError as error:
+        raise MediaError(504, "source_download_timeout") from error
+    except urllib.error.URLError as error:
+        if timeout_shaped(error):
+            raise MediaError(504, "source_download_timeout") from error
+        raise
     if total == 0:
         raise MediaError(404, "source_missing")
+    if expected_length is not None and total != expected_length:
+        # 502 (not 4xx) so the gateway classifies it Retryable and re-fetches
+        # rather than terminally failing the job (TMW-1).
+        raise MediaError(502, "source_truncated")
     return digest.hexdigest(), total
 
 
@@ -73,20 +118,36 @@ def upload(key: str, path: Path) -> None:
         method="PUT",
         headers={"content-type": "application/octet-stream"},
     )
-    with urllib.request.urlopen(request) as response:
-        if response.status != 200:
-            raise MediaError(502, "chunk_upload_failed")
+    try:
+        with urllib.request.urlopen(request, timeout=URLOPEN_TIMEOUT_SECONDS) as response:
+            if response.status != 200:
+                raise MediaError(502, "chunk_upload_failed")
+    except TimeoutError as error:
+        raise MediaError(504, "chunk_upload_timeout") from error
+    except urllib.error.URLError as error:
+        if timeout_shaped(error):
+            raise MediaError(504, "chunk_upload_timeout") from error
+        raise
 
 
 def ffprobe(path: Path) -> dict:
-    completed = subprocess.run(
-        [
-            "ffprobe", "-hide_banner", "-loglevel", "error",
-            "-show_format", "-show_streams", "-of", "json", str(path),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                "ffprobe", "-hide_banner", "-loglevel", "error",
+                # Local file only: the input is always a temp path, so pin the
+                # protocol allow-list to `file`. This forecloses ffmpeg's
+                # remote/playlist protocol surface on untrusted media even
+                # though the container also runs with no internet (TMW-4a).
+                "-protocol_whitelist", "file",
+                "-show_format", "-show_streams", "-of", "json", str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=FFPROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise MediaError(504, "probe_timeout") from error
     if completed.returncode != 0:
         raise MediaError(422, "probe_failed")
     return json.loads(completed.stdout)
@@ -117,36 +178,46 @@ def probe(payload: dict) -> dict:
 def extract_chunk(source: Path, out: Path, start: float, duration: float) -> None:
     # Exact bakeoff command: input-side time seek + MP3 stream copy on valid
     # packet/frame boundaries, metadata stripped, deterministic output.
-    completed = subprocess.run(
-        [
-            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
-            "-map", "0:a:0", "-vn", "-c:a", "copy",
-            "-map_metadata", "-1", "-map_chapters", "-1",
-            "-fflags", "+bitexact", "-write_xing", "0", "-id3v2_version", "0",
-            str(out),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-protocol_whitelist", "file",
+                "-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
+                "-map", "0:a:0", "-vn", "-c:a", "copy",
+                "-map_metadata", "-1", "-map_chapters", "-1",
+                "-fflags", "+bitexact", "-write_xing", "0", "-id3v2_version", "0",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise MediaError(504, "chunk_extraction_timeout") from error
     if completed.returncode != 0 or not out.exists():
         raise MediaError(422, "chunk_extraction_failed")
 
 
 def normalize_chunk(source: Path, out: Path, start: float, duration: float) -> None:
-    completed = subprocess.run(
-        [
-            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
-            "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "44100",
-            "-c:a", "libmp3lame", "-b:a", "128k",
-            "-map_metadata", "-1", "-map_chapters", "-1",
-            "-fflags", "+bitexact", "-write_xing", "0", "-id3v2_version", "0",
-            str(out),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-protocol_whitelist", "file",
+                "-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
+                "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "44100",
+                "-c:a", "libmp3lame", "-b:a", "128k",
+                "-map_metadata", "-1", "-map_chapters", "-1",
+                "-fflags", "+bitexact", "-write_xing", "0", "-id3v2_version", "0",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise MediaError(504, "chunk_normalization_timeout") from error
     if completed.returncode != 0 or not out.exists():
         # Probe and stream-copy already established that this is readable MP3.
         # A missing encoder or a failed re-encode is service infrastructure,
@@ -245,8 +316,18 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "OpenCastMedia/1"
 
     def do_POST(self):  # noqa: N802 (stdlib naming)
-        length = int(self.headers.get("content-length", "0"))
         try:
+            # The framing read is inside the try so a missing/non-numeric
+            # content-length (e.g. chunked encoding) becomes a clean 400
+            # instead of a KeyError-driven generic 500 (or, for a non-numeric
+            # header, no response at all). Phase 10 TMW-7.
+            raw_length = self.headers.get("content-length")
+            if raw_length is None:
+                raise MediaError(400, "content_length_required")
+            try:
+                length = int(raw_length)
+            except ValueError as error:
+                raise MediaError(400, "invalid_content_length") from error
             payload = json.loads(self.rfile.read(length) or b"{}")
             if self.path == "/probe":
                 body = probe(payload)

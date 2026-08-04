@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import OpenCast
 
@@ -349,6 +350,47 @@ struct EpisodeDownloadInfrastructureTests {
         #expect(progressEvents.last?.0 == Int64(body.count))
         #expect(progressEvents.last?.1 == Int64(body.count))
         #expect(try Data(contentsOf: destinationURL) == body)
+    }
+
+    @Test("Response disposition resolves .allow only after metadata delivery")
+    func delegateResolvesAllowAfterMetadataDelivery() async throws {
+        let directory = try makeTemporaryDirectory()
+        let temporaryURL = directory.appending(path: "delegate-disposition.partial")
+        FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
+        let (_, progressContinuation) = AsyncStream<URLSessionEpisodeAudioDownloadDelegate.ProgressUpdate>.makeStream()
+        let metadataDelivered = OSAllocatedUnfairLock(initialState: false)
+        let delegate = URLSessionEpisodeAudioDownloadDelegate(
+            temporaryURL: temporaryURL,
+            resumeOffset: 0,
+            resume: nil,
+            progressInterval: .milliseconds(250),
+            progressContinuation: progressContinuation,
+            onResponseMetadata: { _ in
+                metadataDelivered.withLock { $0 = true }
+            }
+        )
+        let session = URLSession(configuration: .ephemeral)
+        let url = URL(string: "https://example.com/audio.mp3")!
+        let dataTask = session.dataTask(with: url)
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Length": "6"]
+        )!
+
+        let disposition = await withCheckedContinuation { continuation in
+            delegate.urlSession(session, dataTask: dataTask, didReceive: response) { disposition in
+                continuation.resume(returning: disposition)
+            }
+        }
+
+        // Metadata lands strictly before the disposition resolves, and an
+        // uncancelled delivery resolves .allow. (The cancel-during-delivery
+        // side is pinned by the metadata-race leg of the append/restart
+        // downloader test — the callback CAN cancel the disposition task.)
+        #expect(disposition == .allow)
+        #expect(metadataDelivered.withLock { $0 })
     }
 
     @Test("Resume response policy handles partial, full, and unsatisfiable responses")

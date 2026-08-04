@@ -101,6 +101,12 @@ nonisolated final class URLSessionEpisodeAudioDownloadDelegate: NSObject, URLSes
                 return
             }
 
+            // Not dead code: onResponseMetadata runs on this task, and the
+            // store's restart handling may cancel the current task from
+            // inside that callback (pinned by the metadata-race leg of the
+            // append/restart downloader test). The check must come after the
+            // callback so that cancellation resolves .cancel before any body
+            // bytes append to the truncated partial.
             Task { @MainActor [self] in
                 onResponseMetadata(metadata)
                 if Task.isCancelled {

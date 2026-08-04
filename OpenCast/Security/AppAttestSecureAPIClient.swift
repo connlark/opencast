@@ -12,7 +12,7 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         self.appAttestService = appAttestService
     }
 
-    func sendJSONPayload<Payload: Encodable, ResponseBody: Decodable>(
+    func sendJSONPayload<Payload: Encodable, ResponseBody: Decodable & Sendable>(
         path: String,
         installID: String,
         keyID: String,
@@ -29,12 +29,49 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         )
     }
 
-    func sendRawPayload<ResponseBody: Decodable>(
+    func sendRawPayload<ResponseBody: Decodable & Sendable>(
         path: String,
         installID: String,
         keyID: String,
         payload: String,
         timeout: TimeInterval? = nil,
+        response: ResponseBody.Type
+    ) async throws -> ResponseBody {
+        // One gate turn spans issuance → response (including the single
+        // counter-race retry), so a key's counters reach the server in
+        // issuance order regardless of which service is sending.
+        try await AppAttestAssertionGate.shared.withSerializedSend(keyID: keyID) {
+            do {
+                return try await issueAssertionAndSend(
+                    path: path,
+                    installID: installID,
+                    keyID: keyID,
+                    payload: payload,
+                    timeout: timeout,
+                    response: response
+                )
+            } catch let error as AppAttestHTTPError where error.isCounterRaceFailure {
+                // Another process (app vs. extension) can still land a higher
+                // counter first; a fresh assertion picks up the advanced
+                // counter without the maximal delete-key + re-attest recovery.
+                return try await issueAssertionAndSend(
+                    path: path,
+                    installID: installID,
+                    keyID: keyID,
+                    payload: payload,
+                    timeout: timeout,
+                    response: response
+                )
+            }
+        }
+    }
+
+    private func issueAssertionAndSend<ResponseBody: Decodable & Sendable>(
+        path: String,
+        installID: String,
+        keyID: String,
+        payload: String,
+        timeout: TimeInterval?,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
         let clientDataHash = AppAttestRequestBinding.clientDataHash(

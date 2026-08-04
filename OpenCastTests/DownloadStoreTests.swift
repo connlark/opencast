@@ -35,6 +35,35 @@ struct DownloadStoreTests {
         #expect(fileStore.fileExists(relativePath: relativePath) == false)
     }
 
+    @Test("record(for:) matches a linear scan through download, reload, and delete")
+    func recordLookupMatchesLinearScan() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
+        let downloader = ChunkedEpisodeAudioDownloader(chunks: [Data("abc".utf8)])
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "index-equivalence")
+
+        func expectLookupParity() {
+            for episodeID in ["index-equivalence", "index-equivalence-missing"] {
+                #expect(store.record(for: episodeID) === store.records.first { $0.episodeID == episodeID })
+            }
+        }
+
+        store.startDownload(for: episode, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+        expectLookupParity()
+
+        await store.load(modelContext: context)
+        expectLookupParity()
+
+        let record = try #require(store.record(for: episode.episodeID))
+        store.deleteDownload(record, modelContext: context)
+        expectLookupParity()
+        #expect(store.record(for: episode.episodeID) == nil)
+    }
+
     @Test("ensureCompletedDownload returns a completed record and self-heals a missing file")
     func ensureCompletedDownloadSelfHealsMissingFile() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -120,7 +149,7 @@ struct DownloadStoreTests {
     }
 
     @Test("Reconcile marks interrupted and missing downloads")
-    func reconcileMarksInterruptedAndMissingDownloads() throws {
+    func reconcileMarksInterruptedAndMissingDownloads() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -150,7 +179,7 @@ struct DownloadStoreTests {
         )
         try context.save()
 
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         #expect(store.record(for: "interrupted")?.state == .failed)
         #expect(store.record(for: "interrupted")?.errorMessage == EpisodeDownloadError.interrupted.localizedDescription)
@@ -184,7 +213,7 @@ struct DownloadStoreTests {
     }
 
     @Test("Primary playback source remains remote when a download exists")
-    func primaryPlaybackSourceRemainsRemoteWhenDownloadExists() throws {
+    func primaryPlaybackSourceRemainsRemoteWhenDownloadExists() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -203,7 +232,7 @@ struct DownloadStoreTests {
             context: context
         )
         try context.save()
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
 
         let streamEpisode = try appModel.resolvedPlaybackEpisode(for: episode, source: .stream, modelContext: context)
         let downloadedEpisode = try appModel.resolvedPlaybackEpisode(
@@ -219,7 +248,7 @@ struct DownloadStoreTests {
     }
 
     @Test("Downloaded playback marks missing files before throwing")
-    func downloadedPlaybackMarksMissingFilesBeforeThrowing() throws {
+    func downloadedPlaybackMarksMissingFilesBeforeThrowing() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -238,7 +267,7 @@ struct DownloadStoreTests {
             context: context
         )
         try context.save()
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
         try fileStore.removeFile(relativePath: downloadRecord.localRelativePath)
 
         do {
@@ -298,7 +327,7 @@ struct DownloadStoreTests {
         )
         try context.save()
         await libraryStore.load(modelContext: context)
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
 
         await libraryStore.unsubscribe(
             feedURL: removedFeedURL,
@@ -334,7 +363,7 @@ struct DownloadStoreTests {
             context: context
         )
         try context.save()
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
         try writeCacheFixture(in: cacheController.feedCacheDirectory, fileName: "feed.cache")
         try writeCacheFixture(in: cacheController.artworkCacheDirectory, fileName: "artwork.cache")
 
@@ -385,7 +414,7 @@ struct DownloadStoreTests {
         let firstRelativePath = try #require(firstRecord.localRelativePath)
         let secondRelativePath = try #require(secondRecord.localRelativePath)
         try context.save()
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
         try writeCacheFixture(in: cacheController.feedCacheDirectory, fileName: "feed.cache")
         try writeCacheFixture(in: cacheController.artworkCacheDirectory, fileName: "artwork.cache")
 
@@ -407,7 +436,7 @@ struct DownloadStoreTests {
     }
 
     @Test("Batch deletion preserves an earlier failure after a later success")
-    func batchDeletionPreservesEarlierFailure() throws {
+    func batchDeletionPreservesEarlierFailure() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -446,7 +475,7 @@ struct DownloadStoreTests {
         let succeededRelativePath = try #require(succeededRecord.localRelativePath)
         context.insert(failedRecord)
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o500],
@@ -470,7 +499,7 @@ struct DownloadStoreTests {
     }
 
     @Test("Per-podcast storage cleanup removes completed downloads only")
-    func perPodcastStorageCleanupKeepsActiveRecords() throws {
+    func perPodcastStorageCleanupKeepsActiveRecords() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
@@ -502,7 +531,7 @@ struct DownloadStoreTests {
             bytesExpected: 100
         ))
         try context.save()
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
 
         try appModel.deleteCompletedDownloads(
             forPodcastID: completedEpisode.podcastID,
@@ -594,7 +623,7 @@ struct DownloadStoreTests {
         try await firstStore.waitForDownload(episodeID: episode.episodeID)
 
         let relaunchedStore = DownloadStore(downloader: downloader, fileStore: fileStore)
-        relaunchedStore.load(modelContext: context)
+        await relaunchedStore.load(modelContext: context)
         #expect(relaunchedStore.record(for: episode.episodeID)?.state == .paused)
 
         relaunchedStore.resumeDownload(episodeID: episode.episodeID, modelContext: context)
@@ -655,7 +684,7 @@ struct DownloadStoreTests {
     }
 
     @Test("Reconcile adopts interrupted partials and rejects missing paused files")
-    func reconcileAdoptsInterruptedPartialAndRejectsMissingPausedFile() throws {
+    func reconcileAdoptsInterruptedPartialAndRejectsMissingPausedFile() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -726,7 +755,7 @@ struct DownloadStoreTests {
         try context.save()
 
         let store = DownloadStore(fileStore: fileStore)
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         #expect(store.record(for: "adopt-partial")?.state == .paused)
         #expect(store.record(for: "adopt-partial")?.bytesReceived == 13)
@@ -748,7 +777,7 @@ struct DownloadStoreTests {
     }
 
     @Test("Reconcile deletes files no download record claims")
-    func reconcileDeletesUnclaimedFiles() throws {
+    func reconcileDeletesUnclaimedFiles() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -782,7 +811,7 @@ struct DownloadStoreTests {
         try context.save()
 
         let store = DownloadStore(fileStore: fileStore)
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         let claimedPath = fileStore.relativePath(
             episodeID: "claimed-episode",
@@ -798,7 +827,7 @@ struct DownloadStoreTests {
     }
 
     @Test("Reconcile preserves a paused partial when its size cannot be read")
-    func reconcilePreservesUnreadablePausedPartial() throws {
+    func reconcilePreservesUnreadablePausedPartial() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -832,7 +861,7 @@ struct DownloadStoreTests {
         }
 
         let store = DownloadStore(fileStore: fileStore)
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
         #expect(store.lastErrorMessage != nil)
         #expect(store.record(for: episodeID)?.state == .paused)
         #expect(store.record(for: episodeID)?.bytesReceived == Int64(partialData.count))
@@ -846,7 +875,7 @@ struct DownloadStoreTests {
         #expect(storedRecords.contains { $0.episodeID == episodeID && $0.state == .paused })
         #expect(try Data(contentsOf: partialURL) == partialData)
 
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
         #expect(store.record(for: episodeID)?.state == .paused)
         #expect(store.record(for: episodeID)?.bytesReceived == Int64(partialData.count))
     }
@@ -868,7 +897,7 @@ struct DownloadStoreTests {
             ))
         }
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         store.retryAllFailedDownloads(modelContext: context)
         #expect(await waitUntil {
@@ -888,7 +917,7 @@ struct DownloadStoreTests {
     }
 
     @Test("Auto-delete preference persists and played downloads are swept only when enabled")
-    func autoDeletePreferencePersistsAndControlsSweep() throws {
+    func autoDeletePreferencePersistsAndControlsSweep() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -906,7 +935,7 @@ struct DownloadStoreTests {
         )
         let relativePath = try #require(record.localRelativePath)
         try context.save()
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
         #expect(library.markEpisodePlayed(episode, modelContext: context))
 
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: context)
@@ -918,12 +947,12 @@ struct DownloadStoreTests {
         #expect(fileStore.fileExists(relativePath: relativePath) == false)
 
         let relaunchedStore = DownloadStore(fileStore: fileStore)
-        relaunchedStore.load(modelContext: context)
+        await relaunchedStore.load(modelContext: context)
         #expect(relaunchedStore.autoDeletesPlayedDownloads)
     }
 
     @Test("Auto-delete keeps the currently playing download")
-    func autoDeleteSkipsCurrentlyPlayingDownload() throws {
+    func autoDeleteSkipsCurrentlyPlayingDownload() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
@@ -939,7 +968,7 @@ struct DownloadStoreTests {
             context: context
         )
         try context.save()
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
         #expect(library.markEpisodePlayed(episode, modelContext: context))
         #expect(downloadStore.setAutoDeletesPlayedDownloads(true, modelContext: context))
         try appModel.playDownloadedEpisode(
@@ -975,7 +1004,7 @@ struct DownloadStoreTests {
             context: context
         )
         try context.save()
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
         #expect(library.markEpisodePlayed(queuedEpisode, modelContext: context))
         #expect(downloadStore.setAutoDeletesPlayedDownloads(true, modelContext: context))
 
@@ -1022,7 +1051,7 @@ struct DownloadStoreTests {
             context: context
         )
         try context.save()
-        downloadStore.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
         #expect(library.markEpisodePlayed(episode, modelContext: context))
         #expect(downloadStore.setAutoDeletesPlayedDownloads(true, modelContext: context))
         let localFileURL = try #require(downloadStore.localFileURL(for: record))
@@ -1140,7 +1169,7 @@ struct DownloadStoreTests {
             )
         )
         try context.save()
-        store.load(modelContext: context)
+        await store.load(modelContext: context)
 
         // The record predates hash persistence, so the identity is honestly
         // unavailable until something recomputes it from the file.
@@ -1152,19 +1181,12 @@ struct DownloadStoreTests {
     }
 
     private func makeEpisode(episodeID: String, audioURL: String?) -> EpisodeListItemSnapshot {
-        EpisodeListItemSnapshot(
+        .fixture(
             episodeID: episodeID,
-            podcastID: "https://example.com/feed.xml",
-            podcastTitle: "Example Show",
-            title: "Example Episode",
-            summary: nil,
-            publishedAt: nil,
             duration: 120,
             audioURL: audioURL,
             artworkURL: "https://example.com/art.jpg",
-            artworkPreview: nil,
-            guid: episodeID,
-            cachedAt: .now
+            guid: episodeID
         )
     }
 

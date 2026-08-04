@@ -13,13 +13,15 @@ import Testing
 /// OPENCAST_F_GATE=1 OPENCAST_TRANSCRIPTION_AUDIO=<mp3>
 @Suite("Seeded fallback reproducibility gate")
 struct SeededFallbackReproducibilityGateTests {
-    @Test("Two seeded full-episode runs are bit-identical", .timeLimit(.minutes(30)))
+    @Test(
+        "Two seeded full-episode runs are bit-identical",
+        .timeLimit(.minutes(30)),
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_F_GATE"] == "1"
+            && ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil)
+    )
     func seededRunsAreBitIdentical() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["OPENCAST_F_GATE"] == "1",
-              let audioPath = environment["OPENCAST_TRANSCRIPTION_AUDIO"] else {
-            return
-        }
+        let audioPath = try #require(environment["OPENCAST_TRANSCRIPTION_AUDIO"])
 
         let audioData = try Data(contentsOf: URL(fileURLWithPath: audioPath))
         let sourceSHA = SHA256.hash(data: audioData).map { String(format: "%02x", $0) }.joined()

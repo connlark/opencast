@@ -1,6 +1,9 @@
+import Foundation
+import OpenCastCore
 import SwiftData
 import Testing
 @testable import OpenCast
+@testable import OpenCastPlayback
 
 @MainActor
 @Suite("Core store loading")
@@ -53,6 +56,84 @@ struct OpenCastCoreStoresLoadingTests {
 
         #expect(appModel.podcastEpisodeListSettings.filter(forPodcastID: podcastID) == .unplayed)
         #expect(appModel.podcastEpisodeListSettings.sortOrder(forPodcastID: podcastID) == .oldestFirst)
+    }
+
+    @Test("Playback speed restores before playback-surface restoration")
+    func playbackSpeedRestoresBeforePlaybackSurface() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let modelContext = ModelContext(container)
+        try LocalPreferenceRecord.upsert(
+            key: PlaybackSettingsStore.playbackRatePreferenceKey,
+            value: "1.5",
+            modelContext: modelContext
+        )
+        try modelContext.save()
+        let appModel = OpenCastAppModel(
+            localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        var rateAtPlaybackSurfaceRestoration: Float?
+        appModel.playbackSurfaceRestorationObserver = {
+            rateAtPlaybackSurfaceRestoration = $0
+        }
+
+        await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
+
+        #expect(appModel.playback.rate == 1.5)
+        #expect(rateAtPlaybackSurfaceRestoration == 1.5)
+        #expect(appModel.playbackSurfaceRestorationCount == 1)
+    }
+
+    @Test("CarPlay rate cycling persists across app-model launches")
+    func carPlayRateCyclePersistsAcrossLaunches() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let modelContext = ModelContext(container)
+        let appModel = OpenCastAppModel(
+            localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        await appModel.ensureCoreStoresLoaded(modelContext: modelContext)
+
+        #expect(appModel.cyclePlaybackRate(modelContext: modelContext))
+
+        let reloadedAppModel = OpenCastAppModel(
+            localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        await reloadedAppModel.ensureCoreStoresLoaded(modelContext: modelContext)
+
+        #expect(reloadedAppModel.playback.rate == 1.25)
+    }
+
+    @Test("MediaPlayer rate changes persist through the app settings authority")
+    func mediaPlayerRateChangePersistsAcrossLaunches() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let modelContext = ModelContext(container)
+        let appModel = OpenCastAppModel(
+            localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        await appModel.ensureCoreStoresLoaded(modelContext: modelContext)
+
+        appModel.playback.handleRemotePlaybackRateChange(1.5)
+
+        #expect(appModel.playback.rate == 1.5)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
+            modelContext: modelContext
+        )?.value == "1.5")
+        try appModel.playback.load(Episode(
+            id: EpisodeID(rawValue: "rate-persistence-episode"),
+            podcastID: PodcastID(rawValue: "https://example.com/rate.xml"),
+            podcastTitle: "Rate Show",
+            title: "Rate Episode",
+            duration: 120,
+            audioURL: URL(string: "https://example.com/rate.mp3")
+        ))
+        #expect(appModel.playback.rate == 1.5)
+
+        let reloadedAppModel = OpenCastAppModel(
+            localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        await reloadedAppModel.ensureCoreStoresLoaded(modelContext: modelContext)
+
+        #expect(reloadedAppModel.playback.rate == 1.5)
     }
 
     /// Skip zones and the auto-detect decision are read the instant an episode

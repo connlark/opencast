@@ -12,10 +12,18 @@ enum RSSDateParser {
             return Date(timeIntervalSince1970: TimeInterval(secondsSince1970))
         }
 
-        return iso8601DateParser.date(from: trimmed)
+        return parseISO8601(trimmed)
     }
 
-    private static let iso8601DateParser = RSSISO8601DateParser()
+    private static let iso8601 = Date.ISO8601FormatStyle()
+    private static let iso8601WithFractionalSeconds = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+
+    private static func parseISO8601(_ value: String) -> Date? {
+        if let date = try? iso8601.parse(value) {
+            return date
+        }
+        return try? iso8601WithFractionalSeconds.parse(value)
+    }
 
     private static func parseInternetDate(_ value: String) -> Int64? {
         value.withCString { input in

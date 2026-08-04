@@ -6,8 +6,8 @@ use worker::{D1Database, D1Type, Result};
 // App Attest challenge/key storage lives in the shared core crate
 // (one copy for AdAnalysisWorker, NotificationsWorker, and this worker).
 pub use opencast_app_attest_core::app_attest_storage::{
-    app_attest_key_count_since, challenge, challenge_count_since, global_challenge_count_since,
-    increment_challenge_source_bucket, insert_challenge, key, mark_challenge_consumed,
+    app_attest_key_count_since, challenge, increment_challenge_source_bucket,
+    insert_challenge_within_limits, key, mark_challenge_consumed,
     prune_challenge_source_buckets_before, prune_challenges_before, update_key_counter, upsert_key,
     AppAttestKeyRow, ChallengeRow,
 };
@@ -543,6 +543,39 @@ mod tests {
     use rusqlite::{params, Connection};
 
     const NOW: i64 = 1_784_000_000;
+
+    /// Pins this worker's migration schema against the shared atomic
+    /// admission statement (cap predicates + insert in one statement); the
+    /// full boundary matrix lives in AdAnalysisWorker's
+    /// app_attest_migrations tests.
+    #[test]
+    fn migration_supports_atomic_challenge_admission() {
+        use opencast_app_attest_core::app_attest::challenge_hash;
+        use opencast_app_attest_core::app_attest_storage::INSERT_CHALLENGE_WITHIN_LIMITS_SQL;
+
+        let db = setup_db();
+        let admit = |challenge_id: &str, install_cap: i64| -> usize {
+            db.execute(
+                INSERT_CHALLENGE_WITHIN_LIMITS_SQL,
+                params![
+                    challenge_id,
+                    challenge_hash(challenge_id),
+                    "register",
+                    "install-a",
+                    NOW,
+                    NOW + 600,
+                    NOW - 3600,
+                    install_cap,
+                    1_000_i64
+                ],
+            )
+            .expect("run atomic admission statement")
+        };
+
+        assert_eq!(admit("challenge-under-cap", 2), 1);
+        assert_eq!(admit("challenge-at-cap", 2), 1);
+        assert_eq!(admit("challenge-over-cap", 2), 0);
+    }
 
     /// Migration 0005's partial indexes were built against exactly these
     /// predicates; the assembled constants must never drift from them.

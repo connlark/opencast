@@ -100,7 +100,133 @@ struct EpisodeAdAnalysisZoneMapperTests {
     }
 
     @Test
-    func appModelPushesFreshZonesAndClearsStaleOrDeletedAnalysis() throws {
+    func appModelPushesFreshZonesAndClearsStaleOrDeletedAnalysis() async throws {
+        let fixture = try makeAppModelFixture()
+        let context = fixture.context
+        let transcriptFileStore = fixture.transcriptFileStore
+        let adAnalysisFileStore = fixture.adAnalysisFileStore
+        let playback = fixture.playback
+        let appModel = fixture.appModel
+        let transcript = makeTranscriptDocument()
+        let seeded = try seedCompletedAnalysis(
+            transcript: transcript,
+            spans: [
+                span(id: 1, kind: .hostReadAd, start: 4, end: 9),
+                span(id: 2, kind: .insertedAd, start: 12, end: 18, confidence: 0.5)
+            ],
+            in: fixture
+        )
+        let analysis = seeded.analysis
+        let analysisRelativePath = seeded.analysisRelativePath
+        let transcriptRelativePath = seeded.transcriptRelativePath
+
+        appModel.loadLocalTranscriptionState(modelContext: context)
+        try playback.load(makeEpisode(duration: 30), startPosition: 0)
+        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await appModel.waitForSkipZoneRefresh()
+        // Only the >= 0.8 tier reaches the playback policy; the 0.5 span is
+        // display-only.
+        #expect(playback.skipZones == [
+            PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
+        ])
+        #expect(appModel.displayOnlySkipZones == [
+            PlaybackSkipZone(id: 2, startTime: 12, endTime: 18)
+        ])
+
+        let staleTranscript = makeTranscriptDocument(updatedAt: transcript.updatedAt.addingTimeInterval(5))
+        try transcriptFileStore.write(staleTranscript, relativePath: transcriptRelativePath)
+        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await appModel.waitForSkipZoneRefresh()
+        #expect(playback.skipZones == [])
+        #expect(appModel.displayOnlySkipZones == [])
+
+        try transcriptFileStore.write(transcript, relativePath: transcriptRelativePath)
+        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await appModel.waitForSkipZoneRefresh()
+        #expect(playback.skipZones == [
+            PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
+        ])
+
+        // A pre-step-4 ads_only document is outdated even with current
+        // transcript inputs: zero zones in either tier.
+        var outdatedPolicyAnalysis = analysis
+        outdatedPolicyAnalysis.policy = "ads_only"
+        try adAnalysisFileStore.write(outdatedPolicyAnalysis, relativePath: analysisRelativePath)
+        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await appModel.waitForSkipZoneRefresh()
+        #expect(playback.skipZones == [])
+        #expect(appModel.displayOnlySkipZones == [])
+
+        try adAnalysisFileStore.write(analysis, relativePath: analysisRelativePath)
+        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await appModel.waitForSkipZoneRefresh()
+        #expect(playback.skipZones == [
+            PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
+        ])
+
+        appModel.deleteEpisodeAdAnalysis(episodeID: transcript.episodeID, modelContext: context)
+        await appModel.waitForSkipZoneRefresh()
+        #expect(playback.skipZones == [])
+        #expect(appModel.displayOnlySkipZones == [])
+    }
+
+    @Test
+    func zonesInstallAsynchronouslyAfterPlaybackStarts() async throws {
+        let fixture = try makeAppModelFixture()
+        let transcript = makeTranscriptDocument()
+        try seedCompletedAnalysis(
+            transcript: transcript,
+            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
+            in: fixture
+        )
+
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        await fixture.appModel.waitForSkipZoneRefresh()
+        try fixture.playback.load(makeEpisode(duration: 30), startPosition: 0)
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+
+        // The decode runs off-main: nothing is installed at the call boundary,
+        // zones attach when the load completes.
+        #expect(fixture.playback.skipZones == [])
+        #expect(fixture.appModel.displayOnlySkipZones == [])
+        await fixture.appModel.waitForSkipZoneRefresh()
+        #expect(fixture.playback.skipZones == [
+            PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
+        ])
+    }
+
+    @Test
+    func staleZoneResultForSwitchedAwayEpisodeDoesNotInstall() async throws {
+        let fixture = try makeAppModelFixture()
+        let transcript = makeTranscriptDocument()
+        try seedCompletedAnalysis(
+            transcript: transcript,
+            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
+            in: fixture
+        )
+
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        await fixture.appModel.waitForSkipZoneRefresh()
+        try fixture.playback.load(makeEpisode(duration: 30), startPosition: 0)
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+
+        // Switch episodes while the analyzed episode's zone load is in flight;
+        // its result must not attach to the new episode.
+        try fixture.playback.load(makeOtherEpisode(duration: 45), startPosition: 0)
+        await fixture.appModel.waitForSkipZoneRefresh()
+        #expect(fixture.playback.skipZones == [])
+        #expect(fixture.appModel.displayOnlySkipZones == [])
+    }
+
+    private struct AppModelFixture {
+        let context: ModelContext
+        let transcriptFileStore: EpisodeTranscriptFileStore
+        let adAnalysisFileStore: EpisodeAdAnalysisFileStore
+        let playback: AVFoundationPlaybackController
+        let appModel: OpenCastAppModel
+    }
+
+    private func makeAppModelFixture() throws -> AppModelFixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -118,13 +244,31 @@ struct EpisodeAdAnalysisZoneMapperTests {
             playback: playback,
             allowsAutomaticFeedRefresh: false
         )
-        let transcript = makeTranscriptDocument()
-        let transcriptRelativePath = transcriptFileStore.relativePath(
+        return AppModelFixture(
+            context: context,
+            transcriptFileStore: transcriptFileStore,
+            adAnalysisFileStore: adAnalysisFileStore,
+            playback: playback,
+            appModel: appModel
+        )
+    }
+
+    @discardableResult
+    private func seedCompletedAnalysis(
+        transcript: EpisodeTranscriptDocument,
+        spans: [EpisodeAdAnalysisSpan],
+        in fixture: AppModelFixture
+    ) throws -> (
+        analysis: EpisodeAdAnalysisDocument,
+        analysisRelativePath: String,
+        transcriptRelativePath: String
+    ) {
+        let transcriptRelativePath = fixture.transcriptFileStore.relativePath(
             episodeID: transcript.episodeID,
             fingerprint: "transcript"
         )
-        try transcriptFileStore.write(transcript, relativePath: transcriptRelativePath)
-        context.insert(EpisodeTranscriptRecord(
+        try fixture.transcriptFileStore.write(transcript, relativePath: transcriptRelativePath)
+        fixture.context.insert(EpisodeTranscriptRecord(
             episodeID: transcript.episodeID,
             podcastID: transcript.podcastID,
             sourceAudioURL: transcript.sourceAudioURL,
@@ -143,21 +287,18 @@ struct EpisodeAdAnalysisZoneMapperTests {
             updatedAt: transcript.updatedAt
         ))
 
-        let fingerprint = adAnalysisFileStore.transcriptFingerprint(for: transcript)
+        let fingerprint = fixture.adAnalysisFileStore.transcriptFingerprint(for: transcript)
         let analysis = makeDocument(
             transcript: transcript,
             fingerprint: fingerprint,
-            spans: [
-                span(id: 1, kind: .hostReadAd, start: 4, end: 9),
-                span(id: 2, kind: .insertedAd, start: 12, end: 18, confidence: 0.5)
-            ]
+            spans: spans
         )
-        let analysisRelativePath = adAnalysisFileStore.relativePath(
+        let analysisRelativePath = fixture.adAnalysisFileStore.relativePath(
             episodeID: transcript.episodeID,
             transcriptFingerprint: fingerprint
         )
-        try adAnalysisFileStore.write(analysis, relativePath: analysisRelativePath)
-        context.insert(EpisodeAdAnalysisRecord(
+        try fixture.adAnalysisFileStore.write(analysis, relativePath: analysisRelativePath)
+        fixture.context.insert(EpisodeAdAnalysisRecord(
             episodeID: transcript.episodeID,
             podcastID: transcript.podcastID,
             transcriptFingerprint: fingerprint,
@@ -173,50 +314,8 @@ struct EpisodeAdAnalysisZoneMapperTests {
             createdAt: analysis.createdAt,
             updatedAt: analysis.updatedAt
         ))
-        try context.save()
-
-        appModel.loadLocalTranscriptionState(modelContext: context)
-        try playback.load(makeEpisode(duration: 30), startPosition: 0)
-        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
-        // Only the >= 0.8 tier reaches the playback policy; the 0.5 span is
-        // display-only.
-        #expect(playback.skipZones == [
-            PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
-        ])
-        #expect(appModel.displayOnlySkipZones == [
-            PlaybackSkipZone(id: 2, startTime: 12, endTime: 18)
-        ])
-
-        let staleTranscript = makeTranscriptDocument(updatedAt: transcript.updatedAt.addingTimeInterval(5))
-        try transcriptFileStore.write(staleTranscript, relativePath: transcriptRelativePath)
-        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
-        #expect(playback.skipZones == [])
-        #expect(appModel.displayOnlySkipZones == [])
-
-        try transcriptFileStore.write(transcript, relativePath: transcriptRelativePath)
-        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
-        #expect(playback.skipZones == [
-            PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
-        ])
-
-        // A pre-step-4 ads_only document is outdated even with current
-        // transcript inputs: zero zones in either tier.
-        var outdatedPolicyAnalysis = analysis
-        outdatedPolicyAnalysis.policy = "ads_only"
-        try adAnalysisFileStore.write(outdatedPolicyAnalysis, relativePath: analysisRelativePath)
-        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
-        #expect(playback.skipZones == [])
-        #expect(appModel.displayOnlySkipZones == [])
-
-        try adAnalysisFileStore.write(analysis, relativePath: analysisRelativePath)
-        appModel.refreshPlaybackSkipZonesForCurrentEpisode()
-        #expect(playback.skipZones == [
-            PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
-        ])
-
-        appModel.deleteEpisodeAdAnalysis(episodeID: transcript.episodeID, modelContext: context)
-        #expect(playback.skipZones == [])
-        #expect(appModel.displayOnlySkipZones == [])
+        try fixture.context.save()
+        return (analysis, analysisRelativePath, transcriptRelativePath)
     }
 
     private func makeDocument(spans: [EpisodeAdAnalysisSpan]) -> EpisodeAdAnalysisDocument {
@@ -312,6 +411,17 @@ struct EpisodeAdAnalysisZoneMapperTests {
             title: "Episode",
             duration: duration,
             audioURL: URL(filePath: "/tmp/opencast-zone-mapper-test.m4a")
+        )
+    }
+
+    private func makeOtherEpisode(duration: TimeInterval) -> Episode {
+        Episode(
+            id: EpisodeID(rawValue: "other-episode"),
+            podcastID: PodcastID(rawValue: "podcast"),
+            podcastTitle: "Podcast",
+            title: "Other Episode",
+            duration: duration,
+            audioURL: URL(filePath: "/tmp/opencast-zone-mapper-test-other.m4a")
         )
     }
 

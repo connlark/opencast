@@ -8,3 +8,15 @@ nonisolated struct RemoteTranscriptionStartPreviewRequest: Identifiable, Sendabl
 
     var id: String { episodeID }
 }
+
+nonisolated enum RemoteTranscriptionStartPreviewRouting {
+    static func presentedRequest(
+        _ request: RemoteTranscriptionStartPreviewRequest?,
+        for episodeID: String
+    ) -> RemoteTranscriptionStartPreviewRequest? {
+        guard request?.episodeID == episodeID else {
+            return nil
+        }
+        return request
+    }
+}

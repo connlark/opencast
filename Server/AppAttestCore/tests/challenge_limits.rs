@@ -1,8 +1,7 @@
 use opencast_app_attest_core::challenge_limits::{
     challenge_bucket_start, challenge_source_hash_key_for_environment,
-    global_challenge_allows_insert, install_challenge_allows_insert, keyed_source_token,
-    source_challenge_allows_after_increment, MAX_CHALLENGES_PER_INSTALL_PER_HOUR,
-    MAX_CHALLENGES_PER_SOURCE_PER_HOUR, MAX_GLOBAL_CHALLENGES_PER_HOUR,
+    keyed_source_token, source_challenge_allows_after_increment,
+    MAX_CHALLENGES_PER_SOURCE_PER_HOUR,
 };
 
 const DEVELOPMENT_FALLBACK_KEY: &str = "opencast-test-development-challenge-source-key";
@@ -15,38 +14,6 @@ fn source_limit_allows_max_successful_challenges_per_hour() {
     ));
     assert!(!source_challenge_allows_after_increment(
         MAX_CHALLENGES_PER_SOURCE_PER_HOUR + 1
-    ));
-}
-
-#[test]
-fn install_and_global_limits_allow_max_successful_serial_challenges_per_hour() {
-    assert!(install_challenge_allows_insert(
-        MAX_CHALLENGES_PER_INSTALL_PER_HOUR - 1
-    ));
-    assert!(!install_challenge_allows_insert(
-        MAX_CHALLENGES_PER_INSTALL_PER_HOUR
-    ));
-
-    assert!(global_challenge_allows_insert(
-        MAX_GLOBAL_CHALLENGES_PER_HOUR - 1
-    ));
-    assert!(!global_challenge_allows_insert(
-        MAX_GLOBAL_CHALLENGES_PER_HOUR
-    ));
-}
-
-#[test]
-fn install_and_global_limits_are_pre_insert_checks_not_concurrency_invariants() {
-    let observed_before_insert = MAX_CHALLENGES_PER_INSTALL_PER_HOUR - 1;
-    assert!(install_challenge_allows_insert(observed_before_insert));
-    assert!(install_challenge_allows_insert(observed_before_insert));
-
-    let observed_global_before_insert = MAX_GLOBAL_CHALLENGES_PER_HOUR - 1;
-    assert!(global_challenge_allows_insert(
-        observed_global_before_insert
-    ));
-    assert!(global_challenge_allows_insert(
-        observed_global_before_insert
     ));
 }
 

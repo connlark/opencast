@@ -9,9 +9,10 @@ struct SleepTimerView: View {
         NavigationStack {
             List(SleepTimerOption.canonical) { option in
                 Button(option.title) {
-                    appModel.playback.setSleepTimer(duration: option.duration)
+                    appModel.playback.setSleepTimer(mode: option.mode)
                     dismiss()
                 }
+                .disabled(option.isEndOfEpisode && appModel.playback.duration == nil)
             }
             .navigationTitle("Sleep Timer")
         }

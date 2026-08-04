@@ -56,11 +56,20 @@ final class EpisodeTranscriptImprovementCoordinator {
     ) {
         guard runTask == nil,
               phase == .idle || phase.isTerminal,
-              !transcriptions.hasActiveJob,
               transcriptions.record(for: episode.episodeID)?.state == .completed,
               FileManager.default.fileExists(atPath: localFileURL.path),
               appleSpeechAssets.isTranscriberAvailable
         else {
+            return
+        }
+
+        let localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation
+        switch transcriptions.reserveLocalWork(for: episode.episodeID) {
+        case .success(let value):
+            localReservation = value
+        case .failure(let conflict):
+            self.episodeID = episode.episodeID
+            phase = .failed(conflict.localizedDescription)
             return
         }
 
@@ -75,6 +84,7 @@ final class EpisodeTranscriptImprovementCoordinator {
                 downloadRecord: downloadRecord,
                 localFileURL: localFileURL,
                 podcastLanguageCode: podcastLanguageCode,
+                localReservation: localReservation,
                 modelContext: modelContext
             )
         }
@@ -120,9 +130,11 @@ final class EpisodeTranscriptImprovementCoordinator {
         downloadRecord: EpisodeDownloadRecord,
         localFileURL: URL,
         podcastLanguageCode: String?,
+        localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation,
         modelContext: ModelContext
     ) async {
         defer {
+            transcriptions.releaseLocalWork(localReservation)
             if activeRunID == runID {
                 activeRunID = nil
                 runTask = nil
@@ -148,6 +160,7 @@ final class EpisodeTranscriptImprovementCoordinator {
                 modelIdentity: identity,
                 languageCode: languageCode,
                 preservesPriorCompletedTranscript: true,
+                localReservation: localReservation,
                 modelContext: modelContext
             ) else {
                 throw EpisodeTranscriptionRequestError.operationFailed(

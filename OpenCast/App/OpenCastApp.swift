@@ -10,8 +10,15 @@ struct OpenCastApp: App {
         WindowGroup {
             OpenCastRootView()
                 .environment(runtime.appModel)
+                .environment(
+                    \.isAppStoreScreenshotCapture,
+                    runtime.launchConfiguration.seedsAppStoreScreenshotData
+                )
                 .modelContainer(runtime.modelContainer)
                 .preferredColorScheme(preferredColorScheme)
+        }
+        .commands {
+            OpenCastCommands()
         }
     }
 

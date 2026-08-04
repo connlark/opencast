@@ -22,6 +22,8 @@ pub mod rss;
 mod storage;
 #[cfg(any(target_arch = "wasm32", test))]
 mod subscription_admission;
+#[cfg(any(target_arch = "wasm32", test))]
+mod subscription_payloads;
 #[cfg(target_arch = "wasm32")]
 mod worker_app;
 

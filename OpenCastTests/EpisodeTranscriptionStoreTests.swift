@@ -1386,20 +1386,42 @@ struct EpisodeTranscriptionStoreTests {
         )
     }
 
+    @Test("record(for:) matches a linear scan after load")
+    func recordLookupMatchesLinearScan() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        for index in 1...3 {
+            context.insert(EpisodeTranscriptRecord(
+                episodeID: "index-eq-\(index)",
+                podcastID: "https://example.com/feed.xml",
+                sourceAudioURL: "https://example.com/index-eq-\(index).mp3",
+                sourceFileByteCount: 3,
+                sourceFileSHA256: "abc",
+                modelIdentifier: "openai_whisper-tiny.en",
+                modelVersion: "20260701_75MB-v1",
+                modelTreeSHA256: "60d71f9a",
+                state: .failed,
+                audioDuration: 60,
+                completedDuration: 0,
+                checkpointCount: 0,
+                transcriptRelativePath: nil
+            ))
+        }
+        try context.save()
+        let store = EpisodeTranscriptionStore(transcriber: FakeEpisodeTranscriber())
+
+        store.load(modelContext: context)
+
+        for episodeID in ["index-eq-1", "index-eq-2", "index-eq-3", "index-eq-missing"] {
+            #expect(store.record(for: episodeID) === store.records.first { $0.episodeID == episodeID })
+        }
+    }
+
     private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
-        EpisodeListItemSnapshot(
+        .fixture(
             episodeID: episodeID,
-            podcastID: "https://example.com/feed.xml",
-            podcastTitle: "Example Show",
-            title: "Example Episode",
-            summary: nil,
-            publishedAt: nil,
-            duration: 60,
             audioURL: "https://example.com/\(episodeID).mp3",
-            artworkURL: nil,
-            artworkPreview: nil,
-            guid: episodeID,
-            cachedAt: .now
+            guid: episodeID
         )
     }
 

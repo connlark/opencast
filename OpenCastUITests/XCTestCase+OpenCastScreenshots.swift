@@ -9,6 +9,24 @@ extension XCTestCase {
         add(attachment)
     }
 
+    /// Timestamp-suffixed variant for repeated poll captures that need
+    /// unique attachment names.
+    @MainActor
+    func attachTimestampedSmokeScreenshot(named name: String) {
+        attachSmokeScreenshot(named: "\(name)_\(ISO8601DateFormatter().string(from: .now))")
+    }
+
+    /// App-scoped capture (`app.screenshot()`), semantically distinct from
+    /// the full-screen `XCUIScreen` capture — device-run evidence wants the
+    /// app frame, not the whole screen.
+    @MainActor
+    func attachAppScreenshot(of app: XCUIApplication, named name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     @MainActor
     func assertExists(
         _ element: XCUIElement,

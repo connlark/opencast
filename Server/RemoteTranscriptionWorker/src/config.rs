@@ -2,6 +2,8 @@ use crate::types::ErrorResponse;
 use worker::Env;
 
 pub const LANE_DEVELOPMENT: &str = "development";
+pub const LANE_PROD_STAGING: &str = "prod-staging";
+pub const LANE_PRODUCTION: &str = "production";
 
 /// Which authority backs the credit seam (pass 1 decision: same call sites,
 /// swapped backend). `Dev` is the D1 fake and may only exist in the
@@ -223,6 +225,19 @@ pub fn validate_lane(
     dev_bearer_flag: bool,
     dev_bearer_secret_present: bool,
 ) -> Result<bool, ErrorResponse> {
+    // Reject any lane outside the known set. Downstream code distinguishes
+    // production only by an exact-string compare (preserve_stitch_debug_
+    // responses gates on `lane == "production"` and otherwise retains raw
+    // model responses outside the cleanup prefixes), so a typo'd or renamed
+    // lane would fail OPEN — serving normally while persisting content
+    // indefinitely. Fail closed here instead (Phase 10 review RTW-8).
+    if !matches!(lane, LANE_DEVELOPMENT | LANE_PROD_STAGING | LANE_PRODUCTION) {
+        return Err(ErrorResponse::with_detail(
+            "lane_misconfigured",
+            "LANE must be development, prod-staging, or production",
+        ));
+    }
+
     if lane == LANE_DEVELOPMENT {
         if app_attest_environment != "development" {
             return Err(ErrorResponse::with_detail(
@@ -340,6 +355,28 @@ mod tests {
         assert!(validate_lane("production", "production", true, false).is_err());
         assert!(validate_lane("production", "production", false, true).is_err());
         assert!(validate_lane("prod-staging", "production", true, true).is_err());
+        assert_eq!(
+            validate_lane("production", "production", false, false),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn unknown_lane_names_fail_closed() {
+        // A typo'd or renamed lane must refuse to serve, not fall through to
+        // the fail-open exact-string production checks downstream (RTW-8).
+        for lane in ["prod", "Production", "staging", "", "dev"] {
+            assert!(
+                validate_lane(lane, "production", false, false).is_err(),
+                "lane {lane:?} must be rejected"
+            );
+        }
+        // The three known lanes still resolve.
+        assert!(validate_lane("development", "development", false, false).is_ok());
+        assert_eq!(
+            validate_lane("prod-staging", "production", false, false),
+            Ok(false)
+        );
         assert_eq!(
             validate_lane("production", "production", false, false),
             Ok(false)

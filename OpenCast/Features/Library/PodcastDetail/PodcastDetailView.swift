@@ -8,6 +8,9 @@ struct PodcastDetailView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    @State private var feedMigrationErrorMessage: String?
+    @State private var isShowingFeedMigrationError = false
     @State private var isConfirmingUnsubscribe = false
     @State private var isConfirmingAdAutoDetect = false
     @State private var isConfirmingMarkAllPlayed = false
@@ -93,10 +96,22 @@ struct PodcastDetailView: View {
                                     lastRefreshedAt: appModel.library.lastRefreshedAt(for: subscription),
                                     isRefreshing: isRefreshing,
                                     refreshErrorMessage: refreshErrorMessage,
+                                    health: FeedHealthStatus.derive(
+                                        latestLog: appModel.library.latestRefreshLog(feedURL: feedURL),
+                                        latestSuccessAt: appModel.library.latestSuccessfulRefreshByFeedURL[feedURL],
+                                        contentChangedAt: podcastCache?.updatedAt
+                                    ),
+                                    notificationHealth: appModel.library.notificationFeedHealthByFeedURL[feedURL],
                                     primaryAction: primaryAction,
                                     onPlay: playPrimaryAction,
                                     onPreviewResolved: updatePodcastArtworkPreview
                                 )
+                                if let suggestedFeedURL = appModel.library.suggestedFeedMigrationURLsByFeedURL[feedURL] {
+                                    FeedAddressUpdateView(
+                                        suggestedFeedURL: suggestedFeedURL,
+                                        onUpdate: updateFeedAddress
+                                    )
+                                }
                                 PodcastEpisodeListControlsView(
                                     sortOrder: sortOrderBinding,
                                     filter: filterBinding,
@@ -114,7 +129,11 @@ struct PodcastDetailView: View {
 
                     Section("Episodes") {
                         if allEpisodes.isEmpty {
-                            ContentUnavailableView("No Episodes", systemImage: "waveform")
+                            ContentUnavailableView(
+                                "No Episodes Yet",
+                                systemImage: "waveform",
+                                description: Text("This show hasn't published any episodes. New episodes will appear here automatically.")
+                            )
                         } else if hasSearchQuery {
                             EpisodeSearchResultsContent(
                                 mode: searchMode,
@@ -127,6 +146,7 @@ struct PodcastDetailView: View {
                                     episode: episode,
                                     searchResult: result,
                                     showsLocalStatusBadges: true,
+                                    showsGoToShow: false,
                                     onSelect: dismissSearchKeyboard,
                                     onOpenEpisode: onOpenEpisode
                                 )
@@ -145,6 +165,7 @@ struct PodcastDetailView: View {
                                 EpisodeRowButton(
                                     episode: episode,
                                     showsLocalStatusBadges: true,
+                                    showsGoToShow: false,
                                     onSelect: dismissSearchKeyboard,
                                     onOpenEpisode: onOpenEpisode
                                 )
@@ -169,11 +190,13 @@ struct PodcastDetailView: View {
                     }
                 }
             } else {
-                ContentUnavailableView(
-                    "Podcast Not Found",
-                    systemImage: "questionmark.circle",
-                    description: Text("This subscription is no longer in your library.")
-                )
+                ContentUnavailableView {
+                    Label("Podcast Not Found", systemImage: "questionmark.circle")
+                } description: {
+                    Text("This subscription is no longer in your library.")
+                } actions: {
+                    Button("Go Back", systemImage: "chevron.backward", action: dismiss.callAsFunction)
+                }
             }
         }
         .navigationTitle(subscription?.title ?? "Podcast")
@@ -191,6 +214,10 @@ struct PodcastDetailView: View {
             if !isPresented {
                 hideSearch()
             }
+        }
+        .alert("Feed Address Update Failed", isPresented: $isShowingFeedMigrationError) {
+        } message: {
+            Text(feedMigrationErrorMessage ?? "The new feed address could not be loaded.")
         }
         .task(id: searchTaskKey) {
             let library = appModel.library
@@ -272,6 +299,28 @@ struct PodcastDetailView: View {
             feedURL: feedURL,
             modelContext: modelContext
         )
+    }
+
+    private func updateFeedAddress() {
+        guard let suggestedFeedURL = appModel.library.suggestedFeedMigrationURLsByFeedURL[feedURL] else {
+            return
+        }
+        Task {
+            do {
+                try await appModel.library.migrateSubscription(
+                    from: feedURL,
+                    toFeedURL: suggestedFeedURL,
+                    modelContext: modelContext
+                )
+                // The route still points at the old feed URL; the migrated
+                // show is reachable from the library under its new address.
+                dismiss()
+            } catch is CancellationError {
+            } catch {
+                feedMigrationErrorMessage = error.localizedDescription
+                isShowingFeedMigrationError = true
+            }
+        }
     }
 
     private func playPrimaryAction(_ episode: EpisodeListItemSnapshot) {

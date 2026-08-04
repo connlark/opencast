@@ -25,9 +25,16 @@ final class OpenCastAppRuntime {
             modelContainer = try OpenCastModelContainerFactory.make(
                 inMemory: launchConfiguration.usesInMemoryStore
             )
-            if launchConfiguration.seedsUITestData {
+            // Seeds write cache data through the same store the app reads, so
+            // harness data exercises upsertCache rather than the one-time
+            // legacy import (finding 49).
+            let inMemoryCacheStore = launchConfiguration.usesInMemoryStore
+                ? SQLiteLocalLibraryCacheStore.inMemory()
+                : nil
+            if launchConfiguration.seedsUITestData, let inMemoryCacheStore {
                 try OpenCastUITestSeedData.seed(
                     in: modelContainer,
+                    cacheStore: inMemoryCacheStore,
                     includesCompletedDownload: launchConfiguration.seedsCompletedDownload,
                     includesFailedDownload: launchConfiguration.seedsFailedDownload,
                     includesEpisodeProgress: launchConfiguration.seedsEpisodeProgress,
@@ -37,8 +44,11 @@ final class OpenCastAppRuntime {
                 )
             }
             #if DEBUG
-            if launchConfiguration.seedsAppStoreScreenshotData {
-                try AppStoreScreenshotSeedData.seed(in: modelContainer)
+            if launchConfiguration.seedsAppStoreScreenshotData, let inMemoryCacheStore {
+                try AppStoreScreenshotSeedData.seed(
+                    in: modelContainer,
+                    cacheStore: inMemoryCacheStore
+                )
             }
             #endif
             if launchConfiguration.seedsOnboardingCompleted {
@@ -70,7 +80,8 @@ final class OpenCastAppRuntime {
                 nowPlayingArtworkLoader: SharedNowPlayingArtworkLoader()
             )
             let localLibraryCacheStore = Self.localLibraryCacheStore(
-                launchConfiguration: launchConfiguration
+                launchConfiguration: launchConfiguration,
+                inMemoryStore: inMemoryCacheStore
             )
             let onboardingState = OnboardingStateStore()
             let transcriptionModels = launchConfiguration.usesInMemoryStore
@@ -136,22 +147,22 @@ final class OpenCastAppRuntime {
     #endif
 
     private static func localLibraryCacheStore(
-        launchConfiguration: OpenCastLaunchConfiguration
+        launchConfiguration: OpenCastLaunchConfiguration,
+        inMemoryStore: SQLiteLocalLibraryCacheStore?
     ) -> (any LocalLibraryCacheStore)? {
-        guard launchConfiguration.usesInMemoryStore else {
+        guard let inMemoryStore else {
             return nil
         }
 
-        let cacheStore = SQLiteLocalLibraryCacheStore.inMemory()
         #if DEBUG
         if let delayMilliseconds = launchConfiguration.uiTestLibraryLoadDelayMilliseconds {
             return UITestDelayedLocalLibraryCacheStore(
-                base: cacheStore,
+                base: inMemoryStore,
                 loadDelay: .milliseconds(delayMilliseconds)
             )
         }
         #endif
-        return cacheStore
+        return inMemoryStore
     }
 
     private static func syncStatusStore(

@@ -8,6 +8,8 @@ struct PodcastHeroHeaderView: View {
     let lastRefreshedAt: Date?
     let isRefreshing: Bool
     let refreshErrorMessage: String?
+    let health: FeedHealthStatus?
+    let notificationHealth: NotificationFeedHealth?
     let primaryAction: PodcastPrimaryAction?
     let onPlay: (EpisodeListItemSnapshot) -> Void
     let onPreviewResolved: (ArtworkPreview) -> Void
@@ -47,7 +49,9 @@ struct PodcastHeroHeaderView: View {
                 unplayedCount: unplayedCount,
                 lastRefreshedAt: lastRefreshedAt,
                 isRefreshing: isRefreshing,
-                refreshErrorMessage: refreshErrorMessage
+                refreshErrorMessage: refreshErrorMessage,
+                health: health,
+                notificationHealth: notificationHealth
             )
 
             PodcastDescriptionView(summaryHTML: podcast?.summary)

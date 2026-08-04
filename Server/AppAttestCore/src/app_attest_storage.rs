@@ -7,6 +7,9 @@ use serde::Deserialize;
 use worker::{D1Database, D1Type, Result};
 
 use crate::app_attest::challenge_hash;
+use crate::challenge_limits::{
+    MAX_CHALLENGES_PER_INSTALL_PER_HOUR, MAX_GLOBAL_CHALLENGES_PER_HOUR,
+};
 use crate::d1_changes::changed_exactly_one_row;
 
 const MAX_EXACT_F64_INTEGER: i64 = 9_007_199_254_740_991;
@@ -33,7 +36,25 @@ struct CountRow {
     count: i64,
 }
 
-pub async fn insert_challenge(
+/// Admission and insert as one statement: both hourly caps are predicates
+/// of the same `INSERT ... SELECT`, and D1 (SQLite's single writer)
+/// executes a statement atomically, so concurrent requests can never
+/// overshoot either cap the way the former count-then-insert sequence
+/// could. `?7` window start, `?8` per-install cap, `?9` global cap.
+/// Public so every consumer's schema-pinning host tests prove the exact
+/// production statement against their own migration.
+pub const INSERT_CHALLENGE_WITHIN_LIMITS_SQL: &str = "INSERT INTO app_attest_challenges \
+     (challenge_id, challenge_hash, purpose, install_id, created_at, expires_at) \
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6 \
+     WHERE (SELECT COUNT(*) FROM app_attest_challenges \
+            WHERE install_id = ?4 AND created_at >= ?7) < ?8 \
+       AND (SELECT COUNT(*) FROM app_attest_challenges \
+            WHERE created_at >= ?7) < ?9";
+
+/// Returns true when the challenge was admitted and inserted, false when
+/// either hourly cap held it back (the caller rate-limits).
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_challenge_within_limits(
     db: &D1Database,
     challenge_id: &str,
     challenge: &str,
@@ -41,7 +62,8 @@ pub async fn insert_challenge(
     install_id: &str,
     created_at: i64,
     expires_at: i64,
-) -> Result<()> {
+    window_start: i64,
+) -> Result<bool> {
     let hash = challenge_hash(challenge);
     let args = [
         D1Type::Text(challenge_id),
@@ -50,18 +72,20 @@ pub async fn insert_challenge(
         D1Type::Text(install_id),
         d1_i64(created_at)?,
         d1_i64(expires_at)?,
+        d1_i64(window_start)?,
+        d1_i64(MAX_CHALLENGES_PER_INSTALL_PER_HOUR)?,
+        d1_i64(MAX_GLOBAL_CHALLENGES_PER_HOUR)?,
     ];
 
-    db.prepare(
-        "INSERT INTO app_attest_challenges \
-         (challenge_id, challenge_hash, purpose, install_id, created_at, expires_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
+    let result = db
+        .prepare(INSERT_CHALLENGE_WITHIN_LIMITS_SQL)
+        .bind_refs(&args)?
+        .run()
+        .await?;
 
-    Ok(())
+    Ok(changed_exactly_one_row(
+        result.meta()?.and_then(|meta| meta.changes),
+    ))
 }
 
 pub async fn challenge(db: &D1Database, challenge_id: &str) -> Result<Option<ChallengeRow>> {
@@ -75,36 +99,6 @@ pub async fn challenge(db: &D1Database, challenge_id: &str) -> Result<Option<Cha
     .bind_refs(&args)?
     .first::<ChallengeRow>(None)
     .await
-}
-
-pub async fn challenge_count_since(db: &D1Database, install_id: &str, since: i64) -> Result<i64> {
-    let args = [D1Type::Text(install_id), d1_i64(since)?];
-    let row = db
-        .prepare(
-            "SELECT COUNT(*) AS count \
-             FROM app_attest_challenges \
-             WHERE install_id = ?1 AND created_at >= ?2",
-        )
-        .bind_refs(&args)?
-        .first::<CountRow>(None)
-        .await?;
-
-    Ok(row.map(|row| row.count).unwrap_or(0))
-}
-
-pub async fn global_challenge_count_since(db: &D1Database, since: i64) -> Result<i64> {
-    let args = [d1_i64(since)?];
-    let row = db
-        .prepare(
-            "SELECT COUNT(*) AS count \
-             FROM app_attest_challenges \
-             WHERE created_at >= ?1",
-        )
-        .bind_refs(&args)?
-        .first::<CountRow>(None)
-        .await?;
-
-    Ok(row.map(|row| row.count).unwrap_or(0))
 }
 
 pub async fn increment_challenge_source_bucket(

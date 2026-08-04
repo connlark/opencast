@@ -8,11 +8,9 @@ public struct PlaybackItemSourceIdentity: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         case localFile
         case networkStream
-        case streamingCache
     }
 
-    /// The `AVURLAsset` URL backing the current item. For streaming-cache
-    /// items this is the opaque cache scheme, never the enclosure URL.
+    /// The `AVURLAsset` URL backing the current item.
     public var assetURL: URL
     public var kind: Kind
     /// The item's own timeline duration once AVFoundation has established

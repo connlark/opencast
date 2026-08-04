@@ -121,7 +121,7 @@ final class AppStoreScreenshotUITests: XCTestCase {
         )
         XCTAssertTrue(notification.exists, "Completion notification should be on SpringBoard for capture")
         snapshot("app_store_03_notification", timeWaitingForIdle: 0)
-        attachScreenshot(named: "app_store_03_notification")
+        attachSmokeScreenshot(named: "app_store_03_notification")
     }
 
     // Freshly created simulators post system notifications ("Ready for Apple
@@ -156,15 +156,7 @@ final class AppStoreScreenshotUITests: XCTestCase {
     private func attachAppStoreScreenshot(named name: String) {
         dismissSystemNotificationBanners()
         snapshot(name, timeWaitingForIdle: 0)
-        attachScreenshot(named: name)
-    }
-
-    @MainActor
-    private func attachScreenshot(named name: String) {
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        attachSmokeScreenshot(named: name)
     }
 
     @MainActor

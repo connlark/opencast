@@ -8,6 +8,24 @@ public enum PlaybackState: Equatable, Sendable {
     case playing
     case failed(String)
 
+    public nonisolated var showsPauseButton: Bool {
+        switch self {
+        case .playing, .buffering, .loading:
+            true
+        case .idle, .paused, .failed:
+            false
+        }
+    }
+
+    public nonisolated var showsLoadingIndicator: Bool {
+        switch self {
+        case .buffering, .loading:
+            true
+        case .idle, .paused, .playing, .failed:
+            false
+        }
+    }
+
     public nonisolated var accessibilityDescription: String {
         switch self {
         case .idle:

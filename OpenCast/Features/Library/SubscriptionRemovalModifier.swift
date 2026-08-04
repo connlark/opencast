@@ -10,8 +10,30 @@ struct SubscriptionRemovalModifier: ViewModifier {
     let supportsSwipeAction: Bool
     let supportsContextMenu: Bool
 
-    @ViewBuilder
+    @State private var removalErrorMessage: String?
+
     func body(content: Content) -> some View {
+        decoratedContent(content)
+            .alert(
+                "Remove Podcast",
+                // Alert API exception: no item: overload for a
+                // non-Identifiable optional.
+                isPresented: Binding(
+                    get: { removalErrorMessage != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            removalErrorMessage = nil
+                        }
+                    }
+                )
+            ) {
+            } message: {
+                Text(removalErrorMessage ?? "")
+            }
+    }
+
+    @ViewBuilder
+    private func decoratedContent(_ content: Content) -> some View {
         switch (supportsSwipeAction, supportsContextMenu) {
         case (true, true):
             content
@@ -106,11 +128,12 @@ struct SubscriptionRemovalModifier: ViewModifier {
 
     private func removePodcast(clearListeningHistory: Bool) {
         Task {
-            await appModel.unsubscribe(
+            let outcome = await appModel.unsubscribe(
                 feedURL: subscription.feedURL,
                 modelContext: modelContext,
                 clearListeningHistory: clearListeningHistory
             )
+            removalErrorMessage = outcome.userFacingMessage
         }
     }
 }

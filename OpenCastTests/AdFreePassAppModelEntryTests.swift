@@ -10,7 +10,7 @@ import Testing
 struct AdFreePassAppModelEntryTests {
     @Test("Detect Ads enqueues a manual pass and arms the session exactly once per drain")
     func detectAdsEnqueuesAndArmsExactlyOnce() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         let first = makeEpisode(episodeID: "app-entry-1")
         let second = makeEpisode(episodeID: "app-entry-2")
 
@@ -30,7 +30,7 @@ struct AdFreePassAppModelEntryTests {
 
     @Test("The Sound Lab megaphone is a wrapper over the same enqueue path")
     func soundLabMegaphoneWrapsSameEntry() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         let episode = makeEpisode(episodeID: "app-entry-wrapper")
         try fixture.appModel.playback.load(Episode(
             id: EpisodeID(rawValue: episode.episodeID),
@@ -56,7 +56,7 @@ struct AdFreePassAppModelEntryTests {
 
     @Test("Playing an opted-in show auto-enqueues once without arming the session")
     func playTriggeredAutoPassEnqueuesWithoutArming() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         let episode = makeEpisode(episodeID: "app-entry-auto-play")
         try await seedSubscription(
             feedURL: episode.podcastID,
@@ -79,7 +79,7 @@ struct AdFreePassAppModelEntryTests {
 
     @Test("Play-triggered auto passes insert at the queue front behind the active item")
     func playTriggeredAutoPassInsertsAtFront() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         let manualFirst = makeEpisode(episodeID: "app-entry-manual-first")
         let autoPlayed = makeEpisode(episodeID: "app-entry-auto-front")
         let manualSecond = makeEpisode(episodeID: "app-entry-manual-second")
@@ -115,7 +115,7 @@ struct AdFreePassAppModelEntryTests {
 
     @Test("Playing a show without the opt-in never enqueues an auto pass")
     func playWithoutOptInNeverEnqueues() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         let episode = makeEpisode(episodeID: "app-entry-no-opt-in")
         try await seedSubscription(
             feedURL: episode.podcastID,
@@ -132,7 +132,7 @@ struct AdFreePassAppModelEntryTests {
 
     @Test("First background arm requests provisional authorization only when notDetermined")
     func firstArmRequestsProvisionalAuthorization() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         fixture.notificationCenter.authorizationStatusValue = .notDetermined
         let episode = makeEpisode(episodeID: "app-entry-provisional")
 
@@ -146,7 +146,7 @@ struct AdFreePassAppModelEntryTests {
 
     @Test("Arming never requests authorization once the user has decided")
     func armSkipsAuthorizationRequestWhenDecided() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         fixture.notificationCenter.authorizationStatusValue = .denied
         let episode = makeEpisode(episodeID: "app-entry-provisional-denied")
 
@@ -163,7 +163,7 @@ struct AdFreePassAppModelEntryTests {
 
     @Test("Download menu state derives from the download record and local file")
     func downloadMenuStateDerivesFromRecord() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         let episode = makeEpisode(episodeID: "app-entry-download")
 
         #expect(fixture.appModel.downloadMenuState(for: episode) == .available)
@@ -184,7 +184,7 @@ struct AdFreePassAppModelEntryTests {
 
         // A completed download with its file on disk hides the action
         // (fresh fixture: the record is seeded pre-load like a relaunch).
-        let downloadedFixture = try makeFixture()
+        let downloadedFixture = try await makeFixture()
         let sourceURL = URL(string: episode.audioURL ?? "https://example.com/audio.mp3")!
         let relativePath = downloadedFixture.downloadFileStore.relativePath(
             episodeID: episode.episodeID,
@@ -206,7 +206,7 @@ struct AdFreePassAppModelEntryTests {
             bytesExpected: Int64(data.count)
         ))
         try downloadedFixture.context.save()
-        downloadedFixture.appModel.downloads.load(modelContext: downloadedFixture.context)
+        await downloadedFixture.appModel.downloads.load(modelContext: downloadedFixture.context)
         #expect(downloadedFixture.appModel.downloadMenuState(for: episode) == .downloaded)
     }
 
@@ -221,7 +221,7 @@ struct AdFreePassAppModelEntryTests {
         let notificationCenter: FakeAdFreePassNotificationCenter
     }
 
-    private func makeFixture() throws -> EntryFixture {
+    private func makeFixture() async throws -> EntryFixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -245,7 +245,7 @@ struct AdFreePassAppModelEntryTests {
             allowsAutomaticFeedRefresh: false,
             adFreePassNotificationCenter: notificationCenter
         )
-        downloads.load(modelContext: context)
+        await downloads.load(modelContext: context)
         return EntryFixture(
             appModel: appModel,
             context: context,
@@ -270,19 +270,11 @@ struct AdFreePassAppModelEntryTests {
     }
 
     private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
-        EpisodeListItemSnapshot(
+        .fixture(
             episodeID: episodeID,
-            podcastID: "https://example.com/feed.xml",
-            podcastTitle: "Example Show",
             title: "Example Episode \(episodeID)",
-            summary: nil,
-            publishedAt: nil,
-            duration: 60,
             audioURL: "https://example.com/\(episodeID).mp3",
-            artworkURL: nil,
-            artworkPreview: nil,
-            guid: episodeID,
-            cachedAt: .now
+            guid: episodeID
         )
     }
 

@@ -258,9 +258,11 @@ struct GreedySamplerEquivalenceTests {
         }
     }
 
-    @Test("Opt-in: per-call timing, CPU vs MLTensor")
+    @Test(
+        "Opt-in: per-call timing, CPU vs MLTensor",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_SAMPLER_AB_MICROBENCH"] == "1")
+    )
     func timingPass() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_SAMPLER_AB_MICROBENCH"] == "1" else { return }
         guard #available(macOS 15, iOS 18, *) else { return }
         var rng = SplitMix64(state: 0xD3_0007)
         let values = randomValues(Self.realVocabulary, range: -20...20, rng: &rng)

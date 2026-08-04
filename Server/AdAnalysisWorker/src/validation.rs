@@ -2,12 +2,14 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
+use crate::prompt::{segment_framing_chars, PROMPT_OVERHEAD_CHAR_ALLOWANCE};
 use crate::types::{
     AdAnalysisRequest, AdSpanKind, GeminiUsage, TranscriptSegment, ValidatedAdSpan,
     APP_ATTEST_KEY_DAILY_ESTIMATED_INPUT_TOKEN_CAP, APP_ATTEST_KEY_DAILY_REQUEST_CAP,
     BEARER_DAILY_ESTIMATED_INPUT_TOKEN_CAP, BEARER_DAILY_REQUEST_CAP,
     GLOBAL_DAILY_ESTIMATED_INPUT_TOKEN_CAP, GLOBAL_DAILY_REQUEST_CAP, MAX_BODY_BYTES,
-    MAX_ESTIMATED_INPUT_TOKENS_PER_REQUEST, MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS,
+    MAX_EPISODE_ID_CHARS, MAX_ESTIMATED_INPUT_TOKENS_PER_REQUEST, MAX_LANGUAGE_CODE_CHARS,
+    MAX_PODCAST_ID_CHARS, MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS, MAX_TITLE_CHARS,
     MAX_TRANSCRIPT_TEXT_CHARS, SCHEMA_VERSION,
     TRANSCRIPTION_ACCOUNT_DAILY_ESTIMATED_INPUT_TOKEN_CAP, TRANSCRIPTION_ACCOUNT_DAILY_REQUEST_CAP,
 };
@@ -32,6 +34,7 @@ pub enum ValidationError {
     NonMonotonicSegments(i64),
     TranscriptTextTooLarge,
     EstimatedInputTooLarge,
+    MetadataFieldTooLarge,
 }
 
 impl ValidationError {
@@ -55,6 +58,7 @@ impl ValidationError {
             ValidationError::NonMonotonicSegments(_) => "non_monotonic_segments",
             ValidationError::TranscriptTextTooLarge => "transcript_text_too_large",
             ValidationError::EstimatedInputTooLarge => "estimated_input_too_large",
+            ValidationError::MetadataFieldTooLarge => "metadata_field_too_large",
         }
     }
 
@@ -258,7 +262,10 @@ impl<'de> Deserialize<'de> for ModelOutput {
 
 #[derive(Debug, Clone, Deserialize)]
 struct RawModelOutput {
-    #[serde(default)]
+    // No `#[serde(default)]`: a response missing `spans` entirely (`{}` or a
+    // wrong-shape object) must be a deserialize error so it takes the
+    // malformed → retry → warning path, not read as an authoritative empty
+    // result indistinguishable from a genuine `{"spans": []}` (AA-7).
     spans: Vec<serde_json::Value>,
 }
 
@@ -288,6 +295,24 @@ pub fn validate_request(request: AdAnalysisRequest) -> Result<ValidatedRequest, 
     if request.transcript.state != "completed" {
         return Err(ValidationError::TranscriptNotCompleted);
     }
+    // Header fields enter the prompt; bound them so an oversized title or
+    // feed-derived GUID cannot inflate the prompt past the spend caps it
+    // escapes (AA-2). Titles are optional; when absent build_prompt falls
+    // back to the id, which is itself bounded here.
+    if request.episode_id.chars().count() > MAX_EPISODE_ID_CHARS
+        || request.podcast_id.chars().count() > MAX_PODCAST_ID_CHARS
+        || request.transcript.language_code.chars().count() > MAX_LANGUAGE_CODE_CHARS
+        || request
+            .episode_title
+            .as_deref()
+            .is_some_and(|title| title.chars().count() > MAX_TITLE_CHARS)
+        || request
+            .podcast_title
+            .as_deref()
+            .is_some_and(|title| title.chars().count() > MAX_TITLE_CHARS)
+    {
+        return Err(ValidationError::MetadataFieldTooLarge);
+    }
     if request.transcript.language_code.trim().is_empty()
         || request.transcript.fingerprint.trim().is_empty()
         || request.transcript.updated_at.trim().is_empty()
@@ -308,6 +333,7 @@ pub fn validate_request(request: AdAnalysisRequest) -> Result<ValidatedRequest, 
     let mut seen = HashSet::new();
     let mut previous_end = None;
     let mut transcript_text_chars = 0usize;
+    let mut segment_framing_chars_total = 0usize;
     for segment in &request.segments {
         if !seen.insert(segment.id) {
             return Err(ValidationError::DuplicateSegmentID(segment.id));
@@ -329,12 +355,21 @@ pub fn validate_request(request: AdAnalysisRequest) -> Result<ValidatedRequest, 
         }
         previous_end = Some(segment.end);
         transcript_text_chars = transcript_text_chars.saturating_add(text_len);
+        segment_framing_chars_total =
+            segment_framing_chars_total.saturating_add(segment_framing_chars(segment));
     }
     if transcript_text_chars > MAX_TRANSCRIPT_TEXT_CHARS {
         return Err(ValidationError::TranscriptTextTooLarge);
     }
 
-    let estimated_input_tokens = estimate_tokens_for_chars(transcript_text_chars + 8_000);
+    // The fixed allowance stands in for build_prompt's invariant header/block;
+    // the per-segment framing (`[id | s-e] ` + newline) scales with the
+    // transcript and is added explicitly (AA-3), so a segment-dense request no
+    // longer under-counts the ~30 % of the prompt the framing occupies.
+    let prompt_overhead_chars =
+        PROMPT_OVERHEAD_CHAR_ALLOWANCE.saturating_add(segment_framing_chars_total);
+    let estimated_input_tokens =
+        estimate_tokens_for_chars(transcript_text_chars + prompt_overhead_chars);
     if estimated_input_tokens > MAX_ESTIMATED_INPUT_TOKENS_PER_REQUEST {
         return Err(ValidationError::EstimatedInputTooLarge);
     }
@@ -748,8 +783,12 @@ pub fn validate_model_output(
 
     // Post-merge structural caps: a complete ad break is never shorter than
     // 15 s (measured junk: 1-12 s self-quoting singles; shortest real break in
-    // any fixture: 37 s), and the 600 s cap re-applies to merged spans so a
-    // contiguous degenerate chain cannot dodge it via fragmentation.
+    // any fixture: 37 s), and the 600 s duration AND 80 % coverage caps both
+    // re-apply to merged spans so a contiguous degenerate chain cannot dodge
+    // either via fragmentation. The coverage re-check is what stops ~30 small
+    // same-kind fragments from merging into one whole-short-episode span the
+    // client would auto-skip (Phase 10 review AA-1); the pre-merge check only
+    // bounds individual raw spans.
     let mut survivors: Vec<IndexedSpan> = Vec::new();
     for span in merged {
         let duration = span.span.end_time - span.span.start_time;
@@ -763,6 +802,15 @@ pub fn validate_model_output(
         if duration > MAX_SPAN_DURATION_SECONDS {
             warnings.push(format!(
                 "span_too_long:{}-{}",
+                span.span.start_segment_id, span.span.end_segment_id
+            ));
+            continue;
+        }
+        if (span.end_index - span.start_index + 1) as f64
+            > MAX_SPAN_REQUEST_COVERAGE * request.segments.len() as f64
+        {
+            warnings.push(format!(
+                "span_covers_request:{}-{}",
                 span.span.start_segment_id, span.span.end_segment_id
             ));
             continue;

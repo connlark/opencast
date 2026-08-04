@@ -32,6 +32,7 @@ struct InboxView: View {
                         episode: episode,
                         onOpenEpisode: onOpenEpisode
                     )
+                    .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode))
                 }
             }
         }

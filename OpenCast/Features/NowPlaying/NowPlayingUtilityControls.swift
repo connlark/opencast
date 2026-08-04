@@ -38,31 +38,33 @@ struct NowPlayingUtilityControls: View {
         .accessibilityValue(rate.formattedSpeed)
     }
 
+    @ViewBuilder
     private var sleepTimerButton: some View {
+        if appModel.playback.sleepTimerMode != .off {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                sleepTimerButton(value: sleepTimerText(at: context.date))
+            }
+        } else {
+            sleepTimerButton(value: "Off")
+        }
+    }
+
+    private func sleepTimerButton(value: String) -> some View {
         PlayerUtilityButton(
             title: "Sleep",
-            value: sleepTimerText,
+            value: value,
             systemImage: "moon.zzz",
             action: onShowSleepTimer
         )
         .accessibilityLabel("Sleep Timer")
-        .accessibilityValue(sleepTimerText)
+        .accessibilityValue(value)
     }
 
-    private var sleepTimerText: String {
-        guard let endsAt = appModel.playback.sleepTimerEndsAt else {
-            return "Off"
+    private func sleepTimerText(at date: Date) -> String {
+        guard let remaining = appModel.playback.sleepTimerRemaining(at: date) else {
+            return appModel.playback.sleepTimerMode == .endOfEpisode ? "End of Episode" : "Off"
         }
 
-        // The countdown derives from wall-clock; this deliberate read of the
-        // 1 Hz position is what re-evaluates just this control each second
-        // while a timer is active.
-        _ = appModel.playback.position
-        let remaining = endsAt.timeIntervalSinceNow
-        if remaining <= 0 {
-            return "Off"
-        }
-
-        return "-\(remaining.formattedPlaybackDuration)"
+        return remaining > 0 ? "-\(remaining.formattedPlaybackDuration)" : "Off"
     }
 }

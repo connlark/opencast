@@ -109,6 +109,34 @@ struct EpisodeTranscriptFileStore: Sendable {
         try removeItemIfPresent(at: transcriptsDirectory.appending(path: safeStem(episodeID)))
     }
 
+    /// Renames the per-episode directory when an episode's identity migrates.
+    /// If the successor already has a directory, files merge into it and
+    /// name-conflicting leftovers (already present there) are dropped.
+    nonisolated func migrateTranscripts(fromEpisodeID oldEpisodeID: String, to newEpisodeID: String) throws {
+        try migratePerEpisodeDirectory(
+            from: transcriptsDirectory.appending(path: safeStem(oldEpisodeID), directoryHint: .isDirectory),
+            to: transcriptsDirectory.appending(path: safeStem(newEpisodeID), directoryHint: .isDirectory)
+        )
+    }
+
+    private nonisolated func migratePerEpisodeDirectory(from sourceURL: URL, to destinationURL: URL) throws {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            return
+        }
+        guard fileManager.fileExists(atPath: destinationURL.path) else {
+            try fileManager.moveItem(at: sourceURL, to: destinationURL)
+            return
+        }
+        for fileURL in try fileManager.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil) {
+            let targetURL = destinationURL.appending(path: fileURL.lastPathComponent)
+            if !fileManager.fileExists(atPath: targetURL.path) {
+                try fileManager.moveItem(at: fileURL, to: targetURL)
+            }
+        }
+        try removeItemIfPresent(at: sourceURL)
+    }
+
     nonisolated func deleteAllTranscripts() throws {
         try removeItemIfPresent(at: transcriptsDirectory)
     }

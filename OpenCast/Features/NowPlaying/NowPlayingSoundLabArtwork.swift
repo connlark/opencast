@@ -12,7 +12,7 @@ struct NowPlayingSoundLabArtwork: View {
     let voiceBoostControlEnabled: Bool
     let onAdFreePassAction: () -> Void
     let onTranscribeRemotely: () -> Void
-    let onShowTranscript: () -> Void
+    let onTranscriptAction: () -> Void
     let onAdFreePassBackgroundProbe: () -> Void
     @Binding var isSoundLabInteractionActive: Bool
     let isCardDismissDragActive: Bool
@@ -37,7 +37,7 @@ struct NowPlayingSoundLabArtwork: View {
                     voiceBoostControlEnabled: voiceBoostControlEnabled,
                     onAdFreePassAction: onAdFreePassAction,
                     onTranscribeRemotely: onTranscribeRemotely,
-                    onShowTranscript: onShowTranscript,
+                    onTranscriptAction: onTranscriptAction,
                     onAdFreePassBackgroundProbe: onAdFreePassBackgroundProbe
                 )
                 .frame(width: size, height: size)

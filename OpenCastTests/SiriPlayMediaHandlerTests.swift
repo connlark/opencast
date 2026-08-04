@@ -27,6 +27,10 @@ struct SiriPlayMediaHandlerTests {
         #expect(response.code == .success)
         #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "newest")
         #expect(fixture.appModel.playback.rate == 2)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
+            modelContext: fixture.modelContext
+        )?.value == "2.0")
         #expect(fixture.appModel.nowPlayingPresentationRequest == 0)
     }
 
@@ -227,7 +231,8 @@ struct SiriPlayMediaHandlerTests {
 
     private func makeFixture() async throws -> (
         handler: SiriPlayMediaHandler,
-        appModel: OpenCastAppModel
+        appModel: OpenCastAppModel,
+        modelContext: ModelContext
     ) {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
@@ -276,7 +281,8 @@ struct SiriPlayMediaHandlerTests {
         )
         return (
             SiriPlayMediaHandler(appModel: appModel, modelContext: context),
-            appModel
+            appModel,
+            context
         )
     }
 

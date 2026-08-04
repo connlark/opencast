@@ -1,5 +1,6 @@
 import Foundation
 
+// @unchecked: the sole stored state is an immutable, thread-safe URLSession.
 public final class URLSessionOpenCastHTTPClient: OpenCastHTTPClient, @unchecked Sendable {
     private let session: URLSession
 

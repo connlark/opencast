@@ -6,6 +6,7 @@ struct NowPlayingTransportControls: View {
     let skipBackwardInterval: TimeInterval
     let skipForwardInterval: TimeInterval
     let showsPauseButton: Bool
+    let showsLoadingIndicator: Bool
     let playbackStateText: String
     let onSkipBackward: () -> Void
     let onTogglePlayPause: () -> Void
@@ -43,13 +44,20 @@ struct NowPlayingTransportControls: View {
                     Label {
                         Text(showsPauseButton ? "Pause" : "Play")
                     } icon: {
-                        Image(systemName: showsPauseButton ? "pause.fill" : "play.fill")
-                            .resizable()
-                            .scaledToFit()
-                            .contentTransition(.symbolEffect(.replace))
-                            .frame(width: resolvedPlayIconSize, height: resolvedPlayIconSize)
-                            .offset(x: showsPauseButton ? 0 : playIconOpticalOffset)
-                            .animation(.easeOut(duration: 0.2), value: showsPauseButton)
+                        Group {
+                            if showsLoadingIndicator {
+                                ProgressView()
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: showsPauseButton ? "pause.fill" : "play.fill")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .contentTransition(.symbolEffect(.replace))
+                                    .offset(x: showsPauseButton ? 0 : playIconOpticalOffset)
+                            }
+                        }
+                        .frame(width: resolvedPlayIconSize, height: resolvedPlayIconSize)
+                        .animation(.easeOut(duration: 0.2), value: showsLoadingIndicator)
                     }
                     .labelStyle(.iconOnly)
                     .frame(width: resolvedPlayButtonSize, height: resolvedPlayButtonSize)

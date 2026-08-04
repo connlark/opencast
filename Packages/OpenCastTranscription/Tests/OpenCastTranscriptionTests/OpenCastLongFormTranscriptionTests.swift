@@ -239,12 +239,13 @@ struct OpenCastLongFormTranscriptionTests {
         #expect(sawFinished)
     }
 
-    @Test("Optional large-v3 long-form interruption and resume probe")
+    @Test(
+        "Optional large-v3 long-form interruption and resume probe",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_RUN_LARGE_V3_LONGFORM"] == "1"
+            && ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil)
+    )
     func optionalLargeV3LongFormInterruptionAndResumeProbe() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_RUN_LARGE_V3_LONGFORM"] == "1",
-              let audioPath = ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] else {
-            return
-        }
+        let audioPath = try #require(ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"])
 
         let audioURL = URL(fileURLWithPath: audioPath)
         let sourceFileByteCount = try fileByteCount(at: audioURL)

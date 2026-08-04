@@ -211,11 +211,11 @@ struct KVScatterMicrobenchmarkTests {
         #expect(tensorData(productionValue) == tensorData(upstreamValue))
     }
 
-    @Test("Timing pass")
+    @Test(
+        "Timing pass",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_KV_MICROBENCH"] == "1")
+    )
     func timingPass() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_KV_MICROBENCH"] == "1" else {
-            return
-        }
 
         let keySlice = try makeSlice(width: 1, seed: 0.25)
         let valueSlice = try makeSlice(width: 1, seed: 0.5)

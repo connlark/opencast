@@ -12,8 +12,8 @@ use worker::{D1Database, D1Type, Result};
 // wasm-only because the sole consumer (`worker_app`) is wasm-only.
 #[cfg(target_arch = "wasm32")]
 pub use opencast_app_attest_core::app_attest_storage::{
-    app_attest_key_count_since, challenge, challenge_count_since, global_challenge_count_since,
-    increment_challenge_source_bucket, insert_challenge, key, mark_challenge_consumed,
+    app_attest_key_count_since, challenge, increment_challenge_source_bucket,
+    insert_challenge_within_limits, key, mark_challenge_consumed,
     prune_challenge_source_buckets_before, prune_challenges_before, upsert_key,
 };
 
@@ -26,6 +26,11 @@ pub struct DeviceRow {
 #[derive(Debug, Deserialize)]
 pub struct FeedSummaryRow {
     pub title: Option<String>,
+    #[serde(default)]
+    pub consecutive_failures: i64,
+    pub last_http_status: Option<i64>,
+    pub last_error: Option<String>,
+    pub last_polled_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -496,9 +501,13 @@ pub async fn insert_push_send_attempt(
     Ok(())
 }
 
+pub const FEED_SUMMARY_SQL: &str =
+    "SELECT title, consecutive_failures, last_http_status, last_error, last_polled_at \
+     FROM feeds WHERE feed_url = ?1 LIMIT 1";
+
 pub async fn feed_summary(db: &D1Database, feed_url: &str) -> Result<Option<FeedSummaryRow>> {
     let args = [D1Type::Text(feed_url)];
-    db.prepare("SELECT title FROM feeds WHERE feed_url = ?1 LIMIT 1")
+    db.prepare(FEED_SUMMARY_SQL)
         .bind_refs(&args)?
         .first::<FeedSummaryRow>(None)
         .await
@@ -1220,6 +1229,75 @@ mod tests {
             .expect("query plan")
             .collect::<Result<Vec<_>, _>>()
             .expect("read query plan")
+    }
+
+    /// Pins this worker's migration schema against the shared atomic
+    /// admission statement (cap predicates + insert in one statement); the
+    /// full boundary matrix lives in AdAnalysisWorker's
+    /// app_attest_migrations tests.
+    #[test]
+    fn migration_supports_atomic_challenge_admission() {
+        use opencast_app_attest_core::app_attest::challenge_hash;
+        use opencast_app_attest_core::app_attest_storage::INSERT_CHALLENGE_WITHIN_LIMITS_SQL;
+
+        let db = setup_db();
+        let admit = |challenge_id: &str, install_cap: i64| -> usize {
+            db.execute(
+                INSERT_CHALLENGE_WITHIN_LIMITS_SQL,
+                params![
+                    challenge_id,
+                    challenge_hash(challenge_id),
+                    "register",
+                    "install-a",
+                    NOW,
+                    NOW + 600,
+                    NOW - 3600,
+                    install_cap,
+                    1_000_i64
+                ],
+            )
+            .expect("run atomic admission statement")
+        };
+
+        assert_eq!(admit("challenge-under-cap", 2), 1);
+        assert_eq!(admit("challenge-at-cap", 2), 1);
+        assert_eq!(admit("challenge-over-cap", 2), 0);
+    }
+
+    #[test]
+    fn feed_summary_selects_the_health_columns() {
+        let db = setup_db();
+        db.execute(
+            "INSERT INTO feeds \
+             (feed_url, source_url, title, poll_interval_seconds, consecutive_failures, \
+              last_http_status, last_error, last_polled_at, created_at, updated_at) \
+             VALUES ('https://example.com/f.xml', 'https://example.com/f.xml', 'Show', 900, 3, \
+                     503, 'http_error', 1780000000, 1780000000, 1780000000)",
+            params![],
+        )
+        .expect("seed feed row");
+
+        let row = db
+            .query_row(
+                FEED_SUMMARY_SQL,
+                params!["https://example.com/f.xml"],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
+                    ))
+                },
+            )
+            .expect("feed summary row");
+
+        assert_eq!(row.0.as_deref(), Some("Show"));
+        assert_eq!(row.1, 3);
+        assert_eq!(row.2, Some(503));
+        assert_eq!(row.3.as_deref(), Some("http_error"));
+        assert_eq!(row.4, Some(1_780_000_000));
     }
 
     #[test]

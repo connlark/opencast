@@ -29,12 +29,17 @@ struct EpisodeHeroHeaderView: View {
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
 
-                Text(episode.podcastTitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                NavigationLink(value: AppRoute.podcastDetail(feedURL: episode.podcastID)) {
+                    Text(episode.podcastTitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the show")
             }
-            .accessibilityElement(children: .combine)
 
             if !chips.isEmpty {
                 EpisodeMetadataChipsRow(chips: chips)

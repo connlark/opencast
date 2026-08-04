@@ -108,11 +108,13 @@ struct WindowedAudioSourceTests {
         )
     }
 
-    @Test("Opt-in: real episode multi-chunk spill matches the loader", .timeLimit(.minutes(10)))
+    @Test(
+        "Opt-in: real episode multi-chunk spill matches the loader",
+        .timeLimit(.minutes(10)),
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil)
+    )
     func realEpisodeSpillMatchesLoader() throws {
-        guard let audioPath = ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] else {
-            return
-        }
+        let audioPath = try #require(ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"])
 
         let reference = try AudioProcessor.loadAudioAsFloatArray(fromPath: audioPath)
         expectBitIdentical(try spilledSamples(fromPath: audioPath), reference, "episode full")

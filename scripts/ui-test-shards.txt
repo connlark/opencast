@@ -9,8 +9,8 @@
 # Balanced by measured per-test wall-clock (log 'passed (N seconds)' lines), NOT the
 # .xcresult duration field — that reports 0.0s for screenshot-matrix tests. Regenerate
 # with scripts/gen-ui-test-shards.py <run-dir> after a fresh run.
-# Measured baseline: shard1 960s + 2 unmeasured (36 tests) |
-# shard2 984s + 1 unmeasured (35 tests) | serial 37s + 1 unmeasured
+# Measured baseline: shard1 960s + 3 unmeasured (37 tests) |
+# shard2 984s + 2 unmeasured (39 tests) | serial 37s + 1 unmeasured (2 tests)
 
 # --- shard1 (est 960s + 2 unmeasured) ---
 shard1 OpenCastUITests/OpenCastUITests/testAddPodcastRSSClipboardPrefillScreenshots
@@ -35,6 +35,7 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededEpisodeProgressRestoresMiniPlay
 shard1 OpenCastUITests/OpenCastUITests/testSeededEpisodeTapWhileListeningPlaysAndExpandsNowPlaying
 shard1 OpenCastUITests/OpenCastUITests/testSeededFailedDownloadShowsPipelineCardRetry
 shard1 OpenCastUITests/OpenCastUITests/testSeededInboxEpisodeTapPlaysAndExpandsNowPlaying
+shard1 OpenCastUITests/OpenCastUITests/testSeededLocalSoundLabTranscriptionCompletesAndOpensTranscript
 shard1 OpenCastUITests/OpenCastUITests/testSeededMiniPlayerSwitchTabsAndExpands
 shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingAccessibilityXXXLControlsAreReachable
 shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingAdFreePassControlStateScreenshots
@@ -63,10 +64,12 @@ shard2 OpenCastUITests/OpenCastUITests/testRemoteTranscriptionProgressFixtureSho
 shard2 OpenCastUITests/OpenCastUITests/testSearchTabFindsSeededEpisodeAndRecordsRecentQuery
 shard2 OpenCastUITests/OpenCastUITests/testSeededAutoDetectPlayTriggerEnqueuesAutoPass
 shard2 OpenCastUITests/OpenCastUITests/testSeededAutoSkipPromosAndAdsShowsPillAndJumpsAcrossZone
+shard2 OpenCastUITests/OpenCastUITests/testSeededCloudResolvingSoundLabCannotStartLocalTranscription
 shard2 OpenCastUITests/OpenCastUITests/testSeededCompactSmokeScreenshots
 shard2 OpenCastUITests/OpenCastUITests/testSeededEpisodeDetailRedesignScreenshotMatrix
 shard2 OpenCastUITests/OpenCastUITests/testSeededInboxEpisodeCanOpenPlayer
 shard2 OpenCastUITests/OpenCastUITests/testSeededInboxEpisodeContextMenuPeekOpensEpisodeDetail
+shard2 OpenCastUITests/OpenCastUITests/testSeededInboxEpisodeOffersPlayedSwipeAction
 shard2 OpenCastUITests/OpenCastUITests/testSeededInboxRendersLocalArtworkPreviewOnFirstScreenshot
 shard2 OpenCastUITests/OpenCastUITests/testSeededInboxRendersManyVariedLocalArtworkPreviews
 shard2 OpenCastUITests/OpenCastUITests/testSeededLandscapeNowPlayingAdFreePassControlLayoutScreenshots

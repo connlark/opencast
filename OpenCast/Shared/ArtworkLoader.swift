@@ -301,6 +301,12 @@ actor ArtworkLoader {
             return nil
         }
 
+        // Admission policy on receive: oversized payloads never reach decode
+        // or either cache (security triage P1 #4).
+        guard ArtworkTransferPolicy.admitsByteCount(response.data.count) else {
+            return nil
+        }
+
         return response
     }
 
@@ -352,6 +358,17 @@ actor ArtworkLoader {
         ] as CFDictionary
         guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
             return nil
+        }
+
+        // Header-only dimension read; refuses extreme canvases before any
+        // pixel work (security triage P1 #4).
+        if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, sourceOptions) as? [CFString: Any] {
+            guard ArtworkTransferPolicy.admitsPixelDimensions(
+                width: properties[kCGImagePropertyPixelWidth] as? Int,
+                height: properties[kCGImagePropertyPixelHeight] as? Int
+            ) else {
+                return nil
+            }
         }
 
         let maxPixelSize = max(Int(max(targetPixelSize.width, targetPixelSize.height).rounded(.up)), 1)

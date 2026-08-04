@@ -280,7 +280,7 @@ final class EpisodeAdFreePassCoordinator {
         remoteJobStore: RemoteTranscriptionJobStore? = nil,
         remotePurchases: RemoteTranscriptionPurchaseStore? = nil,
         prepareBackgroundSession: @escaping @MainActor () -> Void = {},
-        refreshSkipZones: @escaping @MainActor () -> Int
+        refreshSkipZones: @escaping @MainActor () async -> Int
     ) {
         let episodeID = episode.episodeID
 
@@ -370,7 +370,7 @@ final class EpisodeAdFreePassCoordinator {
         remoteRunner: RemoteTranscriptionJobRunner? = nil,
         remoteJobStore: RemoteTranscriptionJobStore? = nil,
         remotePurchases: RemoteTranscriptionPurchaseStore? = nil,
-        refreshSkipZones: @escaping @MainActor (EpisodeListItemSnapshot) -> Int
+        refreshSkipZones: @escaping @MainActor (EpisodeListItemSnapshot) async -> Int
     ) {
         let records: [AdFreePassQueueItemRecord]
         do {
@@ -425,7 +425,7 @@ final class EpisodeAdFreePassCoordinator {
                     transcriptionEngine: .productDefault,
                     podcastLanguageCode: podcastLanguageCode(episode.podcastID),
                     prepareBackgroundSession: {},
-                    refreshSkipZones: { refreshSkipZones(episode) },
+                    refreshSkipZones: { await refreshSkipZones(episode) },
                     remoteRunner: remoteRunner,
                     remoteJobStore: remoteJobStore,
                     remotePurchases: remotePurchases
@@ -574,7 +574,7 @@ final class EpisodeAdFreePassCoordinator {
         let transcriptionEngine: AdFreePassTranscriptionEngine
         let podcastLanguageCode: String?
         let prepareBackgroundSession: @MainActor () -> Void
-        let refreshSkipZones: @MainActor () -> Int
+        let refreshSkipZones: @MainActor () async -> Int
         // Cloud detect passes only; on-device items never touch these.
         var remoteRunner: RemoteTranscriptionJobRunner?
         var remoteJobStore: RemoteTranscriptionJobStore?
@@ -884,6 +884,20 @@ final class EpisodeAdFreePassCoordinator {
         let episode = entry.item.episode
         let deps = entry.deps
 
+        let localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation
+        switch deps.transcriptions.reserveLocalWork(
+            for: episode.episodeID,
+            allowsSameEpisodeAttachment: true
+        ) {
+        case .success(let value):
+            localReservation = value
+        case .failure(let conflict):
+            return .failed(message: conflict.localizedDescription)
+        }
+        defer {
+            deps.transcriptions.releaseLocalWork(localReservation)
+        }
+
         do {
             let downloadRecord = try await completedDownload(
                 for: episode,
@@ -920,6 +934,7 @@ final class EpisodeAdFreePassCoordinator {
                     transcriptionModels: deps.transcriptionModels,
                     transcriptions: deps.transcriptions,
                     transcriptionPlan: transcriptionPlan,
+                    localReservation: localReservation,
                     modelContext: deps.modelContext
                 )
             }
@@ -929,7 +944,7 @@ final class EpisodeAdFreePassCoordinator {
                 adAnalyses: deps.adAnalyses,
                 modelContext: deps.modelContext
             )
-            let zoneCount = deps.refreshSkipZones()
+            let zoneCount = await deps.refreshSkipZones()
             clearFailure(episodeID: episode.episodeID)
             setStage(.completed(zoneCount: zoneCount))
             return .completed(zoneCount: zoneCount)
@@ -1041,7 +1056,7 @@ final class EpisodeAdFreePassCoordinator {
                         analysisDocument,
                         modelContext: deps.modelContext
                     )
-                    let zoneCount = deps.refreshSkipZones()
+                    let zoneCount = await deps.refreshSkipZones()
                     clearFailure(episodeID: episode.episodeID)
                     setStage(.completed(zoneCount: zoneCount))
                     return .completed(zoneCount: zoneCount)
@@ -1101,7 +1116,7 @@ final class EpisodeAdFreePassCoordinator {
             adAnalyses: entry.deps.adAnalyses,
             modelContext: entry.deps.modelContext
         )
-        let zoneCount = entry.deps.refreshSkipZones()
+        let zoneCount = await entry.deps.refreshSkipZones()
         clearFailure(episodeID: entry.item.episodeID)
         setStage(.completed(zoneCount: zoneCount))
         return .completed(zoneCount: zoneCount)
@@ -1508,6 +1523,7 @@ final class EpisodeAdFreePassCoordinator {
         transcriptionModels: TranscriptionModelStore,
         transcriptions: EpisodeTranscriptionStore,
         transcriptionPlan: EpisodeTranscriptionPlan,
+        localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation,
         modelContext: ModelContext
     ) async throws -> EpisodeTranscriptDocument {
         var didStartTranscription = false
@@ -1553,6 +1569,7 @@ final class EpisodeAdFreePassCoordinator {
                     transcriptionModels: transcriptionModels,
                     transcriptions: transcriptions,
                     transcriptionPlan: transcriptionPlan,
+                    localReservation: localReservation,
                     modelContext: modelContext
                 )
             case .ready, .failed, .cancelled:
@@ -1565,6 +1582,7 @@ final class EpisodeAdFreePassCoordinator {
                     transcriptionModels: transcriptionModels,
                     transcriptions: transcriptions,
                     transcriptionPlan: transcriptionPlan,
+                    localReservation: localReservation,
                     modelContext: modelContext
                 )
             case .downloadRequired:
@@ -1707,6 +1725,7 @@ final class EpisodeAdFreePassCoordinator {
         transcriptionModels: TranscriptionModelStore,
         transcriptions: EpisodeTranscriptionStore,
         transcriptionPlan: EpisodeTranscriptionPlan,
+        localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation,
         modelContext: ModelContext
     ) async throws {
         guard !didStartTranscription else {
@@ -1720,6 +1739,7 @@ final class EpisodeAdFreePassCoordinator {
             transcriptionModels: transcriptionModels,
             transcriptions: transcriptions,
             transcriptionPlan: transcriptionPlan,
+            localReservation: localReservation,
             modelContext: modelContext
         )
         didStartTranscription = true
@@ -1732,6 +1752,7 @@ final class EpisodeAdFreePassCoordinator {
         transcriptionModels: TranscriptionModelStore,
         transcriptions: EpisodeTranscriptionStore,
         transcriptionPlan: EpisodeTranscriptionPlan,
+        localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation,
         modelContext: ModelContext
     ) async throws {
         guard let localFileURL = downloads.localFileURL(for: downloadRecord),
@@ -1757,6 +1778,7 @@ final class EpisodeAdFreePassCoordinator {
             languageCode: transcriptionPlan.languageCode,
             runLanguageCode: transcriptionPlan.runLanguageCode,
             initialComputeProfile: initialComputeProfile,
+            localReservation: localReservation,
             modelContext: modelContext
         )
     }

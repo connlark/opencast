@@ -79,22 +79,22 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
 
         detectAds(on: Self.batchEpisodeA, in: app)
         detectAds(on: Self.batchEpisodeB, in: app)
-        attachScreen(named: "01-batch-enqueued")
+        attachTimestampedSmokeScreenshot(named: "01-batch-enqueued")
 
         // Best-effort while running: the indicator button's identity churns
         // with every progress tick, so the Live Activity below supplies the
         // evidence if this visit cannot open.
         if tryOpenQueueScreen(in: app) {
-            assertExists(queueRow(containing: Self.batchEpisodeA, in: app), named: "queued row A")
-            assertExists(queueRow(containing: Self.batchEpisodeB, in: app), named: "queued row B")
+            assertExists(queueRow(containing: Self.batchEpisodeA, in: app), named: "queued row A", timeout: 10)
+            assertExists(queueRow(containing: Self.batchEpisodeB, in: app), named: "queued row B", timeout: 10)
             assertExists(
                 staticText(containing: "Continues in the background.", in: app),
                 named: "armed continuation label",
                 timeout: 20
             )
-            attachScreen(named: "01-queue-screen-armed")
+            attachTimestampedSmokeScreenshot(named: "01-queue-screen-armed")
         } else {
-            attachScreen(named: "01-queue-screen-unreachable-while-running")
+            attachTimestampedSmokeScreenshot(named: "01-queue-screen-unreachable-while-running")
         }
 
         XCUIDevice.shared.press(.home)
@@ -127,11 +127,11 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
 
         app.activate()
         if tryOpenQueueScreen(in: app) {
-            attachScreen(named: "01-queue-screen-finished")
+            attachTimestampedSmokeScreenshot(named: "01-queue-screen-finished")
         }
         assertAdsDetected(for: Self.batchEpisodeA, in: app)
         assertAdsDetected(for: Self.batchEpisodeB, in: app)
-        attachScreen(named: "01-zones-armed-menu-state")
+        attachTimestampedSmokeScreenshot(named: "01-zones-armed-menu-state")
     }
 
     /// Cancel mid-queue from the system UI: the continued-processing card's
@@ -159,25 +159,25 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
             "Live Activity should be visible before system cancel"
         )
         guard cancelSystemCard(in: springboard) else {
-            attachScreen(named: "02-cancel-affordance-not-found")
+            attachTimestampedSmokeScreenshot(named: "02-cancel-affordance-not-found")
             throw XCTSkip("System-UI cancel affordance was not automatable from springboard; recorded for the audit.")
         }
-        attachScreen(named: "02-after-system-cancel")
+        attachTimestampedSmokeScreenshot(named: "02-after-system-cancel")
 
         app.activate()
         openQueueScreen(in: app)
         let resumeButton = app.buttons["Resume"]
         assertExists(resumeButton, named: "Resume affordance after system cancel", timeout: 30)
-        assertExists(queueRow(containing: Self.cancelEpisodeA, in: app), named: "preserved interrupted row A")
-        assertExists(queueRow(containing: Self.cancelEpisodeB, in: app), named: "preserved queued row B")
-        attachScreen(named: "02-queue-paused-resumable")
+        assertExists(queueRow(containing: Self.cancelEpisodeA, in: app), named: "preserved interrupted row A", timeout: 10)
+        assertExists(queueRow(containing: Self.cancelEpisodeB, in: app), named: "preserved queued row B", timeout: 10)
+        attachTimestampedSmokeScreenshot(named: "02-queue-paused-resumable")
 
         resumeButton.tap()
         XCTAssertTrue(
             waitForQueueDrainToFinish(in: app, timeout: 1200),
             "resumed queue should drain to completion"
         )
-        attachScreen(named: "02-queue-finished-after-resume")
+        attachTimestampedSmokeScreenshot(named: "02-queue-finished-after-resume")
         assertAdsDetected(for: Self.cancelEpisodeA, in: app)
         assertAdsDetected(for: Self.cancelEpisodeB, in: app)
     }
@@ -229,12 +229,12 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 5)
         }
         XCTAssertTrue(parked, "restored queue should park capDeferred against the mock's first 429")
-        attachScreen(named: "03-parked-cap-deferred")
+        attachTimestampedSmokeScreenshot(named: "03-parked-cap-deferred")
 
         // Retry probes into the mock's stall; the queue runs un-armed with
         // the screen already open, so Continue in Background is reachable.
         let retryButton = restored.buttons["Retry"]
-        assertExists(retryButton, named: "cap Retry affordance")
+        assertExists(retryButton, named: "cap Retry affordance", timeout: 10)
         retryButton.tap()
 
         let continueButton = restored.buttons["Continue in Background"]
@@ -254,7 +254,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
             named: "armed running queue row",
             timeout: 10
         )
-        attachScreen(named: "03-armed-mid-run")
+        attachTimestampedSmokeScreenshot(named: "03-armed-mid-run")
 
         XCUIDevice.shared.press(.home)
         let springboard = springboardApp()
@@ -271,7 +271,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         // log records the background completion authoritatively (stale
         // Notification Center banners make notification text unreliable).
         Thread.sleep(forTimeInterval: 240)
-        attachScreen(named: "03-after-background-drain")
+        attachTimestampedSmokeScreenshot(named: "03-after-background-drain")
 
         restored.activate()
         assertAdsDetected(for: Self.armingEpisodeA, in: restored)
@@ -305,8 +305,8 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 5)
         }
         XCTAssertTrue(parked, "forced cap should park the queue with the settled copy")
-        assertExists(cappedApp.buttons["Retry"], named: "cap Retry affordance")
-        attachScreen(named: "04-cap-deferred-queue-screen")
+        assertExists(cappedApp.buttons["Retry"], named: "cap Retry affordance", timeout: 10)
+        attachTimestampedSmokeScreenshot(named: "04-cap-deferred-queue-screen")
 
         // Relaunch without the hook: the restored session is allowed one
         // probe, which retries the deferred item on its own — the resumed
@@ -318,7 +318,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
             waitForQueueDrainToFinish(in: app, timeout: 900),
             "probe should retry the deferred item and complete it"
         )
-        attachScreen(named: "04-deferred-item-completed-after-probe")
+        attachTimestampedSmokeScreenshot(named: "04-deferred-item-completed-after-probe")
         assertAdsDetected(for: Self.capEpisode, in: app)
     }
 
@@ -336,10 +336,10 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         detectAds(on: Self.persistenceEpisodeA, in: app)
         detectAds(on: Self.persistenceEpisodeB, in: app)
         if tryOpenQueueScreen(in: app) {
-            assertExists(queueRow(containing: Self.persistenceEpisodeA, in: app), named: "running row before force-quit")
-            assertExists(queueRow(containing: Self.persistenceEpisodeB, in: app), named: "pending row before force-quit")
+            assertExists(queueRow(containing: Self.persistenceEpisodeA, in: app), named: "running row before force-quit", timeout: 10)
+            assertExists(queueRow(containing: Self.persistenceEpisodeB, in: app), named: "pending row before force-quit", timeout: 10)
         }
-        attachScreen(named: "05-queue-before-force-quit")
+        attachTimestampedSmokeScreenshot(named: "05-queue-before-force-quit")
 
         app.terminate()
         app.launch()
@@ -359,19 +359,19 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
                 named: "restored pending row after relaunch",
                 timeout: 60
             )
-            attachScreen(named: "05-queue-restored-after-relaunch")
+            attachTimestampedSmokeScreenshot(named: "05-queue-restored-after-relaunch")
             let resumeButton = app.buttons["Resume"]
             if resumeButton.waitForExistence(timeout: 10) {
                 resumeButton.tap()
             }
         } else {
-            attachScreen(named: "05-queue-restored-draining-screen-unreachable")
+            attachTimestampedSmokeScreenshot(named: "05-queue-restored-draining-screen-unreachable")
         }
         XCTAssertTrue(
             waitForQueueDrainToFinish(in: app, timeout: 1500),
             "restored queue should drain to completion in the foreground"
         )
-        attachScreen(named: "05-restored-queue-finished")
+        attachTimestampedSmokeScreenshot(named: "05-restored-queue-finished")
         assertAdsDetected(for: Self.persistenceEpisodeA, in: app)
         assertAdsDetected(for: Self.persistenceEpisodeB, in: app)
     }
@@ -388,10 +388,10 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
 
         startPlayback(of: Self.megaphoneEpisode, in: app)
         revealNowPlayingSoundLab(in: app)
-        assertExists(app.descendants(matching: .any)["Now Playing Sound Lab"], named: "Sound Lab panel")
+        assertExists(app.descendants(matching: .any)["Now Playing Sound Lab"], named: "Sound Lab panel", timeout: 10)
         let megaphone = app.descendants(matching: .any)["Skip Promos & Ads"].firstMatch
-        assertExists(megaphone, named: "Skip Promos & Ads control")
-        attachScreen(named: "06-sound-lab-before-pass")
+        assertExists(megaphone, named: "Skip Promos & Ads control", timeout: 10)
+        attachTimestampedSmokeScreenshot(named: "06-sound-lab-before-pass")
         megaphone.tap()
 
         XCTAssertTrue(
@@ -402,7 +402,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
             ),
             "solo megaphone pass should complete and offer Reanalyze"
         )
-        attachScreen(named: "06-solo-pass-completed")
+        attachTimestampedSmokeScreenshot(named: "06-solo-pass-completed")
     }
 
     /// Foreground-only fallback via the debug force hook: arming degrades
@@ -419,18 +419,18 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         // Best-effort while running because the indicator can be un-tappable
         // mid-drain.
         if tryOpenQueueScreen(in: app) {
-            assertExists(queueRow(containing: Self.foregroundOnlyEpisode, in: app), named: "foreground-only queue row")
+            assertExists(queueRow(containing: Self.foregroundOnlyEpisode, in: app), named: "foreground-only queue row", timeout: 10)
             XCTAssertFalse(
                 staticText(containing: "Continues in the background.", in: app).exists,
                 "forced foreground-only session must not report armed continuation"
             )
         }
-        attachScreen(named: "07-foreground-only-running")
+        attachTimestampedSmokeScreenshot(named: "07-foreground-only-running")
         XCTAssertTrue(
             waitForQueueDrainToFinish(in: app, timeout: 1200),
             "foreground-only pass should complete in the foreground"
         )
-        attachScreen(named: "07-foreground-only-finished")
+        attachTimestampedSmokeScreenshot(named: "07-foreground-only-finished")
         assertAdsDetected(for: Self.foregroundOnlyEpisode, in: app)
     }
 
@@ -543,11 +543,11 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         let row = searchEpisodeRow(for: episodeTitle, in: app)
         row.press(forDuration: 1.2)
         let detailsButton = app.buttons["View Episode Details"]
-        assertExists(detailsButton, named: "View Episode Details for \(episodeTitle)")
+        assertExists(detailsButton, named: "View Episode Details for \(episodeTitle)", timeout: 10)
         detailsButton.tap()
 
         let episodeActionsButton = app.buttons["Episode Actions"]
-        assertExists(episodeActionsButton, named: "Episode Actions menu for \(episodeTitle)")
+        assertExists(episodeActionsButton, named: "Episode Actions menu for \(episodeTitle)", timeout: 10)
         episodeActionsButton.tap()
 
         let deleteButton = app.buttons["Delete Transcript"]
@@ -596,9 +596,9 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         } else {
             row = app.buttons.matching(episodeRowPredicate(containing: episodeTitle)).firstMatch
         }
-        assertExists(row, named: "analyzed episode row for \(episodeTitle)")
+        assertExists(row, named: "analyzed episode row for \(episodeTitle)", timeout: 10)
         row.press(forDuration: 1.2)
-        assertExists(app.buttons["Ads Detected"], named: "Ads Detected state for \(episodeTitle)")
+        assertExists(app.buttons["Ads Detected"], named: "Ads Detected state for \(episodeTitle)", timeout: 10)
         dismissContextMenu(in: app)
     }
 
@@ -635,7 +635,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
     @MainActor
     private func revealNowPlayingSoundLab(in app: XCUIApplication) {
         let artwork = app.descendants(matching: .any)["Now Playing Artwork"]
-        assertExists(artwork, named: "Now Playing artwork")
+        assertExists(artwork, named: "Now Playing artwork", timeout: 10)
         let start = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: 0.52))
         let end = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.48))
         start.press(forDuration: 0.10, thenDragTo: end)
@@ -833,7 +833,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         while Date() < deadline {
             for fragment in fragments {
                 if springboardText(containing: fragment, in: springboard).waitForExistence(timeout: 2) {
-                    attachScreen(named: screenshotName)
+                    attachTimestampedSmokeScreenshot(named: screenshotName)
                     if checksNotificationCenter {
                         XCUIDevice.shared.press(.home)
                     }
@@ -850,7 +850,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
             checksNotificationCenter.toggle()
         }
 
-        attachScreen(named: "\(screenshotName)-timeout")
+        attachTimestampedSmokeScreenshot(named: "\(screenshotName)-timeout")
         return false
     }
 
@@ -885,29 +885,12 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
                 return true
             }
             if let pollScreenshotName, Date().timeIntervalSince(lastScreenshotAt) > 120 {
-                attachScreen(named: pollScreenshotName)
+                attachTimestampedSmokeScreenshot(named: pollScreenshotName)
                 lastScreenshotAt = Date()
             }
             Thread.sleep(forTimeInterval: 8)
         }
 
         return false
-    }
-
-    @MainActor
-    private func assertExists(
-        _ element: XCUIElement,
-        named name: String,
-        timeout: TimeInterval = 10
-    ) {
-        XCTAssertTrue(element.waitForExistence(timeout: timeout), "\(name) should exist")
-    }
-
-    @MainActor
-    private func attachScreen(named name: String) {
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        attachment.name = "\(name)_\(ISO8601DateFormatter().string(from: Date()))"
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 }

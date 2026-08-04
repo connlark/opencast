@@ -4,7 +4,9 @@ import SwiftUI
 
 struct EpisodeDetailView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     let episodeID: String
 
@@ -19,6 +21,9 @@ struct EpisodeDetailView: View {
     @State private var isConfirmingClearProgress = false
     @State private var sheetDestination: SheetDestination?
     @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
+    @State private var episodeActionErrorTitle = "Couldn’t Complete Action"
+    @State private var episodeActionErrorMessage = ""
+    @State private var isShowingEpisodeActionError = false
 
     private var episode: EpisodeListItemSnapshot? {
         appModel.episodeSnapshot(for: episodeID)
@@ -34,7 +39,11 @@ struct EpisodeDetailView: View {
             if let episode {
                 content(episode: episode, progressSummary: progressSummary)
             } else {
-                ContentUnavailableView("Episode Not Found", systemImage: "questionmark.circle")
+                ContentUnavailableView {
+                    Label("Episode Not Found", systemImage: "questionmark.circle")
+                } actions: {
+                    Button("Go Back", systemImage: "chevron.backward", action: dismiss.callAsFunction)
+                }
             }
         }
         .navigationTitle("")
@@ -47,7 +56,8 @@ struct EpisodeDetailView: View {
                         isPlayed: progressSummary.isCompleted,
                         hasProgressRecord: progressRecord != nil,
                         onClearProgress: confirmClearProgress,
-                        onShowEpisodeInfo: showEpisodeInfo
+                        onShowEpisodeInfo: showEpisodeInfo,
+                        onActionError: { showEpisodeActionError($0) }
                     )
                 }
             }
@@ -62,11 +72,14 @@ struct EpisodeDetailView: View {
         } message: {
             Text("Listening position for this episode will be removed. Downloads are unchanged.")
         }
-        .sheet(item: Bindable(appModel.remoteTranscription.store).startPreview) { request in
+        .alert(episodeActionErrorTitle, isPresented: $isShowingEpisodeActionError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(episodeActionErrorMessage)
+        }
+        .sheet(item: remoteTranscriptionStartPreviewBinding) { request in
             RemoteTranscriptionConsumptionPreviewSheet(request: request) {
-                if let episode {
-                    startRemoteTranscript(episode)
-                }
+                startRemoteTranscript(request)
             }
         }
         .sheet(item: $sheetDestination) { destination in
@@ -112,13 +125,14 @@ struct EpisodeDetailView: View {
             && hasCurrentCompletedAnalysis
             && adAnalysisDocument?.episodeID == episode.episodeID
         let zoneTiers = hasCurrentAnalysis ? currentAdAnalysisZoneTiers : .empty
-        let downloadLiveProgress = appModel.downloads.byteProgress(for: episode.episodeID)
+        // Coarse pipeline state (no live byte progress) drives column
+        // presence/animation; the per-tick progress reads live in the leaf
+        // sections below so ticks never re-evaluate this whole column.
         let pipelineState = EpisodePipelineState.make(
             episodeID: episode.episodeID,
             queueStatus: appModel.adFreePass.queueStatus(for: episode.episodeID),
             queueSnapshot: appModel.adFreePass.queueSnapshot,
             downloadRecord: downloadRecord,
-            downloadLiveProgress: downloadLiveProgress,
             transcription: transcription,
             analysis: analysis
         )
@@ -139,9 +153,9 @@ struct EpisodeDetailView: View {
                 )
                 .animation(.easeOut(duration: 0.2), value: progressSummary)
 
-                EpisodeActionBar(
+                EpisodeDetailActionBarSection(
+                    episodeID: episode.episodeID,
                     downloadRecord: downloadRecord,
-                    downloadLiveProgress: downloadLiveProgress,
                     detectAdsState: EpisodeDetectAdsMenuState(
                         queueStatus: appModel.adFreePass.queueStatus(for: episode.episodeID),
                         hasCurrentCompletedAnalysis: hasCurrentAnalysis
@@ -170,8 +184,13 @@ struct EpisodeDetailView: View {
                     )
                 }
 
-                if let pipelineState {
-                    EpisodePipelineCard(state: pipelineState) { action in
+                if pipelineState != nil {
+                    EpisodeDetailPipelineSection(
+                        episodeID: episode.episodeID,
+                        downloadRecord: downloadRecord,
+                        transcription: transcription,
+                        analysis: analysis
+                    ) { action in
                         perform(action, episode: episode)
                     }
                 }
@@ -190,6 +209,11 @@ struct EpisodeDetailView: View {
 
                 if !showNotes.isEmpty {
                     EpisodeShowNotesView(blocks: showNotes.blocks)
+                        .frame(
+                            maxWidth: horizontalSizeClass == .regular ? 680 : .infinity,
+                            alignment: .leading
+                        )
+                        .frame(maxWidth: .infinity)
                 }
             }
             .padding()
@@ -276,9 +300,42 @@ struct EpisodeDetailView: View {
         appModel.transcribeDownloadedEpisode(episode, downloadRecord: downloadRecord, modelContext: modelContext)
     }
 
-    private func startRemoteTranscript(_ episode: EpisodeListItemSnapshot) {
-        appModel.remoteTranscription.store.startPreview = nil
-        appModel.remoteTranscription.start(episode: episode, modelContext: modelContext)
+    private var remoteTranscriptionStartPreviewBinding: Binding<RemoteTranscriptionStartPreviewRequest?> {
+        let store = appModel.remoteTranscription.store
+        return Binding {
+            RemoteTranscriptionStartPreviewRouting.presentedRequest(
+                store.startPreview,
+                for: episodeID
+            )
+        } set: { request in
+            guard request == nil,
+                  let presentedRequest = RemoteTranscriptionStartPreviewRouting.presentedRequest(
+                    store.startPreview,
+                    for: episodeID
+                  )
+            else {
+                return
+            }
+            store.dismissStartPreview(ifMatching: presentedRequest)
+        }
+    }
+
+    private func startRemoteTranscript(_ request: RemoteTranscriptionStartPreviewRequest) {
+        switch appModel.confirmRemoteTranscriptionStart(request, modelContext: modelContext) {
+        case .started:
+            break
+        case .unavailable(let message):
+            showEpisodeActionError(message, title: "Couldn’t Start Transcription")
+        }
+    }
+
+    private func showEpisodeActionError(
+        _ message: String,
+        title: String = "Couldn’t Detect Ads"
+    ) {
+        episodeActionErrorTitle = title
+        episodeActionErrorMessage = message
+        isShowingEpisodeActionError = true
     }
 
     private func transcribeLocallyAfterRemote(_ episode: EpisodeListItemSnapshot) {
@@ -524,4 +581,64 @@ private struct TextContentTaskKey: Equatable {
     let episodeID: String?
     let transcriptCompletedAt: Date?
     let isNowPlayingPresented: Bool
+}
+
+/// Reads live download byte progress in its own body so per-tick progress
+/// publishes (many per download) re-evaluate this bar alone, never the
+/// detail column above it.
+private struct EpisodeDetailActionBarSection: View {
+    @Environment(OpenCastAppModel.self) private var appModel
+
+    let episodeID: String
+    let downloadRecord: EpisodeDownloadRecord?
+    let detectAdsState: EpisodeDetectAdsMenuState
+    let showsPauseButton: Bool
+    let onTogglePlayback: () -> Void
+    let onDownload: () -> Void
+    let onResumeDownload: () -> Void
+    let onCancelDownload: () -> Void
+    let onDeleteDownload: () -> Void
+    let onMakeAdFree: () -> Void
+
+    var body: some View {
+        EpisodeActionBar(
+            downloadRecord: downloadRecord,
+            downloadLiveProgress: appModel.downloads.byteProgress(for: episodeID),
+            detectAdsState: detectAdsState,
+            showsPauseButton: showsPauseButton,
+            onTogglePlayback: onTogglePlayback,
+            onDownload: onDownload,
+            onResumeDownload: onResumeDownload,
+            onCancelDownload: onCancelDownload,
+            onDeleteDownload: onDeleteDownload,
+            onMakeAdFree: onMakeAdFree
+        )
+    }
+}
+
+/// Reads live download byte progress in its own body so per-tick progress
+/// publishes re-evaluate this card alone, never the detail column above it.
+/// Presence is decided by the parent's coarse (progress-free) state.
+private struct EpisodeDetailPipelineSection: View {
+    @Environment(OpenCastAppModel.self) private var appModel
+
+    let episodeID: String
+    let downloadRecord: EpisodeDownloadRecord?
+    let transcription: EpisodeTranscriptionJobState
+    let analysis: EpisodeAdAnalysisJobState?
+    let onAction: (EpisodePipelineAction) -> Void
+
+    var body: some View {
+        if let state = EpisodePipelineState.make(
+            episodeID: episodeID,
+            queueStatus: appModel.adFreePass.queueStatus(for: episodeID),
+            queueSnapshot: appModel.adFreePass.queueSnapshot,
+            downloadRecord: downloadRecord,
+            downloadLiveProgress: appModel.downloads.byteProgress(for: episodeID),
+            transcription: transcription,
+            analysis: analysis
+        ) {
+            EpisodePipelineCard(state: state, onAction: onAction)
+        }
+    }
 }

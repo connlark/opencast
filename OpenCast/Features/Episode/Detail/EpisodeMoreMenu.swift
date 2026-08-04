@@ -13,6 +13,7 @@ struct EpisodeMoreMenu: View {
     let hasProgressRecord: Bool
     let onClearProgress: () -> Void
     let onShowEpisodeInfo: () -> Void
+    let onActionError: (String) -> Void
 
     var body: some View {
         Menu {
@@ -94,8 +95,7 @@ struct EpisodeMoreMenu: View {
         if appModel.remoteTranscriptionPurchases.isSurfaceVisible {
             if let phase = appModel.remoteTranscription.store.phase(for: episode.episodeID),
                !phase.isTerminal {
-                Button("Remote: \(phase.displayText)", systemImage: "cloud", action: {})
-                    .disabled(true)
+                Label("Remote: \(phase.displayText)", systemImage: "cloud")
                 Button("Cancel Remote Transcript", systemImage: "xmark.circle", action: cancelRemoteTranscript)
             } else {
                 // Disabled while a cloud detect pass owns this episode — it
@@ -168,10 +168,18 @@ struct EpisodeMoreMenu: View {
     }
 
     private func detectAdsOnly() {
-        guard let document = appModel.transcriptions.document(for: episode.episodeID) else {
-            return
+        Task {
+            let document: EpisodeTranscriptDocument
+            do {
+                document = try await appModel.transcriptions.loadDocument(for: episode.episodeID)
+            } catch is CancellationError {
+                return
+            } catch {
+                onActionError(error.localizedDescription)
+                return
+            }
+            appModel.analyzeEpisodeTranscript(document, modelContext: modelContext)
         }
-        appModel.analyzeEpisodeTranscript(document, modelContext: modelContext)
     }
 
     private func deleteAdAnalysis() {
@@ -189,7 +197,8 @@ struct EpisodeMoreMenu: View {
                         isPlayed: false,
                         hasProgressRecord: true,
                         onClearProgress: {},
-                        onShowEpisodeInfo: {}
+                        onShowEpisodeInfo: {},
+                        onActionError: { _ in }
                     )
                 }
             }
@@ -208,7 +217,8 @@ struct EpisodeMoreMenu: View {
                         isPlayed: true,
                         hasProgressRecord: false,
                         onClearProgress: {},
-                        onShowEpisodeInfo: {}
+                        onShowEpisodeInfo: {},
+                        onActionError: { _ in }
                     )
                 }
             }

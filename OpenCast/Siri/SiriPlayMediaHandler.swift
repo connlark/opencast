@@ -39,13 +39,20 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
         }
 
         do {
-            try appModel.playEpisode(
-                episode,
-                presentsNowPlaying: false,
-                modelContext: modelContext
-            )
+            if appModel.playback.currentEpisode?.id.rawValue == episode.episodeID {
+                appModel.playback.play()
+            } else {
+                try appModel.playEpisode(
+                    episode,
+                    presentsNowPlaying: false,
+                    modelContext: modelContext
+                )
+            }
             if let playbackSpeed = intent.playbackSpeed {
-                appModel.playback.setRate(Float(playbackSpeed))
+                appModel.setPlaybackRate(
+                    Float(playbackSpeed),
+                    modelContext: modelContext
+                )
             }
             guard appModel.playback.currentEpisode != nil else {
                 Self.logger.error("Siri media playback returned without loaded content")

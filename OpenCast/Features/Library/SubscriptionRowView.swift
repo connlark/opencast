@@ -18,14 +18,12 @@ struct SubscriptionRowView: View {
         appModel.library.isRefreshing(feedURL: subscription.feedURL)
     }
 
-    private var refreshErrorMessage: String? {
-        guard let errorMessage = latestRefreshLog?.errorMessage,
-              !errorMessage.isEmpty
-        else {
-            return nil
-        }
-
-        return errorMessage
+    private var health: FeedHealthStatus {
+        FeedHealthStatus.derive(
+            latestLog: latestRefreshLog,
+            latestSuccessAt: appModel.library.latestSuccessfulRefreshByFeedURL[subscription.feedURL],
+            contentChangedAt: podcastCache?.updatedAt
+        )
     }
 
     var body: some View {
@@ -48,16 +46,22 @@ struct SubscriptionRowView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                if let lastRefreshedAt = appModel.library.lastRefreshedAt(for: subscription) {
+                if !health.replacesRefreshedLine,
+                   let lastRefreshedAt = appModel.library.lastRefreshedAt(for: subscription) {
                     Text("Refreshed \(lastRefreshedAt.formatted(.relative(presentation: .named)))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                if refreshErrorMessage != nil {
-                    Label("Refresh failed", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
+                if let statusLine = health.statusLine {
+                    Label(
+                        statusLine,
+                        systemImage: health.kind == .partial
+                            ? "exclamationmark.circle"
+                            : "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
                 }
             }
 
@@ -67,10 +71,10 @@ struct SubscriptionRowView: View {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel("Refreshing")
-            } else if refreshErrorMessage != nil {
+            } else if health.isDegraded {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                    .accessibilityLabel("Last refresh failed")
+                    .accessibilityLabel("Last refresh had problems")
             }
         }
         .padding(.vertical, 4)

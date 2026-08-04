@@ -111,17 +111,26 @@ enum RSSFeedRecovery {
             return xml
         }
 
-        let prefix = String(decoding: data.prefix(1_024), as: Unicode.ASCII.self)
-        let range = NSRange(prefix.startIndex..., in: prefix)
-        guard
-            let match = xmlEncodingPattern.firstMatch(in: prefix, range: range),
-            let nameRange = Range(match.range(at: 1), in: prefix),
-            let encoding = stringEncoding(named: String(prefix[nameRange]))
-        else {
+        guard let encoding = declaredEncoding(in: data) else {
             return nil
         }
 
         return String(data: data, encoding: encoding)
+    }
+
+    /// The XML prolog's declared encoding, when one is present and known.
+    /// CDATA fallback decoding uses it: XMLParser hands CDATA blocks through
+    /// as raw bytes in the document's original encoding.
+    static func declaredEncoding(in data: Data) -> String.Encoding? {
+        let prefix = String(decoding: data.prefix(1_024), as: Unicode.ASCII.self)
+        let range = NSRange(prefix.startIndex..., in: prefix)
+        guard
+            let match = xmlEncodingPattern.firstMatch(in: prefix, range: range),
+            let nameRange = Range(match.range(at: 1), in: prefix)
+        else {
+            return nil
+        }
+        return stringEncoding(named: String(prefix[nameRange]))
     }
 
     private static func stringEncoding(named name: String) -> String.Encoding? {

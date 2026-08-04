@@ -23,6 +23,9 @@ final class NotificationSettingsStore {
     @ObservationIgnored private let registrationService: any NotificationDeviceRegistrationServicing
     @ObservationIgnored private let subscriptionSyncService: any NotificationSubscriptionSyncServicing
     @ObservationIgnored private let debounceInterval: Duration
+    /// Sink for the sync response's per-feed poll health; wired by
+    /// OpenCastAppModel to the library's device-local persistence.
+    @ObservationIgnored var feedHealthRecorder: (([NotificationFeedHealthRecord]) async -> Void)?
     @ObservationIgnored private var scheduledSyncTask: Task<Void, Never>?
     @ObservationIgnored private var pendingActivePodcastIDs: Set<String>?
 
@@ -145,6 +148,12 @@ final class NotificationSettingsStore {
             }
             await self?.syncSubscriptionsIfEnabled(activePodcastIDs: activePodcastIDs)
         }
+    }
+
+    // Test seam — awaits the debounced sync task's settlement (no production
+    // callers), so tests never race the debounce with a fixed grace sleep.
+    func awaitScheduledSubscriptionSync() async {
+        await scheduledSyncTask?.value
     }
 
     func syncSubscriptionsIfEnabled(activePodcastIDs: Set<String>) async {
@@ -367,6 +376,14 @@ final class NotificationSettingsStore {
             : "\(response.accepted.count) synced, \(response.pending.count) syncing"
         if !response.rejected.isEmpty {
             lastErrorMessage = "\(response.rejected.count) feed(s) rejected by notification validation."
+        }
+
+        let healthRecords = response.accepted.compactMap { accepted in
+            accepted.health.map { NotificationFeedHealthRecord(feedURL: accepted.feedURL, health: $0) }
+        }
+        let recorder = feedHealthRecorder
+        Task {
+            await recorder?(healthRecords)
         }
     }
 

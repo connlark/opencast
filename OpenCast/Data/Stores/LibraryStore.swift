@@ -22,8 +22,12 @@ final class LibraryStore {
     private(set) var subscriptions: [SubscriptionRecord] = []
     private(set) var episodes: [EpisodeListItemSnapshot] = []
     @ObservationIgnored private(set) var progressRecords: [EpisodeProgressRecord] = []
+    /// Per-feed refresh-log projection (latest log per feed, plus its latest
+    /// success), newest first. Full history: `loadAllRefreshLogs()`.
     private(set) var refreshLogs: [RefreshLogSnapshot] = []
-    private(set) var refreshingFeedURLs: Set<String> = []
+    var refreshingFeedURLs: Set<String> {
+        Set(refreshingFeedURLCounts.keys)
+    }
     private(set) var activePodcastIDs: Set<String> = []
     private(set) var visibleEpisodeIDs: Set<String> = []
     private(set) var podcastCacheByFeedURL: [String: PodcastCacheSnapshot] = [:]
@@ -38,9 +42,35 @@ final class LibraryStore {
     /// trigger (one credit per save; see `SyncedStoreRemoteChangeArbiter`).
     @ObservationIgnored private(set) var syncedStoreSelfSaveCount = 0
     @ObservationIgnored private var hasPrunedTrivialProgressThisLaunch = false
+    @ObservationIgnored private var lastSyncedProgressProbe: SyncedProgressProbe?
+    /// Times the synced-reload probe skipped the full progress refetch. Test hook.
+    @ObservationIgnored private(set) var syncedProgressProbeSkipCount = 0
 
+    // Busy-marker bookkeeping is reference-counted through the begin/end
+    // helpers so overlapping flows (a single-feed refresh during a bulk
+    // refresh) provably balance on success, error, and cancellation. Rows
+    // observe their feed's activity object, so per-feed marker changes never
+    // invalidate every subscription row.
+    @ObservationIgnored private var refreshingFeedURLCounts: [String: Int] = [:]
+    @ObservationIgnored private var refreshActivityByFeedURL: [String: FeedRefreshActivity] = [:]
     @ObservationIgnored private let feedService: any FeedService
     @ObservationIgnored private let localCache: any LocalLibraryCacheStore
+    /// Episode-keyed device-local stores (downloads, transcripts, ad
+    /// analyses) that identity reconciliation carries across an ID change;
+    /// wired by OpenCastAppModel at composition.
+    @ObservationIgnored var episodeSidecarMigrators: [any EpisodeIdentitySidecarMigrating] = []
+
+    /// Feeds whose refreshes keep landing on a different host: the podcast
+    /// page offers "Update Feed Address" instead of migrating automatically,
+    /// because redirects are routinely CDN noise. Session-scoped state.
+    private(set) var suggestedFeedMigrationURLsByFeedURL: [String: URL] = [:]
+
+    /// Server-reported notification poll health per accepted feed, replaced
+    /// wholesale from each successful subscription sync. Advisory UI only.
+    private(set) var notificationFeedHealthByFeedURL: [String: NotificationFeedHealth] = [:]
+    private static let redirectDivergenceThreshold = 3
+    @ObservationIgnored private var redirectDivergenceByFeedURL: [String: (targetCanonicalURL: String, count: Int)] = [:]
+    @ObservationIgnored private var httpsUpgradeProbedFeedURLs: Set<String> = []
     @ObservationIgnored private var writeGeneration = 0
     @ObservationIgnored private var reloadGeneration = 0
     @ObservationIgnored private var episodeIndexByID: [String: Int] = [:]
@@ -73,17 +103,16 @@ final class LibraryStore {
         refreshLogs.first
     }
 
-    var latestRefreshFailure: RefreshLogSnapshot? {
-        refreshLogs.first { log in
-            guard let errorMessage = log.errorMessage else {
-                return false
-            }
-            return !errorMessage.isEmpty
+    /// Full retained refresh-log history for diagnostics; the published
+    /// `refreshLogs` carries only the per-feed-latest projection.
+    /// Returns nil on a store failure so callers can avoid caching the miss.
+    func loadAllRefreshLogs() async -> [RefreshLogSnapshot]? {
+        do {
+            return try await localCache.allRefreshLogs()
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return nil
         }
-    }
-
-    var refreshLogCount: Int {
-        refreshLogs.count
     }
 
     var feedURLStringsNeedingLocalCache: [String] {
@@ -105,6 +134,19 @@ final class LibraryStore {
         } catch {
             recordFailure(error)
         }
+        // Advisory notification poll health; absence is just "no data".
+        notificationFeedHealthByFeedURL = (try? await localCache.notificationFeedHealthByFeedURL()) ?? [:]
+    }
+
+    /// Persists and republishes the server-reported notification poll health
+    /// from a successful subscription sync. Advisory data: a failed write only
+    /// costs the diagnostics display, never the sync.
+    func recordNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) async {
+        try? await localCache.replaceNotificationFeedHealth(records)
+        notificationFeedHealthByFeedURL = Dictionary(
+            records.map { ($0.feedURL, $0.health) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     func reloadPersistedData(modelContext: ModelContext) async throws {
@@ -124,20 +166,37 @@ final class LibraryStore {
         do {
             let previousActivePodcastIDs = activePodcastIDs
             let previousSubscriptions = subscriptions
-            let previousProgressRecords = progressRecords
             let fetchedSubscriptions = try modelContext.fetch(activeSubscriptionsDescriptor())
             let fetchedActivePodcastIDs = Set(fetchedSubscriptions.map(\.feedURL))
-            let fetchedProgressRecords = try modelContext.fetch(allProgressRecordsDescriptor())
 
             let activePodcastIDsChanged = previousActivePodcastIDs != fetchedActivePodcastIDs
             let activeSubscriptionRecordsChanged = !Self.subscriptionRecords(
                 previousSubscriptions,
                 match: fetchedSubscriptions
             )
-            let progressRecordsChanged = !Self.progressRecords(
-                previousProgressRecords,
-                match: fetchedProgressRecords
-            )
+
+            // Progress is the large table, so a cheap probe (row count +
+            // newest updatedAt) gates its full refetch-and-compare; any
+            // mismatch takes the full reload. Subscriptions stay a plain
+            // fetch: the table is small and the records carry no updatedAt
+            // to probe (adding one would be a synced-schema change).
+            let progressProbe = try syncedProgressProbe(modelContext: modelContext)
+            let progressRecordsChanged: Bool
+            if progressProbe == lastSyncedProgressProbe {
+                syncedProgressProbeSkipCount += 1
+                progressRecordsChanged = false
+            } else {
+                let fetchedProgressRecords = try modelContext.fetch(allProgressRecordsDescriptor())
+                progressRecordsChanged = !Self.progressRecords(
+                    progressRecords,
+                    match: fetchedProgressRecords
+                )
+                if progressRecordsChanged {
+                    progressRecords = fetchedProgressRecords
+                    rebuildProgressByEpisodeID()
+                }
+                lastSyncedProgressProbe = progressProbe
+            }
 
             if activeSubscriptionRecordsChanged {
                 subscriptions = fetchedSubscriptions
@@ -147,10 +206,6 @@ final class LibraryStore {
                 episodes = episodes.filter { fetchedActivePodcastIDs.contains($0.podcastID) }
                 visibleEpisodeIDs = Set(episodes.map(\.episodeID))
                 rebuildEpisodeIndexes()
-            }
-            if progressRecordsChanged {
-                progressRecords = fetchedProgressRecords
-                rebuildProgressByEpisodeID()
             }
             if activeSubscriptionRecordsChanged || progressRecordsChanged {
                 lastErrorMessage = nil
@@ -165,6 +220,21 @@ final class LibraryStore {
             recordFailure(error)
             throw error
         }
+    }
+
+    private struct SyncedProgressProbe: Equatable {
+        var count: Int
+        var latestUpdatedAt: Date?
+    }
+
+    private func syncedProgressProbe(modelContext: ModelContext) throws -> SyncedProgressProbe {
+        let count = try modelContext.fetchCount(FetchDescriptor<EpisodeProgressRecord>())
+        var latestDescriptor = FetchDescriptor<EpisodeProgressRecord>(
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        latestDescriptor.fetchLimit = 1
+        let latestUpdatedAt = try modelContext.fetch(latestDescriptor).first?.updatedAt
+        return SyncedProgressProbe(count: count, latestUpdatedAt: latestUpdatedAt)
     }
 
     func subscribe(
@@ -211,14 +281,13 @@ final class LibraryStore {
         let generation = writeGeneration
         lastErrorMessage = nil
         // Mark the feed busy before the first suspension so refreshAllIfStale
-        // cannot start a duplicate refresh while the initial reload is in flight.
-        refreshingFeedURLs.insert(feedURL)
+        // cannot start a duplicate refresh while this one is in flight.
+        beginRefreshing([feedURL])
         defer {
-            refreshingFeedURLs.remove(feedURL)
+            endRefreshing([feedURL])
         }
         do {
-            try await reloadFromStore(modelContext: modelContext)
-            guard let subscription = subscriptions.first(where: { $0.feedURL == feedURL }) else {
+            guard let subscription = try activeSubscription(feedURL: feedURL, modelContext: modelContext) else {
                 if state != .refreshing {
                     state = .idle
                 }
@@ -245,9 +314,12 @@ final class LibraryStore {
         state = .refreshing
         lastErrorMessage = nil
         do {
-            try await reloadFromStore(modelContext: modelContext)
+            // The refresh set only needs the active feed URLs; the trailing
+            // reload applies results, so a leading full-library reload would
+            // pay the whole SQLite materialization for a subscription fetch.
+            let feedURLStrings = try modelContext.fetch(activeSubscriptionsDescriptor()).map(\.feedURL)
             try await refreshAll(
-                feedURLStrings: subscriptions.map(\.feedURL),
+                feedURLStrings: feedURLStrings,
                 generation: generation,
                 modelContext: modelContext
             )
@@ -255,17 +327,15 @@ final class LibraryStore {
             state = .idle
             refreshCompletedToken += 1
         } catch is CancellationError {
-            refreshingFeedURLs.removeAll()
             try? await reloadFromStore(modelContext: modelContext)
             state = .idle
         } catch {
-            refreshingFeedURLs.removeAll()
             recordFailure(error)
         }
     }
 
     func refreshAllIfStale(modelContext: ModelContext, now: Date = .now) async {
-        guard state != .refreshing, refreshingFeedURLs.isEmpty else {
+        guard state != .refreshing, refreshingFeedURLCounts.isEmpty else {
             return
         }
 
@@ -286,18 +356,16 @@ final class LibraryStore {
             try await reloadFromStore(modelContext: modelContext)
             state = .idle
         } catch is CancellationError {
-            refreshingFeedURLs.removeAll()
             try? await reloadFromStore(modelContext: modelContext)
             state = .idle
         } catch {
-            refreshingFeedURLs.removeAll()
             recordFailure(error)
         }
     }
 
     @discardableResult
     func refreshFeedsNeedingLocalCache(modelContext: ModelContext) async -> Bool {
-        guard state != .refreshing, refreshingFeedURLs.isEmpty else {
+        guard state != .refreshing, refreshingFeedURLCounts.isEmpty else {
             return false
         }
 
@@ -319,12 +387,10 @@ final class LibraryStore {
             state = .idle
             return true
         } catch is CancellationError {
-            refreshingFeedURLs.removeAll()
             try? await reloadFromStore(modelContext: modelContext)
             state = .idle
             return false
         } catch {
-            refreshingFeedURLs.removeAll()
             recordFailure(error)
             return false
         }
@@ -485,7 +551,7 @@ final class LibraryStore {
     func prepareForDataNuke() {
         writeGeneration += 1
         reloadGeneration += 1
-        refreshingFeedURLs.removeAll()
+        clearAllRefreshMarkers()
     }
 
     func deleteAllLocalCache() async throws {
@@ -499,7 +565,7 @@ final class LibraryStore {
         episodes.removeAll()
         progressRecords.removeAll()
         refreshLogs.removeAll()
-        refreshingFeedURLs.removeAll()
+        clearAllRefreshMarkers()
         activePodcastIDs.removeAll()
         visibleEpisodeIDs.removeAll()
         podcastCacheByFeedURL.removeAll()
@@ -509,6 +575,7 @@ final class LibraryStore {
         episodeIndicesByPodcastID.removeAll()
         progressByEpisodeID.removeAll()
         artworkPreviewOverridesByEpisodeID.removeAll()
+        lastSyncedProgressProbe = nil
         progressIndexRevision &+= 1
         lastErrorMessage = nil
     }
@@ -562,7 +629,48 @@ final class LibraryStore {
     }
 
     func isRefreshing(feedURL: String) -> Bool {
-        refreshingFeedURLs.contains(feedURL)
+        refreshActivity(for: feedURL).isRefreshing
+    }
+
+    private func refreshActivity(for feedURL: String) -> FeedRefreshActivity {
+        if let activity = refreshActivityByFeedURL[feedURL] {
+            return activity
+        }
+
+        let activity = FeedRefreshActivity()
+        refreshActivityByFeedURL[feedURL] = activity
+        return activity
+    }
+
+    private func beginRefreshing(_ feedURLStrings: some Sequence<String>) {
+        for feedURLString in feedURLStrings {
+            let count = refreshingFeedURLCounts[feedURLString, default: 0]
+            refreshingFeedURLCounts[feedURLString] = count + 1
+            if count == 0 {
+                refreshActivity(for: feedURLString).isRefreshing = true
+            }
+        }
+    }
+
+    private func endRefreshing(_ feedURLStrings: some Sequence<String>) {
+        for feedURLString in feedURLStrings {
+            guard let count = refreshingFeedURLCounts[feedURLString] else {
+                continue
+            }
+            if count <= 1 {
+                refreshingFeedURLCounts.removeValue(forKey: feedURLString)
+                refreshActivity(for: feedURLString).isRefreshing = false
+            } else {
+                refreshingFeedURLCounts[feedURLString] = count - 1
+            }
+        }
+    }
+
+    private func clearAllRefreshMarkers() {
+        refreshingFeedURLCounts.removeAll()
+        for activity in refreshActivityByFeedURL.values {
+            activity.isRefreshing = false
+        }
     }
 
     func latestRefreshLog(feedURL: String) -> RefreshLogSnapshot? {
@@ -602,7 +710,34 @@ final class LibraryStore {
             return 0
         }
 
-        return progress.position
+        return Self.smartResumePosition(
+            position: progress.position,
+            updatedAt: progress.updatedAt,
+            now: .now
+        )
+    }
+
+    /// Resuming drops the listener mid-word; rewind a little for context,
+    /// more the longer the position has sat. Every resume consumer (play
+    /// path, restore, CarPlay/Siri) inherits this through `resumePosition`.
+    static func smartResumePosition(
+        position: TimeInterval,
+        updatedAt: Date,
+        now: Date
+    ) -> TimeInterval {
+        guard position > 0 else {
+            return position
+        }
+
+        let age = now.timeIntervalSince(updatedAt)
+        let rewind: TimeInterval = if age < 60 * 60 {
+            3
+        } else if age < 24 * 60 * 60 {
+            10
+        } else {
+            20
+        }
+        return max(0, position - rewind)
     }
 
     func progressRecord(for episodeID: String) -> EpisodeProgressRecord? {
@@ -626,7 +761,7 @@ final class LibraryStore {
         let fractionCompleted: Double
         let remaining: TimeInterval?
         if let duration, duration > 0 {
-            fractionCompleted = min(max(position / duration, 0), 1)
+            fractionCompleted = (position / duration).clamped01
             remaining = max(duration - position, 0)
         } else {
             fractionCompleted = 0
@@ -991,12 +1126,7 @@ final class LibraryStore {
         modelContext: ModelContext
     ) async throws {
         let feedURLString = subscription.feedURL
-        refreshingFeedURLs.insert(feedURLString)
         let startedAt = Date.now
-
-        defer {
-            refreshingFeedURLs.remove(feedURLString)
-        }
 
         guard let feedURL = URL(string: feedURLString),
               feedURL.scheme != nil,
@@ -1012,17 +1142,37 @@ final class LibraryStore {
         }
 
         do {
-            let snapshot = try await feedService.fetchFeed(at: feedURL)
+            let canonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: feedURLString)
+            let storedValidators = (try? await localCache.feedValidators(forPodcastID: canonicalFeedURL)) ?? nil
+            let outcome = try await feedService.fetchFeedOutcome(at: feedURL, validators: storedValidators)
             try Task.checkCancellation()
             try ensureCurrentGeneration(generation)
+            guard let snapshot = outcome.snapshot else {
+                // Not-modified short-circuit: still a successful refresh.
+                await persistValidators(outcome.validators, forPodcastID: canonicalFeedURL)
+                try await recordRefreshLog(
+                    feedURL: feedURLString,
+                    startedAt: startedAt,
+                    errorMessage: nil,
+                    generation: generation
+                )
+                return
+            }
             guard try await upsert(snapshot: snapshot, modelContext: modelContext, subscribe: false) else {
                 return
             }
+            await persistValidators(outcome.validators, forPodcastID: snapshot.podcast.id.rawValue)
             try await recordRefreshLog(
                 feedURL: feedURLString,
                 startedAt: startedAt,
-                errorMessage: nil,
+                errorMessage: snapshot.isSalvaged ? RefreshLogSnapshot.partialFeedSalvageMessage : nil,
                 generation: generation
+            )
+            try await handleFeedRelocation(
+                outcome,
+                feedURLString: feedURLString,
+                generation: generation,
+                modelContext: modelContext
             )
         } catch is CancellationError {
             throw CancellationError()
@@ -1036,6 +1186,87 @@ final class LibraryStore {
         }
     }
 
+    /// Bounded fetch fan-out shared by refreshAll and subscribeBatch: wide
+    /// enough to hide network latency, narrow enough not to flood the feed
+    /// hosts or starve the main actor with result application.
+    static let maxConcurrentFeedRefreshes = 4
+
+    /// OPML import's bulk subscribe: fetches run at the shared width while
+    /// each subscription applies serially on the main actor. Per-feed
+    /// failures accumulate; cancellation aborts the whole batch.
+    func subscribeBatch(
+        to feedURLStrings: [String],
+        modelContext: ModelContext
+    ) async throws -> BatchSubscribeResult {
+        let generation = writeGeneration
+        var result = BatchSubscribeResult()
+        guard !feedURLStrings.isEmpty else {
+            return result
+        }
+
+        let feedService = self.feedService
+        let localCache = self.localCache
+        try await withThrowingTaskGroup(of: FeedRefreshResult.self) { group in
+            var unseededFeedURLStrings = feedURLStrings[...]
+            func seedNextFetch() {
+                guard let feedURLString = unseededFeedURLStrings.popFirst() else {
+                    return
+                }
+                group.addTask {
+                    await Self.fetchRefreshResult(
+                        feedURLString: feedURLString,
+                        feedService: feedService,
+                        localCache: localCache
+                    )
+                }
+            }
+
+            for _ in 0..<Self.maxConcurrentFeedRefreshes {
+                seedNextFetch()
+            }
+
+            for try await fetchResult in group {
+                seedNextFetch()
+                try Task.checkCancellation()
+                try ensureCurrentGeneration(generation)
+                switch fetchResult.outcome {
+                case .success(let outcome):
+                    guard let snapshot = outcome.snapshot else {
+                        result.failures.append(
+                            BatchSubscribeFailure(
+                                feedURLString: fetchResult.feedURLString,
+                                message: OpenCastCoreError.invalidHTTPResponse.localizedDescription
+                            )
+                        )
+                        continue
+                    }
+                    do {
+                        _ = try await upsert(snapshot: snapshot, modelContext: modelContext, subscribe: true)
+                        await persistValidators(outcome.validators, forPodcastID: snapshot.podcast.id.rawValue)
+                        result.subscribedFeedURLStrings.append(fetchResult.feedURLString)
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        result.failures.append(
+                            BatchSubscribeFailure(
+                                feedURLString: fetchResult.feedURLString,
+                                message: error.localizedDescription
+                            )
+                        )
+                    }
+                case .failure(let message):
+                    result.failures.append(
+                        BatchSubscribeFailure(feedURLString: fetchResult.feedURLString, message: message)
+                    )
+                case .cancelled:
+                    throw CancellationError()
+                }
+            }
+        }
+
+        return result
+    }
+
     private func refreshAll(
         feedURLStrings: [String],
         generation: Int,
@@ -1047,40 +1278,52 @@ final class LibraryStore {
         }
 
         let startedAt = Date.now
-        refreshingFeedURLs.formUnion(feedURLStrings)
+        var pendingFeedURLStrings = Set(feedURLStrings)
+        beginRefreshing(feedURLStrings)
+        defer {
+            endRefreshing(pendingFeedURLStrings)
+        }
 
         let feedService = self.feedService
-        do {
-            try await withThrowingTaskGroup(of: FeedRefreshResult.self) { group in
-                for feedURLString in feedURLStrings {
-                    group.addTask {
-                        await Self.fetchRefreshResult(
-                            feedURLString: feedURLString,
-                            feedService: feedService
-                        )
-                    }
+        let localCache = self.localCache
+        try await withThrowingTaskGroup(of: FeedRefreshResult.self) { group in
+            var unseededFeedURLStrings = feedURLStrings[...]
+            func seedNextRefresh() {
+                guard let feedURLString = unseededFeedURLStrings.popFirst() else {
+                    return
                 }
-
-                for try await result in group {
-                    try Task.checkCancellation()
-                    try ensureCurrentGeneration(generation)
-                    try await applyRefreshResult(
-                        result,
-                        startedAt: startedAt,
-                        generation: generation,
-                        modelContext: modelContext
+                group.addTask {
+                    await Self.fetchRefreshResult(
+                        feedURLString: feedURLString,
+                        feedService: feedService,
+                        localCache: localCache
                     )
                 }
             }
-        } catch is CancellationError {
-            refreshingFeedURLs.subtract(feedURLStrings)
-            throw CancellationError()
+
+            for _ in 0..<Self.maxConcurrentFeedRefreshes {
+                seedNextRefresh()
+            }
+
+            for try await result in group {
+                seedNextRefresh()
+                try Task.checkCancellation()
+                try ensureCurrentGeneration(generation)
+                pendingFeedURLStrings.remove(result.feedURLString)
+                try await applyRefreshResult(
+                    result,
+                    startedAt: startedAt,
+                    generation: generation,
+                    modelContext: modelContext
+                )
+            }
         }
     }
 
     nonisolated private static func fetchRefreshResult(
         feedURLString: String,
-        feedService: any FeedService
+        feedService: any FeedService,
+        localCache: any LocalLibraryCacheStore
     ) async -> FeedRefreshResult {
         guard let feedURL = URL(string: feedURLString),
               feedURL.scheme != nil,
@@ -1093,9 +1336,11 @@ final class LibraryStore {
         }
 
         do {
-            let snapshot = try await feedService.fetchFeed(at: feedURL)
+            let canonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: feedURLString)
+            let storedValidators = (try? await localCache.feedValidators(forPodcastID: canonicalFeedURL)) ?? nil
+            let outcome = try await feedService.fetchFeedOutcome(at: feedURL, validators: storedValidators)
             try Task.checkCancellation()
-            return FeedRefreshResult(feedURLString: feedURLString, outcome: .success(snapshot))
+            return FeedRefreshResult(feedURLString: feedURLString, outcome: .success(outcome))
         } catch is CancellationError {
             return FeedRefreshResult(feedURLString: feedURLString, outcome: .cancelled)
         } catch {
@@ -1113,20 +1358,41 @@ final class LibraryStore {
         modelContext: ModelContext
     ) async throws {
         defer {
-            refreshingFeedURLs.remove(result.feedURLString)
+            endRefreshing([result.feedURLString])
         }
 
         switch result.outcome {
-        case .success(let snapshot):
+        case .success(let outcome):
             do {
+                guard let snapshot = outcome.snapshot else {
+                    // Not-modified short-circuit: still a successful refresh.
+                    await persistValidators(
+                        outcome.validators,
+                        forPodcastID: URLCanonicalizer.canonicalString(forRawString: result.feedURLString)
+                    )
+                    try await recordRefreshLog(
+                        feedURL: result.feedURLString,
+                        startedAt: startedAt,
+                        errorMessage: nil,
+                        generation: generation
+                    )
+                    return
+                }
                 guard try await upsert(snapshot: snapshot, modelContext: modelContext, subscribe: false) else {
                     return
                 }
+                await persistValidators(outcome.validators, forPodcastID: snapshot.podcast.id.rawValue)
                 try await recordRefreshLog(
                     feedURL: result.feedURLString,
                     startedAt: startedAt,
-                    errorMessage: nil,
+                    errorMessage: snapshot.isSalvaged ? RefreshLogSnapshot.partialFeedSalvageMessage : nil,
                     generation: generation
+                )
+                try await handleFeedRelocation(
+                    outcome,
+                    feedURLString: result.feedURLString,
+                    generation: generation,
+                    modelContext: modelContext
                 )
             } catch is CancellationError {
                 throw CancellationError()
@@ -1148,6 +1414,15 @@ final class LibraryStore {
         case .cancelled:
             throw CancellationError()
         }
+    }
+
+    /// Validator persistence is a refresh optimization: a failed write only
+    /// costs the next fetch a full download, so it never fails the refresh.
+    private func persistValidators(_ validators: FeedValidators?, forPodcastID podcastID: String) async {
+        guard let validators, !validators.isEmpty else {
+            return
+        }
+        try? await localCache.updateFeedValidators(validators, forPodcastID: podcastID)
     }
 
     /// Refresh logs are written once, on completion. Cancelled refreshes write
@@ -1254,9 +1529,27 @@ final class LibraryStore {
         return claims
     }
 
+    private func activeSubscription(
+        feedURL: String,
+        modelContext: ModelContext
+    ) throws -> SubscriptionRecord? {
+        var descriptor = FetchDescriptor<SubscriptionRecord>(
+            predicate: #Predicate { record in
+                record.feedURL == feedURL && !record.isArchived
+            }
+        )
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
     private func activeSubscriptionFeedURLs(modelContext: ModelContext) throws -> Set<String> {
-        let fetchedSubscriptions = try modelContext.fetch(FetchDescriptor<SubscriptionRecord>())
-        return Set(fetchedSubscriptions.filter { !$0.isArchived }.map(\.feedURL))
+        var descriptor = FetchDescriptor<SubscriptionRecord>(
+            predicate: #Predicate { record in
+                !record.isArchived
+            }
+        )
+        descriptor.propertiesToFetch = [\.feedURL]
+        return Set(try modelContext.fetch(descriptor).map(\.feedURL))
     }
 
     private func reloadProgressRecords(modelContext: ModelContext) throws {
@@ -1509,7 +1802,14 @@ final class LibraryStore {
             return false
         }
 
+        let preexistingEpisodes = try await localCache.cachedEpisodes(forPodcastID: canonicalFeedURL)
         try await localCache.upsertCache(from: snapshot, refreshedAt: now)
+        try await reconcileEpisodeIdentities(
+            preexisting: preexistingEpisodes,
+            snapshot: snapshot,
+            includesEstablishedSuccessors: false,
+            modelContext: modelContext
+        )
 
         // Synced-record writes are held to actual changes: every dirtied
         // field exports a CKRecord and round-trips through every device, and
@@ -1543,6 +1843,404 @@ final class LibraryStore {
             syncedStoreSelfSaveCount += 1
         }
         return true
+    }
+
+    /// Re-keys departed episode IDs onto their re-identified successors after
+    /// a cache write: publishers that add or change GUIDs (or a GUID-less
+    /// feed that moves hosts) mint a whole new catalog, and without this the
+    /// old rows linger as duplicates while progress, downloads, transcripts,
+    /// and ad analyses stay orphaned on the dead IDs forever.
+    ///
+    /// Refresh passes only consider successors whose IDs are new to the cache
+    /// (`includesEstablishedSuccessors: false`) so a merely-removed episode
+    /// can never be folded into a long-stable one; the manual merge sweep
+    /// passes `true` because its departed rows are historic duplicates whose
+    /// successors are already cached. Unmatched departed rows are retained as
+    /// off-feed back-catalog — deletion happens only for migrated rows.
+    ///
+    /// The old-ID progress rows re-key (merging when the successor already
+    /// has progress) and an `episode-progress` tombstone for each old ID
+    /// lands in the same save, so old-ID twins on other devices die instead
+    /// of resurrecting. Tombstones index by episode ID alone, so they can
+    /// never touch the migrated new-ID rows; recency is deliberately left
+    /// untouched so a peer's genuinely newer progress still wins its merge.
+    @discardableResult
+    private func reconcileEpisodeIdentities(
+        preexisting: [EpisodeListItemSnapshot],
+        snapshot: FeedSnapshot,
+        includesEstablishedSuccessors: Bool,
+        modelContext: ModelContext
+    ) async throws -> Int {
+        guard !preexisting.isEmpty else {
+            return 0
+        }
+        let canonicalFeedURL = snapshot.podcast.id.rawValue
+        let snapshotIDs = Set(snapshot.episodes.map(\.id.rawValue))
+        let preexistingIDs = Set(preexisting.map(\.episodeID))
+
+        let departed = preexisting
+            .filter { !snapshotIDs.contains($0.episodeID) }
+            .map(EpisodeIdentityReconciler.Candidate.init(listItem:))
+        guard !departed.isEmpty else {
+            return 0
+        }
+
+        let successors = snapshot.episodes
+            .filter { includesEstablishedSuccessors || !preexistingIDs.contains($0.id.rawValue) }
+            .map(EpisodeIdentityReconciler.Candidate.init(episode:))
+        guard !successors.isEmpty else {
+            return 0
+        }
+
+        let matches = EpisodeIdentityReconciler.matches(departed: departed, successors: successors)
+        guard !matches.isEmpty else {
+            return 0
+        }
+
+        try applyIdentityMatches(matches, canonicalFeedURL: canonicalFeedURL, modelContext: modelContext)
+        try modelContext.save()
+        syncedStoreSelfSaveCount += 1
+        try await localCache.deleteEpisodes(episodeIDs: matches.map(\.departedEpisodeID))
+        return matches.count
+    }
+
+    /// The per-match migration body, shared with subscription migration; the
+    /// caller owns the save (constraint: tombstones land in the same save as
+    /// the records they cover).
+    private func applyIdentityMatches(
+        _ matches: [EpisodeIdentityReconciler.Match],
+        canonicalFeedURL: String,
+        modelContext: ModelContext
+    ) throws {
+        let deletedAt = Date.now
+        for match in matches {
+            try migrateProgressRecords(
+                from: match.departedEpisodeID,
+                to: match.successorEpisodeID,
+                canonicalFeedURL: canonicalFeedURL,
+                modelContext: modelContext
+            )
+            for migrator in episodeSidecarMigrators {
+                try migrator.migrateEpisodeSidecars(
+                    from: match.departedEpisodeID,
+                    to: match.successorEpisodeID,
+                    canonicalPodcastID: canonicalFeedURL,
+                    modelContext: modelContext
+                )
+            }
+            try migrateAdFreePassQueueItems(
+                from: match.departedEpisodeID,
+                to: match.successorEpisodeID,
+                canonicalFeedURL: canonicalFeedURL,
+                modelContext: modelContext
+            )
+            modelContext.insert(
+                SyncTombstoneRecord(
+                    scope: .episodeProgress,
+                    feedURL: canonicalFeedURL,
+                    episodeID: match.departedEpisodeID,
+                    deletedAt: deletedAt
+                )
+            )
+        }
+    }
+
+    private func migrateProgressRecords(
+        from oldEpisodeID: String,
+        to newEpisodeID: String,
+        canonicalFeedURL: String,
+        modelContext: ModelContext
+    ) throws {
+        let targetOldID = oldEpisodeID
+        let migratingRecords = try modelContext.fetch(
+            FetchDescriptor<EpisodeProgressRecord>(
+                predicate: #Predicate { record in
+                    record.episodeID == targetOldID
+                }
+            )
+        )
+        guard !migratingRecords.isEmpty else {
+            return
+        }
+
+        let targetNewID = newEpisodeID
+        let existingRecords = try modelContext.fetch(
+            FetchDescriptor<EpisodeProgressRecord>(
+                predicate: #Predicate { record in
+                    record.episodeID == targetNewID
+                }
+            )
+        )
+        for record in migratingRecords {
+            record.episodeID = newEpisodeID
+            record.podcastID = canonicalFeedURL
+        }
+
+        let group = migratingRecords + existingRecords
+        if group.count > 1 {
+            var mergeResult = SyncRepairResult()
+            SyncDuplicateRepairer.mergeProgressGroup(
+                group,
+                key: .init(canonicalFeedURL: canonicalFeedURL, episodeID: newEpisodeID),
+                modelContext: modelContext,
+                result: &mergeResult
+            )
+        }
+    }
+
+    private func migrateAdFreePassQueueItems(
+        from oldEpisodeID: String,
+        to newEpisodeID: String,
+        canonicalFeedURL: String,
+        modelContext: ModelContext
+    ) throws {
+        let targetOldID = oldEpisodeID
+        let queueItems = try modelContext.fetch(
+            FetchDescriptor<AdFreePassQueueItemRecord>(
+                predicate: #Predicate { record in
+                    record.episodeID == targetOldID
+                }
+            )
+        )
+        guard !queueItems.isEmpty else {
+            return
+        }
+
+        // A successor already queued makes the old items redundant — one pass
+        // per episode; re-keying would strand duplicate rows forever.
+        let targetNewID = newEpisodeID
+        let existingItems = try modelContext.fetch(
+            FetchDescriptor<AdFreePassQueueItemRecord>(
+                predicate: #Predicate { record in
+                    record.episodeID == targetNewID
+                }
+            )
+        )
+        guard existingItems.isEmpty else {
+            for item in queueItems {
+                modelContext.delete(item)
+            }
+            return
+        }
+
+        for item in queueItems {
+            item.episodeID = newEpisodeID
+            item.podcastID = canonicalFeedURL
+        }
+    }
+
+    private func handleFeedRelocation(
+        _ outcome: FeedFetchOutcome,
+        feedURLString: String,
+        generation: Int,
+        modelContext: ModelContext
+    ) async throws {
+        try ensureCurrentGeneration(generation)
+        let canonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: feedURLString)
+
+        if let newFeedURL = outcome.newFeedURL,
+           URLCanonicalizer.canonicalString(for: newFeedURL) != canonicalFeedURL {
+            // The tag is the publisher's explicit instruction; migration
+            // performs its own fetch of the new URL and only commits when
+            // that fetch succeeds.
+            do {
+                try await migrateSubscription(
+                    from: feedURLString,
+                    toFeedURL: newFeedURL,
+                    modelContext: modelContext
+                )
+                return
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // The declared URL doesn't serve a usable feed yet; stay put.
+            }
+        }
+
+        updateRedirectDivergence(feedURLString: feedURLString, finalURL: outcome.finalURL)
+        try await probeHTTPSUpgradeIfNeeded(feedURLString: feedURLString, modelContext: modelContext)
+    }
+
+    private func updateRedirectDivergence(feedURLString: String, finalURL: URL?) {
+        guard let finalURL,
+              let subscribedHost = URL(string: feedURLString)?.host?.lowercased(),
+              let finalHost = finalURL.host?.lowercased()
+        else {
+            return
+        }
+        guard finalHost != subscribedHost else {
+            redirectDivergenceByFeedURL[feedURLString] = nil
+            if suggestedFeedMigrationURLsByFeedURL[feedURLString] != nil {
+                suggestedFeedMigrationURLsByFeedURL[feedURLString] = nil
+            }
+            return
+        }
+
+        let targetCanonicalURL = URLCanonicalizer.canonicalString(for: finalURL)
+        var divergence = redirectDivergenceByFeedURL[feedURLString] ?? (targetCanonicalURL, 0)
+        if divergence.targetCanonicalURL == targetCanonicalURL {
+            divergence.count += 1
+        } else {
+            divergence = (targetCanonicalURL, 1)
+        }
+        redirectDivergenceByFeedURL[feedURLString] = divergence
+        if divergence.count >= Self.redirectDivergenceThreshold {
+            suggestedFeedMigrationURLsByFeedURL[feedURLString] = finalURL
+        }
+    }
+
+    /// `http://` feeds stay supported and are never rewritten blindly; when
+    /// the https twin demonstrably serves the same show (identity overlap),
+    /// the subscription upgrades onto it. One probe per feed per launch.
+    private func probeHTTPSUpgradeIfNeeded(
+        feedURLString: String,
+        modelContext: ModelContext
+    ) async throws {
+        guard let feedURL = URL(string: feedURLString),
+              feedURL.scheme?.lowercased() == "http",
+              !httpsUpgradeProbedFeedURLs.contains(feedURLString)
+        else {
+            return
+        }
+        httpsUpgradeProbedFeedURLs.insert(feedURLString)
+
+        var components = URLComponents(url: feedURL, resolvingAgainstBaseURL: false)
+        components?.scheme = "https"
+        guard let httpsURL = components?.url else {
+            return
+        }
+
+        do {
+            try await migrateSubscription(
+                from: feedURLString,
+                toFeedURL: httpsURL,
+                requiresIdentityOverlap: true,
+                modelContext: modelContext
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // No https twin, or it serves something else — keep the http feed.
+        }
+    }
+
+    /// Moves a subscription onto a new canonical feed URL: fetches the new
+    /// URL (the migration only commits when that fetch succeeds), re-keys
+    /// episode identities through the reconciliation machinery, writes the
+    /// old URL's subscription tombstone and the fresh SubscriptionRecord in
+    /// the same save, then drops the old URL's local cache.
+    func migrateSubscription(
+        from oldFeedURLString: String,
+        toFeedURL newFeedURL: URL,
+        requiresIdentityOverlap: Bool = false,
+        modelContext: ModelContext
+    ) async throws {
+        let outcome = try await feedService.fetchFeedOutcome(at: newFeedURL)
+        guard let snapshot = outcome.snapshot else {
+            throw OpenCastCoreError.invalidHTTPResponse
+        }
+        let newCanonicalFeedURL = snapshot.podcast.id.rawValue
+        let oldCanonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: oldFeedURLString)
+        guard newCanonicalFeedURL != oldCanonicalFeedURL else {
+            return
+        }
+
+        let allSubscriptions = try modelContext.fetch(FetchDescriptor<SubscriptionRecord>())
+        let oldSubscriptionRecords = allSubscriptions.filter { record in
+            URLCanonicalizer.canonicalString(forRawString: record.feedURL) == oldCanonicalFeedURL
+        }
+        guard let template = oldSubscriptionRecords.first else {
+            return
+        }
+
+        let departed = try await localCache.cachedEpisodes(forPodcastID: oldCanonicalFeedURL)
+            .map(EpisodeIdentityReconciler.Candidate.init(listItem:))
+        let successors = snapshot.episodes.map(EpisodeIdentityReconciler.Candidate.init(episode:))
+        let matches = EpisodeIdentityReconciler.matches(departed: departed, successors: successors)
+        if requiresIdentityOverlap, !departed.isEmpty, matches.isEmpty {
+            throw FeedMigrationError(message: "The feed at the new address does not match this show.")
+        }
+
+        try await localCache.upsertCache(from: snapshot, refreshedAt: .now)
+        try applyIdentityMatches(matches, canonicalFeedURL: newCanonicalFeedURL, modelContext: modelContext)
+
+        let deletedAt = Date.now
+        modelContext.insert(
+            SyncTombstoneRecord(scope: .subscription, feedURL: oldCanonicalFeedURL, deletedAt: deletedAt)
+        )
+        let hasNewSubscription = allSubscriptions.contains { record in
+            URLCanonicalizer.canonicalString(forRawString: record.feedURL) == newCanonicalFeedURL
+        }
+        if !hasNewSubscription {
+            // subscribedAt must postdate the old URL's tombstone only if the
+            // keys collided — they don't — but a strictly newer stamp keeps
+            // the record safe under any future canonicalization drift.
+            modelContext.insert(
+                SubscriptionRecord(
+                    feedURL: newCanonicalFeedURL,
+                    title: snapshot.podcast.title,
+                    author: snapshot.podcast.author,
+                    artworkURL: snapshot.podcast.artworkURL?.absoluteString,
+                    subscribedAt: deletedAt.addingTimeInterval(1),
+                    lastRefreshAt: .now,
+                    isArchived: template.isArchived,
+                    isVoiceBoostEnabled: template.isVoiceBoostEnabled,
+                    isAdAutoDetectEnabled: template.isAdAutoDetectEnabled
+                )
+            )
+        }
+        for record in oldSubscriptionRecords {
+            modelContext.delete(record)
+        }
+        try modelContext.save()
+        syncedStoreSelfSaveCount += 1
+
+        try await localCache.deleteCache(forPodcastID: oldCanonicalFeedURL)
+        redirectDivergenceByFeedURL[oldFeedURLString] = nil
+        if suggestedFeedMigrationURLsByFeedURL[oldFeedURLString] != nil {
+            suggestedFeedMigrationURLsByFeedURL[oldFeedURLString] = nil
+        }
+        try await reloadFromStore(modelContext: modelContext)
+        try reloadProgressRecords(modelContext: modelContext)
+    }
+
+    /// Diagnostics sweep for libraries duplicated before reconciliation
+    /// existed: refetches every subscribed feed and reconciles departed rows
+    /// against the feed's full current catalog (successors may already be
+    /// cached, which routine refreshes deliberately skip).
+    func mergeDuplicateEpisodes(modelContext: ModelContext) async throws -> EpisodeMergeResult {
+        var result = EpisodeMergeResult()
+        let feedURLStrings = subscriptions.map(\.feedURL)
+        for feedURLString in feedURLStrings {
+            guard let feedURL = URL(string: feedURLString),
+                  feedURL.scheme != nil,
+                  feedURL.host != nil
+            else {
+                result.failedFeedURLs.append(feedURLString)
+                continue
+            }
+            do {
+                let snapshot = try await feedService.fetchFeed(at: feedURL)
+                try Task.checkCancellation()
+                let canonicalFeedURL = snapshot.podcast.id.rawValue
+                let preexisting = try await localCache.cachedEpisodes(forPodcastID: canonicalFeedURL)
+                result.episodesMigrated += try await reconcileEpisodeIdentities(
+                    preexisting: preexisting,
+                    snapshot: snapshot,
+                    includesEstablishedSuccessors: true,
+                    modelContext: modelContext
+                )
+                _ = try await upsert(snapshot: snapshot, modelContext: modelContext, subscribe: false)
+                result.feedsProcessed += 1
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                result.failedFeedURLs.append(feedURLString)
+            }
+        }
+        try await reloadFromStore(modelContext: modelContext)
+        try reloadProgressRecords(modelContext: modelContext)
+        return result
     }
 
     private func update(_ subscription: SubscriptionRecord, from snapshot: FeedSnapshot) -> Bool {
@@ -1606,7 +2304,7 @@ final class LibraryStore {
             return false
         }
 
-        let clampedPosition = min(max(position, 0), duration)
+        let clampedPosition = position.clamped(to: 0...duration)
         let remainingThreshold = min(completedEpisodeRemainingThreshold, duration * 0.5)
         return duration - clampedPosition < remainingThreshold
     }
@@ -1695,30 +2393,13 @@ final class LibraryStore {
     }
 }
 
-private func sanitizedDuration(_ duration: TimeInterval?) -> TimeInterval? {
-    guard let duration, duration.isFinite, duration > 0 else {
-        return nil
-    }
-
-    return duration
-}
-
-private func sanitizedPosition(_ position: TimeInterval, duration: TimeInterval?) -> TimeInterval {
-    let lowerBounded = position.isFinite ? max(0, position) : 0
-    guard let duration else {
-        return lowerBounded
-    }
-
-    return min(lowerBounded, duration)
-}
-
 private struct FeedRefreshResult: Sendable {
     var feedURLString: String
     var outcome: FeedRefreshOutcome
 }
 
 private enum FeedRefreshOutcome: Sendable {
-    case success(FeedSnapshot)
+    case success(FeedFetchOutcome)
     case failure(String)
     case cancelled
 }

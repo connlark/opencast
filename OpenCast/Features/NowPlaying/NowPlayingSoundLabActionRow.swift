@@ -4,6 +4,7 @@ import SwiftUI
 /// (dropped when collapsed to icon-only), and a trailing state glyph. The
 /// full title always remains the accessibility label.
 struct NowPlayingSoundLabActionRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var acceptedFeedback = 0
 
     let title: String
@@ -12,6 +13,7 @@ struct NowPlayingSoundLabActionRow: View {
     let phase: EpisodeAdFreePassPresentationPhase
     let isEnabled: Bool
     let isIconOnly: Bool
+    let rowHeight: CGFloat
     let accessibilityValueText: String
     let accessibilityID: String
     let action: () -> Void
@@ -29,6 +31,8 @@ struct NowPlayingSoundLabActionRow: View {
                         .font(.subheadline)
                         .lineLimit(1)
                         .layoutPriority(1)
+                        .contentTransition(.opacity)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: title)
                 }
 
                 Spacer(minLength: showsTrailingIndicator ? 2 : 0)
@@ -45,7 +49,7 @@ struct NowPlayingSoundLabActionRow: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
-        .frame(height: NowPlayingSoundLabLayout.controlRowHeight)
+        .frame(height: rowHeight)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.62)
         .animation(.easeOut(duration: 0.2), value: isEnabled)

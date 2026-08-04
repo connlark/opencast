@@ -47,7 +47,7 @@ struct OPMLImportStoreTests {
         #expect(result.importedCount == 2)
         #expect(result.skippedDuplicateCount == 0)
         #expect(result.failedCount == 0)
-        #expect(await feedService.requestedURLStrings() == [firstFeed, secondFeed])
+        #expect(Set(await feedService.requestedURLStrings()) == Set([firstFeed, secondFeed]))
         #expect(subscriptions.map(\.feedURL) == [firstFeed, secondFeed])
         #expect(libraryStore.podcastCacheByFeedURL.keys.sorted() == [firstFeed, secondFeed])
         #expect(libraryStore.episodes.map(\.podcastID).sorted() == [firstFeed, secondFeed])
@@ -254,8 +254,75 @@ struct OPMLImportStoreTests {
         #expect(result.failedCount == 1)
         #expect(result.failures.first?.feedURL == badFeed)
         #expect(result.failures.first?.message == "Feed is not parseable")
-        #expect(await feedService.requestedURLStrings() == [goodFeed, badFeed])
+        #expect(Set(await feedService.requestedURLStrings()) == Set([goodFeed, badFeed]))
         #expect(subscriptions.map(\.feedURL) == [goodFeed])
+    }
+
+    @Test("Aborts imports beyond the outline cap before subscribing anything")
+    func abortsImportsBeyondOutlineCap() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedService = StubOPMLFeedService(responses: [:])
+        let libraryStore = LibraryStore(
+            feedService: feedService,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        let importStore = OPMLImportStore()
+        let overCapCount = OPMLImportStore.maximumImportedFeedCount + 1
+        let entries = (1...overCapCount).map { index in
+            ("Feed \(index)", "https://example.com/capped-\(index).xml")
+        }
+
+        await importStore.importOPML(
+            data: opmlData(entries),
+            libraryStore: libraryStore,
+            modelContext: context
+        )
+
+        guard case .failed(let message) = importStore.state else {
+            throw OPMLImportTestError.unexpectedState
+        }
+        #expect(message.contains("\(overCapCount)"))
+        #expect(message.contains("\(OPMLImportStore.maximumImportedFeedCount)"))
+        #expect(await feedService.requestedURLStrings().isEmpty)
+        #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
+    }
+
+    @Test("Concurrent import stays within the fetch window and dedupes")
+    func concurrentImportStaysWithinWindowAndDedupes() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURLs = (1...12).map { "https://example.com/window-\($0).xml" }
+        var responses: [String: StubOPMLFeedService.Response] = [:]
+        for feedURL in feedURLs {
+            responses[feedURL] = .success(makeSnapshot(feedURL: feedURL, podcastTitle: "Show \(feedURL)"))
+        }
+        let feedService = StubOPMLFeedService(responses: responses, fetchDelay: .milliseconds(20))
+        let libraryStore = LibraryStore(
+            feedService: feedService,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        let importStore = OPMLImportStore()
+        // Every feed listed twice: duplicates must be suppressed before the
+        // concurrent window, never fetched twice.
+        let entries = (feedURLs + feedURLs).map { ("Show", $0) }
+
+        await importStore.importOPML(
+            data: opmlData(entries),
+            libraryStore: libraryStore,
+            modelContext: context
+        )
+
+        let result = try importedResult(from: importStore.state)
+        let requested = await feedService.requestedURLStrings()
+
+        #expect(result.importedCount == 12)
+        #expect(result.skippedDuplicateCount == 12)
+        #expect(result.failedCount == 0)
+        #expect(requested.count == 12)
+        #expect(Set(requested) == Set(feedURLs))
+        #expect(await feedService.maximumActiveRequestCount() <= LibraryStore.maxConcurrentFeedRefreshes)
+        #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).count == 12)
     }
 
     @Test("Exports active subscriptions and round-trips through parser")
@@ -362,15 +429,28 @@ private actor StubOPMLFeedService: FeedService {
     }
 
     private var responsesByURL: [String: [Response]]
+    private let fetchDelay: Duration
     private var requestedURLs: [String] = []
+    private var activeRequestCount = 0
+    private var peakActiveRequestCount = 0
 
-    init(responses: [String: Response]) {
+    init(responses: [String: Response], fetchDelay: Duration = .zero) {
         responsesByURL = responses.mapValues { [$0] }
+        self.fetchDelay = fetchDelay
     }
 
     func fetchFeed(at url: URL) async throws -> FeedSnapshot {
         let key = url.absoluteString
         requestedURLs.append(key)
+        activeRequestCount += 1
+        peakActiveRequestCount = max(peakActiveRequestCount, activeRequestCount)
+        defer {
+            activeRequestCount -= 1
+        }
+
+        if fetchDelay > .zero {
+            try await Task.sleep(for: fetchDelay)
+        }
 
         guard var responses = responsesByURL[key],
               !responses.isEmpty
@@ -391,6 +471,10 @@ private actor StubOPMLFeedService: FeedService {
 
     func requestedURLStrings() -> [String] {
         requestedURLs
+    }
+
+    func maximumActiveRequestCount() -> Int {
+        peakActiveRequestCount
     }
 }
 

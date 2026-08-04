@@ -56,19 +56,15 @@ struct EpisodePlayedToggleTests {
     }
 
     private func makeEpisode(id: String) -> EpisodeListItemSnapshot {
-        EpisodeListItemSnapshot(
+        .fixture(
             episodeID: id,
             podcastID: "https://example.com/toggle.xml",
             podcastTitle: "Toggle Show",
             title: "Toggle Episode",
-            summary: nil,
             publishedAt: .now,
             duration: 120,
             audioURL: "https://example.com/\(id).mp3",
-            artworkURL: nil,
-            artworkPreview: nil,
-            guid: id,
-            cachedAt: .now
+            guid: id
         )
     }
 }

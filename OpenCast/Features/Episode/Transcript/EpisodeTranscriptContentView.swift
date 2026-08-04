@@ -8,6 +8,7 @@ import SwiftUI
 struct EpisodeTranscriptContentView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isAppStoreScreenshotCapture) private var isAppStoreScreenshotCapture
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
 
@@ -29,10 +30,7 @@ struct EpisodeTranscriptContentView: View {
     @State private var isFollowing = true
     @State private var scrollPosition = ScrollPosition(idType: Int.self)
     @State private var searchQuery = ""
-    @State private var isSearchInFlight = false
-    @State private var matchSegmentIDs: [Int] = []
-    @State private var highlightRangesBySegmentID: [Int: [Range<String.Index>]] = [:]
-    @State private var currentMatchIndex: Int?
+    @State private var searchSession = TranscriptSearchSession()
 
     var body: some View {
         ScrollView {
@@ -47,7 +45,7 @@ struct EpisodeTranscriptContentView: View {
                         showsTimestamp: showsTimestamps,
                         adSpanLabel: adSpanBySegmentID[segment.id]?.label,
                         isAdSpanStart: adSpanBySegmentID[segment.id]?.startSegmentID == segment.id,
-                        searchHighlightRanges: highlightRangesBySegmentID[segment.id],
+                        searchHighlightRanges: searchSession.highlightRangesBySegmentID[segment.id],
                         karaokeSpokenUpperBound: segment.id == activeSegmentID ? karaokeSpokenUpperBound : nil,
                         karaokeLayout: segment.id == activeSegmentID ? activeKaraokeLayout : nil,
                         action: { playFrom(segment) }
@@ -99,9 +97,9 @@ struct EpisodeTranscriptContentView: View {
             if isSearchPresented {
                 TranscriptSearchBar(
                     query: $searchQuery,
-                    isSearching: isSearchInFlight,
-                    matchCount: matchSegmentIDs.count,
-                    currentMatchOrdinal: currentMatchIndex.map { $0 + 1 },
+                    isSearching: searchSession.isInFlight,
+                    matchCount: searchSession.matchSegmentIDs.count,
+                    currentMatchOrdinal: searchSession.currentMatchIndex.map { $0 + 1 },
                     onPrevious: goToPreviousMatch,
                     onNext: goToNextMatch,
                     onClose: closeSearch
@@ -121,7 +119,8 @@ struct EpisodeTranscriptContentView: View {
                     switchToTranscribedCopy: switchToTranscribedCopy
                 )
             }
-            if !isCurrentEpisode {
+            // Marketing shots keep the flagged sponsor read unobstructed.
+            if !isCurrentEpisode, !isAppStoreScreenshotCapture {
                 TranscriptPlayEpisodeButton(action: playEpisodeFromStart)
             }
         }
@@ -486,38 +485,41 @@ struct EpisodeTranscriptContentView: View {
             return
         }
 
+        let query = searchQuery
         do {
             try await Task.sleep(for: .milliseconds(150))
         } catch {
             return
         }
-        guard let searchIndex else {
+        guard searchQuery == query, let searchIndex else {
             return
         }
 
-        isSearchInFlight = true
-        let query = searchQuery
-        let result = await Task.detached(priority: .userInitiated) {
-            searchIndex.result(for: query)
-        }.value
-        guard !Task.isCancelled, searchQuery == query else {
+        let generation = searchSession.begin(query: query)
+        defer {
+            searchSession.finish(generation: generation)
+        }
+
+        let result: TranscriptSearchResult
+        do {
+            result = try await searchIndex.result(for: query)
+            try Task.checkCancellation()
+        } catch {
+            return
+        }
+        guard searchQuery == query,
+              searchSession.publish(result, generation: generation)
+        else {
             return
         }
 
-        isSearchInFlight = false
-        matchSegmentIDs = result.matchSegmentIDs
-        highlightRangesBySegmentID = result.highlightRangesBySegmentID
-        currentMatchIndex = result.matchSegmentIDs.isEmpty ? nil : 0
         if let firstID = result.matchSegmentIDs.first {
             scrollToSegment(firstID, animated: true)
         }
     }
 
     private func clearSearchResults() {
-        isSearchInFlight = false
-        matchSegmentIDs = []
-        highlightRangesBySegmentID = [:]
-        currentMatchIndex = nil
+        searchSession.clear()
     }
 
     private func goToPreviousMatch() {
@@ -529,14 +531,10 @@ struct EpisodeTranscriptContentView: View {
     }
 
     private func stepMatch(by delta: Int) {
-        guard !matchSegmentIDs.isEmpty else {
+        guard let segmentID = searchSession.stepMatch(by: delta) else {
             return
         }
-
-        let count = matchSegmentIDs.count
-        let next = ((currentMatchIndex ?? 0) + delta + count) % count
-        currentMatchIndex = next
-        scrollToSegment(matchSegmentIDs[next], animated: true)
+        scrollToSegment(segmentID, animated: true)
     }
 
     private func handleSearchPresentationChange(_ isPresented: Bool) {

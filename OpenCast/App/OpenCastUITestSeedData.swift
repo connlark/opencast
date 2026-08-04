@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastCore
 import OpenCastTranscription
 import SwiftData
 import UIKit
@@ -10,11 +11,13 @@ enum OpenCastUITestSeedData {
     static let episodeTitle = "Deterministic UI Episode"
     static let completedEpisodeID = "ui-test-episode-completed"
     static let completedEpisodeTitle = "Completed UI Episode"
+    private static let adDetectionModeEnvironmentKey = "OPENCAST_SEED_AD_DETECTION_MODE"
     private static let liveAdAnalysisTranscriptPathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_TRANSCRIPT_PATH"
     private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
 
     static func seed(
         in container: ModelContainer,
+        cacheStore: SQLiteLocalLibraryCacheStore,
         includesCompletedDownload: Bool = false,
         includesFailedDownload: Bool = false,
         includesEpisodeProgress: Bool = false,
@@ -62,41 +65,61 @@ enum OpenCastUITestSeedData {
                 lastRefreshAt: refreshedAt
             )
         )
-        let podcast = PodcastCacheRecord(
+        var episodes = [
+            Episode(
+                id: EpisodeID(rawValue: episodeID),
+                podcastID: PodcastID(rawValue: feedURL),
+                podcastTitle: podcastTitle,
+                title: episodeTitle,
+                summary: "A deterministic episode seeded for UI tests.",
+                showNotesHTML: showNotesHTML,
+                publishedAt: publishedAt,
+                duration: 180,
+                audioURL: URL(string: audioURL),
+                artworkURL: artworkURL.flatMap(URL.init(string:)),
+                guid: episodeID
+            )
+        ]
+        if includesEpisodeProgress {
+            episodes.append(
+                Episode(
+                    id: EpisodeID(rawValue: completedEpisodeID),
+                    podcastID: PodcastID(rawValue: feedURL),
+                    podcastTitle: podcastTitle,
+                    title: completedEpisodeTitle,
+                    summary: "A completed deterministic episode seeded for UI tests.",
+                    showNotesHTML: "<p>Completed deterministic show notes for UI tests.</p>",
+                    publishedAt: completedPublishedAt,
+                    duration: 180,
+                    audioURL: URL(string: audioURL),
+                    artworkURL: artworkURL.flatMap(URL.init(string:)),
+                    guid: completedEpisodeID
+                )
+            )
+        }
+        try upsertSeedFeed(
+            into: cacheStore,
             feedURL: feedURL,
             title: podcastTitle,
             author: "UI Test Author",
             summary: "A deterministic show seeded for UI tests.",
             websiteURL: "https://example.com/ui-test-show",
             artworkURL: artworkURL,
-            updatedAt: refreshedAt
+            episodes: episodes,
+            refreshedAt: refreshedAt,
+            podcastArtworkPreview: artworkPreview,
+            episodeArtworkPreviews: artworkPreview.map { preview in
+                Dictionary(uniqueKeysWithValues: episodes.map { ($0.id.rawValue, preview) })
+            } ?? [:],
+            validators: FeedValidators(
+                entityTag: "\"ui-test-etag\"",
+                lastModified: "Mon, 03 Aug 2026 12:00:00 GMT"
+            )
         )
-        if let artworkPreview {
-            podcast.storeArtworkPreviewIfChanged(artworkPreview)
-        }
-        context.insert(podcast)
 
-        let episode = EpisodeCacheRecord(
-            episodeID: episodeID,
-            podcastID: feedURL,
-            podcastTitle: podcastTitle,
-            title: episodeTitle,
-            summary: "A deterministic episode seeded for UI tests.",
-            showNotesHTML: showNotesHTML,
-            publishedAt: publishedAt,
-            duration: 180,
-            audioURL: audioURL,
-            artworkURL: artworkURL,
-            guid: episodeID,
-            cachedAt: refreshedAt
-        )
-        if let artworkPreview {
-            episode.storeArtworkPreviewIfChanged(artworkPreview)
-        }
-        context.insert(episode)
-
-        seedExtraFeeds(
+        try seedExtraFeeds(
             count: extraFeedCount,
+            cacheStore: cacheStore,
             context: context,
             audioURL: audioURL,
             artworkURL: artworkURL,
@@ -106,24 +129,6 @@ enum OpenCastUITestSeedData {
         )
 
         if includesEpisodeProgress {
-            let completedEpisode = EpisodeCacheRecord(
-                episodeID: completedEpisodeID,
-                podcastID: feedURL,
-                podcastTitle: podcastTitle,
-                title: completedEpisodeTitle,
-                summary: "A completed deterministic episode seeded for UI tests.",
-                showNotesHTML: "<p>Completed deterministic show notes for UI tests.</p>",
-                publishedAt: completedPublishedAt,
-                duration: 180,
-                audioURL: audioURL,
-                artworkURL: artworkURL,
-                guid: completedEpisodeID,
-                cachedAt: refreshedAt
-            )
-            if let artworkPreview {
-                completedEpisode.storeArtworkPreviewIfChanged(artworkPreview)
-            }
-            context.insert(completedEpisode)
             context.insert(
                 EpisodeProgressRecord(
                     episodeID: episodeID,
@@ -154,6 +159,16 @@ enum OpenCastUITestSeedData {
             context.insert(LocalPreferenceRecord(
                 key: PlaybackSettingsStore.voiceBoostModePreferenceKey,
                 value: seededVoiceBoostMode
+            ))
+        }
+
+        let seededAdDetectionMode = ProcessInfo.processInfo.environment[
+            Self.adDetectionModeEnvironmentKey
+        ]
+        if let seededAdDetectionMode, AdDetectionMode(rawValue: seededAdDetectionMode) != nil {
+            context.insert(LocalPreferenceRecord(
+                key: AdDetectionSettingsStore.modePreferenceKey,
+                value: seededAdDetectionMode
             ))
         }
 
@@ -202,6 +217,7 @@ enum OpenCastUITestSeedData {
         }
 
         try seedLiveAdAnalysisIfRequested(
+            cacheStore: cacheStore,
             context: context,
             audioURL: audioURL,
             artworkURL: artworkURL,
@@ -441,6 +457,7 @@ enum OpenCastUITestSeedData {
     }
 
     private static func seedLiveAdAnalysisIfRequested(
+        cacheStore: SQLiteLocalLibraryCacheStore,
         context: ModelContext,
         audioURL: String,
         artworkURL: String?,
@@ -479,38 +496,33 @@ enum OpenCastUITestSeedData {
             )
         )
 
-        let podcast = PodcastCacheRecord(
+        try upsertSeedFeed(
+            into: cacheStore,
             feedURL: transcript.podcastID,
             title: podcastTitle,
             author: "Goalhanger",
             summary: "Live ad-analysis fixture seeded from saved Worker verification artifacts.",
             websiteURL: "https://www.goalhanger.com",
             artworkURL: artworkURL,
-            updatedAt: createdAt
+            episodes: [
+                Episode(
+                    id: EpisodeID(rawValue: transcript.episodeID),
+                    podcastID: PodcastID(rawValue: transcript.podcastID),
+                    podcastTitle: podcastTitle,
+                    title: episodeTitle,
+                    summary: "Saved live transcript and Worker ad-analysis result.",
+                    showNotesHTML: "<p>Saved live transcript and Worker ad-analysis result.</p>",
+                    publishedAt: publishedAt,
+                    duration: transcript.audioDuration,
+                    audioURL: URL(string: audioURL),
+                    artworkURL: artworkURL.flatMap(URL.init(string:)),
+                    guid: transcript.episodeID
+                )
+            ],
+            refreshedAt: createdAt,
+            podcastArtworkPreview: artworkPreview,
+            episodeArtworkPreviews: artworkPreview.map { [transcript.episodeID: $0] } ?? [:]
         )
-        if let artworkPreview {
-            podcast.storeArtworkPreviewIfChanged(artworkPreview)
-        }
-        context.insert(podcast)
-
-        let episode = EpisodeCacheRecord(
-            episodeID: transcript.episodeID,
-            podcastID: transcript.podcastID,
-            podcastTitle: podcastTitle,
-            title: episodeTitle,
-            summary: "Saved live transcript and Worker ad-analysis result.",
-            showNotesHTML: "<p>Saved live transcript and Worker ad-analysis result.</p>",
-            publishedAt: publishedAt,
-            duration: transcript.audioDuration,
-            audioURL: audioURL,
-            artworkURL: artworkURL,
-            guid: transcript.episodeID,
-            cachedAt: createdAt
-        )
-        if let artworkPreview {
-            episode.storeArtworkPreviewIfChanged(artworkPreview)
-        }
-        context.insert(episode)
 
         let transcriptFileStore = EpisodeTranscriptFileStore()
         let transcriptFingerprint = transcriptFileStore.fingerprint(
@@ -651,13 +663,14 @@ enum OpenCastUITestSeedData {
 
     private static func seedExtraFeeds(
         count: Int,
+        cacheStore: SQLiteLocalLibraryCacheStore,
         context: ModelContext,
         audioURL: String,
         artworkURL: String?,
         artworkPreview: ArtworkPreview?,
         usesVariedArtworkPreviews: Bool,
         refreshedAt: Date
-    ) {
+    ) throws {
         guard count > 0 else {
             return
         }
@@ -677,42 +690,111 @@ enum OpenCastUITestSeedData {
                     lastRefreshAt: refreshedAt
                 )
             )
-            let podcast = PodcastCacheRecord(
+            let resolvedArtworkPreview = usesVariedArtworkPreviews
+                ? seededArtworkPreview(artworkURL: artworkURL, variantIndex: index)
+                : artworkPreview
+            try upsertSeedFeed(
+                into: cacheStore,
                 feedURL: feedURL,
                 title: title,
                 author: "UI Test Author \(index)",
                 summary: "A deterministic extra show seeded for UI performance tests.",
                 websiteURL: "https://example.com/ui-test-extra-\(index)",
                 artworkURL: artworkURL,
-                updatedAt: refreshedAt
+                episodes: [
+                    Episode(
+                        id: EpisodeID(rawValue: episodeID),
+                        podcastID: PodcastID(rawValue: feedURL),
+                        podcastTitle: title,
+                        title: "Extra Deterministic Episode \(index)",
+                        summary: "An extra deterministic episode seeded for UI performance tests.",
+                        showNotesHTML: "<p>Extra deterministic show notes.</p>",
+                        publishedAt: publishedAt,
+                        duration: 180,
+                        audioURL: URL(string: audioURL),
+                        artworkURL: artworkURL.flatMap(URL.init(string:)),
+                        guid: episodeID
+                    )
+                ],
+                refreshedAt: refreshedAt,
+                podcastArtworkPreview: resolvedArtworkPreview,
+                episodeArtworkPreviews: resolvedArtworkPreview.map { [episodeID: $0] } ?? [:]
             )
-            let resolvedArtworkPreview = usesVariedArtworkPreviews
-                ? seededArtworkPreview(artworkURL: artworkURL, variantIndex: index)
-                : artworkPreview
-            if let resolvedArtworkPreview {
-                podcast.storeArtworkPreviewIfChanged(resolvedArtworkPreview)
-            }
-            context.insert(podcast)
-
-            let episode = EpisodeCacheRecord(
-                episodeID: episodeID,
-                podcastID: feedURL,
-                podcastTitle: title,
-                title: "Extra Deterministic Episode \(index)",
-                summary: "An extra deterministic episode seeded for UI performance tests.",
-                showNotesHTML: "<p>Extra deterministic show notes.</p>",
-                publishedAt: publishedAt,
-                duration: 180,
-                audioURL: audioURL,
-                artworkURL: artworkURL,
-                guid: episodeID,
-                cachedAt: refreshedAt
-            )
-            if let resolvedArtworkPreview {
-                episode.storeArtworkPreviewIfChanged(resolvedArtworkPreview)
-            }
-            context.insert(episode)
         }
+    }
+
+    /// Seed-side cache writer: feeds the same parsed-feed shapes production
+    /// refresh feeds into `upsertCache`, so harness data exercises the real
+    /// cache path — validator columns, language, and artwork-preview
+    /// admission included (finding 49).
+    static func upsertSeedFeed(
+        into cacheStore: SQLiteLocalLibraryCacheStore,
+        feedURL: String,
+        title: String,
+        author: String?,
+        summary: String?,
+        websiteURL: String?,
+        artworkURL: String?,
+        languageCode: String? = "en",
+        episodes: [Episode],
+        refreshedAt: Date,
+        podcastArtworkPreview: ArtworkPreview? = nil,
+        episodeArtworkPreviews: [String: ArtworkPreview] = [:],
+        validators: FeedValidators? = nil
+    ) throws {
+        guard let parsedFeedURL = URL(string: feedURL) else {
+            throw NSError(
+                domain: "OpenCastUITestSeedData",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Seed feed URL is not a valid URL: \(feedURL)"]
+            )
+        }
+
+        let podcast = Podcast(
+            id: PodcastID(rawValue: feedURL),
+            feedURL: parsedFeedURL,
+            title: title,
+            author: author,
+            summary: summary,
+            websiteURL: websiteURL.flatMap(URL.init(string:)),
+            artworkURL: artworkURL.flatMap(URL.init(string:)),
+            languageCode: languageCode
+        )
+        let snapshot = FeedSnapshot(podcast: podcast, episodes: episodes, fetchedAt: refreshedAt)
+        // Launch seeding is synchronous main-actor code, but the cache store
+        // is an actor; park until its seed turn completes so the rows are
+        // durable before the first read. The store's SQLite work never needs
+        // the main actor, so the bounded wait cannot deadlock. Test-only
+        // launch path — production never seeds.
+        let outcome = SeedWriteOutcome()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached {
+            do {
+                try await cacheStore.upsertCache(from: snapshot, refreshedAt: refreshedAt)
+                if let podcastArtworkPreview {
+                    try await cacheStore.updatePodcastArtworkPreview(
+                        podcastArtworkPreview,
+                        feedURL: feedURL,
+                        artworkURL: artworkURL
+                    )
+                }
+                for (episodeID, preview) in episodeArtworkPreviews {
+                    try await cacheStore.updateEpisodeArtworkPreview(
+                        preview,
+                        episodeID: episodeID,
+                        artworkURL: artworkURL
+                    )
+                }
+                if let validators {
+                    try await cacheStore.updateFeedValidators(validators, forPodcastID: feedURL)
+                }
+            } catch {
+                outcome.record(error)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        try outcome.rethrow()
     }
 
     private static func longShowNotesHTML() -> String {
@@ -890,5 +972,26 @@ enum OpenCastUITestSeedData {
 
     private enum SeedDataError: Error {
         case invalidArtworkData
+    }
+}
+
+/// Carries the seed write's failure across the synchronous bridge in
+/// `upsertSeedFeed` back to the throwing caller.
+private nonisolated final class SeedWriteOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var error: (any Error)?
+
+    func record(_ error: any Error) {
+        lock.lock()
+        self.error = error
+        lock.unlock()
+    }
+
+    func rethrow() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let error {
+            throw error
+        }
     }
 }

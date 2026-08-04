@@ -292,6 +292,11 @@ final class RemoteTranscriptionPurchaseStore {
             reason: String(localized: "Connect to the App Store and check your internet connection, then try again.")
         )
     }
+
+    func applyDelayedAvailabilityFixture() {
+        usesUIFixture = true
+        availability = .unknown
+    }
     #endif
 
     /// Consumption preview for the pre-create sheet, mirroring the server's

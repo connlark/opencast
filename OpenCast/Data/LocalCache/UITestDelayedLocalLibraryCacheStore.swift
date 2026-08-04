@@ -11,6 +11,10 @@ nonisolated struct UITestDelayedLocalLibraryCacheStore: LocalLibraryCacheStore {
         return try await base.loadLibrary(activePodcastIDs: activePodcastIDs)
     }
 
+    func allRefreshLogs() async throws -> [RefreshLogSnapshot] {
+        try await base.allRefreshLogs()
+    }
+
     func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot? {
         try await base.episodeDetail(episodeID: episodeID)
     }
@@ -35,12 +39,36 @@ nonisolated struct UITestDelayedLocalLibraryCacheStore: LocalLibraryCacheStore {
         try await base.insertRefreshLog(log, prunedTo: retentionLimit)
     }
 
+    func feedValidators(forPodcastID podcastID: String) async throws -> FeedValidators? {
+        try await base.feedValidators(forPodcastID: podcastID)
+    }
+
+    func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) async throws {
+        try await base.updateFeedValidators(validators, forPodcastID: podcastID)
+    }
+
+    func cachedEpisodes(forPodcastID podcastID: String) async throws -> [EpisodeListItemSnapshot] {
+        try await base.cachedEpisodes(forPodcastID: podcastID)
+    }
+
+    func deleteEpisodes(episodeIDs: [String]) async throws {
+        try await base.deleteEpisodes(episodeIDs: episodeIDs)
+    }
+
     func deleteCache(forPodcastID podcastID: String) async throws {
         try await base.deleteCache(forPodcastID: podcastID)
     }
 
     func deleteAllLocalCache() async throws {
         try await base.deleteAllLocalCache()
+    }
+
+    func replaceNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) async throws {
+        try await base.replaceNotificationFeedHealth(records)
+    }
+
+    func notificationFeedHealthByFeedURL() async throws -> [String: NotificationFeedHealth] {
+        try await base.notificationFeedHealthByFeedURL()
     }
 
     func hasCompletedLegacyImport() async throws -> Bool {

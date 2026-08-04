@@ -16,7 +16,7 @@ nonisolated struct NotificationSecureAPIClient: Sendable {
         )
     }
 
-    func sendJSONPayload<Payload: Encodable, ResponseBody: Decodable>(
+    func sendJSONPayload<Payload: Encodable, ResponseBody: Decodable & Sendable>(
         path: String,
         installID: String,
         keyID: String,
@@ -32,7 +32,7 @@ nonisolated struct NotificationSecureAPIClient: Sendable {
         )
     }
 
-    func sendRawPayload<ResponseBody: Decodable>(
+    func sendRawPayload<ResponseBody: Decodable & Sendable>(
         path: String,
         installID: String,
         keyID: String,

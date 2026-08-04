@@ -2,28 +2,58 @@ import XCTest
 
 /// Two-device CloudKit exercise driver (opt-in, physical devices).
 ///
-/// Each `testStep…` method is one device-side step of the exercise. The
-/// external orchestrator runs them one at a time, alternating devices:
+/// Each `testStep…` method is one device-side step; the external orchestrator
+/// runs them one at a time, alternating devices. The subscription and playback
+/// exercise follows this sequence:
 ///
 ///   A00 → A01 → B01 → A02 → B02 → A03 → B03 → A04 → B04 → A05 → B05 →
 ///   A06 → B06 → A07 → B07
 ///
+/// The episode-identity exercise drives the grafted feed served by
+/// `Server/ExerciseFeedWorker`, whose GUID generation the orchestrator flips
+/// between steps:
+///
+///   C01 → D01 → [feed flips v1→v2] → C02 → D02 → D03 → C03 → D04 → C04
+///
 /// Device A performs the mutations (subscribe, play/pause, unsubscribe
-/// variants, manual clear); device B only observes convergence. The synthetic
-/// fixture keeps the exercise independent from fixtures other suites depend
-/// on. Library membership is driven through subscription rows and
-/// swipe actions; played state is read and written through search-result
-/// row context menus, which stay stable while the freshly synced feed's
-/// navigation pushes can get pruned. Set `TEST_RUNNER_OPENCAST_SYNC_E2E=1`
-/// to run.
+/// variants, manual clear, identity merge); device B only observes
+/// convergence. The dedicated fixture feeds keep the exercise off the
+/// almanac fixtures other suites depend on. Library membership is driven
+/// through subscription rows and swipe actions; played state is read and
+/// written through search-result row context menus, which stay stable while
+/// the freshly synced feed's navigation pushes can get pruned. Set
+/// `TEST_RUNNER_OPENCAST_SYNC_E2E=1` to run.
 final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     private static let optInEnvironmentKey = "OPENCAST_SYNC_E2E"
-    private static let feedURLString = "https://feeds.example.com/sync-e2e.xml"
-    private static let historyEpisode = "Seed One"
-    /// Seed episode (9 s): fresh subscriptions default auto-detect off, so
-    /// playing it cannot trigger a standing ad-detection pass or its dialogs.
-    private static let playbackEpisode = "Root Three"
     private static let syncTimeout: TimeInterval = 420
+
+    /// The feed a step operates on. The A/B steps drive the seed podcast; the
+    /// C/D steps drive the grafted podcast, whose GUIDs
+    /// flip between generations mid-exercise to reproduce the changed-ID
+    /// legacy state the identity reconciliation and merge sweep repair.
+    /// Playback episodes are short ones: fresh subscriptions default
+    /// auto-detect off, so playing them cannot trigger the almanac's
+    /// standing ad-detection pass or its dialogs.
+    private struct ExerciseFeed {
+        let urlString: String
+        let historyEpisode: String
+        let playbackEpisode: String
+
+        var rowIdentifier: String { "subscription-row-\(urlString)" }
+
+        static let seed = ExerciseFeed(
+            urlString: "https://feeds.example.com/sync-e2e.xml",
+            historyEpisode: "Seed One",
+            playbackEpisode: "Root Three"
+        )
+        static let graft = ExerciseFeed(
+            urlString: "https://graft.example.com/feed.xml",
+            historyEpisode: "Graft One",
+            playbackEpisode: "Bridge Three"
+        )
+    }
+
+    private var feed: ExerciseFeed = .seed
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -57,11 +87,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     @MainActor
     func testStepA00StashSystemPiPIfPresent() throws {
         try skipUnlessSyncE2E()
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let start = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.18))
-        let end = springboard.coordinate(withNormalizedOffset: CGVector(dx: 1.1, dy: 0.5))
-        start.press(forDuration: 0.3, thenDragTo: end)
-        sleep(2)
+        stashSystemPiPIfPresent()
 
         // Environment prep: title-keyed episode reads later in the flow are
         // ambiguous while a legacy raw-URL variant of the seed feed carries
@@ -71,19 +97,28 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     }
 
     @MainActor
+    private func stashSystemPiPIfPresent() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let start = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.18))
+        let end = springboard.coordinate(withNormalizedOffset: CGVector(dx: 1.1, dy: 0.5))
+        start.press(forDuration: 0.3, thenDragTo: end)
+        sleep(2)
+    }
+
+    @MainActor
     func testStepA01SubscribeAndSeedHistory() throws {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        removeSeedPodcastIfPresent(in: app)
-        subscribeToSeedFeed(in: app)
+        removeExercisePodcastIfPresent(in: app)
+        subscribeToExerciseFeed(in: app)
         playAndPausePlaybackEpisode(in: app)
         setHistoryEpisodePlayed(true, in: app)
         XCTAssertTrue(
             historyEpisodeIsPlayed(in: app),
             "history episode should read as played after marking"
         )
-        attachScreen(named: "A01-subscribed-history-seeded", app: app)
+        attachAppScreenshot(of: app, named: "A01-subscribed-history-seeded")
     }
 
     @MainActor
@@ -92,9 +127,9 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         let app = launchApp()
 
         playAndPausePlaybackEpisode(in: app)
-        unsubscribeSeedPodcast(clearingHistory: false, in: app)
-        assertSeedPodcastAbsent(in: app)
-        attachScreen(named: "A02-unsubscribed-default", app: app)
+        unsubscribeExercisePodcast(clearingHistory: false, in: app)
+        assertExercisePodcastAbsent(in: app)
+        attachAppScreenshot(of: app, named: "A02-unsubscribed-default")
     }
 
     @MainActor
@@ -102,12 +137,12 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        subscribeToSeedFeed(in: app)
+        subscribeToExerciseFeed(in: app)
         XCTAssertTrue(
             waitForHistoryEpisodePlayed(true, in: app),
             "history should survive default unsubscribe + resubscribe on A"
         )
-        attachScreen(named: "A03-resubscribed-history-kept", app: app)
+        attachAppScreenshot(of: app, named: "A03-resubscribed-history-kept")
     }
 
     @MainActor
@@ -116,9 +151,9 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         let app = launchApp()
 
         playAndPausePlaybackEpisode(in: app)
-        unsubscribeSeedPodcast(clearingHistory: true, in: app)
-        assertSeedPodcastAbsent(in: app)
-        attachScreen(named: "A04-unsubscribed-clear-history", app: app)
+        unsubscribeExercisePodcast(clearingHistory: true, in: app)
+        assertExercisePodcastAbsent(in: app)
+        attachAppScreenshot(of: app, named: "A04-unsubscribed-clear-history")
     }
 
     @MainActor
@@ -126,14 +161,14 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        subscribeToSeedFeed(in: app)
+        subscribeToExerciseFeed(in: app)
         // Convergence, not an instant read: a not-yet-imported CloudKit copy
         // may flash into view until tombstone enforcement deletes it.
         XCTAssertTrue(
             waitForHistoryEpisodePlayed(false, in: app),
             "Unsubscribe & Clear History should converge to no played state on A"
         )
-        attachScreen(named: "A05-resubscribed-history-cleared", app: app)
+        attachAppScreenshot(of: app, named: "A05-resubscribed-history-cleared")
     }
 
     @MainActor
@@ -143,17 +178,17 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
 
         setHistoryEpisodePlayed(true, in: app)
         XCTAssertTrue(historyEpisodeIsPlayed(in: app), "played marker should stick before unsubscribe")
-        unsubscribeSeedPodcast(clearingHistory: false, in: app)
-        assertSeedPodcastAbsent(in: app)
+        unsubscribeExercisePodcast(clearingHistory: false, in: app)
+        assertExercisePodcastAbsent(in: app)
 
         clearHistoryForUnfollowedShows(in: app)
 
-        subscribeToSeedFeed(in: app)
+        subscribeToExerciseFeed(in: app)
         XCTAssertTrue(
             waitForHistoryEpisodePlayed(false, in: app),
             "manual clear should converge to no played state on A"
         )
-        attachScreen(named: "A06-manual-clear-applied", app: app)
+        attachAppScreenshot(of: app, named: "A06-manual-clear-applied")
     }
 
     @MainActor
@@ -161,10 +196,10 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        removeSeedPodcastIfPresent(in: app)
+        removeExercisePodcastIfPresent(in: app)
         removeLegacySeedVariantRowsIfPresent(in: app)
-        assertSeedPodcastAbsent(in: app)
-        attachScreen(named: "A07-cleanup", app: app)
+        assertExercisePodcastAbsent(in: app)
+        attachAppScreenshot(of: app, named: "A07-cleanup")
     }
 
     // MARK: - Device B steps (observation)
@@ -174,12 +209,12 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        waitForSeedPodcast(present: true, in: app)
+        waitForExercisePodcast(present: true, in: app)
         XCTAssertTrue(
             waitForHistoryEpisodePlayed(true, in: app),
             "played history should sync to device B"
         )
-        attachScreen(named: "B01-subscription-and-history-arrived", app: app)
+        attachAppScreenshot(of: app, named: "B01-subscription-and-history-arrived")
     }
 
     @MainActor
@@ -187,8 +222,8 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        waitForSeedPodcast(present: false, in: app)
-        attachScreen(named: "B02-unsubscribe-arrived", app: app)
+        waitForExercisePodcast(present: false, in: app)
+        attachAppScreenshot(of: app, named: "B02-unsubscribe-arrived")
     }
 
     @MainActor
@@ -196,12 +231,12 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        waitForSeedPodcast(present: true, in: app)
+        waitForExercisePodcast(present: true, in: app)
         XCTAssertTrue(
             waitForHistoryEpisodePlayed(true, in: app),
             "history should be visible on device B after the default-unsubscribe cycle"
         )
-        attachScreen(named: "B03-history-visible", app: app)
+        attachAppScreenshot(of: app, named: "B03-history-visible")
     }
 
     @MainActor
@@ -209,8 +244,8 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        waitForSeedPodcast(present: false, in: app)
-        attachScreen(named: "B04-clear-unsubscribe-arrived", app: app)
+        waitForExercisePodcast(present: false, in: app)
+        attachAppScreenshot(of: app, named: "B04-clear-unsubscribe-arrived")
     }
 
     @MainActor
@@ -218,12 +253,12 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        waitForSeedPodcast(present: true, in: app)
+        waitForExercisePodcast(present: true, in: app)
         XCTAssertTrue(
             waitForHistoryEpisodePlayed(false, in: app),
             "Unsubscribe & Clear History should converge to no played state on B"
         )
-        attachScreen(named: "B05-history-gone", app: app)
+        attachAppScreenshot(of: app, named: "B05-history-gone")
     }
 
     @MainActor
@@ -231,12 +266,12 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        waitForSeedPodcast(present: true, in: app)
+        waitForExercisePodcast(present: true, in: app)
         XCTAssertTrue(
             waitForHistoryEpisodePlayed(false, in: app),
             "manual clear on A should converge to no played state on B"
         )
-        attachScreen(named: "B06-manual-clear-converged", app: app)
+        attachAppScreenshot(of: app, named: "B06-manual-clear-converged")
     }
 
     @MainActor
@@ -244,8 +279,200 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         try skipUnlessSyncE2E()
         let app = launchApp()
 
-        waitForSeedPodcast(present: false, in: app)
-        attachScreen(named: "B07-cleanup-arrived", app: app)
+        waitForExercisePodcast(present: false, in: app)
+        attachAppScreenshot(of: app, named: "B07-cleanup-arrived")
+    }
+
+    // MARK: - Phase-7 identity exercise: device A steps (mutations)
+
+    /// C01: with the grafted feed serving its legacy GUID generation (v1),
+    /// subscribe, play the playback episode briefly, and mark the history
+    /// episode played — synced progress lands under the legacy episode IDs.
+    @MainActor
+    func testStepC01SubscribeGraftAndSeedLegacyHistory() throws {
+        try skipUnlessSyncE2E()
+        feed = .graft
+        stashSystemPiPIfPresent()
+        let app = launchApp()
+
+        removeExercisePodcastIfPresent(in: app)
+        subscribeToExerciseFeed(in: app)
+        playAndPausePlaybackEpisode(in: app)
+        setHistoryEpisodePlayed(true, in: app)
+        XCTAssertTrue(
+            historyEpisodeIsPlayed(in: app),
+            "history episode should read as played under the legacy GUIDs"
+        )
+        attachAppScreenshot(of: app, named: "C01-graft-legacy-history-seeded")
+    }
+
+    /// C02: the orchestrator has flipped the feed to its modern GUID
+    /// generation (v2), so every cached episode's ID is now stale. Run the
+    /// diagnostics "Merge Duplicate Episodes" sweep and verify the history
+    /// episode's played state survives the re-key on this device without
+    /// duplicating the row.
+    @MainActor
+    func testStepC02MergeDuplicateEpisodes() throws {
+        try skipUnlessSyncE2E()
+        feed = .graft
+        let app = launchApp()
+
+        openDiagnostics(in: app)
+        runMergeDuplicateEpisodes(in: app)
+        attachAppScreenshot(of: app, named: "C02-merge-result")
+
+        XCTAssertTrue(
+            waitForHistoryEpisodePlayed(true, in: app),
+            "played history should survive the identity merge on A"
+        )
+        assertSingleEpisodeSearchRow(for: feed.historyEpisode, in: app)
+        attachAppScreenshot(of: app, named: "C02-history-survives-merge")
+    }
+
+    /// C03: retire the grafted podcast with cleared history so its
+    /// tombstones leave CloudKit clean for future exercise runs.
+    @MainActor
+    func testStepC03CleanupGraft() throws {
+        try skipUnlessSyncE2E()
+        feed = .graft
+        let app = launchApp()
+
+        removeExercisePodcastIfPresent(in: app)
+        assertExercisePodcastAbsent(in: app)
+        attachAppScreenshot(of: app, named: "C03-graft-cleanup")
+    }
+
+    /// C04: the notification feed-health leg — run the diagnostics live
+    /// sync against the notifications worker and verify the response was
+    /// accepted; the per-feed health rows underneath render only when the
+    /// response's health field decoded and persisted end to end.
+    @MainActor
+    func testStepC04NotificationHealthSyncEvidence() throws {
+        try skipUnlessSyncE2E()
+        let app = launchApp()
+
+        openDiagnostics(in: app)
+        let syncButton = app.buttons["Sync Notification Subscriptions"].firstMatch
+        var swipes = 0
+        while !syncButton.exists && swipes < 14 {
+            app.swipeUp()
+            swipes += 1
+        }
+        XCTAssertTrue(
+            syncButton.waitForExistence(timeout: 10),
+            "notification sync diagnostic should exist"
+        )
+        syncButton.tap()
+
+        let syncRow = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Sync, ")
+        ).firstMatch
+        XCTAssertTrue(
+            syncRow.waitForExistence(timeout: 90),
+            "notification sync should report a status"
+        )
+        let acceptedRow = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Accepted, ")
+        ).firstMatch
+        XCTAssertTrue(acceptedRow.exists, "notification sync should report accepted feeds")
+        // Health rows render below the counters; pull them into view for the
+        // evidence screenshot.
+        app.swipeUp()
+        sleep(1)
+        attachAppScreenshot(of: app, named: "C04-notification-health")
+    }
+
+    // MARK: - Phase-7 identity exercise: device B steps (observation)
+
+    /// D01: the grafted subscription and its legacy-ID played history arrive.
+    @MainActor
+    func testStepD01VerifyGraftArrived() throws {
+        try skipUnlessSyncE2E()
+        feed = .graft
+        stashSystemPiPIfPresent()
+        let app = launchApp()
+
+        waitForExercisePodcast(present: true, in: app)
+        XCTAssertTrue(
+            waitForHistoryEpisodePlayed(true, in: app),
+            "legacy-ID played history should sync to device B"
+        )
+        attachAppScreenshot(of: app, named: "D01-graft-arrived")
+    }
+
+    /// D02: after A's merge, the migrated progress record (new episode ID)
+    /// and the legacy-ID tombstones arrive. The played state only becomes
+    /// visible once this device refreshes the flipped feed and its own cache
+    /// re-keys, so refresh explicitly inside the convergence loop.
+    @MainActor
+    func testStepD02VerifyMigratedProgressArrived() throws {
+        try skipUnlessSyncE2E()
+        feed = .graft
+        let app = launchApp()
+
+        XCTAssertTrue(
+            waitForMigratedHistory(in: app),
+            "migrated played history should converge on device B under the new IDs"
+        )
+        assertSingleEpisodeSearchRow(for: feed.historyEpisode, in: app)
+        attachAppScreenshot(of: app, named: "D02-migrated-progress-arrived")
+    }
+
+    /// D03: stability through refresh cycles — the legacy-ID rows must stay
+    /// dead under their tombstones and the migrated state must keep showing
+    /// after further relaunches and refreshes.
+    @MainActor
+    func testStepD03VerifyStabilityThroughRefreshCycles() throws {
+        try skipUnlessSyncE2E()
+        feed = .graft
+        let app = launchApp()
+
+        pullToRefreshAllFeeds(in: app)
+        XCTAssertTrue(
+            waitForHistoryEpisodePlayed(true, in: app),
+            "migrated history should stay played through refresh cycles on B"
+        )
+        assertSingleEpisodeSearchRow(for: feed.historyEpisode, in: app)
+        attachAppScreenshot(of: app, named: "D03-stable-through-refresh")
+    }
+
+    /// D04: the cleanup (unsubscribe with cleared history) converges.
+    @MainActor
+    func testStepD04VerifyGraftCleanupArrived() throws {
+        try skipUnlessSyncE2E()
+        feed = .graft
+        let app = launchApp()
+
+        waitForExercisePodcast(present: false, in: app)
+        attachAppScreenshot(of: app, named: "D04-graft-cleanup-arrived")
+    }
+
+    // MARK: - Launch-path probe
+
+    /// Z00: diagnostic, not part of any exercise sequence. On an iOS beta
+    /// device ahead of the Mac's Xcode, `XCUIApplication.launch()` can fail
+    /// deterministically in the CoreDevice launch-with-progress worker while
+    /// `activate()` still works. This probe checks activation both warm
+    /// (instance pre-launched via devicectl) and cold (after terminate).
+    @MainActor
+    func testStepZ00LaunchPathProbe() throws {
+        try skipUnlessSyncE2E()
+        let app = XCUIApplication()
+        app.activate()
+        XCTAssertTrue(
+            app.wait(for: .runningForeground, timeout: 30),
+            "activate should foreground a devicectl-prelaunched instance"
+        )
+        app.terminate()
+        XCTAssertTrue(
+            app.wait(for: .notRunning, timeout: 15),
+            "terminate should stop the app"
+        )
+        app.activate()
+        XCTAssertTrue(
+            app.wait(for: .runningForeground, timeout: 30),
+            "activate should cold-launch after terminate"
+        )
     }
 
     // MARK: - Gate plumbing
@@ -260,14 +487,47 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         #endif
     }
 
+    /// A device running an iOS beta ahead of the Mac's Xcode can execute the
+    /// runner while the CoreDevice launch/activate worker deterministically
+    /// fails ("could not determine the process identifier"). Attach-only mode
+    /// sidesteps it: the orchestrator pre-launches the app with devicectl
+    /// (which still works) and the test attaches to the foreground instance
+    /// without ever launching — the same capability springboard interaction
+    /// relies on. Steps on such a device must not relaunch mid-step.
+    private var isAttachOnly: Bool {
+        ProcessInfo.processInfo.environment["OPENCAST_ATTACH_ONLY"] == "1"
+    }
+
     @MainActor
     private func launchApp() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launch()
+        if isAttachOnly {
+            if app.state != .runningForeground {
+                XCUIApplication(bundleIdentifier: "com.apple.springboard")
+                    .icons["OpenCast"].firstMatch.tap()
+            }
+            XCTAssertTrue(
+                app.wait(for: .runningForeground, timeout: 60),
+                "attach-only mode needs the app pre-launched via devicectl"
+            )
+        } else {
+            app.launch()
+        }
         // Let the initial load and first maintenance pass settle: navigation
         // pushed while activePodcastIDs is still populating gets pruned.
         sleep(6)
         return app
+    }
+
+    /// Relaunch between convergence polls — skipped in attach-only mode,
+    /// where a terminated app cannot be brought back from inside the test.
+    @MainActor
+    private func relaunchForConvergence(_ app: XCUIApplication) {
+        guard !isAttachOnly else {
+            return
+        }
+        app.terminate()
+        app.launch()
     }
 
     // MARK: - Tab navigation
@@ -404,20 +664,18 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
 
     // MARK: - Library membership
 
-    private static let seedRowIdentifier = "subscription-row-\(feedURLString)"
-
     @MainActor
-    private func seedPodcastRow(in app: XCUIApplication) -> XCUIElement {
-        app.buttons[Self.seedRowIdentifier].firstMatch
+    private func exercisePodcastRow(in app: XCUIApplication) -> XCUIElement {
+        app.buttons[feed.rowIdentifier].firstMatch
     }
 
     /// Scrolls the (lazy, alphabetical) library list until the seed row is
     /// realized or the bottom stops moving. Off-screen rows do not exist in
     /// the hierarchy, so presence and absence both need the scroll.
     @MainActor
-    private func libraryHasSeedPodcast(in app: XCUIApplication) -> Bool {
+    private func libraryHasExercisePodcast(in app: XCUIApplication) -> Bool {
         openTab("Library", in: app)
-        let row = seedPodcastRow(in: app)
+        let row = exercisePodcastRow(in: app)
         if row.waitForExistence(timeout: 8) {
             return true
         }
@@ -450,8 +708,8 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     }
 
     @MainActor
-    private func subscribeToSeedFeed(in app: XCUIApplication) {
-        if libraryHasSeedPodcast(in: app) {
+    private func subscribeToExerciseFeed(in app: XCUIApplication) {
+        if libraryHasExercisePodcast(in: app) {
             return
         }
         // Re-open the tab to settle/scroll back to top after the deep
@@ -480,14 +738,14 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         let field = app.textFields["RSS Feed URL"]
         XCTAssertTrue(field.waitForExistence(timeout: 10), "RSS Feed URL field should exist")
         field.tap()
-        field.typeText(Self.feedURLString)
+        field.typeText(feed.urlString)
         let subscribeButton = app.buttons["Subscribe"].firstMatch
         XCTAssertTrue(subscribeButton.waitForExistence(timeout: 5), "Subscribe button should exist")
         subscribeButton.tap()
 
         var subscribed = false
         for _ in 0..<4 {
-            if libraryHasSeedPodcast(in: app) {
+            if libraryHasExercisePodcast(in: app) {
                 subscribed = true
                 break
             }
@@ -521,13 +779,13 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     /// the `SubscriptionRemovalModifier` surface with the same two-button
     /// confirmation shape as the podcast actions menu.
     @MainActor
-    private func unsubscribeSeedPodcast(clearingHistory: Bool, in app: XCUIApplication) {
+    private func unsubscribeExercisePodcast(clearingHistory: Bool, in app: XCUIApplication) {
         let confirmTitle = clearingHistory ? "Remove & Clear History" : "Remove Podcast"
         for _ in 0..<3 {
-            guard libraryHasSeedPodcast(in: app) else {
+            guard libraryHasExercisePodcast(in: app) else {
                 continue
             }
-            let row = seedPodcastRow(in: app)
+            let row = exercisePodcastRow(in: app)
             guard row.exists, nudgeIntoView(row, in: app) else {
                 continue
             }
@@ -548,13 +806,13 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     }
 
     @MainActor
-    private func removeSeedPodcastIfPresent(in app: XCUIApplication) {
-        guard libraryHasSeedPodcast(in: app) else {
+    private func removeExercisePodcastIfPresent(in app: XCUIApplication) {
+        guard libraryHasExercisePodcast(in: app) else {
             return
         }
 
-        unsubscribeSeedPodcast(clearingHistory: true, in: app)
-        assertSeedPodcastAbsent(in: app)
+        unsubscribeExercisePodcast(clearingHistory: true, in: app)
+        assertExercisePodcastAbsent(in: app)
     }
 
     /// Old probe residue: raw feed-URL variants of the seed host (http
@@ -591,7 +849,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
             NSPredicate(
                 format: "identifier BEGINSWITH 'subscription-row-' AND identifier CONTAINS %@ AND identifier != %@",
                 "feeds.example.com",
-                Self.seedRowIdentifier
+                ExerciseFeed.seed.rowIdentifier
             )
         )
         if variantQuery.firstMatch.waitForExistence(timeout: 5) {
@@ -634,12 +892,12 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     }
 
     @MainActor
-    private func assertSeedPodcastAbsent(in app: XCUIApplication) {
-        var present = libraryHasSeedPodcast(in: app)
+    private func assertExercisePodcastAbsent(in app: XCUIApplication) {
+        var present = libraryHasExercisePodcast(in: app)
         var checks = 0
         while present && checks < 5 {
             sleep(5)
-            present = libraryHasSeedPodcast(in: app)
+            present = libraryHasExercisePodcast(in: app)
             checks += 1
         }
         XCTAssertFalse(present, "seed podcast should be gone from the library")
@@ -730,6 +988,21 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         return row
     }
 
+    /// A failed merge or an escaped tombstone shows up as a twin row —
+    /// the retained legacy-ID episode next to its re-keyed successor.
+    @MainActor
+    private func assertSingleEpisodeSearchRow(for episodeTitle: String, in app: XCUIApplication) {
+        let row = searchEpisodeRow(for: episodeTitle, in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "the '\(episodeTitle)' row should exist")
+        sleep(2)
+        let matches = app.buttons.matching(episodeRowPredicate(containing: episodeTitle)).count
+        XCTAssertEqual(
+            matches,
+            1,
+            "exactly one '\(episodeTitle)' row should exist — a twin means a legacy-ID row survived"
+        )
+    }
+
     @MainActor
     private func clearSearchField(_ searchField: XCUIElement, in app: XCUIApplication) {
         let clearButton = searchField.buttons["Clear text"].firstMatch
@@ -753,7 +1026,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     @MainActor
     private func readHistoryEpisodePlayedState(in app: XCUIApplication) -> Bool? {
         for _ in 0..<2 {
-            let row = searchEpisodeRow(for: Self.historyEpisode, in: app)
+            let row = searchEpisodeRow(for: feed.historyEpisode, in: app)
             guard row.exists, row.isHittable else {
                 continue
             }
@@ -791,7 +1064,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         let actionTitle = played ? "Mark Played" : "Mark Unplayed"
         let oppositeTitle = played ? "Mark Unplayed" : "Mark Played"
         for _ in 0..<3 {
-            let row = searchEpisodeRow(for: Self.historyEpisode, in: app)
+            let row = searchEpisodeRow(for: feed.historyEpisode, in: app)
             guard row.exists, row.isHittable else {
                 continue
             }
@@ -826,7 +1099,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     private func playAndPausePlaybackEpisode(in app: XCUIApplication) {
         var didPlay = false
         for _ in 0..<3 {
-            let row = searchEpisodeRow(for: Self.playbackEpisode, in: app)
+            let row = searchEpisodeRow(for: feed.playbackEpisode, in: app)
             guard row.exists, row.isHittable else {
                 continue
             }
@@ -873,24 +1146,145 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         sleep(2)
     }
 
+    // MARK: - Settings: diagnostics
+
+    /// The persistent mini-player accessory floats over the bottom of every
+    /// list once an episode is loaded, and a tap meant for a control that
+    /// materialized behind it expands the Now Playing card over the whole
+    /// screen instead. Dismiss the card whenever it is up.
+    @MainActor
+    private func dismissNowPlayingCardIfPresent(in app: XCUIApplication) {
+        let overlay = app.descendants(matching: .any)["Now Playing"].firstMatch
+        guard overlay.exists else {
+            return
+        }
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.24))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.74))
+        start.press(forDuration: 0.05, thenDragTo: end)
+        _ = app.buttons["Open Now Playing"].waitForExistence(timeout: 8)
+    }
+
+    /// Short drags until the element's frame sits in the middle band of the
+    /// screen, clear of both the navigation chrome and the floating
+    /// mini-player accessory that swallows bottom-edge taps.
+    @MainActor
+    private func walkClearOfBottomAccessories(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<6 {
+            let frame = element.frame
+            let height = app.frame.height
+            if frame.minY > height * 0.15, frame.maxY < height * 0.7 {
+                return
+            }
+            let towardTop = frame.maxY >= height * 0.7
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+            let end = app.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.5, dy: towardTop ? 0.35 : 0.75)
+            )
+            start.press(forDuration: 0.05, thenDragTo: end)
+            sleep(1)
+        }
+    }
+
+    @MainActor
+    private func openDiagnostics(in app: XCUIApplication) {
+        dismissNowPlayingCardIfPresent(in: app)
+        openTab("Settings", in: app)
+        let diagnosticsLink = app.buttons["Diagnostics"].firstMatch
+        var swipes = 0
+        while !diagnosticsLink.exists && swipes < 12 {
+            app.swipeUp()
+            swipes += 1
+        }
+        XCTAssertTrue(diagnosticsLink.waitForExistence(timeout: 10), "Diagnostics link should exist")
+        diagnosticsLink.tap()
+        XCTAssertTrue(
+            app.navigationBars["Diagnostics"].waitForExistence(timeout: 10),
+            "Diagnostics screen should push"
+        )
+    }
+
+    /// Taps "Merge Duplicate Episodes" and waits for the sweep to finish.
+    /// The sweep sequentially refetches every subscribed feed, so completion
+    /// is minutes, not seconds — and the app must NOT be relaunched while it
+    /// runs. The tap is verified to have engaged the sweep because a tap on
+    /// a button materialized behind the mini-player accessory silently
+    /// expands the Now Playing card instead.
+    @MainActor
+    private func runMergeDuplicateEpisodes(in app: XCUIApplication) {
+        let mergeButton = app.buttons["Merge Duplicate Episodes"].firstMatch
+        let merging = app.staticTexts["Merging"].firstMatch
+        let merged = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@", "Last Merge, Merged")
+        ).firstMatch
+        let noDuplicates = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@", "Last Merge, No Duplicates")
+        ).firstMatch
+
+        var engaged = false
+        for _ in 0..<3 {
+            dismissNowPlayingCardIfPresent(in: app)
+            var swipes = 0
+            while !mergeButton.exists && swipes < 12 {
+                app.swipeUp()
+                swipes += 1
+            }
+            XCTAssertTrue(mergeButton.waitForExistence(timeout: 10), "merge action should exist")
+            walkClearOfBottomAccessories(mergeButton, in: app)
+            guard mergeButton.exists, mergeButton.isHittable else {
+                continue
+            }
+            mergeButton.tap()
+
+            // The sweep is engaged once the progress row or a result row is
+            // up; a stray Now Playing expansion means the accessory ate the
+            // tap — dismiss and retry.
+            for _ in 0..<16 {
+                if merging.exists || merged.exists || noDuplicates.exists {
+                    engaged = true
+                    break
+                }
+                if app.descendants(matching: .any)["Now Playing"].firstMatch.exists {
+                    break
+                }
+                usleep(500_000)
+            }
+            if engaged {
+                break
+            }
+        }
+        XCTAssertTrue(engaged, "the merge sweep should visibly start")
+
+        // Full-library refetch: allow well beyond the sync timeout.
+        let deadline = Date.now.addingTimeInterval(900)
+        while Date.now < deadline {
+            if merged.exists || noDuplicates.exists {
+                break
+            }
+            sleep(5)
+        }
+        XCTAssertTrue(
+            merged.exists,
+            "the sweep should report Merged — the flipped GUIDs re-key every grafted episode"
+        )
+    }
+
     // MARK: - Sync waits (device B)
 
     /// Waits for the seed podcast's library presence to converge, relaunching
     /// periodically so each relaunch's first-active full maintenance pass
     /// pulls imports even if a push never arrives.
     @MainActor
-    private func waitForSeedPodcast(present: Bool, in app: XCUIApplication) {
+    private func waitForExercisePodcast(present: Bool, in app: XCUIApplication) {
         let deadline = Date.now.addingTimeInterval(Self.syncTimeout)
         var attempt = 0
         while Date.now < deadline {
-            if libraryHasSeedPodcast(in: app) == present {
+            if libraryHasExercisePodcast(in: app) == present {
                 return
             }
             attempt += 1
             sleep(20)
             if attempt % 2 == 0 {
-                app.terminate()
-                app.launch()
+                relaunchForConvergence(app)
             }
         }
         XCTFail("seed podcast presence did not converge to \(present) within \(Int(Self.syncTimeout))s")
@@ -904,19 +1298,44 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
                 return true
             }
             sleep(20)
-            app.terminate()
-            app.launch()
+            relaunchForConvergence(app)
         }
         return false
     }
 
-    // MARK: - Evidence
-
+    /// Migrated progress only becomes visible after this device refetches
+    /// the flipped feed and re-keys its cache rows — the hourly staleness
+    /// gate means relaunches alone never refetch it in time, so refresh
+    /// explicitly each pass.
     @MainActor
-    private func attachScreen(named name: String, app: XCUIApplication) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
+    private func waitForMigratedHistory(in app: XCUIApplication) -> Bool {
+        let deadline = Date.now.addingTimeInterval(Self.syncTimeout)
+        while Date.now < deadline {
+            pullToRefreshAllFeeds(in: app)
+            if readHistoryEpisodePlayedState(in: app) == true {
+                return true
+            }
+            sleep(15)
+            relaunchForConvergence(app)
+            sleep(6)
+        }
+        return false
     }
+
+    /// Pulls to refresh on the Inbox tab, which is a List with a
+    /// `.refreshable` full-library refresh on every size class — the iPad
+    /// Library is a ScrollView grid whose pull control cannot be relied on.
+    @MainActor
+    private func pullToRefreshAllFeeds(in app: XCUIApplication) {
+        dismissNowPlayingCardIfPresent(in: app)
+        openTab("Inbox", in: app)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+        start.press(forDuration: 0.1, thenDragTo: end)
+        // refreshAll fans out across the whole library; give the grafted
+        // feed's fetch time to land before probing.
+        sleep(15)
+    }
+
+    // MARK: - Evidence
 }

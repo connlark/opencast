@@ -103,6 +103,26 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(!continuation.sections.contains { $0.rows.contains(.showMore) })
     }
 
+    @Test("An inbox far past the row-build cap keeps the same page and continuation")
+    func farOverCapInboxKeepsPageAndContinuation() async throws {
+        let fixture = try await makeFixture(episodeCount: 60)
+
+        let snapshot = CarPlayBrowseModelBuilder.inbox(
+            library: fixture.library,
+            downloadRecords: [],
+            currentEpisode: nil,
+            nowPlaying: .idle,
+            isLoading: false,
+            limits: Self.floorLimits
+        )
+
+        #expect(snapshot.rowCount == 12)
+        #expect(episodeIDs(in: snapshot) == (0..<11).map(episodeID))
+        let continuation = try #require(snapshot.continuation)
+        #expect(episodeIDs(in: continuation.snapshot) == (11..<23).map(episodeID))
+        #expect(continuation.snapshot.rowCount == 12)
+    }
+
     @Test("A list that cannot push a further page fills every slot with rows")
     func truncationWithoutMarker() async throws {
         let fixture = try await makeFixture(episodeCount: 30)

@@ -9,12 +9,13 @@ import Testing
 /// OPENCAST_ALIGNMENT_PROBE=1 OPENCAST_TRANSCRIPTION_AUDIO=<file>.
 @Suite("Alignment path probe")
 struct AlignmentPathProbeTests {
-    @Test("Word timestamps still work with conditional alignment accumulation")
+    @Test(
+        "Word timestamps still work with conditional alignment accumulation",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_ALIGNMENT_PROBE"] == "1"
+            && ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil)
+    )
     func wordTimestampsStillWork() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_ALIGNMENT_PROBE"] == "1",
-              let audioPath = ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] else {
-            return
-        }
+        let audioPath = try #require(ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"])
 
         let location = try DownloadedWhisperModelLocator(model: .tinyEnglish).modelLocation()
         let config = WhisperKitConfig(

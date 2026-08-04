@@ -3,9 +3,16 @@ import Foundation
 
 @MainActor
 final class PlaybackVoiceBoostControllerSpy: PlaybackSettingsControlling {
+    private(set) var rate: Float = 1
+    private(set) var appliedRates: [Float] = []
     private(set) var appliedValues: [Bool] = []
     private(set) var appliedSkipIntervals: [(backward: TimeInterval, forward: TimeInterval)] = []
     private(set) var appliedAutoSkipValues: [Bool] = []
+
+    func setRate(_ rate: Float) {
+        self.rate = rate
+        appliedRates.append(rate)
+    }
 
     func setVoiceBoostEnabled(_ isEnabled: Bool) {
         appliedValues.append(isEnabled)

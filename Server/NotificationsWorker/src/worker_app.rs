@@ -1,7 +1,6 @@
 use crate::app_attest::{canonical_key_id, challenge_hash, verify_attestation};
 use crate::challenge_limits::{
-    challenge_bucket_start, challenge_source_hash_key_for_environment,
-    global_challenge_allows_insert, install_challenge_allows_insert, keyed_source_token,
+    challenge_bucket_start, challenge_source_hash_key_for_environment, keyed_source_token,
     source_challenge_allows_after_increment, APP_ATTEST_KEY_LIMIT_WINDOW_SECONDS,
     CHALLENGE_LIMIT_WINDOW_SECONDS, CHALLENGE_RETENTION_SECONDS,
     CHALLENGE_SOURCE_BUCKET_RETENTION_SECONDS, CHALLENGE_TTL_SECONDS,
@@ -9,8 +8,8 @@ use crate::challenge_limits::{
     MAX_GLOBAL_CHALLENGES_PER_HOUR,
 };
 use crate::poll_decisions::{
-    episode_should_notify_subscription, episodes_to_notify, feed_poll_chunks, fetch_with_deadline,
-    jittered_backoff_seconds, latest_polled_episode, FEED_FETCH_TIMEOUT_SECONDS,
+    episode_should_notify_subscription, episodes_to_notify, feed_failure_retry_seconds,
+    feed_poll_chunks, fetch_with_deadline, latest_polled_episode, FEED_FETCH_TIMEOUT_SECONDS,
 };
 use crate::route::{
     content_length_exceeds, diagnostic_endpoint_path, parse_env_flag, public_write_endpoint,
@@ -21,8 +20,9 @@ use crate::route::{
 use crate::{
     apns, feed_admission,
     feed_fetch::{
-        append_limited_feed_body_chunk, feed_content_length_exceeds, feed_response_disposition,
-        same_origin, FeedResponseDisposition, MAX_FEED_BODY_BYTES,
+        append_limited_feed_body_chunk, feed_response_disposition,
+        identity_feed_content_length_exceeds, same_origin, FeedBodyAppendError, FeedFetchError,
+        FeedResponseDisposition, FEED_USER_AGENT, MAX_FEED_BODY_BYTES,
     },
     feed_identity, notification_retry, poll_scheduling, random, route, rss, storage,
     subscription_admission::{
@@ -30,6 +30,7 @@ use crate::{
         MAX_EXPECTED_PUBLIC_ROLLOUT_INSTALLS_PER_DAY, MAX_GLOBAL_NEW_FEED_ADMISSIONS_PER_DAY,
         MAX_SUBSCRIPTIONS_PER_INSTALL,
     },
+    subscription_payloads::{AcceptedSubscription, AcceptedSubscriptionHealth},
 };
 use futures_util::future::join_all;
 use futures_util::StreamExt;
@@ -72,7 +73,6 @@ const FEED_POLL_INTERVAL_SECONDS: i64 = poll_scheduling::HOT_INTERVAL_SECONDS;
 const MAX_FEEDS_PER_SCHEDULED_RUN: i64 = 50;
 const MAX_FEEDS_PER_MANUAL_POLL: usize = 10;
 const MAX_FEED_REDIRECTS: usize = 5;
-const MAX_BACKOFF_SECONDS: i64 = 6 * 60 * 60;
 
 const _: () = assert!(
     MAX_GLOBAL_NEW_FEED_ADMISSIONS_PER_DAY
@@ -173,12 +173,6 @@ struct SyncSubscriptionsResponse {
 }
 
 #[derive(Serialize)]
-struct AcceptedSubscription {
-    feed_url: String,
-    title: Option<String>,
-}
-
-#[derive(Serialize)]
 struct RejectedSubscription {
     feed_url: String,
     error: &'static str,
@@ -232,38 +226,6 @@ struct FetchedFeed {
 enum FeedFetchOutcome {
     NotModified { status: u16 },
     Fetched(FetchedFeed),
-}
-
-#[derive(Debug, Clone)]
-enum FeedFetchError {
-    InvalidRedirect,
-    TooManyRedirects,
-    FetchFailed,
-    MissingRedirectLocation,
-    HTTPStatus(u16),
-    OversizedBody,
-    InvalidBodyEncoding,
-}
-
-impl FeedFetchError {
-    fn code(&self) -> &'static str {
-        match self {
-            FeedFetchError::InvalidRedirect => "invalid_redirect",
-            FeedFetchError::TooManyRedirects => "too_many_redirects",
-            FeedFetchError::FetchFailed => "fetch_failed",
-            FeedFetchError::MissingRedirectLocation => "missing_redirect_location",
-            FeedFetchError::HTTPStatus(_) => "http_error",
-            FeedFetchError::OversizedBody => "oversized_body",
-            FeedFetchError::InvalidBodyEncoding => "invalid_body_encoding",
-        }
-    }
-
-    fn http_status(&self) -> Option<u16> {
-        match self {
-            FeedFetchError::HTTPStatus(status) => Some(*status),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Default)]
@@ -476,18 +438,6 @@ async fn handle_challenge(
         return json_error(429, "challenge_rate_limited");
     }
 
-    let global_challenge_count =
-        storage::global_challenge_count_since(db, challenge_window_start).await?;
-    if !global_challenge_allows_insert(global_challenge_count) {
-        return json_error(429, "challenge_rate_limited");
-    }
-
-    let challenge_count =
-        storage::challenge_count_since(db, &body.install_id, challenge_window_start).await?;
-    if !install_challenge_allows_insert(challenge_count) {
-        return json_error(429, "challenge_rate_limited");
-    }
-
     let challenge_id = random::random_urlsafe_token(16)
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
     let challenge = random::random_urlsafe_token(32)
@@ -495,7 +445,9 @@ async fn handle_challenge(
     let Some(expires_at) = now.checked_add(CHALLENGE_TTL_SECONDS) else {
         return json_error(500, "timestamp_overflow");
     };
-    storage::insert_challenge(
+    // Per-install and global hourly caps are predicates of this single
+    // atomic statement — concurrent requests cannot overshoot them.
+    let admitted = storage::insert_challenge_within_limits(
         db,
         &challenge_id,
         &challenge,
@@ -503,8 +455,12 @@ async fn handle_challenge(
         &body.install_id,
         now,
         expires_at,
+        challenge_window_start,
     )
     .await?;
+    if !admitted {
+        return json_error(429, "challenge_rate_limited");
+    }
 
     json_response(
         200,
@@ -930,6 +886,12 @@ async fn handle_sync_subscriptions(
             accepted.push(AcceptedSubscription {
                 feed_url: admitted.canonical_url,
                 title: feed.title,
+                health: Some(AcceptedSubscriptionHealth {
+                    consecutive_failures: feed.consecutive_failures,
+                    last_http_status: feed.last_http_status,
+                    last_error: feed.last_error,
+                    last_polled_at: feed.last_polled_at,
+                }),
             });
             continue;
         }
@@ -1228,14 +1190,23 @@ async fn poll_one_feed(
             })
         }
         Ok(FeedFetchOutcome::Fetched(fetched)) => {
-            let parsed = match rss::parse_rss(&fetched.body, &feed.feed_url) {
+            let FetchedFeed {
+                status,
+                body,
+                etag,
+                last_modified,
+            } = fetched;
+            let parsed_result = rss::parse_rss(&body, &feed.feed_url);
+            drop(body);
+            let parsed = match parsed_result {
                 Ok(parsed) => parsed,
                 Err(error) => {
                     record_feed_poll_failure(
                         db,
                         &feed,
-                        Some(fetched.status),
+                        Some(status),
                         error.code(),
+                        error.is_persistent_compatibility(),
                         started_at,
                         now,
                     )
@@ -1250,8 +1221,9 @@ async fn poll_one_feed(
                     record_feed_poll_failure(
                         db,
                         &feed,
-                        Some(fetched.status),
+                        Some(status),
                         error_code,
+                        false,
                         started_at,
                         now,
                     )
@@ -1313,8 +1285,8 @@ async fn poll_one_feed(
                     previous_episode_id: feed.latest_episode_id.as_deref(),
                     previous_episode_title: feed.latest_episode_title.as_deref(),
                     previous_episode_published_at: feed.latest_episode_published_at,
-                    fetched_etag: fetched.etag.as_deref(),
-                    fetched_last_modified: fetched.last_modified.as_deref(),
+                    fetched_etag: etag.as_deref(),
+                    fetched_last_modified: last_modified.as_deref(),
                     fetched_episode_id: &latest.id,
                     fetched_episode_title: &latest.title,
                     fetched_episode_published_at: latest.published_at,
@@ -1335,7 +1307,7 @@ async fn poll_one_feed(
                     latest_episode_id: completion.latest_episode_id,
                     latest_episode_title: completion.latest_episode_title,
                     latest_episode_published_at: completion.latest_episode_published_at,
-                    http_status: i32::from(fetched.status),
+                    http_status: i32::from(status),
                     next_poll_at: completion.next_poll_at,
                     poll_interval_seconds,
                     publish_cadence_seconds,
@@ -1356,7 +1328,7 @@ async fn poll_one_feed(
             record_feed_poll_attempt(
                 db,
                 &feed.feed_url,
-                Some(fetched.status),
+                Some(status),
                 changed,
                 changed.then_some(latest.id.as_str()),
                 None,
@@ -1369,9 +1341,17 @@ async fn poll_one_feed(
         }
         Err(error) => {
             let code = error.code();
-            record_feed_poll_failure(db, &feed, error.http_status(), code, started_at, now)
-                .await
-                .map_err(|error| error.to_string())?;
+            record_feed_poll_failure(
+                db,
+                &feed,
+                error.http_status(),
+                code,
+                error.is_persistent_compatibility(),
+                started_at,
+                now,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
             Err(format!("{}: {}", feed.feed_url, code))
         }
     }
@@ -1392,10 +1372,7 @@ async fn fetch_feed(
         // UA-less fetches trip host WAFs into 403 -> six-hour backoff; one
         // unconditional identity serves both the poll and admission paths.
         headers
-            .set(
-                "user-agent",
-                "OpenCast-Notifications/1 (+https://opencast.mobile)",
-            )
+            .set("user-agent", FEED_USER_AGENT)
             .map_err(|_| FeedFetchError::FetchFailed)?;
         if same_origin(&parsed_current_url, &original_url) {
             if let Some(etag) = etag {
@@ -1484,7 +1461,15 @@ async fn read_feed_body(response: &mut Response) -> std::result::Result<String, 
         .headers()
         .get("content-length")
         .map_err(|_| FeedFetchError::FetchFailed)?;
-    if feed_content_length_exceeds(content_length.as_deref(), MAX_FEED_BODY_BYTES) {
+    let content_encoding = response
+        .headers()
+        .get("content-encoding")
+        .map_err(|_| FeedFetchError::FetchFailed)?;
+    if identity_feed_content_length_exceeds(
+        content_length.as_deref(),
+        content_encoding.as_deref(),
+        MAX_FEED_BODY_BYTES,
+    ) {
         return Err(FeedFetchError::OversizedBody);
     }
 
@@ -1492,8 +1477,14 @@ async fn read_feed_body(response: &mut Response) -> std::result::Result<String, 
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| FeedFetchError::FetchFailed)?;
-        if !append_limited_feed_body_chunk(&mut bytes, &chunk, MAX_FEED_BODY_BYTES) {
-            return Err(FeedFetchError::OversizedBody);
+        match append_limited_feed_body_chunk(&mut bytes, &chunk, MAX_FEED_BODY_BYTES) {
+            Ok(()) => {}
+            Err(FeedBodyAppendError::Oversized) => {
+                return Err(FeedFetchError::OversizedBody);
+            }
+            Err(FeedBodyAppendError::AllocationFailed) => {
+                return Err(FeedFetchError::FetchFailed);
+            }
         }
     }
 
@@ -1619,17 +1610,23 @@ async fn record_feed_poll_failure(
     feed: &storage::FeedPollRow,
     http_status: Option<u16>,
     error_code: &str,
+    persistent_compatibility: bool,
     started_at: i64,
     now: i64,
 ) -> Result<()> {
     let failures = feed.consecutive_failures.saturating_add(1);
+    let retry_seconds = feed_failure_retry_seconds(
+        failures,
+        persistent_compatibility,
+        worker::js_sys::Math::random(),
+    );
     storage::update_feed_poll_failure(
         db,
         &feed.feed_url,
         http_status.map(i32::from),
         error_code,
         failures,
-        now.saturating_add(backoff_seconds(failures)),
+        now.saturating_add(retry_seconds),
         now,
     )
     .await?;
@@ -1670,14 +1667,6 @@ async fn record_feed_poll_attempt(
         },
     )
     .await
-}
-
-fn backoff_seconds(failures: i64) -> i64 {
-    let exponent = u32::try_from(failures.saturating_sub(1).min(8)).unwrap_or(0);
-    let base = FEED_POLL_INTERVAL_SECONDS
-        .saturating_mul(2_i64.saturating_pow(exponent))
-        .min(MAX_BACKOFF_SECONDS);
-    jittered_backoff_seconds(base, MAX_BACKOFF_SECONDS, worker::js_sys::Math::random())
 }
 
 /// The logging convention for install identity: a 16-hex SHA-256 prefix —

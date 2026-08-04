@@ -11,6 +11,10 @@ import Foundation
 final class BackgroundRemoteTranscriptionUploadTransport: NSObject, RemoteTranscriptionUploadTransport, URLSessionDataDelegate, @unchecked Sendable {
     private static let identifierPrefix = "com.connor.opencast.remote-transcription.upload."
 
+    /// A second waiter registered for the same part number; the displaced
+    /// waiter fails visibly instead of hanging forever.
+    struct WaiterDisplaced: Error, Sendable {}
+
     private let lock = NSLock()
     private var continuations: [Int: CheckedContinuation<RemoteTranscriptionUploadPartPutResult, any Error>] = [:]
     private var session: URLSession!
@@ -87,16 +91,19 @@ final class BackgroundRemoteTranscriptionUploadTransport: NSObject, RemoteTransc
         }
     }
 
-    nonisolated private func register(
+    // Internal (not private) so the displaced-waiter contract stays testable.
+    nonisolated func register(
         _ continuation: CheckedContinuation<RemoteTranscriptionUploadPartPutResult, any Error>,
         partNumber: Int
     ) {
         lock.lock()
-        defer { lock.unlock() }
+        let displaced = continuations[partNumber]
         continuations[partNumber] = continuation
+        lock.unlock()
+        displaced?.resume(throwing: WaiterDisplaced())
     }
 
-    nonisolated private func take(
+    nonisolated func take(
         partNumber: Int
     ) -> CheckedContinuation<RemoteTranscriptionUploadPartPutResult, any Error>? {
         lock.lock()

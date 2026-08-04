@@ -9,12 +9,13 @@ import Testing
 /// OPENCAST_TINY_RESUME_PROBE=1 OPENCAST_TRANSCRIPTION_AUDIO=<file>.
 @Suite("Tiny cancellation and resume probe")
 struct TinyCancellationResumeProbeTests {
-    @Test("Cancel after a checkpoint, resume, and stitch without gaps or duplicates")
+    @Test(
+        "Cancel after a checkpoint, resume, and stitch without gaps or duplicates",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_TINY_RESUME_PROBE"] == "1"
+            && ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil)
+    )
     func cancelResumeStitch() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_TINY_RESUME_PROBE"] == "1",
-              let audioPath = ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] else {
-            return
-        }
+        let audioPath = try #require(ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"])
 
         let clipEnd: TimeInterval = 120
         let audioURL = URL(fileURLWithPath: audioPath)

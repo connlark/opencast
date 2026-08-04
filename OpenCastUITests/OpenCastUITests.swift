@@ -8,7 +8,11 @@ final class OpenCastUITests: XCTestCase {
     private static let seededCompletedEpisodeRowIdentifier = "episode-row-ui-test-episode-completed"
     private static let liveAdAnalysisEpisodeRowIdentifier = "episode-row-audio-illusion-that-proves-we-dont-experience-reality"
     private static let seededSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-feed.xml"
+    private static let soundLabTranscriptActionIdentifier = "Now Playing Sound Lab Transcript Action"
     private static let seedVoiceBoostModeEnvironmentKey = "OPENCAST_SEED_VOICE_BOOST_MODE"
+    private static let seedAdDetectionModeEnvironmentKey = "OPENCAST_SEED_AD_DETECTION_MODE"
+    private static let cloudAdDetectionModeValue = "cloud"
+    private static let onDeviceAdDetectionModeValue = "onDevice"
     private static let adAnalysisClientTokenEnvironmentKey = "OPENCAST_AD_ANALYSIS_CLIENT_TOKEN"
     private static let adAnalysisBaseURLEnvironmentKey = "OPENCAST_AD_ANALYSIS_BASE_URL"
     private static let localAdAnalysisClientTokenFilePath = "/private/tmp/opencast-ad-analysis-client-token"
@@ -461,11 +465,39 @@ final class OpenCastUITests: XCTestCase {
         app.tabBars.buttons["Inbox"].tap()
 
         let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "inbox episode before Go to Show")
+        inboxEpisode.press(forDuration: 1.2)
+        let goToShow = app.buttons["Go to Show"]
+        assertHittable(goToShow, named: "inbox Go to Show context action")
+        goToShow.tap()
+        assertExists(
+            app.descendants(matching: .any)["Podcast Hero Header"],
+            named: "show reached from the context action"
+        )
+        tapBackButton(in: app)
+
         openEpisodeDetailFromContextMenu(
             inboxEpisode,
             in: app,
             named: "inbox episode"
         )
+
+        let showLink = app.buttons["UI Test Show"]
+        assertHittable(showLink, named: "episode show link")
+        showLink.tap()
+        assertExists(app.descendants(matching: .any)["Podcast Hero Header"], named: "show detail")
+    }
+
+    @MainActor
+    func testSeededInboxEpisodeOffersPlayedSwipeAction() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertHittable(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.swipeRight()
+
+        assertHittable(app.buttons["Mark Played"], named: "Inbox Mark Played swipe action")
     }
 
     @MainActor
@@ -482,7 +514,8 @@ final class OpenCastUITests: XCTestCase {
         openEpisodeDetailFromContextMenu(
             podcastEpisode,
             in: app,
-            named: "podcast episode"
+            named: "podcast episode",
+            expectsGoToShow: false
         )
     }
 
@@ -728,7 +761,8 @@ final class OpenCastUITests: XCTestCase {
         openEpisodeDetailFromContextMenu(
             completedEpisode,
             in: app,
-            named: "completed podcast episode"
+            named: "completed podcast episode",
+            expectsGoToShow: false
         )
 
         let playEpisodeButton = app.buttons["Play Episode"]
@@ -769,7 +803,8 @@ final class OpenCastUITests: XCTestCase {
         openEpisodeDetailFromContextMenu(
             completedEpisode,
             in: app,
-            named: "completed podcast episode"
+            named: "completed podcast episode",
+            expectsGoToShow: false
         )
         let playEpisodeButton = app.buttons["Play Episode"]
         assertExists(playEpisodeButton, named: "Play Episode button while another episode is playing")
@@ -1025,6 +1060,9 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     func testSeededAdDetectionIndicatorOpensQueueScreenWithConsentAffordance() throws {
         let app = makeSeededApp()
+        // A stored mode skips the first-tap cloud-or-device dialog (its own
+        // coverage: testDetectAdsFirstTapPromptsForModeAndRemembersOnDeviceChoice).
+        app.launchEnvironment[Self.seedAdDetectionModeEnvironmentKey] = Self.onDeviceAdDetectionModeValue
         app.launch()
 
         let indicator = app.buttons["Ad Detection Queue Indicator"]
@@ -1254,6 +1292,9 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     func testSeededAdDetectionQueueShowsFinishedFailures() throws {
         let app = makeSeededApp(seedsBadAudioURL: true)
+        // A stored mode skips the first-tap cloud-or-device dialog (its own
+        // coverage: testDetectAdsFirstTapPromptsForModeAndRemembersOnDeviceChoice).
+        app.launchEnvironment[Self.seedAdDetectionModeEnvironmentKey] = Self.onDeviceAdDetectionModeValue
         app.launch()
 
         let episodeRow = seededEpisodeRow(in: app)
@@ -1483,13 +1524,18 @@ final class OpenCastUITests: XCTestCase {
 
         let voiceBoost = app.switches["Voice Boost"]
         let adAction = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
-        let remoteAction = app.buttons.matching(identifier: "Show Transcript").firstMatch
+        let remoteAction = app.buttons.matching(
+            identifier: Self.soundLabTranscriptActionIdentifier
+        ).firstMatch
         for (control, name) in [
             (voiceBoost, "Voice Boost"),
             (adAction, "Skip Promos & Ads"),
             (remoteAction, "Show Transcript")
         ] {
             assertExists(control, named: "\(name) Sound Lab control")
+            if name == "Show Transcript" {
+                XCTAssertEqual(control.label, name)
+            }
             XCTAssertTrue(control.isHittable, "\(name) should be hittable")
             XCTAssertGreaterThanOrEqual(
                 control.frame.height,
@@ -1528,11 +1574,15 @@ final class OpenCastUITests: XCTestCase {
     func testSeededNowPlayingSoundLabRemoteTranscriptionPresentsEstimateSheet() throws {
         let app = makeSeededApp()
         app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
+        app.launchEnvironment[Self.seedAdDetectionModeEnvironmentKey] = Self.cloudAdDetectionModeValue
         app.launch()
 
         openSeededNowPlayingSoundLab(in: app)
-        let remoteRow = app.buttons["Transcribe Remotely"].firstMatch
+        let remoteRow = app.buttons.matching(
+            identifier: Self.soundLabTranscriptActionIdentifier
+        ).firstMatch
         assertExists(remoteRow, named: "Transcribe Remotely Sound Lab row")
+        XCTAssertEqual(remoteRow.label, "Transcribe Remotely")
         remoteRow.tap()
 
         assertExists(app.navigationBars["Remote Transcription"], named: "consumption estimate sheet")
@@ -1548,6 +1598,7 @@ final class OpenCastUITests: XCTestCase {
     func testSeededCompletedTranscriptSoundLabOpensTranscript() throws {
         let app = makeSeededApp(seedsCompletedTranscript: true)
         app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
+        app.launchEnvironment[Self.seedAdDetectionModeEnvironmentKey] = Self.cloudAdDetectionModeValue
         app.launch()
 
         openSeededNowPlayingSoundLab(in: app)
@@ -1555,14 +1606,90 @@ final class OpenCastUITests: XCTestCase {
             app.buttons["Transcribe Remotely"],
             named: "cloud transcription action after transcript completion"
         )
-        let showTranscript = app.buttons["Show Transcript"].firstMatch
+        let showTranscript = app.buttons.matching(
+            identifier: Self.soundLabTranscriptActionIdentifier
+        ).firstMatch
         assertHittable(showTranscript, named: "Show Transcript Sound Lab row")
+        XCTAssertEqual(showTranscript.label, "Show Transcript")
         showTranscript.tap()
 
         assertExists(app.staticTexts["Transcript"], named: "transcript sheet title")
         assertExists(
             app.buttons["Welcome to a deterministic transcript."],
             named: "seeded transcript line"
+        )
+    }
+
+    @MainActor
+    func testSeededLocalSoundLabTranscriptionCompletesAndOpensTranscript() throws {
+        let app = makeSeededApp(
+            seedsCompletedDownload: true,
+            completesTranscriptRequests: true
+        )
+        app.launch()
+
+        openSeededNowPlayingSoundLab(in: app)
+        let transcriptAction = app.buttons.matching(
+            identifier: Self.soundLabTranscriptActionIdentifier
+        ).firstMatch
+        assertHittable(transcriptAction, named: "local Sound Lab transcript action")
+        XCTAssertEqual(transcriptAction.label, "Transcribe")
+        transcriptAction.tap()
+
+        assertExists(
+            app.descendants(matching: .any)["Transcription Progress Toast"],
+            named: "local transcription progress toast"
+        )
+        expectation(
+            for: NSPredicate(format: "label == %@", "Show Transcript"),
+            evaluatedWith: transcriptAction
+        )
+        waitForExpectations(timeout: 10)
+        assertHittable(transcriptAction, named: "completed Sound Lab transcript action")
+        transcriptAction.tap()
+
+        assertExists(app.staticTexts["Transcript"], named: "transcript sheet title")
+        assertExists(
+            app.buttons["Deterministic UI request transcript."],
+            named: "generated transcript line"
+        )
+    }
+
+    @MainActor
+    func testSeededCloudResolvingSoundLabCannotStartLocalTranscription() throws {
+        let app = makeSeededApp(
+            seedsCompletedDownload: true,
+            completesTranscriptRequests: true
+        )
+        app.launchArguments += [
+            "-OPENCAST_REMOTE_TRANSCRIPTION_PURCHASE_FIXTURE",
+            "delayed-availability",
+        ]
+        app.launchEnvironment[Self.seedAdDetectionModeEnvironmentKey] = Self.cloudAdDetectionModeValue
+        app.launch()
+
+        openSeededNowPlayingSoundLab(in: app)
+        let transcriptAction = app.buttons.matching(
+            identifier: Self.soundLabTranscriptActionIdentifier
+        ).firstMatch
+        assertExists(transcriptAction, named: "cloud availability checking action")
+        XCTAssertEqual(transcriptAction.label, "Transcribe Remotely")
+        XCTAssertFalse(transcriptAction.isEnabled)
+        XCTAssertTrue(
+            transcriptAction.value.debugDescription.localizedCaseInsensitiveContains("checking"),
+            "The disabled remote action should expose its availability check"
+        )
+
+        transcriptAction.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        assertDoesNotExist(
+            app.descendants(matching: .any)["Transcription Progress Toast"],
+            named: "local transcription toast while cloud availability is unresolved",
+            timeout: 1
+        )
+        assertDoesNotExist(
+            app.navigationBars["Remote Transcription"],
+            named: "remote estimate before cloud availability resolves",
+            timeout: 1
         )
     }
 
@@ -2465,8 +2592,12 @@ final class OpenCastUITests: XCTestCase {
 
         deleteAnalysisButton.tap()
 
+        // Backstop-only budget: the wait returns the moment the banner
+        // clears, but the delete's save→reload propagation can exceed 5s
+        // under full-suite clone load (observed once in the Phase 9 close
+        // lane; green in isolation).
         XCTAssertTrue(
-            app.staticTexts["Outdated — run again"].waitForNonExistence(timeout: 5),
+            app.staticTexts["Outdated — run again"].waitForNonExistence(timeout: 15),
             "The stale banner should clear after deleting the analysis."
         )
         openTranscriptOptionsMenu(in: app)
@@ -2610,7 +2741,16 @@ final class OpenCastUITests: XCTestCase {
         assertExists(episodePlaybackControl(in: app), named: "episode playback control at AX size")
         assertExists(app.buttons["Download"], named: "Download button at AX size")
         assertExists(app.buttons["Make Ad-Free"], named: "Make Ad-Free button at AX size")
+        let showLink = app.buttons["UI Test Show"]
+        assertHittable(showLink, named: "episode show link at AX size")
+        XCTAssertGreaterThanOrEqual(showLink.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(showLink.frame.height, 44)
         attachSmokeScreenshot(named: "episode_detail_dynamic_type_ax")
+        showLink.tap()
+        assertExists(
+            app.descendants(matching: .any)["Podcast Hero Header"],
+            named: "show detail from AX-sized episode link"
+        )
     }
 
     @MainActor
@@ -2750,15 +2890,50 @@ final class OpenCastUITests: XCTestCase {
     func testNowPlayingVoiceBoostSupportsLargeDynamicType() throws {
         let app = makeSeededApp(
             seedsPerEpisodeVoiceBoost: true,
-            preferredContentSizeCategoryName: "UICTContentSizeCategoryAccessibilityL"
+            preferredContentSizeCategoryName: "UICTContentSizeCategoryAccessibilityXXXL"
         )
         app.launch()
 
         openSeededNowPlayingSoundLab(in: app)
 
+        let panel = nowPlayingSoundLabPanel(in: app)
         let voiceBoostToggle = app.switches["Voice Boost"]
+        let adAction = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
+        let transcriptAction = app.buttons.matching(
+            identifier: Self.soundLabTranscriptActionIdentifier
+        ).firstMatch
+        let header = app.staticTexts["Sound Lab"].firstMatch
         assertToggle(voiceBoostToggle, isOn: true)
-        attachSmokeScreenshot(named: "now_playing_voice_boost_dynamic_type")
+        assertExists(adAction, named: "Skip Promos & Ads at Accessibility XXXL")
+        assertExists(transcriptAction, named: "transcript action at Accessibility XXXL")
+
+        let controls = [voiceBoostToggle, adAction, transcriptAction]
+        for control in controls {
+            XCTAssertTrue(control.isHittable, "\(control.label) should remain hittable")
+            XCTAssertGreaterThanOrEqual(control.frame.height, 43.99)
+            XCTAssertTrue(
+                panel.frame.contains(control.frame),
+                "\(control.label) should remain fully inside the Sound Lab panel"
+            )
+            if header.exists {
+                XCTAssertFalse(
+                    control.frame.intersects(header.frame),
+                    "\(control.label) should not overlap the Sound Lab header"
+                )
+            }
+        }
+        for firstIndex in controls.indices {
+            for secondIndex in controls.indices where secondIndex > firstIndex {
+                XCTAssertFalse(
+                    controls[firstIndex].frame.intersects(controls[secondIndex].frame),
+                    "Sound Lab controls should not overlap: \(controls[firstIndex].label) "
+                        + "\(controls[firstIndex].frame) and \(controls[secondIndex].label) "
+                        + "\(controls[secondIndex].frame)"
+                )
+            }
+        }
+
+        attachSmokeScreenshot(named: "now_playing_sound_lab_accessibility_xxxl")
 
         tapToggle(voiceBoostToggle, to: false)
         tapToggle(voiceBoostToggle, to: true)
@@ -3816,6 +3991,7 @@ final class OpenCastUITests: XCTestCase {
         _ row: XCUIElement,
         in app: XCUIApplication,
         named name: String,
+        expectsGoToShow: Bool = true,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -3824,6 +4000,21 @@ final class OpenCastUITests: XCTestCase {
 
         let detailsAction = app.buttons["View Episode Details"]
         assertExists(detailsAction, named: "\(name) details context action", file: file, line: line)
+        if expectsGoToShow {
+            assertExists(
+                app.buttons["Go to Show"],
+                named: "\(name) Go to Show context action",
+                file: file,
+                line: line
+            )
+        } else {
+            assertDoesNotExist(
+                app.buttons["Go to Show"],
+                named: "\(name) duplicate Go to Show context action",
+                file: file,
+                line: line
+            )
+        }
         // The shared row menu carries the step-6 actions on every surface.
         assertExists(
             app.buttons["Detect Ads"].firstMatch,
@@ -4029,10 +4220,15 @@ final class OpenCastUITests: XCTestCase {
             file: file,
             line: line
         )
+        // Mirrors NowPlayingSoundLabLayout(panelWidth:): the artwork rail plus
+        // its gutter is the panel's protected leading space — controls must
+        // clear the rail, wherever layout tuning puts the row's own insets.
+        let artworkRailWidth = min(54, max(40, panel.frame.width * 0.18))
+        let protectedLeadingSpace = artworkRailWidth + 4
         XCTAssertGreaterThanOrEqual(
             element.frame.minX,
-            panel.frame.minX + (panel.frame.width * 0.34),
-            "\(stage) ad-free pass control should stay in the protected trailing panel space",
+            panel.frame.minX + protectedLeadingSpace - 0.5,
+            "\(stage) ad-free pass control should clear the artwork rail",
             file: file,
             line: line
         )

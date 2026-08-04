@@ -4,7 +4,7 @@
 //! tests actually run under `cargo test` (they were dead while these lived in
 //! the wasm-only `worker_app`).
 
-use crate::{feed_identity, rss, storage};
+use crate::{feed_identity, poll_scheduling, rss, storage};
 use futures_util::future::{select, Either};
 use std::future::Future;
 use std::pin::pin;
@@ -17,6 +17,10 @@ pub const FEED_POLL_CHUNK_SIZE: usize = 6;
 /// Generous for a healthy feed host (p99 well under a few seconds) while
 /// keeping one hung host from consuming the whole tick budget.
 pub const FEED_FETCH_TIMEOUT_SECONDS: u64 = 12;
+const TRANSIENT_FAILURE_RETRY_CEILING_SECONDS: i64 = 6 * 60 * 60;
+pub const PERSISTENT_COMPATIBILITY_RETRY_SECONDS: i64 = 24 * 60 * 60;
+const PERSISTENT_COMPATIBILITY_RETRY_CEILING_SECONDS: i64 =
+    PERSISTENT_COMPATIBILITY_RETRY_SECONDS * 6 / 5;
 
 /// Races a fetch against a deadline future. A fetch that outlives the
 /// deadline is dropped and reported as `timeout_error`, taking the same
@@ -44,6 +48,29 @@ pub fn jittered_backoff_seconds(base: i64, ceiling: i64, random: f64) -> i64 {
     let factor = 0.8 + 0.4 * random.clamp(0.0, 1.0);
     let jittered = (base as f64 * factor) as i64;
     jittered.clamp(1, ceiling)
+}
+
+/// Persistent document incompatibilities retry about daily instead of riding
+/// the transient 15-minute-to-6-hour ladder. The branch comes first so its
+/// random draw is applied directly to the policy that will be used.
+pub fn feed_failure_retry_seconds(
+    consecutive_failures: i64,
+    persistent_compatibility: bool,
+    random: f64,
+) -> i64 {
+    if persistent_compatibility {
+        return jittered_backoff_seconds(
+            PERSISTENT_COMPATIBILITY_RETRY_SECONDS,
+            PERSISTENT_COMPATIBILITY_RETRY_CEILING_SECONDS,
+            random,
+        );
+    }
+
+    let exponent = u32::try_from(consecutive_failures.saturating_sub(1).min(8)).unwrap_or(0);
+    let base = poll_scheduling::HOT_INTERVAL_SECONDS
+        .saturating_mul(2_i64.saturating_pow(exponent))
+        .min(TRANSIENT_FAILURE_RETRY_CEILING_SECONDS);
+    jittered_backoff_seconds(base, TRANSIENT_FAILURE_RETRY_CEILING_SECONDS, random)
 }
 
 /// Splits the due batch into order-preserving chunks of
@@ -219,6 +246,38 @@ mod tests {
         assert_eq!(jittered_backoff_seconds(21_600, 21_600, 0.0), 17_280);
         // A degenerate base never jitters to zero.
         assert_eq!(jittered_backoff_seconds(1, 21_600, 0.0), 1);
+    }
+
+    #[test]
+    fn persistent_compatibility_retry_is_jittered_around_one_day() {
+        assert_eq!(
+            feed_failure_retry_seconds(1, true, 0.0),
+            PERSISTENT_COMPATIBILITY_RETRY_SECONDS * 4 / 5
+        );
+        assert_eq!(
+            feed_failure_retry_seconds(1, true, 0.5),
+            PERSISTENT_COMPATIBILITY_RETRY_SECONDS
+        );
+        assert_eq!(
+            feed_failure_retry_seconds(99, true, 1.0),
+            PERSISTENT_COMPATIBILITY_RETRY_SECONDS * 6 / 5
+        );
+    }
+
+    #[test]
+    fn transient_failure_keeps_exponential_retry_policy() {
+        assert_eq!(
+            feed_failure_retry_seconds(1, false, 0.5),
+            poll_scheduling::HOT_INTERVAL_SECONDS
+        );
+        assert_eq!(
+            feed_failure_retry_seconds(2, false, 0.5),
+            poll_scheduling::HOT_INTERVAL_SECONDS * 2
+        );
+        assert_eq!(
+            feed_failure_retry_seconds(99, false, 1.0),
+            TRANSIENT_FAILURE_RETRY_CEILING_SECONDS
+        );
     }
 
     #[test]

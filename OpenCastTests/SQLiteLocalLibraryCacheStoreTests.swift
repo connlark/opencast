@@ -176,6 +176,66 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(relisted.podcastsByFeedURL[Self.feedURL]?.artworkPreview == nil)
     }
 
+    @Test("Re-upserting an identical snapshot writes zero rows and keeps timestamps")
+    func identicalSnapshotUpsertWritesNothing() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        let firstRefreshedAt = Date(timeIntervalSince1970: 1_700_000_300)
+        let snapshot = makeFeedSnapshot(episodes: [
+            makeEpisode(
+                id: "ep-1",
+                title: "First Episode",
+                publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
+                showNotesHTML: "<p>Notes</p>"
+            ),
+            makeEpisode(id: "ep-2", title: "Second Episode", publishedAt: nil)
+        ])
+        try await store.upsertCache(from: snapshot, refreshedAt: firstRefreshedAt)
+        let changesBeforeSecondUpsert = try await store.totalRowChangeCount()
+
+        try await store.upsertCache(from: snapshot, refreshedAt: Date(timeIntervalSince1970: 1_700_000_900))
+
+        #expect(try await store.totalRowChangeCount() == changesBeforeSecondUpsert)
+        let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
+        #expect(library.episodes.map(\.cachedAt) == Array(repeating: firstRefreshedAt, count: 2))
+        #expect(library.podcastsByFeedURL[Self.feedURL]?.updatedAt == firstRefreshedAt)
+    }
+
+    @Test("A changed episode writes exactly that row and advances only its timestamp")
+    func changedEpisodeWritesExactlyThatRow() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        let firstRefreshedAt = Date(timeIntervalSince1970: 1_700_000_300)
+        let unchangedEpisode = makeEpisode(
+            id: "ep-stable",
+            title: "Stable Episode",
+            publishedAt: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(id: "ep-edited", title: "Original Title", publishedAt: Date(timeIntervalSince1970: 1_700_000_200)),
+                unchangedEpisode
+            ]),
+            refreshedAt: firstRefreshedAt
+        )
+        let changesBeforeSecondUpsert = try await store.totalRowChangeCount()
+
+        let secondRefreshedAt = Date(timeIntervalSince1970: 1_700_000_900)
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(id: "ep-edited", title: "Edited Title", publishedAt: Date(timeIntervalSince1970: 1_700_000_200)),
+                unchangedEpisode
+            ]),
+            refreshedAt: secondRefreshedAt
+        )
+
+        #expect(try await store.totalRowChangeCount() == changesBeforeSecondUpsert + 1)
+        let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
+        let edited = try #require(library.episodes.first { $0.episodeID == "ep-edited" })
+        let stable = try #require(library.episodes.first { $0.episodeID == "ep-stable" })
+        #expect(edited.title == "Edited Title")
+        #expect(edited.cachedAt == secondRefreshedAt)
+        #expect(stable.cachedAt == firstRefreshedAt)
+    }
+
     @Test("Episode detail carries show notes and the bulk lookup covers active feeds only")
     func listDetailSplitExposesShowNotes() async throws {
         let store = SQLiteLocalLibraryCacheStore.inMemory()
@@ -268,12 +328,80 @@ struct SQLiteLocalLibraryCacheStoreTests {
             try await store.insertRefreshLog(log, prunedTo: 50)
         }
 
-        let library = try await store.loadLibrary(activePodcastIDs: [])
-        #expect(library.refreshLogs.count == 51)
+        let allLogs = try await store.allRefreshLogs()
+        #expect(allLogs.count == 51)
 
-        let feedLogs = library.refreshLogs.filter { $0.feedURL == Self.feedURL }
+        let feedLogs = allLogs.filter { $0.feedURL == Self.feedURL }
         #expect(feedLogs.map(\.refreshID) == (6...55).reversed().map { "refresh-\($0)" })
-        #expect(library.refreshLogs.last == otherLog)
+        #expect(allLogs.last == otherLog)
+
+        // The library snapshot carries only the per-feed-latest projection.
+        let library = try await store.loadLibrary(activePodcastIDs: [])
+        #expect(library.refreshLogs.map(\.refreshID) == ["refresh-55", "other-refresh"])
+    }
+
+    @Test("Library snapshot projects each feed's latest log plus its latest success")
+    func librarySnapshotProjectsLatestAndLatestSuccessPerFeed() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldSuccess = RefreshLogSnapshot(
+            refreshID: "old-success",
+            feedURL: Self.feedURL,
+            startedAt: base,
+            finishedAt: base.addingTimeInterval(1)
+        )
+        let midFailure = RefreshLogSnapshot(
+            refreshID: "mid-failure",
+            feedURL: Self.feedURL,
+            startedAt: base.addingTimeInterval(10),
+            finishedAt: base.addingTimeInterval(11),
+            errorMessage: "boom"
+        )
+        let latestFailure = RefreshLogSnapshot(
+            refreshID: "latest-failure",
+            feedURL: Self.feedURL,
+            startedAt: base.addingTimeInterval(20),
+            finishedAt: base.addingTimeInterval(21),
+            errorMessage: "boom again"
+        )
+        for log in [oldSuccess, midFailure, latestFailure] {
+            try await store.insertRefreshLog(log, prunedTo: 50)
+        }
+
+        let library = try await store.loadLibrary(activePodcastIDs: [])
+
+        // Latest overall (a failure) and the newest success both survive the
+        // projection; the middle failure does not.
+        #expect(library.refreshLogs.map(\.refreshID) == ["latest-failure", "old-success"])
+    }
+
+    @Test("Feed validators round-trip without touching the content timestamp")
+    func feedValidatorsRoundTripWithoutTouchingTimestamp() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        let refreshedAt = Date(timeIntervalSince1970: 1_700_000_500)
+        let snapshot = makeFeedSnapshot(episodes: [
+            makeEpisode(id: "ep-1", title: "First", publishedAt: Date(timeIntervalSince1970: 1_700_000_100))
+        ])
+        try await store.upsertCache(from: snapshot, refreshedAt: refreshedAt)
+        #expect(try await store.feedValidators(forPodcastID: Self.feedURL) == nil)
+
+        let validators = FeedValidators(
+            entityTag: "\"tag-1\"",
+            lastModified: "Wed, 08 Apr 2026 12:00:00 GMT",
+            bodyHash: "hash-1"
+        )
+        try await store.updateFeedValidators(validators, forPodcastID: Self.feedURL)
+
+        #expect(try await store.feedValidators(forPodcastID: Self.feedURL) == validators)
+        let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
+        #expect(library.podcastsByFeedURL[Self.feedURL]?.updatedAt == refreshedAt)
+    }
+
+    @Test("The schema reports the versioned-migration user_version")
+    func schemaReportsUserVersion() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        _ = try await store.loadLibrary(activePodcastIDs: [])
+        #expect(try await store.currentSchemaVersion() == 1)
     }
 
     @Test("Deleting one feed's cache leaves other feeds untouched")

@@ -29,4 +29,14 @@ struct PlaybackSnapshotTests {
         #expect(PlaybackState.playing.accessibilityDescription == "Playing")
         #expect(PlaybackState.failed("offline").accessibilityDescription == "Playback Failed")
     }
+
+    @Test
+    func loadingStateKeepsPausePresentationAndToggleBehaviorAligned() {
+        #expect(PlaybackState.loading.showsPauseButton)
+        #expect(PlaybackState.loading.showsLoadingIndicator)
+        #expect(PlaybackState.buffering.showsPauseButton)
+        #expect(PlaybackState.buffering.showsLoadingIndicator)
+        #expect(!PlaybackState.paused.showsPauseButton)
+        #expect(!PlaybackState.paused.showsLoadingIndicator)
+    }
 }

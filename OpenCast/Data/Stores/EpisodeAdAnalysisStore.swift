@@ -5,9 +5,24 @@ import SwiftData
 
 @Observable
 final class EpisodeAdAnalysisStore {
-    private(set) var records: [EpisodeAdAnalysisRecord] = []
+    // The index rebuilds on every mutation (didSet), so per-row lookups stay
+    // O(1) and can never go stale; keep-first mirrors the replaced
+    // `records.first` lookup (house precedent: LibraryStore.episodeIndexByID).
+    private(set) var records: [EpisodeAdAnalysisRecord] = [] {
+        didSet {
+            recordsByEpisodeID = Dictionary(
+                records.map { ($0.episodeID, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+    }
+    @ObservationIgnored private var recordsByEpisodeID: [String: EpisodeAdAnalysisRecord] = [:]
     private(set) var lastErrorMessage: String?
     private var lastErrorEpisodeID: String?
+    /// Episode-ID groups that held more than one record and were collapsed to
+    /// a proven survivor, cumulative for this process (startup repair plus
+    /// migration collisions). Diagnostics-only; never names episodes.
+    private(set) var duplicateRepairCount = 0
 
     @ObservationIgnored private let client: any EpisodeAdAnalysisClient
     @ObservationIgnored private let fileStore: EpisodeAdAnalysisFileStore
@@ -114,7 +129,7 @@ final class EpisodeAdAnalysisStore {
     }
 
     func record(for episodeID: String) -> EpisodeAdAnalysisRecord? {
-        records.first { $0.episodeID == episodeID }
+        recordsByEpisodeID[episodeID]
     }
 
     func lastErrorMessage(for episodeID: String) -> String? {
@@ -420,6 +435,46 @@ final class EpisodeAdAnalysisStore {
         for record in records {
             notifyEpisodeStateChanged(record.episodeID)
         }
+    }
+
+    func migrateEpisodeSidecars(
+        from oldEpisodeID: String,
+        to newEpisodeID: String,
+        canonicalPodcastID: String,
+        modelContext: ModelContext
+    ) throws {
+        let migratingRecords = try fetchRecords(episodeID: oldEpisodeID, modelContext: modelContext)
+        guard !migratingRecords.isEmpty else {
+            return
+        }
+
+        let targetRecords = try fetchRecords(episodeID: newEpisodeID, modelContext: modelContext)
+        try fileStore.migrateAnalyses(fromEpisodeID: oldEpisodeID, to: newEpisodeID)
+        let newDirectory = "\(EpisodeAdAnalysisFileStore.directoryName)/\(fileStore.safeStem(newEpisodeID))"
+        for record in migratingRecords {
+            record.episodeID = newEpisodeID
+            record.podcastID = canonicalPodcastID
+            if let relativePath = record.analysisRelativePath,
+               let fileName = relativePath.split(separator: "/").last {
+                record.analysisRelativePath = "\(newDirectory)/\(fileName)"
+            }
+        }
+
+        guard !targetRecords.isEmpty else {
+            return
+        }
+        duplicateRepairCount += 1
+        let deletedRecords = collapseDuplicateRecords(
+            migratingRecords + targetRecords,
+            subscribedFeedURLs: EpisodeSidecarRepair.subscribedFeedURLs(modelContext: modelContext),
+            modelContext: modelContext
+        )
+        guard !deletedRecords.isEmpty else {
+            return
+        }
+        let deletedIdentities = Set(deletedRecords.map(ObjectIdentifier.init))
+        records.removeAll { deletedIdentities.contains(ObjectIdentifier($0)) }
+        notifyEpisodeStateChanged(newEpisodeID)
     }
 
     func nukeAllAnalyses(modelContext: ModelContext) async throws {
@@ -1017,10 +1072,17 @@ final class EpisodeAdAnalysisStore {
     }
 
     private func reconcile(modelContext: ModelContext) throws -> EpisodeAdAnalysisResumeContext? {
-        let fetchedRecords = try fetchRecords(modelContext: modelContext)
+        var fetchedRecords = try fetchRecords(modelContext: modelContext)
         let now = Date.now
         var changed = false
         var resumeContext: EpisodeAdAnalysisResumeContext?
+
+        let repairedGroupCount = repairDuplicateRecordGroups(&fetchedRecords, modelContext: modelContext)
+        if repairedGroupCount > 0 {
+            duplicateRepairCount += repairedGroupCount
+            changed = true
+        }
+
         for record in fetchedRecords {
             switch record.state {
             case .running:
@@ -1071,6 +1133,155 @@ final class EpisodeAdAnalysisStore {
             try modelContext.save()
         }
         return resumeContext
+    }
+
+    private func repairDuplicateRecordGroups(
+        _ fetchedRecords: inout [EpisodeAdAnalysisRecord],
+        modelContext: ModelContext
+    ) -> Int {
+        var groupsByEpisodeID: [String: [EpisodeAdAnalysisRecord]] = [:]
+        for record in fetchedRecords {
+            groupsByEpisodeID[record.episodeID, default: []].append(record)
+        }
+        let duplicateGroups = groupsByEpisodeID.values.filter { $0.count > 1 }
+        guard !duplicateGroups.isEmpty else {
+            return 0
+        }
+
+        let subscribedFeedURLs = EpisodeSidecarRepair.subscribedFeedURLs(modelContext: modelContext)
+        var removedIdentities = Set<ObjectIdentifier>()
+        for group in duplicateGroups {
+            for deleted in collapseDuplicateRecords(
+                group,
+                subscribedFeedURLs: subscribedFeedURLs,
+                modelContext: modelContext
+            ) {
+                removedIdentities.insert(ObjectIdentifier(deleted))
+            }
+        }
+        fetchedRecords.removeAll { removedIdentities.contains(ObjectIdentifier($0)) }
+        return duplicateGroups.count
+    }
+
+    /// Collapses one episode's analysis records to a single survivor. The
+    /// ladder prefers a completed record whose document decodes and whose
+    /// fingerprint matches the episode's surviving transcript; a survivor
+    /// that contradicts that transcript is kept but failed so stale skip
+    /// spans are never presented. Loser documents are removed immediately —
+    /// losing is deterministic, so an interrupted save re-runs the same
+    /// collapse.
+    private func collapseDuplicateRecords(
+        _ group: [EpisodeAdAnalysisRecord],
+        subscribedFeedURLs: Set<String>,
+        modelContext: ModelContext
+    ) -> [EpisodeAdAnalysisRecord] {
+        guard group.count > 1, let episodeID = group.first?.episodeID else {
+            return []
+        }
+
+        let transcriptFingerprint = survivingTranscriptFingerprint(
+            episodeID: episodeID,
+            modelContext: modelContext
+        )
+        let ordered = group
+            .map { record in
+                (record: record, score: repairScore(record, transcriptFingerprint: transcriptFingerprint))
+            }
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score {
+                    return lhs.score > rhs.score
+                }
+                if lhs.record.updatedAt != rhs.record.updatedAt {
+                    return lhs.record.updatedAt > rhs.record.updatedAt
+                }
+                if lhs.record.createdAt != rhs.record.createdAt {
+                    return lhs.record.createdAt > rhs.record.createdAt
+                }
+                return EpisodeSidecarRepair.stableOrderingKey(lhs.record)
+                    < EpisodeSidecarRepair.stableOrderingKey(rhs.record)
+            }
+        guard let winner = ordered.first else {
+            return []
+        }
+
+        if winner.score == 2 {
+            winner.record.state = .failed
+            winner.record.errorMessage = "Promo/ad analysis no longer matches the transcript."
+            winner.record.failureKind = .generic
+            winner.record.jobAcceptedAt = nil
+            winner.record.updatedAt = .now
+        }
+        if let podcastID = EpisodeSidecarRepair.preferredPodcastID(
+            orderedCandidates: ordered.map(\.record.podcastID),
+            subscribedFeedURLs: subscribedFeedURLs
+        ), winner.record.podcastID != podcastID {
+            winner.record.podcastID = podcastID
+            winner.record.updatedAt = .now
+        }
+
+        var deletedRecords: [EpisodeAdAnalysisRecord] = []
+        let winnerPath = winner.record.analysisRelativePath
+        for loser in ordered.dropFirst() {
+            if let loserPath = loser.record.analysisRelativePath, loserPath != winnerPath {
+                try? fileStore.delete(relativePath: loserPath)
+            }
+            modelContext.delete(loser.record)
+            deletedRecords.append(loser.record)
+        }
+        return deletedRecords
+    }
+
+    /// 4: completed, document decodes, fingerprint matches the surviving
+    /// transcript. 3: completed with a valid document and no transcript to
+    /// contradict it. 2: completed but contradicting the surviving
+    /// transcript — survives only when nothing better exists, and is failed.
+    /// 0: everything else.
+    private func repairScore(
+        _ record: EpisodeAdAnalysisRecord,
+        transcriptFingerprint: String?
+    ) -> Int {
+        guard record.state == .completed,
+              let relativePath = record.analysisRelativePath,
+              (try? fileStore.read(relativePath: relativePath)) != nil
+        else {
+            return 0
+        }
+        if let transcriptFingerprint {
+            return record.transcriptFingerprint == transcriptFingerprint ? 4 : 2
+        }
+        return 3
+    }
+
+    /// Fingerprint of the episode's one completed transcript document, or nil
+    /// when there is no unambiguous surviving transcript to compare against.
+    private func survivingTranscriptFingerprint(
+        episodeID: String,
+        modelContext: ModelContext
+    ) -> String? {
+        let targetEpisodeID = episodeID
+        let transcriptRecords = (try? modelContext.fetch(
+            FetchDescriptor<EpisodeTranscriptRecord>(
+                predicate: #Predicate { record in
+                    record.episodeID == targetEpisodeID
+                }
+            )
+        )) ?? []
+        let completedRecords = transcriptRecords.filter {
+            $0.state == .completed && $0.transcriptRelativePath != nil
+        }
+        guard completedRecords.count == 1,
+              let relativePath = completedRecords[0].transcriptRelativePath,
+              let document = try? transcriptFileStore.read(relativePath: relativePath)
+        else {
+            return nil
+        }
+        return fileStore.transcriptFingerprint(for: document)
+    }
+
+    /// Reads transcript documents for provenance checks; shares the analysis
+    /// store's base directory so tests exercise both against one root.
+    private var transcriptFileStore: EpisodeTranscriptFileStore {
+        EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory)
     }
 
     private func commit(

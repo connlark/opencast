@@ -132,8 +132,11 @@ struct EpisodeTranscriptImprovementCoordinatorTests {
             modelContext: harness.context
         )
 
-        #expect(harness.coordinator.phase == .idle)
-        #expect(harness.coordinator.episodeID == nil)
+        // Since the work-reservation rework the refusal is an explicit
+        // conflict outcome, not a silent stay-idle; the improve run still
+        // never starts.
+        #expect(harness.coordinator.phase == .failed("Another transcription is in progress."))
+        #expect(harness.coordinator.episodeID == harness.episode.episodeID)
 
         harness.transcriptions.cancelTranscription(
             episodeID: harness.episode.episodeID,
@@ -241,19 +244,11 @@ private enum ImprovementHarnessError: Error {
 }
 
 private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
-    EpisodeListItemSnapshot(
+    .fixture(
         episodeID: episodeID,
-        podcastID: "https://example.com/feed.xml",
-        podcastTitle: "Example Show",
         title: "Improvement Episode",
-        summary: nil,
-        publishedAt: nil,
-        duration: 60,
         audioURL: "https://example.com/\(episodeID).mp3",
-        artworkURL: nil,
-        artworkPreview: nil,
-        guid: episodeID,
-        cachedAt: .now
+        guid: episodeID
     )
 }
 

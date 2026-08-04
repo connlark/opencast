@@ -292,12 +292,13 @@ struct OpenCastTranscriptionServiceTests {
         #expect(mapped.end > mapped.start)
     }
 
-    @Test("Optional downloaded tiny-model transcription probe")
+    @Test(
+        "Optional downloaded tiny-model transcription probe",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_RUN_TINY"] == "1"
+            && ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil)
+    )
     func optionalDownloadedTinyModelTranscriptionProbe() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_RUN_TINY"] == "1",
-              let audioPath = ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] else {
-            return
-        }
+        let audioPath = try #require(ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"])
 
         let service = OpenCastTranscriptionService(
             modelLocator: DownloadedWhisperModelLocator(model: .tinyEnglish)
@@ -317,12 +318,13 @@ struct OpenCastTranscriptionServiceTests {
         print("OpenCast tiny transcription probe timings: \(result.timings)")
     }
 
-    @Test("Optional large-v3 transcription probe")
+    @Test(
+        "Optional large-v3 transcription probe",
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_RUN_LARGE_V3"] == "1"
+            && ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] != nil)
+    )
     func optionalLargeV3TranscriptionProbe() async throws {
-        guard ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_RUN_LARGE_V3"] == "1",
-              let audioPath = ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"] else {
-            return
-        }
+        let audioPath = try #require(ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_AUDIO"])
 
         let service = OpenCastTranscriptionService()
         let result = try await service.transcribe(

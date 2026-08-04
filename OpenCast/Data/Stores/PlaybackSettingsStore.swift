@@ -1,9 +1,11 @@
 import Foundation
 import Observation
+import OpenCastPlayback
 import SwiftData
 
 @Observable
 final class PlaybackSettingsStore {
+    static let playbackRatePreferenceKey = "playback.rate"
     static let voiceBoostModePreferenceKey = "playback.voiceBoost.mode"
     static let autoSkipPromosAndAdsPreferenceKey = "playback.autoSkipPromosAndAds"
     private static let voiceBoostEpisodeKeyPrefix = "playback.voiceBoost.episode."
@@ -18,6 +20,13 @@ final class PlaybackSettingsStore {
     private(set) var skipForwardOption = PlaybackSkipIntervalOption.defaultForward
     private(set) var isAutoSkipPromosAndAdsEnabled = true
     private(set) var lastErrorMessage: String?
+    @ObservationIgnored private let playbackRatePersistenceOverride: ((Float, ModelContext) throws -> Void)?
+
+    init(
+        playbackRatePersistenceOverride: ((Float, ModelContext) throws -> Void)? = nil
+    ) {
+        self.playbackRatePersistenceOverride = playbackRatePersistenceOverride
+    }
 
     var canChangeCurrentEpisodeVoiceBoost: Bool {
         voiceBoostMode == .perEpisode && currentEpisodeID != nil
@@ -34,6 +43,7 @@ final class PlaybackSettingsStore {
 
         do {
             voiceBoostMode = try storedVoiceBoostMode(modelContext: modelContext)
+            let playbackRate = try storedPlaybackRate(modelContext: modelContext)
             skipBackwardOption = try storedSkipOption(
                 key: Self.skipBackwardIntervalKey,
                 defaultOption: .defaultBackward,
@@ -52,6 +62,7 @@ final class PlaybackSettingsStore {
                 episodeID: episodeID,
                 modelContext: modelContext
             )
+            playback.setRate(playbackRate)
             lastErrorMessage = nil
         } catch {
             voiceBoostMode = .defaultMode
@@ -59,10 +70,45 @@ final class PlaybackSettingsStore {
             skipForwardOption = .defaultForward
             isAutoSkipPromosAndAdsEnabled = true
             isVoiceBoostEnabled = true
+            playback.setRate(1)
             lastErrorMessage = "Unable to load playback settings: \(error.localizedDescription)"
         }
 
         apply(to: playback)
+    }
+
+    @discardableResult
+    func setPlaybackRate(
+        _ rate: Float,
+        modelContext: ModelContext,
+        playback: any PlaybackSettingsControlling
+    ) -> Bool {
+        let rate = PlaybackRateSteps.clamped(rate)
+        guard playback.rate != rate else {
+            return true
+        }
+
+        let previousRate = playback.rate
+        playback.setRate(rate)
+
+        do {
+            if let playbackRatePersistenceOverride {
+                try playbackRatePersistenceOverride(rate, modelContext)
+            } else {
+                try LocalPreferenceRecord.upsert(
+                    key: Self.playbackRatePreferenceKey,
+                    value: String(rate),
+                    modelContext: modelContext
+                )
+                try modelContext.save()
+            }
+            lastErrorMessage = nil
+            return true
+        } catch {
+            playback.setRate(previousRate)
+            lastErrorMessage = "Unable to update playback speed: \(error.localizedDescription)"
+            return false
+        }
     }
 
     @discardableResult
@@ -210,6 +256,42 @@ final class PlaybackSettingsStore {
         )
     }
 
+    /// Unsubscribe cleanup: removes the per-episode Voice Boost switches for
+    /// the given episodes (device-local preference rows).
+    @discardableResult
+    func removeVoiceBoostPreferences(
+        forEpisodeIDs episodeIDs: [String],
+        modelContext: ModelContext
+    ) -> Bool {
+        guard !episodeIDs.isEmpty else {
+            return true
+        }
+
+        let keys = Set(episodeIDs.map(voiceBoostEpisodePreferenceKey))
+        do {
+            let records = try modelContext.fetch(
+                FetchDescriptor<LocalPreferenceRecord>(
+                    predicate: #Predicate { record in
+                        keys.contains(record.key)
+                    }
+                )
+            )
+            guard !records.isEmpty else {
+                return true
+            }
+
+            for record in records {
+                modelContext.delete(record)
+            }
+            try modelContext.save()
+            lastErrorMessage = nil
+            return true
+        } catch {
+            lastErrorMessage = "Unable to remove Voice Boost settings: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     func clearLastError() {
         lastErrorMessage = nil
     }
@@ -251,6 +333,19 @@ final class PlaybackSettingsStore {
         }
 
         return VoiceBoostMode(rawValue: rawValue) ?? .defaultMode
+    }
+
+    private func storedPlaybackRate(modelContext: ModelContext) throws -> Float {
+        guard let value = try preferenceRecord(
+            key: Self.playbackRatePreferenceKey,
+            modelContext: modelContext
+        )?.value,
+              let rate = Float(value)
+        else {
+            return 1
+        }
+
+        return PlaybackRateSteps.clamped(rate)
     }
 
     private func storedSkipOption(

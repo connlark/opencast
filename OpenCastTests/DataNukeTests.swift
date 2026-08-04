@@ -58,7 +58,7 @@ struct DataNukeTests {
         try writeOrphanPartialDownload(fileStore: fileStore)
 
         await appModel.library.load(modelContext: context)
-        appModel.downloads.load(modelContext: context)
+        await appModel.downloads.load(modelContext: context)
         appModel.appearanceSettings.load(modelContext: context)
         appModel.recentSearches.load(modelContext: context)
         appModel.playbackSettings.load(modelContext: context, playback: appModel.playback)
@@ -279,7 +279,7 @@ struct DataNukeTests {
         try Data("not a directory".utf8).write(to: cacheController.artworkCacheDirectory, options: .atomic)
 
         await appModel.library.load(modelContext: context)
-        appModel.downloads.load(modelContext: context)
+        await appModel.downloads.load(modelContext: context)
         appModel.appearanceSettings.load(modelContext: context)
         _ = appModel.setAppearanceMode(.dark, modelContext: context)
 

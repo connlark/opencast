@@ -706,12 +706,12 @@ final class NotificationSecurityUITests: XCTestCase {
         return true
     }
 
+    // Thin redirect onto the shared helper. Call sites live inside
+    // INTERNAL_NOTIFICATIONS_DIAGNOSTICS-gated regions that look dead and are
+    // live — the forwarder stays so those regions remain untouched.
     @MainActor
     private func attachScreen(named name: String) {
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        attachSmokeScreenshot(named: name)
     }
 
     @MainActor

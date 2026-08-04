@@ -11,6 +11,11 @@ import SwiftData
 final class EpisodeRemoteTranscriptionCoordinator {
     typealias UploadSessionFactory = RemoteTranscriptionJobRunner.UploadSessionFactory
 
+    enum StartOutcome: Equatable {
+        case started
+        case rejected(String)
+    }
+
     @ObservationIgnored private let runner: RemoteTranscriptionJobRunner
     @ObservationIgnored private let transcriptions: EpisodeTranscriptionStore
     let store: RemoteTranscriptionJobStore
@@ -35,23 +40,42 @@ final class EpisodeRemoteTranscriptionCoordinator {
         )
     }
 
-    func start(episode: EpisodeListItemSnapshot, modelContext: ModelContext) {
+    @discardableResult
+    func start(episode: EpisodeListItemSnapshot, modelContext: ModelContext) -> StartOutcome {
         guard !transcriptions.hasCompletedTranscript(for: episode.episodeID) else {
-            return
+            return .rejected("A transcript is already available for this episode.")
         }
         guard !store.hasActiveRequest else {
-            return
+            return .rejected("Another remote transcription is in progress.")
+        }
+
+        let reservation: EpisodeTranscriptionWorkCoordinator.RemoteReservation
+        switch transcriptions.workCoordinator.reserveRemote(
+            episodeID: episode.episodeID,
+            activeLocalEpisodeID: transcriptions.activeEpisodeID
+        ) {
+        case .success(let value):
+            reservation = value
+        case .failure(let conflict):
+            return .rejected(conflict.localizedDescription)
         }
         guard let audioURL = episode.audioURL, audioURL.isEmpty == false else {
             store.begin(episodeID: episode.episodeID, title: episode.title)
             store.finish(phase: .failed(.missingAudio))
-            return
+            transcriptions.workCoordinator.releaseRemote(reservation)
+            return .started
         }
 
         store.begin(episodeID: episode.episodeID, title: episode.title)
         store.activeTask = Task { [weak self] in
-            await self?.run(episode: episode, enclosureURL: audioURL, modelContext: modelContext)
+            await self?.run(
+                episode: episode,
+                enclosureURL: audioURL,
+                reservation: reservation,
+                modelContext: modelContext
+            )
         }
+        return .started
     }
 
     func cancel() {
@@ -61,8 +85,12 @@ final class EpisodeRemoteTranscriptionCoordinator {
     private func run(
         episode: EpisodeListItemSnapshot,
         enclosureURL: String,
+        reservation: EpisodeTranscriptionWorkCoordinator.RemoteReservation,
         modelContext: ModelContext
     ) async {
+        defer {
+            transcriptions.workCoordinator.releaseRemote(reservation)
+        }
         do {
             _ = try await runner.run(
                 episode: episode,

@@ -599,7 +599,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         episodeID: String,
         uploadTransport: FakeUploadTransport? = nil,
         transportRetryDelays: [Duration] = []
-    ) throws -> Environment {
+    ) async throws -> Environment {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let downloadFileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
@@ -629,7 +629,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         record.duration = 120
         context.insert(record)
         try context.save()
-        downloads.load(modelContext: context)
+        await downloads.load(modelContext: context)
 
         let suiteName = "remote-coordinator-tests-\(episodeID)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -689,7 +689,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             ],
             resultResponse: OpenCastRemoteTranscriptionResultResponse(schemaVersion: 1, result: result)
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-happy")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-happy")
 
         environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
 
@@ -730,7 +730,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
                 }
             }
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-ack-fail")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-ack-fail")
         transcriptions.value = environment.transcriptions
 
         environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
@@ -751,7 +751,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
                 ),
             ]
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-mismatch")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-mismatch")
 
         environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
 
@@ -778,7 +778,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
                 ),
             ]
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-server-fail")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-server-fail")
 
         environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
 
@@ -812,7 +812,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             ],
             pollError: URLError(.notConnectedToInternet)
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-unreachable")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-unreachable")
 
         environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
 
@@ -833,7 +833,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
                 OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .awaitingCredits),
             ]
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-credits-detect")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-credits-detect")
 
         await #expect(throws: RemoteTranscriptionJobRunError.serverRejected(.insufficientCredits)) {
             _ = try await environment.runner.run(
@@ -868,7 +868,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             ],
             resultResponse: OpenCastRemoteTranscriptionResultResponse(schemaVersion: 1, result: result)
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-credits-wait")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-credits-wait")
         var sawWaitingForCredits = false
 
         let outcome = try await environment.runner.run(
@@ -900,7 +900,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             transientPollErrors: [URLError(.networkConnectionLost)],
             resultResponse: OpenCastRemoteTranscriptionResultResponse(schemaVersion: 1, result: result)
         )
-        let environment = try makeEnvironment(
+        let environment = try await makeEnvironment(
             api: api,
             episodeID: "ep-poll-blip",
             transportRetryDelays: [.zero]
@@ -926,7 +926,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             ],
             pollError: URLError(.notConnectedToInternet)
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-detect-unreachable")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-detect-unreachable")
 
         await #expect(throws: RemoteTranscriptionJobRunError.serviceUnavailable) {
             _ = try await environment.runner.run(
@@ -957,7 +957,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             ],
             pollError: URLError(.notConnectedToInternet)
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-plain-unreachable")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-plain-unreachable")
 
         await #expect(throws: RemoteTranscriptionJobRunError.serviceUnavailable) {
             _ = try await environment.runner.run(
@@ -986,7 +986,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
                 ),
             ]
         )
-        let environment = try makeEnvironment(api: api, episodeID: "ep-cancel")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-cancel")
 
         environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
         #expect(await waitUntil {
@@ -1035,7 +1035,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             )
         )
         let transport = FakeUploadTransport()
-        let environment = try makeEnvironment(
+        let environment = try await makeEnvironment(
             api: api,
             episodeID: "ep-upload",
             uploadTransport: transport
@@ -1071,7 +1071,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             uploadScript: FakeRemoteTranscriptionAPI.UploadScript(partCount: 1, partSizeBytes: 64)
         )
         let transport = FakeUploadTransport()
-        let environment = try makeEnvironment(
+        let environment = try await makeEnvironment(
             api: api,
             episodeID: "ep-upload-mismatch",
             uploadTransport: transport
@@ -1107,7 +1107,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         let transport = FakeUploadTransport(scriptedResults: [
             2: [RemoteTranscriptionUploadPartPutResult(statusCode: 403, etag: nil)],
         ])
-        let environment = try makeEnvironment(
+        let environment = try await makeEnvironment(
             api: api,
             episodeID: "ep-upload-403",
             uploadTransport: transport
@@ -1129,7 +1129,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         let api = FakeRemoteTranscriptionAPI(pollStates: [
             OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .created),
         ])
-        let environment = try makeEnvironment(api: api, episodeID: "ep-no-audio")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-no-audio")
         let episode = makeEpisode(episodeID: "ep-no-audio", audioURL: nil)
 
         environment.coordinator.start(episode: episode, modelContext: environment.context)
@@ -1143,7 +1143,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         let api = FakeRemoteTranscriptionAPI(pollStates: [
             OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .created),
         ])
-        let environment = try makeEnvironment(api: api, episodeID: "ep-missing-file")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-missing-file")
         let record = try #require(environment.downloads.record(for: environment.episode.episodeID))
         let fileURL = try #require(environment.downloads.localFileURL(for: record))
         try FileManager.default.removeItem(at: fileURL)
@@ -1160,7 +1160,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         let api = FakeRemoteTranscriptionAPI(pollStates: [
             OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .created),
         ])
-        let environment = try makeEnvironment(api: api, episodeID: "ep-already-transcribed")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-already-transcribed")
         let document = try EpisodeRemoteTranscriptMapper.document(
             from: RemoteFixtures.result(
                 identity: environment.identity,
@@ -1191,12 +1191,40 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         #expect(api.createRequests.isEmpty)
     }
 
+    @Test("Local ownership rejects remote start before credit-consuming work")
+    func localOwnershipRejectsRemoteStartBeforeSideEffects() async throws {
+        let api = FakeRemoteTranscriptionAPI(pollStates: [
+            OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .created),
+        ])
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-local-owned")
+        let reservationResult = environment.transcriptions.reserveLocalWork(
+            for: environment.episode.episodeID
+        )
+        guard case .success(let localReservation) = reservationResult else {
+            Issue.record("Expected local work to reserve the episode")
+            return
+        }
+
+        let outcome = environment.coordinator.start(
+            episode: environment.episode,
+            modelContext: environment.context
+        )
+
+        #expect(outcome == .rejected(
+            "A local transcription of this episode is already in progress."
+        ))
+        #expect(environment.store.phase == nil)
+        #expect(api.createRequests.isEmpty)
+        #expect(api.uploadStartCount == 0)
+        environment.transcriptions.releaseLocalWork(localReservation)
+    }
+
     @Test("A newer remote import supersedes the prior document only after commit")
     func newerRemoteImportSupersedesPriorDocument() async throws {
         let api = FakeRemoteTranscriptionAPI(pollStates: [
             OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .created),
         ])
-        let environment = try makeEnvironment(api: api, episodeID: "ep-supersede")
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-supersede")
         let identity = environment.identity
 
         let first = try EpisodeRemoteTranscriptMapper.document(
@@ -1245,19 +1273,12 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
     }
 
     private func makeEpisode(episodeID: String, audioURL: String?) -> EpisodeListItemSnapshot {
-        EpisodeListItemSnapshot(
+        .fixture(
             episodeID: episodeID,
-            podcastID: "https://example.com/feed.xml",
-            podcastTitle: "Example Show",
-            title: "Example Episode",
-            summary: nil,
-            publishedAt: nil,
             duration: 120,
             audioURL: audioURL,
             artworkURL: "https://example.com/art.jpg",
-            artworkPreview: nil,
-            guid: episodeID,
-            cachedAt: .now
+            guid: episodeID
         )
     }
 

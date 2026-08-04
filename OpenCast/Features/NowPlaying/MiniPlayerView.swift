@@ -17,7 +17,7 @@ struct MiniPlayerView: View {
 
     var body: some View {
         let state = appModel.playback.state
-        let showsPauseButton = state == .playing || state == .buffering || state == .loading
+        let showsPauseButton = state.showsPauseButton
 
         if let episode = appModel.playback.currentEpisode {
             miniPlayerChrome {
@@ -38,19 +38,25 @@ struct MiniPlayerView: View {
                                 .truncationMode(.tail)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .contentShape(Rectangle())
+                        .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Open Now Playing")
                     .accessibilityValue("\(episode.title), \(episode.podcastTitle)")
 
                     Button(action: togglePlayPause) {
-                        Image(systemName: showsPauseButton ? "pause.fill" : "play.fill")
-                            .font(.title3)
-                            .contentTransition(.symbolEffect(.replace))
-                            .animation(.easeOut(duration: 0.2), value: showsPauseButton)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
+                        Group {
+                            if state.showsLoadingIndicator {
+                                ProgressView()
+                            } else {
+                                Image(systemName: showsPauseButton ? "pause.fill" : "play.fill")
+                                    .contentTransition(.symbolEffect(.replace))
+                            }
+                        }
+                        .font(.title3)
+                        .animation(.easeOut(duration: 0.2), value: state.showsLoadingIndicator)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(showsPauseButton ? "Pause" : "Play")

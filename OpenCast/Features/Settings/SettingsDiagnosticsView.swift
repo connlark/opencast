@@ -7,6 +7,7 @@ struct SettingsDiagnosticsView: View {
     @State private var subscriptionRecordCount: Int?
     @State private var progressRecordCount: Int?
     @State private var syncDetailsErrorMessage: String?
+    @State private var refreshLogs: [RefreshLogSnapshot]?
 
     var body: some View {
         Form {
@@ -50,24 +51,87 @@ struct SettingsDiagnosticsView: View {
                 Text("Repair merges logical duplicates in CloudKit-backed subscriptions and episode progress.")
             }
 
+            Section {
+                Button(
+                    "Merge Duplicate Episodes",
+                    systemImage: "rectangle.stack.badge.minus",
+                    action: mergeDuplicateEpisodes
+                )
+                .disabled(appModel.syncStatus.isMergingDuplicateEpisodes)
+
+                if appModel.syncStatus.isMergingDuplicateEpisodes {
+                    ProgressView("Merging")
+                }
+
+                if let mergeResult = appModel.syncStatus.lastEpisodeMergeResult {
+                    EpisodeMergeResultSummaryView(result: mergeResult)
+                } else {
+                    LabeledContent {
+                        Text("Not Run")
+                    } label: {
+                        Label("Last Merge", systemImage: "clock.badge.questionmark")
+                    }
+                    .accessibilityLabel("Last Merge, Not Run")
+                }
+
+                if let errorMessage = appModel.syncStatus.lastEpisodeMergeErrorMessage {
+                    Text(errorMessage)
+                        .foregroundStyle(.red)
+                }
+            } header: {
+                Text("Episode Identity")
+            } footer: {
+                Text("Merge refetches every subscribed feed and folds episodes whose identity changed (publisher GUID or hosting changes) back onto their current entries, carrying progress, downloads, and transcripts.")
+            }
+
+            Section {
+                LabeledContent {
+                    Text(verifiedDownloadSummary)
+                } label: {
+                    Label("Verified Downloads", systemImage: "checkmark.seal")
+                }
+
+                LabeledContent {
+                    Text("\(appModel.downloads.duplicateRepairCount)")
+                } label: {
+                    Label("Download Repairs", systemImage: "arrow.down.circle")
+                }
+
+                LabeledContent {
+                    Text("\(appModel.transcriptions.duplicateRepairCount)")
+                } label: {
+                    Label("Transcript Repairs", systemImage: "text.quote")
+                }
+
+                LabeledContent {
+                    Text("\(appModel.adAnalyses.duplicateRepairCount)")
+                } label: {
+                    Label("Analysis Repairs", systemImage: "waveform")
+                }
+            } header: {
+                Text("Local Data Repair")
+            } footer: {
+                Text("Repairs collapse duplicate local download, transcript, and analysis records left behind by episode identity changes. A verified download has a stored hash matching the audio file on disk.")
+            }
+
             Section("Refresh Logs") {
-                if let latestRefreshLog = appModel.library.latestRefreshOverall {
+                if let latestRefreshLog = refreshLogs?.first {
                     RefreshLogSummaryRow(title: "Latest Refresh", log: latestRefreshLog)
                 } else {
                     LabeledContent("Latest Refresh", value: "Never")
                 }
 
-                if let latestRefreshFailure = appModel.library.latestRefreshFailure {
+                if let latestRefreshFailure {
                     RefreshLogSummaryRow(title: "Latest Failure", log: latestRefreshFailure)
                 } else {
                     LabeledContent("Latest Failure", value: "None")
                 }
 
-                LabeledContent("Retained Logs", value: "\(appModel.library.refreshLogCount)")
+                LabeledContent("Retained Logs", value: refreshLogs.map { "\($0.count)" } ?? "Not Loaded")
 
-                if !appModel.library.refreshLogs.isEmpty {
+                if let refreshLogs, !refreshLogs.isEmpty {
                     NavigationLink {
-                        RefreshLogListView(logs: appModel.library.refreshLogs)
+                        RefreshLogListView(logs: refreshLogs)
                     } label: {
                         Label("Recent Logs", systemImage: "list.bullet.clipboard")
                     }
@@ -134,15 +198,42 @@ struct SettingsDiagnosticsView: View {
         }
     }
 
+    private func mergeDuplicateEpisodes() {
+        Task {
+            await appModel.syncStatus.mergeDuplicateEpisodes(
+                modelContext: modelContext,
+                libraryStore: appModel.library
+            )
+        }
+    }
+
     private func refreshSyncDetails() {
         Task {
             await refreshSyncDetailsNow()
         }
     }
 
+    private var latestRefreshFailure: RefreshLogSnapshot? {
+        refreshLogs?.first { !($0.errorMessage ?? "").isEmpty }
+    }
+
+    private var verifiedDownloadSummary: String {
+        let completedEpisodeIDs = appModel.downloads.records
+            .filter { $0.state == .completed }
+            .map(\.episodeID)
+        guard !completedEpisodeIDs.isEmpty else {
+            return "None"
+        }
+        let verifiedCount = completedEpisodeIDs.count { episodeID in
+            appModel.downloads.completedSourceIdentity(for: episodeID) != nil
+        }
+        return "\(verifiedCount) of \(completedEpisodeIDs.count)"
+    }
+
     private func refreshSyncDetailsNow() async {
         await appModel.syncStatus.refreshAccountStatus(force: true)
         loadSyncRowCounts()
+        refreshLogs = await appModel.library.loadAllRefreshLogs()
     }
 
     private func loadSyncRowCounts() {

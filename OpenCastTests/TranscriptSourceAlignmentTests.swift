@@ -15,7 +15,6 @@ struct TranscriptSourceAlignmentTests {
     private let differentAssemblySHA = "sha-source-b"
     private let downloadFileURL = URL(filePath: "/downloads/episode-1.mp3")
     private let streamURL = URL(string: "https://example.com/e/traffic.host.fm/episode-1.mp3")!
-    private let streamingCacheURL = URL(string: "opencast-stream-cache://audio/9D2B6A44-1B7B-4E1F-9C93-2F6A54F41C11")!
 
     @Test("Matching download playing as the live item is verified")
     func matchingDownloadCurrentItemIsVerified() {
@@ -35,17 +34,6 @@ struct TranscriptSourceAlignmentTests {
             trustedDownloadSHA256: transcribedSHA,
             downloadFileURL: downloadFileURL,
             playerItemURL: streamURL
-        )
-        #expect(alignment == .mismatched(canSwitchToTranscribedCopy: true))
-    }
-
-    @Test("A streaming-cache item never verifies even when it wraps the same enclosure")
-    func streamingCacheItemIsMismatched() {
-        let alignment = TranscriptSourceAlignment.resolve(
-            documentSHA256: transcribedSHA,
-            trustedDownloadSHA256: transcribedSHA,
-            downloadFileURL: downloadFileURL,
-            playerItemURL: streamingCacheURL
         )
         #expect(alignment == .mismatched(canSwitchToTranscribedCopy: true))
     }

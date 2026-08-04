@@ -11,6 +11,9 @@ final class SyncStatusStore {
     private(set) var isRepairingDuplicates = false
     private(set) var lastRepairResult: SyncRepairResult?
     private(set) var lastRepairErrorMessage: String?
+    private(set) var isMergingDuplicateEpisodes = false
+    private(set) var lastEpisodeMergeResult: EpisodeMergeResult?
+    private(set) var lastEpisodeMergeErrorMessage: String?
 
     @ObservationIgnored private let accountStatusProvider: any CloudKitAccountStatusProviding
     @ObservationIgnored private let now: () -> Date
@@ -105,6 +108,30 @@ final class SyncStatusStore {
         } catch {
             lastRepairResult = nil
             lastRepairErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    @discardableResult
+    func mergeDuplicateEpisodes(modelContext: ModelContext, libraryStore: LibraryStore) async -> EpisodeMergeResult? {
+        guard !isMergingDuplicateEpisodes else {
+            return lastEpisodeMergeResult
+        }
+
+        isMergingDuplicateEpisodes = true
+        defer {
+            isMergingDuplicateEpisodes = false
+        }
+
+        await Task.yield()
+
+        do {
+            lastEpisodeMergeResult = try await libraryStore.mergeDuplicateEpisodes(modelContext: modelContext)
+            lastEpisodeMergeErrorMessage = nil
+            return lastEpisodeMergeResult
+        } catch {
+            lastEpisodeMergeResult = nil
+            lastEpisodeMergeErrorMessage = error.localizedDescription
             return nil
         }
     }

@@ -175,6 +175,40 @@ struct EpisodeDownloadFileStore: Sendable {
         try removeItemIfPresent(at: downloadsDirectory)
     }
 
+    /// Moves the completed file and paused partial onto the new episode stem
+    /// when an episode's identity migrates; token-suffixed temporaries are
+    /// transient and simply removed. Returns the completed file's new relative
+    /// path, or the stored path unchanged when its file is missing on disk.
+    nonisolated func migrateFiles(
+        fromEpisodeID oldEpisodeID: String,
+        to newEpisodeID: String,
+        localRelativePath: String?
+    ) throws -> String? {
+        try removeTemporaryFiles(episodeID: oldEpisodeID)
+
+        let oldPausedURL = pausedPartialFileURL(episodeID: oldEpisodeID)
+        if FileManager.default.fileExists(atPath: oldPausedURL.path) {
+            let newPausedURL = pausedPartialFileURL(episodeID: newEpisodeID)
+            try removeItemIfPresent(at: newPausedURL)
+            try FileManager.default.moveItem(at: oldPausedURL, to: newPausedURL)
+        }
+
+        guard let localRelativePath else {
+            return nil
+        }
+        let sourceURL = fileURL(relativePath: localRelativePath)
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            return localRelativePath
+        }
+
+        let extensionName = sourceURL.pathExtension.isEmpty ? "audio" : sourceURL.pathExtension
+        let newRelativePath = "\(Self.directoryName)/\(safeStem(episodeID: newEpisodeID)).\(extensionName)"
+        let destinationURL = fileURL(relativePath: newRelativePath)
+        try removeItemIfPresent(at: destinationURL)
+        try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+        return newRelativePath
+    }
+
     /// Deletes downloads-directory files no record claims — strandings from a
     /// crash window between a file move and its record save. Claims are
     /// deliberately broad (any record's path or episode stem, in any state);

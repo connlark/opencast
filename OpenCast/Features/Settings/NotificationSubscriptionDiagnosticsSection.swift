@@ -82,8 +82,33 @@ struct NotificationSubscriptionDiagnosticsSection: View {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
             }
+
+            let healthByFeedURL = appModel.library.notificationFeedHealthByFeedURL
+            if !healthByFeedURL.isEmpty {
+                ForEach(healthByFeedURL.sorted(by: { $0.key < $1.key }), id: \.key) { feedURL, health in
+                    LabeledContent {
+                        Text(healthSummary(for: health))
+                    } label: {
+                        Text(feedURL)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .font(.caption)
+                }
+            }
         }
         .onDisappear(perform: cancel)
+    }
+
+    private func healthSummary(for health: NotificationFeedHealth) -> String {
+        guard health.consecutiveFailures > 0 else {
+            return "OK"
+        }
+        var summary = "\(health.consecutiveFailures) failures"
+        if let lastError = health.lastError {
+            summary += " · \(lastError)"
+        }
+        return summary
     }
 
     private func sync() {

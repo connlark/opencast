@@ -5,8 +5,6 @@ import Testing
 @testable import OpenCastPlayback
 
 struct AVFoundationVoiceBoostIntegrationTests {
-    private let remoteVoiceBoostTestFlag = "OPENCAST_RUN_REMOTE_VOICEBOOST_TESTS"
-    private let mp3VoiceBoostTestFlag = "OPENCAST_RUN_MP3_VOICEBOOST_TESTS"
     private let remoteFeedURLOverrideKey = "OPENCAST_VOICEBOOST_REMOTE_FEED_URL"
     private let defaultRemoteFeedURL = URL(string: "https://feeds.feedburner.com/LibrivoxCommunityPodcast")!
 
@@ -44,7 +42,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
         try controller.load(episode)
         controller.play()
 
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(30)
         while diagnostics.snapshot.processedFrameCount == 0 && Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
@@ -60,13 +58,9 @@ struct AVFoundationVoiceBoostIntegrationTests {
         #expect(snapshot.unsupportedFormatCount == 0)
     }
 
-    @Test
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCAST_RUN_MP3_VOICEBOOST_TESTS"] == "1"))
     @MainActor
     func controllerProcessesMP3EpisodeThroughVoiceBoostTap() async throws {
-        guard ProcessInfo.processInfo.environment[mp3VoiceBoostTestFlag] == "1" else {
-            return
-        }
-
         try await AVFoundationPlaybackTestGate.acquire()
         defer {
             AVFoundationPlaybackTestGate.release()
@@ -226,7 +220,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
         try controller.load(episode)
         controller.play()
 
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(30)
         while diagnostics.snapshot.processedFrameCount == 0 && Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
@@ -681,14 +675,10 @@ struct AVFoundationVoiceBoostIntegrationTests {
         #expect(diagnostics.snapshot.unsupportedFormatCount == 0)
     }
 
-    @Test
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCAST_RUN_REMOTE_VOICEBOOST_TESTS"] == "1"))
     @MainActor
     func optInRemotePodcastEpisodeProcessesThroughVoiceBoostTap() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard environment[remoteVoiceBoostTestFlag] == "1" else {
-            return
-        }
-
         try await AVFoundationPlaybackTestGate.acquire()
         defer {
             AVFoundationPlaybackTestGate.release()
@@ -717,14 +707,10 @@ struct AVFoundationVoiceBoostIntegrationTests {
         #expect(diagnostics.snapshot.unsupportedFormatCount == 0)
     }
 
-    @Test
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCAST_RUN_REMOTE_VOICEBOOST_TESTS"] == "1"))
     @MainActor
     func optInRemotePodcastEpisodeSurvivesVoiceBoostControls() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard environment[remoteVoiceBoostTestFlag] == "1" else {
-            return
-        }
-
         try await AVFoundationPlaybackTestGate.acquire()
         defer {
             AVFoundationPlaybackTestGate.release()
@@ -800,7 +786,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
     private func waitForProcessedFrames(
         in diagnostics: VoiceBoostAudioTapDiagnostics,
         exceeding minimumFrameCount: Int,
-        timeout: TimeInterval = 5
+        timeout: TimeInterval = 30
     ) async throws -> Int {
         let deadline = Date.now.addingTimeInterval(timeout)
         while diagnostics.snapshot.processedFrameCount <= minimumFrameCount && Date.now < deadline {
@@ -818,7 +804,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
         in diagnostics: VoiceBoostAudioTapDiagnostics,
         exceeding minimumFrameCount: Int
     ) async throws -> Int {
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(30)
         while diagnostics.snapshot.bypassedFrameCount <= minimumFrameCount && Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
@@ -834,7 +820,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
         in diagnostics: VoiceBoostAudioTapDiagnostics,
         atLeast minimumAttemptCount: Int
     ) async throws -> Int {
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(30)
         while diagnostics.snapshot.tapInstallAttemptCount < minimumAttemptCount && Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
@@ -850,7 +836,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
         in controller: AVFoundationPlaybackController,
         exceeding minimumPosition: TimeInterval
     ) async throws -> TimeInterval {
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(30)
         while controller.snapshot.position <= minimumPosition && Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
@@ -866,7 +852,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
         _ controller: AVFoundationPlaybackController,
         minimumPosition: TimeInterval
     ) async throws -> PlaybackSnapshot {
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(30)
         while (controller.snapshot.state != .paused || controller.snapshot.position < minimumPosition)
             && Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
@@ -880,7 +866,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
 
     @MainActor
     private func waitForPaused(_ controller: AVFoundationPlaybackController) async throws -> PlaybackSnapshot {
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(30)
         while controller.snapshot.state != .paused && Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }

@@ -9,9 +9,10 @@ use worker::{
 
 use crate::analysis::run_windows_analysis;
 use crate::job::{
-    alarm_decision, poll_decision, submit_decision, AlarmDecision, JobRecord, JobSubmitRequest,
-    PollDecision, SubmitDecision, JOB_HEARTBEAT_SECONDS, JOB_POLL_AFTER_SECONDS,
-    JOB_RESULT_TTL_SECONDS, JOB_SUBMIT_POLL_AFTER_SECONDS,
+    alarm_decision, poll_decision, submit_decision, transcript_content_hash, AlarmDecision,
+    JobDoPollRequest, JobRecord, JobSubmitRequest, PollDecision, SubmitDecision,
+    JOB_HEARTBEAT_SECONDS, JOB_POLL_AFTER_SECONDS, JOB_RESULT_TTL_SECONDS,
+    JOB_SUBMIT_POLL_AFTER_SECONDS,
 };
 use crate::route::JSON_CONTENT_TYPE;
 use crate::types::{resolve_gemini_model, ErrorResponse, GEMINI_MODEL_ENV_VAR};
@@ -47,7 +48,7 @@ impl DurableObject for AdAnalysisJob {
 
         match req.path().as_str() {
             INTERNAL_SUBMIT_PATH => self.handle_submit(&mut req).await,
-            INTERNAL_POLL_PATH => self.handle_poll().await,
+            INTERNAL_POLL_PATH => self.handle_poll(&mut req).await,
             _ => json_error(404, "not_found"),
         }
     }
@@ -83,21 +84,52 @@ impl AdAnalysisJob {
             Ok(submit) => submit,
             Err(_) => return json_error(400, "malformed_json"),
         };
+        let submitted_hash =
+            transcript_content_hash(&submit.request.transcript, &submit.request.segments);
 
         loop {
-            let record = read_record(&self.state.storage()).await?;
-            match submit_decision(record.as_ref()) {
-                SubmitDecision::Attach { job_id } => {
+            let mut record = read_record(&self.state.storage()).await?;
+            match submit_decision(
+                record.as_ref(),
+                &submit.subject,
+                &submitted_hash,
+                submit.internal,
+            ) {
+                SubmitDecision::Attach { job_id, join } => {
+                    if join {
+                        if let Some(record) = record.as_mut() {
+                            if record.push_subject(&submit.subject) {
+                                write_record(&self.state.storage(), record).await?;
+                            }
+                        }
+                    }
                     return job_status(202, &job_id, "running", JOB_SUBMIT_POLL_AFTER_SECONDS);
                 }
-                SubmitDecision::ServeCompleted { result_json, .. } => {
+                SubmitDecision::ServeCompleted {
+                    result_json, join, ..
+                } => {
                     // Completed results serve idempotently until the TTL
                     // alarm purges them: a response lost in transit must be
                     // recoverable by asking again, never by re-running the
-                    // model.
+                    // model. A content-proven new subject joins first so its
+                    // later polls stay authorized.
+                    if join {
+                        if let Some(record) = record.as_mut() {
+                            if record.push_subject(&submit.subject) {
+                                write_record(&self.state.storage(), record).await?;
+                            }
+                        }
+                    }
                     return raw_json(200, result_json);
                 }
-                SubmitDecision::Start => {}
+                SubmitDecision::DenyContentMismatch => {
+                    return json_error(409, "fingerprint_content_mismatch");
+                }
+                // Replace: a trusted internal submit over a squatted name
+                // starts fresh below exactly like Start — the new Running
+                // record (new started_at) drops the squatter's subjects, and
+                // the stale-run guard discards the squatted task's result.
+                SubmitDecision::Start | SubmitDecision::Replace => {}
             }
 
             // Non-storage I/O opens the DO input gate. Serialize the admission
@@ -123,9 +155,16 @@ impl AdAnalysisJob {
 
             let job_id = submit.request.transcript.fingerprint.clone();
             let started_at = now_seconds();
+            let subjects = if submit.subject.is_empty() {
+                Vec::new()
+            } else {
+                vec![submit.subject.clone()]
+            };
             let running = JobRecord::Running {
                 job_id: job_id.clone(),
                 started_at,
+                subjects,
+                content_hash: submitted_hash.clone(),
             };
             write_record(&self.state.storage(), &running).await?;
             self.state
@@ -153,9 +192,13 @@ impl AdAnalysisJob {
         }
     }
 
-    async fn handle_poll(&self) -> Result<Response> {
+    async fn handle_poll(&self, req: &mut Request) -> Result<Response> {
+        let poll = match req.json::<JobDoPollRequest>().await {
+            Ok(poll) => poll,
+            Err(_) => return json_error(400, "malformed_json"),
+        };
         let record = read_record(&self.state.storage()).await?;
-        match poll_decision(record.as_ref()) {
+        match poll_decision(record.as_ref(), poll.subject.as_deref()) {
             PollDecision::NotFound => json_error(404, "job_not_found"),
             PollDecision::Running { job_id } => {
                 job_status(202, &job_id, "running", JOB_POLL_AFTER_SECONDS)
@@ -183,6 +226,11 @@ impl AdAnalysisJob {
     }
 }
 
+enum RunOutcome {
+    Completed { result_json: String },
+    FailedUpstream { status: u16, code: String },
+}
+
 async fn run_job(
     state: Rc<State>,
     env: Env,
@@ -190,7 +238,7 @@ async fn run_job(
     started_at: i64,
     request: crate::types::AdAnalysisRequest,
 ) -> Result<()> {
-    let record = match env.secret(GEMINI_API_KEY) {
+    let outcome = match env.secret(GEMINI_API_KEY) {
         Ok(secret) => {
             let gemini_api_key = secret.to_string();
             let model_value = env
@@ -199,44 +247,55 @@ async fn run_job(
                 .map(|value| value.to_string());
             let model = resolve_gemini_model(model_value.as_deref());
             match run_windows_analysis(&gemini_api_key, model, request).await {
-                Ok(response) => JobRecord::Completed {
-                    job_id: job_id.clone(),
+                Ok(response) => RunOutcome::Completed {
                     result_json: serde_json::to_string(&response)?,
-                    purge_at: now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS),
                 },
-                Err(error) => JobRecord::FailedUpstream {
-                    job_id: job_id.clone(),
+                Err(error) => RunOutcome::FailedUpstream {
                     status: error.status,
                     code: error.body.error,
-                    purge_at: now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS),
                 },
             }
         }
-        Err(_) => JobRecord::FailedUpstream {
-            job_id: job_id.clone(),
+        Err(_) => RunOutcome::FailedUpstream {
             status: 503,
             code: "worker_secret_missing".to_string(),
-            purge_at: now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS),
         },
     };
 
+    // The guard re-read also supplies the authoritative subject set: a
+    // content-proven subject may have joined while the model ran, and the
+    // terminal record must keep authorizing it.
     let current = read_record(&state.storage()).await?;
-    if !matches!(
-        current,
-        Some(JobRecord::Running {
-            job_id: ref current_job_id,
-            started_at: current_started_at,
-        }) if current_job_id == &job_id && current_started_at == started_at
-    ) {
+    let Some(JobRecord::Running {
+        job_id: current_job_id,
+        started_at: current_started_at,
+        subjects,
+        content_hash,
+    }) = current
+    else {
+        return Ok(());
+    };
+    if current_job_id != job_id || current_started_at != started_at {
         return Ok(());
     }
-    let purge_at = match &record {
-        JobRecord::Completed { purge_at, .. } | JobRecord::FailedUpstream { purge_at, .. } => {
-            *purge_at
-        }
-        JobRecord::Running { .. } | JobRecord::FailedTransient { .. } => {
-            unreachable!("run task only creates completed or upstream-failed records")
-        }
+
+    let purge_at = now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS);
+    let record = match outcome {
+        RunOutcome::Completed { result_json } => JobRecord::Completed {
+            job_id,
+            result_json,
+            purge_at,
+            subjects,
+            content_hash,
+        },
+        RunOutcome::FailedUpstream { status, code } => JobRecord::FailedUpstream {
+            job_id,
+            status,
+            code,
+            purge_at,
+            subjects,
+            content_hash,
+        },
     };
     write_record(&state.storage(), &record).await?;
     set_alarm_at(&state.storage(), purge_at).await

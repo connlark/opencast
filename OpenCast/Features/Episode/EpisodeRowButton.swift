@@ -9,6 +9,7 @@ struct EpisodeRowButton: View {
     let episode: EpisodeListItemSnapshot
     var searchResult: EpisodeSearchResult?
     var showsLocalStatusBadges = false
+    var showsGoToShow = true
     var onSelect: () -> Void = {}
     let onOpenEpisode: (String) -> Void
 
@@ -24,6 +25,7 @@ struct EpisodeRowButton: View {
         .modifier(
             EpisodeRowContextMenuModifier(
                 episode: episode,
+                showsGoToShow: showsGoToShow,
                 onViewDetails: viewEpisodeDetails
             )
         )

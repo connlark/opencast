@@ -95,7 +95,7 @@ final class ScrollJankDeviceProbeUITests: XCTestCase {
             scrollTarget.swipeDown(velocity: .fast)
             tapProbeMark(app)
         }
-        attachScreenshot(of: app, named: "State-\(label)")
+        attachAppScreenshot(of: app, named: "State-\(label)")
         sleep(Self.flushSettleSeconds)
 
         let value = frameSummaryValue(in: app)
@@ -263,14 +263,6 @@ final class ScrollJankDeviceProbeUITests: XCTestCase {
             return
         }
         button.tap()
-    }
-
-    @MainActor
-    private func attachScreenshot(of app: XCUIApplication, named name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 
     @MainActor

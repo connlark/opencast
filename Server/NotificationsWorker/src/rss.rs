@@ -9,6 +9,8 @@ const MAX_RSS_YEAR: i32 = 9_999;
 const MAX_FEED_TITLE_CHARS: usize = 512;
 const MAX_EPISODE_TITLE_CHARS: usize = 512;
 const MAX_EPISODE_TEXT_BYTES: usize = 16 * 1024;
+// Bounds per-item metadata and episode-identity work independently of XML size.
+pub(crate) const MAX_RSS_ITEMS: usize = 4_096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedFeed {
@@ -36,6 +38,7 @@ pub enum RSSParseError {
     InvalidXML,
     UnsupportedFeedFormat,
     EmptyFeed,
+    TooManyFeedItems,
 }
 
 impl RSSParseError {
@@ -44,7 +47,12 @@ impl RSSParseError {
             RSSParseError::InvalidXML => "invalid_xml",
             RSSParseError::UnsupportedFeedFormat => "unsupported_feed_format",
             RSSParseError::EmptyFeed => "empty_feed",
+            RSSParseError::TooManyFeedItems => "too_many_feed_items",
         }
+    }
+
+    pub fn is_persistent_compatibility(&self) -> bool {
+        matches!(self, RSSParseError::TooManyFeedItems)
     }
 }
 
@@ -92,6 +100,9 @@ pub fn parse_rss(xml: &str, canonical_feed_url: &str) -> Result<ParsedFeed, RSSP
                 }
                 apply_start_element(&name, &element, &mut channel, &mut current_item, &reader);
                 if name == "item" {
+                    if items.len() >= MAX_RSS_ITEMS {
+                        return Err(RSSParseError::TooManyFeedItems);
+                    }
                     current_item = Some(ItemAccumulator::default());
                 }
                 stack.push(name);
@@ -533,6 +544,7 @@ fn truncated_utf8(value: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write;
 
     const EXAMPLE_CURRENT_AFFAIRS: &str = include_str!(
         "../../../Packages/OpenCastCore/Tests/OpenCastCoreTests/Fixtures/examplecurrentaffairs.xml"
@@ -637,6 +649,47 @@ mod tests {
             .expect("title fallback should exist");
         assert_eq!(title_episode.audio_url, None);
         assert_eq!(title_episode.published_at, Some(1_775_736_000));
+    }
+
+    #[test]
+    fn accepts_maximum_rss_item_count() {
+        let mut xml = String::from("<rss><channel><title>Bounded</title>");
+        for index in 0..MAX_RSS_ITEMS {
+            write!(xml, "<item><guid>{index}</guid></item>")
+                .expect("writing to String should succeed");
+        }
+        xml.push_str("</channel></rss>");
+
+        let feed = parse_rss(&xml, "https://example.com/feed.xml")
+            .expect("the item-count boundary should be accepted");
+
+        assert_eq!(feed.episodes.len(), MAX_RSS_ITEMS);
+    }
+
+    #[test]
+    fn rejects_item_beyond_maximum_before_returning_parsed_catalog() {
+        let mut xml = String::from("<rss><channel><title>Bounded</title>");
+        for _ in 0..=MAX_RSS_ITEMS {
+            xml.push_str("<item></item>");
+        }
+        xml.push_str("</channel></rss>");
+
+        assert_eq!(
+            parse_rss(&xml, "https://example.com/feed.xml"),
+            Err(RSSParseError::TooManyFeedItems)
+        );
+        assert_eq!(
+            RSSParseError::TooManyFeedItems.code(),
+            "too_many_feed_items"
+        );
+        assert!(RSSParseError::TooManyFeedItems.is_persistent_compatibility());
+        for error in [
+            RSSParseError::InvalidXML,
+            RSSParseError::UnsupportedFeedFormat,
+            RSSParseError::EmptyFeed,
+        ] {
+            assert!(!error.is_persistent_compatibility(), "{error:?}");
+        }
     }
 
     #[test]

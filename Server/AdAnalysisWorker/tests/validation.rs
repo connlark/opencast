@@ -3,8 +3,9 @@ use opencast_ad_analysis_worker::types::{
     APP_ATTEST_KEY_DAILY_ESTIMATED_INPUT_TOKEN_CAP, APP_ATTEST_KEY_DAILY_REQUEST_CAP,
     BEARER_DAILY_ESTIMATED_INPUT_TOKEN_CAP, BEARER_DAILY_REQUEST_CAP,
     GLOBAL_DAILY_ESTIMATED_INPUT_TOKEN_CAP, GLOBAL_DAILY_REQUEST_CAP,
-    MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES, MAX_BODY_BYTES, MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS,
-    MAX_TRANSCRIPT_TEXT_CHARS, SCHEMA_VERSION,
+    MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES, MAX_BODY_BYTES, MAX_EPISODE_ID_CHARS,
+    MAX_LANGUAGE_CODE_CHARS, MAX_PODCAST_ID_CHARS, MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS,
+    MAX_TITLE_CHARS, MAX_TRANSCRIPT_TEXT_CHARS, SCHEMA_VERSION,
 };
 use opencast_ad_analysis_worker::usage::{
     global_usage_object_name, usage_object_name, UsageLimitProfile,
@@ -226,6 +227,61 @@ fn malformed_json_is_rejected_before_model_call() {
     assert_eq!(error, ValidationError::MalformedJson);
     assert_eq!(error.code(), "malformed_json");
     assert_eq!(error.http_status(), 400);
+}
+
+#[test]
+fn oversized_header_fields_are_rejected_before_the_spend_estimate() {
+    // AA-2: these flow into build_prompt but not the segment-text estimate,
+    // so an unbounded title/GUID would inflate the prompt past the spend caps
+    // (a 1.4 MB title fits under MAX_BODY_BYTES). Each field is now capped.
+    let over = |request: AdAnalysisRequest| {
+        assert_eq!(
+            validate_request(request).unwrap_err(),
+            ValidationError::MetadataFieldTooLarge
+        );
+    };
+
+    let mut request = sample_request();
+    request.episode_title = Some("t".repeat(MAX_TITLE_CHARS + 1));
+    over(request);
+
+    let mut request = sample_request();
+    request.podcast_title = Some("t".repeat(MAX_TITLE_CHARS + 1));
+    over(request);
+
+    let mut request = sample_request();
+    request.episode_id = "e".repeat(MAX_EPISODE_ID_CHARS + 1);
+    over(request);
+
+    let mut request = sample_request();
+    request.podcast_id = "p".repeat(MAX_PODCAST_ID_CHARS + 1);
+    over(request);
+
+    let mut request = sample_request();
+    request.transcript.language_code = "x".repeat(MAX_LANGUAGE_CODE_CHARS + 1);
+    over(request);
+
+    // At the caps, a request still validates.
+    let mut request = sample_request();
+    request.episode_title = Some("t".repeat(MAX_TITLE_CHARS));
+    request.podcast_title = Some("t".repeat(MAX_TITLE_CHARS));
+    request.episode_id = "e".repeat(MAX_EPISODE_ID_CHARS);
+    request.podcast_id = "p".repeat(MAX_PODCAST_ID_CHARS);
+    request.transcript.language_code = "en-US".to_string();
+    assert!(validate_request(request).is_ok());
+}
+
+#[test]
+fn a_response_missing_spans_is_treated_as_malformed_not_empty() {
+    // AA-7: `{}` (or any object without a `spans` array) must be a
+    // deserialize error so it takes the malformed -> retry -> warning path,
+    // never read as an authoritative empty result.
+    assert!(serde_json::from_str::<ModelOutput>("{}").is_err());
+    assert!(serde_json::from_str::<ModelOutput>(r#"{"ads":[]}"#).is_err());
+    // The genuine empty-valid answer still deserializes cleanly.
+    let empty = serde_json::from_str::<ModelOutput>(r#"{"spans":[]}"#)
+        .expect("explicit empty spans is valid");
+    assert!(empty.spans.is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +565,42 @@ fn overlong_spans_and_request_covering_spans_are_dropped() {
     let (spans, warnings) = validate_model_output(&request, output);
     assert!(spans.is_empty());
     assert!(warnings.contains(&"span_covers_request:0-59".to_string()));
+}
+
+#[test]
+fn fragmented_same_kind_spans_cannot_merge_into_a_whole_episode() {
+    // AA-1: 30 segments x 15s = 450s. Each single-segment raw span is 3.3%
+    // coverage and passes the pre-merge coverage cap, but they chain-merge
+    // into one span covering 100% of the episode (450s: under the 600s
+    // duration cap AND under the max(0.25*450, 600)=600s budget, so neither
+    // of those catches it). Only the post-merge coverage re-check drops it —
+    // otherwise the app receives one whole-episode auto-skippable span.
+    let request = wide_request(30, 15.0);
+    let raw: Vec<ModelSpan> = (0..30)
+        .map(|index| {
+            span(
+                AdSpanKind::InsertedAd,
+                "Fragment",
+                index as i64,
+                index as i64,
+                0.9,
+                &format!("segment {index} unique pepper"),
+            )
+        })
+        .collect();
+
+    let (spans, warnings) = validate_model_output(&request, ModelOutput::from_spans(raw));
+
+    assert!(
+        spans.is_empty(),
+        "the merged whole-episode span must be dropped, got {spans:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.starts_with("span_covers_request:")),
+        "expected a post-merge span_covers_request warning, got {warnings:?}"
+    );
 }
 
 #[test]

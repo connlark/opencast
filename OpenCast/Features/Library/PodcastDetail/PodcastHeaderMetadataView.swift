@@ -7,6 +7,8 @@ struct PodcastHeaderMetadataView: View {
     let lastRefreshedAt: Date?
     let isRefreshing: Bool
     let refreshErrorMessage: String?
+    var health: FeedHealthStatus?
+    var notificationHealth: NotificationFeedHealth?
 
     var body: some View {
         VStack(spacing: 5) {
@@ -17,7 +19,18 @@ struct PodcastHeaderMetadataView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if let lastRefreshedAt {
+            if let checkedUpdatedLine = health?.checkedUpdatedLine {
+                HStack(spacing: 6) {
+                    Text(checkedUpdatedLine)
+                    if isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Refreshing")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else if let lastRefreshedAt {
                 HStack(spacing: 6) {
                     Text("Refreshed \(lastRefreshedAt.formatted(.relative(presentation: .named)))")
                     if isRefreshing {
@@ -40,12 +53,29 @@ struct PodcastHeaderMetadataView: View {
                 .accessibilityElement(children: .combine)
             }
 
-            if let refreshErrorMessage {
-                Label(refreshErrorMessage, systemImage: "exclamationmark.triangle.fill")
+            if let notificationHealth, notificationHealth.isDegraded {
+                Label("Notifications degraded for this show", systemImage: "bell.slash")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.center)
+            }
+
+            if let health, health.replacesRefreshedLine, let statusLine = health.statusLine {
+                Text(statusLine)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            if let refreshErrorMessage {
+                Label(
+                    refreshErrorMessage,
+                    systemImage: health?.kind == .partial
+                        ? "exclamationmark.circle"
+                        : "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .lineLimit(3)
+                .multilineTextAlignment(.center)
             }
         }
         .multilineTextAlignment(.center)

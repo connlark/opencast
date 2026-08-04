@@ -216,12 +216,31 @@ final class OpenCastPadUITests: XCTestCase {
 
     @MainActor
     private func skipUnlessPad() throws {
-        let environment = ProcessInfo.processInfo.environment
-        let simulatorName = environment["SIMULATOR_DEVICE_NAME"] ?? ""
-        let isNamedIPadSimulator = simulatorName.range(of: "iPad", options: .caseInsensitive) != nil
-        guard UIDevice.current.userInterfaceIdiom == .pad || isNamedIPadSimulator else {
+        guard Self.isPadDestination(
+            environment: ProcessInfo.processInfo.environment,
+            deviceModel: UIDevice.current.model,
+            isPadIdiom: UIDevice.current.userInterfaceIdiom == .pad
+        ) else {
             throw XCTSkip("OpenCastPadUITests require an iPad destination.")
         }
+    }
+
+    /// Pure destination decision so the hardware and override paths stay
+    /// unit-covered (`OpenCastPadDestinationDecisionTests`). The runner's own
+    /// idiom evaluated non-pad on a physical iPad (Phase 8 closeout), so the
+    /// hardware model string and an explicit orchestrator override are
+    /// affirmative disjuncts that don't depend on it.
+    static func isPadDestination(
+        environment: [String: String],
+        deviceModel: String,
+        isPadIdiom: Bool
+    ) -> Bool {
+        let simulatorName = environment["SIMULATOR_DEVICE_NAME"] ?? ""
+        let isNamedIPadSimulator = simulatorName.range(of: "iPad", options: .caseInsensitive) != nil
+        let isPadHardware = deviceModel.hasPrefix("iPad")
+        let isForcedPad = environment["OPENCAST_FORCE_PAD"] == "1"
+            || environment["TEST_RUNNER_OPENCAST_FORCE_PAD"] == "1"
+        return isPadIdiom || isNamedIPadSimulator || isPadHardware || isForcedPad
     }
 
     private func requireHierarchyProbeOptIn() throws {

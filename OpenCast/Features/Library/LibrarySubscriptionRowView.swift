@@ -20,7 +20,7 @@ struct LibrarySubscriptionRowView: View {
                 isConfirmingRemoval: $isConfirmingRemoval,
                 subscription: subscription,
                 supportsSwipeAction: true,
-                supportsContextMenu: false
+                supportsContextMenu: true
             )
         )
     }

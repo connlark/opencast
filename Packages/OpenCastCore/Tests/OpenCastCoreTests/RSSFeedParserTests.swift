@@ -119,6 +119,68 @@ struct RSSFeedParserTests {
         #expect(episode.showNotesHTML == "Hello bold and italic world")
     }
 
+    @Test("Channel metadata stays intact alongside large show notes")
+    func channelMetadataStaysIntactAlongsideLargeShowNotes() throws {
+        let bigNotes = String(repeating: "Show note sentence. ", count: 2_000)
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Contained Feed</title>
+            <description>Channel summary</description>
+            <link>https://example.com/contained</link>
+            <item>
+              <title>Big Notes <em>Episode</em></title>
+              <guid>contained-1</guid>
+              <description>Inline <b>bold</b> summary</description>
+              <content:encoded>\(bigNotes)</content:encoded>
+              <enclosure url="https://example.com/audio/contained-1.mp3" type="audio/mpeg" />
+            </item>
+          </channel>
+        </rss>
+        """
+
+        let snapshot = try RSSFeedParser().parse(
+            data: Data(xml.utf8),
+            feedURL: URL(string: "https://example.com/contained.xml")!
+        )
+        let episode = try #require(snapshot.episodes.first)
+
+        #expect(snapshot.podcast.title == "Contained Feed")
+        #expect(snapshot.podcast.summary == "Channel summary")
+        #expect(snapshot.podcast.websiteURL?.absoluteString == "https://example.com/contained")
+        #expect(episode.title == "Big Notes Episode")
+        #expect(episode.summary == "Inline bold summary")
+        #expect(episode.showNotesHTML?.hasPrefix("Show note sentence.") == true)
+    }
+
+    @Test("Parses the channel's itunes:new-feed-url declaration")
+    func parsesNewFeedURLDeclaration() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Moving Show</title>
+                <itunes:new-feed-url>https://example.net/moved.xml</itunes:new-feed-url>
+                <item>
+                  <title>One</title>
+                  <guid>moving-1</guid>
+                  <enclosure url="https://example.com/audio/moving-1.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/moving.xml")!
+        )
+
+        #expect(snapshot.newFeedURL?.absoluteString == "https://example.net/moved.xml")
+    }
+
     @Test("Parses PDT item pubDate values")
     func parsesPDTItemPubDateValues() throws {
         let data = Data(
@@ -177,13 +239,342 @@ struct RSSFeedParserTests {
         )
     }
 
-    @Test("Rejects feeds with no episodes")
-    func rejectsFeedsWithNoEpisodes() throws {
+    @Test("Fixture episode IDs stay stable across date-parser changes")
+    func fixtureEpisodeIDsStayStable() throws {
+        let feedURL = try #require(URL(string: "https://example.com/fallbacks.xml"))
+        let snapshot = try fixtureSnapshot(named: "fallbacks", feedURL: feedURL)
+        let audioEpisode = try #require(snapshot.episodes.first { $0.title == "Audio URL Stable Original" })
+        let titleDateEpisode = try #require(snapshot.episodes.first { $0.title == "Title Date Stable" })
+
+        #expect(audioEpisode.publishedAt?.timeIntervalSince1970 == 1_775_649_600)
+        #expect(titleDateEpisode.publishedAt?.timeIntervalSince1970 == 1_775_736_000)
+        #expect(
+            titleDateEpisode.id == EpisodeIdentity.makeID(
+                feedURL: feedURL,
+                guid: nil,
+                audioURL: nil,
+                title: "Title Date Stable",
+                publishedAt: Date(timeIntervalSince1970: 1_775_736_000)
+            )
+        )
+    }
+
+    @Test("Returns an empty snapshot for feeds without episodes")
+    func returnsEmptySnapshotForFeedsWithoutEpisodes() throws {
         let url = try #require(Bundle.module.url(forResource: "empty", withExtension: "xml"))
         let data = try Data(contentsOf: url)
 
-        #expect(throws: OpenCastCoreError.self) {
-            try RSSFeedParser().parse(data: data, feedURL: URL(string: "https://example.com/empty.xml")!)
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/empty.xml")!
+        )
+
+        #expect(snapshot.podcast.title == "Empty Show")
+        #expect(snapshot.episodes.isEmpty)
+    }
+
+    @Test("Reports Atom documents as not a feed")
+    func reportsAtomDocumentsAsNotAFeed() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <feed xmlns="http://www.w3.org/2005/Atom">
+              <title>Atom Show</title>
+              <entry>
+                <title>Atom Entry</title>
+                <id>urn:uuid:atom-entry-1</id>
+              </entry>
+            </feed>
+            """.utf8
+        )
+
+        #expect(throws: OpenCastCoreError.notAFeed(rootElement: "feed")) {
+            try RSSFeedParser().parse(data: data, feedURL: URL(string: "https://example.com/atom.xml")!)
+        }
+    }
+
+    @Test("Reports HTML documents as not a feed")
+    func reportsHTMLDocumentsAsNotAFeed() throws {
+        let data = Data(
+            """
+            <!DOCTYPE html>
+            <html>
+            <head><title>A Web Page</title>
+            <body>
+            <p>Not a feed
+            </body>
+            </html>
+            """.utf8
+        )
+
+        #expect(throws: OpenCastCoreError.notAFeed(rootElement: "html")) {
+            try RSSFeedParser().parse(data: data, feedURL: URL(string: "https://example.com/page")!)
+        }
+    }
+
+    @Test("Non-UTF-8 CDATA falls back to the prolog-declared encoding")
+    func nonUTF8CDATAFallsBackToDeclaredEncoding() throws {
+        let latinXML = """
+        <?xml version="1.0" encoding="ISO-8859-1"?>
+        <rss version="2.0">
+          <channel>
+            <title>Latin Show</title>
+            <item>
+              <title>Latin Episode</title>
+              <guid>latin-cdata</guid>
+              <description><![CDATA[Café crème notes]]></description>
+              <enclosure url="https://example.com/latin.mp3" type="audio/mpeg" />
+            </item>
+          </channel>
+        </rss>
+        """
+        let data = try #require(latinXML.data(using: .isoLatin1))
+
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/latin-cdata.xml")!
+        )
+
+        #expect(snapshot.episodes.first?.summary == "Café crème notes")
+    }
+
+    @Test("Double-encoded entities in titles decode at parse time")
+    func doubleEncodedTitleEntitiesDecodeAtParseTime() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Rock &amp;amp; Roll Hour</title>
+                <itunes:author>Smith &amp;amp; Jones</itunes:author>
+                <item>
+                  <title>Fish &amp;amp;amp; Chips &amp;#8212; Live</title>
+                  <guid>double-encoded</guid>
+                  <enclosure url="https://example.com/audio/double.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/double.xml")!
+        )
+
+        #expect(snapshot.podcast.title == "Rock & Roll Hour")
+        #expect(snapshot.podcast.author == "Smith & Jones")
+        #expect(snapshot.episodes.first?.title == "Fish & Chips — Live")
+    }
+
+    @Test("Repeated GUIDs with distinct enclosures materialize distinct episodes")
+    func repeatedGUIDsWithDistinctEnclosuresMaterializeDistinctEpisodes() throws {
+        let feedURL = try #require(URL(string: "https://example.com/repeated-guid.xml"))
+        let items = (1...3).map { index in
+            """
+            <item>
+              <title>Collider \(index)</title>
+              <guid>shared-guid</guid>
+              <pubDate>Tue, 0\(index) Jun 2026 10:00:00 GMT</pubDate>
+              <enclosure url="https://example.com/audio/collider-\(index).mp3" type="audio/mpeg" />
+            </item>
+            """
+        }.joined()
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Repeated GUID Feed</title>
+            \(items)
+          </channel>
+        </rss>
+        """
+
+        let snapshot = try RSSFeedParser().parse(data: Data(xml.utf8), feedURL: feedURL)
+
+        #expect(snapshot.episodes.count == 3)
+        #expect(Set(snapshot.episodes.map(\.id)).count == 3)
+        #expect(
+            snapshot.episodes[0].id == EpisodeIdentity.makeID(
+                feedURL: feedURL,
+                guid: "shared-guid",
+                audioURL: snapshot.episodes[0].audioURL,
+                title: "Collider 1",
+                publishedAt: snapshot.episodes[0].publishedAt
+            )
+        )
+        #expect(
+            snapshot.episodes[1].id == EpisodeIdentity.makeID(
+                feedURL: feedURL,
+                guid: nil,
+                audioURL: URL(string: "https://example.com/audio/collider-2.mp3"),
+                title: "Collider 2",
+                publishedAt: snapshot.episodes[1].publishedAt
+            )
+        )
+    }
+
+    @Test("Truly identical repeated items still collapse")
+    func trulyIdenticalRepeatedItemsStillCollapse() throws {
+        let item = """
+        <item>
+          <title>Doubled Episode</title>
+          <guid>doubled</guid>
+          <pubDate>Tue, 02 Jun 2026 10:00:00 GMT</pubDate>
+          <enclosure url="https://example.com/audio/doubled.mp3" type="audio/mpeg" />
+        </item>
+        """
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Doubled Feed</title>
+            \(item)
+            \(item)
+          </channel>
+        </rss>
+        """
+
+        let snapshot = try RSSFeedParser().parse(
+            data: Data(xml.utf8),
+            feedURL: URL(string: "https://example.com/doubled.xml")!
+        )
+
+        #expect(snapshot.episodes.map(\.title) == ["Doubled Episode"])
+    }
+
+    @Test("Salvages fully-parsed episodes from a truncated feed")
+    func salvagesFullyParsedEpisodesFromTruncatedFeed() throws {
+        let items = (1...3).map { index in
+            """
+            <item>
+              <title>Episode \(index)</title>
+              <guid>truncated-\(index)</guid>
+              <enclosure url="https://example.com/audio/truncated-\(index).mp3" type="audio/mpeg" />
+            </item>
+            """
+        }.joined()
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Truncated Show</title>
+            \(items)
+            <item>
+              <title>Torn Episo
+        """
+
+        let snapshot = try RSSFeedParser().parse(
+            data: Data(xml.utf8),
+            feedURL: URL(string: "https://example.com/truncated.xml")!
+        )
+
+        #expect(snapshot.isSalvaged)
+        #expect(snapshot.podcast.title == "Truncated Show")
+        #expect(snapshot.episodes.map(\.title) == ["Episode 1", "Episode 2", "Episode 3"])
+    }
+
+    @Test("Aborts and salvages when nesting exceeds the depth budget")
+    func abortsAndSalvagesWhenNestingExceedsDepthBudget() throws {
+        let nesting = (0..<60).map { "<nest\($0)>" }.joined()
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Deep Feed</title>
+            <item>
+              <title>Complete Episode</title>
+              <guid>deep-1</guid>
+              <enclosure url="https://example.com/audio/deep-1.mp3" type="audio/mpeg" />
+            </item>
+            \(nesting)
+          </channel>
+        </rss>
+        """
+
+        let snapshot = try RSSFeedParser().parse(
+            data: Data(xml.utf8),
+            feedURL: URL(string: "https://example.com/deep.xml")!
+        )
+
+        #expect(snapshot.isSalvaged)
+        #expect(snapshot.episodes.map(\.title) == ["Complete Episode"])
+    }
+
+    @Test("Aborts and salvages when a single text node exceeds the budget")
+    func abortsAndSalvagesWhenTextNodeExceedsBudget() throws {
+        let hugeText = String(repeating: "a", count: 13 * 1_024 * 1_024)
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Huge Text Feed</title>
+            <item>
+              <title>Complete Episode</title>
+              <guid>huge-1</guid>
+              <enclosure url="https://example.com/audio/huge-1.mp3" type="audio/mpeg" />
+            </item>
+            <item>
+              <title>Oversized Episode</title>
+              <guid>huge-2</guid>
+              <description>\(hugeText)</description>
+            </item>
+          </channel>
+        </rss>
+        """
+
+        let snapshot = try RSSFeedParser().parse(
+            data: Data(xml.utf8),
+            feedURL: URL(string: "https://example.com/huge.xml")!
+        )
+
+        #expect(snapshot.isSalvaged)
+        #expect(snapshot.episodes.map(\.title) == ["Complete Episode"])
+    }
+
+    @Test("Caps the number of parsed items")
+    func capsTheNumberOfParsedItems() throws {
+        let items = (1...10_002).map { index in
+            "<item><title>E\(index)</title><guid>cap-\(index)</guid></item>"
+        }.joined()
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Capped Feed</title>
+            \(items)
+          </channel>
+        </rss>
+        """
+
+        let snapshot = try RSSFeedParser().parse(
+            data: Data(xml.utf8),
+            feedURL: URL(string: "https://example.com/capped.xml")!
+        )
+
+        #expect(snapshot.isSalvaged)
+        #expect(snapshot.episodes.count == 10_000)
+    }
+
+    @Test("Reports malformed XML as a malformed feed")
+    func reportsMalformedXMLAsMalformedFeed() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Broken Feed</title>
+            """.utf8
+        )
+
+        do {
+            _ = try RSSFeedParser().parse(data: data, feedURL: URL(string: "https://example.com/broken.xml")!)
+            Issue.record("Expected malformed XML to throw")
+        } catch let error as OpenCastCoreError {
+            guard case .malformedFeed = error else {
+                Issue.record("Expected malformedFeed, got \(error)")
+                return
+            }
         }
     }
 

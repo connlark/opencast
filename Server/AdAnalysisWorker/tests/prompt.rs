@@ -1,10 +1,11 @@
 use opencast_ad_analysis_worker::prompt::{
-    build_prompt, gemini_generate_content_url, gemini_request_payload, GeminiGenerationOptions,
-    GEMINI_MAX_OUTPUT_TOKENS,
+    build_prompt, gemini_generate_content_url, gemini_request_payload, segment_framing_chars,
+    GeminiGenerationOptions, GEMINI_MAX_OUTPUT_TOKENS, PROMPT_OVERHEAD_CHAR_ALLOWANCE,
 };
 use opencast_ad_analysis_worker::types::{
     resolve_gemini_model, AdAnalysisRequest, TranscriptMetadata, TranscriptSegment,
-    GEMINI_MODEL_ALLOWLIST, GEMINI_MODEL_DEFAULT, POLICY_NAME, SCHEMA_VERSION,
+    GEMINI_MODEL_ALLOWLIST, GEMINI_MODEL_DEFAULT, MAX_LANGUAGE_CODE_CHARS, MAX_PODCAST_ID_CHARS,
+    MAX_TITLE_CHARS, POLICY_NAME, SCHEMA_VERSION,
 };
 
 #[test]
@@ -149,6 +150,100 @@ fn gemini_payload_sends_transcript_segments_without_audio_provenance() {
     assert!(!encoded.contains("source_file_byte_count"));
     assert!(!encoded.contains("audio.mp3"));
     assert!(!encoded.contains("source-sha"));
+}
+
+/// Pins `PROMPT_OVERHEAD_CHAR_ALLOWANCE` to the real template: everything
+/// `build_prompt` emits beyond per-segment lines — the fixed instruction
+/// block plus a deliberately oversized metadata header — must fit inside
+/// the allowance `validation.rs` folds into the spend estimate. If template
+/// growth breaks this, raise the allowance with it instead of silently
+/// under-counting spend.
+#[test]
+fn prompt_overhead_fits_inside_the_spend_allowance() {
+    let mut request = sample_request();
+    request.segments.clear();
+    request.transcript.segment_count = 0;
+    // The worst header validation admits (AA-2 caps): a max-length episode
+    // title, an ABSENT podcast title so build_prompt falls back to a
+    // max-length podcast_id (the direct app path's canonical feed URL), and
+    // a max-length language code.
+    request.episode_title = Some("E".repeat(MAX_TITLE_CHARS));
+    request.podcast_title = None;
+    request.podcast_id = "p".repeat(MAX_PODCAST_ID_CHARS);
+    request.transcript.language_code = "x".repeat(MAX_LANGUAGE_CODE_CHARS);
+
+    let overhead_chars = build_prompt(&request).chars().count();
+
+    assert!(
+        overhead_chars <= PROMPT_OVERHEAD_CHAR_ALLOWANCE,
+        "prompt overhead {overhead_chars} chars exceeds the \
+         {PROMPT_OVERHEAD_CHAR_ALLOWANCE}-char allowance"
+    );
+    // The allowance must also stay honest work, not slack that hides a
+    // template rewrite: the fixed block alone is the dominant share.
+    assert!(
+        overhead_chars >= PROMPT_OVERHEAD_CHAR_ALLOWANCE / 2,
+        "prompt overhead {overhead_chars} chars is under half the allowance — \
+         re-derive PROMPT_OVERHEAD_CHAR_ALLOWANCE against the current template"
+    );
+}
+
+/// Pins `segment_framing_chars` against `build_prompt`'s actual output so the
+/// spend estimate's per-segment framing term (AA-3) stays byte-exact with the
+/// template. Renders the prompt with full text, with empty text, and with no
+/// segments, and asserts the framing sum reconciles all three.
+#[test]
+fn per_segment_framing_reconciles_the_rendered_prompt() {
+    let request = sample_request();
+
+    let full = build_prompt(&request).chars().count();
+
+    let mut empty_text = request.clone();
+    for segment in &mut empty_text.segments {
+        segment.text = String::new();
+    }
+    let header_plus_framing = build_prompt(&empty_text).chars().count();
+
+    let mut headerless = request.clone();
+    headerless.segments.clear();
+    headerless.transcript.segment_count = 0;
+    let header_only = build_prompt(&headerless).chars().count();
+
+    let text_chars: usize = request
+        .segments
+        .iter()
+        .map(|segment| segment.text.chars().count())
+        .sum();
+    let framing_sum: usize = request.segments.iter().map(segment_framing_chars).sum();
+
+    // full = header + framing + text; empty-text drops only the text.
+    assert_eq!(full, header_plus_framing + text_chars);
+    // header-only drops the framing; the difference is exactly the framing sum.
+    assert_eq!(header_plus_framing, header_only + framing_sum);
+}
+
+/// `{:.3}` rounds before printing, so a timing just under a power of ten
+/// gains an integer digit (9.9996 renders "10.000"). The width helper must
+/// round the same way, not truncate (Phase 10 re-review).
+#[test]
+fn framing_width_survives_round_up_across_a_power_of_ten() {
+    for (start, end) in [(9.999_6, 99.999_5), (0.999_9, 9.999_9), (7.25, 999.999_6)] {
+        let segment = TranscriptSegment {
+            id: 7,
+            start,
+            end,
+            text: String::new(),
+        };
+        let rendered = format!(
+            "[{} | {:.3}-{:.3}] \n",
+            segment.id, segment.start, segment.end
+        );
+        assert_eq!(
+            segment_framing_chars(&segment),
+            rendered.chars().count(),
+            "width mismatch for {start}-{end}: rendered {rendered:?}"
+        );
+    }
 }
 
 fn sample_request() -> AdAnalysisRequest {

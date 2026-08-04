@@ -8,16 +8,32 @@ struct DownloadsListModel {
         downloading.isEmpty && failed.isEmpty && downloaded.isEmpty
     }
 
+    func filteringUnplayed(using library: LibraryStore) -> DownloadsListModel {
+        let unplayedDownloads = downloaded.filter {
+            library.progressRecord(for: $0.id)?.isPlayed != true
+        }
+        return DownloadsListModel(
+            downloading: downloading,
+            failed: failed,
+            downloaded: unplayedDownloads,
+            animationKey: DownloadsListAnimationKey(
+                downloadingEpisodeIDs: animationKey.downloadingEpisodeIDs,
+                failedEpisodeIDs: animationKey.failedEpisodeIDs,
+                downloadedEpisodeIDs: unplayedDownloads.map(\.id),
+                stateRawValuesByEpisodeID: animationKey.stateRawValuesByEpisodeID
+            )
+        )
+    }
+
     static func make(
         records: [EpisodeDownloadRecord],
-        library: LibraryStore,
-        showsUnplayedOnly: Bool
+        library: LibraryStore
     ) -> DownloadsListModel {
         var downloading: [DownloadListItem] = []
         var failed: [DownloadListItem] = []
         var downloaded: [DownloadListItem] = []
 
-        for record in records {
+        for record in uniquedByEpisodeID(records) {
             let item = DownloadListItem.make(record: record, library: library)
             switch record.state {
             case .downloading, .paused:
@@ -25,9 +41,6 @@ struct DownloadsListModel {
             case .failed, .missing:
                 failed.append(item)
             case .completed:
-                guard !showsUnplayedOnly || library.progressRecord(for: record.episodeID)?.isPlayed != true else {
-                    continue
-                }
                 downloaded.append(item)
             }
         }
@@ -50,6 +63,48 @@ struct DownloadsListModel {
                 )
             )
         )
+    }
+
+    /// Item IDs are episode IDs, so every row must be unique per episode even
+    /// when persisted records violate that invariant (`DownloadStore` repairs
+    /// them at load; this is the last fence before `ForEach`/selection). The
+    /// survivor is chosen by an explicit ladder, never by fetch order, so the
+    /// same rows always render the same list.
+    private static func uniquedByEpisodeID(_ records: [EpisodeDownloadRecord]) -> [EpisodeDownloadRecord] {
+        var winnersByEpisodeID: [String: EpisodeDownloadRecord] = [:]
+        for record in records {
+            if let current = winnersByEpisodeID[record.episodeID], !prefers(record, over: current) {
+                continue
+            }
+            winnersByEpisodeID[record.episodeID] = record
+        }
+        guard winnersByEpisodeID.count != records.count else {
+            return records
+        }
+        return records.filter { winnersByEpisodeID[$0.episodeID] === $0 }
+    }
+
+    private static func prefers(_ lhs: EpisodeDownloadRecord, over rhs: EpisodeDownloadRecord) -> Bool {
+        if displayPriority(lhs.state) != displayPriority(rhs.state) {
+            return displayPriority(lhs.state) > displayPriority(rhs.state)
+        }
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt > rhs.updatedAt
+        }
+        if lhs.createdAt != rhs.createdAt {
+            return lhs.createdAt > rhs.createdAt
+        }
+        return String(describing: lhs.persistentModelID) < String(describing: rhs.persistentModelID)
+    }
+
+    private static func displayPriority(_ state: EpisodeDownloadState) -> Int {
+        switch state {
+        case .completed: 4
+        case .downloading: 3
+        case .paused: 2
+        case .failed: 1
+        case .missing: 0
+        }
     }
 
     private static func sortsDownloading(_ lhs: DownloadListItem, _ rhs: DownloadListItem) -> Bool {
