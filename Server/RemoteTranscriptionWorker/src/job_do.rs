@@ -1232,6 +1232,11 @@ impl TranscriptionJob {
         // finished; the media call has already completed (the overlap driver
         // always awaits it), so cleanup cannot race container writes.
         if let Some(code) = overlap.fatal {
+            worker::console_error!(
+                "overlap driver latched fatal: job {} code {}",
+                record.job_id,
+                code
+            );
             self.release_and_fail(record, config, code).await?;
             return Ok(());
         }
@@ -1240,14 +1245,22 @@ impl TranscriptionJob {
             Err(failure) => return self.handle_media_failure(record, config, failure).await,
         };
         let canonical = record.canonical_duration_seconds.unwrap_or_default();
-        if let Err(code) = media::validate_chunks(
+        if let Err(rejection) = media::validate_chunks(
             &chunk_response.chunks,
             job::MAX_CHUNK_RAW_BYTES,
             canonical,
             job::CHUNK_SECONDS,
             job::STEP_SECONDS,
         ) {
-            self.release_and_fail(record, config, code).await?;
+            worker::console_error!(
+                "chunk manifest rejected: job {} {} ({} chunks, canonical {:.3})",
+                record.job_id,
+                rejection,
+                chunk_response.chunks.len(),
+                canonical
+            );
+            self.release_and_fail(record, config, rejection.code())
+                .await?;
             return Ok(());
         }
         let Some(validated_chunks) = chunk_response

@@ -14,6 +14,7 @@ from media_server import (
     extract_bounded_chunk,
     extract_chunk,
     ffprobe,
+    measured_audio_duration,
     normalize_chunk,
     upload,
 )
@@ -82,6 +83,58 @@ class BoundedChunkTests(unittest.TestCase):
             self.assertEqual(raised.exception.status, 413)
             self.assertEqual(raised.exception.code, "normalized_chunk_too_large")
             self.assertFalse(output.exists())
+
+
+class MeasuredDurationTests(unittest.TestCase):
+    """actual_duration_seconds must be exact on the Xing-less stream copies
+    the chunker emits — ffprobe's format.duration is only a filesize/bitrate
+    estimate there, off by ±10% on VBR media (2026-08-04 short-episode bug).
+    """
+
+    def test_packet_sum_matches_decoded_duration_on_vbr_stream_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            source = directory / "vbr-source.mp3"
+            # Sine then noise: frame sizes vary front-to-back, so a
+            # first-frames bitrate estimate cannot represent the whole file.
+            subprocess.run(
+                [
+                    "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi",
+                    "-i", "sine=frequency=440:sample_rate=44100:duration=2",
+                    "-f", "lavfi",
+                    "-i", "anoisesrc=sample_rate=44100:duration=2",
+                    "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1",
+                    "-c:a", "libmp3lame", "-q:a", "9", str(source),
+                ],
+                check=True,
+            )
+            copy = directory / "copy.mp3"
+            extract_chunk(source, copy, 0.0, 4.0)
+
+            measured = measured_audio_duration(copy)
+
+            # Ground truth: decode the copy to WAV, whose header duration is
+            # exact. Allow one MP3 frame (26 ms) plus decoder-delay slack.
+            wav = directory / "copy.wav"
+            subprocess.run(
+                [
+                    "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                    "-i", str(copy), str(wav),
+                ],
+                check=True,
+            )
+            decoded = float(ffprobe(wav)["format"]["duration"])
+            self.assertAlmostEqual(measured, decoded, delta=0.1)
+
+    def test_unreadable_input_is_a_clean_probe_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            garbage = Path(raw_directory) / "garbage.mp3"
+            garbage.write_bytes(b"not an mp3 stream")
+            with self.assertRaises(MediaError) as raised:
+                measured_audio_duration(garbage)
+            self.assertEqual(raised.exception.status, 422)
+            self.assertEqual(raised.exception.code, "probe_failed")
 
 
 class _EndlessResponse:
@@ -162,6 +215,7 @@ class FfmpegHardeningTests(unittest.TestCase):
         # must restrict the protocol surface to local files (TMW-4a).
         cases = [
             (ffprobe, (Path("in"),)),
+            (measured_audio_duration, (Path("in"),)),
             (extract_chunk, (Path("in"), Path("out"), 0.0, 4.0)),
             (normalize_chunk, (Path("in"), Path("out"), 0.0, 4.0)),
         ]
@@ -189,6 +243,12 @@ class TimeoutBudgetTests(unittest.TestCase):
     def test_subprocess_timeouts_map_to_clean_media_errors(self) -> None:
         cases = [
             (ffprobe, media_server.FFPROBE_TIMEOUT_SECONDS, "probe_timeout", (Path("in"),)),
+            (
+                measured_audio_duration,
+                media_server.FFPROBE_TIMEOUT_SECONDS,
+                "probe_timeout",
+                (Path("in"),),
+            ),
             (
                 extract_chunk,
                 media_server.FFMPEG_TIMEOUT_SECONDS,

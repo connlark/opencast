@@ -153,6 +153,50 @@ def ffprobe(path: Path) -> dict:
     return json.loads(completed.stdout)
 
 
+def measured_audio_duration(path: Path) -> float:
+    """Demux-level duration of the first audio stream: the sum of its packet
+    durations.
+
+    Chunks are written without Xing headers (bitexact bakeoff contract), so
+    ffprobe's format.duration falls back to a filesize/bitrate estimate that
+    is off by up to ±10% on VBR media — enough to trip the gateway's chunk
+    coverage validation (2026-08-04 short-episode bug) and to misplace
+    stitch intervals. Packet enumeration reads every frame header without
+    decoding and is exact.
+    """
+    try:
+        completed = subprocess.run(
+            [
+                "ffprobe", "-hide_banner", "-loglevel", "error",
+                "-protocol_whitelist", "file",
+                "-select_streams", "a:0",
+                "-show_entries", "packet=duration_time",
+                "-of", "csv=p=0", str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=FFPROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise MediaError(504, "probe_timeout") from error
+    if completed.returncode != 0:
+        raise MediaError(422, "probe_failed")
+    total = 0.0
+    counted = False
+    for token in completed.stdout.split():
+        value = token.strip().rstrip(",")
+        if not value or value == "N/A":
+            continue
+        try:
+            total += float(value)
+        except ValueError:
+            continue
+        counted = True
+    if not counted or total <= 0.0:
+        raise MediaError(422, "probe_failed")
+    return total
+
+
 def probe(payload: dict) -> dict:
     source_key = payload["source_key"]
     with tempfile.TemporaryDirectory(prefix="opencast-media-") as workdir:
@@ -278,8 +322,7 @@ def chunk(payload: dict) -> dict:
                 max_chunk_raw_bytes,
             ))
             byte_count = out.stat().st_size
-            chunk_info = ffprobe(out)
-            actual_duration = float(chunk_info.get("format", {}).get("duration", 0.0))
+            actual_duration = measured_audio_duration(out)
             sha256 = hashlib.sha256(out.read_bytes()).hexdigest()
             key = f"{chunk_prefix}{index}.mp3"
             upload(key, out)

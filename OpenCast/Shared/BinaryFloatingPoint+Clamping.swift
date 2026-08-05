@@ -1,4 +1,4 @@
-extension BinaryFloatingPoint {
+nonisolated extension BinaryFloatingPoint {
     var clamped01: Self {
         clamped(to: 0...1)
     }

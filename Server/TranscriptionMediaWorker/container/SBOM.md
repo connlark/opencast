@@ -1,305 +1,129 @@
 # Media Container SBOM
 
-Generated 2026-07-19 from a linux/amd64 image; re-verified 2026-08-04 with the same base pin and Debian trixie ffmpeg 7:7.1.5-0+deb13u1 after the latest media-server changes.
+Generated 2026-08-04 from a linux/amd64 image using Alpine and hand-compiled
+ffmpeg 9.0 (a 574 MB → 55 MB hardening/size revision). `media_server.py` is
+unchanged from the previous image revision.
 
 - Image: registry.cloudflare.com/REPLACE_WITH_ACCOUNT_HASH/your-transcription-media-container:REPLACE_WITH_TAG@sha256:REPLACE_WITH_IMAGE_DIGEST
-- Base: docker.io/library/python:3.12-slim@sha256:cab2dbf575e971934a81e4622f5aba17aa7929719bd7e31033a3a83b97fd0464
-- ffmpeg: 7:7.1.5-0+deb13u1 (Debian trixie)
+- Base (both stages): docker.io/library/python:3.12-alpine@sha256:aa679aa4eed6eb56c1dc6ad3f1b98b7d2d788fd961596779d188fdedad97fb38
+  (linux/amd64 manifest; Alpine 3.24.1, Python 3.12.13)
 - Image build: `podman build --format=docker --platform=linux/amd64 container`
+- ffmpeg: 9.0 "Lei", compiled from source in the builder stage (gcc 15.2.0,
+  nasm; static ffmpeg libs, `-static-libgcc`). Only ffmpeg + ffprobe ship
+  (2,132,080 / 1,910,832 bytes stripped); linked libraries are
+  avutil/avcodec/avformat/avfilter/swresample only — no avdevice, no
+  swscale, no postproc (removed upstream in 9.0), no ffplay.
+- libmp3lame: lame 3.100, compiled static in the builder stage — the same
+  upstream version as the Debian `libmp3lame0` the previous image shipped, so
+  the normalize path's encoder behavior does not drift.
 
-## Debian packages
+## Source provenance (vendored in `vendor/`, tracked in git)
+
+| Source | sha256 | Verification |
+|---|---|---|
+| `ffmpeg-9.0.tar.xz` | `7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52` | GPG signature verified 2026-08-04 against the FFmpeg release signing key `FCF986EA15E6E293A5644F10B4322F04D67658D8` (detached sig vendored as `vendor/ffmpeg-9.0.tar.xz.asc`) |
+| `lame-3.100.tar.gz` | `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e` | sha512 cross-checked byte-identical against the Alpine aports `main/lame` pin 2026-08-04 |
+
+Both sha256s are re-verified inside the image build (`sha256sum -c`), so a
+swapped vendor file fails the build.
+
+## ffmpeg configure line (canonical copy; must stay derived from media_server.py)
 
 ```
-adduser 3.152
-apt 3.0.3
-base-files 13.8+deb13u6
-base-passwd 3.6.7
-bash 5.2.37-2+b9
-bsdutils 1:2.41-5
-ca-certificates 20250419
-coreutils 9.7-3
-dash 0.5.12-12
-debconf 1.5.91
-debian-archive-keyring 2025.1
-debianutils 5.23.2
-diffutils 1:3.10-4
-dpkg 1.22.22
-ffmpeg 7:7.1.5-0+deb13u1
-findutils 4.10.0-3
-fontconfig 2.15.0-2.3
-fontconfig-config 2.15.0-2.3
-fonts-dejavu-core 2.37-8
-fonts-dejavu-mono 2.37-8
-gcc-14-base 14.2.0-19
-grep 3.11-4
-gzip 1.13-1
-hostname 3.25
-init-system-helpers 1.69~deb13u1
-libacl1 2.3.2-2+b1
-libaom3 3.12.1-1
-libapt-pkg7.0 3.0.3
-libasound2-data 1.2.14-1
-libasound2t64 1.2.14-1
-libass9 1:0.17.3-1+deb13u1
-libasyncns0 0.8-6+b5
-libatomic1 14.2.0-19
-libattr1 1:2.5.2-3
-libaudit-common 1:4.0.2-2
-libaudit1 1:4.0.2-2+b2
-libavc1394-0 0.5.4-5+b2
-libavcodec61 7:7.1.5-0+deb13u1
-libavdevice61 7:7.1.5-0+deb13u1
-libavfilter10 7:7.1.5-0+deb13u1
-libavformat61 7:7.1.5-0+deb13u1
-libavutil59 7:7.1.5-0+deb13u1
-libblas3 3.12.1-6
-libblkid1 2.41-5
-libbluray2 1:1.3.4-1+b2
-libbrotli1 1.1.0-2+b7
-libbs2b0 3.1.0+dfsg-8+b1
-libbsd0 0.12.2-2
-libbz2-1.0 1.0.8-6
-libc-bin 2.41-12+deb13u3
-libc6 2.41-12+deb13u3
-libcaca0 0.99.beta20-5+deb13u1
-libcairo-gobject2 1.18.4-1+b1
-libcairo2 1.18.4-1+b1
-libcap-ng0 0.8.5-4+b1
-libcap2 1:2.75-10+deb13u1+b1
-libcdio-cdda2t64 10.2+2.0.2-1+b1
-libcdio-paranoia2t64 10.2+2.0.2-1+b1
-libcdio19t64 2.2.0-4.1~deb13u1
-libchromaprint1 1.5.1-7
-libcjson1 1.7.18-3.1+deb13u1
-libcodec2-1.2 1.2.0-3
-libcom-err2 1.47.2-3+b11
-libcrypt1 1:4.4.38-1
-libdatrie1 0.2.13-3+b1
-libdav1d7 1.5.1-1
-libdb5.3t64 5.3.28+dfsg2-9
-libdbus-1-3 1.16.2-2
-libdc1394-25 2.2.6-5
-libdebconfclient0 0.280
-libdecor-0-0 0.2.2-2
-libdeflate0 1.23-2
-libdrm-amdgpu1 2.4.124-2
-libdrm-common 2.4.124-2
-libdrm-intel1 2.4.124-2
-libdrm2 2.4.124-2
-libdvdnav4 6.1.1-3+b1
-libdvdread8t64 6.1.3-2
-libedit2 3.1-20250104-1
-libelf1t64 0.192-4
-libexpat1 2.7.1-2
-libffi8 3.4.8-2
-libfftw3-double3 3.3.10-2+b1
-libflac14 1.5.0+ds-2
-libflite1 2.2-7
-libfontconfig1 2.15.0-2.3
-libfreetype6 2.13.3+dfsg-1+deb13u1
-libfribidi0 1.0.16-1
-libgbm1 25.0.7-2+deb13u1
-libgcc-s1 14.2.0-19
-libgdbm6t64 1.24-2
-libgdk-pixbuf-2.0-0 2.42.12+dfsg-4+deb13u1
-libgdk-pixbuf2.0-common 2.42.12+dfsg-4+deb13u1
-libgfortran5 14.2.0-19
-libgl1 1.7.0-1+b2
-libgl1-mesa-dri 25.0.7-2+deb13u1
-libglib2.0-0t64 2.84.4-3~deb13u3
-libglvnd0 1.7.0-1+b2
-libglx-mesa0 25.0.7-2+deb13u1
-libglx0 1.7.0-1+b2
-libgme0 0.6.3-7+b2
-libgmp10 2:6.3.0+dfsg-3
-libgnutls30t64 3.8.9-3+deb13u4
-libgomp1 14.2.0-19
-libgraphite2-3 1.3.14-2+deb13u1
-libgsm1 1.0.22-1+b2
-libgssapi-krb5-2 1.21.3-5+deb13u1
-libharfbuzz0b 10.2.0-1+deb13u1
-libhogweed6t64 3.10.1-1
-libhwy1t64 1.2.0-2+b2
-libidn2-0 2.3.8-2
-libiec61883-0 1.2.0-7
-libjack-jackd2-0 1.9.22~dfsg-4
-libjbig0 2.1-6.1+b2
-libjpeg62-turbo 1:2.1.5-4
-libjxl0.11 0.11.2-0.1~deb13u2
-libk5crypto3 1.21.3-5+deb13u1
-libkeyutils1 1.6.3-6
-libkrb5-3 1.21.3-5+deb13u1
-libkrb5support0 1.21.3-5+deb13u1
-liblapack3 3.12.1-6
-liblastlog2-2 2.41-5
-liblcms2-2 2.16-2+deb13u2
-liblerc4 4.0.0+ds-5
-liblilv-0-0 0.24.26-1
-libllvm19 1:19.1.7-3+b1
-liblz4-1 1.10.0-4
-liblzma5 5.8.1-1+deb13u1
-libmbedcrypto16 3.6.5-0.1~deb13u1
-libmd0 1.1.0-2+b1
-libmount1 2.41-5
-libmp3lame0 3.100-6+b3
-libmpg123-0t64 1.32.10-1+deb13u1
-libmysofa1 1.3.3+dfsg-1
-libncursesw6 6.5+20250216-2
-libnettle8t64 3.10.1-1
-libnorm1t64 1.5.9+dfsg-3.1+b2
-libnuma1 2.0.19-1
-libogg0 1.3.5-3+b2
-libopenal-data 1:1.24.2-1
-libopenal1 1:1.24.2-1
-libopenjp2-7 2.5.3-2.1~deb13u2
-libopenmpt0t64 0.7.13-1+b1
-libopus0 1.5.2-2
-libp11-kit0 0.25.5-3
-libpam-modules 1.7.0-5
-libpam-modules-bin 1.7.0-5
-libpam-runtime 1.7.0-5
-libpam0g 1.7.0-5
-libpango-1.0-0 1.56.3-1
-libpangocairo-1.0-0 1.56.3-1
-libpangoft2-1.0-0 1.56.3-1
-libpciaccess0 0.17-3+b3
-libpcre2-8-0 10.46-1~deb13u1
-libpgm-5.3-0t64 5.3.128~dfsg-2.1+b1
-libpixman-1-0 0.44.0-3
-libplacebo349 7.349.0-3
-libpng16-16t64 1.6.48-1+deb13u5
-libpocketsphinx3 0.8+5prealpha+1-15+b4
-libpostproc58 7:7.1.5-0+deb13u1
-libpulse0 17.0+dfsg1-2+b1
-librabbitmq4 0.15.0-1+deb13u1
-librav1e0.7 0.7.1-9+b2
-libraw1394-11 2.1.2-2+b2
-libreadline8t64 8.2-6
-librist4 0.2.11+dfsg-1
-librsvg2-2 2.60.0+dfsg-1
-librubberband2 3.3.0+dfsg-2+b3
-libsamplerate0 0.2.2-4+b2
-libsdl2-2.0-0 2.32.4+dfsg-1
-libseccomp2 2.6.0-2
-libselinux1 3.8.1-1
-libsemanage-common 3.8.1-1
-libsemanage2 3.8.1-1
-libsensors-config 1:3.6.2-2
-libsensors5 1:3.6.2-2
-libsepol2 3.8.1-1
-libserd-0-0 0.32.4-1
-libsharpyuv0 1.5.0-0.1
-libshine3 3.1.1-2+b2
-libslang2 2.3.3-5+b2
-libsmartcols1 2.41-5
-libsnappy1v5 1.2.2-1
-libsndfile1 1.2.2-2+deb13u1
-libsodium23 1.0.18-1+deb13u1
-libsord-0-0 0.16.18-1
-libsoxr0 0.1.3-4+b2
-libspeex1 1.2.1-3
-libsphinxbase3t64 0.8+5prealpha+1-21+b1
-libsqlite3-0 3.46.1-7+deb13u1
-libsratom-0-0 0.6.18-1
-libsrt1.5-gnutls 1.5.4-1
-libssh-4 0.11.2-1+deb13u1
-libssl3t64 3.5.6-1~deb13u2
-libstdc++6 14.2.0-19
-libsvtav1enc2 2.3.0+dfsg-1
-libswresample5 7:7.1.5-0+deb13u1
-libswscale8 7:7.1.5-0+deb13u1
-libsystemd0 257.13-1~deb13u1
-libtasn1-6 4.20.0-2+deb13u1
-libthai-data 0.1.29-2
-libthai0 0.1.29-2+b1
-libtheoradec1 1.2.0~alpha1+dfsg-6
-libtheoraenc1 1.2.0~alpha1+dfsg-6
-libtiff6 4.7.0-3+deb13u3
-libtinfo6 6.5+20250216-2
-libtwolame0 0.4.0-2+b2
-libudev1 257.13-1~deb13u1
-libudfread0 1.1.2-1+b2
-libunibreak6 6.1-3
-libunistring5 1.3-2
-libusb-1.0-0 2:1.0.28-1
-libuuid1 2.41-5
-libva-drm2 2.22.0-3
-libva-x11-2 2.22.0-3
-libva2 2.22.0-3
-libvdpau1 1.5-3+b1
-libvidstab1.1 1.1.0-2+b2
-libvorbis0a 1.3.7-3
-libvorbisenc2 1.3.7-3
-libvorbisfile3 1.3.7-3
-libvpl2 1:2.14.0-1+b1
-libvpx9 1.15.0-2.1+deb13u1
-libvulkan1 1.4.309.0-1
-libwayland-client0 1.23.1-3
-libwayland-cursor0 1.23.1-3
-libwayland-egl1 1.23.1-3
-libwayland-server0 1.23.1-3
-libwebp7 1.5.0-0.1
-libwebpmux3 1.5.0-0.1
-libx11-6 2:1.8.12-1
-libx11-data 2:1.8.12-1
-libx11-xcb1 2:1.8.12-1
-libx264-164 2:0.164.3108+git31e19f9-2+b1
-libx265-215 4.1-2
-libxau6 1:1.0.11-1
-libxcb-dri3-0 1.17.0-2+b1
-libxcb-glx0 1.17.0-2+b1
-libxcb-present0 1.17.0-2+b1
-libxcb-randr0 1.17.0-2+b1
-libxcb-render0 1.17.0-2+b1
-libxcb-shape0 1.17.0-2+b1
-libxcb-shm0 1.17.0-2+b1
-libxcb-sync1 1.17.0-2+b1
-libxcb-xfixes0 1.17.0-2+b1
-libxcb1 1.17.0-2+b1
-libxcursor1 1:1.2.3-1
-libxdmcp6 1:1.1.5-1
-libxext6 2:1.3.4-1+b3
-libxfixes3 1:6.0.0-2+b4
-libxi6 2:1.8.2-1
-libxkbcommon0 1.7.0-2
-libxml2 2.12.7+dfsg+really2.9.14-2.1+deb13u3
-libxrandr2 2:1.5.4-1+b3
-libxrender1 1:0.9.12-1
-libxshmfence1 1.3.3-1
-libxss1 1:1.2.3-1+b3
-libxv1 2:1.0.11-1.1+b3
-libxvidcore4 2:1.3.7-1+b2
-libxxf86vm1 1:1.1.4-1+b4
-libxxhash0 0.8.3-2
-libz3-4 4.13.3-1
-libzimg2 3.0.5+ds1-1+b2
-libzix-0-0 0.6.2-1
-libzmq5 4.3.5-1+b3
-libzstd1 1.5.7+dfsg-1
-libzvbi-common 0.2.44-1
-libzvbi0t64 0.2.44-1
-login 1:4.16.0-2+really2.41-5
-login.defs 1:4.17.4-2
-mawk 1.3.4.20250131-1
-mesa-libgallium 25.0.7-2+deb13u1
-mount 2.41-5
-ncurses-base 6.5+20250216-2
-ncurses-bin 6.5+20250216-2
-netbase 6.5
-ocl-icd-libopencl1 2.3.3-1
-openssl 3.5.6-1~deb13u2
-openssl-provider-legacy 3.5.6-1~deb13u2
-passwd 1:4.17.4-2
-perl-base 5.40.1-6
-readline-common 8.2-6
-sed 4.9-2+deb13u1
-shared-mime-info 2.4-5+b2
-sqv 1.3.0-3+b2
-sysvinit-utils 3.14-4
-tar 1.35+dfsg-3.1
-tzdata 2026b-0+deb13u1
-util-linux 2.41-5
-x11-common 1:7.7+24+deb13u1
-xkb-data 2.42-1
-zlib1g 1:1.3.dfsg+really1.3.1-1+b1
+./configure \
+  --prefix=/opt/ffmpeg \
+  --disable-everything \
+  --disable-autodetect \
+  --disable-network \
+  --disable-doc \
+  --disable-debug \
+  --disable-ffplay \
+  --disable-avdevice \
+  --disable-swscale \
+  --enable-libmp3lame \
+  --enable-protocol=file \
+  --enable-demuxer=mp3 \
+  --enable-muxer=mp3 \
+  --enable-decoder=mp3float \
+  --enable-parser=mpegaudio \
+  --enable-encoder=libmp3lame \
+  --enable-filter=aresample \
+  --enable-filter=aformat \
+  --enable-filter=anull \
+  --extra-cflags=-I/usr/local/include \
+  --extra-ldflags='-L/usr/local/lib -static-libgcc'
+```
+
+Enabled components map 1:1 to what `media_server.py` invokes: mp3
+demux/parse/decode for probe + packet-sum measurement, mp3 mux + stream copy
+for chunking, libmp3lame + aresample/aformat/anull (abuffer/abuffersink are
+linked unconditionally by configure) for the `-ac 1 -ar 44100` normalize
+path, and the `file` protocol only. Everything else — every other codec,
+demuxer, protocol, filter, device, and all network code — is compiled out,
+not flagged off. (`test_media_server.py` runs on the HOST's ffmpeg and may
+use lavfi there; the container binary deliberately has no lavfi.)
+
+## Security updates require active tracking
+
+The previous image took ffmpeg from Debian trixie, which backported security
+fixes. This image compiles a pinned upstream release, so its maintainer must
+track and apply updates. Watch:
+
+- https://ffmpeg.org/security.html — per-release CVE fix lists (the 9.0.x
+  point releases land there and on https://ffmpeg.org/download.html)
+- https://ffmpeg.org/releases/ — new 9.0.x tarballs (verify the `.asc`
+  against key `FCF986EA15E6E293A5644F10B4322F04D67658D8`, update
+  `vendor/` + the Dockerfile sha256, roll a new container image)
+- Alpine/python base CVEs ride the `python:3.12-alpine` digest — bump the
+  pinned digest and rebuild to pick them up.
+- lame 3.100 (2017) is the long-frozen upstream final; Debian carries it
+  unpatched too. Mitigation if that changes: it only touches the normalize
+  path, after ffmpeg has already demuxed/decoded the input.
+
+The exposure is narrow by construction — the only bytes that reach these
+binaries are R2-staged job audio via the `file` protocol on a no-internet
+container — but a demuxer/decoder CVE in the mp3 path is still reachable by
+untrusted media, so point releases should be adopted promptly.
+
+## apk packages (runtime stage, `apk list --installed`)
+
+```
+.python-rundeps-20260616.002526
+alpine-baselayout-3.7.2-r1
+alpine-baselayout-data-3.7.2-r1
+alpine-keys-2.6-r0
+alpine-release-3.24.1-r0
+apk-tools-3.0.6-r0
+busybox-1.37.0-r31
+busybox-binsh-1.37.0-r31
+ca-certificates-20260611-r0
+ca-certificates-bundle-20260611-r0
+gdbm-1.26-r0
+keyutils-libs-1.6.3-r4
+krb5-conf-1.0-r2
+krb5-libs-1.22.2-r1
+libapk-3.0.6-r0
+libbz2-1.0.8-r6
+libcom_err-1.47.4-r0
+libcrypto3-3.5.7-r0
+libffi-3.5.2-r1
+libintl-1.0-r0
+libncursesw-6.6_p20260516-r0
+libnsl-2.0.1-r2
+libpanelw-6.6_p20260516-r0
+libssl3-3.5.7-r0
+libtirpc-1.3.5-r1
+libtirpc-conf-1.3.5-r1
+libuuid-2.42-r0
+libverto-0.3.2-r2
+musl-1.2.6-r2
+musl-utils-1.2.6-r2
+ncurses-terminfo-base-6.6_p20260516-r0
+readline-8.3.3-r1
+scanelf-1.3.9-r1
+sqlite-libs-3.53.2-r0
+ssl_client-1.37.0-r31
+tzdata-2026b-r0
+xz-libs-5.8.3-r0
+zlib-1.3.2-r0
 ```

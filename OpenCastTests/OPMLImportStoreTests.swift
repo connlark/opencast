@@ -321,7 +321,7 @@ struct OPMLImportStoreTests {
         #expect(result.failedCount == 0)
         #expect(requested.count == 12)
         #expect(Set(requested) == Set(feedURLs))
-        #expect(await feedService.maximumActiveRequestCount() <= LibraryStore.maxConcurrentFeedRefreshes)
+        #expect(await feedService.maximumActiveRequestCount() <= FeedRefreshFetcher.maxConcurrentFeedRefreshes)
         #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).count == 12)
     }
 

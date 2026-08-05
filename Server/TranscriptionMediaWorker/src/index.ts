@@ -19,7 +19,13 @@ interface Env {
 
 export class TranscriptionMediaContainer extends Container<Env> {
   defaultPort = 8080;
-  sleepAfter = "10m";
+  // Billing is provisioned-GiB × running-seconds, and the idle tail after a
+  // job burst was the dominant cost of this whole surface (a 43 s job paid
+  // 600 s of tail). The long tail existed to amortize the 574 MB image's
+  // cold start; the 55 MB ffmpeg-9 image plus the /wake ping (which overlaps
+  // starts with gateway staging) makes cold starts cheap, and probe/chunk
+  // already retry through them.
+  sleepAfter = "90s";
   enableInternet = false;
 
   override async fetch(request: Request): Promise<Response> {
@@ -118,7 +124,7 @@ export default {
     // fresh container instead of waiting out a sleepy old instance.
     let response: Response;
     try {
-      response = await getContainer(env.MEDIA_CONTAINER, "media-pass0-7").fetch(
+      response = await getContainer(env.MEDIA_CONTAINER, "media-pass0-9").fetch(
         new Request(url.toString(), {
           method: "POST",
           headers: { "content-type": "application/json" },

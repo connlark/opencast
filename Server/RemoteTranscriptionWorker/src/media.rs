@@ -116,6 +116,49 @@ pub fn validate_probe(
     Ok(())
 }
 
+/// Names the exact predicate that rejected a chunk manifest. The wire error
+/// stays the opaque stable `internal_error` (`code()`); the reason/detail
+/// exist so the call site can log which chunk and which contract failed —
+/// a bare `internal_error` cost a full telemetry bisect to localize
+/// (2026-08-04 short-episode bug).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChunkRejection {
+    pub position: Option<usize>,
+    pub reason: &'static str,
+    pub detail: String,
+}
+
+impl ChunkRejection {
+    pub fn code(&self) -> &'static str {
+        crate::types::ERROR_INTERNAL
+    }
+
+    fn at(position: usize, reason: &'static str, detail: String) -> Self {
+        Self {
+            position: Some(position),
+            reason,
+            detail,
+        }
+    }
+
+    fn manifest(reason: &'static str, detail: String) -> Self {
+        Self {
+            position: None,
+            reason,
+            detail,
+        }
+    }
+}
+
+impl std::fmt::Display for ChunkRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.position {
+            Some(position) => write!(f, "{} at chunk {}: {}", self.reason, position, self.detail),
+            None => write!(f, "{}: {}", self.reason, self.detail),
+        }
+    }
+}
+
 /// The chunk manifest is authenticated service output, so malformed entries
 /// are an internal contract failure rather than unsupported customer media.
 pub fn validate_chunks(
@@ -124,7 +167,7 @@ pub fn validate_chunks(
     canonical_duration_seconds: f64,
     chunk_seconds: f64,
     step_seconds: f64,
-) -> Result<(), &'static str> {
+) -> Result<(), ChunkRejection> {
     if chunks.is_empty()
         || !canonical_duration_seconds.is_finite()
         || canonical_duration_seconds <= 0.0
@@ -134,7 +177,13 @@ pub fn validate_chunks(
         || step_seconds <= 0.0
         || step_seconds > chunk_seconds
     {
-        return Err(crate::types::ERROR_INTERNAL);
+        return Err(ChunkRejection::manifest(
+            "invalid_manifest_contract",
+            format!(
+                "chunks {} canonical {canonical_duration_seconds} chunk_seconds {chunk_seconds} step_seconds {step_seconds}",
+                chunks.len()
+            ),
+        ));
     }
     let overlap_seconds = chunk_seconds - step_seconds;
     let mut previous_valid_end = 0.0;
@@ -143,34 +192,95 @@ pub fn validate_chunks(
         let Some((valid_start, valid_end)) =
             valid_chunk_interval(chunk, canonical_duration_seconds)
         else {
-            return Err(crate::types::ERROR_INTERNAL);
+            return Err(ChunkRejection::at(
+                position,
+                "invalid_chunk_interval",
+                format!(
+                    "requested_start {} requested_duration {} actual_duration {} canonical {canonical_duration_seconds}",
+                    chunk.requested_start_seconds,
+                    chunk.requested_duration_seconds,
+                    chunk.actual_duration_seconds
+                ),
+            ));
         };
         let ownership_boundary =
             (valid_start + overlap_seconds / 2.0).min(canonical_duration_seconds);
-        if chunk.index as usize != position
-            || chunk.byte_count <= 0
-            || chunk.byte_count > max_chunk_raw_bytes
-            || !chunk.requested_start_seconds.is_finite()
+        if chunk.index as usize != position {
+            return Err(ChunkRejection::at(
+                position,
+                "index_out_of_order",
+                format!("manifest index {}", chunk.index),
+            ));
+        }
+        if chunk.byte_count <= 0 || chunk.byte_count > max_chunk_raw_bytes {
+            return Err(ChunkRejection::at(
+                position,
+                "byte_count_out_of_bounds",
+                format!("byte_count {} max {max_chunk_raw_bytes}", chunk.byte_count),
+            ));
+        }
+        if !chunk.requested_start_seconds.is_finite()
             || chunk.requested_start_seconds < 0.0
             || (chunk.requested_start_seconds - expected_start).abs()
                 > MANIFEST_TIMING_TOLERANCE_SECONDS
-            || !chunk.requested_duration_seconds.is_finite()
+        {
+            return Err(ChunkRejection::at(
+                position,
+                "requested_start_off_grid",
+                format!(
+                    "requested_start {} expected {expected_start}",
+                    chunk.requested_start_seconds
+                ),
+            ));
+        }
+        if !chunk.requested_duration_seconds.is_finite()
             || chunk.requested_duration_seconds <= 0.0
             || (chunk.requested_duration_seconds - chunk_seconds).abs()
                 > MANIFEST_TIMING_TOLERANCE_SECONDS
-            || !chunk.actual_duration_seconds.is_finite()
-            || chunk.actual_duration_seconds <= 0.0
-            || (position > 0
-                && previous_valid_end + MANIFEST_TIMING_TOLERANCE_SECONDS < ownership_boundary)
-            || chunk.sha256.len() != 64
-            || !chunk.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
-            return Err(crate::types::ERROR_INTERNAL);
+            return Err(ChunkRejection::at(
+                position,
+                "requested_duration_off_contract",
+                format!(
+                    "requested_duration {} expected {chunk_seconds}",
+                    chunk.requested_duration_seconds
+                ),
+            ));
+        }
+        if !chunk.actual_duration_seconds.is_finite() || chunk.actual_duration_seconds <= 0.0 {
+            return Err(ChunkRejection::at(
+                position,
+                "actual_duration_invalid",
+                format!("actual_duration {}", chunk.actual_duration_seconds),
+            ));
+        }
+        if position > 0
+            && previous_valid_end + MANIFEST_TIMING_TOLERANCE_SECONDS < ownership_boundary
+        {
+            return Err(ChunkRejection::at(
+                position,
+                "seam_coverage_gap",
+                format!(
+                    "previous_valid_end {previous_valid_end} ownership_boundary {ownership_boundary}"
+                ),
+            ));
+        }
+        if chunk.sha256.len() != 64 || !chunk.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ChunkRejection::at(
+                position,
+                "sha256_malformed",
+                format!("length {}", chunk.sha256.len()),
+            ));
         }
         previous_valid_end = valid_end;
     }
     if canonical_duration_seconds - previous_valid_end > FINAL_COVERAGE_TOLERANCE_SECONDS {
-        return Err(crate::types::ERROR_INTERNAL);
+        return Err(ChunkRejection::manifest(
+            "final_coverage_gap",
+            format!(
+                "canonical {canonical_duration_seconds} previous_valid_end {previous_valid_end} tolerance {FINAL_COVERAGE_TOLERANCE_SECONDS}"
+            ),
+        ));
     }
     Ok(())
 }
@@ -305,23 +415,26 @@ mod tests {
             298.0,
         )
         .is_ok());
-        assert_eq!(
-            validate_chunks(&[], 5 * 1024 * 1024, 300.0, 300.0, 298.0),
-            Err(crate::types::ERROR_INTERNAL)
-        );
+        let empty = validate_chunks(&[], 5 * 1024 * 1024, 300.0, 300.0, 298.0).unwrap_err();
+        assert_eq!(empty.reason, "invalid_manifest_contract");
+        assert_eq!(empty.code(), crate::types::ERROR_INTERNAL);
 
         let mut oversized = entry.clone();
         oversized.byte_count = 6 * 1024 * 1024;
         assert_eq!(
-            validate_chunks(&[oversized], 5 * 1024 * 1024, 300.0, 300.0, 298.0),
-            Err(crate::types::ERROR_INTERNAL)
+            validate_chunks(&[oversized], 5 * 1024 * 1024, 300.0, 300.0, 298.0)
+                .unwrap_err()
+                .reason,
+            "byte_count_out_of_bounds"
         );
 
         let mut out_of_order = entry;
         out_of_order.index = 1;
         assert_eq!(
-            validate_chunks(&[out_of_order], 5 * 1024 * 1024, 300.0, 300.0, 298.0,),
-            Err(crate::types::ERROR_INTERNAL)
+            validate_chunks(&[out_of_order], 5 * 1024 * 1024, 300.0, 300.0, 298.0)
+                .unwrap_err()
+                .reason,
+            "index_out_of_order"
         );
 
         let gap = MediaChunkEntry {
@@ -352,8 +465,10 @@ mod tests {
                 300.0,
                 300.0,
                 298.0,
-            ),
-            Err(crate::types::ERROR_INTERNAL)
+            )
+            .unwrap_err()
+            .reason,
+            "seam_coverage_gap"
         );
 
         let sufficient_seam_coverage = MediaChunkEntry {
@@ -418,5 +533,46 @@ mod tests {
         )
         .expect("valid interval");
         assert_eq!(interval, (298.0, 500.0));
+    }
+
+    /// Real manifest numbers from developing_perspective_225.mp3 (VBR,
+    /// canonical 885.943 s, 3 chunks; 2026-08-04 short-episode bug). The
+    /// container's stream-copied chunks carry no Xing header, so ffprobe's
+    /// format.duration was a filesize/bitrate estimate — off by ±10% on VBR
+    /// media — and the final chunk's underestimate (281.343 vs 289.954
+    /// measured exactly) tripped the coverage gate. The container now
+    /// reports exact packet-sum durations; both facts stay pinned here.
+    #[test]
+    fn dp225_vbr_manifest_regression() {
+        let canonical = 885.943;
+        let chunk = |index: u32, actual: f64, byte_count: i64| MediaChunkEntry {
+            index,
+            key: format!("chunks/job/{index}.mp3"),
+            requested_start_seconds: f64::from(index) * 298.0,
+            requested_duration_seconds: 300.0,
+            actual_duration_seconds: actual,
+            byte_count,
+            sha256: "c".repeat(64),
+        };
+
+        let bitrate_estimated = [
+            chunk(0, 330.929, 3_259_112),
+            chunk(1, 318.791, 3_263_100),
+            chunk(2, 281.343, 3_152_871),
+        ];
+        let rejection =
+            validate_chunks(&bitrate_estimated, 5 * 1024 * 1024, canonical, 300.0, 298.0)
+                .unwrap_err();
+        assert_eq!(rejection.reason, "final_coverage_gap");
+        assert_eq!(rejection.code(), crate::types::ERROR_INTERNAL);
+
+        let packet_sum_exact = [
+            chunk(0, 300.011, 3_259_112),
+            chunk(1, 300.037, 3_263_100),
+            chunk(2, 289.954, 3_152_871),
+        ];
+        assert!(
+            validate_chunks(&packet_sum_exact, 5 * 1024 * 1024, canonical, 300.0, 298.0,).is_ok()
+        );
     }
 }
