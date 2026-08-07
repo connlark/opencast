@@ -1,7 +1,6 @@
 use opencast_app_attest_core::challenge_limits::{
-    challenge_bucket_start, challenge_source_hash_key_for_environment,
-    keyed_source_token, source_challenge_allows_after_increment,
-    MAX_CHALLENGES_PER_SOURCE_PER_HOUR,
+    challenge_bucket_start, challenge_source_hash_key_for_environment, keyed_source_token,
+    source_challenge_allows_after_increment, MAX_CHALLENGES_PER_SOURCE_PER_HOUR,
 };
 
 const DEVELOPMENT_FALLBACK_KEY: &str = "opencast-test-development-challenge-source-key";

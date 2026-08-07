@@ -5,6 +5,46 @@ import OpenCastCore
 /// ordering, capping and marking decision lives here so the surface that has no
 /// UI-test bridge stays covered by plain unit tests.
 enum CarPlayBrowseModelBuilder {
+    static func upNext(
+        queueItems: [UpNextQueueItem],
+        library: LibraryStore,
+        downloadRecords: [EpisodeDownloadRecord],
+        nowPlaying: CarPlayNowPlayingState,
+        limits: CarPlayListLimits
+    ) -> CarPlayBrowseSnapshot {
+        let downloadsByEpisodeID = Dictionary(grouping: downloadRecords, by: \.episodeID)
+            .compactMapValues { $0.first }
+        let downloadedEpisodeIDs = completedDownloadEpisodeIDs(in: downloadRecords)
+        let rows = Array(queueItems.lazy.compactMap { item in
+            let episode = library.episode(with: item.episodeID)
+                ?? downloadsByEpisodeID[item.episodeID].map {
+                    EpisodeListItemSnapshot(
+                        downloadRecord: $0,
+                        podcastCache: library.podcastCache(for: $0.podcastID)
+                    )
+                }
+            return episode.map {
+                CarPlayListRow.episode(
+                    episodeRow(
+                        for: $0,
+                        detailText: $0.podcastTitle,
+                        library: library,
+                        downloadedEpisodeIDs: downloadedEpisodeIDs,
+                        nowPlaying: nowPlaying
+                    )
+                )
+            }
+        }.prefix(limits.maximumItemCount))
+
+        return makeSnapshotWithoutContinuation(
+            title: "Up Next",
+            sections: [CarPlayListSection(header: nil, rows: rows)],
+            emptyTitleVariants: ["Nothing Up Next", "Empty"],
+            emptySubtitleVariants: ["Queue episodes from OpenCast on your phone."],
+            limits: limits
+        )
+    }
+
     static func inbox(
         library: LibraryStore,
         downloadRecords: [EpisodeDownloadRecord],
@@ -188,6 +228,25 @@ enum CarPlayBrowseModelBuilder {
             emptySubtitleVariants: isLoadingEmpty ? [] : emptySubtitleVariants,
             showsSpinnerWhileEmpty: isLoadingEmpty,
             continuation: truncated.continuation
+        )
+    }
+
+    private static func makeSnapshotWithoutContinuation(
+        title: String,
+        sections: [CarPlayListSection],
+        emptyTitleVariants: [String],
+        emptySubtitleVariants: [String],
+        limits: CarPlayListLimits
+    ) -> CarPlayBrowseSnapshot {
+        let populated = Array(sections.filter { !$0.rows.isEmpty }.prefix(limits.maximumSectionCount))
+        let visibleSections = sliced(populated[...], budget: limits.maximumItemCount).sections
+        return CarPlayBrowseSnapshot(
+            title: title,
+            sections: visibleSections,
+            emptyTitleVariants: emptyTitleVariants,
+            emptySubtitleVariants: emptySubtitleVariants,
+            showsSpinnerWhileEmpty: false,
+            continuation: nil
         )
     }
 

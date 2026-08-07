@@ -7,20 +7,27 @@ struct NowPlayingUtilityControls: View {
     let rate: Float
     let onShowSpeed: () -> Void
     let onShowSleepTimer: () -> Void
+    let onShowUpNext: () -> Void
 
     var body: some View {
         GlassEffectContainer(spacing: 12) {
             if dynamicTypeSize.isAccessibilitySize {
-                VStack(spacing: 10) {
-                    playbackSpeedButton
-                    AirPlayRoutePickerButton()
-                    sleepTimerButton
+                Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+                    GridRow {
+                        playbackSpeedButton
+                        AirPlayRoutePickerButton()
+                    }
+                    GridRow {
+                        sleepTimerButton
+                        upNextButton
+                    }
                 }
             } else {
                 HStack(alignment: .center, spacing: 12) {
                     playbackSpeedButton
                     AirPlayRoutePickerButton()
                     sleepTimerButton
+                    upNextButton
                 }
             }
         }
@@ -28,14 +35,7 @@ struct NowPlayingUtilityControls: View {
     }
 
     private var playbackSpeedButton: some View {
-        PlayerUtilityButton(
-            title: "Speed",
-            value: rate.formattedSpeed,
-            systemImage: "speedometer",
-            action: onShowSpeed
-        )
-        .accessibilityLabel("Playback Speed")
-        .accessibilityValue(rate.formattedSpeed)
+        PlayerUtilitySpeedButton(rate: rate, action: onShowSpeed)
     }
 
     @ViewBuilder
@@ -50,14 +50,27 @@ struct NowPlayingUtilityControls: View {
     }
 
     private func sleepTimerButton(value: String) -> some View {
-        PlayerUtilityButton(
+        let isActive = appModel.playback.sleepTimerMode != .off
+        return PlayerUtilityCircleButton(
             title: "Sleep",
-            value: value,
-            systemImage: "moon.zzz",
+            systemImage: isActive ? "moon.zzz.fill" : "moon.zzz",
+            isActive: isActive,
+            replacesSymbol: true,
             action: onShowSleepTimer
         )
         .accessibilityLabel("Sleep Timer")
         .accessibilityValue(value)
+    }
+
+    private var upNextButton: some View {
+        let count = appModel.upNextQueue.items.count
+        return PlayerUtilityCircleButton(
+            title: "Up Next",
+            systemImage: "text.line.first.and.arrowtriangle.forward",
+            isActive: count > 0,
+            action: onShowUpNext
+        )
+        .accessibilityValue(queueAccessibilityValue(count: count))
     }
 
     private func sleepTimerText(at date: Date) -> String {
@@ -66,5 +79,11 @@ struct NowPlayingUtilityControls: View {
         }
 
         return remaining > 0 ? "-\(remaining.formattedPlaybackDuration)" : "Off"
+    }
+
+    private func queueAccessibilityValue(count: Int) -> Text {
+        count == 0
+            ? Text("Empty")
+            : Text("^[\(count) episode](inflect: true) queued")
     }
 }

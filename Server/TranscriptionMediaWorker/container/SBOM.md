@@ -1,8 +1,10 @@
 # Media Container SBOM
 
-Generated 2026-08-04 from a linux/amd64 image using Alpine and hand-compiled
-ffmpeg 9.0 (a 574 MB → 55 MB hardening/size revision). `media_server.py` is
-unchanged from the previous image revision.
+Regenerated 2026-08-05 for a linux/amd64 image. Every layer below the
+application layer is byte-identical to the previous image revision (the
+Alpine + hand-compiled ffmpeg 9.0 hardening/size pass, 574 MB → 55 MB): the
+sole change is `media_server.py` installing a SIGTERM handler so the container
+actually stops when the Container SDK's `sleepAfter` idle timer fires.
 
 - Image: registry.cloudflare.com/REPLACE_WITH_ACCOUNT_HASH/your-transcription-media-container:REPLACE_WITH_TAG@sha256:REPLACE_WITH_IMAGE_DIGEST
 - Base (both stages): docker.io/library/python:3.12-alpine@sha256:aa679aa4eed6eb56c1dc6ad3f1b98b7d2d788fd961596779d188fdedad97fb38

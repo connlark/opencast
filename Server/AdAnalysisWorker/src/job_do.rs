@@ -338,11 +338,7 @@ async fn run_job(
 /// AA-5 leg 3: turn a still-Running record whose run task errored into a
 /// terminal failure (same guard as run_job's own terminal write: only the
 /// exact run that started it may finish it).
-async fn terminalize_failed_run(
-    state: &Rc<State>,
-    job_id: &str,
-    started_at: i64,
-) -> Result<()> {
+async fn terminalize_failed_run(state: &Rc<State>, job_id: &str, started_at: i64) -> Result<()> {
     let current = read_record(&state.storage()).await?;
     let Some(JobRecord::Running {
         job_id: current_job_id,

@@ -4,8 +4,8 @@ use opencast_ad_analysis_worker::types::{
     BEARER_DAILY_ESTIMATED_INPUT_TOKEN_CAP, BEARER_DAILY_REQUEST_CAP,
     GLOBAL_DAILY_ESTIMATED_INPUT_TOKEN_CAP, GLOBAL_DAILY_REQUEST_CAP,
     MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES, MAX_BODY_BYTES, MAX_EPISODE_ID_CHARS,
-    MAX_LANGUAGE_CODE_CHARS, MAX_PODCAST_ID_CHARS, MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS,
-    MAX_REQUEST_ID_CHARS, MAX_RESULT_JSON_BYTES, MAX_TITLE_CHARS, MAX_TRANSCRIPT_TEXT_CHARS,
+    MAX_LANGUAGE_CODE_CHARS, MAX_PODCAST_ID_CHARS, MAX_REQUEST_ID_CHARS, MAX_RESULT_JSON_BYTES,
+    MAX_SEGMENTS, MAX_SEGMENT_TEXT_CHARS, MAX_TITLE_CHARS, MAX_TRANSCRIPT_TEXT_CHARS,
     SCHEMA_VERSION,
 };
 use opencast_ad_analysis_worker::usage::{
@@ -14,10 +14,10 @@ use opencast_ad_analysis_worker::usage::{
 use opencast_ad_analysis_worker::validation::{
     decode_and_validate_request, validate_content_length, validate_model_output, validate_request,
     window_output_within_span_cap, CapError, ContentLengthError, DailyUsage, ModelOutput,
-    ModelSpan, ValidationError,
-    AD_BUDGET_EPISODE_FRACTION, AD_BUDGET_FLOOR_SECONDS, EVIDENCE_MIN_WORDS_ACCEPT,
-    EVIDENCE_MIN_WORDS_REANCHOR, EVIDENCE_PROBE_WORDS, MAX_RAW_SPANS_PER_WINDOW,
-    MAX_SPAN_DURATION_SECONDS, MAX_SPAN_REQUEST_COVERAGE, MIN_BREAK_DURATION_SECONDS,
+    ModelSpan, ValidationError, AD_BUDGET_EPISODE_FRACTION, AD_BUDGET_FLOOR_SECONDS,
+    EVIDENCE_MIN_WORDS_ACCEPT, EVIDENCE_MIN_WORDS_REANCHOR, EVIDENCE_PROBE_WORDS,
+    MAX_RAW_SPANS_PER_WINDOW, MAX_SPAN_DURATION_SECONDS, MAX_SPAN_REQUEST_COVERAGE,
+    MIN_BREAK_DURATION_SECONDS,
 };
 
 #[test]
@@ -300,7 +300,10 @@ fn degeneracy_cap_is_enforced_per_window() {
     // belt). Boundary: exactly the cap merges; one over contributes
     // nothing; malformed spans count toward the same cap.
     assert!(window_output_within_span_cap(MAX_RAW_SPANS_PER_WINDOW, 0));
-    assert!(!window_output_within_span_cap(MAX_RAW_SPANS_PER_WINDOW + 1, 0));
+    assert!(!window_output_within_span_cap(
+        MAX_RAW_SPANS_PER_WINDOW + 1,
+        0
+    ));
     assert!(window_output_within_span_cap(
         MAX_RAW_SPANS_PER_WINDOW - 4,
         4

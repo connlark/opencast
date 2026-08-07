@@ -76,8 +76,8 @@ final class RemoteCommandController {
         register(command: commandCenter.skipForwardCommand, handler: handlers.skipForward)
         register(command: commandCenter.skipBackwardCommand, handler: handlers.skipBackward)
         // Some steering-wheel controls emit track commands for their previous/next buttons.
-        // Until OpenCast has queue navigation, treat those as podcast skip aliases too.
-        register(command: commandCenter.nextTrackCommand, handler: handlers.skipForward)
+        // Next can navigate the queue; previous remains a podcast skip alias.
+        register(command: commandCenter.nextTrackCommand, handler: handlers.nextTrack)
         register(command: commandCenter.previousTrackCommand, handler: handlers.skipBackward)
 
         targets.append(RemoteCommandTarget(

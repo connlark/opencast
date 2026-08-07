@@ -135,7 +135,8 @@ struct NowPlayingView: View {
                         NowPlayingUtilityControls(
                             rate: appModel.playback.rate,
                             onShowSpeed: { utilitySheet = .speed },
-                            onShowSleepTimer: { utilitySheet = .sleep }
+                            onShowSleepTimer: { utilitySheet = .sleep },
+                            onShowUpNext: { utilitySheet = .upNext }
                         )
                         .padding(.top, utilityTopPadding)
                         .layoutPriority(1)
@@ -235,6 +236,12 @@ struct NowPlayingView: View {
                         .presentationDragIndicator(.visible)
                 case .sleep:
                     SleepTimerView()
+                        .environment(appModel)
+                        .modelContext(modelContext)
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
+                case .upNext:
+                    UpNextQueueView()
                         .environment(appModel)
                         .modelContext(modelContext)
                         .presentationDetents([.medium, .large])

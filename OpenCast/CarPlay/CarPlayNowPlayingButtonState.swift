@@ -8,7 +8,8 @@ nonisolated struct CarPlayNowPlayingButtonState: Equatable, Sendable {
         hasLoadedEpisode: false,
         isVoiceBoostOn: false,
         canToggleVoiceBoost: false,
-        canShowCurrentShow: false
+        canShowCurrentShow: false,
+        upNextTitle: "Inbox"
     )
 
     let rate: Float
@@ -16,4 +17,5 @@ nonisolated struct CarPlayNowPlayingButtonState: Equatable, Sendable {
     let isVoiceBoostOn: Bool
     let canToggleVoiceBoost: Bool
     let canShowCurrentShow: Bool
+    let upNextTitle: String
 }

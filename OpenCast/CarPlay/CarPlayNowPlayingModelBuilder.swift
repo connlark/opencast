@@ -8,7 +8,8 @@ enum CarPlayNowPlayingModelBuilder {
         hasLoadedEpisode: Bool,
         isCurrentShowSubscribed: Bool,
         isVoiceBoostEnabled: Bool,
-        canChangeVoiceBoost: Bool
+        canChangeVoiceBoost: Bool,
+        hasQueuedEpisodes: Bool
     ) -> CarPlayNowPlayingButtonState {
         CarPlayNowPlayingButtonState(
             rate: rate,
@@ -19,7 +20,8 @@ enum CarPlayNowPlayingModelBuilder {
             canToggleVoiceBoost: hasLoadedEpisode && canChangeVoiceBoost,
             // An orphaned download's show was unsubscribed, so there is no show
             // list left to push.
-            canShowCurrentShow: hasLoadedEpisode && isCurrentShowSubscribed
+            canShowCurrentShow: hasLoadedEpisode && isCurrentShowSubscribed,
+            upNextTitle: hasQueuedEpisodes ? "Up Next" : "Inbox"
         )
     }
 }

@@ -22,6 +22,15 @@ struct PodcastEpisodeSwipeActionsModifier: ViewModifier {
                 .tint(isPlayed ? .blue : .green)
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                let isCurrentlyPlaying = appModel.playback.currentEpisode?.id.rawValue == episode.episodeID
+                Button(
+                    "Play Next",
+                    systemImage: "text.line.first.and.arrowtriangle.forward",
+                    action: enqueueNext
+                )
+                .tint(.orange)
+                .disabled(isCurrentlyPlaying)
+
                 let downloadState = appModel.downloadMenuState(for: episode)
                 if downloadState.showsDownloadAction {
                     Button("Download", systemImage: "arrow.down.circle", action: download)
@@ -37,5 +46,11 @@ struct PodcastEpisodeSwipeActionsModifier: ViewModifier {
 
     private func download() {
         appModel.downloads.startDownload(for: episode, modelContext: modelContext)
+    }
+
+    private func enqueueNext() {
+        appModel.performUpNextQueueMutation {
+            appModel.upNextQueue.enqueueNext(episode, modelContext: modelContext)
+        }
     }
 }

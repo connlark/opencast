@@ -371,6 +371,13 @@ struct DataNukeTests {
         context.insert(EpisodeProgressRecord(episodeID: episode.episodeID, podcastID: feedURL, position: 120))
         context.insert(RefreshLogRecord(feedURL: feedURL, finishedAt: .now))
         context.insert(LocalPreferenceRecord(key: "custom.preference", value: "stored"))
+        context.insert(
+            UpNextQueueItemRecord(
+                episodeID: episode.episodeID,
+                podcastID: feedURL,
+                sequence: 0
+            )
+        )
         try fileStore.prepareDownloadsDirectory()
         try Data("downloaded audio".utf8).write(
             to: fileStore.fileURL(relativePath: downloadPath),
@@ -410,6 +417,7 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeTranscriptRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeAdAnalysisRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).isEmpty)
     }
 
     private func seedTranscriptAndAdAnalysis(

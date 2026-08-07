@@ -140,18 +140,23 @@ final class LibraryStore {
         }
     }
 
-    func load(modelContext: ModelContext) async {
+    @discardableResult
+    func load(modelContext: ModelContext) async -> Bool {
         state = .loading
         lastErrorMessage = nil
         await importLegacyCacheIfNeeded(modelContext: modelContext)
+        let didLoad: Bool
         do {
             try await reloadFromStore(modelContext: modelContext)
             state = .idle
+            didLoad = true
         } catch {
             recordFailure(error)
+            didLoad = false
         }
         // Advisory notification poll health; absence is just "no data".
         notificationFeedHealthByFeedURL = (try? await localCache.notificationFeedHealthByFeedURL()) ?? [:]
+        return didLoad
     }
 
     /// Persists and republishes the server-reported notification poll health

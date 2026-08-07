@@ -801,6 +801,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencast-mp3-frame-core"
+version = "0.1.0"
+
+[[package]]
 name = "opencast-remote-transcription-worker"
 version = "0.1.0"
 dependencies = [
@@ -811,6 +815,7 @@ dependencies = [
  "hex",
  "hmac",
  "opencast-app-attest-core",
+ "opencast-mp3-frame-core",
  "rusqlite",
  "serde",
  "serde_json",

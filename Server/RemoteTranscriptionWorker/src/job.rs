@@ -64,7 +64,37 @@ pub const ALL_STATES: [&str; 19] = [
 pub const CHUNK_SECONDS: f64 = 300.0;
 pub const OVERLAP_SECONDS: f64 = 2.0;
 pub const STEP_SECONDS: f64 = 298.0;
-pub const MAX_CHUNK_RAW_BYTES: i64 = 5 * 1024 * 1024;
+
+/// Per-chunk raw-byte ceiling, derived from the format: MPEG Layer III tops
+/// out at 320 kbps, so no legal 300 s chunk can exceed ~12.01 MB. The model
+/// accepts far larger inputs (probe record in the README); the binding
+/// constraint is isolate memory, handled by `chunk_ai_concurrency`.
+pub const MAX_CHUNK_RAW_BYTES: i64 = 12_800 * 1024;
+
+/// What the container is asked to keep chunks under — still the old 5 MiB.
+/// The native walker knows every chunk's size at plan time; the container
+/// only reports sizes after writing, so a container wave must assume a bound.
+pub const CONTAINER_MAX_CHUNK_RAW_BYTES: i64 = 5 * 1024 * 1024;
+
+/// Raw audio a job may hold in flight across concurrent AI calls. Each chunk
+/// is briefly resident ~3x (audio bytes, base64, binding copy) against a
+/// 128 MB isolate shared by DOs of the class. Two envelope-width chunks
+/// (25 MiB, ~75 MB peak resident) replaced the long-proven 4x5 MiB point:
+/// span reads removed the R2 chunk copies, the isolate is the only real
+/// constraint left, and one wave still stays under it with headroom.
+/// Confirm live isolate memory on the first top-bitrate dev-lane job
+/// whenever this changes.
+pub const MAX_CHUNK_BYTES_IN_FLIGHT: i64 = 2 * MAX_CHUNK_RAW_BYTES;
+
+/// Wave width that keeps in-flight audio inside `MAX_CHUNK_BYTES_IN_FLIGHT`:
+/// ordinary bitrates run the configured width, 320 kbps steps down to 2.
+pub fn chunk_ai_concurrency(max_chunk_bytes: i64, configured: u32) -> u32 {
+    if max_chunk_bytes <= 0 {
+        return configured;
+    }
+    let affordable = (MAX_CHUNK_BYTES_IN_FLIGHT / max_chunk_bytes).clamp(1, i64::from(u32::MAX));
+    configured.min(affordable as u32).max(1)
+}
 
 /// Bounded presigned-URL batches (pass 2 decision 3).
 pub const UPLOAD_MAX_PARTS_PER_BATCH: usize = 8;
@@ -323,6 +353,16 @@ pub struct JobRecord {
     pub chunk_manifest_sha256: Option<String>,
     #[serde(default)]
     pub chunk_audio_profile: Option<String>,
+    /// Containerless copy plan from the native probe. Present only when
+    /// the object is inside the supported subset; its absence is what
+    /// routes chunking back to the ffmpeg container. Bound to the exact
+    /// source hash and R2 etag the plan was computed from.
+    #[serde(default)]
+    pub native_plan: Option<crate::native_media::NativePlan>,
+    /// Source hash the native walker already refused, so container-probe
+    /// retries don't re-walk the same immutable bytes.
+    #[serde(default)]
+    pub native_declined_source_sha256: Option<String>,
     /// Pass-0 walk position, kept as a completed-count mirror so old records
     /// decode and old readers stay coherent; `chunk_work` is the pass-0.5
     /// scheduling truth.
@@ -449,6 +489,8 @@ impl JobRecord {
             chunks: Vec::new(),
             chunk_manifest_sha256: None,
             chunk_audio_profile: None,
+            native_plan: None,
+            native_declined_source_sha256: None,
             next_chunk_index: 0,
             current_chunk_attempts: 0,
             chunk_work: Vec::new(),
@@ -489,6 +531,35 @@ impl JobRecord {
         } else {
             r2_raw_key(&self.job_id)
         }
+    }
+
+    /// Keyed by hash rather than a bare flag: a re-staged or re-uploaded
+    /// source is different bytes and gets walked on its own merits.
+    pub fn native_already_declined(&self) -> bool {
+        match (
+            self.native_declined_source_sha256.as_deref(),
+            self.device_identity.as_ref(),
+        ) {
+            (Some(declined), Some(identity)) => declined.eq_ignore_ascii_case(&identity.sha256),
+            _ => false,
+        }
+    }
+
+    /// Widest chunk a wave may have to hold, answerable *before* the
+    /// manifest exists — the overlap driver picks its width while chunking
+    /// is still running, when `chunks` is empty. Manifest, else the native
+    /// plan (exact at probe time), else the container's ceiling.
+    pub fn planned_max_chunk_bytes(&self) -> i64 {
+        self.chunks
+            .iter()
+            .map(|chunk| chunk.byte_count)
+            .max()
+            .or_else(|| {
+                self.native_plan
+                    .as_ref()
+                    .and_then(|plan| plan.chunks.iter().map(|chunk| chunk.byte_count).max())
+            })
+            .unwrap_or(CONTAINER_MAX_CHUNK_RAW_BYTES)
     }
 }
 
@@ -636,6 +707,29 @@ mod tests {
         }
     }
 
+    fn native_plan_chunk(index: u32, byte_count: i64) -> crate::native_media::NativePlanChunk {
+        crate::native_media::NativePlanChunk {
+            index,
+            spans: vec![[0, byte_count as u64]],
+            byte_count,
+            actual_duration_seconds: CHUNK_SECONDS,
+            sha256: Some("ab".repeat(32)),
+        }
+    }
+
+    fn chunk_ref(index: u32, byte_count: i64) -> ChunkRef {
+        ChunkRef {
+            index,
+            key: format!("chunks/job-1/{index}.mp3"),
+            requested_start_seconds: index as f64 * STEP_SECONDS,
+            actual_duration_seconds: CHUNK_SECONDS,
+            valid_start_seconds: index as f64 * STEP_SECONDS,
+            valid_end_seconds: index as f64 * STEP_SECONDS + CHUNK_SECONDS,
+            byte_count,
+            sha256: "aa".into(),
+        }
+    }
+
     #[test]
     fn identity_comparison_requires_both_sides() {
         assert_eq!(
@@ -658,6 +752,124 @@ mod tests {
             compare_identities(Some(&identity("aa", 10)), Some("bb"), Some(10)),
             IdentityComparison::Mismatched
         );
+    }
+
+    #[test]
+    fn every_legal_mp3_chunk_fits_the_raw_byte_ceiling() {
+        // 320 kbps is the top legal Layer III bitrate, and frame granularity
+        // can run a 300 s chunk one frame long (observed: 12,001,698 B), so
+        // bound at a generous 301 s rather than exactly 300.
+        let widest_chunk = 320_000 / 8 * 301;
+        assert!(
+            MAX_CHUNK_RAW_BYTES > widest_chunk,
+            "ceiling {MAX_CHUNK_RAW_BYTES} must clear {widest_chunk}"
+        );
+    }
+
+    #[test]
+    fn chunk_concurrency_bounds_in_flight_audio_without_touching_ordinary_bitrates() {
+        // A 128 kbps five-minute chunk: unchanged from the long-proven point.
+        assert_eq!(chunk_ai_concurrency(4_800_679, 4), 4);
+        // The old container ceiling exactly: still four wide.
+        assert_eq!(chunk_ai_concurrency(5 * 1024 * 1024, 4), 4);
+        // Bitrates that used to force a whole-job container fallback. The
+        // two-envelope-chunk budget keeps 160 kbps at full width and runs
+        // even 320 kbps two wide.
+        assert_eq!(chunk_ai_concurrency(6_000_000, 4), 4); // 160 kbps
+        assert_eq!(chunk_ai_concurrency(7_201_018, 4), 3); // 192 kbps
+        assert_eq!(chunk_ai_concurrency(12_001_698, 4), 2); // 320 kbps
+
+        // Never exceeds the configured width, never reaches zero, and an
+        // unmeasured chunk list defers to configuration.
+        assert_eq!(chunk_ai_concurrency(1_000, 2), 2);
+        assert_eq!(chunk_ai_concurrency(i64::MAX, 4), 1);
+        assert_eq!(chunk_ai_concurrency(0, 4), 4);
+        assert_eq!(chunk_ai_concurrency(-1, 4), 4);
+
+        // The invariant itself: in-flight audio stays inside the budget.
+        for bytes in [1_000_000, 4_800_679, 6_000_000, 9_601_358, 12_800 * 1024] {
+            let concurrency = i64::from(chunk_ai_concurrency(bytes, 4));
+            assert!(
+                concurrency == 1 || concurrency * bytes <= MAX_CHUNK_BYTES_IN_FLIGHT,
+                "{bytes} x {concurrency} exceeds the in-flight budget"
+            );
+        }
+    }
+
+    #[test]
+    fn wave_width_is_bounded_while_chunking_is_still_running() {
+        let mut record = JobRecord::created(
+            "job-plan".into(),
+            "acct-1".into(),
+            "ep-1".into(),
+            None,
+            None,
+            None,
+            None,
+            1_784_000_000,
+        );
+
+        // Nothing known yet: assume the container's ceiling, four wide.
+        assert_eq!(
+            record.planned_max_chunk_bytes(),
+            CONTAINER_MAX_CHUNK_RAW_BYTES
+        );
+        assert_eq!(chunk_ai_concurrency(record.planned_max_chunk_bytes(), 4), 4);
+
+        // The wave driver sizes its width before the manifest merge, when
+        // `chunks` is still empty. The native plan is the only size truth
+        // available then, and missing it is what let a 320 kbps job run
+        // four 12 MB chunks wide.
+        record.native_plan = Some(crate::native_media::NativePlan {
+            algorithm_version: 1,
+            source_sha256: "aa".into(),
+            byte_count: 36_001_959,
+            etag: "etag".into(),
+            canonical_duration_seconds: 900.049,
+            chunks: vec![
+                native_plan_chunk(0, 12_001_698),
+                native_plan_chunk(1, 12_001_698),
+                native_plan_chunk(2, 11_998_563),
+            ],
+        });
+        assert!(record.chunks.is_empty());
+        assert_eq!(record.planned_max_chunk_bytes(), 12_001_698);
+        assert_eq!(chunk_ai_concurrency(record.planned_max_chunk_bytes(), 4), 2);
+
+        // Once the manifest lands, the measured chunks win over the plan.
+        record.chunks = vec![chunk_ref(0, 4_800_679), chunk_ref(1, 4_600_000)];
+        assert_eq!(record.planned_max_chunk_bytes(), 4_800_679);
+        assert_eq!(chunk_ai_concurrency(record.planned_max_chunk_bytes(), 4), 4);
+    }
+
+    #[test]
+    fn native_refusal_is_reused_only_for_the_source_it_was_decided_against() {
+        let mut record = JobRecord::created(
+            "job-native".into(),
+            "acct-1".into(),
+            "ep-1".into(),
+            None,
+            None,
+            None,
+            None,
+            1_784_000_000,
+        );
+        record.device_identity = Some(identity("aa", 10));
+
+        // Nothing refused yet: the walker still gets its pass.
+        assert!(!record.native_already_declined());
+
+        // Refused: container-probe retries must not re-walk the same bytes.
+        record.native_declined_source_sha256 = Some("AA".into());
+        assert!(record.native_already_declined());
+
+        // Different bytes (re-staged or re-uploaded source) are walked again.
+        record.device_identity = Some(identity("bb", 10));
+        assert!(!record.native_already_declined());
+
+        // A refusal without a pinned identity is never trusted.
+        record.device_identity = None;
+        assert!(!record.native_already_declined());
     }
 
     #[test]

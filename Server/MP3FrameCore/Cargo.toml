@@ -1,0 +1,16 @@
+[package]
+name = "opencast-mp3-frame-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Deliberately dependency-free: this crate is the security-sensitive parser
+# that replaces the container's ffmpeg probe/chunk path, and it compiles for
+# both the host test lane and wasm32-unknown-unknown inside
+# RemoteTranscriptionWorker. Any new dependency needs the documented
+# native-API-insufficiency justification in AGENTS.md.
+[dependencies]
+
+[[bin]]
+name = "mp3-frame-diff"
+path = "src/bin/mp3_frame_diff.rs"

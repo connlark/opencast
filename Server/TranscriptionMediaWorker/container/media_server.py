@@ -20,8 +20,10 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -415,5 +417,27 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def serve() -> None:
+    server = HTTPServer(("0.0.0.0", PORT), Handler)
+
+    # This process is PID 1, and the kernel applies no default signal
+    # disposition to PID 1: without an explicit handler SIGTERM is discarded.
+    # The Container SDK's `sleepAfter` stop is exactly that signal, so an
+    # unhandled SIGTERM means the instance never sleeps and bills until
+    # something SIGKILLs it. `shutdown` must run off the serving thread —
+    # calling it from the handler (which interrupts `serve_forever`)
+    # deadlocks.
+    def request_shutdown(signum: int, _frame: object) -> None:
+        del signum
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, request_shutdown)
+    signal.signal(signal.SIGINT, request_shutdown)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
 if __name__ == "__main__":
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    serve()

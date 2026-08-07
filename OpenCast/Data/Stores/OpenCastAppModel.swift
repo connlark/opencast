@@ -34,6 +34,7 @@ final class OpenCastAppModel {
     let remoteTranscriptionPurchases: RemoteTranscriptionPurchaseStore
     let adAnalyses: EpisodeAdAnalysisStore
     let adFreePass: EpisodeAdFreePassCoordinator
+    let upNextQueue: UpNextQueueStore
     let adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession
     let transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession
     let transcriptImprovement: EpisodeTranscriptImprovementCoordinator
@@ -61,6 +62,7 @@ final class OpenCastAppModel {
     var isNowPlayingPresented = false
     var onboardingPresentationRequest = 0
     var lastPlaybackError: String?
+    var lastUpNextError: String?
     /// Unsubscribe outcome surface, presented by the removal confirmation
     /// surfaces; unsubscribe failures never route through the playback error.
     var lastUnsubscribeErrorMessage: String?
@@ -119,6 +121,7 @@ final class OpenCastAppModel {
         transcriptions: EpisodeTranscriptionStore = EpisodeTranscriptionStore(),
         adAnalyses: EpisodeAdAnalysisStore = EpisodeAdAnalysisStore(),
         adFreePass: EpisodeAdFreePassCoordinator = EpisodeAdFreePassCoordinator(),
+        upNextQueue: UpNextQueueStore = UpNextQueueStore(),
         adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession = EpisodeAdFreePassBackgroundSession(),
         transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession = EpisodeTranscriptGenerationBackgroundSession(),
         playback: AVFoundationPlaybackController? = nil,
@@ -221,6 +224,7 @@ final class OpenCastAppModel {
             await resolvedLibrary?.recordNotificationFeedHealth(records)
         }
         self.adFreePass = adFreePass
+        self.upNextQueue = upNextQueue
         self.adFreePassBackgroundSession = adFreePassBackgroundSession
         self.transcriptGenerationBackgroundSession = transcriptGenerationBackgroundSession
         self.transcriptImprovement = EpisodeTranscriptImprovementCoordinator(
@@ -298,6 +302,10 @@ final class OpenCastAppModel {
             }
             return self.transcriptions.progressByEpisodeID[episodeID]
         }
+        let playbackController = self.playback
+        upNextQueue.onQueueChanged = { [weak playbackController, weak upNextQueue] in
+            playbackController?.setHasQueuedNextEpisode(!(upNextQueue?.items.isEmpty ?? true))
+        }
         startSiriMediaUserContextObservation()
     }
 
@@ -312,16 +320,38 @@ final class OpenCastAppModel {
             }
             self.setPlaybackRate(rate, modelContext: modelContext)
         }
+        playback.setEpisodeFinishedHandler { [weak self, weak modelContext] _ in
+            guard let self, let modelContext else {
+                return
+            }
+            advanceToNextQueuedEpisode(modelContext: modelContext)
+        }
+        playback.setNextTrackHandler { [weak self, weak modelContext] in
+            guard let self, let modelContext else {
+                return
+            }
+            advanceToNextQueuedEpisode(modelContext: modelContext)
+        }
         if let coreStoresLoadTask {
             await coreStoresLoadTask.value
             return
         }
 
         let task = Task {
-            await library.load(modelContext: modelContext)
+            let didLoadLibrary = await library.load(modelContext: modelContext)
             await downloads.load(modelContext: modelContext)
             playbackSettings.load(modelContext: modelContext, playback: playback)
             podcastEpisodeListSettings.load(modelContext: modelContext)
+            upNextQueue.load(
+                resolveEpisode: { [weak self] episodeID in
+                    self?.episodeSnapshot(for: episodeID)
+                },
+                mayPruneUnresolved: didLoadLibrary,
+                modelContext: modelContext
+            )
+            if let message = upNextQueue.consumeLastErrorMessage() {
+                lastUpNextError = message
+            }
         }
         coreStoresLoadTask = task
         await task.value
@@ -428,6 +458,51 @@ final class OpenCastAppModel {
         )
     }
 
+    func advanceToNextQueuedEpisode(modelContext: ModelContext) {
+        var hadCandidate = false
+        var playbackFailureMessage: String?
+
+        while true {
+            let item: UpNextQueueItem
+            switch upNextQueue.popNext(modelContext: modelContext) {
+            case .item(let nextItem):
+                item = nextItem
+                hadCandidate = true
+            case .empty:
+                if hadCandidate {
+                    lastPlaybackError = playbackFailureMessage
+                        ?? "None of the episodes in Up Next are available to play."
+                }
+                return
+            case .failure(let message):
+                lastUpNextError = upNextQueue.consumeLastErrorMessage() ?? message
+                return
+            }
+
+            guard let episode = episodeSnapshot(for: item.episodeID) else {
+                continue
+            }
+
+            do {
+                try playEpisode(
+                    episode,
+                    presentsNowPlaying: false,
+                    modelContext: modelContext
+                )
+                return
+            } catch {
+                playbackFailureMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func performUpNextQueueMutation(_ mutation: () -> Bool) {
+        guard !mutation() else {
+            return
+        }
+        lastUpNextError = upNextQueue.consumeLastErrorMessage()
+    }
+
     /// A completed download is the preferred source for any playback: it is
     /// offline, byte-stable, and the copy that transcripts and ad analyses
     /// describe. Dynamic enclosure URLs can return a different audio assembly
@@ -531,18 +606,21 @@ final class OpenCastAppModel {
 
         // Sidecar cleanup is best-effort once the subscription is gone.
         var sidecarErrorMessage: String?
+        if !upNextQueue.removeAll(forPodcastID: feedURL, modelContext: modelContext) {
+            sidecarErrorMessage = upNextQueue.lastErrorMessage
+        }
         if let unsubscribeSidecarCleanupOverride {
             do {
                 try unsubscribeSidecarCleanupOverride(feedURL, episodeIDs, modelContext)
             } catch {
-                sidecarErrorMessage = error.localizedDescription
+                sidecarErrorMessage = sidecarErrorMessage ?? error.localizedDescription
             }
         } else {
             do {
                 try adAnalyses.deleteAnalyses(forPodcastID: feedURL, modelContext: modelContext)
                 try transcriptions.deleteTranscripts(forPodcastID: feedURL, modelContext: modelContext)
             } catch {
-                sidecarErrorMessage = error.localizedDescription
+                sidecarErrorMessage = sidecarErrorMessage ?? error.localizedDescription
             }
             if !podcastEpisodeListSettings.removePreferences(
                 forPodcastID: feedURL,
@@ -1453,6 +1531,7 @@ final class OpenCastAppModel {
         modelContext: ModelContext
     ) -> Bool {
         let didSave = library.markEpisodePlayed(episode, modelContext: modelContext)
+        _ = upNextQueue.remove(episodeID: episode.episodeID, modelContext: modelContext)
         if isCurrentEpisode(episode) {
             // Mark Played is a playback command too, so unload even when persistence was already complete.
             playback.unload()
@@ -1497,6 +1576,7 @@ final class OpenCastAppModel {
         modelContext: ModelContext
     ) -> Bool {
         let didSave = library.markAllPlayed(forPodcastID: podcastID, modelContext: modelContext)
+        _ = upNextQueue.removeAll(forPodcastID: podcastID, modelContext: modelContext)
         if playback.currentEpisode?.podcastID.rawValue == podcastID {
             playback.unload()
             clearLastPlaybackEpisode(modelContext: modelContext)
@@ -1668,6 +1748,7 @@ final class OpenCastAppModel {
         try deleteAll(EpisodeTranscriptRecord.self, modelContext: modelContext)
         try deleteAll(EpisodeAdAnalysisRecord.self, modelContext: modelContext)
         try deleteAll(AdFreePassQueueItemRecord.self, modelContext: modelContext)
+        try deleteAll(UpNextQueueItemRecord.self, modelContext: modelContext)
         try modelContext.save()
     }
 
@@ -1684,6 +1765,7 @@ final class OpenCastAppModel {
         playback.unload()
         isNowPlayingPresented = false
         lastPlaybackError = nil
+        lastUpNextError = nil
         lastUnsubscribeErrorMessage = nil
         lastPlaybackEpisodeRecordCache = nil
         library.resetAfterDataNuke()
@@ -1691,6 +1773,7 @@ final class OpenCastAppModel {
         transcriptions.load(modelContext: modelContext)
         adAnalyses.load(modelContext: modelContext)
         adFreePass.reset()
+        upNextQueue.resetAfterDataNuke()
         adFreePassBackgroundSession.reset()
         transcriptGenerationBackgroundSession.reset()
         transcriptImprovement.resetForDataNuke()
@@ -1759,6 +1842,7 @@ final class OpenCastAppModel {
             episode,
             startPosition: startPosition ?? library.resumePosition(for: snapshot.episodeID)
         )
+        _ = upNextQueue.remove(episodeID: snapshot.episodeID, modelContext: modelContext)
         sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         refreshPlaybackSkipZonesForCurrentEpisode()
         nowPlayingProbeMark("play-loaded")

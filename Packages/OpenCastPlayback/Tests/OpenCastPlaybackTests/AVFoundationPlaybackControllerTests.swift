@@ -692,6 +692,138 @@ struct AVFoundationPlaybackControllerTests {
     }
 
     @Test
+    func naturalEpisodeCompletionPublishesParkedStateBeforeFinishingCallback() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 60))
+        var finishedEpisodeID: EpisodeID?
+        var callbackSnapshot: PlaybackSnapshot?
+        controller.setEpisodeFinishedHandler { episode in
+            finishedEpisodeID = episode.id
+            callbackSnapshot = controller.snapshot
+        }
+
+        controller.handleCurrentItemDidPlayToEnd()
+
+        #expect(finishedEpisodeID == controller.currentEpisode?.id)
+        #expect(callbackSnapshot?.state == .paused)
+        #expect(callbackSnapshot?.position == 60)
+        #expect(controller.snapshot.state == .paused)
+        #expect(controller.snapshot.position == 60)
+    }
+
+    @Test
+    func endOfEpisodeSleepTimerSuppressesFinishingCallback() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 60))
+        controller.setSleepTimer(mode: .endOfEpisode)
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _ in callbackCount += 1 }
+
+        controller.handleCurrentItemDidPlayToEnd()
+
+        #expect(callbackCount == 0)
+        #expect(controller.sleepTimerMode == .off)
+        #expect(controller.snapshot.state == .paused)
+        #expect(controller.snapshot.position == 60)
+    }
+
+    @Test
+    func staleItemCompletionIsIgnored() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(id: "current", duration: 60))
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _ in callbackCount += 1 }
+        let staleItem = AVPlayerItem(url: URL(string: "https://example.com/stale.mp3")!)
+
+        controller.handleCurrentItemDidPlayToEnd(staleItem)
+
+        #expect(callbackCount == 0)
+        #expect(controller.currentEpisode?.id.rawValue == "current")
+        #expect(controller.snapshot.position == 0)
+        #expect(controller.snapshot.state == .paused)
+    }
+
+    @Test
+    func playFromSyntheticEpisodeEndRestartsAtZero() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 60), startPosition: 60)
+
+        controller.play()
+
+        #expect(controller.snapshot.position == 0)
+        #expect(controller.snapshot.progressBoundaryID > 0)
+    }
+
+    @Test
+    func playFromRealFixtureEndRestartsAtZero() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 2
+        )
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+        let fixtureEpisode = Episode(
+            id: EpisodeID(rawValue: "replay-fixture"),
+            podcastID: PodcastID(rawValue: "podcast"),
+            podcastTitle: "Podcast",
+            title: "Replay Fixture",
+            duration: 2,
+            audioURL: fixtureURL
+        )
+        try controller.load(fixtureEpisode, startPosition: 2)
+
+        controller.play()
+
+        #expect(controller.snapshot.position == 0)
+        #expect(controller.snapshot.progressBoundaryID > 0)
+    }
+
+    @Test
+    func nextTrackAdvancesQueueOnlyWhenQueueIsNonempty() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 120), startPosition: 30)
+        var advanceCount = 0
+        controller.setNextTrackHandler { advanceCount += 1 }
+
+        controller.handleNextTrackCommand()
+        #expect(controller.snapshot.position == 45)
+        #expect(advanceCount == 0)
+
+        controller.setHasQueuedNextEpisode(true)
+        controller.handleNextTrackCommand()
+        #expect(controller.snapshot.position == 45)
+        #expect(advanceCount == 1)
+
+        controller.setHasQueuedNextEpisode(false)
+        controller.handleNextTrackCommand()
+        #expect(controller.snapshot.position == 60)
+        #expect(advanceCount == 1)
+    }
+
+    @Test
     func remoteRateChangeUsesInstalledPersistenceHandler() {
         let controller = AVFoundationPlaybackController()
         var requestedRate: Float?

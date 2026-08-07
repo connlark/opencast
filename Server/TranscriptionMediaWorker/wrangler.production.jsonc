@@ -24,12 +24,14 @@
       }
     ]
   },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["TranscriptionMediaContainer"]
+  // Declarative class exports (replaces the legacy migrations array). This map
+  // is the source of truth: a class missing here is deprovisioned, not ignored.
+  "exports": {
+    "TranscriptionMediaContainer": {
+      "type": "durable-object",
+      "storage": "sqlite"
     }
-  ],
+  },
   "r2_buckets": [
     {
       "binding": "TRANSCRIPTION_AUDIO",

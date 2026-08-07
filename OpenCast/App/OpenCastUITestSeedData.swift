@@ -11,6 +11,11 @@ enum OpenCastUITestSeedData {
     static let episodeTitle = "Deterministic UI Episode"
     static let completedEpisodeID = "ui-test-episode-completed"
     static let completedEpisodeTitle = "Completed UI Episode"
+    static let queuedEpisodeIDs = [
+        "ui-test-queued-episode-1",
+        "ui-test-queued-episode-2",
+        "ui-test-queued-episode-3"
+    ]
     private static let adDetectionModeEnvironmentKey = "OPENCAST_SEED_AD_DETECTION_MODE"
     private static let liveAdAnalysisTranscriptPathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_TRANSCRIPT_PATH"
     private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
@@ -41,6 +46,14 @@ enum OpenCastUITestSeedData {
         let usesLongShowNotes = ProcessInfo.processInfo.environment["OPENCAST_SEED_LONG_SHOW_NOTES"] == "1"
         let extraFeedCount = Int(ProcessInfo.processInfo.environment["OPENCAST_SEED_EXTRA_FEED_COUNT"] ?? "") ?? 0
         let overrideAudioFileURL = ProcessInfo.processInfo.environment["OPENCAST_SEED_AUDIO_FILE_URL"]
+        let overriddenAudioDuration = Int(
+            ProcessInfo.processInfo.environment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] ?? ""
+        ).flatMap { $0 > 0 ? $0 : nil }
+        let episodeDuration = Double(overriddenAudioDuration ?? 180)
+        let audioDuration = overriddenAudioDuration ?? 300
+        let shouldSeedUpNextQueue = ProcessInfo.processInfo.environment[
+            "OPENCAST_SEED_UP_NEXT_QUEUE"
+        ] == "1"
         let audioURL = if usesBadAudioURL {
             "file:///tmp/opencast-ui-test-missing-audio.wav"
         } else if let overrideAudioFileURL, !overrideAudioFileURL.isEmpty {
@@ -50,7 +63,7 @@ enum OpenCastUITestSeedData {
                 ? overrideAudioFileURL
                 : URL.documentsDirectory.appending(path: overrideAudioFileURL).absoluteString
         } else {
-            try writeDeterministicAudio().absoluteString
+            try writeDeterministicAudio(durationSeconds: audioDuration).absoluteString
         }
         let showNotesHTML = usesLongShowNotes
             ? longShowNotesHTML()
@@ -74,7 +87,7 @@ enum OpenCastUITestSeedData {
                 summary: "A deterministic episode seeded for UI tests.",
                 showNotesHTML: showNotesHTML,
                 publishedAt: publishedAt,
-                duration: 180,
+                duration: episodeDuration,
                 audioURL: URL(string: audioURL),
                 artworkURL: artworkURL.flatMap(URL.init(string:)),
                 guid: episodeID
@@ -96,6 +109,22 @@ enum OpenCastUITestSeedData {
                     guid: completedEpisodeID
                 )
             )
+        }
+        if shouldSeedUpNextQueue {
+            episodes.append(contentsOf: queuedEpisodeIDs.enumerated().map { index, episodeID in
+                Episode(
+                    id: EpisodeID(rawValue: episodeID),
+                    podcastID: PodcastID(rawValue: feedURL),
+                    podcastTitle: podcastTitle,
+                    title: "Queued UI Episode \(index + 1)",
+                    summary: "A deterministic queued episode seeded for UI tests.",
+                    publishedAt: completedPublishedAt.addingTimeInterval(Double(-index - 1)),
+                    duration: episodeDuration,
+                    audioURL: URL(string: audioURL),
+                    artworkURL: artworkURL.flatMap(URL.init(string:)),
+                    guid: episodeID
+                )
+            })
         }
         try upsertSeedFeed(
             into: cacheStore,
@@ -127,6 +156,19 @@ enum OpenCastUITestSeedData {
             usesVariedArtworkPreviews: usesVariedArtworkPreviews,
             refreshedAt: refreshedAt
         )
+
+        if shouldSeedUpNextQueue {
+            for (sequence, episodeID) in queuedEpisodeIDs.enumerated() {
+                context.insert(
+                    UpNextQueueItemRecord(
+                        episodeID: episodeID,
+                        podcastID: feedURL,
+                        sequence: sequence,
+                        enqueuedAt: refreshedAt.addingTimeInterval(Double(sequence))
+                    )
+                )
+            }
+        }
 
         if includesEpisodeProgress {
             context.insert(
@@ -179,7 +221,7 @@ enum OpenCastUITestSeedData {
             let fileURL = fileStore.fileURL(relativePath: relativePath)
             let completedAudioSourceURL = FileManager.default.fileExists(atPath: sourceURL.path)
                 ? sourceURL
-                : try writeDeterministicAudio()
+                : try writeDeterministicAudio(durationSeconds: audioDuration)
             let data = try Data(contentsOf: completedAudioSourceURL)
             try fileStore.prepareDownloadsDirectory()
             try data.write(to: fileURL, options: .atomic)
@@ -922,9 +964,10 @@ enum OpenCastUITestSeedData {
         return fileURL
     }
 
-    private static func writeDeterministicAudio() throws -> URL {
+    private static func writeDeterministicAudio(durationSeconds: Int = 300) throws -> URL {
         try PCM16WAVWriter.write(
-            to: FileManager.default.temporaryDirectory.appending(path: "opencast-ui-test-episode.wav")
+            to: FileManager.default.temporaryDirectory.appending(path: "opencast-ui-test-episode.wav"),
+            durationSeconds: durationSeconds
         ) { phase in
             sin(phase * 440 * 2 * .pi) * 0.2
         }

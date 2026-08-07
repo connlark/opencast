@@ -12,6 +12,34 @@ struct CarPlayBrowseModelBuilderTests {
     private static let floorLimits = CarPlayListLimits(maximumItemCount: 12, maximumSectionCount: 2)
     private static let roomyLimits = CarPlayListLimits(maximumItemCount: 100, maximumSectionCount: 10)
 
+    @Test("Up Next preserves queue order, skips missing episodes, and respects the item cap")
+    func upNextOrderResolutionAndCap() async throws {
+        let fixture = try await makeFixture(episodeCount: 20)
+        let episodeIDs = [episodeID(19), "missing"] + (0..<13).map(episodeID)
+        let queueItems = episodeIDs.enumerated().map { index, episodeID in
+            UpNextQueueItem(
+                episodeID: episodeID,
+                podcastID: Self.podcastID,
+                sequence: index,
+                enqueuedAt: Date(timeIntervalSince1970: Double(index))
+            )
+        }
+
+        let snapshot = CarPlayBrowseModelBuilder.upNext(
+            queueItems: queueItems,
+            library: fixture.library,
+            downloadRecords: [],
+            nowPlaying: .idle,
+            limits: Self.floorLimits.withoutContinuation
+        )
+
+        #expect(snapshot.title == "Up Next")
+        #expect(snapshot.rowCount == 12)
+        #expect(self.episodeIDs(in: snapshot) == [episodeID(19)] + (0..<11).map(episodeID))
+        #expect(snapshot.continuation == nil)
+        #expect(!snapshot.sections.contains { $0.rows.contains(.showMore) })
+    }
+
     @Test("Inbox keeps newest-first order and slices to the item cap")
     func inboxOrderAndSlicing() async throws {
         let fixture = try await makeFixture(episodeCount: 20)

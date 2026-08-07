@@ -29,6 +29,7 @@ use crate::media::{
     self, MediaChunkRequest, MediaChunkResponse, MediaProbeRequest, MediaProbeResponse,
     MEDIA_BINDING, MEDIA_CHUNK_PATH, MEDIA_INTERNAL_ORIGIN, MEDIA_PROBE_PATH, MEDIA_WAKE_PATH,
 };
+use crate::native_media::{self, NativeFallback, NativePlan};
 use crate::route::JSON_CONTENT_TYPE;
 use crate::stitch;
 use crate::storage as d1;
@@ -617,9 +618,10 @@ impl TranscriptionJob {
                     // terminal record or re-arm its deleted alarm — abort
                     // the upload we just opened and refuse.
                     _ => {
-                        if let Ok(open) = bucket
-                            .resume_multipart_upload(&job::r2_upload_key(&record.job_id), &upload_id)
-                        {
+                        if let Ok(open) = bucket.resume_multipart_upload(
+                            &job::r2_upload_key(&record.job_id),
+                            &upload_id,
+                        ) {
                             open.abort().await.ok();
                         }
                         return json_error(409, types::ERROR_INVALID_REQUEST);
@@ -876,7 +878,12 @@ impl TranscriptionJob {
         // overlaps staging and the device-hash wait instead of serializing
         // after them. /wake returns without waiting for readiness; any
         // failure changes nothing (probe/chunk already retry cold starts).
-        if record.state == job::STATE_CREATED && !self.fake_media_enabled(config) {
+        // With the native chunker on, most jobs never touch the container,
+        // so don't wake it — fallback jobs pay a retryable cold start.
+        if record.state == job::STATE_CREATED
+            && !self.fake_media_enabled(config)
+            && !config.native_chunker_enabled
+        {
             self.media_wake().await;
         }
         let record = match self
@@ -909,8 +916,7 @@ impl TranscriptionJob {
                     .await?
                 {
                     LiveUpdate::Applied(updated) => updated,
-                    LiveUpdate::RefusedTerminal(record)
-                    | LiveUpdate::RefusedCancelling(record) => {
+                    LiveUpdate::RefusedTerminal(record) | LiveUpdate::RefusedCancelling(record) => {
                         // stage_origin just completed the raw multipart — the
                         // cancel's cleanup may already have swept the
                         // prefixes, so re-delete on both refusal flavors.
@@ -1046,7 +1052,7 @@ impl TranscriptionJob {
         self.sync_index(&updated).await;
 
         let probe = self.run_media_probe(&updated, config).await;
-        let probe = match probe {
+        let (probe, native_plan) = match probe {
             Ok(probe) => probe,
             Err(failure) => return self.handle_media_failure(updated, config, failure).await,
         };
@@ -1094,6 +1100,9 @@ impl TranscriptionJob {
                 record.canonical_source_byte_count = Some(probe.byte_count);
                 record.canonical_duration_seconds = Some(probe.duration_seconds);
                 record.reserved_seconds = Some(reserved_seconds);
+                // Stored together with the identity it is bound to, so the
+                // chunk step can never execute a plan for other bytes.
+                record.native_plan = native_plan;
                 record.media_attempts = 0;
             })
             .await?
@@ -1214,17 +1223,30 @@ impl TranscriptionJob {
             .expect("record exists");
         self.sync_index(&record).await;
 
-        // Lever 2 (pass 0.5): transcribe chunks while the container is still
-        // writing the rest of them. Concurrency 1 keeps the strict pass-0
-        // chunk-then-transcribe walk — the rollback story.
-        let concurrency = self.chunk_concurrency(&record, config);
-        let overlap = if concurrency > 1 {
-            self.run_chunk_overlap(&record, config, concurrency).await?
-        } else {
+        // A current native plan whose chunks all carry stored hashes already
+        // IS the manifest: chunking becomes metadata-only, no chunk object is
+        // ever written, and the proven wave driver serves every AI call from
+        // span reads of the source. Anything else — container jobs, rejected
+        // or sha-less plans — runs the container path.
+        let overlap = if let Some(response) = self.native_manifest_preempt(&record).await {
             OverlapReport {
-                media: self.run_media_chunk(&record, config).await,
+                media: Ok(response),
                 fatal: None,
                 defer_seconds: None,
+            }
+        } else {
+            // Lever 2 (pass 0.5): transcribe chunks while the container is
+            // still writing the rest of them. Concurrency 1 keeps the strict
+            // pass-0 chunk-then-transcribe walk — the rollback story.
+            let concurrency = self.chunk_concurrency(&record, config);
+            if concurrency > 1 {
+                self.run_chunk_overlap(&record, config, concurrency).await?
+            } else {
+                OverlapReport {
+                    media: self.run_media_chunk(&record, config).await,
+                    fatal: None,
+                    defer_seconds: None,
+                }
             }
         };
 
@@ -1827,7 +1849,12 @@ impl TranscriptionJob {
                 return concurrency.clamp(1, 8);
             }
         }
-        config.chunk_ai_concurrency
+        // Chunks are only as large as the source's bitrate makes them, and a
+        // wave holds every chunk it runs. Bound the product, not the count.
+        job::chunk_ai_concurrency(
+            record.planned_max_chunk_bytes(),
+            config.chunk_ai_concurrency,
+        )
     }
 
     /// One chunk's admission → read → AI → persist sequence. Never touches
@@ -1848,41 +1875,67 @@ impl TranscriptionJob {
             result: ChunkCallResult::TransportError,
         };
 
-        let audio = match self.read_chunk_audio(&chunk.key).await {
-            Ok(Some(audio)) => audio,
-            Ok(None) => {
-                // A missing chunk with a durable response means a previous
-                // turn already transcribed it (and deleted the audio) but
-                // its record write was lost — e.g. a DO reset mid-turn with
-                // side effects still landing. The AI output is what stitch
-                // needs; self-heal instead of failing the job.
-                let response_key = job::r2_response_key(&record.job_id, chunk.index);
-                match self.read_chunk_audio(&response_key).await {
-                    Ok(Some(_)) => {
-                        worker::console_log!(
-                            "chunk audio gone but response durable; self-healing: job {} index {}",
-                            record.job_id,
-                            chunk.index
-                        );
-                        outcome.result = ChunkCallResult::AlreadyTranscribed;
-                    }
-                    Ok(None) => {
-                        worker::console_error!(
-                            "chunk object missing at read: job {} index {}",
-                            record.job_id,
-                            chunk.index
-                        );
-                        outcome.result = ChunkCallResult::MissingChunkObject;
-                    }
-                    Err(error) => {
-                        worker::console_error!("response probe transport error: {error:?}");
-                    }
+        // A current plan carrying this chunk's stored hash serves the AI call
+        // straight from ranged reads of the source — the chunk object was
+        // never materialized. `None` (container job, or a sha-less plan from
+        // an older deploy whose chunk objects are real) keeps the
+        // chunk-object path exactly as it was, per-chunk delete included.
+        let span_plan = record.native_plan.as_ref().and_then(|plan| {
+            self.native_plan_is_current(record, plan).ok()?;
+            let chunk_plan = plan.chunks.get(chunk.index as usize)?;
+            chunk_plan.sha256.as_ref()?;
+            Some((plan, chunk_plan))
+        });
+        let spans_served = span_plan.is_some();
+
+        let audio = if let Some((plan, chunk_plan)) = span_plan {
+            match self
+                .read_span_chunk_audio(record, plan, chunk_plan, chunk.index)
+                .await
+            {
+                Ok(audio) => audio,
+                Err(result) => {
+                    outcome.result = result;
+                    return outcome;
                 }
-                return outcome;
             }
-            Err(error) => {
-                worker::console_error!("chunk read transport error: {error:?}");
-                return outcome;
+        } else {
+            match self.read_chunk_audio(&chunk.key).await {
+                Ok(Some(audio)) => audio,
+                Ok(None) => {
+                    // A missing chunk with a durable response means a previous
+                    // turn already transcribed it (and deleted the audio) but
+                    // its record write was lost — e.g. a DO reset mid-turn with
+                    // side effects still landing. The AI output is what stitch
+                    // needs; self-heal instead of failing the job.
+                    let response_key = job::r2_response_key(&record.job_id, chunk.index);
+                    match self.read_chunk_audio(&response_key).await {
+                        Ok(Some(_)) => {
+                            worker::console_log!(
+                                "chunk audio gone but response durable; self-healing: job {} index {}",
+                                record.job_id,
+                                chunk.index
+                            );
+                            outcome.result = ChunkCallResult::AlreadyTranscribed;
+                        }
+                        Ok(None) => {
+                            worker::console_error!(
+                                "chunk object missing at read: job {} index {}",
+                                record.job_id,
+                                chunk.index
+                            );
+                            outcome.result = ChunkCallResult::MissingChunkObject;
+                        }
+                        Err(error) => {
+                            worker::console_error!("response probe transport error: {error:?}");
+                        }
+                    }
+                    return outcome;
+                }
+                Err(error) => {
+                    worker::console_error!("chunk read transport error: {error:?}");
+                    return outcome;
+                }
             }
         };
 
@@ -1904,8 +1957,11 @@ impl TranscriptionJob {
                         )
                         .execute()
                         .await?;
-                    // Chunk audio is deleted only after its response is durable.
-                    bucket.delete(&chunk.key).await?;
+                    if !spans_served {
+                        // Chunk audio is deleted only after its response is
+                        // durable. Span-served chunks never had an object.
+                        bucket.delete(&chunk.key).await?;
+                    }
                     Ok(())
                 }
                 .await;
@@ -1933,6 +1989,86 @@ impl TranscriptionJob {
             return Ok(None);
         };
         Ok(Some(body.bytes().await?))
+    }
+
+    /// One span-served chunk's audio for one AI attempt: response-durability
+    /// probe, etag-conditional span reads, and the stored-hash cross-check.
+    /// `Err` carries the exact `ChunkCallResult` the wave driver should see.
+    async fn read_span_chunk_audio(
+        &self,
+        record: &JobRecord,
+        plan: &NativePlan,
+        chunk_plan: &native_media::NativePlanChunk,
+        index: u32,
+    ) -> std::result::Result<Vec<u8>, ChunkCallResult> {
+        let bucket = self
+            .env
+            .bucket(TRANSCRIPTION_BUCKET)
+            .map_err(|_| ChunkCallResult::TransportError)?;
+
+        // The chunk-object path got its crash-window self-heal for free from
+        // "audio deleted only after its response is durable". With no chunk
+        // object, the durable response must be probed explicitly, or a DO
+        // reset landing after a response PUT would re-spend the AI call.
+        let response_key = job::r2_response_key(&record.job_id, index);
+        match bucket.head(&response_key).await {
+            Ok(Some(_)) => {
+                worker::console_log!(
+                    "span chunk already has a durable response; self-healing: job {} index {}",
+                    record.job_id,
+                    index
+                );
+                return Err(ChunkCallResult::AlreadyTranscribed);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                worker::console_error!("response probe transport error: {error:?}");
+                return Err(ChunkCallResult::TransportError);
+            }
+        }
+
+        let audio = match native_media::read_chunk_bytes(
+            &bucket,
+            &record.source_object_key(),
+            plan,
+            chunk_plan,
+        )
+        .await
+        {
+            Ok(audio) => audio,
+            Err(NativeFallback::StorageUnavailable) => {
+                worker::console_error!(
+                    "span read transport error: job {} index {}",
+                    record.job_id,
+                    index
+                );
+                return Err(ChunkCallResult::TransportError);
+            }
+            Err(reason) => {
+                // The source vanished or changed under a mid-flight job:
+                // unrecoverable, routed exactly like a vanished chunk object.
+                worker::console_error!(
+                    "span read lost its source: job {} index {} reason={}",
+                    record.job_id,
+                    index,
+                    reason.reason()
+                );
+                return Err(ChunkCallResult::MissingChunkObject);
+            }
+        };
+
+        // Permanent production cross-check of the dependency-free streamed
+        // hash: fail closed before spending the AI call.
+        let expected = chunk_plan.sha256.as_deref().unwrap_or_default();
+        if !hex::encode(Sha256::digest(&audio)).eq_ignore_ascii_case(expected) {
+            worker::console_error!(
+                "span read hash mismatch: job {} index {}",
+                record.job_id,
+                index
+            );
+            return Err(ChunkCallResult::MissingChunkObject);
+        }
+        Ok(audio)
     }
 
     async fn step_stitch(&self, record: JobRecord, config: &AppConfig) -> Result<()> {
@@ -2610,10 +2746,7 @@ impl TranscriptionJob {
             }
         }
         match self.credit(&config) {
-            Ok(credit) => credit
-                .release(&record.job_id, now_seconds())
-                .await
-                .is_ok(),
+            Ok(credit) => credit.release(&record.job_id, now_seconds()).await.is_ok(),
             Err(_) => false,
         }
     }
@@ -2942,7 +3075,79 @@ impl TranscriptionJob {
         Ok((hex::encode(hasher.finalize()), total))
     }
 
+    /// Probe result plus, when the object is inside the supported subset,
+    /// the containerless copy plan the chunk step will execute.
     async fn run_media_probe(
+        &self,
+        record: &JobRecord,
+        config: &AppConfig,
+    ) -> std::result::Result<(MediaProbeResponse, Option<NativePlan>), media::MediaCallFailure>
+    {
+        if config.native_chunker_enabled
+            && !self.fake_media_enabled(config)
+            && !record.native_already_declined()
+        {
+            match self.run_native_probe(record).await {
+                Ok(native) => return Ok(native),
+                // R2 hiccups are the container's problem too; retry rather
+                // than burn the container on a transient read failure.
+                Err(NativeFallback::StorageUnavailable) => {
+                    return Err(media::MediaCallFailure::Retryable)
+                }
+                Err(reason) => {
+                    worker::console_log!(
+                        "native probe fallback: job {} reason={}",
+                        record.job_id,
+                        reason.reason()
+                    );
+                    self.bump("native_probe_fallback", 1).await;
+                    self.bump(&format!("native_fallback_{}", reason.reason()), 1)
+                        .await;
+                    // Memoize the refusal so container cold-start retries
+                    // don't re-walk the same bytes; a raced cancel is fine.
+                    if let Some(sha256) =
+                        record.device_identity.as_ref().map(|id| id.sha256.clone())
+                    {
+                        self.update_record_if_live(|record| {
+                            record.native_declined_source_sha256 = Some(sha256);
+                        })
+                        .await
+                        .ok();
+                    }
+                }
+            }
+        }
+        self.run_container_probe(record, config)
+            .await
+            .map(|probe| (probe, None))
+    }
+
+    /// Single sequential R2 pass: streaming SHA-256, MPEG frame walk and
+    /// chunk plan, with no container involved. Falls back for anything
+    /// outside the supported subset, including chunks that would need the
+    /// container's libmp3lame normalization.
+    async fn run_native_probe(
+        &self,
+        record: &JobRecord,
+    ) -> std::result::Result<(MediaProbeResponse, Option<NativePlan>), NativeFallback> {
+        let bucket = self
+            .env
+            .bucket(TRANSCRIPTION_BUCKET)
+            .map_err(|_| NativeFallback::StorageUnavailable)?;
+        let walk = native_media::walk_source(
+            &bucket,
+            &record.source_object_key(),
+            native_media::SOURCE_RANGE_BYTES,
+            job::MAX_CHUNK_RAW_BYTES.max(0) as u64,
+        )
+        .await?;
+        worker::console_log!("native probe: job {} {}", record.job_id, walk.telemetry());
+        let plan = walk.plan(job::MAX_CHUNK_RAW_BYTES)?;
+        self.bump("native_probe_planned", 1).await;
+        Ok((walk.probe_response(), Some(plan)))
+    }
+
+    async fn run_container_probe(
         &self,
         record: &JobRecord,
         config: &AppConfig,
@@ -2998,13 +3203,28 @@ impl TranscriptionJob {
                 .await
                 .map_err(media::MediaCallFailure::Fatal);
         }
+        // A stored plan with complete chunk hashes was pre-empted in
+        // `step_chunk`; reaching here with a plan means it was rejected
+        // (version/identity/spans) or is a sha-less plan from a
+        // pre-span-read deploy. Nothing has been written yet, so handing the
+        // whole job to the container is still safe — with the caveat that a
+        // native canonical duration now drives container chunks, which can
+        // disagree on no-Xing VBR (the 2026-08-04 class). That window only
+        // exists for jobs probed under an older deploy.
+        if record.native_plan.is_some() {
+            worker::console_error!(
+                "native plan not servable from spans; container takes job {}",
+                record.job_id
+            );
+            self.bump("native_chunk_plan_rejected", 1).await;
+        }
         let request = MediaChunkRequest {
             job_id: record.job_id.clone(),
             source_key: record.source_object_key(),
             chunk_prefix: job::r2_chunk_prefix(&record.job_id),
             chunk_seconds: job::CHUNK_SECONDS,
             overlap_seconds: job::OVERLAP_SECONDS,
-            max_chunk_raw_bytes: job::MAX_CHUNK_RAW_BYTES,
+            max_chunk_raw_bytes: job::CONTAINER_MAX_CHUNK_RAW_BYTES,
         };
         self.media_post(MEDIA_CHUNK_PATH, &request).await
     }
@@ -3094,6 +3314,51 @@ impl TranscriptionJob {
             manifest_sha256: hex::encode(manifest_hasher.finalize()),
             chunk_audio_profile: Some("mp3-stream-copy-v1".to_string()),
         })
+    }
+
+    /// Metadata-only chunking: when the stored plan is current and every
+    /// chunk carries its streamed hash, the manifest is built from the plan
+    /// alone — zero R2 I/O — and the job transitions straight to
+    /// TRANSCRIBING. `None` falls through to the existing chunk executors,
+    /// which re-check the plan themselves and log any rejection.
+    async fn native_manifest_preempt(&self, record: &JobRecord) -> Option<MediaChunkResponse> {
+        let plan = record.native_plan.as_ref()?;
+        self.native_plan_is_current(record, plan).ok()?;
+        let response = native_media::manifest_from_plan(plan, &record.job_id)?;
+        self.bump("native_manifest_from_plan", 1).await;
+        Some(response)
+    }
+
+    /// Preflight before a single byte is written: the plan must come from
+    /// this algorithm version, describe the exact source identity the probe
+    /// pinned, and be internally consistent. Rejecting here is safe because
+    /// nothing has been written yet, so the container can still take the job.
+    fn native_plan_is_current(
+        &self,
+        record: &JobRecord,
+        plan: &NativePlan,
+    ) -> std::result::Result<(), NativeFallback> {
+        if plan.algorithm_version != native_media::ALGORITHM_VERSION {
+            return Err(NativeFallback::PlanVersionMismatch);
+        }
+        let identity_matches = record
+            .canonical_source_sha256
+            .as_deref()
+            .is_some_and(|sha256| sha256.eq_ignore_ascii_case(&plan.source_sha256))
+            && record.canonical_source_byte_count == Some(plan.byte_count);
+        if !identity_matches || plan.chunks.is_empty() {
+            return Err(NativeFallback::SourceChanged);
+        }
+        let object_len = plan.byte_count.max(0) as u64;
+        for (position, chunk) in plan.chunks.iter().enumerate() {
+            if chunk.index as usize != position || !chunk.spans_are_sane(object_len) {
+                return Err(NativeFallback::SourceChanged);
+            }
+            if chunk.byte_count > job::MAX_CHUNK_RAW_BYTES {
+                return Err(NativeFallback::ChunkOverEnvelope);
+            }
+        }
+        Ok(())
     }
 
     /// Best-effort container wake (A3). Errors are logged and ignored: the

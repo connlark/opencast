@@ -48,9 +48,11 @@ migrations_dir = "migrations"
 name = "PURCHASE_ACCOUNT"
 class_name = "PurchaseAccount"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["PurchaseAccount"]
+# Declarative class exports (replaces the legacy migrations array). This map is
+# the source of truth: a class missing here is deprovisioned, not ignored.
+[exports.PurchaseAccount]
+type = "durable-object"
+storage = "sqlite"
 
 # --- prod-staging lane: isolated resources + reconciliation cron ------------
 [env.prod-staging]
@@ -88,9 +90,9 @@ migrations_dir = "migrations"
 name = "PURCHASE_ACCOUNT"
 class_name = "PurchaseAccount"
 
-[[env.prod-staging.migrations]]
-tag = "v1"
-new_sqlite_classes = ["PurchaseAccount"]
+[env.prod-staging.exports.PurchaseAccount]
+type = "durable-object"
+storage = "sqlite"
 
 [env.prod-staging.triggers]
 # Add a reconciliation schedule only after the lane is fully configured.
@@ -132,9 +134,9 @@ migrations_dir = "migrations"
 name = "PURCHASE_ACCOUNT"
 class_name = "PurchaseAccount"
 
-[[env.production.migrations]]
-tag = "v1"
-new_sqlite_classes = ["PurchaseAccount"]
+[env.production.exports.PurchaseAccount]
+type = "durable-object"
+storage = "sqlite"
 
 [env.production.triggers]
 # Add a reconciliation schedule only after the lane is fully configured.

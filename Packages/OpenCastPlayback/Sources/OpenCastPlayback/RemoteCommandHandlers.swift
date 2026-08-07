@@ -6,6 +6,7 @@ struct RemoteCommandHandlers: Sendable {
     let togglePlayPause: @MainActor () -> Void
     let skipForward: @MainActor () -> Void
     let skipBackward: @MainActor () -> Void
+    let nextTrack: @MainActor () -> Void
     let seek: @MainActor (TimeInterval) -> Void
     let changeRate: @MainActor (Float) -> Void
 }

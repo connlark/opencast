@@ -11,6 +11,8 @@ typealias VoiceBoostAudioTapFactory = (
 ) throws -> VoiceBoostAudioTap
 
 public typealias PlaybackRateChangeRequestHandler = @MainActor (Float) -> Void
+public typealias PlaybackEpisodeFinishedHandler = @MainActor (Episode) -> Void
+public typealias PlaybackNextTrackHandler = @MainActor () -> Void
 
 @Observable
 public final class AVFoundationPlaybackController {
@@ -65,6 +67,9 @@ public final class AVFoundationPlaybackController {
     @ObservationIgnored private var shouldResumeAfterInterruption = false
     @ObservationIgnored private var sleepTimerTask: Task<Void, Never>?
     @ObservationIgnored private var remotePlaybackRateChangeHandler: PlaybackRateChangeRequestHandler?
+    @ObservationIgnored private var episodeFinishedHandler: PlaybackEpisodeFinishedHandler?
+    @ObservationIgnored private var nextTrackHandler: PlaybackNextTrackHandler?
+    @ObservationIgnored private var hasQueuedNextEpisode = false
     @ObservationIgnored private var playbackPositionProtection = PlaybackPositionProtection()
     @ObservationIgnored private var playbackAdSkipPolicy = PlaybackAdSkipPolicy()
     @ObservationIgnored private var playbackFailureRecoveryPolicy = PlaybackFailureRecoveryPolicy()
@@ -278,6 +283,13 @@ public final class AVFoundationPlaybackController {
             return
         }
 
+        if let duration = resolvedDuration(), snapshot.position >= duration - 0.25 {
+            currentVoiceBoostTap?.reset()
+            seekPlayer(to: 0)
+            snapshot.position = 0
+            markProgressBoundary()
+        }
+
         if !isPlaybackRequested {
             playbackFailureRecoveryPolicy.reset()
         }
@@ -384,6 +396,22 @@ public final class AVFoundationPlaybackController {
         _ handler: PlaybackRateChangeRequestHandler?
     ) {
         remotePlaybackRateChangeHandler = handler
+    }
+
+    public func setEpisodeFinishedHandler(_ handler: PlaybackEpisodeFinishedHandler?) {
+        episodeFinishedHandler = handler
+    }
+
+    public func setNextTrackHandler(_ handler: PlaybackNextTrackHandler?) {
+        nextTrackHandler = handler
+    }
+
+    public func setHasQueuedNextEpisode(_ hasQueuedNextEpisode: Bool) {
+        guard self.hasQueuedNextEpisode != hasQueuedNextEpisode else {
+            return
+        }
+
+        self.hasQueuedNextEpisode = hasQueuedNextEpisode
     }
 
     public func sleepTimerRemaining(at date: Date = .now) -> TimeInterval? {
@@ -609,6 +637,9 @@ public final class AVFoundationPlaybackController {
             skipBackward: { [weak self] in
                 self?.skipBackward()
             },
+            nextTrack: { [weak self] in
+                self?.handleNextTrackCommand()
+            },
             seek: { [weak self] position in
                 self?.seek(to: position, intent: .scrub)
             },
@@ -624,6 +655,14 @@ public final class AVFoundationPlaybackController {
 
     private func skipBackward() {
         skip(by: -skipBackwardInterval)
+    }
+
+    func handleNextTrackCommand() {
+        if hasQueuedNextEpisode, let nextTrackHandler {
+            nextTrackHandler()
+        } else {
+            skipForward()
+        }
     }
 
     func handleRemotePlaybackRateChange(_ rate: Float) {
@@ -892,7 +931,7 @@ public final class AVFoundationPlaybackController {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.handleCurrentItemDidPlayToEnd()
+                self?.handleCurrentItemDidPlayToEnd(playerItem)
             }
         }
     }
@@ -1230,7 +1269,17 @@ public final class AVFoundationPlaybackController {
         }
     }
 
+    func handleCurrentItemDidPlayToEnd(_ playerItem: AVPlayerItem) {
+        guard player.currentItem === playerItem else {
+            return
+        }
+
+        handleCurrentItemDidPlayToEnd()
+    }
+
     func handleCurrentItemDidPlayToEnd() {
+        let finishedEpisode = snapshot.currentEpisode
+        let sleepGated = sleepTimerMode == .endOfEpisode
         isPlaybackRequested = false
         shouldResumeAfterInterruption = false
         if let duration = resolvedDuration() {
@@ -1244,6 +1293,9 @@ public final class AVFoundationPlaybackController {
         snapshot.state = snapshot.currentEpisode == nil ? .idle : .paused
         markProgressBoundary()
         publishPlaybackState()
+        if !sleepGated, let finishedEpisode {
+            episodeFinishedHandler?(finishedEpisode)
+        }
     }
 
     private func clampedPosition(_ position: TimeInterval) -> TimeInterval {

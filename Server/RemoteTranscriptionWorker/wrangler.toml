@@ -64,6 +64,9 @@ ORIGIN_FETCH_WALL_SECONDS = "840"
 POLL_AFTER_SECONDS = "2"
 # Keep chained ad analysis disabled until the deployer configures the
 # service binding and explicitly enables the internal AdAnalysis surface.
+# Containerless MP3 probe/chunk (MP3FrameCore) kill switch. Gates new
+# probes only — a job with a stored native plan finishes on it.
+NATIVE_CHUNKER_ENABLED = "false"
 AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_DEADLINE_SECONDS = "900"
 AD_ANALYSIS_POLL_SECONDS = "5"
@@ -94,9 +97,15 @@ class_name = "TranscriptionUsageLimiter"
 binding = "TRANSCRIPTION_MEDIA_WORKER"
 service = "your-transcription-media-worker"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["TranscriptionJob", "TranscriptionUsageLimiter"]
+# Declarative class exports (replaces the legacy migrations array). This map is
+# the source of truth: a class missing here is deprovisioned, not ignored.
+[exports.TranscriptionJob]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.TranscriptionUsageLimiter]
+type = "durable-object"
+storage = "sqlite"
 
 # --- prod-staging lane: isolated D1/R2/DO, production App Attest, and
 # Sandbox StoreKit through the PurchaseWorker binding. The dev bearer gate
@@ -139,6 +148,9 @@ DAILY_SPEND_CAP_USD_MICRO = "1000000"
 WAITING_FOR_DEVICE_SOURCE_DEADLINE_SECONDS = "43200"
 AWAITING_CREDITS_DEADLINE_SECONDS = "21600"
 STAGING_ORIGIN_DEADLINE_SECONDS = "3600"
+# Containerless MP3 probe/chunk (MP3FrameCore); see the development lane
+# comment. Roll back by setting this to "false" and redeploying.
+NATIVE_CHUNKER_ENABLED = "false"
 ORIGIN_FETCH_MAX_REDIRECTS = "5"
 ORIGIN_FETCH_WALL_SECONDS = "840"
 POLL_AFTER_SECONDS = "2"
@@ -176,9 +188,13 @@ service = "your-transcription-media-worker-prod-staging"
 binding = "PURCHASE_WORKER"
 service = "your-purchase-worker-prod-staging"
 
-[[env.prod-staging.migrations]]
-tag = "v1"
-new_sqlite_classes = ["TranscriptionJob", "TranscriptionUsageLimiter"]
+[env.prod-staging.exports.TranscriptionJob]
+type = "durable-object"
+storage = "sqlite"
+
+[env.prod-staging.exports.TranscriptionUsageLimiter]
+type = "durable-object"
+storage = "sqlite"
 
 [env.prod-staging.triggers]
 # Add an orphan-sweep schedule only after the lane is fully configured.
@@ -226,6 +242,9 @@ AWAITING_CREDITS_DEADLINE_SECONDS = "21600"
 EXACT_UPLOAD_REQUIRED_DEADLINE_SECONDS = "43200"
 EXACT_UPLOADING_DEADLINE_SECONDS = "43200"
 STAGING_ORIGIN_DEADLINE_SECONDS = "3600"
+# Containerless MP3 probe/chunk (MP3FrameCore); see the development lane
+# comment. Roll back by setting this to "false" and redeploying.
+NATIVE_CHUNKER_ENABLED = "false"
 ORIGIN_FETCH_MAX_REDIRECTS = "5"
 ORIGIN_FETCH_WALL_SECONDS = "840"
 POLL_AFTER_SECONDS = "2"
@@ -265,9 +284,13 @@ service = "your-transcription-media-worker-production"
 binding = "PURCHASE_WORKER"
 service = "your-purchase-worker-production"
 
-[[env.production.migrations]]
-tag = "v1"
-new_sqlite_classes = ["TranscriptionJob", "TranscriptionUsageLimiter"]
+[env.production.exports.TranscriptionJob]
+type = "durable-object"
+storage = "sqlite"
+
+[env.production.exports.TranscriptionUsageLimiter]
+type = "durable-object"
+storage = "sqlite"
 
 [env.production.triggers]
 crons = []

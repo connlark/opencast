@@ -40,13 +40,15 @@ class_name = "AdAnalysisUsageLimiter"
 name = "AD_ANALYSIS_JOB"
 class_name = "AdAnalysisJob"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["AdAnalysisUsageLimiter"]
+# Declarative class exports (replaces the legacy migrations array). This map is
+# the source of truth: a class missing here is deprovisioned, not ignored.
+[exports.AdAnalysisUsageLimiter]
+type = "durable-object"
+storage = "sqlite"
 
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = ["AdAnalysisJob"]
+[exports.AdAnalysisJob]
+type = "durable-object"
+storage = "sqlite"
 
 [env.prod-staging]
 name = "your-ad-analysis-worker-prod-staging"
@@ -75,13 +77,13 @@ class_name = "AdAnalysisUsageLimiter"
 name = "AD_ANALYSIS_JOB"
 class_name = "AdAnalysisJob"
 
-[[env.prod-staging.migrations]]
-tag = "v1"
-new_sqlite_classes = ["AdAnalysisUsageLimiter"]
+[env.prod-staging.exports.AdAnalysisUsageLimiter]
+type = "durable-object"
+storage = "sqlite"
 
-[[env.prod-staging.migrations]]
-tag = "v2"
-new_sqlite_classes = ["AdAnalysisJob"]
+[env.prod-staging.exports.AdAnalysisJob]
+type = "durable-object"
+storage = "sqlite"
 
 [env.production]
 name = "your-ad-analysis-worker-production"
@@ -114,10 +116,10 @@ class_name = "AdAnalysisUsageLimiter"
 name = "AD_ANALYSIS_JOB"
 class_name = "AdAnalysisJob"
 
-[[env.production.migrations]]
-tag = "v1"
-new_sqlite_classes = ["AdAnalysisUsageLimiter"]
+[env.production.exports.AdAnalysisUsageLimiter]
+type = "durable-object"
+storage = "sqlite"
 
-[[env.production.migrations]]
-tag = "v2"
-new_sqlite_classes = ["AdAnalysisJob"]
+[env.production.exports.AdAnalysisJob]
+type = "durable-object"
+storage = "sqlite"

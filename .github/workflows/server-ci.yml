@@ -44,6 +44,10 @@ jobs:
             directory: Server/AppAttestCore
             wasm: false
             check_args: ""
+          - name: MP3FrameCore
+            directory: Server/MP3FrameCore
+            wasm: true
+            check_args: ""
           - name: NotificationsWorker
             directory: Server/NotificationsWorker
             wasm: true

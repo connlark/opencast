@@ -6,6 +6,9 @@ final class OpenCastUITests: XCTestCase {
     private static let seededEpisodeRowIdentifier = "episode-row-ui-test-episode-1"
     private static let seededDownloadSelectionRowIdentifier = "download-selection-row-ui-test-episode-1"
     private static let seededCompletedEpisodeRowIdentifier = "episode-row-ui-test-episode-completed"
+    private static let seededQueuedEpisodeRowIdentifiers = (1...3).map {
+        "episode-row-ui-test-queued-episode-\($0)"
+    }
     private static let liveAdAnalysisEpisodeRowIdentifier = "episode-row-audio-illusion-that-proves-we-dont-experience-reality"
     private static let seededSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-feed.xml"
     private static let soundLabTranscriptActionIdentifier = "Now Playing Sound Lab Transcript Action"
@@ -3362,6 +3365,79 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededUpNextQueueSmoke() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let upNextButton = nowPlayingOverlay(in: app).buttons["Up Next"].firstMatch
+        assertNowPlayingControlIsReachable(upNextButton, named: "Up Next control", in: app)
+        upNextButton.tap()
+
+        assertExists(app.navigationBars["Up Next"], named: "Up Next sheet")
+        let rowQueries = Self.seededQueuedEpisodeRowIdentifiers.map {
+            app.buttons.matching(identifier: $0)
+        }
+        let rows = rowQueries.map { query in
+            query.allElementsBoundByIndex.first(where: \.isHittable) ?? query.firstMatch
+        }
+        for (index, query) in rowQueries.enumerated() {
+            XCTAssertGreaterThanOrEqual(
+                query.count,
+                2,
+                "Queued episode \(index + 1) should exist in the Inbox and Up Next sheet."
+            )
+            let row = rows[index]
+            assertExists(row, named: "queued episode \(index + 1)")
+        }
+
+        app.buttons["Edit"].tap()
+        let reorderHandles = app.images.matching(NSPredicate(format: "label == %@", "drag"))
+        XCTAssertEqual(reorderHandles.count, 3, "Every queued row should expose a reorder handle.")
+        let reorderStart = reorderHandles.element(boundBy: 2)
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let reorderEnd = reorderHandles.element(boundBy: 0)
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
+        reorderStart.press(
+            forDuration: 1,
+            thenDragTo: reorderEnd,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.4
+        )
+        let thirdMovedBeforeFirst = NSPredicate { _, _ in
+            rows[0].exists && rows[2].exists && rows[2].frame.midY < rows[0].frame.midY
+        }
+        let reorderExpectation = XCTNSPredicateExpectation(
+            predicate: thirdMovedBeforeFirst,
+            object: app
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [reorderExpectation], timeout: 5),
+            .completed,
+            "Dragging the third queued row should persist its new visible order."
+        )
+        app.buttons["Done"].tap()
+
+        rows[1].swipeLeft()
+        let deleteButton = app.buttons["Delete"].firstMatch
+        assertExists(deleteButton, named: "queued row delete action")
+        deleteButton.tap()
+        let deletedFromQueue = NSPredicate { _, _ in rowQueries[1].count == 1 }
+        let deleteExpectation = XCTNSPredicateExpectation(predicate: deletedFromQueue, object: app)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [deleteExpectation], timeout: 5),
+            .completed,
+            "Deleting from Up Next should remove only the sheet copy of the queued episode."
+        )
+
+        app.buttons["Clear"].tap()
+        let confirmClearButton = app.buttons["Clear Up Next"].firstMatch
+        assertExists(confirmClearButton, named: "clear queue confirmation")
+        confirmClearButton.tap()
+        assertExists(app.staticTexts["Nothing Up Next"], named: "empty Up Next state")
+    }
+
+    @MainActor
     func testSeededNowPlayingAirPlayPickerCanOpen() throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("AirPlay route-picker presentation is a physical-device check; see docs/simulator-limitations.md.")
@@ -3424,6 +3500,7 @@ final class OpenCastUITests: XCTestCase {
         assertNowPlayingControlIsReachable(app.buttons["Playback Speed"], named: "Playback Speed control", in: app)
         assertNowPlayingControlIsReachable(app.buttons["AirPlay"], named: "AirPlay control", in: app)
         assertNowPlayingControlIsReachable(app.buttons["Sleep Timer"], named: "Sleep Timer control", in: app)
+        assertNowPlayingControlIsReachable(app.buttons["Up Next"], named: "Up Next control", in: app)
         assertPlayerUtilityControlHeightsAreBalanced(in: app)
         attachSmokeScreenshot(named: "now_playing_expanded_accessibility_xxxl")
     }
@@ -3477,6 +3554,7 @@ final class OpenCastUITests: XCTestCase {
         seedsVariedArtworkPreviews: Bool = false,
         seedsPerEpisodeVoiceBoost: Bool = false,
         seedsLongShowNotes: Bool = false,
+        seedsUpNextQueue: Bool = false,
         extraFeedCount: Int = 0,
         artworkVariant: String? = nil,
         preferredContentSizeCategoryName: String? = nil
@@ -3557,6 +3635,10 @@ final class OpenCastUITests: XCTestCase {
         }
         if seedsLongShowNotes {
             app.launchEnvironment["OPENCAST_SEED_LONG_SHOW_NOTES"] = "1"
+        }
+        if seedsUpNextQueue {
+            app.launchEnvironment["OPENCAST_SEED_UP_NEXT_QUEUE"] = "1"
+            app.launchEnvironment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] = "600"
         }
         if extraFeedCount > 0 {
             app.launchEnvironment["OPENCAST_SEED_EXTRA_FEED_COUNT"] = String(extraFeedCount)
@@ -4017,6 +4099,18 @@ final class OpenCastUITests: XCTestCase {
         }
         // The shared row menu carries the step-6 actions on every surface.
         assertExists(
+            app.buttons["Play Next"].firstMatch,
+            named: "\(name) Play Next context action",
+            file: file,
+            line: line
+        )
+        assertExists(
+            app.buttons["Play Last"].firstMatch,
+            named: "\(name) Play Last context action",
+            file: file,
+            line: line
+        )
+        assertExists(
             app.buttons["Detect Ads"].firstMatch,
             named: "\(name) Detect Ads context action",
             file: file,
@@ -4050,6 +4144,16 @@ final class OpenCastUITests: XCTestCase {
         let airPlayButtonCount = app.buttons.matching(NSPredicate(format: "label == %@", "AirPlay")).count
         XCTAssertEqual(airPlayButtonCount, 1, "AirPlay should expose one accessible control", file: file, line: line)
         assertExists(app.buttons["Sleep Timer"], named: "Sleep Timer control")
+        let upNextControl = app.buttons["Up Next"].firstMatch
+        assertExists(upNextControl, named: "Up Next control", file: file, line: line)
+        let upNextValue = (upNextControl.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        XCTAssertFalse(
+            upNextValue.isEmpty,
+            "Up Next should expose its queue state as an accessibility value",
+            file: file,
+            line: line
+        )
 
         let routeValue = (airPlayControl.value as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -4072,7 +4176,8 @@ final class OpenCastUITests: XCTestCase {
         let controls = [
             (name: "Playback Speed", element: overlay.buttons["Playback Speed"].firstMatch),
             (name: "AirPlay", element: overlay.buttons["AirPlay"].firstMatch),
-            (name: "Sleep Timer", element: overlay.buttons["Sleep Timer"].firstMatch)
+            (name: "Sleep Timer", element: overlay.buttons["Sleep Timer"].firstMatch),
+            (name: "Up Next", element: overlay.buttons["Up Next"].firstMatch)
         ]
 
         for (name, control) in controls {

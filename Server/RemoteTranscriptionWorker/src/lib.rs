@@ -10,6 +10,7 @@ pub mod eta;
 pub mod job;
 pub mod limiter;
 pub mod media;
+pub mod native_media;
 pub mod origin;
 pub mod result_validation;
 pub mod route;

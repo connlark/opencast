@@ -25,6 +25,15 @@ struct OpenCastRootPresentationModifier: ViewModifier {
                 Text(message)
             }
             .alert(
+                "Up Next Error",
+                isPresented: upNextErrorAlertBinding,
+                presenting: appModel.lastUpNextError
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { message in
+                Text(message)
+            }
+            .alert(
                 "Library Error",
                 isPresented: libraryErrorAlertBinding,
                 presenting: appModel.library.lastErrorMessage
@@ -39,6 +48,13 @@ struct OpenCastRootPresentationModifier: ViewModifier {
         Binding(
             get: { appModel.lastPlaybackError != nil },
             set: { if !$0 { appModel.lastPlaybackError = nil } }
+        )
+    }
+
+    private var upNextErrorAlertBinding: Binding<Bool> {
+        Binding(
+            get: { appModel.lastUpNextError != nil },
+            set: { if !$0 { appModel.lastUpNextError = nil } }
         )
     }
 

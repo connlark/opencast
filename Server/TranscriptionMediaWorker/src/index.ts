@@ -124,7 +124,7 @@ export default {
     // fresh container instead of waiting out a sleepy old instance.
     let response: Response;
     try {
-      response = await getContainer(env.MEDIA_CONTAINER, "media-pass0-9").fetch(
+      response = await getContainer(env.MEDIA_CONTAINER, "media-pass0-10").fetch(
         new Request(url.toString(), {
           method: "POST",
           headers: { "content-type": "application/json" },

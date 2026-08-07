@@ -174,7 +174,7 @@ final class CarPlayInterfaceCoordinator {
         CarPlayNowPlayingActions(
             cycleRate: { [weak self] in self?.cycleRate() },
             toggleVoiceBoost: { [weak self] in self?.toggleVoiceBoost() },
-            showUpNext: { [weak self] in self?.pushInbox() },
+            showUpNext: { [weak self] in self?.pushUpNext() },
             showCurrentShow: { [weak self] in self?.pushCurrentShow() }
         )
     }
@@ -195,7 +195,8 @@ final class CarPlayInterfaceCoordinator {
                 appModel.library.isActivelySubscribed(to: episode.podcastID.rawValue)
             } ?? false,
             isVoiceBoostEnabled: playbackSettings.isVoiceBoostEnabled,
-            canChangeVoiceBoost: playbackSettings.canChangeCurrentEpisodeVoiceBoost
+            canChangeVoiceBoost: playbackSettings.canChangeCurrentEpisodeVoiceBoost,
+            hasQueuedEpisodes: !appModel.upNextQueue.items.isEmpty
         )
     }
 
@@ -367,8 +368,8 @@ final class CarPlayInterfaceCoordinator {
         )
     }
 
-    /// Up Next is the Inbox without its Continue row: the episode that row would
-    /// carry is the screen this list was pushed from.
+    /// The system Up Next affordance historically opened Inbox, which remains
+    /// the useful fallback until the listener has explicitly queued something.
     private func pushInbox() {
         push(
             CarPlayBrowseModelBuilder.inbox(
@@ -377,6 +378,24 @@ final class CarPlayInterfaceCoordinator {
                 currentEpisode: nil,
                 nowPlaying: Self.nowPlayingState(appModel: appModel),
                 isLoading: isHydrating || appModel.library.state == .loading,
+                limits: limits.withoutContinuation
+            ),
+            returnsToNowPlaying: true
+        )
+    }
+
+    private func pushUpNext() {
+        guard !appModel.upNextQueue.items.isEmpty else {
+            pushInbox()
+            return
+        }
+
+        push(
+            CarPlayBrowseModelBuilder.upNext(
+                queueItems: appModel.upNextQueue.items,
+                library: appModel.library,
+                downloadRecords: appModel.downloads.records,
+                nowPlaying: Self.nowPlayingState(appModel: appModel),
                 limits: limits.withoutContinuation
             ),
             returnsToNowPlaying: true

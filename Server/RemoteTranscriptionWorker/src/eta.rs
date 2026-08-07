@@ -1,5 +1,6 @@
 //! Read-only ETA projection from durable job state. The constants are the
-//! July 2026 bakeoff calibration; changing the model or chunk latency means
+//! 2026-08-05 span-read bakeoff calibration (nine dev-lane runs across wave
+//! widths 1/2/4, wave counts 1–13); changing the model or chunk latency means
 //! recalibrating this module and the Worker README together.
 
 use crate::job::{self, JobRecord};
@@ -7,12 +8,18 @@ use crate::types::EstimateStatus;
 
 pub const DELAYED_AFTER_SECONDS: i64 = 30;
 pub const PROBE_AND_RESERVATION_SECONDS: f64 = 4.0;
-pub const AI_WAVE_SECONDS: f64 = 13.0;
+/// Measured wave wall is width-insensitive across the widths production can
+/// serve (two through four lanes measured 26.6 s and 26.7 s mean); a lone
+/// call floors near 19 s but width one is unreachable behind
+/// `chunk_ai_concurrency`, so a single constant carries the model.
+pub const AI_WAVE_SECONDS: f64 = 26.0;
 pub const AI_SCHEDULING_SECONDS: f64 = 2.0;
-pub const CHUNK_PREPARATION_SECONDS_PER_MB: f64 = 0.5;
+/// Native source-walk rate: streamed R2 read + frame walk + hash measured
+/// 4 s + 0.27 s/MB across 9.8–174 MB sources, rounded conservative.
+pub const CHUNK_PREPARATION_SECONDS_PER_MB: f64 = 0.3;
 pub const NORMALIZED_CHUNK_PREPARATION_SECONDS_PER_MB: f64 = 2.0;
 pub const FINALIZATION_BASE_SECONDS: f64 = 2.0;
-pub const FINALIZATION_SECONDS_PER_CHUNK: f64 = 0.5;
+pub const FINALIZATION_SECONDS_PER_CHUNK: f64 = 0.6;
 /// Chained cloud ad detection budget (submit + Gemini + poll), added to
 /// finalization only when the job requested the phase.
 pub const AD_ANALYSIS_PHASE_SECONDS: f64 = 30.0;
@@ -80,8 +87,17 @@ pub fn self_remaining_seconds(record: &JobRecord, chunk_concurrency: u32, now: i
         } else {
             CHUNK_PREPARATION_SECONDS_PER_MB
         };
-    let chunk_preparation_seconds =
-        source_bytes.max(0) as f64 / 1_000_000.0 * preparation_seconds_per_mb;
+    // A stored native plan means chunking is metadata-only: the manifest is
+    // built from the plan with zero R2 I/O, so there is no preparation phase
+    // left to project. Without a plan the bytes-based figure stands in for
+    // the native source walk (during PROBING) or the container chunk pass
+    // (the sha-less fallback). Nothing overlaps AI any more — the overlap
+    // driver is retired — so preparation is sequential with the wave phase.
+    let chunk_preparation_seconds = if record.native_plan.is_some() {
+        0.0
+    } else {
+        source_bytes.max(0) as f64 / 1_000_000.0 * preparation_seconds_per_mb
+    };
     let ad_phase_seconds = if record.ad_analysis_requested {
         AD_ANALYSIS_PHASE_SECONDS
     } else {
@@ -93,19 +109,22 @@ pub fn self_remaining_seconds(record: &JobRecord, chunk_concurrency: u32, now: i
 
     let remaining = match record.state.as_str() {
         job::STATE_SOURCE_MATCHED | job::STATE_PROBING => {
+            // The native walk runs inside PROBING, so its bytes-based budget
+            // counts down together with the probe/reservation floor.
             let elapsed = elapsed_since_first(
                 record,
                 &[job::STATE_SOURCE_MATCHED, job::STATE_PROBING],
                 now,
             );
-            let probe = (PROBE_AND_RESERVATION_SECONDS - elapsed).max(0.0);
-            probe + chunk_preparation_seconds.max(ai_seconds) + finalization_seconds
+            let staged =
+                (PROBE_AND_RESERVATION_SECONDS + chunk_preparation_seconds - elapsed).max(0.0);
+            staged + ai_seconds + finalization_seconds
         }
-        job::STATE_RESERVED => chunk_preparation_seconds.max(ai_seconds) + finalization_seconds,
+        job::STATE_RESERVED => chunk_preparation_seconds + ai_seconds + finalization_seconds,
         job::STATE_CHUNKING => {
             let elapsed = elapsed_since_first(record, &[job::STATE_CHUNKING], now);
             let preparation_remaining = (chunk_preparation_seconds - elapsed).max(0.0);
-            preparation_remaining.max(ai_seconds) + finalization_seconds
+            preparation_remaining + ai_seconds + finalization_seconds
         }
         job::STATE_TRANSCRIBING => ai_seconds + finalization_seconds,
         job::STATE_STITCHING => {
@@ -177,18 +196,23 @@ mod tests {
         record
     }
 
+    /// The 2026-08-05 span-read bakeoff fixtures, projected at PROBING entry
+    /// with their natural wave width. Measured probing->result_ready walls
+    /// were 28, 101, 71, and 430 seconds respectively — the model lands
+    /// within a few seconds on the three larger sources and stays
+    /// conservative on the smallest (its lone wave of three calls ran cheap).
     #[test]
     fn bakeoff_anchors_match_the_calibrated_model() {
         let now = 1_000;
         let anchors = [
-            (885.943, 9_825_356, 23),
-            (2_916.6, 46_990_136, 52),
-            (5_796.8, 93_076_365, 83),
-            (6_978.4, 111_797_868, 98),
+            (885.943, 9_825_356, 4, 39),
+            (3_180.0, 25_447_863, 4, 101),
+            (900.049, 36_001_959, 2, 74),
+            (14_313.326, 174_313_938, 4, 428),
         ];
-        for (duration, bytes, expected) in anchors {
+        for (duration, bytes, width, expected) in anchors {
             let record = record(duration, bytes, job::STATE_PROBING, now);
-            assert_eq!(self_remaining_seconds(&record, 4, now), Some(expected));
+            assert_eq!(self_remaining_seconds(&record, width, now), Some(expected));
         }
     }
 
@@ -197,34 +221,45 @@ mod tests {
         let now = 1_000;
         let mut record = record(2_916.6, 46_990_136, job::STATE_TRANSCRIBING, now);
         record.chunk_work = job::init_chunk_work(10, 0);
-        assert_eq!(self_remaining_seconds(&record, 4, now), Some(48));
-        assert_eq!(self_remaining_seconds(&record, 1, now), Some(139));
+        assert_eq!(self_remaining_seconds(&record, 4, now), Some(88));
+        assert_eq!(self_remaining_seconds(&record, 1, now), Some(270));
 
         for work in record.chunk_work.iter_mut().take(4) {
             work.completed = true;
         }
-        assert_eq!(self_remaining_seconds(&record, 4, now), Some(35));
+        assert_eq!(self_remaining_seconds(&record, 4, now), Some(62));
     }
 
+    /// Without a stored plan (the container fallback), preparation is a
+    /// sequential phase ahead of the waves; its budget counts down against
+    /// CHUNKING elapsed and the AI projection stays whole.
     #[test]
-    fn chunk_preparation_overlaps_ai_and_finalization_counts_down() {
+    fn chunk_preparation_precedes_ai_and_counts_down() {
         let now = 1_000;
         let mut chunking = record(6_978.4, 111_797_868, job::STATE_CHUNKING, now - 40);
         chunking.updated_at = now;
         chunking.chunk_work = job::init_chunk_work(24, 8);
-        assert_eq!(self_remaining_seconds(&chunking, 4, now), Some(68));
+        assert_eq!(self_remaining_seconds(&chunking, 4, now), Some(123));
 
         let mut stitching = record(2_916.6, 46_990_136, job::STATE_STITCHING, now - 3);
         stitching.updated_at = now;
         stitching.chunk_work = job::init_chunk_work(10, 10);
-        assert_eq!(self_remaining_seconds(&stitching, 4, now), Some(4));
+        assert_eq!(self_remaining_seconds(&stitching, 4, now), Some(5));
     }
 
     #[test]
-    fn oversized_stream_copy_projection_accounts_for_normalization() {
+    fn top_bitrate_sources_project_as_stream_copy_at_reduced_width() {
         let now = 1_000;
+        // 320 kbps — the class the container used to normalize chunk by
+        // chunk. Its five-minute chunk now sits inside the raw ceiling, so
+        // preparation projects at the stream-copy rate instead of 4x that,
+        // and the wave runs two chunks wide to bound in-flight audio.
+        let widest_chunk = (164_041_483_f64 / 4_099.004 * job::CHUNK_SECONDS) as i64;
+        assert!(widest_chunk < job::MAX_CHUNK_RAW_BYTES);
+        assert_eq!(job::chunk_ai_concurrency(widest_chunk, 4), 2);
+
         let mut record = record(4_099.004, 164_041_483, job::STATE_PROBING, now);
-        assert_eq!(self_remaining_seconds(&record, 4, now), Some(342));
+        assert_eq!(self_remaining_seconds(&record, 2, now), Some(248));
 
         record.state = job::STATE_CHUNKING.into();
         record.phase_timestamps.clear();
@@ -232,7 +267,37 @@ mod tests {
             .phase_timestamps
             .insert(job::STATE_CHUNKING.into(), now - 240);
         record.chunk_work = job::init_chunk_work(14, 10);
-        assert_eq!(self_remaining_seconds(&record, 4, now), Some(98));
+        assert_eq!(self_remaining_seconds(&record, 2, now), Some(65));
+    }
+
+    fn native_plan() -> crate::native_media::NativePlan {
+        crate::native_media::NativePlan {
+            algorithm_version: crate::native_media::ALGORITHM_VERSION,
+            source_sha256: "a".repeat(64),
+            byte_count: 36_001_959,
+            etag: "etag".into(),
+            canonical_duration_seconds: 900.049,
+            chunks: vec![],
+        }
+    }
+
+    /// A stored native plan means chunking is metadata-only, so the
+    /// projection is exactly `ai + finalization` with no preparation term.
+    #[test]
+    fn a_stored_native_plan_zeroes_chunk_preparation() {
+        let now = 1_000;
+        // 320 kbps, 15 minutes. Without the plan the bytes term stays:
+        // 36 MB x 0.3 + ai (2 + 1 wave x 26) + finalization (2 + 4 x 0.6).
+        let mut reserved = record(900.049, 36_001_959, job::STATE_RESERVED, now);
+        assert_eq!(self_remaining_seconds(&reserved, 4, now), Some(44));
+
+        // With the plan the preparation term drops out entirely.
+        reserved.native_plan = Some(native_plan());
+        assert_eq!(self_remaining_seconds(&reserved, 4, now), Some(33));
+
+        let mut chunking = record(900.049, 36_001_959, job::STATE_CHUNKING, now);
+        chunking.native_plan = Some(native_plan());
+        assert_eq!(self_remaining_seconds(&chunking, 4, now), Some(33));
     }
 
     #[test]
@@ -240,11 +305,11 @@ mod tests {
         let now = 1_000;
         // Flag-off anchors are byte-identical to the calibrated model.
         let baseline = record(885.943, 9_825_356, job::STATE_PROBING, now);
-        assert_eq!(self_remaining_seconds(&baseline, 4, now), Some(23));
+        assert_eq!(self_remaining_seconds(&baseline, 4, now), Some(39));
 
         let mut flagged = record(885.943, 9_825_356, job::STATE_PROBING, now);
         flagged.ad_analysis_requested = true;
-        assert_eq!(self_remaining_seconds(&flagged, 4, now), Some(53));
+        assert_eq!(self_remaining_seconds(&flagged, 4, now), Some(69));
 
         // The new state counts the phase down from its first entry.
         let mut detecting = record(885.943, 9_825_356, job::STATE_DETECTING_ADS, now - 12);
@@ -295,7 +360,7 @@ mod tests {
             last_modified: None,
         });
         record.chunk_work = job::init_chunk_work(4, 0);
-        assert_eq!(self_remaining_seconds(&record, 4, now), Some(19));
+        assert_eq!(self_remaining_seconds(&record, 4, now), Some(33));
     }
 
     #[test]
@@ -318,6 +383,6 @@ mod tests {
         record.queue_wait_seconds = Some(20);
         let queued = project(&record, 4, now).unwrap();
         assert_eq!(queued.status, EstimateStatus::Queued);
-        assert_eq!(queued.remaining_seconds, Some(39));
+        assert_eq!(queued.remaining_seconds, Some(53));
     }
 }

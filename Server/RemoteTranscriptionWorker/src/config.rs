@@ -62,6 +62,9 @@ pub struct AppConfig {
     pub origin_fetch_max_redirects: u32,
     pub origin_fetch_wall_seconds: u64,
     pub poll_after_seconds: u32,
+    /// Containerless MP3 probe/chunk kill switch. Gates new probes only:
+    /// a job that already stored a native plan finishes on it.
+    pub native_chunker_enabled: bool,
     /// Chained cloud ad detection. Fail-safe defaults: disabled ⇒ jobs that
     /// requested the phase finalize immediately with the
     /// `ad_analysis_unavailable` marker — the transcript is never blocked.
@@ -136,7 +139,7 @@ impl AppConfig {
             max_chunk_attempts: int_var(env, "MAX_CHUNK_ATTEMPTS", 3) as u32,
             chunk_ai_concurrency,
             global_inference_concurrency,
-            queue_default_remaining_seconds: int_var(env, "QUEUE_DEFAULT_REMAINING_SECONDS", 64)
+            queue_default_remaining_seconds: int_var(env, "QUEUE_DEFAULT_REMAINING_SECONDS", 90)
                 .clamp(1, i64::from(u32::MAX)) as u32,
             daily_spend_cap_usd_micro: int_var(env, "DAILY_SPEND_CAP_USD_MICRO", 1_000_000),
             waiting_for_device_source_deadline_seconds: int_var(
@@ -175,6 +178,9 @@ impl AppConfig {
             origin_fetch_max_redirects: int_var(env, "ORIGIN_FETCH_MAX_REDIRECTS", 5) as u32,
             origin_fetch_wall_seconds: int_var(env, "ORIGIN_FETCH_WALL_SECONDS", 900) as u64,
             poll_after_seconds: int_var(env, "POLL_AFTER_SECONDS", 5) as u32,
+            native_chunker_enabled: optional_var(env, "NATIVE_CHUNKER_ENABLED")
+                .map(|value| value == "true")
+                .unwrap_or(false),
             ad_analysis_enabled: optional_var(env, "AD_ANALYSIS_ENABLED")
                 .map(|value| value == "true")
                 .unwrap_or(false),
