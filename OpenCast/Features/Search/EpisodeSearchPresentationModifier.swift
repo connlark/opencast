@@ -6,6 +6,7 @@ struct EpisodeSearchPresentationModifier: ViewModifier {
     @Binding var searchQuery: String
     @Binding var isSearchPresented: Bool
     @Binding var searchMode: EpisodeSearchMode
+    var isFullTextSearchAvailable = true
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -17,7 +18,9 @@ struct EpisodeSearchPresentationModifier: ViewModifier {
                     prompt: prompt
                 )
                 .searchScopes($searchMode) {
-                    EpisodeSearchScopePicker()
+                    EpisodeSearchScopePicker(
+                        isFullTextAvailable: isFullTextSearchAvailable
+                    )
                 }
         } else {
             content

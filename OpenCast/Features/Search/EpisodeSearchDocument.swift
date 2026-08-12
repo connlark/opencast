@@ -1,6 +1,6 @@
 import Foundation
 
-struct EpisodeSearchDocument: Sendable {
+nonisolated struct EpisodeSearchDocument: Sendable {
     let episodeID: String
     let sourceIndex: Int
     let title: String

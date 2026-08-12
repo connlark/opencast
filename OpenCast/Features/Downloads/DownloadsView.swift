@@ -89,6 +89,9 @@ struct DownloadsView: View {
             if !model.downloaded.isEmpty || hasSearchQuery {
                 Section("Downloaded") {
                     if hasSearchQuery {
+                        if searchSession.isIndexedSearchUnavailable {
+                            SearchIndexUpdatingIndicator(mode: searchMode)
+                        }
                         EpisodeSearchResultsContent(
                             mode: searchMode,
                             isLoadingVisible: searchSession.isLoadingVisible,
@@ -177,7 +180,8 @@ struct DownloadsView: View {
                 prompt: "Downloaded episodes",
                 searchQuery: $searchQuery,
                 isSearchPresented: $isSearchPresented,
-                searchMode: $searchMode
+                searchMode: $searchMode,
+                isFullTextSearchAvailable: !searchSession.isIndexedSearchUnavailable
             )
         )
         .onChange(of: isSearchPresented) { _, isPresented in
@@ -202,10 +206,26 @@ struct DownloadsView: View {
         }
         .task(id: searchTaskKey) {
             let library = appModel.library
+            // Downloads survive an unsubscribe as orphans, but the derived
+            // index is scoped to active podcasts and their cache rows; feed
+            // orphans to the session so they stay findable in this list.
+            let orphanedEpisodes = downloadedEpisodes.filter {
+                !library.isActivelySubscribed(to: $0.podcastID)
+            }
             await searchSession.update(
                 episodes: downloadedEpisodes,
                 query: searchQuery,
                 mode: searchMode,
+                unindexedEpisodes: orphanedEpisodes,
+                indexedSearchProvider: {
+                    await library.searchEpisodes(
+                        query: searchQuery,
+                        mode: searchMode,
+                        allowedEpisodeIDs: Set(
+                            downloadedEpisodes.map(\.episodeID)
+                        )
+                    )
+                },
                 showNotesProvider: { await library.showNotesHTMLByEpisodeID() }
             )
         }

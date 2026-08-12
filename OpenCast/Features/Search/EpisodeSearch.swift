@@ -109,6 +109,38 @@ enum EpisodeSearch {
         }
     }
 
+    static func results(
+        from indexedHits: [EpisodeSearchIndexHit],
+        episodesByID: [String: EpisodeListItemSnapshot]
+    ) -> [EpisodeSearchResult] {
+        indexedHits.compactMap { hit in
+            guard let episode = episodesByID[hit.episodeID] else {
+                return nil
+            }
+            let snippet: AttributedString? = hit.snippet.map {
+                highlightedText(
+                    $0,
+                    terms: hit.snippetHighlightTerms,
+                    baseForegroundColor: .secondary
+                )
+            }
+            return EpisodeSearchResult(
+                episode: episode,
+                highlightedTitle: highlightedText(
+                    episode.title,
+                    terms: hit.titleHighlightTerms
+                ),
+                highlightedPodcastTitle: highlightedText(
+                    episode.podcastTitle,
+                    terms: hit.podcastTitleHighlightTerms,
+                    baseForegroundColor: .secondary
+                ),
+                snippet: snippet,
+                transcriptStartTime: hit.transcriptStartTime
+            )
+        }
+    }
+
     private nonisolated static func matchesSynchronously(
         in documents: [EpisodeSearchDocument],
         query: String,

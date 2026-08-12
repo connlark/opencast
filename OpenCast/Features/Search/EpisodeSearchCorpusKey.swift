@@ -7,17 +7,26 @@ nonisolated struct EpisodeSearchCorpusKey: Equatable, Sendable {
     let newestEpisodeID: String?
     let oldestEpisodeID: String?
     let latestCachedAt: Date?
+    let sourceRevision: Int?
 
-    init(episodes: [EpisodeListItemSnapshot]) {
+    init(
+        episodes: [EpisodeListItemSnapshot],
+        sourceRevision: Int? = nil
+    ) {
         episodeCount = episodes.count
         newestEpisodeID = episodes.first?.episodeID
         oldestEpisodeID = episodes.last?.episodeID
-        latestCachedAt = episodes.reduce(nil) { latestCachedAt, episode in
-            guard let latestCachedAt else {
-                return episode.cachedAt
-            }
+        self.sourceRevision = sourceRevision
+        if sourceRevision == nil {
+            latestCachedAt = episodes.reduce(nil) { latestCachedAt, episode in
+                guard let latestCachedAt else {
+                    return episode.cachedAt
+                }
 
-            return max(latestCachedAt, episode.cachedAt)
+                return max(latestCachedAt, episode.cachedAt)
+            }
+        } else {
+            latestCachedAt = nil
         }
     }
 }

@@ -10,11 +10,31 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     private nonisolated static let legacyImportCompleteKey = "legacy_swiftdata_import_complete"
 
     private let databaseURL: URL?
+    private let episodeSearchRebuildBatchSize: Int
     private var connection: OpaquePointer?
+    private var episodeSearchIndexState = EpisodeSearchIndexState.unknown
+    private var hasValidatedEpisodeSearchIndex = false
+    private var episodeSearchIndexRebuildHandler: (@MainActor @Sendable () -> Void)?
+
+    private enum EpisodeSearchIndexState {
+        case unknown
+        case needsRebuild
+        case rebuilding
+        case ready
+        case unavailable
+    }
 
     /// - Parameter databaseURL: `nil` opens a private in-memory database.
-    init(databaseURL: URL?) {
+    init(
+        databaseURL: URL?,
+        episodeSearchRebuildBatchSize: Int =
+            SQLiteEpisodeSearchIndex.rebuildBatchSize
+    ) {
         self.databaseURL = databaseURL
+        self.episodeSearchRebuildBatchSize = max(
+            episodeSearchRebuildBatchSize,
+            1
+        )
     }
 
     isolated deinit {
@@ -203,6 +223,149 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         return showNotesByEpisodeID
     }
 
+    func prepareEpisodeSearchIndex() async throws {
+        let db = try database()
+        guard episodeSearchIndexState != .unavailable else {
+            throw EpisodeSearchIndexError.unavailable
+        }
+        guard episodeSearchIndexState != .rebuilding else {
+            return
+        }
+
+        if episodeSearchIndexState == .ready,
+           hasValidatedEpisodeSearchIndex {
+            return
+        }
+        if episodeSearchIndexState == .ready,
+           try SQLiteEpisodeSearchIndex.isConsistent(in: db) {
+            hasValidatedEpisodeSearchIndex = true
+            return
+        }
+
+        episodeSearchIndexState = .rebuilding
+        hasValidatedEpisodeSearchIndex = false
+        do {
+            try inTransaction("episode search rebuild start") { db in
+                try SQLiteEpisodeSearchIndex.markNeedsRebuild(in: db)
+                try SQLiteEpisodeSearchIndex.clear(in: db)
+            }
+
+            var finalEpisodeID: String?
+            while true {
+                try Task.checkCancellation()
+                let batch = try SQLiteEpisodeSearchIndex.rebuildBatch(
+                    after: finalEpisodeID,
+                    limit: episodeSearchRebuildBatchSize,
+                    in: db
+                )
+                guard !batch.isEmpty else {
+                    break
+                }
+                try inTransaction("episode search rebuild batch") { db in
+                    try SQLiteEpisodeSearchIndex.replace(batch, in: db)
+                }
+                finalEpisodeID = batch.last?.episodeID
+                await Task.yield()
+            }
+
+            try inTransaction("episode search rebuild finish") { db in
+                guard try SQLiteEpisodeSearchIndex.isConsistent(in: db) else {
+                    throw EpisodeSearchIndexError.invalidSchema
+                }
+                try SQLiteEpisodeSearchIndex.markReady(in: db)
+            }
+            episodeSearchIndexState = .ready
+            hasValidatedEpisodeSearchIndex = true
+            notifyEpisodeSearchIndexRebuilt()
+        } catch {
+            episodeSearchIndexState = .needsRebuild
+            try? SQLiteEpisodeSearchIndex.markNeedsRebuild(in: db)
+            throw error
+        }
+    }
+
+    func setEpisodeSearchIndexRebuildHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) {
+        episodeSearchIndexRebuildHandler = handler
+    }
+
+    /// The rebuild paths clear the transcript FTS and segment tables but can
+    /// repopulate only canonical `episode_cache` metadata. Notify the
+    /// transcript owner so its documents converge without a relaunch.
+    private func notifyEpisodeSearchIndexRebuilt() {
+        guard let handler = episodeSearchIndexRebuildHandler else {
+            return
+        }
+        Task {
+            await handler()
+        }
+    }
+
+    func searchEpisodes(
+        _ request: EpisodeSearchIndexRequest
+    ) async throws -> [EpisodeSearchIndexHit] {
+        let db = try database()
+        switch episodeSearchIndexState {
+        case .ready:
+            guard hasValidatedEpisodeSearchIndex else {
+                throw EpisodeSearchIndexError.notReady("validating")
+            }
+        case .rebuilding:
+            throw EpisodeSearchIndexError.rebuilding
+        case .unknown:
+            throw EpisodeSearchIndexError.notReady("unknown")
+        case .needsRebuild:
+            throw EpisodeSearchIndexError.notReady("needsRebuild")
+        case .unavailable:
+            throw EpisodeSearchIndexError.unavailable
+        }
+
+        do {
+            return try SQLiteEpisodeSearchIndex.search(request, in: db)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            episodeSearchIndexState = .needsRebuild
+            hasValidatedEpisodeSearchIndex = false
+            try? SQLiteEpisodeSearchIndex.markNeedsRebuild(in: db)
+            throw error
+        }
+    }
+
+    func replaceEpisodeTranscriptSearchDocument(
+        _ document: EpisodeSearchTranscriptDocument
+    ) async throws {
+        _ = try writableEpisodeSearchIndexDatabase()
+        try inTransaction("episode transcript search replace") { db in
+            try SQLiteEpisodeSearchIndex.replaceTranscript(document, in: db)
+        }
+    }
+
+    func removeEpisodeTranscriptSearchDocument(
+        episodeID: String
+    ) async throws {
+        _ = try writableEpisodeSearchIndexDatabase()
+        try inTransaction("episode transcript search delete") { db in
+            try SQLiteEpisodeSearchIndex.deleteTranscript(
+                episodeID: episodeID,
+                in: db
+            )
+        }
+    }
+
+    func reconcileEpisodeTranscriptSearchDocuments(
+        retaining episodeIDs: Set<String>
+    ) async throws {
+        _ = try writableEpisodeSearchIndexDatabase()
+        try inTransaction("episode transcript search reconcile") { db in
+            try SQLiteEpisodeSearchIndex.removeTranscripts(
+                except: episodeIDs,
+                in: db
+            )
+        }
+    }
+
     func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) throws {
         try inTransaction("feed upsert") { db in
             let operation = "feed upsert"
@@ -313,6 +476,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 sqlite3_finalize(episodePreviewClear)
             }
 
+            var changedSearchDocuments: [SQLiteEpisodeSearchDocument] = []
             for episode in snapshot.episodes {
                 let artworkURL = episode.artworkURL?.absoluteString
                 try bind(episode.id.rawValue, at: 1, statement: episodeUpsert, db: db, operation: operation)
@@ -328,12 +492,33 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 try bind(episode.guid, at: 11, statement: episodeUpsert, db: db, operation: operation)
                 try bind(refreshedAt, at: 12, statement: episodeUpsert, db: db, operation: operation)
                 try step(episodeUpsert, operation: operation, db: db)
+                let didChangeSearchableContent = sqlite3_changes(db) > 0
                 try reset(episodeUpsert, operation: operation, db: db)
+
+                if didChangeSearchableContent {
+                    changedSearchDocuments.append(
+                        SQLiteEpisodeSearchDocument(
+                            episodeID: episode.id.rawValue,
+                            podcastID: episode.podcastID.rawValue,
+                            title: episode.title,
+                            podcastTitle: episode.podcastTitle,
+                            summaryHTML: episode.summary,
+                            showNotesHTML: episode.showNotesHTML
+                        )
+                    )
+                }
 
                 try bind(episode.id.rawValue, at: 1, statement: episodePreviewClear, db: db, operation: operation)
                 try bind(ArtworkPreview.canonicalArtworkURLKey(for: artworkURL), at: 2, statement: episodePreviewClear, db: db, operation: operation)
                 try step(episodePreviewClear, operation: operation, db: db)
                 try reset(episodePreviewClear, operation: operation, db: db)
+            }
+
+            _ = maintainEpisodeSearchIndex(in: db) {
+                try SQLiteEpisodeSearchIndex.replace(
+                    changedSearchDocuments,
+                    in: db
+                )
             }
         }
     }
@@ -475,14 +660,21 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         guard !episodeIDs.isEmpty else {
             return
         }
-        let operation = "episode delete"
-        let db = try database()
-        try run(
-            "DELETE FROM episode_cache WHERE episode_id IN (SELECT value FROM json_each(?))",
-            operation: operation,
-            db: db
-        ) { statement in
-            try bind(jsonArray(episodeIDs), at: 1, statement: statement, db: db, operation: operation)
+        try inTransaction("episode delete") { db in
+            let operation = "episode delete"
+            _ = maintainEpisodeSearchIndex(in: db) {
+                try SQLiteEpisodeSearchIndex.deleteEpisodes(
+                    episodeIDs: episodeIDs,
+                    in: db
+                )
+            }
+            try run(
+                "DELETE FROM episode_cache WHERE episode_id IN (SELECT value FROM json_each(?))",
+                operation: operation,
+                db: db
+            ) { statement in
+                try bind(jsonArray(episodeIDs), at: 1, statement: statement, db: db, operation: operation)
+            }
         }
     }
 
@@ -545,6 +737,12 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     func deleteCache(forPodcastID podcastID: String) throws {
         try inTransaction("feed cache delete") { db in
             let operation = "feed cache delete"
+            _ = maintainEpisodeSearchIndex(in: db) {
+                try SQLiteEpisodeSearchIndex.deletePodcast(
+                    podcastID: podcastID,
+                    in: db
+                )
+            }
             try run("DELETE FROM episode_cache WHERE podcast_id = ?", operation: operation, db: db) { statement in
                 try bind(podcastID, at: 1, statement: statement, db: db, operation: operation)
             }
@@ -562,6 +760,18 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             try exec("DELETE FROM episode_cache", operation: "local cache delete", db: db)
             try exec("DELETE FROM podcast_cache", operation: "local cache delete", db: db)
             try exec("DELETE FROM refresh_log", operation: "local cache delete", db: db)
+            let didClearSearchIndex = maintainEpisodeSearchIndex(
+                in: db,
+                allowWhenNotReady: true
+            ) {
+                try SQLiteEpisodeSearchIndex.clear(in: db)
+                try SQLiteEpisodeSearchIndex.markReady(in: db)
+            }
+            if didClearSearchIndex {
+                episodeSearchIndexState = .ready
+                hasValidatedEpisodeSearchIndex = true
+                notifyEpisodeSearchIndexRebuilt()
+            }
         }
     }
 
@@ -571,9 +781,31 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         Int(sqlite3_total_changes64(try database()))
     }
 
+    func checkpointForSearchBenchmark() throws {
+        try exec(
+            "PRAGMA wal_checkpoint(TRUNCATE)",
+            operation: "search benchmark checkpoint",
+            db: database()
+        )
+    }
+
     /// Current PRAGMA user_version. Test hook for the versioned migrations.
     func currentSchemaVersion() throws -> Int {
         try schemaVersion(db: try database())
+    }
+
+    /// Current derived-search lifecycle state. Test hook for rebuild/fallback
+    /// transition assertions.
+    func episodeSearchIndexStateDescription() throws -> String {
+        _ = try database()
+        return switch episodeSearchIndexState {
+        case .unknown: "unknown"
+        case .needsRebuild: "needsRebuild"
+        case .rebuilding: "rebuilding"
+        case .ready:
+            hasValidatedEpisodeSearchIndex ? "ready" : "validating"
+        case .unavailable: "unavailable"
+        }
     }
 
     private func schemaVersion(db: OpaquePointer) throws -> Int {
@@ -651,6 +883,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             defer {
                 sqlite3_finalize(episodeInsert)
             }
+            var changedSearchDocuments: [SQLiteEpisodeSearchDocument] = []
             for episode in episodes {
                 let listItem = episode.listItem
                 try bind(listItem.episodeID, at: 1, statement: episodeInsert, db: db, operation: operation)
@@ -667,7 +900,26 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 try bind(listItem.guid, at: 17, statement: episodeInsert, db: db, operation: operation)
                 try bind(listItem.cachedAt, at: 18, statement: episodeInsert, db: db, operation: operation)
                 try step(episodeInsert, operation: operation, db: db)
+                let didInsert = sqlite3_changes(db) > 0
                 try reset(episodeInsert, operation: operation, db: db)
+                if didInsert {
+                    changedSearchDocuments.append(
+                        SQLiteEpisodeSearchDocument(
+                            episodeID: listItem.episodeID,
+                            podcastID: listItem.podcastID,
+                            title: listItem.title,
+                            podcastTitle: listItem.podcastTitle,
+                            summaryHTML: listItem.summary,
+                            showNotesHTML: episode.showNotesHTML
+                        )
+                    )
+                }
+            }
+            _ = maintainEpisodeSearchIndex(in: db) {
+                try SQLiteEpisodeSearchIndex.replace(
+                    changedSearchDocuments,
+                    in: db
+                )
             }
 
             let logInsert = try prepare(
@@ -755,6 +1007,29 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 try? exec("ALTER TABLE podcast_cache ADD COLUMN last_modified TEXT", operation: "schema migration", db: handle)
                 try? exec("ALTER TABLE podcast_cache ADD COLUMN body_hash TEXT", operation: "schema migration", db: handle)
                 try exec("PRAGMA user_version = 1", operation: "schema migration", db: handle)
+            }
+
+            // The search index is rebuildable derived data. An unavailable
+            // FTS module must not prevent the canonical cache from opening;
+            // search will use the legacy fallback and retry on next launch.
+            do {
+                try SQLiteEpisodeSearchIndex.ensureSchema(in: handle)
+                if try schemaVersion(db: handle) < SQLiteEpisodeSearchIndex.schemaVersion {
+                    try exec(
+                        "PRAGMA user_version = \(SQLiteEpisodeSearchIndex.schemaVersion)",
+                        operation: "episode search schema migration",
+                        db: handle
+                    )
+                }
+                let storedVersion = try SQLiteEpisodeSearchIndex.storedContentVersion(
+                    in: handle
+                )
+                episodeSearchIndexState = storedVersion
+                    == SQLiteEpisodeSearchIndex.contentVersion
+                    ? .ready
+                    : .needsRebuild
+            } catch {
+                episodeSearchIndexState = .unavailable
             }
         } catch {
             sqlite3_close_v2(handle)
@@ -913,10 +1188,6 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
 
     // MARK: - SQLite plumbing
 
-    private var transientDestructor: sqlite3_destructor_type {
-        unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-    }
-
     private func inTransaction<Result>(
         _ operation: String,
         _ body: (OpaquePointer) throws -> Result
@@ -933,18 +1204,57 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         }
     }
 
-    private func exec(_ sql: String, operation: String, db: OpaquePointer) throws {
-        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
-            throw errorFromDatabase(operation: operation, db: db)
+    @discardableResult
+    private func writableEpisodeSearchIndexDatabase() throws -> OpaquePointer {
+        let db = try database()
+        switch episodeSearchIndexState {
+        case .ready where hasValidatedEpisodeSearchIndex:
+            return db
+        case .rebuilding:
+            return db
+        case .ready:
+            throw EpisodeSearchIndexError.notReady("validating")
+        case .unknown:
+            throw EpisodeSearchIndexError.notReady("unknown")
+        case .needsRebuild:
+            throw EpisodeSearchIndexError.notReady("needsRebuild")
+        case .unavailable:
+            throw EpisodeSearchIndexError.unavailable
         }
     }
 
-    private func prepare(_ sql: String, operation: String, db: OpaquePointer) throws -> OpaquePointer {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            throw errorFromDatabase(operation: operation, db: db)
+    private func maintainEpisodeSearchIndex(
+        in db: OpaquePointer,
+        allowWhenNotReady: Bool = false,
+        _ update: () throws -> Void
+    ) -> Bool {
+        guard episodeSearchIndexState != .unavailable else {
+            return false
         }
-        return statement
+        guard allowWhenNotReady
+                || (episodeSearchIndexState == .ready
+                    && hasValidatedEpisodeSearchIndex)
+                || episodeSearchIndexState == .rebuilding
+        else {
+            return false
+        }
+        do {
+            try update()
+            return true
+        } catch {
+            episodeSearchIndexState = .needsRebuild
+            hasValidatedEpisodeSearchIndex = false
+            try? SQLiteEpisodeSearchIndex.markNeedsRebuild(in: db)
+            return false
+        }
+    }
+
+    private func exec(_ sql: String, operation: String, db: OpaquePointer) throws {
+        try LocalCacheSQLite.execute(sql, operation: operation, db: db)
+    }
+
+    private func prepare(_ sql: String, operation: String, db: OpaquePointer) throws -> OpaquePointer {
+        try LocalCacheSQLite.prepare(sql, operation: operation, db: db)
     }
 
     private func run(
@@ -953,12 +1263,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         db: OpaquePointer,
         bindings: (OpaquePointer) throws -> Void
     ) throws {
-        let statement = try prepare(sql, operation: operation, db: db)
-        defer {
-            sqlite3_finalize(statement)
-        }
-        try bindings(statement)
-        try step(statement, operation: operation, db: db)
+        try LocalCacheSQLite.run(sql, operation: operation, db: db, bindings: bindings)
     }
 
     private func query(
@@ -968,42 +1273,23 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         bindings: (OpaquePointer) throws -> Void = { _ in },
         row: (OpaquePointer) throws -> Void
     ) throws {
-        let statement = try prepare(sql, operation: operation, db: db)
-        defer {
-            sqlite3_finalize(statement)
-        }
-        try bindings(statement)
-        while true {
-            let code = sqlite3_step(statement)
-            if code == SQLITE_ROW {
-                try row(statement)
-            } else if code == SQLITE_DONE {
-                return
-            } else {
-                throw errorFromDatabase(operation: operation, db: db)
-            }
-        }
+        try LocalCacheSQLite.query(sql, operation: operation, db: db, bindings: bindings, row: row)
     }
 
     private func step(_ statement: OpaquePointer, operation: String, db: OpaquePointer) throws {
-        let code = sqlite3_step(statement)
-        guard code == SQLITE_DONE || code == SQLITE_ROW else {
-            throw errorFromDatabase(operation: operation, db: db)
-        }
+        try LocalCacheSQLite.step(statement, operation: operation, db: db)
     }
 
     private func reset(_ statement: OpaquePointer, operation: String, db: OpaquePointer) throws {
-        guard sqlite3_reset(statement) == SQLITE_OK, sqlite3_clear_bindings(statement) == SQLITE_OK else {
-            throw errorFromDatabase(operation: operation, db: db)
-        }
+        try LocalCacheSQLite.reset(statement, operation: operation, db: db)
     }
 
     private func errorFromDatabase(operation: String, db: OpaquePointer) -> LocalLibraryCacheStoreError {
-        LocalLibraryCacheStoreError(operation: operation, message: String(cString: sqlite3_errmsg(db)))
+        LocalCacheSQLite.error(operation: operation, db: db)
     }
 
     private func jsonArray(_ values: some Collection<String>) throws -> String {
-        String(decoding: try JSONEncoder().encode(values.sorted()), as: UTF8.self)
+        try LocalCacheSQLite.jsonArray(values)
     }
 
     // MARK: - Binding
@@ -1015,14 +1301,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         db: OpaquePointer,
         operation: String
     ) throws {
-        let code = if let value {
-            sqlite3_bind_text(statement, index, value, -1, transientDestructor)
-        } else {
-            sqlite3_bind_null(statement, index)
-        }
-        guard code == SQLITE_OK else {
-            throw errorFromDatabase(operation: operation, db: db)
-        }
+        try LocalCacheSQLite.bind(value, at: index, statement: statement, db: db, operation: operation)
     }
 
     private func bind(
@@ -1042,14 +1321,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         db: OpaquePointer,
         operation: String
     ) throws {
-        let code = if let value {
-            sqlite3_bind_double(statement, index, value)
-        } else {
-            sqlite3_bind_null(statement, index)
-        }
-        guard code == SQLITE_OK else {
-            throw errorFromDatabase(operation: operation, db: db)
-        }
+        try LocalCacheSQLite.bind(value, at: index, statement: statement, db: db, operation: operation)
     }
 
     private func bind(
@@ -1059,14 +1331,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         db: OpaquePointer,
         operation: String
     ) throws {
-        let code = if let value {
-            sqlite3_bind_int64(statement, index, Int64(value))
-        } else {
-            sqlite3_bind_null(statement, index)
-        }
-        guard code == SQLITE_OK else {
-            throw errorFromDatabase(operation: operation, db: db)
-        }
+        try LocalCacheSQLite.bind(value, at: index, statement: statement, db: db, operation: operation)
     }
 
     private func bind(
@@ -1076,16 +1341,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         db: OpaquePointer,
         operation: String
     ) throws {
-        let code = if let value {
-            value.withUnsafeBytes { bytes in
-                sqlite3_bind_blob(statement, index, bytes.baseAddress, Int32(bytes.count), transientDestructor)
-            }
-        } else {
-            sqlite3_bind_null(statement, index)
-        }
-        guard code == SQLITE_OK else {
-            throw errorFromDatabase(operation: operation, db: db)
-        }
+        try LocalCacheSQLite.bind(value, at: index, statement: statement, db: db, operation: operation)
     }
 
     /// Binds the six artwork preview columns starting at column 1.
@@ -1117,17 +1373,11 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     // MARK: - Column reading
 
     private func columnText(_ statement: OpaquePointer, _ index: Int32) -> String? {
-        guard let text = sqlite3_column_text(statement, index) else {
-            return nil
-        }
-        return String(cString: text)
+        LocalCacheSQLite.columnText(statement, index)
     }
 
     private func columnDouble(_ statement: OpaquePointer, _ index: Int32) -> Double? {
-        guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
-            return nil
-        }
-        return sqlite3_column_double(statement, index)
+        LocalCacheSQLite.columnDouble(statement, index)
     }
 
     private func columnDate(_ statement: OpaquePointer, _ index: Int32) -> Date? {
@@ -1135,19 +1385,10 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     }
 
     private func columnInt(_ statement: OpaquePointer, _ index: Int32) -> Int? {
-        guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
-            return nil
-        }
-        return Int(sqlite3_column_int64(statement, index))
+        LocalCacheSQLite.columnInt(statement, index)
     }
 
     private func columnData(_ statement: OpaquePointer, _ index: Int32) -> Data? {
-        guard sqlite3_column_type(statement, index) != SQLITE_NULL else {
-            return nil
-        }
-        guard let bytes = sqlite3_column_blob(statement, index) else {
-            return Data()
-        }
-        return Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, index)))
+        LocalCacheSQLite.columnData(statement, index)
     }
 }

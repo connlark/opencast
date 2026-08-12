@@ -26,6 +26,10 @@ struct OpenCastRootView: View {
     @State private var emptyImportPollingTask: Task<Void, Never>?
     @State private var importedSubscriptionsNotificationDismissalTask: Task<Void, Never>?
     @State private var hasStartedTranscriptionBenchmark = false
+    @State private var hasStartedSearchBenchmark = false
+    @State private var hasStartedSearchPerformance = false
+    @State private var hasStartedSearchEvaluation = false
+    @State private var hasStartedSearchColdStartSeed = false
     @State private var hasStartedUITestAutoPlay = false
     #if DEBUG
     @State private var hasStartedTranscriptionProof = false
@@ -94,6 +98,22 @@ struct OpenCastRootView: View {
         }
         .task {
             await runTranscriptionBenchmarkIfRequested()
+        }
+        .task {
+            await runSearchBenchmarkIfRequested()
+        }
+        .task {
+            await runSearchPerformanceIfRequested()
+        }
+        .task {
+            await runSearchEvaluationIfRequested()
+        }
+        .task {
+            guard !hasStartedSearchColdStartSeed else { return }
+            hasStartedSearchColdStartSeed = true
+            await SearchColdStartProbe.seedIfRequested(
+                store: appModel.library.localCache
+            )
         }
         .task {
             await runUITestAutoPlayIfRequested()
@@ -166,6 +186,7 @@ struct OpenCastRootView: View {
         appModel.restorePlaybackSurfaceIfNeeded(modelContext: modelContext)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         isInitialSetupComplete = true
+        SearchColdStartProbe.recordFirstUsableIfRequested()
         initialSetupGate.complete()
         await appModel.refreshLibraryIfStale(modelContext: modelContext)
         appModel.cacheController.pruneIfNeeded()
@@ -251,6 +272,33 @@ struct OpenCastRootView: View {
 
         hasStartedTranscriptionBenchmark = true
         await TranscriptionBenchmarkRunner.runIfRequested()
+    }
+
+    private func runSearchBenchmarkIfRequested() async {
+        guard !hasStartedSearchBenchmark else {
+            return
+        }
+
+        hasStartedSearchBenchmark = true
+        await SearchBenchmarkRunner.runIfRequested()
+    }
+
+    private func runSearchPerformanceIfRequested() async {
+        guard !hasStartedSearchPerformance else {
+            return
+        }
+
+        hasStartedSearchPerformance = true
+        await SearchPerformanceRunner.runIfRequested()
+    }
+
+    private func runSearchEvaluationIfRequested() async {
+        guard !hasStartedSearchEvaluation else {
+            return
+        }
+
+        hasStartedSearchEvaluation = true
+        await SearchEvaluationRunner.runIfRequested()
     }
 
     private func runUITestAutoPlayIfRequested() async {

@@ -91,11 +91,15 @@ final class LibraryStore {
     @ObservationIgnored private var reloadGeneration = 0
     @ObservationIgnored private var episodeIndexByID: [String: Int] = [:]
     @ObservationIgnored private var episodeIndicesByPodcastID: [String: [Int]] = [:]
+    /// O(1) search-session invalidation token. Every publication that changes
+    /// `episodes` rebuilds the lookup indexes and advances this revision.
+    private(set) var episodeSearchCorpusRevision = 0
     // Existing rows observe their SwiftData model directly. This revision is
     // reserved for index membership changes and out-of-band store reloads.
     private var progressIndexRevision = 0
     @ObservationIgnored private var progressIndex = EpisodeProgressIndex()
     @ObservationIgnored var pendingCacheWriteTask: Task<Void, Never>?
+    @ObservationIgnored private var episodeSearchIndexPreparationTask: Task<Void, Never>?
     // Resolved artwork previews live beside `episodes`, not inside it: writing
     // episodes[index] republishes the whole array and re-diffs every List that
     // reads it — once per newly realized row during a scroll.
@@ -570,6 +574,8 @@ final class LibraryStore {
     func prepareForDataNuke() {
         writeGeneration += 1
         reloadGeneration += 1
+        episodeSearchIndexPreparationTask?.cancel()
+        episodeSearchIndexPreparationTask = nil
         clearAllRefreshMarkers()
     }
 
@@ -633,6 +639,38 @@ final class LibraryStore {
             return try await localCache.showNotesHTMLByEpisodeID(activePodcastIDs: scopedPodcastIDs)
         } catch {
             lastErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func searchEpisodes(
+        query: String,
+        mode: EpisodeSearchMode,
+        forPodcastID podcastID: String? = nil,
+        allowedEpisodeIDs: Set<String>? = nil
+    ) async -> [EpisodeSearchIndexHit]? {
+        let scopedPodcastIDs: Set<String>
+        if let podcastID {
+            scopedPodcastIDs = activePodcastIDs.contains(podcastID)
+                ? [podcastID]
+                : []
+        } else {
+            scopedPodcastIDs = activePodcastIDs
+        }
+        let request = EpisodeSearchIndexRequest(
+            query: query,
+            mode: mode,
+            activePodcastIDs: scopedPodcastIDs,
+            allowedEpisodeIDs: allowedEpisodeIDs
+        )
+        do {
+            return try await localCache.searchEpisodes(request)
+        } catch {
+            // Cancellation, an unready index, and store failures all share
+            // the nil path: this index is disposable derived data, so the
+            // session falls back to the established matcher and preparation
+            // rebuilds after the cache republishes instead of surfacing an
+            // unrelated library error banner.
             return nil
         }
     }
@@ -1322,6 +1360,28 @@ final class LibraryStore {
         refreshLogs = cacheSnapshot.refreshLogs
         rebuildEpisodeIndexes()
         rebuildLatestRefreshLogByFeedURL()
+        prepareEpisodeSearchIndexIfNeeded()
+    }
+
+    private func prepareEpisodeSearchIndexIfNeeded() {
+        guard !SearchColdStartProbe.disablesSearchIndexPreparation else {
+            return
+        }
+        guard episodeSearchIndexPreparationTask == nil else {
+            return
+        }
+        let localCache = localCache
+        episodeSearchIndexPreparationTask = Task { [weak self] in
+            do {
+                try await localCache.prepareEpisodeSearchIndex()
+            } catch is CancellationError {
+                // Cancellation is normal during teardown or a data reset.
+            } catch {
+                // The lexical index is derived; search keeps using its
+                // established fallback and a later load retries the rebuild.
+            }
+            self?.episodeSearchIndexPreparationTask = nil
+        }
     }
 
     /// Which canonical feed each cached episode belongs to, for repair's
@@ -1854,6 +1914,7 @@ final class LibraryStore {
         }
         episodeIndexByID = indexByID
         episodeIndicesByPodcastID = indicesByPodcastID
+        episodeSearchCorpusRevision &+= 1
     }
 
     private func rebuildLatestRefreshLogByFeedURL() {

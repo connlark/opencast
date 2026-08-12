@@ -27,6 +27,13 @@ struct OpenCastLaunchConfiguration {
     var adFreePassPresentationOverride: EpisodeAdFreePassPresentation?
     var uiTestLibraryLoadDelayMilliseconds: Int?
     var uiTestCloudKitAccountStatus: SyncAccountStatus?
+    var usesUITestSeedFeedRefreshService: Bool
+    // Search cold-start probe flags are Release-capable benchmark seams, so
+    // unlike the seams above they are deliberately not gated on UI testing.
+    var runsSearchColdStartProbe = false
+    var seedsSearchColdStartCorpus = false
+    var disablesSearchIndexPreparation = false
+    var searchColdStartProbeLabel: String?
 
     static var current: OpenCastLaunchConfiguration {
         let processInfo = ProcessInfo.processInfo
@@ -40,6 +47,10 @@ struct OpenCastLaunchConfiguration {
         arguments: [String],
         environment: [String: String]
     ) -> OpenCastLaunchConfiguration {
+        let searchColdStartProbeLabel = BenchmarkHarnessSupport.argumentValue(
+            from: arguments,
+            flag: SearchColdStartProbe.labelArgument
+        )
         let arguments = Set(arguments)
         let isUITesting = arguments.contains("--opencast-ui-testing")
             || environment["OPENCAST_UI_TESTING"] == "1"
@@ -92,6 +103,8 @@ struct OpenCastLaunchConfiguration {
         let uiTestCloudKitAccountStatus = isUITesting
             ? Self.uiTestCloudKitAccountStatus(environment: environment)
             : nil
+        let usesUITestSeedFeedRefreshService = isUITesting
+            && environment["OPENCAST_UI_TEST_REFRESH_SEED_FEED"] == "1"
         #if DEBUG
         let runsVoiceBoostDeviceProbe = shouldRunVoiceBoostDeviceProbe
         let capturesVoiceBoostDiagnostics = shouldCaptureVoiceBoostDiagnostics || runsVoiceBoostDeviceProbe
@@ -134,7 +147,18 @@ struct OpenCastLaunchConfiguration {
             resetsAdAnalysisAppAttestCredential: isUITesting && shouldResetAdAnalysisAppAttestCredential,
             adFreePassPresentationOverride: adFreePassPresentationOverride,
             uiTestLibraryLoadDelayMilliseconds: uiTestLibraryLoadDelayMilliseconds,
-            uiTestCloudKitAccountStatus: uiTestCloudKitAccountStatus
+            uiTestCloudKitAccountStatus: uiTestCloudKitAccountStatus,
+            usesUITestSeedFeedRefreshService: usesUITestSeedFeedRefreshService,
+            runsSearchColdStartProbe: arguments.contains(
+                SearchColdStartProbe.probeArgument
+            ),
+            seedsSearchColdStartCorpus: arguments.contains(
+                SearchColdStartProbe.seedArgument
+            ),
+            disablesSearchIndexPreparation: arguments.contains(
+                SearchColdStartProbe.disablePreparationArgument
+            ),
+            searchColdStartProbeLabel: searchColdStartProbeLabel
         )
     }
 

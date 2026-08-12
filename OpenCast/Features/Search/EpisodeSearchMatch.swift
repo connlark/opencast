@@ -1,6 +1,6 @@
 import Foundation
 
-struct EpisodeSearchMatch: Sendable {
+nonisolated struct EpisodeSearchMatch: Sendable {
     let episodeID: String
     let sourceIndex: Int
     let rank: EpisodeSearchRank

@@ -78,7 +78,8 @@ struct PodcastDetailView: View {
         let searchTaskKey = EpisodeSearchRequestKey(
             episodes: allEpisodes,
             query: searchQuery,
-            mode: searchMode
+            mode: searchMode,
+            corpusRevision: appModel.library.episodeSearchCorpusRevision
         )
         let searchResults = searchSession.displayedResults(for: searchTaskKey)
 
@@ -135,6 +136,9 @@ struct PodcastDetailView: View {
                                 description: Text("This show hasn't published any episodes. New episodes will appear here automatically.")
                             )
                         } else if hasSearchQuery {
+                            if searchSession.isIndexedSearchUnavailable {
+                                SearchIndexUpdatingIndicator(mode: searchMode)
+                            }
                             EpisodeSearchResultsContent(
                                 mode: searchMode,
                                 isLoadingVisible: searchSession.isLoadingVisible,
@@ -207,7 +211,8 @@ struct PodcastDetailView: View {
                 prompt: searchPrompt,
                 searchQuery: $searchQuery,
                 isSearchPresented: $isSearchPresented,
-                searchMode: $searchMode
+                searchMode: $searchMode,
+                isFullTextSearchAvailable: !searchSession.isIndexedSearchUnavailable
             )
         )
         .onChange(of: isSearchPresented) { _, isPresented in
@@ -226,6 +231,14 @@ struct PodcastDetailView: View {
                 episodes: allEpisodes,
                 query: searchQuery,
                 mode: searchMode,
+                corpusRevision: library.episodeSearchCorpusRevision,
+                indexedSearchProvider: {
+                    await library.searchEpisodes(
+                        query: searchQuery,
+                        mode: searchMode,
+                        forPodcastID: podcastID
+                    )
+                },
                 showNotesProvider: { await library.showNotesHTMLByEpisodeID(forPodcastID: podcastID) }
             )
         }

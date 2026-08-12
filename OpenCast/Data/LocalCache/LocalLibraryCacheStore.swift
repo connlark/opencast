@@ -14,6 +14,27 @@ protocol LocalLibraryCacheStore: Sendable {
     func allRefreshLogs() async throws -> [RefreshLogSnapshot]
     func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot?
     func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String]
+    /// Builds or validates the derived lexical index without blocking the
+    /// initial library load. Search falls back while this is in progress.
+    func prepareEpisodeSearchIndex() async throws
+    /// Called after any operation clears and repopulates the derived index.
+    /// A rebuild can restore only canonical `episode_cache` metadata, so the
+    /// transcript owner must re-reconcile its documents when this fires.
+    func setEpisodeSearchIndexRebuildHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) async
+    func searchEpisodes(
+        _ request: EpisodeSearchIndexRequest
+    ) async throws -> [EpisodeSearchIndexHit]
+    func replaceEpisodeTranscriptSearchDocument(
+        _ document: EpisodeSearchTranscriptDocument
+    ) async throws
+    func removeEpisodeTranscriptSearchDocument(
+        episodeID: String
+    ) async throws
+    func reconcileEpisodeTranscriptSearchDocuments(
+        retaining episodeIDs: Set<String>
+    ) async throws
     func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) async throws
     /// `artworkURL` is the URL string the preview was generated from; the write
     /// is skipped when the stored row's artwork URL no longer matches it.
@@ -45,4 +66,30 @@ protocol LocalLibraryCacheStore: Sendable {
         episodes: [EpisodeDetailSnapshot],
         refreshLogs: [RefreshLogSnapshot]
     ) async throws
+}
+
+extension LocalLibraryCacheStore {
+    func prepareEpisodeSearchIndex() async throws {}
+
+    func setEpisodeSearchIndexRebuildHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) async {}
+
+    func searchEpisodes(
+        _ request: EpisodeSearchIndexRequest
+    ) async throws -> [EpisodeSearchIndexHit] {
+        throw EpisodeSearchIndexError.unavailable
+    }
+
+    func replaceEpisodeTranscriptSearchDocument(
+        _ document: EpisodeSearchTranscriptDocument
+    ) async throws {}
+
+    func removeEpisodeTranscriptSearchDocument(
+        episodeID: String
+    ) async throws {}
+
+    func reconcileEpisodeTranscriptSearchDocuments(
+        retaining episodeIDs: Set<String>
+    ) async throws {}
 }

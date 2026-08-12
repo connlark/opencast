@@ -1,6 +1,6 @@
 import Foundation
 
-enum EpisodeSearchRank: Int, Sendable {
+nonisolated enum EpisodeSearchRank: Int, Sendable {
     case exactVisible
     case exactSummary
     case exactShowNotes

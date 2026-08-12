@@ -168,6 +168,7 @@ final class OpenCastAppModel {
         self.adDetectionSettings = adDetectionSettings
         self.appleSpeechAssets = appleSpeechAssets
         self.transcriptions = transcriptions
+        transcriptions.episodeSearchIndexStore = resolvedLibrary.localCache
         self.transcriptionRequests = EpisodeTranscriptionRequestCoordinator(
             library: resolvedLibrary,
             downloads: downloads,

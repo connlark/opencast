@@ -23,6 +23,44 @@ nonisolated struct UITestDelayedLocalLibraryCacheStore: LocalLibraryCacheStore {
         try await base.showNotesHTMLByEpisodeID(activePodcastIDs: activePodcastIDs)
     }
 
+    func prepareEpisodeSearchIndex() async throws {
+        try await base.prepareEpisodeSearchIndex()
+    }
+
+    func setEpisodeSearchIndexRebuildHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) async {
+        await base.setEpisodeSearchIndexRebuildHandler(handler)
+    }
+
+    func searchEpisodes(
+        _ request: EpisodeSearchIndexRequest
+    ) async throws -> [EpisodeSearchIndexHit] {
+        try await base.searchEpisodes(request)
+    }
+
+    func replaceEpisodeTranscriptSearchDocument(
+        _ document: EpisodeSearchTranscriptDocument
+    ) async throws {
+        try await base.replaceEpisodeTranscriptSearchDocument(document)
+    }
+
+    func removeEpisodeTranscriptSearchDocument(
+        episodeID: String
+    ) async throws {
+        try await base.removeEpisodeTranscriptSearchDocument(
+            episodeID: episodeID
+        )
+    }
+
+    func reconcileEpisodeTranscriptSearchDocuments(
+        retaining episodeIDs: Set<String>
+    ) async throws {
+        try await base.reconcileEpisodeTranscriptSearchDocuments(
+            retaining: episodeIDs
+        )
+    }
+
     func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) async throws {
         try await base.upsertCache(from: snapshot, refreshedAt: refreshedAt)
     }

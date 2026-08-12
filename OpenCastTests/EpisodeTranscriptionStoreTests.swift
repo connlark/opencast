@@ -1,6 +1,7 @@
 import Foundation
 import OpenCastCore
 import OpenCastTranscription
+import SQLite3
 import SwiftData
 import Testing
 @testable import OpenCast
@@ -65,6 +66,671 @@ struct EpisodeTranscriptionStoreTests {
         #expect(transcriptRecord.state == .completed)
         #expect(document.text.contains("hello transcript"))
         #expect(document.segments.map(\.start) == [0, 2])
+    }
+
+    @Test("Completed and deleted transcripts reconcile the library search index")
+    func transcriptLifecycleReconcilesSearchIndex() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let audioURL = try writeAudioPlaceholder(
+            in: temporaryDirectory,
+            contents: "audio"
+        )
+        let cache = SQLiteLocalLibraryCacheStore.inMemory()
+        let episode = makeEpisode(episodeID: "search-index-transcript")
+        let feedURL = try #require(URL(string: episode.podcastID))
+        try await cache.upsertCache(
+            from: FeedSnapshot(
+                podcast: Podcast(
+                    id: PodcastID(rawValue: episode.podcastID),
+                    feedURL: feedURL,
+                    title: episode.podcastTitle,
+                    author: nil,
+                    summary: nil,
+                    websiteURL: nil,
+                    artworkURL: nil
+                ),
+                episodes: [
+                    Episode(
+                        id: EpisodeID(rawValue: episode.episodeID),
+                        podcastID: PodcastID(rawValue: episode.podcastID),
+                        podcastTitle: episode.podcastTitle,
+                        title: episode.title,
+                        summary: episode.summary,
+                        showNotesHTML: nil,
+                        publishedAt: episode.publishedAt,
+                        duration: episode.duration,
+                        audioURL: episode.audioURL.flatMap(URL.init(string:)),
+                        artworkURL: nil,
+                        guid: episode.guid
+                    )
+                ],
+                fetchedAt: .now
+            ),
+            refreshedAt: .now
+        )
+        let transcriptionStore = EpisodeTranscriptionStore(
+            transcriber: FakeEpisodeTranscriber(),
+            fileStore: EpisodeTranscriptFileStore(
+                baseDirectory: temporaryDirectory
+            )
+        )
+        transcriptionStore.episodeSearchIndexStore = cache
+        let download = completedDownloadRecord(episode: episode)
+        context.insert(download)
+
+        transcriptionStore.startTranscription(
+            episode,
+            downloadRecord: download,
+            localFileURL: audioURL,
+            modelSummary: modelSummary(),
+            modelContext: context
+        )
+        #expect(await waitUntil {
+            transcriptionStore.record(for: episode.episodeID)?.state == .completed
+                && !transcriptionStore.hasActiveJob
+        })
+        await transcriptionStore.waitForEpisodeSearchIndexSync()
+
+        let request = EpisodeSearchIndexRequest(
+            query: "hello transcript",
+            mode: .fullText,
+            activePodcastIDs: [episode.podcastID]
+        )
+        let indexedHits = try await cache.searchEpisodes(request)
+        #expect(indexedHits.first?.episodeID == episode.episodeID)
+        #expect(indexedHits.first?.transcriptPassage?.startSeconds == 0)
+
+        transcriptionStore.deleteTranscript(
+            episodeID: episode.episodeID,
+            modelContext: context
+        )
+        await transcriptionStore.waitForEpisodeSearchIndexSync()
+        #expect(try await cache.searchEpisodes(request).isEmpty)
+    }
+
+    @Test("Existing transcript import and identity migration reconcile search")
+    func existingTranscriptImportAndMigrationReconcileSearch() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeTranscriptFileStore(
+            baseDirectory: temporaryDirectory
+        )
+        let cache = SQLiteLocalLibraryCacheStore.inMemory()
+        let podcastID = "https://example.com/feed.xml"
+        let oldEpisodeID = "existing-transcript-old"
+        let newEpisodeID = "existing-transcript-new"
+        let oldEpisode = makeEpisode(episodeID: oldEpisodeID)
+        let feedURL = try #require(URL(string: podcastID))
+        try await cache.upsertCache(
+            from: FeedSnapshot(
+                podcast: Podcast(
+                    id: PodcastID(rawValue: podcastID),
+                    feedURL: feedURL,
+                    title: oldEpisode.podcastTitle,
+                    author: nil,
+                    summary: nil,
+                    websiteURL: nil,
+                    artworkURL: nil
+                ),
+                episodes: [
+                    Episode(
+                        id: EpisodeID(rawValue: oldEpisodeID),
+                        podcastID: PodcastID(rawValue: podcastID),
+                        podcastTitle: oldEpisode.podcastTitle,
+                        title: oldEpisode.title,
+                        summary: oldEpisode.summary,
+                        showNotesHTML: nil,
+                        publishedAt: oldEpisode.publishedAt,
+                        duration: oldEpisode.duration,
+                        audioURL: oldEpisode.audioURL.flatMap(URL.init(string:)),
+                        artworkURL: nil,
+                        guid: oldEpisode.guid
+                    )
+                ],
+                fetchedAt: .now
+            ),
+            refreshedAt: .now
+        )
+        try await cache.prepareEpisodeSearchIndex()
+
+        let relativePath = fileStore.relativePath(
+            episodeID: oldEpisodeID,
+            fingerprint: "existing"
+        )
+        let document = EpisodeTranscriptDocument(
+            schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
+            episodeID: oldEpisodeID,
+            podcastID: podcastID,
+            sourceAudioURL: "https://example.com/existing.mp3",
+            sourceFileByteCount: 10,
+            sourceFileSHA256: "existing-sha",
+            modelIdentifier: "openai_whisper-tiny.en",
+            modelVersion: "1",
+            modelTreeSHA256: "tree",
+            languageCode: "en",
+            audioDuration: 60,
+            checkpoints: [],
+            segments: [
+                OpenCastTranscriptSegment(
+                    id: 7,
+                    start: 12,
+                    end: 18,
+                    text: "A preexisting heliopause boundary transcript.",
+                    avgLogProbability: -0.1,
+                    noSpeechProbability: 0.01
+                )
+            ],
+            text: "A preexisting heliopause boundary transcript.",
+            timings: EpisodeTranscriptTimings(),
+            createdAt: .now,
+            updatedAt: .now
+        )
+        try fileStore.write(document, relativePath: relativePath)
+        context.insert(
+            EpisodeTranscriptRecord(
+                episodeID: oldEpisodeID,
+                podcastID: podcastID,
+                sourceAudioURL: document.sourceAudioURL,
+                sourceFileByteCount: document.sourceFileByteCount,
+                sourceFileSHA256: document.sourceFileSHA256,
+                modelIdentifier: document.modelIdentifier,
+                modelVersion: document.modelVersion,
+                modelTreeSHA256: document.modelTreeSHA256,
+                state: .completed,
+                audioDuration: document.audioDuration,
+                completedDuration: document.audioDuration,
+                checkpointCount: 0,
+                transcriptRelativePath: relativePath
+            )
+        )
+        try context.save()
+
+        let store = EpisodeTranscriptionStore(
+            transcriber: FakeEpisodeTranscriber(),
+            fileStore: fileStore
+        )
+        store.episodeSearchIndexStore = cache
+        store.load(modelContext: context)
+        await store.waitForEpisodeSearchIndexSync()
+
+        let request = EpisodeSearchIndexRequest(
+            query: "heliopause boundary",
+            mode: .fullText,
+            activePodcastIDs: [podcastID]
+        )
+        #expect(
+            try await cache.searchEpisodes(request).map(\.episodeID)
+                == [oldEpisodeID]
+        )
+
+        try await cache.deleteEpisodes(episodeIDs: [oldEpisodeID])
+        try await cache.upsertCache(
+            from: FeedSnapshot(
+                podcast: Podcast(
+                    id: PodcastID(rawValue: podcastID),
+                    feedURL: feedURL,
+                    title: oldEpisode.podcastTitle,
+                    author: nil,
+                    summary: nil,
+                    websiteURL: nil,
+                    artworkURL: nil
+                ),
+                episodes: [
+                    Episode(
+                        id: EpisodeID(rawValue: newEpisodeID),
+                        podcastID: PodcastID(rawValue: podcastID),
+                        podcastTitle: oldEpisode.podcastTitle,
+                        title: oldEpisode.title,
+                        summary: oldEpisode.summary,
+                        showNotesHTML: nil,
+                        publishedAt: oldEpisode.publishedAt,
+                        duration: oldEpisode.duration,
+                        audioURL: oldEpisode.audioURL.flatMap(URL.init(string:)),
+                        artworkURL: nil,
+                        guid: oldEpisode.guid
+                    )
+                ],
+                fetchedAt: .now
+            ),
+            refreshedAt: .now
+        )
+        try store.migrateEpisodeSidecars(
+            from: oldEpisodeID,
+            to: newEpisodeID,
+            canonicalPodcastID: podcastID,
+            modelContext: context
+        )
+        try context.save()
+        await store.waitForEpisodeSearchIndexSync()
+
+        let migratedDocument = try #require(store.document(for: newEpisodeID))
+        #expect(migratedDocument.episodeID == newEpisodeID)
+        #expect(migratedDocument.podcastID == podcastID)
+        #expect(
+            try await cache.searchEpisodes(request).map(\.episodeID)
+                == [newEpisodeID]
+        )
+
+        try store.deleteTranscripts(
+            forPodcastID: podcastID,
+            modelContext: context
+        )
+        await store.waitForEpisodeSearchIndexSync()
+        #expect(try await cache.searchEpisodes(request).isEmpty)
+    }
+
+    @Test("Assigning the index store before load does not wipe indexed transcripts")
+    func assigningIndexStoreBeforeLoadDoesNotWipeIndexedTranscripts() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeTranscriptFileStore(
+            baseDirectory: temporaryDirectory
+        )
+        let cache = SQLiteLocalLibraryCacheStore.inMemory()
+        let episodeID = "cold-launch-transcript"
+        let podcastID = "https://example.com/feed.xml"
+        try await seedFeed(
+            cache: cache,
+            podcastID: podcastID,
+            episodeID: episodeID,
+            title: "Cold Launch Episode"
+        )
+        try await cache.prepareEpisodeSearchIndex()
+        let document = try insertCompletedTranscript(
+            episodeID: episodeID,
+            podcastID: podcastID,
+            text: "A heliopause boundary crossing recorded on launch day.",
+            fileStore: fileStore,
+            modelContext: context
+        )
+        try await cache.replaceEpisodeTranscriptSearchDocument(
+            EpisodeSearchTranscriptDocument(document)
+        )
+        let request = EpisodeSearchIndexRequest(
+            query: "heliopause boundary",
+            mode: .fullText,
+            activePodcastIDs: [podcastID]
+        )
+        #expect(
+            try await cache.searchEpisodes(request).map(\.episodeID)
+                == [episodeID]
+        )
+
+        // Composition order at launch: the index store is assigned before
+        // load(modelContext:) can run. That alone must not touch the index.
+        let store = EpisodeTranscriptionStore(
+            transcriber: FakeEpisodeTranscriber(),
+            fileStore: fileStore
+        )
+        store.episodeSearchIndexStore = cache
+        await store.waitForEpisodeSearchIndexSync()
+        #expect(
+            try await cache.searchEpisodes(request).map(\.episodeID)
+                == [episodeID]
+        )
+
+        store.load(modelContext: context)
+        await store.waitForEpisodeSearchIndexSync()
+        #expect(
+            try await cache.searchEpisodes(request).map(\.episodeID)
+                == [episodeID]
+        )
+    }
+
+    @Test("A loaded empty record set still reconciles stale transcripts to empty")
+    func loadedEmptyRecordSetReconcilesStaleTranscriptsToEmpty() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let cache = SQLiteLocalLibraryCacheStore.inMemory()
+        let podcastID = "https://example.com/feed.xml"
+        try await seedFeed(
+            cache: cache,
+            podcastID: podcastID,
+            episodeID: "departed-episode",
+            title: "Departed Episode"
+        )
+        try await cache.prepareEpisodeSearchIndex()
+        try await cache.replaceEpisodeTranscriptSearchDocument(
+            EpisodeSearchTranscriptDocument(
+                episodeID: "departed-episode",
+                podcastID: podcastID,
+                version: "stale",
+                segments: [
+                    EpisodeSearchTranscriptSegment(
+                        segmentID: "stale-1",
+                        startSeconds: 0,
+                        endSeconds: 5,
+                        text: "A stale heliopause document with no canonical record."
+                    )
+                ]
+            )
+        )
+        let request = EpisodeSearchIndexRequest(
+            query: "heliopause",
+            mode: .fullText,
+            activePodcastIDs: [podcastID]
+        )
+        #expect(try await cache.searchEpisodes(request).isEmpty == false)
+
+        let store = EpisodeTranscriptionStore(
+            transcriber: FakeEpisodeTranscriber(),
+            fileStore: EpisodeTranscriptFileStore(
+                baseDirectory: temporaryDirectory
+            )
+        )
+        store.episodeSearchIndexStore = cache
+        store.load(modelContext: context)
+        await store.waitForEpisodeSearchIndexSync()
+
+        #expect(try await cache.searchEpisodes(request).isEmpty)
+    }
+
+    @Test("A mid-session index rebuild repopulates transcripts without a relaunch")
+    func midSessionRebuildRepopulatesTranscripts() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let databaseDirectory = try makeTemporaryDirectory()
+        let databaseURL = databaseDirectory.appending(
+            path: "LocalLibraryCache.sqlite"
+        )
+        let fileStore = EpisodeTranscriptFileStore(
+            baseDirectory: temporaryDirectory
+        )
+        let cache = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        let episodeID = "rebuild-transcript"
+        let podcastID = "https://example.com/feed.xml"
+        try await seedFeed(
+            cache: cache,
+            podcastID: podcastID,
+            episodeID: episodeID,
+            title: "Rebuild Episode"
+        )
+        try await cache.prepareEpisodeSearchIndex()
+        _ = try insertCompletedTranscript(
+            episodeID: episodeID,
+            podcastID: podcastID,
+            text: "A heliopause boundary crossing survives the rebuild.",
+            fileStore: fileStore,
+            modelContext: context
+        )
+        let store = EpisodeTranscriptionStore(
+            transcriber: FakeEpisodeTranscriber(),
+            fileStore: fileStore
+        )
+        store.episodeSearchIndexStore = cache
+        store.load(modelContext: context)
+        await store.waitForEpisodeSearchIndexSync()
+        let request = EpisodeSearchIndexRequest(
+            query: "heliopause boundary",
+            mode: .fullText,
+            activePodcastIDs: [podcastID]
+        )
+        #expect(
+            try await cache.searchEpisodes(request).map(\.episodeID)
+                == [episodeID]
+        )
+
+        // Break a derived table the maintenance path writes so the next
+        // refresh marks the index for rebuild, exactly like a mid-session
+        // SQLite failure would.
+        try execRawSQL(
+            "DROP TABLE episode_search_spelling_document",
+            databaseURL: databaseURL
+        )
+        try await seedFeed(
+            cache: cache,
+            podcastID: podcastID,
+            episodeID: episodeID,
+            title: "Rebuild Episode Retitled"
+        )
+        #expect(
+            try await cache.episodeSearchIndexStateDescription()
+                == "needsRebuild"
+        )
+        try execRawSQL(
+            """
+            CREATE TABLE IF NOT EXISTS episode_search_spelling_document (
+              episode_id TEXT NOT NULL,
+              source INTEGER NOT NULL,
+              terms_data BLOB NOT NULL,
+              PRIMARY KEY (episode_id, source)
+            ) WITHOUT ROWID
+            """,
+            databaseURL: databaseURL
+        )
+
+        try await cache.prepareEpisodeSearchIndex()
+
+        // The rebuild restored metadata only; the rebuild handler must bring
+        // the transcript documents back without a relaunch.
+        var transcriptRecovered = false
+        for _ in 0..<250 {
+            if let hits = try? await cache.searchEpisodes(request),
+               hits.map(\.episodeID) == [episodeID] {
+                transcriptRecovered = true
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(transcriptRecovered)
+    }
+
+    @Test("A failed sidecar rewrite does not abort identity migration")
+    func failedSidecarRewriteDoesNotAbortIdentityMigration() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeTranscriptFileStore(
+            baseDirectory: temporaryDirectory
+        )
+        let cache = SQLiteLocalLibraryCacheStore.inMemory()
+        let podcastID = "https://example.com/feed.xml"
+        let oldEpisodeID = "rewrite-fails-old"
+        let newEpisodeID = "rewrite-fails-new"
+        try await seedFeed(
+            cache: cache,
+            podcastID: podcastID,
+            episodeID: oldEpisodeID,
+            title: "Rewrite Episode"
+        )
+        try await cache.prepareEpisodeSearchIndex()
+        _ = try insertCompletedTranscript(
+            episodeID: oldEpisodeID,
+            podcastID: podcastID,
+            text: "A heliopause narration awaiting migration.",
+            fileStore: fileStore,
+            modelContext: context
+        )
+        let store = EpisodeTranscriptionStore(
+            transcriber: FakeEpisodeTranscriber(),
+            fileStore: fileStore
+        )
+        store.episodeSearchIndexStore = cache
+        store.load(modelContext: context)
+        await store.waitForEpisodeSearchIndexSync()
+
+        try await cache.deleteEpisodes(episodeIDs: [oldEpisodeID])
+        try await seedFeed(
+            cache: cache,
+            podcastID: podcastID,
+            episodeID: newEpisodeID,
+            title: "Rewrite Episode"
+        )
+        // Make the migrated per-episode directory read-only so the sidecar
+        // identity rewrite fails while the directory move and reads succeed.
+        let oldTranscriptDirectory = temporaryDirectory.appending(
+            path: "\(EpisodeTranscriptFileStore.directoryName)/\(fileStore.safeStem(oldEpisodeID))",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555],
+            ofItemAtPath: oldTranscriptDirectory.path(percentEncoded: false)
+        )
+        defer {
+            let newTranscriptDirectory = temporaryDirectory.appending(
+                path: "\(EpisodeTranscriptFileStore.directoryName)/\(fileStore.safeStem(newEpisodeID))",
+                directoryHint: .isDirectory
+            )
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: newTranscriptDirectory.path(percentEncoded: false)
+            )
+        }
+
+        try store.migrateEpisodeSidecars(
+            from: oldEpisodeID,
+            to: newEpisodeID,
+            canonicalPodcastID: podcastID,
+            modelContext: context
+        )
+        try context.save()
+        await store.waitForEpisodeSearchIndexSync()
+
+        // The record migrated and reload ran even though the rewrite failed.
+        let migratedRecord = try #require(store.record(for: newEpisodeID))
+        #expect(migratedRecord.state == .completed)
+        #expect(store.record(for: oldEpisodeID) == nil)
+
+        // The sidecar kept its stale embedded identity, so reconciliation
+        // must skip it: no searchable ghost under either identity.
+        let staleDocument = try #require(store.document(for: newEpisodeID))
+        #expect(staleDocument.episodeID == oldEpisodeID)
+        #expect(try await cache.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "heliopause narration",
+                mode: .fullText,
+                activePodcastIDs: [podcastID]
+            )
+        ).isEmpty)
+    }
+
+    private func seedFeed(
+        cache: SQLiteLocalLibraryCacheStore,
+        podcastID: String,
+        episodeID: String,
+        title: String
+    ) async throws {
+        let feedURL = try #require(URL(string: podcastID))
+        try await cache.upsertCache(
+            from: FeedSnapshot(
+                podcast: Podcast(
+                    id: PodcastID(rawValue: podcastID),
+                    feedURL: feedURL,
+                    title: "Composition Show",
+                    author: nil,
+                    summary: nil,
+                    websiteURL: nil,
+                    artworkURL: nil
+                ),
+                episodes: [
+                    Episode(
+                        id: EpisodeID(rawValue: episodeID),
+                        podcastID: PodcastID(rawValue: podcastID),
+                        podcastTitle: "Composition Show",
+                        title: title,
+                        summary: nil,
+                        showNotesHTML: nil,
+                        publishedAt: Date(timeIntervalSince1970: 1_700_000_100),
+                        duration: 120,
+                        audioURL: URL(string: "https://example.com/\(episodeID).mp3"),
+                        artworkURL: nil,
+                        guid: episodeID
+                    )
+                ],
+                fetchedAt: .now
+            ),
+            refreshedAt: .now
+        )
+    }
+
+    @discardableResult
+    private func insertCompletedTranscript(
+        episodeID: String,
+        podcastID: String,
+        text: String,
+        fileStore: EpisodeTranscriptFileStore,
+        modelContext: ModelContext
+    ) throws -> EpisodeTranscriptDocument {
+        let relativePath = fileStore.relativePath(
+            episodeID: episodeID,
+            fingerprint: "fixture"
+        )
+        let document = EpisodeTranscriptDocument(
+            schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
+            episodeID: episodeID,
+            podcastID: podcastID,
+            sourceAudioURL: "https://example.com/\(episodeID).mp3",
+            sourceFileByteCount: 10,
+            sourceFileSHA256: "fixture-sha",
+            modelIdentifier: "openai_whisper-tiny.en",
+            modelVersion: "1",
+            modelTreeSHA256: "tree",
+            languageCode: "en",
+            audioDuration: 60,
+            checkpoints: [],
+            segments: [
+                OpenCastTranscriptSegment(
+                    id: 1,
+                    start: 4,
+                    end: 12,
+                    text: text,
+                    avgLogProbability: -0.1,
+                    noSpeechProbability: 0.01
+                )
+            ],
+            text: text,
+            timings: EpisodeTranscriptTimings(),
+            createdAt: .now,
+            updatedAt: .now
+        )
+        try fileStore.write(document, relativePath: relativePath)
+        modelContext.insert(
+            EpisodeTranscriptRecord(
+                episodeID: episodeID,
+                podcastID: podcastID,
+                sourceAudioURL: document.sourceAudioURL,
+                sourceFileByteCount: document.sourceFileByteCount,
+                sourceFileSHA256: document.sourceFileSHA256,
+                modelIdentifier: document.modelIdentifier,
+                modelVersion: document.modelVersion,
+                modelTreeSHA256: document.modelTreeSHA256,
+                state: .completed,
+                audioDuration: document.audioDuration,
+                completedDuration: document.audioDuration,
+                checkpointCount: 0,
+                transcriptRelativePath: relativePath
+            )
+        )
+        try modelContext.save()
+        return document
+    }
+
+    private func execRawSQL(_ sql: String, databaseURL: URL) throws {
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(
+            databaseURL.path(percentEncoded: false),
+            &handle,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        ) == SQLITE_OK, let handle else {
+            throw LocalLibraryCacheStoreError(
+                operation: "test open",
+                message: "unable to open database"
+            )
+        }
+        defer { sqlite3_close_v2(handle) }
+        guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else {
+            throw LocalLibraryCacheStoreError(
+                operation: "test exec",
+                message: String(cString: sqlite3_errmsg(handle))
+            )
+        }
     }
 
     @Test("Deleting a transcript sweeps the per-episode directory like the ad-analysis twin")

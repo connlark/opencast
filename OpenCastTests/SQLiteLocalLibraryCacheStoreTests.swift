@@ -5,7 +5,7 @@ import Testing
 @testable import OpenCast
 
 @MainActor
-@Suite("SQLite local library cache store")
+@Suite("SQLite local library cache store", .serialized)
 struct SQLiteLocalLibraryCacheStoreTests {
     private static let feedURL = "https://example.com/sqlite-cache.xml"
     private static let otherFeedURL = "https://example.com/sqlite-other.xml"
@@ -200,7 +200,7 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(library.podcastsByFeedURL[Self.feedURL]?.updatedAt == firstRefreshedAt)
     }
 
-    @Test("A changed episode writes exactly that row and advances only its timestamp")
+    @Test("A changed episode writes one canonical row, refreshes its index row, and advances only its timestamp")
     func changedEpisodeWritesExactlyThatRow() async throws {
         let store = SQLiteLocalLibraryCacheStore.inMemory()
         let firstRefreshedAt = Date(timeIntervalSince1970: 1_700_000_300)
@@ -227,6 +227,9 @@ struct SQLiteLocalLibraryCacheStoreTests {
             refreshedAt: secondRefreshedAt
         )
 
+        // Exact bound: the refresh may write only the one changed canonical
+        // row. (The derived index is not yet prepared on this store, so no
+        // index rows contribute; its refresh behavior has its own coverage.)
         #expect(try await store.totalRowChangeCount() == changesBeforeSecondUpsert + 1)
         let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
         let edited = try #require(library.episodes.first { $0.episodeID == "ep-edited" })
@@ -401,13 +404,950 @@ struct SQLiteLocalLibraryCacheStoreTests {
     func schemaReportsUserVersion() async throws {
         let store = SQLiteLocalLibraryCacheStore.inMemory()
         _ = try await store.loadLibrary(activePodcastIDs: [])
-        #expect(try await store.currentSchemaVersion() == 1)
+        #expect(try await store.currentSchemaVersion() == 5)
+    }
+
+    @Test("Episode search rebuild enables fielded and scoped retrieval")
+    func episodeSearchRebuildEnablesFieldedAndScopedRetrieval() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "title",
+                    title: "The Orchard at Midnight",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_300)
+                ),
+                makeEpisode(
+                    id: "notes",
+                    title: "How a Night Bird Finds North",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
+                    showNotesHTML: """
+                    <article><p>Cryptochrome&nbsp;<strong>radical pairs</strong>
+                    respond to a magnetic field &amp; guide migration.</p>
+                    <script>unfindable-script-token</script></article>
+                    """
+                ),
+                makeEpisode(
+                    id: "japanese",
+                    title: "東京の小さな庭",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_100)
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+
+        let notesRequest = EpisodeSearchIndexRequest(
+            query: "radical pairs",
+            mode: .fullText,
+            activePodcastIDs: [Self.feedURL]
+        )
+        await #expect(throws: EpisodeSearchIndexError.self) {
+            _ = try await store.searchEpisodes(notesRequest)
+        }
+
+        try await store.prepareEpisodeSearchIndex()
+        #expect(try await store.episodeSearchIndexStateDescription() == "ready")
+
+        let titleHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "orch",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(titleHits.map(\.episodeID) == ["title"])
+        #expect(titleHits.first?.scoreTrace.channel == .prefix)
+
+        let notesHits = try await store.searchEpisodes(notesRequest)
+        #expect(notesHits.map(\.episodeID) == ["notes"])
+        #expect(notesHits.first?.scoreTrace.matchedFields.contains(.showNotes) == true)
+        #expect(notesHits.first?.snippet?.contains("radical pairs") == true)
+        #expect(notesHits.first?.snippet?.contains("<") == false)
+        #expect(notesHits.first?.snippet?.contains("& guide") == true)
+
+        let excludedMarkupHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "unfindable-script-token",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(excludedMarkupHits.isEmpty)
+
+        let visibleOnlyHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "radical pairs",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(visibleOnlyHits.isEmpty)
+
+        let disallowedHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "orchard",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL],
+                allowedEpisodeIDs: ["notes"]
+            )
+        )
+        #expect(disallowedHits.isEmpty)
+
+        let unsegmentedJapaneseHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "東京 庭",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(unsegmentedJapaneseHits.map(\.episodeID) == ["japanese"])
+        #expect(
+            unsegmentedJapaneseHits.first?.scoreTrace.channel
+                == .visibleSubstring
+        )
+    }
+
+    @Test("Episode search reads pre-cleaned derived evidence instead of canonical HTML")
+    func episodeSearchReadsDerivedBodyEvidence() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(
+                path: "SQLiteSearchEvidenceTests-\(UUID().uuidString)",
+                directoryHint: .isDirectory
+            )
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
+        let store = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "derived-evidence",
+                    title: "Upper Atmosphere",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
+                    showNotesHTML: """
+                    <section><p>Mesosphere&nbsp;<em>aurora coupling</em>
+                    is visible &amp; measurable.</p></section>
+                    """
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
+        )
+        try await store.prepareEpisodeSearchIndex()
+
+        try execRawSQL(
+            """
+            UPDATE episode_cache
+            SET show_notes_html = '<p>Canonical HTML changed.</p>'
+            WHERE episode_id = 'derived-evidence'
+            """,
+            databaseURL: databaseURL
+        )
+
+        let hits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "mesosphere aurora",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(hits.map(\.episodeID) == ["derived-evidence"])
+        #expect(hits.first?.scoreTrace.matchedFields.contains(.showNotes) == true)
+        #expect(hits.first?.snippet?.contains("Mesosphere aurora coupling") == true)
+        #expect(hits.first?.snippet?.contains("& measurable") == true)
+    }
+
+    @Test("Episode search maintenance follows content updates and deletes")
+    func episodeSearchMaintenanceFollowsUpdatesAndDeletes() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "mutable",
+                    title: "Ceramic Receiver",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
+                    showNotesHTML: "<p>A vanadium lattice stabilizes reception.</p>"
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
+        )
+        try await store.prepareEpisodeSearchIndex()
+        #expect(try await store.episodeSearchIndexStateDescription() == "ready")
+
+        let oldRequest = EpisodeSearchIndexRequest(
+            query: "ceramic receiver",
+            mode: .episodes,
+            activePodcastIDs: [Self.feedURL]
+        )
+        #expect(try await store.searchEpisodes(oldRequest).map(\.episodeID) == ["mutable"])
+        let oldBodyRequest = EpisodeSearchIndexRequest(
+            query: "vanadium lattice",
+            mode: .fullText,
+            activePodcastIDs: [Self.feedURL]
+        )
+        #expect(
+            try await store.searchEpisodes(oldBodyRequest).map(\.episodeID)
+                == ["mutable"]
+        )
+
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "mutable",
+                    title: "Optical Compass",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
+                    showNotesHTML: "<p>A xenon gyroscope stabilizes navigation.</p>"
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        let newRequest = EpisodeSearchIndexRequest(
+            query: "optical compass",
+            mode: .episodes,
+            activePodcastIDs: [Self.feedURL]
+        )
+        #expect(try await store.searchEpisodes(oldRequest).isEmpty)
+        #expect(try await store.searchEpisodes(oldBodyRequest).isEmpty)
+        #expect(try await store.searchEpisodes(newRequest).map(\.episodeID) == ["mutable"])
+        let newBodyRequest = EpisodeSearchIndexRequest(
+            query: "xenon gyroscope",
+            mode: .fullText,
+            activePodcastIDs: [Self.feedURL]
+        )
+        let newBodyHits = try await store.searchEpisodes(newBodyRequest)
+        #expect(newBodyHits.map(\.episodeID) == ["mutable"])
+        #expect(newBodyHits.first?.snippet?.contains("xenon gyroscope") == true)
+
+        try await store.deleteEpisodes(episodeIDs: ["mutable"])
+        #expect(try await store.searchEpisodes(newRequest).isEmpty)
+        #expect(try await store.searchEpisodes(newBodyRequest).isEmpty)
+    }
+
+    @Test("Episode search treats hostile syntax as literals")
+    func episodeSearchTreatsHostileSyntaxAsLiterals() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "syntax",
+                    title: "OR Near Five",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
+        )
+        try await store.prepareEpisodeSearchIndex()
+        #expect(try await store.episodeSearchIndexStateDescription() == "ready")
+
+        let hits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "\"OR\" NEAR(5) *",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(hits.map(\.episodeID) == ["syntax"])
+    }
+
+    @Test("Episode search corrects scoped corpus terms without broad negative matches")
+    func episodeSearchUsesBoundedCorpusCorrections() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "keyboard",
+                    title: "Keyboard Membrane",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_300)
+                ),
+                makeEpisode(
+                    id: "kubernetes",
+                    title: "Kubernetes Pronunciation",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                ),
+                makeEpisode(
+                    id: "episode",
+                    title: "Episode 42",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_100)
+                ),
+                makeEpisode(
+                    id: "cache",
+                    title: "Local Cache",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_000)
+                ),
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        try await store.prepareEpisodeSearchIndex()
+
+        let transpositionHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "keybaord membrane",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(transpositionHits.first?.episodeID == "keyboard")
+        #expect(transpositionHits.first?.scoreTrace.channel == .corrected)
+
+        let deletionHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "kubernets",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(deletionHits.first?.episodeID == "kubernetes")
+        #expect(deletionHits.first?.scoreTrace.channel == .corrected)
+
+        let hostileNegativeHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "'); DROP TABLE episode_cache;--",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(hostileNegativeHits.isEmpty)
+    }
+
+    @Test("Episode search retrieves, times, replaces, and removes transcript passages")
+    func episodeSearchMaintainsTranscriptPassages() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "bird",
+                    title: "How a Night Bird Finds North",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_300)
+                ),
+                makeEpisode(
+                    id: "repetitive",
+                    title: "Counting Exercise",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                ),
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        try await store.prepareEpisodeSearchIndex()
+        try await store.replaceEpisodeTranscriptSearchDocument(
+            EpisodeSearchTranscriptDocument(
+                episodeID: "bird",
+                podcastID: Self.feedURL,
+                version: "v1",
+                segments: [
+                    EpisodeSearchTranscriptSegment(
+                        segmentID: "bird-1",
+                        startSeconds: 42,
+                        endSeconds: 57,
+                        text: "Cryptochrome radical pairs respond to Earth's magnetic field."
+                    )
+                ]
+            )
+        )
+        try await store.replaceEpisodeTranscriptSearchDocument(
+            EpisodeSearchTranscriptDocument(
+                episodeID: "repetitive",
+                podcastID: Self.feedURL,
+                version: "v1",
+                segments: [
+                    EpisodeSearchTranscriptSegment(
+                        segmentID: "repeat-1",
+                        startSeconds: 8,
+                        endSeconds: 18,
+                        text: String(repeating: "coral ", count: 80)
+                    )
+                ]
+            )
+        )
+
+        let hits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "cryptochrome radical pairs",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(hits.first?.episodeID == "bird")
+        #expect(hits.first?.scoreTrace.matchedFields.contains(.transcript) == true)
+        #expect(hits.first?.transcriptPassage?.segmentID == "bird-1")
+        #expect(hits.first?.transcriptPassage?.startSeconds == 42)
+        #expect(hits.first?.transcriptPassage?.endSeconds == 57)
+
+        let visibleOnlyHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "magnetoreception",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(visibleOnlyHits.isEmpty)
+
+        let typoHits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "magnetorecpetion",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(typoHits.first?.episodeID == "bird")
+        #expect(typoHits.first?.transcriptPassage?.segmentID == "bird-1")
+
+        try await store.replaceEpisodeTranscriptSearchDocument(
+            EpisodeSearchTranscriptDocument(
+                episodeID: "bird",
+                podcastID: Self.feedURL,
+                version: "v2",
+                segments: [
+                    EpisodeSearchTranscriptSegment(
+                        segmentID: "bird-2",
+                        startSeconds: 60,
+                        endSeconds: 72,
+                        text: "A replacement passage discusses polarized starlight."
+                    )
+                ]
+            )
+        )
+        #expect(try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "magnetoreception",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL]
+            )
+        ).isEmpty)
+        #expect(try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "polarized starlight",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL]
+            )
+        ).first?.transcriptPassage?.segmentID == "bird-2")
+
+        try await store.removeEpisodeTranscriptSearchDocument(episodeID: "bird")
+        #expect(try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "polarized starlight",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL]
+            )
+        ).isEmpty)
+    }
+
+    @Test("Transcript hits render a passage snippet and body evidence still wins")
+    func transcriptHitsRenderPassageSnippet() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "transcript-only",
+                    title: "Deep Water Survey",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_300)
+                ),
+                makeEpisode(
+                    id: "notes-and-transcript",
+                    title: "Harbor Report",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
+                    showNotesHTML: "<p>The bioluminescent plankton bloom stretched for miles offshore.</p>"
+                ),
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        try await store.prepareEpisodeSearchIndex()
+        try await store.replaceEpisodeTranscriptSearchDocument(
+            EpisodeSearchTranscriptDocument(
+                episodeID: "transcript-only",
+                podcastID: Self.feedURL,
+                version: "v1",
+                segments: [
+                    EpisodeSearchTranscriptSegment(
+                        segmentID: "deep-1",
+                        startSeconds: 10,
+                        endSeconds: 24,
+                        text: "The sonar picked up a bioluminescent shimmer near the trench floor."
+                    )
+                ]
+            )
+        )
+        try await store.replaceEpisodeTranscriptSearchDocument(
+            EpisodeSearchTranscriptDocument(
+                episodeID: "notes-and-transcript",
+                podcastID: Self.feedURL,
+                version: "v1",
+                segments: [
+                    EpisodeSearchTranscriptSegment(
+                        segmentID: "harbor-1",
+                        startSeconds: 5,
+                        endSeconds: 15,
+                        text: "Divers reported bioluminescent flashes under the pier."
+                    )
+                ]
+            )
+        )
+
+        let hits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "bioluminescent",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        let transcriptOnly = try #require(
+            hits.first { $0.episodeID == "transcript-only" }
+        )
+        #expect(transcriptOnly.snippet?.contains("sonar") == true)
+        #expect(transcriptOnly.snippetHighlightTerms == ["bioluminescent"])
+        #expect(transcriptOnly.transcriptPassage?.segmentID == "deep-1")
+
+        // Legacy search surfaced the show-notes snippet; a hit matching both
+        // sources must keep it rather than the transcript excerpt.
+        let bothSources = try #require(
+            hits.first { $0.episodeID == "notes-and-transcript" }
+        )
+        #expect(bothSources.snippet?.contains("plankton bloom") == true)
+        #expect(bothSources.scoreTrace.matchedFields.contains(.transcript))
+    }
+
+    @Test("Replacing an unchanged transcript document writes nothing")
+    func unchangedTranscriptReplaceWritesNothing() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "stable-transcript",
+                    title: "Stable Transcript",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_300)
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        try await store.prepareEpisodeSearchIndex()
+        let document = EpisodeSearchTranscriptDocument(
+            episodeID: "stable-transcript",
+            podcastID: Self.feedURL,
+            version: "v1",
+            segments: [
+                EpisodeSearchTranscriptSegment(
+                    segmentID: "stable-1",
+                    startSeconds: 0,
+                    endSeconds: 9,
+                    text: "An unchanged aurora forecast for the northern stations."
+                ),
+                EpisodeSearchTranscriptSegment(
+                    segmentID: "stable-2",
+                    startSeconds: 9,
+                    endSeconds: 20,
+                    text: "Signal strength held steady through the night."
+                ),
+            ]
+        )
+        try await store.replaceEpisodeTranscriptSearchDocument(document)
+        let changesBeforeIdenticalReplace = try await store.totalRowChangeCount()
+
+        try await store.replaceEpisodeTranscriptSearchDocument(document)
+
+        // Reconciliation replays every completed transcript per launch; an
+        // unchanged version+segment set must be a read-only no-op.
+        #expect(
+            try await store.totalRowChangeCount() == changesBeforeIdenticalReplace
+        )
+
+        let changedDocument = EpisodeSearchTranscriptDocument(
+            episodeID: "stable-transcript",
+            podcastID: Self.feedURL,
+            version: "v2",
+            segments: [
+                EpisodeSearchTranscriptSegment(
+                    segmentID: "stable-1",
+                    startSeconds: 0,
+                    endSeconds: 9,
+                    text: "A revised aurora forecast replaces the overnight guidance."
+                )
+            ]
+        )
+        try await store.replaceEpisodeTranscriptSearchDocument(changedDocument)
+        #expect(
+            try await store.totalRowChangeCount() > changesBeforeIdenticalReplace
+        )
+        let hits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "revised aurora",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(hits.first?.episodeID == "stable-transcript")
+    }
+
+    @Test("Mid-word substring recall supplements FTS hits after the ranked results")
+    func midWordSubstringRecallSupplementsRankedResults() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "substring",
+                    title: "The Broadcast Hour",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_300)
+                ),
+                makeEpisode(
+                    id: "token",
+                    title: "Cast Away Reunion",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_100)
+                ),
+                makeEpisode(
+                    id: "miss",
+                    title: "Harbor Report",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                ),
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        try await store.prepareEpisodeSearchIndex()
+
+        let hits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "cast",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        // The whole-token FTS match keeps its rank; the mid-word containment
+        // hit the legacy matcher used to find follows it.
+        #expect(hits.map(\.episodeID) == ["token", "substring"])
+        #expect(hits.last?.scoreTrace.channel == .visibleSubstring)
+    }
+
+    @Test("Turkish dotted and dotless titles are found from either casing")
+    func turkishDottedAndDotlessTitlesAreFound() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "uppercase",
+                    title: "IŞIK Söyleşisi",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_300)
+                ),
+                makeEpisode(
+                    id: "lowercase",
+                    title: "ışık masalı",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                ),
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        try await store.prepareEpisodeSearchIndex()
+
+        for query in ["ışık", "IŞIK", "isik"] {
+            let hits = try await store.searchEpisodes(
+                EpisodeSearchIndexRequest(
+                    query: query,
+                    mode: .episodes,
+                    activePodcastIDs: [Self.feedURL]
+                )
+            )
+            #expect(
+                Set(hits.map(\.episodeID)) == ["uppercase", "lowercase"],
+                "query \(query)"
+            )
+        }
+    }
+
+    @Test("Broad queries return the same result set as the legacy fallback")
+    func broadQueriesMatchLegacyFallbackResultSet() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        let episodes = (0..<60).map { index in
+            makeEpisode(
+                id: String(format: "bulk-%02d", index),
+                title: "Fieldwork Dispatch \(index)",
+                publishedAt: Date(
+                    timeIntervalSince1970: 1_700_000_000 + Double(index)
+                )
+            )
+        }
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: episodes),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_100_000)
+        )
+        try await store.prepareEpisodeSearchIndex()
+        let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
+
+        let hits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "fieldwork",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        let legacyMatches = EpisodeSearch.matchingEpisodes(
+            in: library.episodes,
+            query: "fieldwork"
+        )
+
+        // The old 50-hit default silently truncated broad queries while the
+        // legacy fallback returned everything; both paths must agree now.
+        #expect(hits.count == 60)
+        #expect(
+            Set(hits.map(\.episodeID)) == Set(legacyMatches.map(\.episodeID))
+        )
+    }
+
+    @Test("A relaunched search index validates before use and preserves ranking")
+    func episodeSearchRelaunchValidatesBeforeUse() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(
+                path: "SQLiteSearchRelaunchTests-\(UUID().uuidString)",
+                directoryHint: .isDirectory
+            )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
+        let request = EpisodeSearchIndexRequest(
+            query: "orchard midnight",
+            mode: .fullText,
+            activePodcastIDs: [Self.feedURL]
+        )
+
+        let firstStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        try await firstStore.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "relaunch-exact",
+                    title: "The Orchard at Midnight",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_300)
+                ),
+                makeEpisode(
+                    id: "relaunch-body",
+                    title: "Night Agriculture",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
+                    showNotesHTML: "<p>An orchard after midnight.</p>"
+                ),
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        try await firstStore.prepareEpisodeSearchIndex()
+        let expectedIDs = try await firstStore.searchEpisodes(request)
+            .map(\.episodeID)
+
+        let relaunchedStore = SQLiteLocalLibraryCacheStore(
+            databaseURL: databaseURL
+        )
+        #expect(
+            try await relaunchedStore.episodeSearchIndexStateDescription()
+                == "validating"
+        )
+        await #expect(throws: EpisodeSearchIndexError.self) {
+            _ = try await relaunchedStore.searchEpisodes(request)
+        }
+
+        try await relaunchedStore.prepareEpisodeSearchIndex()
+        #expect(
+            try await relaunchedStore.searchEpisodes(request).map(\.episodeID)
+                == expectedIDs
+        )
+    }
+
+    @Test("Upgrade and derived-index corruption rebuild to canonical rankings")
+    func episodeSearchUpgradeAndCorruptionRecover() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(
+                path: "SQLiteSearchRecoveryTests-\(UUID().uuidString)",
+                directoryHint: .isDirectory
+            )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
+        let request = EpisodeSearchIndexRequest(
+            query: "recovery beacon",
+            mode: .fullText,
+            activePodcastIDs: [Self.feedURL]
+        )
+
+        let originalStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        try await originalStore.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "recovery-title",
+                    title: "Recovery Beacon",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_300)
+                ),
+                makeEpisode(
+                    id: "recovery-notes",
+                    title: "Repair Log",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
+                    showNotesHTML: "<p>The recovery beacon remained visible.</p>"
+                ),
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        try await originalStore.prepareEpisodeSearchIndex()
+        let expectedIDs = try await originalStore.searchEpisodes(request)
+            .map(\.episodeID)
+
+        // Version 1 is the pre-search canonical cache version. Opening it must
+        // preserve canonical rows while recreating only disposable search data.
+        try execRawSQL("PRAGMA user_version = 1", databaseURL: databaseURL)
+        let upgradedStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        _ = try await upgradedStore.loadLibrary(activePodcastIDs: [Self.feedURL])
+        #expect(try await upgradedStore.currentSchemaVersion() == 5)
+        try await upgradedStore.prepareEpisodeSearchIndex()
+        #expect(
+            try await upgradedStore.searchEpisodes(request).map(\.episodeID)
+                == expectedIDs
+        )
+
+        // Delete one derived evidence row without touching canonical cache
+        // data or the ready marker. Relaunch validation must detect and heal it.
+        try execRawSQL(
+            "DELETE FROM episode_search_evidence WHERE search_rowid IN (SELECT search_rowid FROM episode_search_evidence LIMIT 1)",
+            databaseURL: databaseURL
+        )
+        let corruptedStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        await #expect(throws: EpisodeSearchIndexError.self) {
+            _ = try await corruptedStore.searchEpisodes(request)
+        }
+        try await corruptedStore.prepareEpisodeSearchIndex()
+        #expect(
+            try await corruptedStore.searchEpisodes(request).map(\.episodeID)
+                == expectedIDs
+        )
+        let canonical = try await corruptedStore.loadLibrary(
+            activePodcastIDs: [Self.feedURL]
+        )
+        #expect(canonical.episodes.count == 2)
+    }
+
+    @Test("A cancelled rebuild remains resumable and converges without ghosts")
+    func episodeSearchInterruptedRebuildResumes() async throws {
+        let store = SQLiteLocalLibraryCacheStore(
+            databaseURL: nil,
+            episodeSearchRebuildBatchSize: 1
+        )
+        let episodes = (0..<160).map { index in
+            makeEpisode(
+                id: "interrupted-\(index)",
+                title: index == 159
+                    ? "Interrupted Rebuild Sentinel"
+                    : "Routine Episode \(index)",
+                publishedAt: Date(
+                    timeIntervalSince1970: 1_700_000_000 + Double(index)
+                )
+            )
+        }
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: episodes),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_001_000)
+        )
+
+        let rebuildTask = Task {
+            try await store.prepareEpisodeSearchIndex()
+        }
+        var observedRebuild = false
+        for _ in 0..<200 {
+            if try await store.episodeSearchIndexStateDescription()
+                == "rebuilding" {
+                observedRebuild = true
+                break
+            }
+            await Task.yield()
+        }
+        try #require(observedRebuild)
+        rebuildTask.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await rebuildTask.value
+        }
+        #expect(
+            try await store.episodeSearchIndexStateDescription()
+                == "needsRebuild"
+        )
+
+        try await store.prepareEpisodeSearchIndex()
+        let hits = try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "interrupted rebuild sentinel",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(hits.map(\.episodeID) == ["interrupted-159"])
+    }
+
+    @Test("Identity replacement, cancellation, and concurrent refresh stay bounded")
+    func episodeSearchIdentityReplacementAndConcurrency() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "old-identity",
+                    title: "Copper Wayfinder",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
+        )
+        try await store.prepareEpisodeSearchIndex()
+
+        try await store.deleteEpisodes(episodeIDs: ["old-identity"])
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "new-identity",
+                    title: "Copper Wayfinder",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        let request = EpisodeSearchIndexRequest(
+            query: "copper",
+            mode: .episodes,
+            activePodcastIDs: [Self.feedURL]
+        )
+        #expect(
+            try await store.searchEpisodes(request).map(\.episodeID)
+                == ["new-identity"]
+        )
+
+        let cancelledSearch = Task {
+            try Task.checkCancellation()
+            return try await store.searchEpisodes(request)
+        }
+        cancelledSearch.cancel()
+        await #expect(throws: CancellationError.self) {
+            _ = try await cancelledSearch.value
+        }
+
+        let searches = Task {
+            for _ in 0..<20 {
+                _ = try await store.searchEpisodes(request)
+            }
+        }
+        let refresh = Task {
+            try await store.upsertCache(
+                from: makeFeedSnapshot(episodes: [
+                    makeEpisode(
+                        id: "new-identity",
+                        title: "Silver Wayfinder",
+                        publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                    )
+                ]),
+                refreshedAt: Date(timeIntervalSince1970: 1_700_000_500)
+            )
+        }
+        try await searches.value
+        try await refresh.value
+
+        #expect(try await store.searchEpisodes(request).isEmpty)
+        #expect(
+            try await store.searchEpisodes(
+                EpisodeSearchIndexRequest(
+                    query: "silver wayfinder",
+                    mode: .episodes,
+                    activePodcastIDs: [Self.feedURL]
+                )
+            ).map(\.episodeID) == ["new-identity"]
+        )
     }
 
     @Test("Deleting one feed's cache leaves other feeds untouched")
     func deleteCacheRemovesSingleFeed() async throws {
         let store = SQLiteLocalLibraryCacheStore.inMemory()
         try await seedTwoFeeds(in: store)
+        try await store.prepareEpisodeSearchIndex()
 
         try await store.deleteCache(forPodcastID: Self.feedURL)
 
@@ -416,12 +1356,27 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(library.podcastsByFeedURL[Self.otherFeedURL] != nil)
         #expect(library.episodes.map(\.episodeID) == ["ep-other"])
         #expect(library.refreshLogs.map(\.feedURL) == [Self.otherFeedURL])
+        #expect(try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "main",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL, Self.otherFeedURL]
+            )
+        ).isEmpty)
+        #expect(try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "other episode",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL, Self.otherFeedURL]
+            )
+        ).map(\.episodeID) == ["ep-other"])
     }
 
     @Test("Deleting all local cache clears podcasts, episodes, and refresh logs")
     func deleteAllLocalCacheClearsEverything() async throws {
         let store = SQLiteLocalLibraryCacheStore.inMemory()
         try await seedTwoFeeds(in: store)
+        try await store.prepareEpisodeSearchIndex()
 
         try await store.deleteAllLocalCache()
 
@@ -429,6 +1384,13 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(library.podcastsByFeedURL.isEmpty)
         #expect(library.episodes.isEmpty)
         #expect(library.refreshLogs.isEmpty)
+        #expect(try await store.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "episode",
+                mode: .fullText,
+                activePodcastIDs: [Self.feedURL, Self.otherFeedURL]
+            )
+        ).isEmpty)
     }
 
     @Test("Legacy import inserts rows, marks completion, and ignores conflicting re-imports")

@@ -35,7 +35,8 @@ struct SearchView: View {
         let requestKey = EpisodeSearchRequestKey(
             episodes: episodes,
             query: query,
-            mode: .fullText
+            mode: .fullText,
+            corpusRevision: appModel.library.episodeSearchCorpusRevision
         )
         let taskKey = SearchSessionTaskKey(scope: scope, request: requestKey)
         let searchResults = searchSession.displayedResults(for: requestKey)
@@ -81,6 +82,9 @@ struct SearchView: View {
             } else {
                 switch scope {
                 case .library:
+                    if searchSession.isIndexedSearchUnavailable {
+                        SearchIndexUpdatingIndicator()
+                    }
                     EpisodeSearchResultsContent(
                         mode: .fullText,
                         isLoadingVisible: searchSession.isLoadingVisible,
@@ -135,6 +139,13 @@ struct SearchView: View {
                 episodes: episodes,
                 query: query,
                 mode: .fullText,
+                corpusRevision: library.episodeSearchCorpusRevision,
+                indexedSearchProvider: {
+                    await library.searchEpisodes(
+                        query: query,
+                        mode: .fullText
+                    )
+                },
                 showNotesProvider: { await library.showNotesHTMLByEpisodeID() }
             )
         }

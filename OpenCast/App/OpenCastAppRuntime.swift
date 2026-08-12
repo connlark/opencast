@@ -11,6 +11,7 @@ final class OpenCastAppRuntime {
     let appModel: OpenCastAppModel
 
     private init() {
+        SearchColdStartProbe.recordProcessStart()
         do {
             let launchConfiguration = OpenCastLaunchConfiguration.current
             self.launchConfiguration = launchConfiguration
@@ -83,6 +84,10 @@ final class OpenCastAppRuntime {
                 launchConfiguration: launchConfiguration,
                 inMemoryStore: inMemoryCacheStore
             )
+            let library = Self.libraryStore(
+                launchConfiguration: launchConfiguration,
+                localCacheStore: localLibraryCacheStore
+            )
             let onboardingState = OnboardingStateStore()
             let transcriptionModels = launchConfiguration.usesInMemoryStore
                 ? TranscriptionModelStore(
@@ -97,6 +102,7 @@ final class OpenCastAppRuntime {
             appModel = OpenCastAppModel(
                 cacheController: cacheController,
                 httpClient: httpClient,
+                library: library,
                 localLibraryCacheStore: localLibraryCacheStore,
                 transcriptionModels: transcriptionModels,
                 appleSpeechAssets: appleSpeechAssets,
@@ -150,6 +156,9 @@ final class OpenCastAppRuntime {
         launchConfiguration: OpenCastLaunchConfiguration,
         inMemoryStore: SQLiteLocalLibraryCacheStore?
     ) -> (any LocalLibraryCacheStore)? {
+        if let databaseURL = SearchColdStartProbe.dedicatedDatabaseURL {
+            return SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        }
         guard let inMemoryStore else {
             return nil
         }
@@ -163,6 +172,21 @@ final class OpenCastAppRuntime {
         }
         #endif
         return inMemoryStore
+    }
+
+    private static func libraryStore(
+        launchConfiguration: OpenCastLaunchConfiguration,
+        localCacheStore: (any LocalLibraryCacheStore)?
+    ) -> LibraryStore? {
+        guard launchConfiguration.usesUITestSeedFeedRefreshService,
+              let localCacheStore
+        else {
+            return nil
+        }
+        return LibraryStore(
+            feedService: OpenCastUITestSeedFeedRefreshService(),
+            localCache: localCacheStore
+        )
     }
 
     private static func syncStatusStore(

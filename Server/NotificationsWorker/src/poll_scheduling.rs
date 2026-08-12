@@ -1,5 +1,7 @@
 //! Pure poll-interval policy: feeds earn their polling rate from their
-//! observed publish cadence instead of a flat constant. No I/O.
+//! observed publish cadence instead of a flat constant. Cadence is a pure
+//! accelerator: it can tighten the age-tier baseline as a predicted publish
+//! approaches, never loosen it. No I/O.
 
 /// Base (fastest) poll interval. `worker_app::FEED_POLL_INTERVAL_SECONDS` is
 /// defined from this constant; keep the literal only here.
@@ -16,7 +18,8 @@ const MAX_CADENCE_SECONDS: i64 = 90 * 24 * 60 * 60;
 const MIN_CADENCE_GAPS: usize = 3;
 const CADENCE_EPISODE_SAMPLE: usize = 10;
 
-/// Age tiers for feeds without a usable cadence prediction.
+/// Age tiers on the latest publish: the baseline interval for every feed. A
+/// live cadence prediction can only tighten these, never loosen them.
 const RECENT_PUBLISH_AGE_SECONDS: i64 = 2 * 24 * 60 * 60;
 const ACTIVE_AGE_SECONDS: i64 = 14 * 24 * 60 * 60;
 const QUIET_AGE_SECONDS: i64 = 60 * 24 * 60 * 60;
@@ -55,7 +58,9 @@ pub fn publish_cadence_seconds(published_at: &mut Vec<i64>) -> Option<i64> {
 }
 
 /// Poll interval for a feed given its learned cadence and latest publish
-/// timestamp. Never returns less than `HOT_INTERVAL_SECONDS`.
+/// timestamp. The latest-publish age tier is the ceiling; a live cadence
+/// prediction can only pull the interval below it. Never returns less than
+/// `HOT_INTERVAL_SECONDS`.
 pub fn poll_interval_seconds(
     cadence: Option<i64>,
     latest_published_at: Option<i64>,
@@ -64,6 +69,7 @@ pub fn poll_interval_seconds(
     let Some(latest) = latest_published_at else {
         return UNKNOWN_HISTORY_INTERVAL_SECONDS;
     };
+    let age_tier = age_tier_interval_seconds(now.saturating_sub(latest));
 
     if let Some(cadence) = cadence {
         let expected = latest.saturating_add(cadence);
@@ -72,14 +78,20 @@ pub fn poll_interval_seconds(
             if time_to_expected <= 0 {
                 return HOT_INTERVAL_SECONDS;
             }
-            return (time_to_expected / APPROACH_DIVISOR)
+            let approach = (time_to_expected / APPROACH_DIVISOR)
                 .clamp(HOT_INTERVAL_SECONDS, APPROACH_MAX_INTERVAL_SECONDS);
+            return approach.min(age_tier);
         }
         // Expected publish blew past the grace window: the show is
         // off-schedule, so the prediction is stale. Fall through to age tiers.
     }
 
-    let age = now.saturating_sub(latest);
+    age_tier
+}
+
+/// Baseline interval for the latest publish age. Future-dated `pubDate`
+/// values have age less than or equal to zero and therefore use the hot tier.
+fn age_tier_interval_seconds(age: i64) -> i64 {
     if age <= RECENT_PUBLISH_AGE_SECONDS {
         HOT_INTERVAL_SECONDS
     } else if age <= ACTIVE_AGE_SECONDS {
@@ -208,20 +220,79 @@ mod tests {
 
     #[test]
     fn interval_ramps_down_as_expected_publish_approaches() {
-        // Mid-cycle weekly show: 3.5 days out → capped at the approach max.
+        // Mid-cycle weekly show: age tier beats the capped approach ramp.
         assert_eq!(
             poll_interval_seconds(Some(WEEK), Some(NOW - WEEK / 2), NOW),
-            APPROACH_MAX_INTERVAL_SECONDS
+            ACTIVE_INTERVAL_SECONDS
         );
-        // 8 hours out → 2 hours.
+        // 8 hours out: age tier beats the 2-hour approach ramp.
         assert_eq!(
             poll_interval_seconds(Some(WEEK), Some(NOW - WEEK + 8 * 60 * 60), NOW),
-            2 * 60 * 60
+            ACTIVE_INTERVAL_SECONDS
+        );
+        // 2 hours out: approach ramp accelerates below the age tier.
+        assert_eq!(
+            poll_interval_seconds(Some(WEEK), Some(NOW - WEEK + 2 * 60 * 60), NOW),
+            30 * 60
         );
         // 20 minutes out → floored at hot.
         assert_eq!(
             poll_interval_seconds(Some(WEEK), Some(NOW - WEEK + 20 * 60), NOW),
             HOT_INTERVAL_SECONDS
+        );
+        // A future-dated pubDate is hot even with a cadence prediction.
+        assert_eq!(
+            poll_interval_seconds(Some(WEEK), Some(NOW + DAY), NOW),
+            HOT_INTERVAL_SECONDS
+        );
+    }
+
+    #[test]
+    fn interval_age_tier_beats_slower_cadence_ramp() {
+        assert_eq!(
+            poll_interval_seconds(Some(752_090), Some(NOW - WEEK), NOW),
+            ACTIVE_INTERVAL_SECONDS
+        );
+    }
+
+    #[test]
+    fn interval_cadence_only_accelerates() {
+        let cadences = [
+            MIN_CADENCE_SECONDS,
+            DAY,
+            WEEK,
+            752_090,
+            30 * DAY,
+            MAX_CADENCE_SECONDS,
+        ];
+        let ages = [
+            -DAY,
+            0,
+            DAY,
+            3 * DAY,
+            WEEK,
+            13 * DAY,
+            20 * DAY,
+            59 * DAY,
+            90 * DAY,
+            400 * DAY,
+        ];
+        for cadence in cadences {
+            for age in ages {
+                assert!(
+                    poll_interval_seconds(Some(cadence), Some(NOW - age), NOW)
+                        <= poll_interval_seconds(None, Some(NOW - age), NOW),
+                    "cadence={cadence} age={age}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn interval_monthly_show_still_accelerates_toward_predicted_drop() {
+        assert_eq!(
+            poll_interval_seconds(Some(30 * DAY), Some(NOW - 30 * DAY + 12 * 60 * 60), NOW),
+            3 * 60 * 60
         );
     }
 

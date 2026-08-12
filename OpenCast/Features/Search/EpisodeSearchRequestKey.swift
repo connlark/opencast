@@ -8,10 +8,14 @@ struct EpisodeSearchRequestKey: Equatable, Sendable {
     init(
         episodes: [EpisodeListItemSnapshot],
         query: String,
-        mode: EpisodeSearchMode
+        mode: EpisodeSearchMode,
+        corpusRevision: Int? = nil
     ) {
         self.query = query
         self.mode = mode
-        corpus = EpisodeSearchCorpusKey(episodes: episodes)
+        corpus = EpisodeSearchCorpusKey(
+            episodes: episodes,
+            sourceRevision: corpusRevision
+        )
     }
 }

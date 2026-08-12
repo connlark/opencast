@@ -32,6 +32,36 @@ struct OpenCastLaunchConfigurationTests {
         #expect(configuration.forcedAppearance == .system)
         #expect(configuration.adFreePassPresentationOverride == nil)
         #expect(configuration.uiTestLibraryLoadDelayMilliseconds == nil)
+        #expect(configuration.usesUITestSeedFeedRefreshService == false)
+    }
+
+    @Test("Search cold-start probe flags resolve without UI testing mode")
+    func searchColdStartProbeFlagsResolveWithoutUITestingMode() {
+        let disabled = OpenCastLaunchConfiguration.resolving(
+            arguments: ["OpenCast"],
+            environment: [:]
+        )
+        #expect(disabled.runsSearchColdStartProbe == false)
+        #expect(disabled.seedsSearchColdStartCorpus == false)
+        #expect(disabled.disablesSearchIndexPreparation == false)
+        #expect(disabled.searchColdStartProbeLabel == nil)
+
+        let enabled = OpenCastLaunchConfiguration.resolving(
+            arguments: [
+                "OpenCast",
+                SearchColdStartProbe.probeArgument,
+                SearchColdStartProbe.seedArgument,
+                SearchColdStartProbe.disablePreparationArgument,
+                SearchColdStartProbe.labelArgument,
+                "baseline-run"
+            ],
+            environment: [:]
+        )
+        #expect(enabled.runsSearchColdStartProbe == true)
+        #expect(enabled.seedsSearchColdStartCorpus == true)
+        #expect(enabled.disablesSearchIndexPreparation == true)
+        #expect(enabled.searchColdStartProbeLabel == "baseline-run")
+        #expect(enabled.usesInMemoryStore == false)
     }
 
     @Test("Voice Boost device probe is Debug-only and implies diagnostics")
@@ -181,6 +211,21 @@ struct OpenCastLaunchConfigurationTests {
 
         #expect(ignoredConfiguration.uiTestLibraryLoadDelayMilliseconds == nil)
         #expect(enabledConfiguration.uiTestLibraryLoadDelayMilliseconds == 750)
+    }
+
+    @Test("UI-test seed feed refresh service requires UI testing mode")
+    func uiTestSeedFeedRefreshServiceRequiresUITestingMode() {
+        let ignoredConfiguration = OpenCastLaunchConfiguration.resolving(
+            arguments: ["OpenCast"],
+            environment: ["OPENCAST_UI_TEST_REFRESH_SEED_FEED": "1"]
+        )
+        let enabledConfiguration = OpenCastLaunchConfiguration.resolving(
+            arguments: ["OpenCast", "--opencast-ui-testing"],
+            environment: ["OPENCAST_UI_TEST_REFRESH_SEED_FEED": "1"]
+        )
+
+        #expect(ignoredConfiguration.usesUITestSeedFeedRefreshService == false)
+        #expect(enabledConfiguration.usesUITestSeedFeedRefreshService == true)
     }
 
     @Test("UI-test CloudKit account status override requires UI testing mode")

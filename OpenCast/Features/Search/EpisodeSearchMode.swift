@@ -1,6 +1,6 @@
 import Foundation
 
-enum EpisodeSearchMode: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum EpisodeSearchMode: String, CaseIterable, Identifiable, Sendable {
     case episodes
     case fullText
 

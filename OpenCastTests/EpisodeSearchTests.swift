@@ -69,6 +69,138 @@ struct EpisodeSearchTests {
         #expect(session.isSearching == false)
     }
 
+    @Test("Search session publishes indexed ranking without loading legacy full text")
+    func searchSessionPublishesIndexedRanking() async {
+        let episodes = [
+            makeEpisode(id: "first", title: "First Indexed Result"),
+            makeEpisode(id: "second", title: "Second Indexed Result")
+        ]
+        let session = EpisodeSearchSession()
+        var loadedLegacyShowNotes = false
+
+        await session.update(
+            episodes: episodes,
+            query: "indexed",
+            mode: .fullText,
+            corpusRevision: 7,
+            indexedSearchProvider: {
+                [self.makeIndexHit(id: "second"), self.makeIndexHit(id: "first")]
+            },
+            showNotesProvider: {
+                loadedLegacyShowNotes = true
+                return [:]
+            },
+            debounceDuration: .zero
+        )
+
+        #expect(resultIDs(session.results) == ["second", "first"])
+        #expect(loadedLegacyShowNotes == false)
+        #expect(session.isSearching == false)
+    }
+
+    @Test("Search session without a corpus revision rebuilds the lookup for a same-shape corpus")
+    func searchSessionWithoutRevisionRebuildsLookupForSameShapeCorpus() async {
+        let cachedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let firstCorpus = [
+            makeEpisode(id: "anchor", title: "Anchor", cachedAt: cachedAt),
+            makeEpisode(id: "removed", title: "Indexed Beacon", cachedAt: cachedAt),
+            makeEpisode(id: "zenith", title: "Zenith", cachedAt: cachedAt)
+        ]
+        // Same count, boundary IDs, and newest cachedAt: only the middle
+        // membership changed, which the revision-less corpus key cannot see.
+        let secondCorpus = [
+            firstCorpus[0],
+            makeEpisode(id: "added", title: "Indexed Beacon", cachedAt: cachedAt),
+            firstCorpus[2]
+        ]
+        let session = EpisodeSearchSession()
+
+        await session.update(
+            episodes: firstCorpus,
+            query: "indexed",
+            mode: .fullText,
+            indexedSearchProvider: { [self.makeIndexHit(id: "removed")] },
+            debounceDuration: .zero
+        )
+        #expect(resultIDs(session.results) == ["removed"])
+
+        await session.update(
+            episodes: secondCorpus,
+            query: "indexed",
+            mode: .fullText,
+            indexedSearchProvider: { [self.makeIndexHit(id: "added")] },
+            debounceDuration: .zero
+        )
+        #expect(resultIDs(session.results) == ["added"])
+    }
+
+    @Test("Indexed search appends matches from unindexed orphan episodes")
+    func indexedSearchAppendsUnindexedOrphanMatches() async {
+        let episodes = [
+            makeEpisode(id: "indexed", title: "Beacon Update"),
+            makeEpisode(id: "orphan", title: "Beacon Farewell"),
+            makeEpisode(id: "orphan-miss", title: "Harbor Notes")
+        ]
+        let session = EpisodeSearchSession()
+
+        await session.update(
+            episodes: episodes,
+            query: "beacon",
+            mode: .episodes,
+            unindexedEpisodes: [episodes[1], episodes[2]],
+            indexedSearchProvider: { [self.makeIndexHit(id: "indexed")] },
+            debounceDuration: .zero
+        )
+
+        #expect(resultIDs(session.results) == ["indexed", "orphan"])
+    }
+
+    @Test("Normalization folds Turkish dotted and dotless I pairs identically")
+    func normalizationFoldsTurkishDottedAndDotlessIPairs() {
+        #expect(SearchTextNormalization.normalize("IŞIK") == "isik")
+        #expect(SearchTextNormalization.normalize("ışık") == "isik")
+        #expect(SearchTextNormalization.normalize("İzmir") == "izmir")
+        #expect(
+            SearchTextNormalization.canonicalSearchText("IŞIK Hikayesi")
+                == SearchTextNormalization.canonicalSearchText("ışık hikayesi")
+        )
+    }
+
+    @Test("Search session rejects an indexed result from an older corpus revision")
+    func searchSessionRejectsStaleIndexedCorpus() async {
+        let episodes = [
+            makeEpisode(id: "old", title: "Old Indexed Result"),
+            makeEpisode(id: "new", title: "New Indexed Result")
+        ]
+        let session = EpisodeSearchSession()
+        let oldProvider = PendingEpisodeSearchIndexProvider()
+        let oldSearch = Task {
+            await session.update(
+                episodes: episodes,
+                query: "indexed",
+                mode: .fullText,
+                corpusRevision: 1,
+                indexedSearchProvider: { await oldProvider.value() },
+                debounceDuration: .zero
+            )
+        }
+
+        await oldProvider.waitUntilStarted()
+        await session.update(
+            episodes: episodes,
+            query: "indexed",
+            mode: .fullText,
+            corpusRevision: 2,
+            indexedSearchProvider: { [self.makeIndexHit(id: "new")] },
+            debounceDuration: .zero
+        )
+        await oldProvider.finish(returning: [makeIndexHit(id: "old")])
+        await oldSearch.value
+
+        #expect(resultIDs(session.results) == ["new"])
+        #expect(session.isSearching == false)
+    }
+
     @Test("Search session keeps prior results during debounce")
     func searchSessionKeepsPriorResultsDuringDebounce() async throws {
         let episodes = [
@@ -447,6 +579,123 @@ struct EpisodeSearchTests {
         #expect(snippetText.count <= 180)
     }
 
+    @Test("Index-unavailable fallback bounds matching to visible fields")
+    func indexUnavailableFallbackBoundsMatchingToVisibleFields() async {
+        let episodes = [
+            makeEpisode(id: "visible-hit", title: "Beacon Update"),
+            makeEpisode(id: "notes-only", title: "Harbor Notes")
+        ]
+        let session = EpisodeSearchSession()
+        var loadedShowNotes = false
+
+        await session.update(
+            episodes: episodes,
+            query: "beacon",
+            mode: .fullText,
+            indexedSearchProvider: { nil },
+            showNotesProvider: {
+                loadedShowNotes = true
+                return ["notes-only": "<p>A beacon hidden in the show notes.</p>"]
+            },
+            debounceDuration: .zero
+        )
+
+        #expect(session.isIndexedSearchUnavailable)
+        #expect(resultIDs(session.results) == ["visible-hit"])
+        #expect(loadedShowNotes == false)
+    }
+
+    @Test("Index availability transitions mid-typing in both directions")
+    func indexAvailabilityTransitionsMidTyping() async {
+        let episodes = [
+            makeEpisode(id: "beacon", title: "Beacon Update")
+        ]
+        let session = EpisodeSearchSession()
+
+        await session.update(
+            episodes: episodes,
+            query: "bea",
+            mode: .fullText,
+            indexedSearchProvider: { nil },
+            debounceDuration: .zero
+        )
+        #expect(session.isIndexedSearchUnavailable)
+        #expect(resultIDs(session.results) == ["beacon"])
+
+        // The rebuild finishes between keystrokes: the indexed path answers
+        // and the degraded-state affordances must clear.
+        await session.update(
+            episodes: episodes,
+            query: "beac",
+            mode: .fullText,
+            indexedSearchProvider: { [self.makeIndexHit(id: "beacon")] },
+            debounceDuration: .zero
+        )
+        #expect(session.isIndexedSearchUnavailable == false)
+        #expect(resultIDs(session.results) == ["beacon"])
+
+        // And back: a mid-typing index failure re-enters the bounded fallback.
+        await session.update(
+            episodes: episodes,
+            query: "beaco",
+            mode: .fullText,
+            indexedSearchProvider: { nil },
+            debounceDuration: .zero
+        )
+        #expect(session.isIndexedSearchUnavailable)
+        #expect(resultIDs(session.results) == ["beacon"])
+    }
+
+    @Test("Callers without an indexed provider keep full legacy semantics")
+    func absentIndexedProviderKeepsFullLegacySemantics() async throws {
+        let episodes = [
+            makeEpisode(id: "notes-only", title: "Harbor Notes")
+        ]
+        let session = EpisodeSearchSession()
+
+        await session.update(
+            episodes: episodes,
+            query: "beacon",
+            mode: .fullText,
+            showNotesProvider: {
+                ["notes-only": "<p>A beacon hidden in the show notes.</p>"]
+            },
+            debounceDuration: .zero
+        )
+
+        #expect(session.isIndexedSearchUnavailable == false)
+        let result = try #require(session.results.first)
+        #expect(result.episode.episodeID == "notes-only")
+        #expect(plainText(result.snippet).contains("beacon"))
+    }
+
+    @Test("A blank query clears the index-unavailable state")
+    func blankQueryClearsIndexUnavailableState() async {
+        let episodes = [
+            makeEpisode(id: "beacon", title: "Beacon Update")
+        ]
+        let session = EpisodeSearchSession()
+
+        await session.update(
+            episodes: episodes,
+            query: "beacon",
+            mode: .fullText,
+            indexedSearchProvider: { nil },
+            debounceDuration: .zero
+        )
+        #expect(session.isIndexedSearchUnavailable)
+
+        await session.update(
+            episodes: episodes,
+            query: "   ",
+            mode: .fullText,
+            indexedSearchProvider: { nil },
+            debounceDuration: .zero
+        )
+        #expect(session.isIndexedSearchUnavailable == false)
+        #expect(session.results.isEmpty)
+    }
+
     @Test("Visible matches are highlighted in title and podcast title")
     func visibleMatchesAreHighlightedInTitleAndPodcastTitle() throws {
         let episodes = [
@@ -464,7 +713,8 @@ struct EpisodeSearchTests {
         podcastTitle: String = "Example Podcast",
         title: String,
         summary: String? = nil,
-        publishedAt: TimeInterval = 100
+        publishedAt: TimeInterval = 100,
+        cachedAt: Date = .now
     ) -> EpisodeListItemSnapshot {
         EpisodeListItemSnapshot(
             episodeID: id,
@@ -478,7 +728,29 @@ struct EpisodeSearchTests {
             artworkURL: nil,
             artworkPreview: nil,
             guid: nil,
-            cachedAt: .now
+            cachedAt: cachedAt
+        )
+    }
+
+    private func makeIndexHit(id: String) -> EpisodeSearchIndexHit {
+        EpisodeSearchIndexHit(
+            episodeID: id,
+            titleHighlightTerms: ["indexed"],
+            podcastTitleHighlightTerms: [],
+            snippet: nil,
+            snippetHighlightTerms: [],
+            transcriptPassage: nil,
+            scoreTrace: EpisodeSearchScoreTrace(
+                channel: .exact,
+                rawBM25: -1,
+                exactTitle: false,
+                titlePhrase: true,
+                exactPodcastTitle: false,
+                podcastTitlePhrase: false,
+                matchedFields: [.title],
+                recencyBoost: 0,
+                finalScore: 1
+            )
         )
     }
 
@@ -526,9 +798,39 @@ struct EpisodeSearchTests {
 
     private struct WaitTimeoutError: Error, CustomStringConvertible {
         let description: String
+}
+
+private actor PendingEpisodeSearchIndexProvider {
+    private var hasStarted = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var resultContinuation:
+        CheckedContinuation<[EpisodeSearchIndexHit]?, Never>?
+
+    func value() async -> [EpisodeSearchIndexHit]? {
+        await withCheckedContinuation { continuation in
+            resultContinuation = continuation
+            hasStarted = true
+            startContinuation?.resume()
+            startContinuation = nil
+        }
     }
 
-    private actor PendingShowNotesProvider {
+    func waitUntilStarted() async {
+        if hasStarted {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            startContinuation = continuation
+        }
+    }
+
+    func finish(returning result: [EpisodeSearchIndexHit]?) {
+        resultContinuation?.resume(returning: result)
+        resultContinuation = nil
+    }
+}
+
+private actor PendingShowNotesProvider {
         private var hasStarted = false
         private var startContinuation: CheckedContinuation<Void, Never>?
         private var resultContinuation: CheckedContinuation<[String: String]?, Never>?

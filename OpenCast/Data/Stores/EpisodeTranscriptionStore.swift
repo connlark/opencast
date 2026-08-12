@@ -42,6 +42,24 @@ final class EpisodeTranscriptionStore {
     @ObservationIgnored private var activePreservesPriorCompletedTranscript = false
     @ObservationIgnored private var priorCompletedTranscriptSnapshot: PriorCompletedTranscriptSnapshot?
     @ObservationIgnored private let stateChanges = StoreChangeNotifier()
+    @ObservationIgnored var episodeSearchIndexStore: (any LocalLibraryCacheStore)? {
+        didSet {
+            registerEpisodeSearchIndexRebuildHandler()
+            scheduleEpisodeSearchIndexReconciliation()
+        }
+    }
+    /// Reconciliation treats `records` as the complete canonical set and
+    /// deletes every transcript document it does not retain. At composition
+    /// time the index store is assigned before `load(modelContext:)` can run,
+    /// so an ungated reconciliation would wipe the whole transcript index on
+    /// every launch. Only record sets fetched from (or authoritatively
+    /// emptied against) the model context may drive reconciliation.
+    @ObservationIgnored private var hasAuthoritativeRecords = false
+    /// Episodes that may hold transcript documents in the search index
+    /// (conservative superset). Lets non-completed state commits skip
+    /// enqueueing removes for episodes the index has never seen.
+    @ObservationIgnored private var searchIndexCandidateEpisodeIDs: Set<String> = []
+    @ObservationIgnored private var episodeSearchIndexSyncTask: Task<Void, Never>?
     @ObservationIgnored private var lastProgressPublicationByEpisodeID: [String: Date] = [:]
     @ObservationIgnored var onEpisodeStateChanged: ((String) -> Void)?
     @ObservationIgnored var onAppleSpeechRunInterrupted: ((_ episodeID: String, _ restoredPriorTranscript: Bool) -> Void)?
@@ -477,22 +495,36 @@ final class EpisodeTranscriptionStore {
                let fileName = relativePath.split(separator: "/").last {
                 record.transcriptRelativePath = "\(newDirectory)/\(fileName)"
             }
+            // Reconciliation rejects a sidecar whose embedded identity does
+            // not match its migrated record. Rewrite valid documents while
+            // leaving unreadable legacy sidecars to the existing repair path.
+            // A failed rewrite must not abort the migration after records
+            // were already re-keyed: the stale sidecar stays identity-guarded
+            // out of the search index, and duplicate collapse, reload, and
+            // the state-change notification below must always run.
+            if let relativePath = record.transcriptRelativePath,
+               var document = try? fileStore.read(relativePath: relativePath) {
+                document.episodeID = newEpisodeID
+                document.podcastID = canonicalPodcastID
+                try? fileStore.write(document, relativePath: relativePath)
+            }
+        }
+        if !targetRecords.isEmpty {
+            duplicateRepairCount += 1
+            _ = collapseDuplicateRecords(
+                migratingRecords + targetRecords,
+                subscribedFeedURLs: EpisodeSidecarRepair.subscribedFeedURLs(
+                    modelContext: modelContext
+                ),
+                modelContext: modelContext
+            )
         }
 
-        guard !targetRecords.isEmpty else {
-            return
-        }
-        duplicateRepairCount += 1
-        let deletedRecords = collapseDuplicateRecords(
-            migratingRecords + targetRecords,
-            subscribedFeedURLs: EpisodeSidecarRepair.subscribedFeedURLs(modelContext: modelContext),
-            modelContext: modelContext
-        )
-        guard !deletedRecords.isEmpty else {
-            return
-        }
-        let deletedIdentities = Set(deletedRecords.map(ObjectIdentifier.init))
-        records.removeAll { deletedIdentities.contains(ObjectIdentifier($0)) }
+        // A SwiftData refetch is not guaranteed to return the same object
+        // instances held by `records`. Reload once from the final migration
+        // set so lookup, duplicate repair, and derived-index reconciliation
+        // all observe the successor identity.
+        try reload(modelContext: modelContext)
         notifyEpisodeStateChanged(newEpisodeID)
     }
 
@@ -508,6 +540,8 @@ final class EpisodeTranscriptionStore {
         try fileStore.deleteAllTranscripts()
         try modelContext.save()
         records.removeAll()
+        hasAuthoritativeRecords = true
+        scheduleEpisodeSearchIndexReconciliation()
         lastErrorMessage = nil
         lastErrorEpisodeID = nil
         stateChanges.notify()
@@ -1631,11 +1665,183 @@ final class EpisodeTranscriptionStore {
         if resort {
             records.sort { $0.updatedAt > $1.updatedAt }
         }
+        scheduleEpisodeSearchIndexUpdate(for: record)
         notifyEpisodeStateChanged(record.episodeID)
     }
 
     private func reload(modelContext: ModelContext) throws {
         records = try fetchRecords(modelContext: modelContext)
+        hasAuthoritativeRecords = true
+        scheduleEpisodeSearchIndexReconciliation()
+    }
+
+    func waitForEpisodeSearchIndexSync() async {
+        await episodeSearchIndexSyncTask?.value
+    }
+
+    private func scheduleEpisodeSearchIndexUpdate(
+        for record: EpisodeTranscriptRecord
+    ) {
+        guard let store = episodeSearchIndexStore else {
+            return
+        }
+        let episodeID = record.episodeID
+        let snapshot = searchIndexSnapshot(for: record)
+        if snapshot == nil {
+            // Non-completed state commits (progress checkpoints, failures of
+            // never-indexed episodes) would otherwise enqueue a remove for an
+            // episode the index has never seen.
+            guard searchIndexCandidateEpisodeIDs.contains(episodeID) else {
+                return
+            }
+            searchIndexCandidateEpisodeIDs.remove(episodeID)
+        } else {
+            searchIndexCandidateEpisodeIDs.insert(episodeID)
+        }
+        let fileStore = fileStore
+        enqueueEpisodeSearchIndexOperation {
+            do {
+                if let snapshot,
+                   let document = try? await fileStore.readOffCaller(
+                    relativePath: snapshot.relativePath
+                   ),
+                   document.episodeID == snapshot.episodeID {
+                    let searchDocument = EpisodeSearchTranscriptDocument(
+                        document
+                    )
+                    try await Self.retryingAfterIndexPreparation(store) {
+                        try await store.replaceEpisodeTranscriptSearchDocument(
+                            searchDocument
+                        )
+                    }
+                } else {
+                    try await Self.retryingAfterIndexPreparation(store) {
+                        try await store.removeEpisodeTranscriptSearchDocument(
+                            episodeID: episodeID
+                        )
+                    }
+                }
+            } catch is CancellationError {
+            } catch {
+                // This is a fully derived index. Canonical transcript state
+                // remains authoritative and the next load reconciles it.
+            }
+        }
+    }
+
+    private static func retryingAfterIndexPreparation(
+        _ store: any LocalLibraryCacheStore,
+        _ operation: () async throws -> Void
+    ) async throws {
+        do {
+            try await operation()
+        } catch is EpisodeSearchIndexError {
+            try await store.prepareEpisodeSearchIndex()
+            try await operation()
+        }
+    }
+
+    private func registerEpisodeSearchIndexRebuildHandler() {
+        guard let store = episodeSearchIndexStore else {
+            return
+        }
+        Task { [weak self] in
+            // A rebuild restores metadata from `episode_cache` but cannot
+            // read transcript sidecars; re-reconcile so transcript documents
+            // repopulate without waiting for the next launch.
+            await store.setEpisodeSearchIndexRebuildHandler {
+                self?.scheduleEpisodeSearchIndexReconciliation()
+            }
+        }
+    }
+
+    private func scheduleEpisodeSearchIndexReconciliation() {
+        guard let store = episodeSearchIndexStore, hasAuthoritativeRecords else {
+            return
+        }
+        var snapshotsByEpisodeID: [String: EpisodeSearchIndexDocumentSnapshot] = [:]
+        for record in records {
+            if let snapshot = searchIndexSnapshot(for: record),
+               snapshotsByEpisodeID[snapshot.episodeID] == nil {
+                snapshotsByEpisodeID[snapshot.episodeID] = snapshot
+            }
+        }
+        if let priorCompletedTranscriptSnapshot,
+           let relativePath =
+            priorCompletedTranscriptSnapshot.transcriptRelativePath,
+           snapshotsByEpisodeID[priorCompletedTranscriptSnapshot.episodeID] == nil {
+            snapshotsByEpisodeID[priorCompletedTranscriptSnapshot.episodeID] =
+                EpisodeSearchIndexDocumentSnapshot(
+                    episodeID: priorCompletedTranscriptSnapshot.episodeID,
+                    relativePath: relativePath
+                )
+        }
+        let snapshots = snapshotsByEpisodeID.values.sorted {
+            $0.episodeID < $1.episodeID
+        }
+        searchIndexCandidateEpisodeIDs = Set(snapshotsByEpisodeID.keys)
+        let fileStore = fileStore
+        enqueueEpisodeSearchIndexOperation {
+            do {
+                try await store.prepareEpisodeSearchIndex()
+                var retainedEpisodeIDs: Set<String> = []
+                for snapshot in snapshots {
+                    try Task.checkCancellation()
+                    guard let document = try? await fileStore.readOffCaller(
+                        relativePath: snapshot.relativePath
+                    ), document.episodeID == snapshot.episodeID else {
+                        continue
+                    }
+                    try await store.replaceEpisodeTranscriptSearchDocument(
+                        EpisodeSearchTranscriptDocument(document)
+                    )
+                    retainedEpisodeIDs.insert(snapshot.episodeID)
+                }
+                try Task.checkCancellation()
+                try await store.reconcileEpisodeTranscriptSearchDocuments(
+                    retaining: retainedEpisodeIDs
+                )
+            } catch is CancellationError {
+            } catch {
+                // Search is derived and self-healing; never fail transcript
+                // loading, completion, or deletion because indexing failed.
+            }
+        }
+    }
+
+    private func searchIndexSnapshot(
+        for record: EpisodeTranscriptRecord
+    ) -> EpisodeSearchIndexDocumentSnapshot? {
+        if record.state == .completed,
+           let relativePath = record.transcriptRelativePath {
+            return EpisodeSearchIndexDocumentSnapshot(
+                episodeID: record.episodeID,
+                relativePath: relativePath
+            )
+        }
+        if let priorCompletedTranscriptSnapshot,
+           let relativePath =
+            priorCompletedTranscriptSnapshot.transcriptRelativePath,
+           priorCompletedTranscriptSnapshot.episodeID == record.episodeID {
+            return EpisodeSearchIndexDocumentSnapshot(
+                episodeID: record.episodeID,
+                relativePath: relativePath
+            )
+        }
+        return nil
+    }
+
+    private func enqueueEpisodeSearchIndexOperation(
+        _ operation: @escaping @Sendable () async -> Void
+    ) {
+        let precedingTask = episodeSearchIndexSyncTask
+        episodeSearchIndexSyncTask = Task {
+            await precedingTask?.value
+            guard !Task.isCancelled else {
+                return
+            }
+            await operation()
+        }
     }
 
     private func fetchStoredRecord(
@@ -1764,6 +1970,11 @@ final class EpisodeTranscriptionStore {
         )
     }
 
+}
+
+private struct EpisodeSearchIndexDocumentSnapshot: Sendable {
+    let episodeID: String
+    let relativePath: String
 }
 
 /// In-memory image of a completed transcript record taken before an improve

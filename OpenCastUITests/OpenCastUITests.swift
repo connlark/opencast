@@ -159,6 +159,127 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSearchRevampSeededScopesEvidenceAndRelaunch() throws {
+        let app = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true,
+            seedsCompletedDownload: true,
+            seedsCompletedTranscript: true
+        )
+        app.launchEnvironment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS"] =
+            "noAccount"
+        app.launchEnvironment["OPENCAST_UI_TEST_REFRESH_SEED_FEED"] = "1"
+        app.launch()
+
+        openLibrary(in: app)
+        let refreshedSubscription = seededSubscriptionRow(in: app)
+        assertExists(refreshedSubscription, named: "seeded show for feed refresh")
+        refreshedSubscription.tap()
+        let refreshActions = app.buttons["Podcast Actions"]
+        assertExists(refreshActions, named: "podcast actions for feed refresh")
+        refreshActions.tap()
+        let refreshButton = app.buttons["Refresh"].firstMatch
+        assertExists(refreshButton, named: "feed refresh action")
+        refreshButton.tap()
+
+        var searchField = openGlobalSearch(in: app)
+        searchField.typeText("Refresh Boundary Signal")
+        let refreshedResult = seededEpisodeRow(in: app)
+        assertExists(
+            refreshedResult,
+            named: "refresh-updated global result",
+            timeout: 20
+        )
+        XCTAssertTrue(refreshedResult.label.contains("Refresh Boundary Signal"))
+        attachSmokeScreenshot(named: "search_revamp_feed_refresh")
+
+        clearSearchFieldForRevampSmoke(searchField)
+        searchField = openGlobalSearch(in: app)
+        searchField.typeText("Determinstic UI Episode")
+        assertExists(
+            seededEpisodeRow(in: app),
+            named: "typo-corrected global result",
+            timeout: 20
+        )
+
+        clearSearchFieldForRevampSmoke(searchField)
+        searchField = openGlobalSearch(in: app)
+        searchField.typeText("missing replacement query")
+        clearSearchFieldForRevampSmoke(searchField)
+        searchField = openGlobalSearch(in: app)
+        searchField.typeText("Seed Sponsor")
+        assertExists(
+            seededEpisodeRow(in: app),
+            named: "transcript-only global result after rapid replacement",
+            timeout: 20
+        )
+        attachSmokeScreenshot(named: "search_revamp_global_transcript")
+
+        clearSearchFieldForRevampSmoke(searchField)
+        assertExists(
+            app.staticTexts["No Recent Searches"],
+            named: "unchanged blank-query state"
+        )
+
+        app.terminate()
+        app.launch()
+        searchField = openGlobalSearch(in: app)
+        searchField.typeText("Seed Sponsor")
+        assertExists(
+            seededEpisodeRow(in: app),
+            named: "transcript-only result after relaunch",
+            timeout: 20
+        )
+
+        app.terminate()
+        app.launch()
+        openLibrary(in: app)
+        let subscription = seededSubscriptionRow(in: app)
+        assertExists(subscription, named: "seeded show for scoped search")
+        subscription.tap()
+        let podcastActions = app.buttons["Podcast Actions"]
+        assertExists(podcastActions, named: "podcast actions for scoped search")
+        podcastActions.tap()
+        app.buttons["Search"].firstMatch.tap()
+        searchField = presentedSearchField(
+            in: app,
+            navigationBarTitle: "UI Test Show"
+        )
+        // Search scopes are presented only after the field has content on the
+        // current iOS 26 search presentation.
+        searchField.typeText("show notes")
+        let showFullTextScope = app.buttons["Full Text"].firstMatch
+        assertExists(showFullTextScope, named: "show full-text scope")
+        showFullTextScope.tap()
+        assertExists(
+            seededEpisodeRow(in: app),
+            named: "show-notes result in show scope",
+            timeout: 20
+        )
+
+        app.terminate()
+        app.launch()
+        openSection("Downloads", in: app)
+        let downloadSearch = app.navigationBars["Downloads"].buttons["Search"]
+        assertExists(downloadSearch, named: "downloads search button")
+        downloadSearch.tap()
+        searchField = presentedSearchField(
+            in: app,
+            navigationBarTitle: "Downloads"
+        )
+        searchField.typeText("Seed Sponsor")
+        let downloadFullTextScope = app.buttons["Full Text"].firstMatch
+        assertExists(downloadFullTextScope, named: "downloads full-text scope")
+        downloadFullTextScope.tap()
+        assertExists(
+            seededEpisodeRow(in: app),
+            named: "transcript-only result in download scope",
+            timeout: 20
+        )
+        attachSmokeScreenshot(named: "search_revamp_download_transcript")
+    }
+
+    @MainActor
     func testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty() throws {
         let app = makeCompletedOnboardingApp(libraryLoadDelayMilliseconds: 6_000)
         app.launchEnvironment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS"] = "noAccount"
@@ -3656,6 +3777,27 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func clearSearchFieldForRevampSmoke(
+        _ searchField: XCUIElement
+    ) {
+        searchField.tap()
+        let clearButton = searchField.buttons["Clear text"].firstMatch
+        if clearButton.waitForExistence(timeout: 2), clearButton.isHittable {
+            clearButton.tap()
+            return
+        }
+        guard let value = searchField.value as? String, !value.isEmpty else {
+            return
+        }
+        searchField.typeText(
+            String(
+                repeating: XCUIKeyboardKey.delete.rawValue,
+                count: value.count + 2
+            )
+        )
+    }
+
+    @MainActor
     private func makeCompletedOnboardingApp(
         libraryLoadDelayMilliseconds: Int? = nil
     ) -> XCUIApplication {
@@ -4511,6 +4653,54 @@ final class OpenCastUITests: XCTestCase {
         line: UInt = #line
     ) {
         openSection("Library", in: app, file: file, line: line)
+    }
+
+    @MainActor
+    private func openGlobalSearch(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> XCUIElement {
+        openSection("Search", in: app, file: file, line: line)
+        return presentedSearchField(
+            in: app,
+            navigationBarTitle: "Search",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func presentedSearchField(
+        in app: XCUIApplication,
+        navigationBarTitle: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> XCUIElement {
+        let searchField = app.searchFields.firstMatch
+        if !searchField.waitForExistence(timeout: 2) {
+            let searchButtons = app.navigationBars[navigationBarTitle].buttons.matching(
+                NSPredicate(format: "label == %@", "Search")
+            )
+            assertExists(
+                searchButtons.firstMatch,
+                named: "search presentation button",
+                file: file,
+                line: line
+            )
+            let searchButton = searchButtons.allElementsBoundByIndex
+                .filter(\.isHittable)
+                .max { $0.frame.minX < $1.frame.minX }
+                ?? searchButtons.firstMatch
+            searchButton.tap()
+        }
+        assertExists(
+            searchField,
+            named: "search field",
+            file: file,
+            line: line
+        )
+        return searchField
     }
 
     @MainActor

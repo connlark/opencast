@@ -59,7 +59,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         // benchmark for this launch (measure-only spike; no product path).
         if StatefulSpikeDecoderProbe.isRequested {
             await StatefulSpikeDecoderProbe.run(
-                runLabel: argumentValue(from: arguments, flag: runLabelArgument) ?? environment[runLabelEnvironmentKey],
+                runLabel: BenchmarkHarnessSupport.argumentValue(from: arguments, flag: runLabelArgument) ?? environment[runLabelEnvironmentKey],
                 commit: environment[commitEnvironmentKey]
             )
             return
@@ -72,7 +72,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         }
 
         func value(_ flag: String, _ environmentKey: String) -> String? {
-            argumentValue(from: arguments, flag: flag) ?? environment[environmentKey]
+            BenchmarkHarnessSupport.argumentValue(from: arguments, flag: flag) ?? environment[environmentKey]
         }
 
         let runner = TranscriptionBenchmarkRunner(
@@ -112,7 +112,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         report.runLabel = runLabel
         report.commit = commit
         report.notes = notes
-        report.deviceModelIdentifier = Self.deviceModelIdentifier()
+        report.deviceModelIdentifier = BenchmarkHarnessSupport.machineIdentifier()
         report.systemVersion = ProcessInfo.processInfo.operatingSystemVersionString
         report.appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         report.appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
@@ -124,7 +124,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
 
         let reportURL = Self.reportURL(runLabel: runLabel, startedAt: report.createdAt)
         do {
-            try Self.prepareBenchmarkDirectory()
+            try BenchmarkHarnessSupport.prepareReportDirectory(Self.benchmarkDirectory())
 
             let feed = try await DefaultFeedService().fetchFeed(at: feedURL)
             let episode = try Self.selectedEpisode(from: feed, preferredEpisodeTitle: preferredEpisodeTitle)
@@ -149,7 +149,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
             report.sourceFilePath = audioFileURL.path
             report.sourceFileByteCount = try Self.fileByteCount(at: audioFileURL)
             report.sourceFileSHA256 = try await OpenCastSHA256.hashFileOffCaller(at: audioFileURL)
-            try Self.write(report, to: reportURL)
+            try BenchmarkHarnessSupport.writeJSONReport(report, to: reportURL)
 
             let request = OpenCastLongFormTranscriptionRequest(
                 audioFileURL: audioFileURL,
@@ -185,7 +185,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
                     )
                 }
                 lastResult = runResult.result
-                try Self.write(report, to: reportURL)
+                try BenchmarkHarnessSupport.writeJSONReport(report, to: reportURL)
             }
             await service.unload()
 
@@ -203,13 +203,13 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
             report.outputsIdenticalAcrossRuns = Set(report.runs.map { "\($0.textSHA256)|\($0.segmentsSHA256)" }).count <= 1
             report.status = "completed"
             report.completedAt = .now
-            try Self.write(report, to: reportURL)
+            try BenchmarkHarnessSupport.writeJSONReport(report, to: reportURL)
         } catch {
             report.status = "failed"
             report.errorMessage = error.localizedDescription
             report.completedAt = .now
-            try? Self.prepareBenchmarkDirectory()
-            try? Self.write(report, to: reportURL)
+            try? BenchmarkHarnessSupport.prepareReportDirectory(Self.benchmarkDirectory())
+            try? BenchmarkHarnessSupport.writeJSONReport(report, to: reportURL)
         }
     }
 
@@ -219,7 +219,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         request: OpenCastLongFormTranscriptionRequest
     ) async throws -> (metrics: TranscriptionBenchmarkRunResult, result: OpenCastTranscriptionResult) {
         let startedAt = Date.now
-        let thermalStart = thermalStateDescription()
+        let thermalStart = BenchmarkHarnessSupport.thermalStateDescription
         let batteryStart = await batterySnapshot()
         let footprintStart = MemoryFootprintSampler.currentFootprintBytes()
         let footprintSampler = MemoryFootprintSampler()
@@ -251,7 +251,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
             startedAt: startedAt,
             finishedAt: .now,
             thermalStateStart: thermalStart,
-            thermalStateEnd: thermalStateDescription(),
+            thermalStateEnd: BenchmarkHarnessSupport.thermalStateDescription,
             batteryLevelStart: batteryStart.level,
             batteryLevelEnd: batteryEnd.level,
             batteryStateStart: batteryStart.state,
@@ -333,7 +333,7 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
     private static func downloadAudioIfNeeded(_ audioURL: URL, episodeID: String) async throws -> URL {
         let destination = benchmarkDirectory()
             .appending(path: "Audio", directoryHint: .isDirectory)
-            .appending(path: "\(safeStem(episodeID)).mp3")
+            .appending(path: "\(BenchmarkHarnessSupport.safeStem(episodeID)).mp3")
         if FileManager.default.fileExists(atPath: destination.path),
            (try? fileByteCount(at: destination)) ?? 0 > 0 {
             return destination
@@ -412,44 +412,9 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         return (level >= 0 ? Double(level) : nil, state)
     }
 
-    private static func thermalStateDescription() -> String {
-        switch ProcessInfo.processInfo.thermalState {
-        case .nominal: "nominal"
-        case .fair: "fair"
-        case .serious: "serious"
-        case .critical: "critical"
-        @unknown default: "unknown"
-        }
-    }
-
-    private static func deviceModelIdentifier() -> String {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        return withUnsafeBytes(of: &systemInfo.machine) { buffer in
-            let data = Data(buffer.prefix(while: { $0 != 0 }))
-            return String(decoding: data, as: UTF8.self)
-        }
-    }
-
-    private static func prepareBenchmarkDirectory() throws {
-        try FileManager.default.createDirectory(
-            at: benchmarkDirectory(),
-            withIntermediateDirectories: true
-        )
-        try LocalBackupExclusion.apply(to: benchmarkDirectory())
-    }
-
-    private static func write(_ report: TranscriptionBenchmarkReport, to url: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(report)
-        try data.write(to: url, options: [.atomic])
-    }
-
     private static func reportURL(runLabel: String?, startedAt: Date) -> URL {
         let timestamp = startedAt.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))
-        let stem = safeStem(([runLabel, timestamp].compactMap(\.self)).joined(separator: "-"))
+        let stem = BenchmarkHarnessSupport.safeStem(([runLabel, timestamp].compactMap(\.self)).joined(separator: "-"))
         return benchmarkDirectory().appending(path: "benchmark-\(stem).json")
     }
 
@@ -466,30 +431,4 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         }
     }
 
-    private static func safeStem(_ rawValue: String) -> String {
-        let allowedScalars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        var value = ""
-        for scalar in rawValue.unicodeScalars {
-            if allowedScalars.contains(scalar) {
-                value.unicodeScalars.append(scalar)
-            } else {
-                value.append("-")
-            }
-        }
-
-        let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
-        return String((trimmed.isEmpty ? "run" : trimmed).prefix(96))
-    }
-
-    private static func argumentValue(from arguments: [String], flag: String) -> String? {
-        for (index, argument) in arguments.enumerated() {
-            if argument.hasPrefix("\(flag)=") {
-                return String(argument.dropFirst(flag.count + 1))
-            }
-            if argument == flag, arguments.indices.contains(index + 1) {
-                return arguments[index + 1]
-            }
-        }
-        return nil
-    }
 }
