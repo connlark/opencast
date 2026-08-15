@@ -50,7 +50,8 @@ export default defineConfig(async () => {
       include: ['test/workerd-production/**/*.spec.mjs'],
       setupFiles: ['./test/workerd-production/apply-migrations.mjs'],
       testTimeout: 30_000,
-      poolOptions: { workers: { isolatedStorage: false, singleWorker: true } },
+      maxWorkers: 1,
+      isolate: false,
     },
   };
 });

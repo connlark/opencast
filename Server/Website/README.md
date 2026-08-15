@@ -23,7 +23,9 @@ These URLs are referenced by `OpenCast/App/OpenCastConstants.swift` and `fastlan
 
 ## Build / develop / deploy
 
-Yarn 1.22.22 only (never npm/npx; no `package-lock.json`).
+Yarn only (never npm/npx; no `package-lock.json`). The repository root pins
+Yarn 4 and owns the single `yarn.lock`; `yarn install` anywhere in the repo
+installs every workspace.
 
 ```bash
 yarn dev        # next dev (Next routes only, no worker logic)
@@ -37,7 +39,7 @@ yarn lint
 ```
 
 `yarn preview` exercises the marketing host. It does **not** exercise the
-support host: wrangler 4.111.0's dev proxy rewrites the worker's `request.url`
+support host: wrangler 4.123.0's dev proxy rewrites the worker's `request.url`
 host to the local address, so `url.hostname === "support.opencast.mobile"` never
 matches locally and every request falls through to the marketing branch (a
 `Host:` header or `curl --resolve` does not change this). Verify support-host
@@ -55,14 +57,14 @@ toggle and no persisted override.
   `[data-theme="dark"]` — selectors this site never sets. Keep every token
   declaration on `:root`: HeroUI's derived tokens are `color-mix()` chains that
   resolve against the element's own custom properties.
-- The dark block mirrors the token set `@heroui/styles@3.2.2` declares at
+- The dark block mirrors the token set `@heroui/styles@3.2.4` declares at
   `dist/themes/default/variables.css:177-293`. Re-diff that block on upgrade.
 - `color-scheme: light dark` on `:root` is deliberate; it replaces HeroUI's
   hardcoded `color-scheme: light` so native scrollbars and form controls follow
   the system too.
-- HeroUI 3.2.2's `dark:` Tailwind variant has a broken `prefers-color-scheme`
-  fallback (`dist/variants/index.css:97` has a stray trailing `&`), so `dark:*`
-  utilities silently do nothing here. Use tokens, not `dark:` utilities.
+- HeroUI 3.2.4 fixes the `dark:` Tailwind variant's system-preference fallback.
+  This site still uses tokens instead of `dark:` utilities so its native
+  light/dark palette remains centralized in `globals.css`.
 - Brand orange (`#F9730E`) and gold (`#FEC44C`) are display colors: on the warm
   off-white surfaces they measure 2.63:1 and 1.49:1, below even the 3:1 UI bar.
   Light mode uses darkened, hue-matched functional variants (`--accent`,

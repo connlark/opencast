@@ -24,11 +24,16 @@ MODELS = {
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 SAFE_RESPONSE_HEADERS = {"content-type", "cf-ray", "server-timing"}
 
+# The repository-root Wrangler owned by the Yarn workspace; a bare `wrangler`
+# on PATH would be an unpinned global install.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+WRANGLER_BIN = REPO_ROOT / "node_modules" / ".bin" / "wrangler"
+
 
 def wrangler_json(*arguments: str) -> dict:
     with tempfile.TemporaryDirectory(prefix="opencast-remote-transcription-wrangler-") as cwd:
         completed = subprocess.run(
-            ["wrangler", *arguments, "--json"],
+            [str(WRANGLER_BIN), *arguments, "--json"],
             check=True,
             capture_output=True,
             text=True,

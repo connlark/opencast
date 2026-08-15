@@ -3,7 +3,7 @@
 # state and credentials.
 name = "your-purchase-worker"
 main = "src/index.ts"
-compatibility_date = "2026-07-09"
+compatibility_date = "2026-08-14"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 

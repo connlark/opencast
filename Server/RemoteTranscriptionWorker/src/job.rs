@@ -545,11 +545,12 @@ impl JobRecord {
         }
     }
 
-    /// Widest chunk a wave may have to hold, answerable *before* the
-    /// manifest exists — the overlap driver picks its width while chunking
-    /// is still running, when `chunks` is empty. Manifest, else the native
-    /// plan (exact at probe time), else the container's ceiling.
-    pub fn planned_max_chunk_bytes(&self) -> i64 {
+    /// Exact chunk geometry when the job has any: the durable manifest's
+    /// widest chunk, else the stored native plan's. `None` before either
+    /// exists so each caller picks its own pre-plan stand-in — the driver
+    /// assumes the container ceiling, ETA projects provisional geometry
+    /// first — from this one chain, so they cannot desynchronize.
+    pub fn exact_max_chunk_bytes(&self) -> Option<i64> {
         self.chunks
             .iter()
             .map(|chunk| chunk.byte_count)
@@ -559,6 +560,14 @@ impl JobRecord {
                     .as_ref()
                     .and_then(|plan| plan.chunks.iter().map(|chunk| chunk.byte_count).max())
             })
+    }
+
+    /// Widest chunk a wave may have to hold, answerable *before* the
+    /// manifest exists — the wave driver picks its width while chunking
+    /// is still running, when `chunks` is empty. Manifest, else the native
+    /// plan (exact at probe time), else the container's ceiling.
+    pub fn planned_max_chunk_bytes(&self) -> i64 {
+        self.exact_max_chunk_bytes()
             .unwrap_or(CONTAINER_MAX_CHUNK_RAW_BYTES)
     }
 }

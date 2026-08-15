@@ -32,8 +32,8 @@ const UNKNOWN_HISTORY_INTERVAL_SECONDS: i64 = QUIET_INTERVAL_SECONDS;
 /// Median gap between the newest episode publish timestamps, clamped to
 /// `[MIN_CADENCE_SECONDS, MAX_CADENCE_SECONDS]`. Returns `None` when there are
 /// fewer than `MIN_CADENCE_GAPS` positive gaps. Input order is not trusted;
-/// the vector is sorted in place.
-pub fn publish_cadence_seconds(published_at: &mut Vec<i64>) -> Option<i64> {
+/// the slice is sorted in place.
+pub fn publish_cadence_seconds(published_at: &mut [i64]) -> Option<i64> {
     published_at.sort_unstable_by(|a, b| b.cmp(a));
     let mut gaps: Vec<i64> = published_at
         .iter()
@@ -48,7 +48,7 @@ pub fn publish_cadence_seconds(published_at: &mut Vec<i64>) -> Option<i64> {
 
     gaps.sort_unstable();
     let middle = gaps.len() / 2;
-    let median = if gaps.len() % 2 == 0 {
+    let median = if gaps.len().is_multiple_of(2) {
         (gaps[middle - 1] + gaps[middle]) / 2
     } else {
         gaps[middle]
@@ -152,8 +152,8 @@ mod tests {
 
     #[test]
     fn cadence_requires_minimum_positive_gaps() {
-        assert_eq!(publish_cadence_seconds(&mut vec![]), None);
-        assert_eq!(publish_cadence_seconds(&mut vec![NOW]), None);
+        assert_eq!(publish_cadence_seconds(&mut []), None);
+        assert_eq!(publish_cadence_seconds(&mut [NOW]), None);
         assert_eq!(publish_cadence_seconds(&mut weekly_pubdates(3)), None);
         assert_eq!(publish_cadence_seconds(&mut weekly_pubdates(4)), Some(WEEK));
     }

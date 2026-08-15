@@ -3,7 +3,7 @@
 //! diagnostics only ever carry the keyed URL hash.
 
 use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
 
 pub const URL_ENCRYPTION_KEY_SECRET: &str = "URL_ENCRYPTION_KEY";
@@ -38,10 +38,10 @@ pub fn encrypt_string(
     key: &[u8; 32],
     nonce_bytes: &[u8; 12],
 ) -> Result<String, CryptoError> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| CryptoError::InvalidKey)?;
+    let nonce = Nonce::from(*nonce_bytes);
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(&nonce, plaintext.as_bytes())
         .map_err(|_| CryptoError::EncryptFailed)?;
     let mut combined = Vec::with_capacity(12 + ciphertext.len());
     combined.extend_from_slice(nonce_bytes);
@@ -57,9 +57,13 @@ pub fn decrypt_string(encoded: &str, key: &[u8; 32]) -> Result<String, CryptoErr
         return Err(CryptoError::DecryptFailed);
     }
     let (nonce_bytes, ciphertext) = combined.split_at(12);
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce_bytes: &[u8; 12] = nonce_bytes
+        .try_into()
+        .map_err(|_| CryptoError::DecryptFailed)?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| CryptoError::InvalidKey)?;
+    let nonce = Nonce::from(*nonce_bytes);
     let plaintext = cipher
-        .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|_| CryptoError::DecryptFailed)?;
     String::from_utf8(plaintext).map_err(|_| CryptoError::DecryptFailed)
 }

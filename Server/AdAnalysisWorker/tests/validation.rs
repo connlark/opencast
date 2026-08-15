@@ -208,7 +208,9 @@ fn rejects_contract_and_size_guardrails_before_model_call() {
 
 #[test]
 fn envelope_body_cap_admits_any_bearer_size_payload_after_json_escaping() {
-    assert!(MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES >= 2 * MAX_BODY_BYTES + 8 * 1024);
+    const {
+        assert!(MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES >= 2 * MAX_BODY_BYTES + 8 * 1024);
+    }
 }
 
 #[test]
@@ -290,7 +292,9 @@ fn result_budget_leaves_headroom_under_the_do_write_limit() {
     // (ids, hashes, subject sets); the budget must leave real slack under
     // the DO storage 128 KiB per-value platform limit or an in-budget
     // result could still strand the job at the write.
-    assert!(MAX_RESULT_JSON_BYTES + 16 * 1024 < 128 * 1024);
+    const {
+        assert!(MAX_RESULT_JSON_BYTES + 16 * 1024 < 128 * 1024);
+    }
 }
 
 #[test]

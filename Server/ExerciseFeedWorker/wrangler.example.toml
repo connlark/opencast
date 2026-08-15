@@ -1,6 +1,6 @@
 name = "your-exercise-feed-worker"
 main = "src/index.js"
-compatibility_date = "2026-06-01"
+compatibility_date = "2026-08-14"
 workers_dev = false
 
 routes = [

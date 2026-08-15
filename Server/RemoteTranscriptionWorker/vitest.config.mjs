@@ -216,12 +216,8 @@ export default defineConfig(async () => {
       testTimeout: 30_000,
       // Jobs span multiple requests and alarms; tests share storage and use
       // unique client request IDs instead of per-test isolation.
-      poolOptions: {
-        workers: {
-          isolatedStorage: false,
-          singleWorker: true,
-        },
-      },
+      maxWorkers: 1,
+      isolate: false,
     },
   };
 });

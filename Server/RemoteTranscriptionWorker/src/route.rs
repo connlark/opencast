@@ -133,31 +133,6 @@ pub fn route_request(method: &str, path: &str, enabled: bool) -> RouteAction {
     RouteAction::Static(json_response(404, ErrorResponse::new("not_found")))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn flags_off_keeps_only_fail_closed_verification_and_money_routes() {
-        assert!(matches!(
-            route_request("POST", JOBS_PATH, false),
-            RouteAction::Static(StaticResponse { status: 503, .. })
-        ));
-        assert_eq!(
-            route_request("POST", APP_ATTEST_REGISTER_PATH, false),
-            RouteAction::AppAttestRegister
-        );
-        assert_eq!(
-            route_request("POST", PURCHASE_REDEEM_PATH, false),
-            RouteAction::PurchaseRedeem
-        );
-        assert!(matches!(
-            route_request("POST", APP_ATTEST_CHALLENGE_PATH, false),
-            RouteAction::Static(StaticResponse { status: 503, .. })
-        ));
-    }
-}
-
 pub fn json_response(status: u16, body: ErrorResponse) -> StaticResponse {
     StaticResponse {
         status,
@@ -215,5 +190,30 @@ fn method_not_allowed(allow: &'static str) -> StaticResponse {
         ],
         body: serde_json::to_string(&ErrorResponse::new("method_not_allowed"))
             .expect("error response serializes"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flags_off_keeps_only_fail_closed_verification_and_money_routes() {
+        assert!(matches!(
+            route_request("POST", JOBS_PATH, false),
+            RouteAction::Static(StaticResponse { status: 503, .. })
+        ));
+        assert_eq!(
+            route_request("POST", APP_ATTEST_REGISTER_PATH, false),
+            RouteAction::AppAttestRegister
+        );
+        assert_eq!(
+            route_request("POST", PURCHASE_REDEEM_PATH, false),
+            RouteAction::PurchaseRedeem
+        );
+        assert!(matches!(
+            route_request("POST", APP_ATTEST_CHALLENGE_PATH, false),
+            RouteAction::Static(StaticResponse { status: 503, .. })
+        ));
     }
 }

@@ -2,7 +2,6 @@
   "name": "@opencast/exercise-feed-worker",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "yarn@1.22.22",
   "scripts": {
     "dev": "wrangler dev",
     "deploy:dry-run": "wrangler deploy --dry-run --outdir dist",
@@ -10,12 +9,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.18.1",
-    "vitest": "^4.1.9",
-    "wrangler": "4.111.0"
-  },
-  "allowScripts": {
-    "workerd@1.20260701.1": true,
-    "esbuild@0.28.1": true
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
   }
 }

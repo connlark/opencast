@@ -11,17 +11,12 @@
     "login": "wrangler login",
     "test": "cargo test",
     "typecheck": "cargo check --target wasm32-unknown-unknown",
-    "build:worker": "cargo install -q \"worker-build@^0.8\" && \"$HOME/.cargo/bin/worker-build\" --release",
+    "build:worker": "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release",
     "test:integration": "yarn run build:worker && vitest run"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.18.1",
-    "vitest": "^4.1.9",
-    "wrangler": "4.111.0"
-  },
-  "allowScripts": {
-    "workerd@1.20260701.1": true,
-    "esbuild@0.28.1": true
-  },
-  "packageManager": "yarn@1.22.22"
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
 }

@@ -203,7 +203,7 @@
   :root {
     /*
      * HeroUI semantic tokens — dark appearance. Mirrors the set
-     * @heroui/styles@3.2.2 declares for `.dark` at
+     * @heroui/styles@3.2.4 declares for `.dark` at
      * dist/themes/default/variables.css:177-293; re-diff that block on upgrade.
      * Tokens derived there through color-mix() (the *-hover, *-soft,
      * background-secondary/tertiary, border-secondary/tertiary and

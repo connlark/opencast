@@ -39,6 +39,9 @@ use crate::types::{
 };
 
 const RECORD_KEY: &str = "job";
+/// One-shot marker for the dev-lane `fake-source-mismatch-fail` test hook
+/// (see the mismatch branch of `step_evaluate_identities`).
+const TEST_MISMATCH_FAIL_INJECTED_KEY: &str = "test_mismatch_fail_injected";
 const RESULT_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const BUSY_RETRY_SECONDS: u64 = 10;
 /// RTW-5 backstop budget: the terminal-path release attempt plus three
@@ -233,6 +236,32 @@ impl TranscriptionJob {
         }
     }
 
+    /// `update_record_if_live` that additionally refuses when the live state
+    /// is not `expected`: a compare-and-set for transitions whose decision
+    /// was made from a snapshot that an open input gate may have invalidated
+    /// (a subrequest await lets a concurrent `/source`, upload route, or
+    /// alarm turn advance the record). A refused-stale caller must treat the
+    /// turn as an idempotent no-op: no telemetry, no alarm change. Storage
+    /// awaits keep the input gate closed, so the check here and the re-read
+    /// inside `update_record_if_live` observe the same record.
+    async fn update_record_if_state<F>(&self, expected: &str, mutate: F) -> Result<StateUpdate>
+    where
+        F: FnOnce(&mut JobRecord),
+    {
+        let Some(record) = self.read_record().await? else {
+            return Ok(StateUpdate::Missing);
+        };
+        if job::transition_refusal(&record.state).is_none() && record.state != expected {
+            return Ok(StateUpdate::RefusedStale(record));
+        }
+        Ok(match self.update_record_if_live(mutate).await? {
+            LiveUpdate::Applied(record) => StateUpdate::Applied(record),
+            LiveUpdate::RefusedTerminal(record) => StateUpdate::RefusedTerminal(record),
+            LiveUpdate::RefusedCancelling(record) => StateUpdate::RefusedCancelling(record),
+            LiveUpdate::Missing => StateUpdate::Missing,
+        })
+    }
+
     async fn schedule(&self, delay: Duration) -> Result<()> {
         self.state.storage().set_alarm(delay).await
     }
@@ -323,7 +352,17 @@ impl TranscriptionJob {
         if message.origin_unsafe {
             // The server will never fetch this origin: skip staging entirely
             // and wait for the device's exact copy.
-            let record = self.enter_upload_path(&config).await?;
+            let record = match self.enter_upload_path(&config, job::STATE_CREATED).await? {
+                StateUpdate::Applied(record)
+                | StateUpdate::RefusedTerminal(record)
+                | StateUpdate::RefusedCancelling(record)
+                | StateUpdate::RefusedStale(record) => record,
+                StateUpdate::Missing => {
+                    return Err(worker::Error::RustError(
+                        "job record missing entering upload path".to_string(),
+                    ))
+                }
+            };
             self.bump("jobs_created", 1).await;
             return self.status_response(&record, None);
         }
@@ -348,9 +387,23 @@ impl TranscriptionJob {
             return json_error(404, types::ERROR_JOB_NOT_FOUND);
         };
 
-        if record.state == job::STATE_WAITING_FOR_DEVICE_SOURCE {
-            self.schedule(Duration::from_secs(0)).await?;
-        }
+        let record = if record.state == job::STATE_WAITING_FOR_DEVICE_SOURCE {
+            let config = match self.config() {
+                Ok(config) => config,
+                Err(error) => return json_error_body(503, error),
+            };
+            // The captured post-transition record IS the response: on a
+            // match the zero-delay probe alarm can interleave on the
+            // telemetry awaits and advance the live record to `probing`,
+            // and the matching response stays pinned to `source_matched`
+            // with its on-track ETA.
+            match self.step_evaluate_identities(&config).await? {
+                Some(record) => record,
+                None => return json_error(404, types::ERROR_JOB_NOT_FOUND),
+            }
+        } else {
+            record
+        };
         self.status_response(&record, None)
     }
 
@@ -367,7 +420,7 @@ impl TranscriptionJob {
             job: job_status(
                 &record,
                 config.is_development_lane(),
-                self.chunk_concurrency(&record, &config),
+                self.configured_ai_concurrency(&record, &config),
                 now_seconds(),
             ),
             poll_after_seconds: config.poll_after_seconds,
@@ -774,9 +827,14 @@ impl TranscriptionJob {
                 return json_error(409, types::ERROR_INVALID_REQUEST);
             }
         };
+        // Alarm before the fallible D1 telemetry (the RTW-4 ordering class,
+        // same shape as the matched branch of `step_evaluate_identities`):
+        // a reset parked on `sync_index`/`bump` must not leave this
+        // `source_matched` record waiting on the stale uploading-deadline
+        // alarm.
+        self.schedule(Duration::from_secs(0)).await?;
         self.sync_index(&updated).await;
         self.bump("exact_upload_completed", 1).await;
-        self.schedule(Duration::from_secs(0)).await?;
         self.status_response(&updated, None)
     }
 
@@ -822,7 +880,7 @@ impl TranscriptionJob {
             job::STATE_CREATED => self.step_staging(record, &config).await,
             job::STATE_STAGING_ORIGIN => self.step_staging(record, &config).await,
             job::STATE_WAITING_FOR_DEVICE_SOURCE => {
-                self.step_evaluate_identities(record, &config).await
+                self.step_evaluate_identities(&config).await.map(|_| ())
             }
             job::STATE_EXACT_UPLOAD_REQUIRED | job::STATE_EXACT_UPLOADING => {
                 // Nothing to drive server-side: the app owns the upload. The
@@ -926,7 +984,10 @@ impl TranscriptionJob {
                     LiveUpdate::Missing => return Ok(()),
                 };
                 self.sync_index(&updated).await;
-                self.step_evaluate_identities(updated, config).await
+                // Fresh-read evaluation: `/source` may have advanced the
+                // live record while `sync_index` held the gate open, so the
+                // captured `updated` snapshot must not drive the comparison.
+                self.step_evaluate_identities(config).await.map(|_| ())
             }
             Err(code) => {
                 // Pass 2 decision 1: the server couldn't stage the origin
@@ -938,7 +999,8 @@ impl TranscriptionJob {
                     "job {} origin staging failed ({code}); requesting exact upload",
                     record.job_id
                 );
-                self.enter_upload_path(config).await?;
+                self.enter_upload_path(config, job::STATE_STAGING_ORIGIN)
+                    .await?;
                 Ok(())
             }
         }
@@ -948,35 +1010,39 @@ impl TranscriptionJob {
     /// any partial server copy is already gone (staging aborts its multipart;
     /// the mismatch path deletes the raw object before calling this), the
     /// encrypted URL is cleared, and the job waits for the device's bytes
-    /// under its own 12 h deadline.
-    async fn enter_upload_path(&self, config: &AppConfig) -> Result<JobRecord> {
+    /// under its own 12 h deadline. `expected_state` is the state the
+    /// caller's routing decision observed: the reads and R2 delete below
+    /// open the input gate, so the transition compare-and-sets against it
+    /// instead of trusting the snapshot — a stale turn must never overwrite
+    /// `exact_uploading` (or any later live state) back to
+    /// `exact_upload_required`.
+    async fn enter_upload_path(
+        &self,
+        config: &AppConfig,
+        expected_state: &str,
+    ) -> Result<StateUpdate> {
         let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
         if let Some(record) = self.read_record().await? {
             bucket.delete(&job::r2_raw_key(&record.job_id)).await.ok();
         }
         let deadline = now_seconds() + config.exact_upload_required_deadline_seconds;
         let updated = match self
-            .update_record_if_live(|record| {
+            .update_record_if_state(expected_state, |record| {
                 record.enclosure_url_ciphertext = None;
                 record.state = job::STATE_EXACT_UPLOAD_REQUIRED.to_string();
                 record.state_deadline_at = Some(deadline);
             })
             .await?
         {
-            LiveUpdate::Applied(updated) => updated,
+            StateUpdate::Applied(updated) => updated,
             // The terminal path owns the record (a cancel raced the staging
             // or mismatch path that routed here): no schedule, no telemetry,
-            // hand the caller the record as-is.
-            LiveUpdate::RefusedTerminal(record) => {
+            // hand the caller the refusal as-is.
+            StateUpdate::RefusedTerminal(record) => {
                 self.delete_job_prefixes(&record.job_id).await.ok();
-                return Ok(record);
+                return Ok(StateUpdate::RefusedTerminal(record));
             }
-            LiveUpdate::RefusedCancelling(record) => return Ok(record),
-            LiveUpdate::Missing => {
-                return Err(worker::Error::RustError(
-                    "job record missing entering upload path".to_string(),
-                ))
-            }
+            refused => return Ok(refused),
         };
         // Alarm first, telemetry second: sync_index and bump are D1
         // subrequests, and a reset while parked on them would otherwise leave
@@ -988,10 +1054,45 @@ impl TranscriptionJob {
         self.schedule_at(deadline).await?;
         self.sync_index(&updated).await;
         self.bump("exact_upload_required", 1).await;
-        Ok(updated)
+        Ok(StateUpdate::Applied(updated))
     }
 
-    async fn step_evaluate_identities(&self, record: JobRecord, config: &AppConfig) -> Result<()> {
+    /// Identity evaluation shared by the alarm turn, the staging tail, and
+    /// the inline `/source` path. It always evaluates a freshly read record
+    /// — a caller's snapshot may predate an interleaved turn — and only
+    /// `waiting_for_device_source` may transition through identity
+    /// comparison: any later state is returned as an idempotent no-op, so a
+    /// stale alarm turn or repeated `/source` can never regress the machine
+    /// or double-count transition telemetry.
+    ///
+    /// Returns the record whose state the caller should report. On a match
+    /// that is the captured `source_matched` record — the pinned `/source`
+    /// response — never a re-read that the zero-delay probe alarm may
+    /// already have advanced to `probing`.
+    async fn step_evaluate_identities(&self, config: &AppConfig) -> Result<Option<JobRecord>> {
+        let Some(record) = self.read_record().await? else {
+            return Ok(None);
+        };
+        if record.state != job::STATE_WAITING_FOR_DEVICE_SOURCE {
+            return Ok(Some(record));
+        }
+        // Same deadline admission as the alarm path's `advance()` gate: a
+        // `/source` landing after the waiting deadline follows the
+        // deadline-expired terminal path instead of matching and advancing
+        // the job.
+        if let Some(deadline) = record.state_deadline_at {
+            if now_seconds() >= deadline {
+                let record = self
+                    .finish_terminal(
+                        record,
+                        job::STATE_CANCELLED,
+                        types::ERROR_DEADLINE_EXPIRED,
+                        None,
+                    )
+                    .await?;
+                return Ok(Some(record));
+            }
+        }
         match job::compare_identities(
             record.device_identity.as_ref(),
             record.server_sha256.as_deref(),
@@ -1001,36 +1102,90 @@ impl TranscriptionJob {
                 if let Some(deadline) = record.state_deadline_at {
                     self.schedule_at(deadline).await?;
                 }
-                Ok(())
+                Ok(Some(record))
             }
             job::IdentityComparison::Matched => {
                 let updated = match self
-                    .update_record_if_live(|record| {
+                    .update_record_if_state(job::STATE_WAITING_FOR_DEVICE_SOURCE, |record| {
                         record.state = job::STATE_SOURCE_MATCHED.to_string();
                         record.state_deadline_at = None;
                     })
                     .await?
                 {
-                    LiveUpdate::Applied(updated) => updated,
-                    LiveUpdate::RefusedTerminal(record) => {
+                    StateUpdate::Applied(updated) => updated,
+                    StateUpdate::RefusedTerminal(record) => {
                         self.delete_job_prefixes(&record.job_id).await.ok();
-                        return Ok(());
+                        return Ok(Some(record));
                     }
-                    LiveUpdate::RefusedCancelling(_) | LiveUpdate::Missing => return Ok(()),
+                    StateUpdate::RefusedCancelling(record) | StateUpdate::RefusedStale(record) => {
+                        return Ok(Some(record))
+                    }
+                    StateUpdate::Missing => return Ok(None),
                 };
+                // Alarm before the fallible D1 telemetry: `schedule` is a
+                // storage op, so the state write and the zero-delay probe
+                // alarm commit as one gated stretch, and a reset parked on
+                // `sync_index`/`bump` can no longer leave `source_matched`
+                // holding only the old waiting-state alarm — which may be
+                // up to twelve hours away (the RTW-4 ordering class).
+                self.schedule(Duration::from_secs(0)).await?;
                 self.sync_index(&updated).await;
                 self.bump("source_matched", 1).await;
-                self.schedule(Duration::from_secs(0)).await
+                Ok(Some(updated))
             }
             job::IdentityComparison::Mismatched => {
                 // DAI variant or stale device copy: delete the server copy
                 // FIRST (parent rule), then request the device's exact bytes
                 // instead of failing (pass 2 decision 1). Nothing is spent.
+                //
+                // The R2 delete and the upload-path entry are fallible, and
+                // a landed 5xx from the inline `/source` path is not retried
+                // by the app the way `alarm()` re-arms an alarm-turn error.
+                // Arm a safety alarm first so a mid-flight failure retries
+                // durably; success replaces it with the exact-upload
+                // deadline alarm at `enter_upload_path`'s tail.
+                self.schedule(Duration::from_secs(config.alarm_retry_seconds))
+                    .await?;
+                // Test-only failure injection (dev-lane FAKE_AI jobs whose
+                // language_code carries `fake-source-mismatch-fail`): fail
+                // exactly one evaluation here — after the safety alarm,
+                // before the fallible R2/upload-path work it protects — so
+                // the workerd suite can prove the inline mismatch error is
+                // retried durably instead of waiting out the twelve-hour
+                // deadline.
+                if self.fake_ai_enabled(config)
+                    && record
+                        .language_code
+                        .as_deref()
+                        .is_some_and(|code| code.contains("fake-source-mismatch-fail"))
+                {
+                    let storage = self.state.storage();
+                    let injected: Option<bool> =
+                        storage.get(TEST_MISMATCH_FAIL_INJECTED_KEY).await?;
+                    if injected.is_none() {
+                        storage.put(TEST_MISMATCH_FAIL_INJECTED_KEY, true).await?;
+                        return Err(worker::Error::RustError(
+                            "injected mismatch-path failure (test hook)".to_string(),
+                        ));
+                    }
+                }
                 let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
                 bucket.delete(&job::r2_raw_key(&record.job_id)).await?;
-                self.bump("source_mismatched", 1).await;
-                self.enter_upload_path(config).await?;
-                Ok(())
+                match self
+                    .enter_upload_path(config, job::STATE_WAITING_FOR_DEVICE_SOURCE)
+                    .await?
+                {
+                    StateUpdate::Applied(updated) => {
+                        // Counted only on the winning transition, so a
+                        // repeated or concurrent report can't double-bump.
+                        self.bump("source_mismatched", 1).await;
+                        Ok(Some(updated))
+                    }
+                    StateUpdate::RefusedTerminal(record)
+                    | StateUpdate::RefusedCancelling(record)
+                    | StateUpdate::RefusedStale(record) => Ok(Some(record)),
+                    StateUpdate::Missing => Ok(None),
+                }
             }
         }
     }
@@ -1839,9 +1994,13 @@ impl TranscriptionJob {
         self.schedule(Duration::from_secs(0)).await
     }
 
-    /// FAKE_AI test hooks may pin a per-job concurrency (workerd A/B proof);
-    /// deploys tune the real knob via `CHUNK_AI_CONCURRENCY`.
-    fn chunk_concurrency(&self, record: &JobRecord, config: &AppConfig) -> u32 {
+    /// Configured AI wave ceiling before any geometry clamp: the FAKE_AI
+    /// per-job override (workerd A/B proof), else `CHUNK_AI_CONCURRENCY`.
+    /// ETA call sites take this raw ceiling and apply `chunk_ai_concurrency`
+    /// once with their own provisional-or-exact geometry; only the driver
+    /// path below clamps with planned geometry. Never feed a pre-clamped
+    /// value into `eta::` — that double-clamps and understates width.
+    fn configured_ai_concurrency(&self, record: &JobRecord, config: &AppConfig) -> u32 {
         if self.fake_ai_enabled(config) {
             if let Some(concurrency) =
                 ai::parse_fake_hooks(record.language_code.as_deref()).concurrency_override
@@ -1849,11 +2008,16 @@ impl TranscriptionJob {
                 return concurrency.clamp(1, 8);
             }
         }
-        // Chunks are only as large as the source's bitrate makes them, and a
-        // wave holds every chunk it runs. Bound the product, not the count.
+        config.chunk_ai_concurrency
+    }
+
+    /// Wave width the real driver runs. Chunks are only as large as the
+    /// source's bitrate makes them, and a wave holds every chunk it runs:
+    /// bound the product, not the count.
+    fn chunk_concurrency(&self, record: &JobRecord, config: &AppConfig) -> u32 {
         job::chunk_ai_concurrency(
             record.planned_max_chunk_bytes(),
-            config.chunk_ai_concurrency,
+            self.configured_ai_concurrency(record, config),
         )
     }
 
@@ -3481,7 +3645,7 @@ impl TranscriptionJob {
             max_slots: config.global_inference_concurrency,
             remaining_seconds: eta::self_remaining_seconds(
                 record,
-                self.chunk_concurrency(record, config),
+                self.configured_ai_concurrency(record, config),
                 now_seconds(),
             ),
             default_remaining_seconds: config.queue_default_remaining_seconds,
@@ -3557,16 +3721,16 @@ impl TranscriptionJob {
     fn status_response(&self, record: &JobRecord, balance: Option<Balance>) -> Result<Response> {
         let config = self.config().ok();
         let include_phase_timestamps = config.as_ref().is_some_and(AppConfig::is_development_lane);
-        let chunk_concurrency = config
+        let configured_concurrency = config
             .as_ref()
-            .map(|config| self.chunk_concurrency(record, config))
+            .map(|config| self.configured_ai_concurrency(record, config))
             .unwrap_or(4);
         let response = types::JobResponse {
             schema_version: SCHEMA_VERSION,
             job: job_status(
                 record,
                 include_phase_timestamps,
-                chunk_concurrency,
+                configured_concurrency,
                 now_seconds(),
             ),
             balance,
@@ -3591,6 +3755,19 @@ enum LiveUpdate {
     Applied(JobRecord),
     RefusedTerminal(JobRecord),
     RefusedCancelling(JobRecord),
+    Missing,
+}
+
+/// Outcome of a state-guarded record write (`update_record_if_state`):
+/// `LiveUpdate`'s refusal flavors plus the stale one, kept separate so the
+/// many `update_record_if_live` matches never carry an unreachable arm.
+enum StateUpdate {
+    Applied(JobRecord),
+    RefusedTerminal(JobRecord),
+    RefusedCancelling(JobRecord),
+    /// Live record, but no longer in the state the caller's decision was
+    /// based on: another turn already advanced it — idempotent no-op.
+    RefusedStale(JobRecord),
     Missing,
 }
 
@@ -3660,11 +3837,11 @@ enum ChunkCallResult {
 pub fn job_status(
     record: &JobRecord,
     include_phase_timestamps: bool,
-    chunk_concurrency: u32,
+    configured_concurrency: u32,
     now: i64,
 ) -> JobStatus {
     let chunk_progress = eta::chunk_progress(record);
-    let estimate = eta::project(record, chunk_concurrency, now);
+    let estimate = eta::project(record, configured_concurrency, now);
     let progress = if chunk_progress.is_none() && estimate.is_none() {
         None
     } else {

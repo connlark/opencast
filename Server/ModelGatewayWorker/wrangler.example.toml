@@ -1,6 +1,6 @@
 name = "your-model-gateway-worker"
 main = "build/index.js"
-compatibility_date = "2026-07-09"
+compatibility_date = "2026-08-14"
 workers_dev = true
 
 [observability]
@@ -15,7 +15,7 @@ invocation_logs = true
 enabled = false
 
 [build]
-command = "cargo install -q \"worker-build@^0.8\" && \"$HOME/.cargo/bin/worker-build\" --release"
+command = "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release"
 
 [vars]
 MODEL_OBJECT_PREFIX = "opencast/models"

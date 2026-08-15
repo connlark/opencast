@@ -30,7 +30,7 @@ reconciliation and the "Merge Duplicate Episodes" sweep.
 ```sh
 cp wrangler.example.toml wrangler.toml
 # Replace the example Worker name, route, and KV namespace ID first.
-yarn install
+yarn install         # workspace install at the repository root (any directory works)
 yarn deploy          # single lane; custom domain rides the route config
 yarn wrangler secret put ADMIN_TOKEN   # regenerate per exercise session
 ```

@@ -11,22 +11,17 @@
     "login": "wrangler login",
     "test": "cargo test",
     "typecheck": "cargo check --target wasm32-unknown-unknown",
-    "build:worker": "cargo install -q \"worker-build@^0.8\" && \"$HOME/.cargo/bin/worker-build\" --release",
+    "build:worker": "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release",
     "test:integration": "yarn run build:worker && vitest run",
     "test:production": "yarn run build:worker && vitest run -c vitest.production.config.mjs",
-    "test:purchase": "yarn run build:worker && yarn --cwd ../PurchaseWorker build:test-bundle && vitest run -c vitest.purchase.config.mjs && vitest run -c vitest.killswitch.config.mjs",
+    "test:purchase": "yarn run build:worker && yarn workspace opencast-purchase-worker build:test-bundle && vitest run -c vitest.purchase.config.mjs && vitest run -c vitest.killswitch.config.mjs",
     "provision": "./scripts/provision-dev.sh",
     "provision:production": "./scripts/provision-production.sh"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.18.1",
-    "jsonwebtoken": "^9.0.2",
-    "vitest": "^4.1.9",
-    "wrangler": "4.111.0"
-  },
-  "allowScripts": {
-    "workerd@1.20260701.1": true,
-    "esbuild@0.28.1": true
-  },
-  "packageManager": "yarn@1.22.22"
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "jsonwebtoken": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
 }

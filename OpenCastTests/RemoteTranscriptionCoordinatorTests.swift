@@ -1408,6 +1408,20 @@ struct RemoteTranscriptionProgressMappingTests {
         #expect(stitching.stage == .finalizing)
     }
 
+    @Test("A probing ETA reaches the checking stage and remaining-time copy")
+    func probingETA() throws {
+        let tracker = RemoteTranscriptionProgressTracker()
+        let progress = try #require(tracker.activeProgress(for: status(
+            state: .probing,
+            estimatedRemainingSeconds: 75,
+            estimateStatus: .onTrack
+        )))
+
+        #expect(progress.stage.displayText == "Checking audio details")
+        let estimate = try #require(progress.estimate)
+        #expect(estimate.displayText == "About 1 minute remaining.")
+    }
+
     @Test("Rounded ETA buckets are stable at every boundary")
     func roundedETABoundaries() {
         #expect(RemoteTranscriptionEstimate.onTrack(remainingSeconds: 1).displayText == "Finishing up.")
@@ -1468,13 +1482,16 @@ struct RemoteTranscriptionProgressMappingTests {
         #expect(clamped.fractionCompleted == 1)
     }
 
-    @Test("Legacy and unknown estimates safely fall back to indeterminate progress")
-    func compatibilityFallbacks() throws {
+    @Test("A legacy response without progress remains safely indeterminate")
+    func legacyNoProgressCompatibility() throws {
         let tracker = RemoteTranscriptionProgressTracker()
         let legacy = try #require(tracker.activeProgress(for: status(state: .transcribing)))
         #expect(legacy.fractionCompleted == nil)
         #expect(legacy.estimate == nil)
+    }
 
+    @Test("An unknown estimate status remains safely indeterminate")
+    func unknownEstimateCompatibility() {
         let unknown = OpenCastRemoteTranscriptionJobProgress(
             estimatedRemainingSeconds: 20,
             estimateStatus: .unknown("recalculating")
@@ -1485,17 +1502,27 @@ struct RemoteTranscriptionProgressMappingTests {
     private func status(
         state: OpenCastRemoteTranscriptionJobState,
         completed: Int? = nil,
-        total: Int? = nil
+        total: Int? = nil,
+        estimatedRemainingSeconds: Int? = nil,
+        estimateStatus: OpenCastRemoteTranscriptionEstimateStatus? = nil
     ) -> OpenCastRemoteTranscriptionJobStatus {
-        OpenCastRemoteTranscriptionJobStatus(
+        let progress: OpenCastRemoteTranscriptionJobProgress? = if completed == nil
+            && total == nil
+            && estimatedRemainingSeconds == nil
+            && estimateStatus == nil {
+            nil
+        } else {
+            OpenCastRemoteTranscriptionJobProgress(
+                chunksCompleted: completed,
+                chunksTotal: total,
+                estimatedRemainingSeconds: estimatedRemainingSeconds,
+                estimateStatus: estimateStatus
+            )
+        }
+        return OpenCastRemoteTranscriptionJobStatus(
             jobID: "job-progress",
             state: state,
-            progress: completed == nil && total == nil
-                ? nil
-                : OpenCastRemoteTranscriptionJobProgress(
-                    chunksCompleted: completed,
-                    chunksTotal: total
-                )
+            progress: progress
         )
     }
 }

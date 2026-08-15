@@ -19,16 +19,11 @@
     "@apple/app-store-server-library": "3.1.0"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.18.1",
-    "@cloudflare/workers-types": "^4",
-    "jsonwebtoken": "^9.0.2",
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
+    "jsonwebtoken": "catalog:",
     "typescript": "^5.6.0",
-    "vitest": "^4.1.9",
-    "wrangler": "4.111.0"
-  },
-  "allowScripts": {
-    "workerd@1.20260701.1": true,
-    "esbuild@0.28.1": true
-  },
-  "packageManager": "yarn@1.22.22"
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
 }

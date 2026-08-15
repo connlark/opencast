@@ -2,8 +2,8 @@
 // Verification #3): the gateway runs with CREDIT_BACKEND=purchase against the
 // REAL compiled PurchaseWorker as a miniflare auxiliary worker, beside the
 // existing FAKE_MEDIA/FAKE_AI upstreams. Requires `build/index.js` (gateway)
-// and `../PurchaseWorker/dist/index.js` (`yarn --cwd ../PurchaseWorker
-// build:test-bundle`); see the `test:purchase` script.
+// and `../PurchaseWorker/dist/index.js` (`yarn workspace
+// opencast-purchase-worker build:test-bundle`); see the `test:purchase` script.
 //
 // The gateway stays in the development lane so the dev bearer authenticates
 // requests — strictly more production-shaped than the dev fake, while App
@@ -150,12 +150,8 @@ export async function makePurchaseConfig({ include, extraBindings = {} }) {
       // Debt/refund flows run 14400 s episodes (49 chunk objects) through
       // the fake media/AI path; give them generous wall clock.
       testTimeout: 120_000,
-      poolOptions: {
-        workers: {
-          isolatedStorage: false,
-          singleWorker: true,
-        },
-      },
+      maxWorkers: 1,
+      isolate: false,
     },
   };
 }

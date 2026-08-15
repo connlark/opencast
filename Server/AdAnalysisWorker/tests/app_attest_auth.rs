@@ -276,6 +276,7 @@ fn consume_challenge(db: &Connection, challenge_id: &str, consumed_at: i64) -> u
     .expect("consume challenge")
 }
 
+#[allow(clippy::too_many_arguments)] // Test fixture mirrors the persisted key columns.
 fn insert_key(
     db: &Connection,
     install_id: &str,

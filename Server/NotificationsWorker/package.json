@@ -2,7 +2,6 @@
   "name": "@opencast/notifications-worker",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "yarn@1.22.22",
   "scripts": {
     "dev": "wrangler dev",
     "deploy:dry-run": "wrangler deploy --dry-run --outdir dist",
@@ -15,6 +14,6 @@
     "typecheck": "cargo check --target wasm32-unknown-unknown"
   },
   "devDependencies": {
-    "wrangler": "4.111.0"
+    "wrangler": "catalog:"
   }
 }

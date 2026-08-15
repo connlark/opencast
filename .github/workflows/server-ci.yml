@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+env:
+  CI: "true"
+  GIT_LFS_SKIP_SMUDGE: "1"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -27,6 +31,7 @@ jobs:
 
       - name: Verify cross-component server contracts
         run: |
+          ./scripts/check-yarn-workspace.sh
           ./scripts/check-media-ua-pins.sh
           ./scripts/check-wasm-only-test-gating.sh
 
@@ -123,13 +128,16 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "26"
 
-      - name: Activate Yarn 1.22.22
+      - name: Activate Yarn 4.18.0
         shell: bash
         run: |
+          npm install --global corepack@0.35.0
           corepack enable
-          corepack prepare yarn@1.22.22 --activate
+          corepack install --global yarn@4.18.0
+          node --version
+          corepack --version
           yarn --version
 
       - name: Install stable Rust and the WebAssembly target
@@ -140,8 +148,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Install dependencies
-        working-directory: ${{ matrix.directory }}
-        run: yarn install --frozen-lockfile
+        run: yarn install --immutable
 
       - name: Prepare public AdAnalysis integration harness
         if: matrix.name == 'AdAnalysisWorker'
@@ -198,10 +205,10 @@ jobs:
       - name: Run public AdAnalysis integration tests
         if: matrix.name == 'AdAnalysisWorker'
         working-directory: ${{ matrix.directory }}
-        run: >-
-          yarn test:integration --
-          -t
-          'routing|rejects an unauthenticated request|challenges|404s internal paths on the public host|rejects malformed internal envelopes and invalid payloads|404s an unknown internal job id'
+        run: |
+          yarn build:worker
+          yarn exec vitest run -t \
+            'routing|rejects an unauthenticated request|challenges|404s internal paths on the public host|rejects malformed internal envelopes and invalid payloads|404s an unknown internal job id'
 
       - name: Run deterministic RemoteTranscription integration tests
         if: matrix.name == 'RemoteTranscriptionWorker'
@@ -237,18 +244,20 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "26"
 
-      - name: Activate Yarn 1.22.22
+      - name: Activate Yarn 4.18.0
         shell: bash
         run: |
+          npm install --global corepack@0.35.0
           corepack enable
-          corepack prepare yarn@1.22.22 --activate
+          corepack install --global yarn@4.18.0
+          node --version
+          corepack --version
           yarn --version
 
       - name: Install dependencies
-        working-directory: ${{ matrix.directory }}
-        run: yarn install --frozen-lockfile
+        run: yarn install --immutable
 
       - name: Install TranscriptionMediaWorker test prerequisites
         if: matrix.name == 'TranscriptionMediaWorker'

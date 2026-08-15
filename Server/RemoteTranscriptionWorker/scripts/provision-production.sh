@@ -23,10 +23,10 @@ grep -q '"workers_dev": false' "$MEDIA_DIR/wrangler.production.jsonc"
 echo "  both flags off; custom domain present; private workers have workers.dev disabled"
 
 echo "== D1 (gateway): $GW_DB_NAME"
-if ! yarn --silent wrangler d1 info "$GW_DB_NAME" >/dev/null 2>&1; then
-  yarn --silent wrangler d1 create "$GW_DB_NAME"
+if ! yarn wrangler d1 info "$GW_DB_NAME" >/dev/null 2>&1; then
+  yarn wrangler d1 create "$GW_DB_NAME"
 fi
-GW_DB_ID=$(yarn --silent wrangler d1 info "$GW_DB_NAME" --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["uuid"])')
+GW_DB_ID=$(yarn wrangler d1 info "$GW_DB_NAME" --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["uuid"])')
 if ! grep -q "database_id = \"$GW_DB_ID\"" wrangler.toml; then
   echo "FATAL: production gateway D1 id is $GW_DB_ID but wrangler.toml differs." >&2
   echo "Patch the production database_id deliberately, then rerun." >&2
@@ -34,10 +34,10 @@ if ! grep -q "database_id = \"$GW_DB_ID\"" wrangler.toml; then
 fi
 
 echo "== D1 (purchase): $PW_DB_NAME"
-if ! (cd "$PURCHASE_DIR" && yarn --silent wrangler d1 info "$PW_DB_NAME" >/dev/null 2>&1); then
-  (cd "$PURCHASE_DIR" && yarn --silent wrangler d1 create "$PW_DB_NAME")
+if ! (cd "$PURCHASE_DIR" && yarn wrangler d1 info "$PW_DB_NAME" >/dev/null 2>&1); then
+  (cd "$PURCHASE_DIR" && yarn wrangler d1 create "$PW_DB_NAME")
 fi
-PW_DB_ID=$(cd "$PURCHASE_DIR" && yarn --silent wrangler d1 info "$PW_DB_NAME" --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["uuid"])')
+PW_DB_ID=$(cd "$PURCHASE_DIR" && yarn wrangler d1 info "$PW_DB_NAME" --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["uuid"])')
 if ! grep -q "database_id = \"$PW_DB_ID\"" "$PURCHASE_DIR/wrangler.toml"; then
   echo "FATAL: production PurchaseWorker D1 id is $PW_DB_ID but wrangler.toml differs." >&2
   echo "Patch the production database_id deliberately, then rerun." >&2
@@ -45,14 +45,14 @@ if ! grep -q "database_id = \"$PW_DB_ID\"" "$PURCHASE_DIR/wrangler.toml"; then
 fi
 
 echo "== R2: $BUCKET"
-if ! yarn --silent wrangler r2 bucket info "$BUCKET" >/dev/null 2>&1; then
-  yarn --silent wrangler r2 bucket create "$BUCKET"
-elif ! yarn --silent wrangler r2 bucket lifecycle list "$BUCKET" 2>/dev/null | grep -q "scratch-raw-one-day"; then
+if ! yarn wrangler r2 bucket info "$BUCKET" >/dev/null 2>&1; then
+  yarn wrangler r2 bucket create "$BUCKET"
+elif ! yarn wrangler r2 bucket lifecycle list "$BUCKET" 2>/dev/null | grep -q "scratch-raw-one-day"; then
   echo "FATAL: existing bucket lacks OpenCast lifecycle rules; refusing adoption." >&2
   exit 1
 fi
-yarn --silent wrangler r2 bucket lifecycle set "$BUCKET" --file r2-lifecycle.json --force
-LIFECYCLE=$(yarn --silent wrangler r2 bucket lifecycle list "$BUCKET" 2>/dev/null)
+yarn wrangler r2 bucket lifecycle set "$BUCKET" --file r2-lifecycle.json --force
+LIFECYCLE=$(yarn wrangler r2 bucket lifecycle list "$BUCKET" 2>/dev/null)
 for rule in scratch-raw-one-day scratch-uploads-one-day scratch-chunks-one-day scratch-responses-one-day results-seven-days abort-multipart-one-day; do
   if ! echo "$LIFECYCLE" | grep -q "$rule"; then
     echo "FATAL: lifecycle rule $rule missing after apply." >&2
@@ -62,18 +62,18 @@ done
 echo "  exact six named lifecycle rules present"
 
 echo "== R2: verifying no public r2.dev URL"
-if ! yarn --silent wrangler r2 bucket dev-url get "$BUCKET" 2>/dev/null | grep -q "disabled"; then
+if ! yarn wrangler r2 bucket dev-url get "$BUCKET" 2>/dev/null | grep -q "disabled"; then
   echo "FATAL: bucket has a public r2.dev endpoint; disable it." >&2
   exit 1
 fi
 echo "  private"
 
 echo "== D1 migrations"
-yarn --silent wrangler d1 migrations apply "$GW_DB_NAME" --remote --env production
-(cd "$PURCHASE_DIR" && yarn --silent wrangler d1 migrations apply "$PW_DB_NAME" --remote --env production)
+yarn wrangler d1 migrations apply "$GW_DB_NAME" --remote --env production
+(cd "$PURCHASE_DIR" && yarn wrangler d1 migrations apply "$PW_DB_NAME" --remote --env production)
 
 echo "== Gateway production secrets (names only)"
-GW_SECRETS=$(yarn --silent wrangler secret list --env production 2>/dev/null || echo "[]")
+GW_SECRETS=$(yarn wrangler secret list --env production 2>/dev/null || echo "[]")
 for name in URL_ENCRYPTION_KEY CHALLENGE_SOURCE_HASH_KEY R2_S3_ACCESS_KEY_ID R2_S3_SECRET_ACCESS_KEY PUSHOVER_APP_TOKEN PUSHOVER_USER_KEY; do
   if echo "$GW_SECRETS" | grep -q "\"$name\""; then
     echo "  $name: present"
@@ -87,7 +87,7 @@ if echo "$GW_SECRETS" | grep -q '"DEV_BEARER_TOKEN"'; then
 fi
 
 echo "== PurchaseWorker production secrets (names only)"
-PW_SECRETS=$(cd "$PURCHASE_DIR" && yarn --silent wrangler secret list --env production 2>/dev/null || echo "[]")
+PW_SECRETS=$(cd "$PURCHASE_DIR" && yarn wrangler secret list --env production 2>/dev/null || echo "[]")
 for name in APP_TX_HMAC_KEY APP_TX_ENCRYPTION_KEY APPLE_IAP_KEY_ID APPLE_IAP_ISSUER_ID APPLE_IAP_PRIVATE_KEY PUSHOVER_APP_TOKEN PUSHOVER_USER_KEY; do
   if echo "$PW_SECRETS" | grep -q "\"$name\""; then
     echo "  $name: present"
@@ -97,11 +97,11 @@ for name in APP_TX_HMAC_KEY APP_TX_ENCRYPTION_KEY APPLE_IAP_KEY_ID APPLE_IAP_ISS
 done
 
 echo "== Dry runs"
-yarn --silent wrangler deploy --dry-run --outdir dist-production --env production >/dev/null
+yarn wrangler deploy --dry-run --outdir dist-production --env production >/dev/null
 echo "  gateway production dry-run OK"
-(cd "$PURCHASE_DIR" && yarn --silent wrangler deploy --dry-run --outdir dist-production --env production >/dev/null)
+(cd "$PURCHASE_DIR" && yarn wrangler deploy --dry-run --outdir dist-production --env production >/dev/null)
 echo "  purchase production dry-run OK"
-(cd "$MEDIA_DIR" && yarn --silent wrangler deploy --dry-run --outdir dist-production -c wrangler.production.jsonc >/dev/null)
+(cd "$MEDIA_DIR" && yarn wrangler deploy --dry-run --outdir dist-production -c wrangler.production.jsonc >/dev/null)
 echo "  media production dry-run OK"
 
 cat <<'NEXT'

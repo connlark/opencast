@@ -2,56 +2,56 @@
 export const screenshotAssets = {
   "app_store_01_now_playing_framed": {
     "src": "/screenshots/app_store_01_now_playing_framed.91d0fcf312.w464.png",
-    "avifSrcSet": "/screenshots/app_store_01_now_playing_framed.d7f5b987b8.w232.avif 232w, /screenshots/app_store_01_now_playing_framed.286be31f2c.w464.avif 464w",
+    "avifSrcSet": "/screenshots/app_store_01_now_playing_framed.97d45db16c.w232.avif 232w, /screenshots/app_store_01_now_playing_framed.53fc71d025.w464.avif 464w",
     "webpSrcSet": "/screenshots/app_store_01_now_playing_framed.44c8c9b8f9.w232.webp 232w, /screenshots/app_store_01_now_playing_framed.69a67b81e9.w464.webp 464w",
     "width": 464,
     "height": 1008
   },
   "app_store_02_transcript_framed": {
     "src": "/screenshots/app_store_02_transcript_framed.f180f07e5a.w464.png",
-    "avifSrcSet": "/screenshots/app_store_02_transcript_framed.5cd644d724.w232.avif 232w, /screenshots/app_store_02_transcript_framed.9dae067574.w464.avif 464w",
+    "avifSrcSet": "/screenshots/app_store_02_transcript_framed.233e28b0fb.w232.avif 232w, /screenshots/app_store_02_transcript_framed.5640d190c9.w464.avif 464w",
     "webpSrcSet": "/screenshots/app_store_02_transcript_framed.183250f7ef.w232.webp 232w, /screenshots/app_store_02_transcript_framed.396a482727.w464.webp 464w",
     "width": 464,
     "height": 1008
   },
   "app_store_03_notification_framed": {
     "src": "/screenshots/app_store_03_notification_framed.e9279b5625.w464.png",
-    "avifSrcSet": "/screenshots/app_store_03_notification_framed.2102db17f7.w232.avif 232w, /screenshots/app_store_03_notification_framed.1379643169.w464.avif 464w",
+    "avifSrcSet": "/screenshots/app_store_03_notification_framed.b778e9d882.w232.avif 232w, /screenshots/app_store_03_notification_framed.fe705a5a4d.w464.avif 464w",
     "webpSrcSet": "/screenshots/app_store_03_notification_framed.ec8782ed7a.w232.webp 232w, /screenshots/app_store_03_notification_framed.13802ee600.w464.webp 464w",
     "width": 464,
     "height": 1008
   },
   "app_store_04_library_framed": {
     "src": "/screenshots/app_store_04_library_framed.3bb4225004.w464.png",
-    "avifSrcSet": "/screenshots/app_store_04_library_framed.bad47ebc57.w232.avif 232w, /screenshots/app_store_04_library_framed.a13f380a5c.w464.avif 464w",
+    "avifSrcSet": "/screenshots/app_store_04_library_framed.e5c35de63d.w232.avif 232w, /screenshots/app_store_04_library_framed.0246bd5b16.w464.avif 464w",
     "webpSrcSet": "/screenshots/app_store_04_library_framed.9adbd4f167.w232.webp 232w, /screenshots/app_store_04_library_framed.9a03b7f85c.w464.webp 464w",
     "width": 464,
     "height": 1008
   },
   "app_store_05_podcast_detail_framed": {
     "src": "/screenshots/app_store_05_podcast_detail_framed.84a8bb0090.w464.png",
-    "avifSrcSet": "/screenshots/app_store_05_podcast_detail_framed.c3c221a6cf.w232.avif 232w, /screenshots/app_store_05_podcast_detail_framed.65f8c1aaa2.w464.avif 464w",
+    "avifSrcSet": "/screenshots/app_store_05_podcast_detail_framed.afc83619ee.w232.avif 232w, /screenshots/app_store_05_podcast_detail_framed.f93b2a301c.w464.avif 464w",
     "webpSrcSet": "/screenshots/app_store_05_podcast_detail_framed.754d6edb1c.w232.webp 232w, /screenshots/app_store_05_podcast_detail_framed.749d436189.w464.webp 464w",
     "width": 464,
     "height": 1008
   },
   "app_store_06_sound_lab_framed": {
     "src": "/screenshots/app_store_06_sound_lab_framed.e885dd2182.w464.png",
-    "avifSrcSet": "/screenshots/app_store_06_sound_lab_framed.1b24293f70.w232.avif 232w, /screenshots/app_store_06_sound_lab_framed.c3fde2c4ae.w464.avif 464w",
+    "avifSrcSet": "/screenshots/app_store_06_sound_lab_framed.63b540849d.w232.avif 232w, /screenshots/app_store_06_sound_lab_framed.6b9916cd5f.w464.avif 464w",
     "webpSrcSet": "/screenshots/app_store_06_sound_lab_framed.6b8cc629d0.w232.webp 232w, /screenshots/app_store_06_sound_lab_framed.54f843a938.w464.webp 464w",
     "width": 464,
     "height": 1008
   },
   "app_store_07_inbox_framed": {
     "src": "/screenshots/app_store_07_inbox_framed.e3201d6cd8.w464.png",
-    "avifSrcSet": "/screenshots/app_store_07_inbox_framed.d1547fba38.w232.avif 232w, /screenshots/app_store_07_inbox_framed.551bb72586.w464.avif 464w",
+    "avifSrcSet": "/screenshots/app_store_07_inbox_framed.a32d021c7f.w232.avif 232w, /screenshots/app_store_07_inbox_framed.766edc98f5.w464.avif 464w",
     "webpSrcSet": "/screenshots/app_store_07_inbox_framed.de2bd4a944.w232.webp 232w, /screenshots/app_store_07_inbox_framed.a302f27479.w464.webp 464w",
     "width": 464,
     "height": 1008
   },
   "app_store_08_episode_detail_framed": {
     "src": "/screenshots/app_store_08_episode_detail_framed.f1f499ca5d.w464.png",
-    "avifSrcSet": "/screenshots/app_store_08_episode_detail_framed.f1e583cbe5.w232.avif 232w, /screenshots/app_store_08_episode_detail_framed.ac36d6badb.w464.avif 464w",
+    "avifSrcSet": "/screenshots/app_store_08_episode_detail_framed.07df7ea403.w232.avif 232w, /screenshots/app_store_08_episode_detail_framed.876dff09ae.w464.avif 464w",
     "webpSrcSet": "/screenshots/app_store_08_episode_detail_framed.eb3127ebc5.w232.webp 232w, /screenshots/app_store_08_episode_detail_framed.48e561356e.w464.webp 464w",
     "width": 464,
     "height": 1008

@@ -382,15 +382,37 @@ describe("remote transcription dev lane", () => {
   });
 
   it("runs create -> hash match -> reserve -> chunk -> fake AI -> stitch -> result -> ack with verified deletes", async () => {
+    // Precompute the deterministic matching identity (a 1 MiB WebCrypto
+    // digest) BEFORE creating the job so hashing cannot eat into the
+    // deliberately short two-second waiting deadline; report immediately
+    // after observing the waiting state.
+    const source = await deviceIdentity(600);
+    const matchedBefore =
+      (await counterValues(["source_matched"])).source_matched ?? 0;
     const job = await createJob({
       clientRequestId: "e2e-normal-1",
       episodeId: "ep-e2e-1",
       durationSeconds: 600,
     });
-    const source = await deviceIdentity(600);
+    await waitForState(job.job_id, ["waiting_for_device_source"]);
+    const matched = await reportSource(job.job_id, source);
+    expect(matched.state).toBe("source_matched");
+    expect(matched.progress).toMatchObject({ estimate_status: "on_track" });
+    // Deterministic fixture (1 MiB / 600 s): scan floor ~4.3 s + one
+    // 28 s wave + 3.8 s finalization ≈ 36 s, minus at most a few elapsed
+    // seconds — bound the calibrated range, not just positivity.
+    expect(matched.progress.estimated_remaining_seconds).toBeGreaterThanOrEqual(30);
+    expect(matched.progress.estimated_remaining_seconds).toBeLessThanOrEqual(40);
+
+    // A repeated report on the advanced job is an idempotent no-op.
     await reportSource(job.job_id, source);
 
     const ready = await waitForState(job.job_id, ["result_ready"]);
+    // The source_matched transition counted exactly once across the inline
+    // evaluation, its zero-delay alarm, and the repeated report.
+    const matchedAfter =
+      (await counterValues(["source_matched"])).source_matched ?? 0;
+    expect(matchedAfter - matchedBefore).toBe(1);
     expect(ready.job.progress.chunks_total).toBe(3);
     expect(ready.job.progress.chunks_completed).toBe(3);
 
@@ -477,22 +499,39 @@ describe("remote transcription dev lane", () => {
 
   it("routes a hash mismatch to exact-device upload and transcribes the uploaded bytes", async () => {
     // The device's copy (a DAI variant): what actually gets uploaded.
+    // Precomputed before the job exists so the report can land inside the
+    // two-second waiting deadline, after explicitly observing the waiting
+    // state — this exercises the inline mismatch path, not the alarm one.
     const deviceBytes = makeBytes(12 * 1024 * 1024 + 512 * 1024, 23);
-    const deviceSha = await sha256Hex(deviceBytes);
+    const deviceIdentityMismatch = {
+      sha256: await sha256Hex(deviceBytes),
+      byte_count: deviceBytes.length,
+      duration_seconds: 600,
+    };
+    const deviceSha = deviceIdentityMismatch.sha256;
+    const mismatchedBefore =
+      (await counterValues(["source_mismatched"])).source_mismatched ?? 0;
     const job = await createJob({
       clientRequestId: "e2e-mismatch-1",
       episodeId: "ep-mismatch-1",
       durationSeconds: 600,
     });
-    await reportSource(job.job_id, {
-      sha256: deviceSha,
-      byte_count: deviceBytes.length,
-      duration_seconds: 600,
-    });
+    await waitForState(job.job_id, ["waiting_for_device_source"]);
+    const inline = await reportSource(job.job_id, deviceIdentityMismatch);
+    // The inline evaluation already routed the job: the response reports
+    // the upload requirement, never a parked waiting state.
+    expect(inline.state).toBe("exact_upload_required");
 
     // Mismatch: the server copy is deleted BEFORE upload capability exists.
-    await waitForState(job.job_id, ["exact_upload_required"]);
     expect(await bucketKeys(`raw/${job.job_id}/`)).toEqual([]);
+
+    // A repeated report is an idempotent no-op on the advanced state and
+    // cannot double-count the transition.
+    const repeat = await reportSource(job.job_id, deviceIdentityMismatch);
+    expect(repeat.state).toBe("exact_upload_required");
+    const mismatchedAfter =
+      (await counterValues(["source_mismatched"])).source_mismatched ?? 0;
+    expect(mismatchedAfter - mismatchedBefore).toBe(1);
     // Nothing spent or reserved while waiting for the upload.
     let balance = (await bootstrapBalance()).balance;
     expect(balance.available_seconds).toBe(GRANT - 600);
@@ -586,6 +625,101 @@ describe("remote transcription dev lane", () => {
     expect(balance.reserved_seconds).toBe(0);
 
     await post(`/v1/remote-transcription/jobs/${job.job_id}/ack`, {
+      schema_version: 1,
+    });
+    await expectJobStorageEmpty(job.job_id);
+  });
+
+  it("keeps later upload states authoritative over repeated source reports", async () => {
+    const deviceBytes = makeBytes(6 * 1024 * 1024, 43);
+    const identity = {
+      sha256: await sha256Hex(deviceBytes),
+      byte_count: deviceBytes.length,
+      duration_seconds: 600,
+    };
+    const job = await createJob({
+      clientRequestId: "e2e-stale-source-1",
+      episodeId: "ep-stale-source-1",
+      durationSeconds: 600,
+      enclosureUrl: FAILING_ORIGIN_URL,
+    });
+    await waitForState(job.job_id, ["exact_upload_required"]);
+    await reportSource(job.job_id, identity);
+    const startResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/upload/start`,
+      { schema_version: 1 },
+    );
+    expect(startResponse.status).toBe(200);
+    expect((await pollJob(job.job_id)).job.state).toBe("exact_uploading");
+
+    // A late or duplicate source report must not re-run identity
+    // evaluation and regress the live upload state back to
+    // exact_upload_required.
+    const stale = await reportSource(job.job_id, identity);
+    expect(stale.state).toBe("exact_uploading");
+
+    await post(`/v1/remote-transcription/jobs/${job.job_id}/cancel`, {
+      schema_version: 1,
+    });
+    await expectJobStorageEmpty(job.job_id);
+  });
+
+  it("expires a source report that lands after the waiting deadline", async () => {
+    // Matching identity precomputed so the late report would advance the
+    // job if the deadline gate were missing.
+    const source = await deviceIdentity(90);
+    const job = await createJob({
+      clientRequestId: "e2e-late-source-1",
+      episodeId: "ep-late-source-1",
+      durationSeconds: 90,
+    });
+    await waitForState(job.job_id, ["waiting_for_device_source"]);
+    // Sleep past WAITING_FOR_DEVICE_SOURCE_DEADLINE_SECONDS (2 s here).
+    // Whichever side wins the race — the deadline alarm or the inline
+    // deadline gate on /source — a matching report must expire the job,
+    // never match and advance it.
+    await sleep(2_500);
+    const late = await reportSource(job.job_id, source);
+    expect(late.state).toBe("cancelled");
+    expect(late.error.code).toBe("deadline_expired");
+    expect((await pollJob(job.job_id)).job.state).toBe("cancelled");
+    await expectJobStorageEmpty(job.job_id);
+  });
+
+  it("retries a failed inline mismatch evaluation from the safety alarm", async () => {
+    const deviceBytes = makeBytes(3 * 1024 * 1024, 47);
+    const identity = {
+      sha256: await sha256Hex(deviceBytes),
+      byte_count: deviceBytes.length,
+      duration_seconds: 600,
+    };
+    const job = await createJob({
+      clientRequestId: "e2e-mismatch-retry-1",
+      episodeId: "ep-mismatch-retry-1",
+      durationSeconds: 600,
+      // One-shot injected failure in the mismatch branch, parked after the
+      // safety alarm is armed and before the fallible R2/upload-path work
+      // (the fake-source-mismatch-fail hook in job_do.rs).
+      languageCode: "fake-source-mismatch-fail",
+    });
+    await waitForState(job.job_id, ["waiting_for_device_source"]);
+    // The injected failure lands on the request (a 500-class response or a
+    // propagated worker exception, depending on runtime plumbing); the
+    // armed safety alarm — not the app, and not the twelve-hour deadline —
+    // must finish the mismatch routing (ALARM_RETRY_SECONDS=1 here).
+    const response = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/source`,
+      { schema_version: 1, source_identity: identity },
+    ).catch(() => ({ status: 500 }));
+    expect(response.status).toBeGreaterThanOrEqual(500);
+    const required = await waitForState(
+      job.job_id,
+      ["exact_upload_required"],
+      15_000,
+    );
+    expect(required.job.error).toBeFalsy();
+    expect(await bucketKeys(`raw/${job.job_id}/`)).toEqual([]);
+    await post(`/v1/remote-transcription/jobs/${job.job_id}/cancel`, {
       schema_version: 1,
     });
     await expectJobStorageEmpty(job.job_id);
