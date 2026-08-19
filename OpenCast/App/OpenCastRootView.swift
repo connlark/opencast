@@ -135,7 +135,7 @@ struct OpenCastRootView: View {
     }
 
     private func presentNowPlaying() {
-        guard appModel.playback.currentEpisode != nil else {
+        guard appModel.hasNowPlayingPresentationContent else {
             return
         }
 
@@ -198,7 +198,7 @@ struct OpenCastRootView: View {
     }
 
     private func dismissNowPlaying() {
-        appModel.isNowPlayingPresented = false
+        appModel.dismissNowPlayingAndDiscardFinishedPlayback()
     }
 
     private func openCurrentEpisodeFromNowPlaying() {

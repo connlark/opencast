@@ -53,13 +53,26 @@ final class OpenCastAppModel {
     let allowsAutomaticFeedRefresh: Bool
     let adFreePassPresentationOverride: EpisodeAdFreePassPresentation?
     let adFreePassNotificationCenter: any AdFreePassNotificationCenter
-    /// Tracked from the root lifecycle modifier; completion notifications are
-    /// suppressed at scheduling time while the scene is active.
-    var isSceneActive = true
+    private(set) var finishedPlaybackPresentation: FinishedPlaybackPresentation?
+    /// Tracked from the root lifecycle modifier. Completion notifications are
+    /// suppressed while active, and leaving active discards the session-only
+    /// Finished presentation.
+    var isSceneActive = true {
+        didSet {
+            guard !isSceneActive, finishedPlaybackPresentation != nil else {
+                return
+            }
+
+            dismissNowPlayingAndDiscardFinishedPlayback()
+        }
+    }
     var nowPlayingPresentationRequest = 0
     /// Single source of truth for Now Playing presentation; the root layer
     /// and tab views read this directly.
     var isNowPlayingPresented = false
+    var hasNowPlayingPresentationContent: Bool {
+        playback.currentEpisode != nil || finishedPlaybackPresentation != nil
+    }
     var onboardingPresentationRequest = 0
     var lastPlaybackError: String?
     var lastUpNextError: String?
@@ -92,6 +105,7 @@ final class OpenCastAppModel {
     @ObservationIgnored private var hasRestoredPlaybackSurface = false
     @ObservationIgnored private(set) var playbackSurfaceRestorationCount = 0
     @ObservationIgnored var playbackSurfaceRestorationObserver: ((Float) -> Void)?
+    @ObservationIgnored var playbackProgressFlushObserver: (() -> Void)?
     @ObservationIgnored private var progressPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var progressBoundaryPersistenceTask: Task<Void, Never>?
     // The periodic flush calls rememberLastPlaybackEpisode every tick; the
@@ -321,11 +335,15 @@ final class OpenCastAppModel {
             }
             self.setPlaybackRate(rate, modelContext: modelContext)
         }
-        playback.setEpisodeFinishedHandler { [weak self, weak modelContext] _ in
+        playback.setEpisodeFinishedHandler { [weak self, weak modelContext] episode, policy in
             guard let self, let modelContext else {
                 return
             }
-            advanceToNextQueuedEpisode(modelContext: modelContext)
+            handlePlaybackEpisodeFinished(
+                episode,
+                policy: policy,
+                modelContext: modelContext
+            )
         }
         playback.setNextTrackHandler { [weak self, weak modelContext] in
             guard let self, let modelContext else {
@@ -459,7 +477,8 @@ final class OpenCastAppModel {
         )
     }
 
-    func advanceToNextQueuedEpisode(modelContext: ModelContext) {
+    @discardableResult
+    func advanceToNextQueuedEpisode(modelContext: ModelContext) -> Bool {
         var hadCandidate = false
         var playbackFailureMessage: String?
 
@@ -470,14 +489,16 @@ final class OpenCastAppModel {
                 item = nextItem
                 hadCandidate = true
             case .empty:
+                flushPlaybackProgress(modelContext: modelContext)
                 if hadCandidate {
                     lastPlaybackError = playbackFailureMessage
                         ?? "None of the episodes in Up Next are available to play."
                 }
-                return
+                return false
             case .failure(let message):
+                flushPlaybackProgress(modelContext: modelContext)
                 lastUpNextError = upNextQueue.consumeLastErrorMessage() ?? message
-                return
+                return false
             }
 
             guard let episode = episodeSnapshot(for: item.episodeID) else {
@@ -490,11 +511,73 @@ final class OpenCastAppModel {
                     presentsNowPlaying: false,
                     modelContext: modelContext
                 )
-                return
+                return true
             } catch {
                 playbackFailureMessage = error.localizedDescription
             }
         }
+    }
+
+    func handlePlaybackEpisodeFinished(
+        _ episode: Episode,
+        policy: PlaybackCompletionPolicy,
+        modelContext: ModelContext
+    ) {
+        guard playback.currentEpisode?.id == episode.id else {
+            return
+        }
+
+        switch policy {
+        case .advanceIfQueued:
+            guard !advanceToNextQueuedEpisode(modelContext: modelContext) else {
+                return
+            }
+        case .stop:
+            flushPlaybackProgress(modelContext: modelContext)
+        }
+
+        unloadFinishedPlayback(retainingPresentationFor: episode, modelContext: modelContext)
+    }
+
+    @discardableResult
+    func replayFinishedPlayback(modelContext: ModelContext) -> Bool {
+        guard let finishedPlaybackPresentation else {
+            return false
+        }
+
+        do {
+            try playEpisode(
+                finishedPlaybackPresentation.episode,
+                presentsNowPlaying: false,
+                modelContext: modelContext
+            )
+            return true
+        } catch {
+            lastPlaybackError = error.localizedDescription
+            return false
+        }
+    }
+
+    func dismissNowPlayingAndDiscardFinishedPlayback() {
+        finishedPlaybackPresentation = nil
+        isNowPlayingPresented = false
+    }
+
+    private func unloadFinishedPlayback(
+        retainingPresentationFor episode: Episode,
+        modelContext: ModelContext
+    ) {
+        nowPlayingProbeMark("playback-finished")
+        let episodeSnapshot = currentPlaybackEpisodeSnapshot ?? EpisodeListItemSnapshot(episode: episode)
+        if isSceneActive, isNowPlayingPresented {
+            finishedPlaybackPresentation = FinishedPlaybackPresentation(episode: episodeSnapshot)
+        } else {
+            dismissNowPlayingAndDiscardFinishedPlayback()
+        }
+
+        playback.unload()
+        clearLastPlaybackEpisode(modelContext: modelContext)
+        sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
     }
 
     func performUpNextQueueMutation(_ mutation: () -> Bool) {
@@ -582,6 +665,7 @@ final class OpenCastAppModel {
         lastUnsubscribeErrorMessage = nil
         let podcastID = PodcastID(rawValue: feedURL)
         if playback.currentEpisode?.podcastID == podcastID {
+            dismissNowPlayingAndDiscardFinishedPlayback()
             playback.unload()
             clearLastPlaybackEpisode(modelContext: modelContext)
         }
@@ -1374,6 +1458,7 @@ final class OpenCastAppModel {
         modelContext: ModelContext,
         refreshObservableProgress: Bool = true
     ) -> Bool {
+        playbackProgressFlushObserver?()
         guard let episode = playback.currentEpisode else {
             return false
         }
@@ -1413,7 +1498,16 @@ final class OpenCastAppModel {
                 modelContext: modelContext
             )
             applyVoiceBoostSetting(for: episode, modelContext: modelContext)
-            try playback.load(episode, startPosition: library.resumePosition(for: record.episodeID))
+            let boundaries = playbackEpisodeBoundaries(forPodcastID: record.podcastID)
+            let startPosition = boundaries.ordinaryStartPosition(
+                library.resumePosition(for: record.episodeID),
+                duration: episode.duration
+            )
+            try playback.load(
+                episode,
+                startPosition: startPosition,
+                boundaries: boundaries
+            )
             refreshPlaybackSkipZonesForCurrentEpisode()
             rememberLastPlaybackEpisode(record.episodeID, modelContext: modelContext)
         } catch {
@@ -1429,9 +1523,9 @@ final class OpenCastAppModel {
     func dismissCurrentPlayback(modelContext: ModelContext) -> Bool {
         let hadCurrentEpisode = playback.currentEpisode != nil
         flushPlaybackProgress(modelContext: modelContext)
+        dismissNowPlayingAndDiscardFinishedPlayback()
         playback.unload()
         clearLastPlaybackEpisode(modelContext: modelContext)
-        isNowPlayingPresented = false
         sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         return hadCurrentEpisode
     }
@@ -1535,6 +1629,7 @@ final class OpenCastAppModel {
         _ = upNextQueue.remove(episodeID: episode.episodeID, modelContext: modelContext)
         if isCurrentEpisode(episode) {
             // Mark Played is a playback command too, so unload even when persistence was already complete.
+            dismissNowPlayingAndDiscardFinishedPlayback()
             playback.unload()
             clearLastPlaybackEpisode(modelContext: modelContext)
         }
@@ -1579,6 +1674,7 @@ final class OpenCastAppModel {
         let didSave = library.markAllPlayed(forPodcastID: podcastID, modelContext: modelContext)
         _ = upNextQueue.removeAll(forPodcastID: podcastID, modelContext: modelContext)
         if playback.currentEpisode?.podcastID.rawValue == podcastID {
+            dismissNowPlayingAndDiscardFinishedPlayback()
             playback.unload()
             clearLastPlaybackEpisode(modelContext: modelContext)
         }
@@ -1763,8 +1859,8 @@ final class OpenCastAppModel {
     }
 
     private func resetRuntimeStateAfterDataNuke(modelContext: ModelContext) async {
+        dismissNowPlayingAndDiscardFinishedPlayback()
         playback.unload()
-        isNowPlayingPresented = false
         lastPlaybackError = nil
         lastUpNextError = nil
         lastUnsubscribeErrorMessage = nil
@@ -1835,14 +1931,21 @@ final class OpenCastAppModel {
         autoplay: Bool = true,
         modelContext: ModelContext
     ) throws {
-        flushPlaybackProgress(modelContext: modelContext)
         let episode = try resolvedPlaybackEpisode(for: snapshot, source: source, modelContext: modelContext)
+        flushPlaybackProgress(modelContext: modelContext)
         nowPlayingProbeMark("play-validated")
         applyVoiceBoostSetting(for: episode, modelContext: modelContext)
+        let boundaries = playbackEpisodeBoundaries(forPodcastID: snapshot.podcastID)
+        let requestedStartPosition = startPosition ?? library.resumePosition(for: snapshot.episodeID)
+        let resolvedStartPosition = startPosition != nil
+            ? requestedStartPosition
+            : boundaries.ordinaryStartPosition(requestedStartPosition, duration: episode.duration)
         try playback.load(
             episode,
-            startPosition: startPosition ?? library.resumePosition(for: snapshot.episodeID)
+            startPosition: resolvedStartPosition,
+            boundaries: boundaries
         )
+        finishedPlaybackPresentation = nil
         _ = upNextQueue.remove(episodeID: snapshot.episodeID, modelContext: modelContext)
         sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         refreshPlaybackSkipZonesForCurrentEpisode()
@@ -1929,6 +2032,14 @@ final class OpenCastAppModel {
         )
     }
 
+    func playbackEpisodeBoundaries(forPodcastID podcastID: String) -> PlaybackEpisodeBoundaries {
+        let settings = library.podcastPlaybackSkipSettings(forPodcastID: podcastID)
+        return PlaybackEpisodeBoundaries(
+            skipIntroSeconds: settings.skipIntroSeconds,
+            skipOutroSeconds: settings.skipOutroSeconds
+        )
+    }
+
     private func refreshPlaybackSkipZonesIfCurrentEpisode(episodeID: String) {
         guard playback.currentEpisode?.id.rawValue == episodeID else {
             return
@@ -1958,9 +2069,14 @@ final class OpenCastAppModel {
         _ tiers: EpisodeAdAnalysisZoneTiers,
         forEpisodeID episodeID: String?
     ) {
+        let installingEpisodeID = episodeID
         playback.setSkipZones(tiers.autoSkip)
+        guard playback.currentEpisode?.id.rawValue == installingEpisodeID else {
+            return
+        }
+
         displayOnlySkipZones = tiers.displayOnly
-        installedSkipZoneEpisodeID = episodeID
+        installedSkipZoneEpisodeID = installingEpisodeID
     }
 
     private var currentPlaybackEpisodeSnapshot: EpisodeListItemSnapshot? {

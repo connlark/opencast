@@ -6,6 +6,7 @@ enum SheetDestination: Identifiable {
     case importOPMLFile(URL)
     case nukeConfirmation
     case onboarding
+    case podcastPlaybackSettings(feedURL: String)
 
     var id: String {
         switch self {
@@ -19,6 +20,8 @@ enum SheetDestination: Identifiable {
             "nukeConfirmation"
         case .onboarding:
             "onboarding"
+        case .podcastPlaybackSettings(let feedURL):
+            "podcastPlaybackSettings-\(feedURL)"
         }
     }
 }

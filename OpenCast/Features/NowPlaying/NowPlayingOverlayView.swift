@@ -218,21 +218,28 @@ struct NowPlayingOverlayView: View {
     }
 
     private func resetPresentedEpisode(isPresented: Bool, containerHeight: CGFloat) {
-        let shouldKeepPresentedOffset = isPresented && offsetY == 0
+        guard !isFinishingDismissal, !isTrackingDismissDrag else {
+            return
+        }
+
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            offsetY = reduceMotion || shouldKeepPresentedOffset ? 0 : containerHeight
-            resetOverlayInteractionState()
+            offsetY = reduceMotion || isPresented ? 0 : containerHeight
+            resetNonDismissInteractionState()
         }
+    }
+
+    private func resetNonDismissInteractionState() {
+        isSoundLabInteractionActive = false
+        isContentScrolledToTop = true
     }
 
     private func resetOverlayInteractionState() {
         isTrackingDismissDrag = false
         dismissDragLatchBaselineHeight = 0
         isFinishingDismissal = false
-        isSoundLabInteractionActive = false
-        isContentScrolledToTop = true
+        resetNonDismissInteractionState()
     }
 
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
@@ -276,6 +283,7 @@ struct NowPlayingOverlayView: View {
         withAnimation(springAnimation(response: 0.24, damping: 0.92)) {
             offsetY = containerHeight
         } completion: {
+            nowPlayingProbeMark("card-dismissed")
             onDismissed()
             completion?()
         }

@@ -31,21 +31,27 @@ struct NowPlayingView: View {
 
     var body: some View {
         GeometryReader { proxy in
+            let metrics = NowPlayingContentMetrics(
+                proxy: proxy,
+                dynamicTypeSize: dynamicTypeSize,
+                horizontalSizeClass: horizontalSizeClass,
+                topContentPadding: topContentPadding,
+                bottomContentPadding: bottomContentPadding
+            )
             ScrollView {
                 if let episode = appModel.playback.currentEpisode {
-                    let artworkSize = artworkWidth(in: proxy)
-                    VStack(spacing: contentSpacing) {
+                    VStack(spacing: metrics.contentSpacing) {
                         if appModel.replacesNowPlayingArtworkWithPlaybackDiagnostics {
                             NowPlayingPlaybackDiagnosticsView(
                                 text: appModel.playback.playbackDiagnosticsText
                                     + appModel.playbackSourceIdentityDiagnostics,
-                                size: artworkSize
+                                size: metrics.artworkSize
                             )
                         } else {
                             NowPlayingSoundLabArtwork(
                                 title: episode.podcastTitle,
                                 imageURL: episode.artworkURL?.absoluteString,
-                                size: artworkSize,
+                                size: metrics.artworkSize,
                                 voiceBoostEnabled: $isVoiceBoostEnabled,
                                 voiceBoostControlEnabled: appModel.playbackSettings.canChangeCurrentEpisodeVoiceBoost,
                                 onAdFreePassAction: startAdFreePass,
@@ -57,13 +63,13 @@ struct NowPlayingView: View {
                             )
                         }
 
-                        VStack(spacing: 6) {
+                        VStack(spacing: metrics.metadataSpacing) {
                             Button(action: openEpisode) {
                                 Text(episode.title)
-                                    .font(titleFont)
+                                    .font(metrics.titleFont)
                                     .multilineTextAlignment(.center)
-                                    .lineLimit(titleLineLimit)
-                                    .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 0.92 : 0.78)
+                                    .lineLimit(metrics.titleLineLimit)
+                                    .minimumScaleFactor(metrics.titleMinimumScaleFactor)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             .buttonStyle(.plain)
@@ -73,11 +79,11 @@ struct NowPlayingView: View {
 
                             Button(action: openPodcast) {
                                 Text(episode.podcastTitle)
-                                    .font(podcastFont)
+                                    .font(metrics.podcastFont)
                                     .foregroundStyle(.secondary)
                                     .multilineTextAlignment(.center)
-                                    .lineLimit(podcastLineLimit)
-                                    .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 0.9 : 0.82)
+                                    .lineLimit(metrics.podcastLineLimit)
+                                    .minimumScaleFactor(metrics.podcastMinimumScaleFactor)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             .buttonStyle(.plain)
@@ -141,15 +147,22 @@ struct NowPlayingView: View {
                         .padding(.top, utilityTopPadding)
                         .layoutPriority(1)
                     }
-                    .frame(maxWidth: contentWidth(in: proxy))
-                    .padding(.horizontal, horizontalPadding)
-                    .padding(.top, topContentPadding)
-                    .padding(.bottom, bottomContentPadding)
+                    .frame(maxWidth: metrics.contentWidth)
+                    .padding(.horizontal, metrics.horizontalPadding)
+                    .padding(.top, metrics.topContentPadding)
+                    .padding(.bottom, metrics.bottomContentPadding)
                     .frame(maxWidth: .infinity)
-                    .frame(minHeight: proxy.size.height, alignment: .top)
+                    .frame(minHeight: metrics.containerHeight, alignment: .top)
                     .animation(
                         accessibilityReduceMotion ? nil : .easeOut(duration: 0.2),
                         value: isPlaybackFailed
+                    )
+                } else if let finishedPlaybackPresentation = appModel.finishedPlaybackPresentation {
+                    FinishedPlaybackView(
+                        presentation: finishedPlaybackPresentation,
+                        metrics: metrics,
+                        onReplay: replayFinishedPlayback,
+                        onDone: onDismiss
                     )
                 } else {
                     ContentUnavailableView("Nothing Playing", systemImage: "play.circle")
@@ -179,6 +192,8 @@ struct NowPlayingView: View {
                 if let remoteTranscriptionPresentation {
                     NowPlayingRemoteTranscriptionToast(
                         presentation: remoteTranscriptionPresentation,
+                        canOpenEpisode: canOpenCurrentEpisode,
+                        onOpenEpisode: openEpisode,
                         onCancel: appModel.remoteTranscription.cancel
                     )
                     .padding(.horizontal, 16)
@@ -191,7 +206,8 @@ struct NowPlayingView: View {
                 } else if let transcriptionRequest {
                     NowPlayingTranscriptionToast(
                         request: transcriptionRequest,
-                        onOpenTranscript: openTranscriptFromToast,
+                        canOpenEpisode: canOpenCurrentEpisode,
+                        onOpenEpisode: openEpisodeFromTranscriptionToast,
                         onDismiss: dismissTranscriptionToast
                     )
                     .padding(.horizontal, 16)
@@ -318,10 +334,6 @@ struct NowPlayingView: View {
         }
     }
 
-    private var horizontalPadding: CGFloat {
-        horizontalSizeClass == .regular ? 36 : 24
-    }
-
     private var showsPauseButton: Bool {
         appModel.playback.state.showsPauseButton
     }
@@ -446,36 +458,12 @@ struct NowPlayingView: View {
         appModel.dismissTranscriptionRequest(id: transcriptionRequest.id)
     }
 
-    private func openTranscriptFromToast() {
-        guard transcriptionRequest?.phase == .completed else {
+    private func openEpisodeFromTranscriptionToast() {
+        guard canOpenCurrentEpisode else {
             return
         }
         dismissTranscriptionToast()
-        performTranscriptAction()
-    }
-
-    private func artworkWidth(in proxy: GeometryProxy) -> CGFloat {
-        let availableWidth = proxy.size.width - horizontalPadding * 2
-        let availableHeight = max(proxy.size.height - topContentPadding - bottomContentPadding, 280)
-        if dynamicTypeSize.isAccessibilitySize {
-            let heightConstrainedWidth = availableHeight * (horizontalSizeClass == .regular ? 0.30 : 0.26)
-            return min(availableWidth, heightConstrainedWidth, accessibilityArtworkCap(in: proxy))
-        }
-
-        let heightConstrainedWidth = availableHeight * (horizontalSizeClass == .regular ? 0.46 : 0.40)
-        return min(availableWidth, heightConstrainedWidth, horizontalSizeClass == .regular ? 360 : 300)
-    }
-
-    private func contentWidth(in proxy: GeometryProxy) -> CGFloat {
-        min(proxy.size.width - horizontalPadding * 2, horizontalSizeClass == .regular ? 500 : 430)
-    }
-
-    private var contentSpacing: CGFloat {
-        if dynamicTypeSize.isAccessibilitySize {
-            return 14
-        }
-
-        return 12
+        openEpisode()
     }
 
     private func transportTopPadding(in proxy: GeometryProxy) -> CGFloat {
@@ -494,40 +482,12 @@ struct NowPlayingView: View {
         return 6
     }
 
-    private var titleFont: Font {
-        dynamicTypeSize.isAccessibilitySize ? .headline : .title2
-    }
-
-    private var podcastFont: Font {
-        dynamicTypeSize.isAccessibilitySize ? .subheadline : .title3
-    }
-
-    private var titleLineLimit: Int {
-        dynamicTypeSize.isAccessibilitySize ? 3 : 2
-    }
-
-    private var podcastLineLimit: Int {
-        dynamicTypeSize.isAccessibilitySize ? 2 : 1
-    }
-
-    private func accessibilityArtworkCap(in proxy: GeometryProxy) -> CGFloat {
-        if horizontalSizeClass == .regular {
-            return 300
-        }
-
-        if proxy.size.height < 700 {
-            return 188
-        }
-
-        if proxy.size.height < 780 {
-            return 220
-        }
-
-        return 240
-    }
-
     private func retryPlayback() {
         appModel.playback.play()
+    }
+
+    private func replayFinishedPlayback() {
+        appModel.replayFinishedPlayback(modelContext: modelContext)
     }
 
     private func skipBackward() {

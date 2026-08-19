@@ -2,11 +2,11 @@ import Foundation
 
 nonisolated enum PlaybackEndOfEpisodeSleepTimer {
     static func remainingPlaybackDuration(
-        duration: TimeInterval?,
+        endPosition: TimeInterval?,
         position: TimeInterval,
         rate: Float
     ) -> TimeInterval? {
-        guard let duration = finitePositive(duration),
+        guard let endPosition = finitePositive(endPosition),
               position.isFinite,
               rate.isFinite,
               rate > 0
@@ -14,7 +14,7 @@ nonisolated enum PlaybackEndOfEpisodeSleepTimer {
             return nil
         }
 
-        let remainingMediaTime = duration - position.clamped(to: 0...duration)
+        let remainingMediaTime = endPosition - position.clamped(to: 0...endPosition)
         guard remainingMediaTime > 0 else {
             return nil
         }

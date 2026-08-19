@@ -12,6 +12,7 @@ struct PodcastActionsMenu: View {
     let unplayedEpisodeCount: Int
     let downloadCount: Int
     let onSearch: () -> Void
+    let onPlaybackSettings: () -> Void
     let adAutoDetectBinding: Binding<Bool>
     @Binding var isConfirmingAdAutoDetect: Bool
     @Binding var isConfirmingMarkAllPlayed: Bool
@@ -52,6 +53,8 @@ struct PodcastActionsMenu: View {
             }
 
             Section {
+                Button("Skip Intro & Outro…", systemImage: "scissors", action: onPlaybackSettings)
+
                 Toggle(
                     "Automatically Detect Ads",
                     systemImage: "megaphone",

@@ -781,6 +781,171 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededCompletionRemovesCollapsedMiniPlayer() throws {
+        let app = makeSeededApp(audioDurationSeconds: 15)
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        dismissNowPlayingOverlay(in: app)
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        XCTAssertTrue(
+            miniPlayer.waitForNonExistence(timeout: 25),
+            "Natural completion should remove the collapsed mini-player."
+        )
+        let overlay = nowPlayingOverlay(in: app)
+        XCTAssertTrue(overlay.waitForNonExistence(timeout: 5))
+        assertDoesNotExist(
+            finishedPlayback(in: overlay),
+            named: "Finished presentation inside collapsed overlay"
+        )
+        assertDoesNotExist(
+            finishedPlayback(in: app),
+            named: "app-scoped collapsed Finished presentation"
+        )
+    }
+
+    @MainActor
+    func testSeededExpandedCompletionReplaysAndDismissesWithoutMiniPlayer() throws {
+        let app = makeSeededApp(audioDurationSeconds: 15)
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let overlay = nowPlayingOverlay(in: app)
+        let finished = finishedPlayback(in: overlay)
+        assertExists(finished, named: "expanded Finished state", timeout: 25)
+        XCTAssertEqual(finished.label, "Finished")
+        let replay = overlay.buttons["Replay"]
+        let done = overlay.buttons["Done"]
+        assertExists(replay, named: "Replay action")
+        assertExists(done, named: "Done action")
+        XCTAssertGreaterThanOrEqual(replay.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(replay.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(done.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(done.frame.height, 44)
+        assertDoesNotExist(playbackProgress(in: app), named: "progress control after completion")
+        assertDoesNotExist(overlay.buttons["Up Next"], named: "Up Next control after completion")
+        assertDoesNotExist(app.buttons["Open Now Playing"], named: "mini-player behind Finished state")
+
+        replay.tap()
+        XCTAssertTrue(
+            finished.waitForNonExistence(timeout: 5),
+            "Replay should return the overlay to live Now Playing."
+        )
+        assertExists(playbackProgress(in: app), named: "progress control after Replay")
+        assertExists(finished, named: "Finished state after Replay completes", timeout: 25)
+        assertDoesNotExist(app.buttons["Open Now Playing"], named: "mini-player after second completion")
+
+        done.tap()
+        XCTAssertTrue(
+            overlay.waitForNonExistence(timeout: 5),
+            "Done should finish the existing card dismissal before unmounting the overlay."
+        )
+        assertDoesNotExist(app.buttons["Open Now Playing"], named: "mini-player after Done")
+    }
+
+    @MainActor
+    func testSeededCompletionDuringCancelledDismissDragReturnsFinishedCard() throws {
+        let app = makeSeededApp(audioDurationSeconds: 8)
+        app.launchArguments.append("--opencast-frame-probe")
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let overlay = nowPlayingOverlay(in: app)
+        holdNowPlayingDismissDrag(in: app, endY: 0.32, holdDuration: 10)
+
+        let finished = finishedPlayback(in: overlay)
+        assertHittable(finished, named: "Finished card after cancelled completion drag", timeout: 5)
+        assertHittable(overlay.buttons["Replay"], named: "Replay after cancelled completion drag")
+        // Completion must land while the drag is held; otherwise this only
+        // proves an ordinary drag on an already-Finished card springs back.
+        let summary = captureFramePacingSummary(
+            in: app,
+            expectedSessions: 1,
+            containing: "dismiss-drag-ended"
+        )
+        assertEventOrder(
+            ["dismiss-drag-start", "playback-finished", "dismiss-drag-ended"],
+            in: summary,
+            named: "completion during held dismiss drag"
+        )
+
+        overlay.buttons["Done"].tap()
+        XCTAssertTrue(overlay.waitForNonExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testSeededCompletionDuringDismissDragCompletesDismissal() throws {
+        let app = makeSeededApp(audioDurationSeconds: 8)
+        app.launchArguments.append("--opencast-frame-probe")
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let overlay = nowPlayingOverlay(in: app)
+        holdNowPlayingDismissDrag(in: app, endY: 0.58, holdDuration: 10)
+
+        XCTAssertTrue(
+            overlay.waitForNonExistence(timeout: 5),
+            "A completion drag above threshold should finish dismissal."
+        )
+        assertDoesNotExist(finishedPlayback(in: app), named: "Finished card after completed dismissal")
+        assertHittable(app.tabBars.buttons["Library"], named: "interactive Library tab after completion dismissal")
+        let summary = captureFramePacingSummary(
+            in: app,
+            expectedSessions: 1,
+            containing: "card-dismissed"
+        )
+        assertEventOrder(
+            ["dismiss-drag-start", "playback-finished", "dismiss-drag-ended", "card-dismissed"],
+            in: summary,
+            named: "completion during held dismiss drag that dismisses"
+        )
+    }
+
+    @MainActor
+    func testSeededCompletionDuringExitAnimationLeavesInteractiveTabs() throws {
+        let app = makeSeededApp(
+            audioDurationSeconds: 15,
+            skipIntroSeconds: 13.4
+        )
+        app.launchArguments.append("--opencast-frame-probe")
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let overlay = nowPlayingOverlay(in: app)
+        holdNowPlayingDismissDrag(
+            in: app,
+            endY: 0.58,
+            holdDuration: 0.05,
+            velocity: .fast
+        )
+
+        XCTAssertTrue(overlay.waitForNonExistence(timeout: 5))
+        assertHittable(app.tabBars.buttons["Library"], named: "interactive Library tab after in-flight completion")
+        let summary = captureFramePacingSummary(in: app, expectedSessions: 1)
+        assertEventOrder(
+            ["dismiss-drag-ended", "playback-finished", "card-dismissed"],
+            in: summary,
+            named: "completion during dismissal exit"
+        )
+    }
+
+    @MainActor
+    func testSeededNearEndCompletionDuringEntranceShowsFinishedCard() throws {
+        let app = makeSeededApp(
+            audioDurationSeconds: 15,
+            skipIntroSeconds: 14.4
+        )
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let overlay = nowPlayingOverlay(in: app)
+        let finished = finishedPlayback(in: overlay)
+        assertHittable(finished, named: "Finished card after near-end entrance", timeout: 5)
+        assertHittable(overlay.buttons["Replay"], named: "Replay after near-end entrance")
+    }
+
+    @MainActor
     func testSeededMiniPlayerTabAccessorySurvivesInboxScrollAndExpands() throws {
         let app = makeSeededApp(extraFeedCount: 12)
         app.launch()
@@ -1138,6 +1303,81 @@ final class OpenCastUITests: XCTestCase {
         assertExists(toggle, named: "Automatically Detect Ads toggle after enabling")
         toggle.tap()
         assertDoesNotExist(app.sheets.firstMatch, named: "confirmation dialog after disabling")
+    }
+
+    @MainActor
+    func testSeededPodcastPlaybackSkipSettingsValidateSaveAndReset() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+
+        openPodcastPlaybackSettings(in: app)
+        let navigationBar = app.navigationBars["Skip Intro & Outro"]
+        let introField = app.textFields["Skip Intro Duration"]
+        let outroField = app.textFields["Skip Outro Duration"]
+        assertExists(navigationBar.buttons["Cancel"], named: "playback settings cancel action")
+        assertExists(navigationBar.buttons["Save"], named: "playback settings save action")
+        assertExists(introField, named: "skip intro duration field")
+        assertExists(outroField, named: "skip outro duration field")
+        XCTAssertTrue(introField.label.contains("Skip Intro duration"))
+        XCTAssertTrue(outroField.label.contains("Skip Outro duration"))
+        XCTAssertEqual(introField.value as? String, "0:00")
+        XCTAssertEqual(outroField.value as? String, "0:00")
+
+        let introStepper = app.steppers["Adjust Skip Intro"]
+        assertHittable(introStepper, named: "native skip intro stepper")
+        let increaseIntro = introStepper.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)
+        )
+        let decreaseIntro = introStepper.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.80, dy: 0.5)
+        )
+        increaseIntro.tap()
+        XCTAssertEqual(introField.value as? String, "0:05")
+        decreaseIntro.tap()
+        XCTAssertEqual(introField.value as? String, "0:00")
+
+        replaceText(in: introField, with: "1:99")
+        navigationBar.buttons["Save"].tap()
+        assertExists(
+            app.staticTexts["Podcast Playback Settings Error"],
+            named: "invalid playback duration error"
+        )
+
+        replaceText(in: introField, with: "1:05")
+        assertDoesNotExist(
+            app.staticTexts["Podcast Playback Settings Error"],
+            named: "stale validation error after editing"
+        )
+        replaceText(in: outroField, with: "0:30")
+        XCTAssertEqual(introField.value as? String, "1:05")
+        XCTAssertEqual(outroField.value as? String, "0:30")
+        navigationBar.buttons["Save"].tap()
+        assertDoesNotExist(navigationBar, named: "playback settings after save")
+
+        openPodcastPlaybackSettings(in: app)
+        let reopenedNavigationBar = app.navigationBars["Skip Intro & Outro"]
+        let reopenedIntroField = app.textFields["Skip Intro Duration"]
+        let reopenedOutroField = app.textFields["Skip Outro Duration"]
+        assertExists(reopenedIntroField, named: "reopened skip intro duration field")
+        XCTAssertEqual(reopenedIntroField.value as? String, "1:05")
+        XCTAssertEqual(reopenedOutroField.value as? String, "0:30")
+
+        let resetBoth = app.buttons["Reset Both"]
+        assertHittable(resetBoth, named: "reset both playback skips")
+        resetBoth.tap()
+        XCTAssertEqual(reopenedIntroField.value as? String, "0:00")
+        XCTAssertEqual(reopenedOutroField.value as? String, "0:00")
+        reopenedNavigationBar.buttons["Save"].tap()
+        assertDoesNotExist(reopenedNavigationBar, named: "playback settings after reset save")
+
+        openPodcastPlaybackSettings(in: app)
+        XCTAssertEqual(app.textFields["Skip Intro Duration"].value as? String, "0:00")
+        XCTAssertEqual(app.textFields["Skip Outro Duration"].value as? String, "0:00")
     }
 
     @MainActor
@@ -2481,7 +2721,7 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testOnDemandTranscriptRequestToastOpensCompletedTranscript() throws {
+    func testOnDemandTranscriptRequestToastOpensEpisodeDescription() throws {
         let app = makeSeededApp(
             seedsCompletedDownload: true,
             completesTranscriptRequests: true
@@ -2501,20 +2741,30 @@ final class OpenCastUITests: XCTestCase {
 
         let toast = app.descendants(matching: .any)["Transcription Progress Toast"]
         assertExists(toast, named: "transcription request toast")
-        let readyButton = toast.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@",
-            "Transcript ready"
-        )).firstMatch
-        assertHittable(readyButton, named: "Transcript ready action", timeout: 10)
+        let openEpisodeButton = toast.buttons["Open Episode Description from Local Toast"]
+        assertHittable(openEpisodeButton, named: "local toast episode description action", timeout: 10)
         assertHittable(toast.buttons["Dismiss"], named: "separate transcript toast dismiss action")
-        readyButton.tap()
+        openEpisodeButton.tap()
 
-        assertExists(app.staticTexts["Transcript"], named: "transcript sheet title")
-        assertExists(app.buttons["Search Transcript"], named: "transcript search action")
-        assertExists(app.buttons["Transcript Options"], named: "transcript options action")
+        assertDoesNotExist(nowPlayingOverlay(in: app), named: "Now Playing overlay after toast navigation")
         assertExists(
-            app.buttons["Deterministic UI request transcript."],
-            named: "generated transcript line"
+            episodePlaybackControl(in: app),
+            named: "episode description after tapping completed local toast",
+            timeout: 10
+        )
+        assertExists(
+            app.buttons["Read Transcript"],
+            named: "completed transcript status on episode detail",
+            timeout: 10
+        )
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertHittable(miniPlayer, named: "mini-player after local toast navigation")
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        assertDoesNotExist(
+            app.descendants(matching: .any)["Transcription Progress Toast"],
+            named: "consumed local toast after reopening Now Playing"
         )
     }
 
@@ -2943,11 +3193,14 @@ final class OpenCastUITests: XCTestCase {
         )
         let toastProgress = toast.progressIndicators["Remote Transcription Chunk Progress"]
         assertExists(toastProgress, named: "Now Playing determinate remote progress")
-        // iOS 26.5 exposes this SwiftUI progress label as empty to XCUITest;
-        // the stable identifier above and exact value still verify the control.
+        XCTAssertEqual(toastProgress.label, "Transcription progress")
         XCTAssertEqual(toastProgress.value as? String, "43 percent")
+        let openEpisodeButton = toast.buttons["Open Episode Description from Remote Toast"]
+        assertHittable(openEpisodeButton, named: "remote toast episode description action")
+        assertHittable(toast.buttons["Cancel"], named: "separate remote toast cancel action")
 
-        openCurrentEpisodeDetailFromNowPlaying(in: app)
+        openEpisodeButton.tap()
+        assertDoesNotExist(nowPlayingOverlay(in: app), named: "Now Playing overlay after remote toast navigation")
         let card = app.descendants(matching: .any)["Remote Transcription Status Card"]
         assertExists(card, named: "episode remote transcription status card")
         assertExists(card.staticTexts["Transcribing"], named: "episode remote stage")
@@ -2957,6 +3210,7 @@ final class OpenCastUITests: XCTestCase {
         )
         let cardProgress = card.progressIndicators["Remote Transcription Chunk Progress"]
         assertExists(cardProgress, named: "episode determinate remote progress")
+        XCTAssertEqual(cardProgress.label, "Transcription progress")
         XCTAssertEqual(cardProgress.value as? String, "43 percent")
     }
 
@@ -3676,6 +3930,8 @@ final class OpenCastUITests: XCTestCase {
         seedsPerEpisodeVoiceBoost: Bool = false,
         seedsLongShowNotes: Bool = false,
         seedsUpNextQueue: Bool = false,
+        audioDurationSeconds: Int? = nil,
+        skipIntroSeconds: Double? = nil,
         extraFeedCount: Int = 0,
         artworkVariant: String? = nil,
         preferredContentSizeCategoryName: String? = nil
@@ -3759,7 +4015,12 @@ final class OpenCastUITests: XCTestCase {
         }
         if seedsUpNextQueue {
             app.launchEnvironment["OPENCAST_SEED_UP_NEXT_QUEUE"] = "1"
-            app.launchEnvironment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] = "600"
+        }
+        if let audioDurationSeconds = audioDurationSeconds ?? (seedsUpNextQueue ? 600 : nil) {
+            app.launchEnvironment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] = String(audioDurationSeconds)
+        }
+        if let skipIntroSeconds {
+            app.launchEnvironment["OPENCAST_SEED_SKIP_INTRO_SECONDS"] = String(skipIntroSeconds)
         }
         if extraFeedCount > 0 {
             app.launchEnvironment["OPENCAST_SEED_EXTRA_FEED_COUNT"] = String(extraFeedCount)
@@ -4211,6 +4472,32 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func openPodcastPlaybackSettings(in app: XCUIApplication) {
+        let actionsButton = app.buttons["Podcast Actions"]
+        assertHittable(actionsButton, named: "podcast actions menu")
+        actionsButton.tap()
+        let playbackSettings = app.buttons["Skip Intro & Outro…"]
+        assertHittable(playbackSettings, named: "Skip Intro & Outro menu action")
+        playbackSettings.tap()
+        assertExists(
+            app.navigationBars["Skip Intro & Outro"],
+            named: "podcast playback settings sheet"
+        )
+    }
+
+    @MainActor
+    private func replaceText(in field: XCUIElement, with replacement: String) {
+        assertHittable(field, named: "duration field to replace")
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
+        let existingValue = (field.value as? String) ?? ""
+        field.typeText(String(
+            repeating: XCUIKeyboardKey.delete.rawValue,
+            count: existingValue.count + 2
+        ))
+        field.typeText(replacement)
+    }
+
+    @MainActor
     private func openEpisodeDetailFromContextMenu(
         _ row: XCUIElement,
         in app: XCUIApplication,
@@ -4412,6 +4699,23 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func holdNowPlayingDismissDrag(
+        in app: XCUIApplication,
+        endY: CGFloat,
+        holdDuration: TimeInterval,
+        velocity: XCUIGestureVelocity = .slow
+    ) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.24))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: end,
+            withVelocity: velocity,
+            thenHoldForDuration: holdDuration
+        )
+    }
+
+    @MainActor
     private func dragDismissNowPlayingOverlayFromArtwork(in app: XCUIApplication) {
         let artwork = nowPlayingArtwork(in: app)
         assertExists(artwork, named: "Now Playing artwork before dismissal")
@@ -4441,6 +4745,11 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     private func nowPlayingOverlay(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["Now Playing"]
+    }
+
+    @MainActor
+    private func finishedPlayback(in element: XCUIElement) -> XCUIElement {
+        element.descendants(matching: .any)["Finished Playback"]
     }
 
     @MainActor
@@ -4624,6 +4933,7 @@ final class OpenCastUITests: XCTestCase {
     private func captureFramePacingSummary(
         in app: XCUIApplication,
         expectedSessions: Int,
+        containing requiredEvent: String? = nil,
         timeout: TimeInterval = 15
     ) -> String {
         let element = app.descendants(matching: .any)["Frame Pacing Summary"]
@@ -4632,7 +4942,8 @@ final class OpenCastUITests: XCTestCase {
         while Date() < deadline {
             value = (element.value as? String) ?? ""
             let sessions = value.components(separatedBy: "session=").count - 1
-            if sessions >= expectedSessions {
+            let hasRequiredEvent = requiredEvent.map(value.contains) ?? true
+            if sessions >= expectedSessions, hasRequiredEvent {
                 break
             }
             usleep(250_000)
@@ -4644,6 +4955,30 @@ final class OpenCastUITests: XCTestCase {
         add(attachment)
         print("FRAMEPACING_SUMMARY: \(value)")
         return value
+    }
+
+    private func assertEventOrder(
+        _ events: [String],
+        in summary: String,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        var searchStart = summary.startIndex
+        for event in events {
+            guard let range = summary.range(
+                of: event,
+                range: searchStart..<summary.endIndex
+            ) else {
+                XCTFail(
+                    "Missing or out-of-order \(event) for \(name): \(summary)",
+                    file: file,
+                    line: line
+                )
+                return
+            }
+            searchStart = range.upperBound
+        }
     }
 
     @MainActor

@@ -6,12 +6,13 @@ struct NowPlayingTranscriptionToast: View {
     @Environment(OpenCastAppModel.self) private var appModel
 
     let request: EpisodeTranscriptionRequest
-    let onOpenTranscript: () -> Void
+    let canOpenEpisode: Bool
+    let onOpenEpisode: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
-            Button(action: onOpenTranscript) {
+            Button(action: onOpenEpisode) {
                 HStack(spacing: 12) {
                     statusIndicator
 
@@ -30,10 +31,11 @@ struct NowPlayingTranscriptionToast: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .disabled(!canOpenEpisode)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .disabled(!canOpenTranscript)
             .accessibilityLabel("\(title). \(detail)")
-            .accessibilityHint("Opens the transcript", isEnabled: canOpenTranscript)
+            .accessibilityHint("Opens the episode description.")
+            .accessibilityIdentifier("Open Episode Description from Local Toast")
 
             Button("Dismiss", systemImage: "xmark", action: onDismiss)
                 .labelStyle(.iconOnly)
@@ -101,10 +103,6 @@ struct NowPlayingTranscriptionToast: View {
         case .failed:
             "Transcription stopped"
         }
-    }
-
-    private var canOpenTranscript: Bool {
-        request.phase == .completed
     }
 
     private var detail: String {

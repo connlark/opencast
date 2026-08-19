@@ -699,15 +699,18 @@ struct AVFoundationPlaybackControllerTests {
         }
         try controller.load(episode(duration: 60))
         var finishedEpisodeID: EpisodeID?
+        var callbackPolicy: PlaybackCompletionPolicy?
         var callbackSnapshot: PlaybackSnapshot?
-        controller.setEpisodeFinishedHandler { episode in
+        controller.setEpisodeFinishedHandler { episode, policy in
             finishedEpisodeID = episode.id
+            callbackPolicy = policy
             callbackSnapshot = controller.snapshot
         }
 
         controller.handleCurrentItemDidPlayToEnd()
 
         #expect(finishedEpisodeID == controller.currentEpisode?.id)
+        #expect(callbackPolicy == .advanceIfQueued)
         #expect(callbackSnapshot?.state == .paused)
         #expect(callbackSnapshot?.position == 60)
         #expect(controller.snapshot.state == .paused)
@@ -715,19 +718,25 @@ struct AVFoundationPlaybackControllerTests {
     }
 
     @Test
-    func endOfEpisodeSleepTimerSuppressesFinishingCallback() throws {
+    func endOfEpisodeSleepTimerRequestsStopAfterPublishingParkedState() throws {
         let controller = AVFoundationPlaybackController()
         defer {
             controller.unload()
         }
         try controller.load(episode(duration: 60))
         controller.setSleepTimer(mode: .endOfEpisode)
-        var callbackCount = 0
-        controller.setEpisodeFinishedHandler { _ in callbackCount += 1 }
+        var callbackPolicies: [PlaybackCompletionPolicy] = []
+        var callbackSnapshot: PlaybackSnapshot?
+        controller.setEpisodeFinishedHandler { _, policy in
+            callbackPolicies.append(policy)
+            callbackSnapshot = controller.snapshot
+        }
 
         controller.handleCurrentItemDidPlayToEnd()
 
-        #expect(callbackCount == 0)
+        #expect(callbackPolicies == [.stop])
+        #expect(callbackSnapshot?.state == .paused)
+        #expect(callbackSnapshot?.position == 60)
         #expect(controller.sleepTimerMode == .off)
         #expect(controller.snapshot.state == .paused)
         #expect(controller.snapshot.position == 60)
@@ -741,7 +750,7 @@ struct AVFoundationPlaybackControllerTests {
         }
         try controller.load(episode(id: "current", duration: 60))
         var callbackCount = 0
-        controller.setEpisodeFinishedHandler { _ in callbackCount += 1 }
+        controller.setEpisodeFinishedHandler { _, _ in callbackCount += 1 }
         let staleItem = AVPlayerItem(url: URL(string: "https://example.com/stale.mp3")!)
 
         controller.handleCurrentItemDidPlayToEnd(staleItem)
@@ -764,6 +773,322 @@ struct AVFoundationPlaybackControllerTests {
 
         #expect(controller.snapshot.position == 0)
         #expect(controller.snapshot.progressBoundaryID > 0)
+    }
+
+    @Test
+    func replayStartsAtConfiguredIntro() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        let boundaries = PlaybackEpisodeBoundaries(
+            skipIntroSeconds: 12,
+            skipOutroSeconds: 10
+        )
+        try controller.load(
+            episode(duration: 60),
+            startPosition: 60,
+            boundaries: boundaries
+        )
+
+        controller.play()
+
+        #expect(controller.snapshot.position == 12)
+        #expect(controller.snapshot.progressBoundaryID > 0)
+    }
+
+    @Test
+    func replayAfterOutroFinishUsesLatchWhenDurationGrows() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: 100),
+            boundaries: PlaybackEpisodeBoundaries(
+                skipIntroSeconds: 12,
+                skipOutroSeconds: 10
+            )
+        )
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _, _ in callbackCount += 1 }
+
+        controller.handleObservedPlaybackPosition(89, duration: 100)
+        controller.handleObservedPlaybackPosition(90, duration: 100)
+        #expect(controller.isFinishLatchedForTesting)
+        let generation = controller.observationGenerationForTesting
+        controller.handleObservedDuration(140, observationGeneration: generation)
+
+        controller.play()
+
+        #expect(!controller.isFinishLatchedForTesting)
+        #expect(controller.snapshot.position == 12)
+        controller.handleObservedPlaybackPosition(12, duration: 140)
+        controller.handleObservedPlaybackPosition(20, duration: 140)
+        #expect(controller.snapshot.position == 20)
+        #expect(callbackCount == 1)
+    }
+
+    @Test
+    func replayAfterFinishWithoutResolvedDurationClearsLatch() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: nil),
+            boundaries: PlaybackEpisodeBoundaries(skipIntroSeconds: 15)
+        )
+
+        controller.handleCurrentItemDidPlayToEnd()
+        #expect(controller.isFinishLatchedForTesting)
+
+        controller.play()
+
+        #expect(!controller.isFinishLatchedForTesting)
+        #expect(controller.snapshot.position == 15)
+        controller.handleObservedPlaybackPosition(15, duration: nil)
+        controller.handleObservedPlaybackPosition(20, duration: nil)
+        #expect(controller.snapshot.position == 20)
+    }
+
+    @Test
+    func oldLoadPositionAndDurationCallbacksCannotMutateReplacement() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(id: "first", duration: 60))
+        let oldGeneration = controller.observationGenerationForTesting
+        try controller.load(
+            episode(id: "second", duration: 120),
+            boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
+        )
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _, _ in callbackCount += 1 }
+        let originalSnapshot = controller.snapshot
+
+        controller.handleObservedPlaybackPosition(
+            110,
+            duration: 120,
+            observationGeneration: oldGeneration
+        )
+        controller.handleObservedDuration(
+            999,
+            observationGeneration: oldGeneration
+        )
+
+        #expect(controller.snapshot == originalSnapshot)
+        #expect(controller.currentEpisode?.id.rawValue == "second")
+        #expect(callbackCount == 0)
+        #expect(!controller.isFinishLatchedForTesting)
+    }
+
+    @Test
+    func crossingOutroCompletesAtFullDurationAndParksPaused() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: 100),
+            boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
+        )
+        var callbackPolicies: [PlaybackCompletionPolicy] = []
+        controller.setEpisodeFinishedHandler { _, policy in callbackPolicies.append(policy) }
+
+        controller.handleObservedPlaybackPosition(89.99, duration: 100)
+        #expect(callbackPolicies.isEmpty)
+        controller.handleObservedPlaybackPosition(90, duration: 100)
+
+        #expect(callbackPolicies == [.advanceIfQueued])
+        #expect(controller.snapshot.state == .paused)
+        #expect(controller.snapshot.position == 100)
+    }
+
+    @Test
+    func preciseBoundaryCallbackCompletesAtConfiguredCutoff() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: 100),
+            boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
+        )
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _, _ in callbackCount += 1 }
+        let generation = controller.observationGenerationForTesting
+        #expect(controller.outroBoundaryCutoffForTesting == 90)
+        controller.handleObservedPlaybackPosition(89.75, duration: 100)
+
+        controller.handleOutroBoundaryReached(90, observationGeneration: generation)
+
+        #expect(callbackCount == 1)
+        #expect(controller.snapshot.state == .paused)
+        #expect(controller.snapshot.position == 100)
+    }
+
+    @Test
+    func resolvingUnknownDurationInstallsPreciseBoundary() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: nil),
+            boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
+        )
+        let generation = controller.observationGenerationForTesting
+        #expect(controller.outroBoundaryCutoffForTesting == nil)
+
+        controller.handleObservedDuration(100, observationGeneration: generation)
+
+        #expect(controller.outroBoundaryCutoffForTesting == 90)
+    }
+
+    @Test
+    func outroCompletionCallsFinishedHandlerOnlyOnce() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: 100),
+            boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
+        )
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _, _ in callbackCount += 1 }
+
+        controller.handleObservedPlaybackPosition(89, duration: 100)
+        controller.handleObservedPlaybackPosition(90, duration: 100)
+        controller.handleObservedPlaybackPosition(91, duration: 100)
+        controller.handleCurrentItemDidPlayToEnd()
+
+        #expect(callbackCount == 1)
+        #expect(controller.snapshot.position == 100)
+    }
+
+    @Test
+    func autoSkipAcrossOutroCompletesInsteadOfLandingPastCutoff() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: 100),
+            boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
+        )
+        controller.setSkipZones([
+            PlaybackSkipZone(id: 7, startTime: 80, endTime: 95)
+        ])
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _, _ in callbackCount += 1 }
+
+        controller.handleObservedPlaybackPosition(79, duration: 100)
+        controller.handleObservedPlaybackPosition(80, duration: 100)
+
+        #expect(callbackCount == 1)
+        #expect(controller.snapshot.state == .paused)
+        #expect(controller.snapshot.position == 100)
+        #expect(controller.lastAutoSkipEvent == PlaybackAutoSkipEvent(zoneID: 7, sequence: 1))
+    }
+
+    @Test
+    func manualSeeksIntoTrimmedRegionsRemainExactAndDoNotCompleteOutro() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: 100),
+            boundaries: PlaybackEpisodeBoundaries(
+                skipIntroSeconds: 15,
+                skipOutroSeconds: 10
+            )
+        )
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _, _ in callbackCount += 1 }
+
+        controller.seek(to: 5)
+        #expect(controller.snapshot.position == 5)
+
+        controller.seek(to: 95)
+        controller.handleObservedPlaybackPosition(96, duration: 100)
+
+        #expect(controller.snapshot.position == 96)
+        #expect(callbackCount == 0)
+    }
+
+    @Test
+    func endOfEpisodeSleepTimerUsesOutroCutoffAndRequestsStop() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: 100),
+            startPosition: 20,
+            boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
+        )
+        controller.setSleepTimer(mode: .endOfEpisode)
+        var callbackPolicies: [PlaybackCompletionPolicy] = []
+        controller.setEpisodeFinishedHandler { _, policy in callbackPolicies.append(policy) }
+
+        #expect(controller.sleepTimerRemaining() == 70)
+        controller.handleObservedPlaybackPosition(20, duration: 100)
+        controller.handleObservedPlaybackPosition(89, duration: 100)
+        controller.handleObservedPlaybackPosition(90, duration: 100)
+
+        #expect(controller.sleepTimerMode == .off)
+        #expect(controller.snapshot.position == 100)
+        #expect(callbackPolicies == [.stop])
+    }
+
+    @Test
+    func unknownDurationActivatesOutroWhenDurationResolves() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(
+            episode(duration: nil),
+            boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
+        )
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _, _ in callbackCount += 1 }
+
+        controller.handleObservedPlaybackPosition(89, duration: nil)
+        #expect(callbackCount == 0)
+        controller.handleObservedPlaybackPosition(90, duration: 100)
+
+        #expect(callbackCount == 1)
+        #expect(controller.snapshot.position == 100)
+    }
+
+    @Test
+    func trimsAreIgnoredWhenTheyLeaveNoPlayableSpan() throws {
+        let boundaries = PlaybackEpisodeBoundaries(
+            skipIntroSeconds: 15,
+            skipOutroSeconds: 5
+        )
+        #expect(boundaries.ordinaryStartPosition(0, duration: 20) == 0)
+        #expect(boundaries.replayPosition(duration: 20) == 0)
+        #expect(boundaries.outroCutoff(duration: 20) == nil)
+
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 20), boundaries: boundaries)
+        var callbackCount = 0
+        controller.setEpisodeFinishedHandler { _, _ in callbackCount += 1 }
+
+        controller.handleObservedPlaybackPosition(14, duration: 20)
+        controller.handleObservedPlaybackPosition(15, duration: 20)
+
+        #expect(callbackCount == 0)
+        #expect(controller.snapshot.position == 15)
     }
 
     @Test

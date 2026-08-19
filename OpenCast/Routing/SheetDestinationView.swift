@@ -21,6 +21,10 @@ struct SheetDestinationView: View {
                 directoryService: appModel.podcastDirectoryService,
                 onCompleted: onDismiss
             )
+        case .podcastPlaybackSettings(let feedURL):
+            PodcastPlaybackSettingsView(feedURL: feedURL)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
     }
 }

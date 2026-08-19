@@ -178,6 +178,14 @@ enum SyncDuplicateRepairer {
         result: inout SyncRepairResult
     ) {
         let sortedRecords = records.sorted(by: isBetterSubscription)
+        let mergedSkipSettings = PodcastPlaybackSkipSettings.greatestValid(
+            in: records.map {
+                PodcastPlaybackSkipSettings(
+                    skipIntroSeconds: $0.skipIntroSeconds,
+                    skipOutroSeconds: $0.skipOutroSeconds
+                )
+            }
+        )
         let merged = MergedSubscription(
             feedURL: canonicalFeedURL,
             title: bestTitle(in: sortedRecords),
@@ -192,7 +200,9 @@ enum SyncDuplicateRepairer {
             isArchived: records.allSatisfy(\.isArchived),
             isVoiceBoostEnabled: records.allSatisfy(\.isVoiceBoostEnabled),
             // Auto-detect defaults off, so an explicit opt-in on any duplicate wins.
-            isAdAutoDetectEnabled: records.contains(where: \.isAdAutoDetectEnabled)
+            isAdAutoDetectEnabled: records.contains(where: \.isAdAutoDetectEnabled),
+            skipIntroSeconds: mergedSkipSettings.skipIntroSeconds,
+            skipOutroSeconds: mergedSkipSettings.skipOutroSeconds
         )
 
         if let keep = deterministicWinner(in: records) {
@@ -205,6 +215,8 @@ enum SyncDuplicateRepairer {
             setIfChanged(keep, \.isArchived, merged.isArchived)
             setIfChanged(keep, \.isVoiceBoostEnabled, merged.isVoiceBoostEnabled)
             setIfChanged(keep, \.isAdAutoDetectEnabled, merged.isAdAutoDetectEnabled)
+            setIfChanged(keep, \.skipIntroSeconds, merged.skipIntroSeconds)
+            setIfChanged(keep, \.skipOutroSeconds, merged.skipOutroSeconds)
 
             for record in records where record !== keep {
                 modelContext.delete(record)
@@ -225,7 +237,9 @@ enum SyncDuplicateRepairer {
                     lastRefreshAt: merged.lastRefreshAt,
                     isArchived: merged.isArchived,
                     isVoiceBoostEnabled: merged.isVoiceBoostEnabled,
-                    isAdAutoDetectEnabled: merged.isAdAutoDetectEnabled
+                    isAdAutoDetectEnabled: merged.isAdAutoDetectEnabled,
+                    skipIntroSeconds: merged.skipIntroSeconds,
+                    skipOutroSeconds: merged.skipOutroSeconds
                 )
             )
             for record in records {
@@ -370,6 +384,8 @@ enum SyncDuplicateRepairer {
         var isArchived: Bool
         var isVoiceBoostEnabled: Bool
         var isAdAutoDetectEnabled: Bool
+        var skipIntroSeconds: Double
+        var skipOutroSeconds: Double
     }
 
     private static func isBetterSubscription(

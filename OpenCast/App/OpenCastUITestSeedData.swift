@@ -49,6 +49,9 @@ enum OpenCastUITestSeedData {
         let overriddenAudioDuration = Int(
             ProcessInfo.processInfo.environment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] ?? ""
         ).flatMap { $0 > 0 ? $0 : nil }
+        let overriddenSkipIntroSeconds = Double(
+            ProcessInfo.processInfo.environment["OPENCAST_SEED_SKIP_INTRO_SECONDS"] ?? ""
+        ).flatMap { $0 > 0 ? $0 : nil }
         let episodeDuration = Double(overriddenAudioDuration ?? 180)
         let audioDuration = overriddenAudioDuration ?? 300
         let shouldSeedUpNextQueue = ProcessInfo.processInfo.environment[
@@ -75,7 +78,8 @@ enum OpenCastUITestSeedData {
                 title: podcastTitle,
                 author: "UI Test Author",
                 artworkURL: artworkURL,
-                lastRefreshAt: refreshedAt
+                lastRefreshAt: refreshedAt,
+                skipIntroSeconds: overriddenSkipIntroSeconds ?? 0
             )
         )
         var episodes = [

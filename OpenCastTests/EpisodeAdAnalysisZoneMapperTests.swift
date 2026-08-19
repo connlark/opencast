@@ -218,6 +218,42 @@ struct EpisodeAdAnalysisZoneMapperTests {
         #expect(fixture.appModel.displayOnlySkipZones == [])
     }
 
+    @Test
+    func synchronousOutroCompletionPreservesAdvancedEpisodeZones() async throws {
+        let fixture = try makeAppModelFixture()
+        let transcript = makeTranscriptDocument()
+        try seedCompletedAnalysis(
+            transcript: transcript,
+            spans: [
+                span(id: 1, kind: .hostReadAd, start: 40, end: 55),
+                span(id: 2, kind: .insertedAd, start: 10, end: 20, confidence: 0.5)
+            ],
+            in: fixture
+        )
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        await fixture.appModel.waitForSkipZoneRefresh()
+
+        var didCompleteFirstEpisode = false
+        fixture.playback.setEpisodeFinishedHandler { _, _ in
+            didCompleteFirstEpisode = true
+            try? fixture.playback.load(makeOtherEpisode(duration: 45))
+            fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        }
+        try fixture.playback.load(
+            makeEpisode(duration: 60),
+            startPosition: 45,
+            boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
+        )
+
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await fixture.appModel.waitForSkipZoneRefresh()
+
+        #expect(didCompleteFirstEpisode)
+        #expect(fixture.playback.currentEpisode?.id.rawValue == "other-episode")
+        #expect(fixture.playback.skipZones == [])
+        #expect(fixture.appModel.displayOnlySkipZones == [])
+    }
+
     private struct AppModelFixture {
         let context: ModelContext
         let transcriptFileStore: EpisodeTranscriptFileStore

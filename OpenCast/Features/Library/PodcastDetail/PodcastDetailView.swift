@@ -20,6 +20,7 @@ struct PodcastDetailView: View {
     @State private var isSearchPresented = false
     @State private var searchMode: EpisodeSearchMode = .episodes
     @State private var searchSession = EpisodeSearchSession()
+    @State private var sheetDestination: SheetDestination?
 
     let feedURL: String
     var onOpenEpisode: (String) -> Void = { _ in }
@@ -224,6 +225,9 @@ struct PodcastDetailView: View {
         } message: {
             Text(feedMigrationErrorMessage ?? "The new feed address could not be loaded.")
         }
+        .sheet(item: $sheetDestination) { destination in
+            SheetDestinationView(destination: destination, onDismiss: dismissSheet)
+        }
         .task(id: searchTaskKey) {
             let library = appModel.library
             let podcastID = feedURL
@@ -252,6 +256,7 @@ struct PodcastDetailView: View {
                         unplayedEpisodeCount: unplayedEpisodeCount,
                         downloadCount: downloadCount,
                         onSearch: showSearch,
+                        onPlaybackSettings: showPlaybackSettings,
                         adAutoDetectBinding: adAutoDetectBinding,
                         isConfirmingAdAutoDetect: $isConfirmingAdAutoDetect,
                         isConfirmingMarkAllPlayed: $isConfirmingMarkAllPlayed,
@@ -265,6 +270,14 @@ struct PodcastDetailView: View {
 
     private var listAnimation: Animation? {
         hasSearchQuery || reduceMotion ? nil : .default
+    }
+
+    private func showPlaybackSettings() {
+        sheetDestination = .podcastPlaybackSettings(feedURL: feedURL)
+    }
+
+    private func dismissSheet() {
+        sheetDestination = nil
     }
 
     private var sortOrderBinding: Binding<PodcastEpisodeSortOrder> {

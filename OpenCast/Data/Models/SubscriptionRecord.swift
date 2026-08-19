@@ -12,6 +12,8 @@ final class SubscriptionRecord {
     var isArchived: Bool = false
     var isVoiceBoostEnabled: Bool = true
     var isAdAutoDetectEnabled: Bool = false
+    var skipIntroSeconds: Double = 0
+    var skipOutroSeconds: Double = 0
     /// Stable per-record identity so duplicate repair picks the same winner on
     /// every device (smallest UUID wins); peers that chose opposite winners
     /// used to cross-delete both copies. Records imported from builds that
@@ -28,6 +30,8 @@ final class SubscriptionRecord {
         isArchived: Bool = false,
         isVoiceBoostEnabled: Bool = true,
         isAdAutoDetectEnabled: Bool = false,
+        skipIntroSeconds: Double = 0,
+        skipOutroSeconds: Double = 0,
         dedupeUUID: String = UUID().uuidString
     ) {
         self.feedURL = feedURL
@@ -39,6 +43,8 @@ final class SubscriptionRecord {
         self.isArchived = isArchived
         self.isVoiceBoostEnabled = isVoiceBoostEnabled
         self.isAdAutoDetectEnabled = isAdAutoDetectEnabled
+        self.skipIntroSeconds = skipIntroSeconds
+        self.skipOutroSeconds = skipOutroSeconds
         self.dedupeUUID = dedupeUUID
     }
 }

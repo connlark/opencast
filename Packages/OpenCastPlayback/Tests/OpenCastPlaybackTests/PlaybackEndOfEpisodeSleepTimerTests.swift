@@ -8,12 +8,12 @@ struct PlaybackEndOfEpisodeSleepTimerTests {
     @Test
     func remainingPlaybackDurationTracksPositionAndRate() {
         #expect(PlaybackEndOfEpisodeSleepTimer.remainingPlaybackDuration(
-            duration: 600,
+            endPosition: 600,
             position: 120,
             rate: 1
         ) == 480)
         #expect(PlaybackEndOfEpisodeSleepTimer.remainingPlaybackDuration(
-            duration: 600,
+            endPosition: 600,
             position: 120,
             rate: 2
         ) == 240)
@@ -22,12 +22,12 @@ struct PlaybackEndOfEpisodeSleepTimerTests {
     @Test
     func unavailableOrCompletedEpisodeHasNoDuration() {
         #expect(PlaybackEndOfEpisodeSleepTimer.remainingPlaybackDuration(
-            duration: nil,
+            endPosition: nil,
             position: 0,
             rate: 1
         ) == nil)
         #expect(PlaybackEndOfEpisodeSleepTimer.remainingPlaybackDuration(
-            duration: 600,
+            endPosition: 600,
             position: 600,
             rate: 1
         ) == nil)

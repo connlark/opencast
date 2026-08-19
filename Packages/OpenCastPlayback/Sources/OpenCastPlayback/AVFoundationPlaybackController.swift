@@ -11,7 +11,7 @@ typealias VoiceBoostAudioTapFactory = (
 ) throws -> VoiceBoostAudioTap
 
 public typealias PlaybackRateChangeRequestHandler = @MainActor (Float) -> Void
-public typealias PlaybackEpisodeFinishedHandler = @MainActor (Episode) -> Void
+public typealias PlaybackEpisodeFinishedHandler = @MainActor (Episode, PlaybackCompletionPolicy) -> Void
 public typealias PlaybackNextTrackHandler = @MainActor () -> Void
 
 @Observable
@@ -42,6 +42,9 @@ public final class AVFoundationPlaybackController {
     @ObservationIgnored private let nowPlayingPublisher: NowPlayingInfoPublisher
     @ObservationIgnored private let remoteCommandController = RemoteCommandController()
     @ObservationIgnored private var timeObserver: PlayerTimeObserver?
+    @ObservationIgnored private var outroBoundaryObserver: PlayerTimeObserver?
+    @ObservationIgnored private var outroBoundaryCutoff: TimeInterval?
+    @ObservationIgnored private var currentItemObservationGeneration = 0
     @ObservationIgnored private var mediaClockObservers: [UUID: PlayerTimeObserver] = [:]
     @ObservationIgnored private var mediaClockContinuations: [UUID: AsyncStream<PlaybackMediaClockSample>.Continuation] = [:]
     @ObservationIgnored private var currentItemEndObserver: NSObjectProtocol?
@@ -75,6 +78,8 @@ public final class AVFoundationPlaybackController {
     @ObservationIgnored private var playbackFailureRecoveryPolicy = PlaybackFailureRecoveryPolicy()
     @ObservationIgnored private var autoSkipEventSequence = 0
     @ObservationIgnored private var pendingAutoSkipTarget: TimeInterval?
+    @ObservationIgnored private var episodeBoundaries = PlaybackEpisodeBoundaries.disabled
+    @ObservationIgnored private var hasFinishedCurrentEpisode = false
     @ObservationIgnored private var isPlaybackDiagnosticsEnabled = false
     @ObservationIgnored private var playbackDiagnosticsEvents: [String] = []
     @ObservationIgnored var playbackStartBehaviorObserver: ((PlaybackStartBehavior) -> Void)?
@@ -108,16 +113,12 @@ public final class AVFoundationPlaybackController {
         self.voiceBoostTapDiagnostics = voiceBoostTapDiagnostics
         self.voiceBoostAudioTapFactory = voiceBoostAudioTapFactory
         self.audioSessionActivation = audioSessionActivation
-        installPeriodicTimeObserver()
         observePlayerTimeControlStatus()
         installAudioSessionObservers()
         installRemoteCommands()
     }
 
     isolated deinit {
-        if let timeObserver {
-            player.removeTimeObserver(timeObserver.token)
-        }
         for observer in mediaClockObservers.values {
             player.removeTimeObserver(observer.token)
         }
@@ -144,7 +145,11 @@ public final class AVFoundationPlaybackController {
         #endif
     }
 
-    public func load(_ episode: Episode, startPosition: TimeInterval = 0) throws {
+    public func load(
+        _ episode: Episode,
+        startPosition: TimeInterval = 0,
+        boundaries: PlaybackEpisodeBoundaries = .disabled
+    ) throws {
         guard let audioURL = episode.audioURL else {
             throw OpenCastCoreError.missingAudioURL
         }
@@ -159,6 +164,8 @@ public final class AVFoundationPlaybackController {
         autoSkipEventSequence = 0
         lastAutoSkipEvent = nil
         pendingAutoSkipTarget = nil
+        episodeBoundaries = boundaries
+        hasFinishedCurrentEpisode = false
         if sleepTimerMode == .endOfEpisode {
             clearSleepTimer()
         }
@@ -178,6 +185,7 @@ public final class AVFoundationPlaybackController {
         let playerItem = makeDirectPlayerItem(audioURL: audioURL)
         player.replaceCurrentItem(with: playerItem)
         observeCurrentItem(playerItem)
+        refreshOutroBoundaryObserver()
 
         if snapshot.position > 0 {
             seekPlayer(to: snapshot.position, mode: .restoredPosition)
@@ -283,10 +291,15 @@ public final class AVFoundationPlaybackController {
             return
         }
 
-        if let duration = resolvedDuration(), snapshot.position >= duration - 0.25 {
+        let duration = resolvedDuration()
+        if hasFinishedCurrentEpisode
+            || (duration.map { snapshot.position >= $0 - 0.25 } ?? false)
+        {
+            let replayPosition = episodeBoundaries.replayPosition(duration: duration)
             currentVoiceBoostTap?.reset()
-            seekPlayer(to: 0)
-            snapshot.position = 0
+            seekPlayer(to: replayPosition)
+            snapshot.position = replayPosition
+            hasFinishedCurrentEpisode = false
             markProgressBoundary()
         }
 
@@ -342,6 +355,8 @@ public final class AVFoundationPlaybackController {
         autoSkipEventSequence = 0
         lastAutoSkipEvent = nil
         pendingAutoSkipTarget = nil
+        episodeBoundaries = .disabled
+        hasFinishedCurrentEpisode = false
         recordDiagnosticsEvent("unloaded playback")
         replaceSnapshot(PlaybackSnapshot(rate: snapshot.rate, progressBoundaryID: snapshot.progressBoundaryID))
         nowPlayingPublisher.clear()
@@ -375,6 +390,7 @@ public final class AVFoundationPlaybackController {
         currentVoiceBoostTap?.reset()
         seekPlayer(to: clamped, mode: .userInitiated(intent))
         snapshot.position = clamped
+        hasFinishedCurrentEpisode = false
         markProgressBoundary()
         recordDiagnosticsEvent("seek requested position=\(diagnosticsTime(clamped)) intent=\(intent)")
         publishPlaybackState()
@@ -422,7 +438,7 @@ public final class AVFoundationPlaybackController {
             snapshot.sleepTimerEndsAt.map { max(0, $0.timeIntervalSince(date)) }
         case .endOfEpisode:
             PlaybackEndOfEpisodeSleepTimer.remainingPlaybackDuration(
-                duration: resolvedDuration(),
+                endPosition: episodeBoundaries.automaticEndPosition(duration: resolvedDuration()),
                 position: snapshot.position,
                 rate: snapshot.rate
             )
@@ -483,53 +499,97 @@ public final class AVFoundationPlaybackController {
         }
     }
 
-    private func installPeriodicTimeObserver() {
+    private func installPeriodicTimeObserver(
+        for playerItem: AVPlayerItem,
+        generation: Int
+    ) {
         timeObserver = PlayerTimeObserver(token: player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 1, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
+            let observedPosition = time.seconds
+            let observedDuration = playerItem.duration.seconds
             Task { @MainActor [weak self] in
                 guard let self else {
                     return
                 }
-                guard snapshot.currentEpisode != nil else {
+                guard isCurrentItemCallback(playerItem, generation: generation) else {
                     return
                 }
 
-                let previousPosition = snapshot.position
-                let durationChanged = updateDuration(from: player.currentItem?.duration)
-                let newPosition = clampPlaybackPosition(time.seconds, to: resolvedDuration())
-                guard shouldAcceptObservedPosition(newPosition) else {
-                    if durationChanged {
-                        publishPlaybackState()
-                    }
-                    return
-                }
-
-                let positionChanged = snapshot.position != newPosition
-                if positionChanged {
-                    snapshot.position = newPosition
-                }
-
-                if evaluateAutoSkip(
-                    previousPosition: previousPosition,
-                    position: newPosition,
-                    cause: .acceptedTick
-                ) {
-                    return
-                }
-
-                guard durationChanged || positionChanged else {
-                    return
-                }
-
-                if durationChanged {
-                    publishPlaybackState()
-                } else {
-                    syncObservableState()
-                }
+                handleObservedPlaybackPosition(
+                    observedPosition,
+                    duration: observedDuration,
+                    observationGeneration: generation
+                )
             }
         })
+    }
+
+    func handleObservedPlaybackPosition(
+        _ observedPosition: TimeInterval,
+        duration observedDuration: TimeInterval?
+    ) {
+        handleObservedPlaybackPosition(
+            observedPosition,
+            duration: observedDuration,
+            observationGeneration: currentItemObservationGeneration
+        )
+    }
+
+    func handleObservedPlaybackPosition(
+        _ observedPosition: TimeInterval,
+        duration observedDuration: TimeInterval?,
+        observationGeneration: Int
+    ) {
+        guard observationGeneration == currentItemObservationGeneration,
+              snapshot.currentEpisode != nil
+        else {
+            return
+        }
+        guard !hasFinishedCurrentEpisode else {
+            return
+        }
+
+        let previousPosition = snapshot.position
+        let durationChanged = updateDuration(from: observedDuration)
+        let newPosition = clampPlaybackPosition(observedPosition, to: resolvedDuration())
+        guard shouldAcceptObservedPosition(newPosition) else {
+            if durationChanged {
+                publishPlaybackState()
+            }
+            return
+        }
+
+        let positionChanged = snapshot.position != newPosition
+        if positionChanged {
+            snapshot.position = newPosition
+        }
+
+        if completeAtOutroIfNeeded(
+            previousPosition: previousPosition,
+            position: newPosition
+        ) {
+            return
+        }
+
+        if evaluateAutoSkip(
+            previousPosition: previousPosition,
+            position: newPosition,
+            cause: .acceptedTick
+        ) {
+            return
+        }
+
+        guard durationChanged || positionChanged else {
+            return
+        }
+
+        if durationChanged {
+            publishPlaybackState()
+        } else {
+            syncObservableState()
+        }
     }
 
     /// Display-cadence media-time samples for one consumer, independent of the
@@ -917,68 +977,92 @@ public final class AVFoundationPlaybackController {
     }
 
     private func observeCurrentItem(_ playerItem: AVPlayerItem) {
-        observeEnd(of: playerItem)
-        observePlaybackStall(of: playerItem)
-        observeDuration(of: playerItem)
-        observeStatus(of: playerItem)
-        observeBuffering(of: playerItem)
+        let generation = currentItemObservationGeneration
+        installPeriodicTimeObserver(for: playerItem, generation: generation)
+        observeEnd(of: playerItem, generation: generation)
+        observePlaybackStall(of: playerItem, generation: generation)
+        observeDuration(of: playerItem, generation: generation)
+        observeStatus(of: playerItem, generation: generation)
+        observeBuffering(of: playerItem, generation: generation)
     }
 
-    private func observeEnd(of playerItem: AVPlayerItem) {
+    private func observeEnd(of playerItem: AVPlayerItem, generation: Int) {
         currentItemEndObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.handleCurrentItemDidPlayToEnd(playerItem)
+                guard let self,
+                      isCurrentItemCallback(playerItem, generation: generation)
+                else {
+                    return
+                }
+                handleCurrentItemDidPlayToEnd(playerItem)
             }
         }
     }
 
-    private func observePlaybackStall(of playerItem: AVPlayerItem) {
+    private func observePlaybackStall(of playerItem: AVPlayerItem, generation: Int) {
         currentItemPlaybackStalledObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemPlaybackStalled,
             object: playerItem,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.handleCurrentItemPlaybackStalled(playerItem)
+                guard let self,
+                      isCurrentItemCallback(playerItem, generation: generation)
+                else {
+                    return
+                }
+                handleCurrentItemPlaybackStalled(playerItem)
             }
         }
     }
 
-    private func observeDuration(of playerItem: AVPlayerItem) {
+    private func observeDuration(of playerItem: AVPlayerItem, generation: Int) {
         currentItemDurationObservation = playerItem.observe(\.duration, options: [.initial, .new]) { [weak self] item, _ in
+            let observedDuration = item.duration.seconds
             Task { @MainActor [weak self] in
                 guard let self else {
                     return
                 }
-
-                if updateDuration(from: item.duration) {
-                    publishPlaybackState()
-                } else {
-                    syncObservableState()
+                guard isCurrentItemCallback(item, generation: generation) else {
+                    return
                 }
+                handleObservedDuration(
+                    observedDuration,
+                    observationGeneration: generation
+                )
             }
         }
     }
 
-    private func observeStatus(of playerItem: AVPlayerItem) {
+    private func observeStatus(of playerItem: AVPlayerItem, generation: Int) {
         currentItemStatusObservation = playerItem.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
-                self?.handleCurrentItemStatusChanged(item)
+                guard let self,
+                      isCurrentItemCallback(item, generation: generation)
+                else {
+                    return
+                }
+                handleCurrentItemStatusChanged(item)
             }
         }
     }
 
-    private func observeBuffering(of playerItem: AVPlayerItem) {
+    private func observeBuffering(of playerItem: AVPlayerItem, generation: Int) {
         currentItemLikelyToKeepUpObservation = playerItem.observe(
             \.isPlaybackLikelyToKeepUp,
             options: [.new]
         ) { [weak self] item, _ in
             Task { @MainActor [weak self] in
-                self?.handleCurrentItemBufferingChanged(item)
+                guard let self,
+                      isCurrentItemCallback(item, generation: generation)
+                else {
+                    return
+                }
+                handleCurrentItemBufferingChanged(item)
             }
         }
 
@@ -987,12 +1071,23 @@ public final class AVFoundationPlaybackController {
             options: [.new]
         ) { [weak self] item, _ in
             Task { @MainActor [weak self] in
-                self?.handleCurrentItemBufferingChanged(item)
+                guard let self,
+                      isCurrentItemCallback(item, generation: generation)
+                else {
+                    return
+                }
+                handleCurrentItemBufferingChanged(item)
             }
         }
     }
 
     private func removeCurrentItemObservations() {
+        currentItemObservationGeneration += 1
+        if let timeObserver {
+            player.removeTimeObserver(timeObserver.token)
+            self.timeObserver = nil
+        }
+        removeOutroBoundaryObserver()
         if let currentItemEndObserver {
             NotificationCenter.default.removeObserver(currentItemEndObserver)
             self.currentItemEndObserver = nil
@@ -1278,8 +1373,38 @@ public final class AVFoundationPlaybackController {
     }
 
     func handleCurrentItemDidPlayToEnd() {
+        guard !hasFinishedCurrentEpisode else {
+            return
+        }
+
+        finishCurrentEpisode()
+    }
+
+    private func completeAtOutroIfNeeded(
+        previousPosition: TimeInterval,
+        position: TimeInterval
+    ) -> Bool {
+        guard !hasFinishedCurrentEpisode,
+              episodeBoundaries.crossesOutro(
+                  from: previousPosition,
+                  to: position,
+                  duration: resolvedDuration()
+              )
+        else {
+            return false
+        }
+
+        finishCurrentEpisode()
+        return true
+    }
+
+    private func finishCurrentEpisode() {
         let finishedEpisode = snapshot.currentEpisode
-        let sleepGated = sleepTimerMode == .endOfEpisode
+        let isEndOfEpisodeSleepTimer = sleepTimerMode == .endOfEpisode
+        let completionPolicy: PlaybackCompletionPolicy = isEndOfEpisodeSleepTimer
+            ? .stop
+            : .advanceIfQueued
+        hasFinishedCurrentEpisode = true
         isPlaybackRequested = false
         shouldResumeAfterInterruption = false
         if let duration = resolvedDuration() {
@@ -1287,14 +1412,14 @@ public final class AVFoundationPlaybackController {
             snapshot.position = duration
         }
         player.pause()
-        if sleepTimerMode == .endOfEpisode {
+        if isEndOfEpisodeSleepTimer {
             clearSleepTimer()
         }
         snapshot.state = snapshot.currentEpisode == nil ? .idle : .paused
         markProgressBoundary()
         publishPlaybackState()
-        if !sleepGated, let finishedEpisode {
-            episodeFinishedHandler?(finishedEpisode)
+        if let finishedEpisode {
+            episodeFinishedHandler?(finishedEpisode, completionPolicy)
         }
     }
 
@@ -1403,6 +1528,18 @@ public final class AVFoundationPlaybackController {
             currentVoiceBoostTap?.reset()
             autoSkipEventSequence += 1
             lastAutoSkipEvent = PlaybackAutoSkipEvent(zoneID: zoneID, sequence: autoSkipEventSequence)
+            if episodeBoundaries.crossesOutro(
+                from: position,
+                to: target,
+                duration: resolvedDuration()
+            ), let cutoff = episodeBoundaries.outroCutoff(duration: resolvedDuration())
+            {
+                recordDiagnosticsEvent(
+                    "auto-skip zone=\(zoneID) from=\(diagnosticsTime(position)) reached outro=\(diagnosticsTime(cutoff))"
+                )
+                finishCurrentEpisode()
+                return
+            }
             seekPlayer(to: target, mode: .autoSkip)
             snapshot.position = target
             markProgressBoundary()
@@ -1434,7 +1571,12 @@ public final class AVFoundationPlaybackController {
 
     @discardableResult
     private func updateDuration(from time: CMTime?) -> Bool {
-        guard let duration = finitePositive(time?.seconds) else {
+        updateDuration(from: time?.seconds)
+    }
+
+    @discardableResult
+    private func updateDuration(from seconds: TimeInterval?) -> Bool {
+        guard let duration = finitePositive(seconds) else {
             return false
         }
 
@@ -1450,7 +1592,105 @@ public final class AVFoundationPlaybackController {
             changed = true
         }
 
+        if changed {
+            refreshOutroBoundaryObserver()
+        }
+
         return changed
+    }
+
+    func handleObservedDuration(
+        _ observedDuration: TimeInterval?,
+        observationGeneration: Int
+    ) {
+        guard observationGeneration == currentItemObservationGeneration,
+              snapshot.currentEpisode != nil
+        else {
+            return
+        }
+
+        if updateDuration(from: observedDuration) {
+            publishPlaybackState()
+        } else {
+            syncObservableState()
+        }
+    }
+
+    private func refreshOutroBoundaryObserver() {
+        guard let playerItem = player.currentItem,
+              let cutoff = episodeBoundaries.outroCutoff(duration: resolvedDuration())
+        else {
+            removeOutroBoundaryObserver()
+            return
+        }
+        guard outroBoundaryCutoff != cutoff else {
+            return
+        }
+
+        removeOutroBoundaryObserver()
+        outroBoundaryCutoff = cutoff
+        let generation = currentItemObservationGeneration
+        let boundaryTime = CMTime(seconds: cutoff, preferredTimescale: 600)
+        outroBoundaryObserver = PlayerTimeObserver(token: player.addBoundaryTimeObserver(
+            forTimes: [NSValue(time: boundaryTime)],
+            queue: .main
+        ) { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      isCurrentItemCallback(playerItem, generation: generation)
+                else {
+                    return
+                }
+                handleOutroBoundaryReached(
+                    cutoff,
+                    observationGeneration: generation
+                )
+            }
+        })
+    }
+
+    private func removeOutroBoundaryObserver() {
+        if let outroBoundaryObserver {
+            player.removeTimeObserver(outroBoundaryObserver.token)
+            self.outroBoundaryObserver = nil
+        }
+        outroBoundaryCutoff = nil
+    }
+
+    func handleOutroBoundaryReached(
+        _ cutoff: TimeInterval,
+        observationGeneration: Int
+    ) {
+        guard observationGeneration == currentItemObservationGeneration,
+              snapshot.currentEpisode != nil
+        else {
+            return
+        }
+        _ = completeAtOutroIfNeeded(
+            previousPosition: snapshot.position,
+            position: cutoff
+        )
+    }
+
+    private func isCurrentItemCallback(
+        _ playerItem: AVPlayerItem,
+        generation: Int
+    ) -> Bool {
+        generation == currentItemObservationGeneration
+            && player.currentItem === playerItem
+            && snapshot.currentEpisode != nil
+    }
+
+    var observationGenerationForTesting: Int {
+        currentItemObservationGeneration
+    }
+
+    var outroBoundaryCutoffForTesting: TimeInterval? {
+        outroBoundaryCutoff
+    }
+
+    var isFinishLatchedForTesting: Bool {
+        hasFinishedCurrentEpisode
     }
 
     private func markProgressBoundary() {

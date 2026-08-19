@@ -71,6 +71,7 @@ final class LibraryStore {
     @ObservationIgnored private var refreshActivityByFeedURL: [String: FeedRefreshActivity] = [:]
     @ObservationIgnored private let feedService: any FeedService
     @ObservationIgnored let localCache: any LocalLibraryCacheStore
+    @ObservationIgnored private let savePlaybackSkipSettingsModelContext: (ModelContext) throws -> Void
     /// Episode-keyed device-local stores (downloads, transcripts, ad
     /// analyses) that identity reconciliation carries across an ID change;
     /// wired by OpenCastAppModel at composition.
@@ -107,10 +108,12 @@ final class LibraryStore {
 
     init(
         feedService: any FeedService = DefaultFeedService(),
-        localCache: any LocalLibraryCacheStore
+        localCache: any LocalLibraryCacheStore,
+        savePlaybackSkipSettingsModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) {
         self.feedService = feedService
         self.localCache = localCache
+        self.savePlaybackSkipSettingsModelContext = savePlaybackSkipSettingsModelContext
     }
 
     /// The episode list is already filtered to active subscriptions and ordered
@@ -517,6 +520,56 @@ final class LibraryStore {
 
     func isAdAutoDetectEnabled(forPodcastID podcastID: String) -> Bool {
         subscriptions.first { $0.feedURL == podcastID }?.isAdAutoDetectEnabled ?? false
+    }
+
+    func podcastPlaybackSkipSettings(forPodcastID podcastID: String) -> PodcastPlaybackSkipSettings {
+        guard let subscription = subscriptions.first(where: { $0.feedURL == podcastID }) else {
+            return .disabled
+        }
+        return PodcastPlaybackSkipSettings(
+            skipIntroSeconds: subscription.skipIntroSeconds,
+            skipOutroSeconds: subscription.skipOutroSeconds
+        ).sanitized
+    }
+
+    @discardableResult
+    func setPodcastPlaybackSkipSettings(
+        _ settings: PodcastPlaybackSkipSettings,
+        feedURL: String,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard settings.isValid else {
+            lastErrorMessage = "Intro and outro skips must be finite, nonnegative durations."
+            return false
+        }
+        guard let subscription = subscriptions.first(where: { $0.feedURL == feedURL }) else {
+            lastErrorMessage = "Unable to find this podcast subscription."
+            return false
+        }
+        guard subscription.skipIntroSeconds != settings.skipIntroSeconds
+                || subscription.skipOutroSeconds != settings.skipOutroSeconds
+        else {
+            lastErrorMessage = nil
+            return true
+        }
+
+        let previousSkipIntroSeconds = subscription.skipIntroSeconds
+        let previousSkipOutroSeconds = subscription.skipOutroSeconds
+        subscription.skipIntroSeconds = settings.skipIntroSeconds
+        subscription.skipOutroSeconds = settings.skipOutroSeconds
+
+        do {
+            try savePlaybackSkipSettingsModelContext(modelContext)
+            syncedStoreSelfSaveCount += 1
+            lastErrorMessage = nil
+            return true
+        } catch {
+            subscription.skipIntroSeconds = previousSkipIntroSeconds
+            subscription.skipOutroSeconds = previousSkipOutroSeconds
+            modelContext.rollback()
+            lastErrorMessage = "Unable to update intro and outro skips: \(error.localizedDescription)"
+            return false
+        }
     }
 
     @discardableResult
@@ -1506,7 +1559,9 @@ final class LibraryStore {
                   lhsRecord.lastRefreshAt == rhsRecord.lastRefreshAt,
                   lhsRecord.isArchived == rhsRecord.isArchived,
                   lhsRecord.isVoiceBoostEnabled == rhsRecord.isVoiceBoostEnabled,
-                  lhsRecord.isAdAutoDetectEnabled == rhsRecord.isAdAutoDetectEnabled
+                  lhsRecord.isAdAutoDetectEnabled == rhsRecord.isAdAutoDetectEnabled,
+                  lhsRecord.skipIntroSeconds == rhsRecord.skipIntroSeconds,
+                  lhsRecord.skipOutroSeconds == rhsRecord.skipOutroSeconds
             else {
                 return false
             }
@@ -1774,6 +1829,14 @@ final class LibraryStore {
         let hasNewSubscription = allSubscriptions.contains { record in
             URLCanonicalizer.canonicalString(forRawString: record.feedURL) == newCanonicalFeedURL
         }
+        let migrationSkipSettings = PodcastPlaybackSkipSettings.greatestValid(
+            in: oldSubscriptionRecords.map {
+                PodcastPlaybackSkipSettings(
+                    skipIntroSeconds: $0.skipIntroSeconds,
+                    skipOutroSeconds: $0.skipOutroSeconds
+                )
+            }
+        )
         if !hasNewSubscription {
             // subscribedAt must postdate the old URL's tombstone only if the
             // keys collided — they don't — but a strictly newer stamp keeps
@@ -1788,9 +1851,20 @@ final class LibraryStore {
                     lastRefreshAt: .now,
                     isArchived: template.isArchived,
                     isVoiceBoostEnabled: template.isVoiceBoostEnabled,
-                    isAdAutoDetectEnabled: template.isAdAutoDetectEnabled
+                    isAdAutoDetectEnabled: template.isAdAutoDetectEnabled,
+                    skipIntroSeconds: migrationSkipSettings.skipIntroSeconds,
+                    skipOutroSeconds: migrationSkipSettings.skipOutroSeconds
                 )
             )
+        } else {
+            for record in allSubscriptions where
+                URLCanonicalizer.canonicalString(forRawString: record.feedURL) == newCanonicalFeedURL
+            {
+                Self.mergePodcastPlaybackSkipSettings(
+                    migrationSkipSettings,
+                    into: record
+                )
+            }
         }
         for record in oldSubscriptionRecords {
             modelContext.delete(record)
@@ -1805,6 +1879,28 @@ final class LibraryStore {
         }
         try await reloadFromStore(modelContext: modelContext)
         try reloadProgressRecords(modelContext: modelContext)
+    }
+
+    @discardableResult
+    static func mergePodcastPlaybackSkipSettings(
+        _ incoming: PodcastPlaybackSkipSettings,
+        into record: SubscriptionRecord
+    ) -> Bool {
+        let current = PodcastPlaybackSkipSettings(
+            skipIntroSeconds: record.skipIntroSeconds,
+            skipOutroSeconds: record.skipOutroSeconds
+        )
+        let merged = current.mergingGreatestValid(with: incoming)
+        var changed = false
+        if record.skipIntroSeconds != merged.skipIntroSeconds {
+            record.skipIntroSeconds = merged.skipIntroSeconds
+            changed = true
+        }
+        if record.skipOutroSeconds != merged.skipOutroSeconds {
+            record.skipOutroSeconds = merged.skipOutroSeconds
+            changed = true
+        }
+        return changed
     }
 
     /// Diagnostics sweep for libraries duplicated before reconciliation

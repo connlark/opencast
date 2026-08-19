@@ -26,6 +26,8 @@ struct OpenCastModelTests {
         #expect(fetched.map(\.feedURL) == [Self.modelFixtureFeedURL])
         #expect(fetched.first?.isVoiceBoostEnabled == true)
         #expect(fetched.first?.isAdAutoDetectEnabled == false)
+        #expect(fetched.first?.skipIntroSeconds == 0)
+        #expect(fetched.first?.skipOutroSeconds == 0)
     }
 
     @Test("Synced records use logical keys instead of unique attributes")
@@ -299,7 +301,9 @@ struct OpenCastModelTests {
                 feedURL: feedURL,
                 title: "Original Show",
                 lastRefreshAt: Date(timeIntervalSince1970: 1_700_000_000),
-                isAdAutoDetectEnabled: true
+                isAdAutoDetectEnabled: true,
+                skipIntroSeconds: 65,
+                skipOutroSeconds: 30
             )
         )
         try context.save()
@@ -323,6 +327,8 @@ struct OpenCastModelTests {
         #expect(subscription.title == "Updated Show")
         #expect(subscription.isAdAutoDetectEnabled == true)
         #expect(store.isAdAutoDetectEnabled(forPodcastID: feedURL))
+        #expect(subscription.skipIntroSeconds == 65)
+        #expect(subscription.skipOutroSeconds == 30)
     }
 
     @Test("Auto-detect setter persists the flag and rejects unknown feeds")
@@ -351,6 +357,126 @@ struct OpenCastModelTests {
         // An unsubscribed feed has nothing to toggle.
         #expect(!store.setAdAutoDetectEnabled(true, feedURL: "https://example.com/unknown.xml", modelContext: context))
         #expect(!store.isAdAutoDetectEnabled(forPodcastID: "https://example.com/unknown.xml"))
+    }
+
+    @Test("Per-show playback skip setter validates and persists both values atomically")
+    func podcastPlaybackSkipSetterValidatesAndPersists() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/playback-skips.xml"
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Skip Show"))
+        try context.save()
+
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+
+        #expect(store.podcastPlaybackSkipSettings(forPodcastID: feedURL) == .disabled)
+        #expect(store.setPodcastPlaybackSkipSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.syncedStoreSelfSaveCount == 1)
+
+        let freshContext = ModelContext(container)
+        let persisted = try #require(freshContext.fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(persisted.skipIntroSeconds == 65)
+        #expect(persisted.skipOutroSeconds == 40)
+
+        #expect(!store.setPodcastPlaybackSkipSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: .infinity, skipOutroSeconds: 5),
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.podcastPlaybackSkipSettings(forPodcastID: feedURL) == PodcastPlaybackSkipSettings(
+            skipIntroSeconds: 65,
+            skipOutroSeconds: 40
+        ))
+        #expect(store.syncedStoreSelfSaveCount == 1)
+    }
+
+    @Test("Per-show playback skip setter rolls both values back when its save fails")
+    func podcastPlaybackSkipSetterRollsBackFailedSave() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/playback-skips-rollback.xml"
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Rollback Show",
+                skipIntroSeconds: 15,
+                skipOutroSeconds: 10
+            )
+        )
+        try context.save()
+
+        let store = LibraryStore(
+            localCache: SQLiteLocalLibraryCacheStore.inMemory(),
+            savePlaybackSkipSettingsModelContext: { _ in
+                throw StubFeedError(message: "Simulated playback settings save failure")
+            }
+        )
+        await store.load(modelContext: context)
+
+        #expect(!store.setPodcastPlaybackSkipSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.podcastPlaybackSkipSettings(forPodcastID: feedURL) == PodcastPlaybackSkipSettings(
+            skipIntroSeconds: 15,
+            skipOutroSeconds: 10
+        ))
+        #expect(store.syncedStoreSelfSaveCount == 0)
+        #expect(store.lastErrorMessage?.contains("Simulated playback settings save failure") == true)
+        let freshContext = ModelContext(container)
+        let persisted = try #require(freshContext.fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(persisted.skipIntroSeconds == 15)
+        #expect(persisted.skipOutroSeconds == 10)
+    }
+
+    @Test("Playback skip merge keeps greatest valid trims and avoids no-op writes")
+    func podcastPlaybackSkipMergeIsDeterministicAndChangeAware() throws {
+        let merged = PodcastPlaybackSkipSettings.greatestValid(in: [
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 20),
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 30, skipOutroSeconds: 50),
+            PodcastPlaybackSkipSettings(skipIntroSeconds: .infinity, skipOutroSeconds: -1)
+        ])
+        #expect(merged == PodcastPlaybackSkipSettings(
+            skipIntroSeconds: 65,
+            skipOutroSeconds: 50
+        ))
+
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let record = SubscriptionRecord(
+            feedURL: "https://example.com/merge-skips.xml",
+            title: "Merge Show",
+            skipIntroSeconds: 65,
+            skipOutroSeconds: 40
+        )
+        context.insert(record)
+        try context.save()
+
+        #expect(!LibraryStore.mergePodcastPlaybackSkipSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 20),
+            into: record
+        ))
+        #expect(!context.hasChanges)
+        #expect(!LibraryStore.mergePodcastPlaybackSkipSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: .infinity, skipOutroSeconds: -1),
+            into: record
+        ))
+        #expect(!context.hasChanges)
+
+        #expect(LibraryStore.mergePodcastPlaybackSkipSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 70, skipOutroSeconds: 10),
+            into: record
+        ))
+        #expect(context.hasChanges)
+        #expect(record.skipIntroSeconds == 70)
+        #expect(record.skipOutroSeconds == 40)
     }
 
     @Test("Resume progress transitions from in-progress to played")
@@ -1771,6 +1897,37 @@ struct OpenCastModelTests {
         #expect(store.visibleEpisodeIDs.isEmpty)
     }
 
+    @Test("Synced data reload publishes remote per-show playback skip changes")
+    func syncedDataReloadPublishesPlaybackSkipChanges() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/remote-playback-skips.xml"
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Remote Skip Show"))
+        try context.save()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+
+        let subscription = try #require(context.fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        context.delete(subscription)
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Remote Skip Show",
+                skipIntroSeconds: 75,
+                skipOutroSeconds: 25
+            )
+        )
+        try context.save()
+
+        let result = try store.reloadSyncedUserData(modelContext: context)
+
+        #expect(result.activeSubscriptionRecordsChanged)
+        #expect(store.podcastPlaybackSkipSettings(forPodcastID: feedURL) == PodcastPlaybackSkipSettings(
+            skipIntroSeconds: 75,
+            skipOutroSeconds: 25
+        ))
+    }
+
     @Test("Automatic foreground refresh skips fresh subscriptions")
     func automaticForegroundRefreshSkipsFreshSubscriptions() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -2261,7 +2418,9 @@ struct OpenCastModelTests {
                 author: "Detailed Host",
                 artworkURL: "https://example.com/art.jpg",
                 subscribedAt: oldRefresh,
-                lastRefreshAt: oldRefresh
+                lastRefreshAt: oldRefresh,
+                skipIntroSeconds: 35,
+                skipOutroSeconds: 10
             )
         )
         context.insert(
@@ -2271,7 +2430,9 @@ struct OpenCastModelTests {
                 subscribedAt: newRefresh,
                 lastRefreshAt: newRefresh,
                 isVoiceBoostEnabled: false,
-                isAdAutoDetectEnabled: true
+                isAdAutoDetectEnabled: true,
+                skipIntroSeconds: 65,
+                skipOutroSeconds: 5
             )
         )
         try context.save()
@@ -2287,6 +2448,8 @@ struct OpenCastModelTests {
         #expect(records.first?.lastRefreshAt == newRefresh)
         #expect(records.first?.isVoiceBoostEnabled == false)
         #expect(records.first?.isAdAutoDetectEnabled == true)
+        #expect(records.first?.skipIntroSeconds == 65)
+        #expect(records.first?.skipOutroSeconds == 10)
         #expect(result.duplicateSubscriptionRecordsFound == 1)
         #expect(result.subscriptionGroupsMerged == 1)
         #expect(result.subscriptionRecordsDeleted == 1)

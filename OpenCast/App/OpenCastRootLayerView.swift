@@ -29,11 +29,10 @@ struct OpenCastRootLayerView<Content: View>: View {
                 .allowsHitTesting(!isNowPlayingPresented)
                 .accessibilityHidden(isNowPlayingPresented)
 
-            // Mounted only while presented: the overlay animates itself in on
-            // appear and calls onDismissed after its exit animation, so the
-            // full Now Playing tree never idles behind the tab content
-            // re-evaluating on every playback tick.
-            if isNowPlayingPresented {
+            // Conditional mounting keeps the full Now Playing tree from
+            // reevaluating behind tab content on every playback tick. The
+            // overlay calls onDismissed after its exit animation.
+            if isNowPlayingPresented, appModel.hasNowPlayingPresentationContent {
                 NowPlayingOverlayView(
                     isPresented: isNowPlayingPresented,
                     onDismissed: onDismissNowPlaying,

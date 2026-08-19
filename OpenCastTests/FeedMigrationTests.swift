@@ -63,6 +63,52 @@ struct FeedMigrationTests {
         #expect(Set(store.episodes.map(\.podcastID)) == Set([Self.newFeedURL]))
     }
 
+    @Test("A migration collision keeps the largest valid intro and outro trims")
+    func migrationCollisionMergesPlaybackSkips() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let newSnapshot = makeSnapshot(feedURL: Self.newFeedURL, title: "Moving Show")
+        let service = OutcomeStubFeedService(outcomes: [
+            Self.newFeedURL: [FeedFetchOutcome(snapshot: newSnapshot)]
+        ])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        context.insert(
+            SubscriptionRecord(
+                feedURL: Self.oldFeedURL,
+                title: "Moving Show",
+                skipIntroSeconds: 45,
+                skipOutroSeconds: 10
+            )
+        )
+        context.insert(
+            SubscriptionRecord(
+                feedURL: Self.newFeedURL,
+                title: "Moving Show",
+                skipIntroSeconds: 30,
+                skipOutroSeconds: 20
+            )
+        )
+        try context.save()
+        await store.load(modelContext: context)
+
+        try await store.migrateSubscription(
+            from: Self.oldFeedURL,
+            toFeedURL: try #require(URL(string: Self.newFeedURL)),
+            modelContext: context
+        )
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        let subscription = try #require(subscriptions.first)
+        #expect(subscriptions.count == 1)
+        #expect(subscription.feedURL == Self.newFeedURL)
+        #expect(subscription.skipIntroSeconds == 45)
+        #expect(subscription.skipOutroSeconds == 20)
+        #expect(store.podcastPlaybackSkipSettings(forPodcastID: Self.newFeedURL) == PodcastPlaybackSkipSettings(
+            skipIntroSeconds: 45,
+            skipOutroSeconds: 20
+        ))
+    }
+
     @Test("Persistent redirect divergence suggests but never auto-migrates")
     func redirectDivergenceSuggestsWithoutMigrating() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

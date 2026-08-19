@@ -2,21 +2,31 @@ import Foundation
 
 extension TimeInterval {
     nonisolated var formattedPlaybackDuration: String {
+        formattedPlaybackDuration(locale: .current)
+    }
+
+    nonisolated func formattedPlaybackDuration(locale: Locale) -> String {
         guard isFinite else {
             return "0:00"
         }
 
-        let totalSeconds = max(Int(self), 0)
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let seconds = totalSeconds % 60
-        let padded = IntegerFormatStyle<Int>().precision(.integerLength(2))
+        let totalSeconds = floor(max(self, 0))
+        let hours = floor(totalSeconds / 3_600)
+        let minutes = Int(totalSeconds.truncatingRemainder(dividingBy: 3_600) / 60)
+        let seconds = Int(totalSeconds.truncatingRemainder(dividingBy: 60))
+        let padded = IntegerFormatStyle<Int>(locale: locale)
+            .grouping(.never)
+            .precision(.integerLength(2...))
 
         if hours > 0 {
-            return "\(hours):\(minutes.formatted(padded)):\(seconds.formatted(padded))"
+            let hourStyle = FloatingPointFormatStyle<Double>(locale: locale)
+                .grouping(.never)
+                .precision(.fractionLength(0))
+            return "\(hours.formatted(hourStyle)):\(minutes.formatted(padded)):\(seconds.formatted(padded))"
         }
 
-        return "\(minutes):\(seconds.formatted(padded))"
+        let minuteStyle = IntegerFormatStyle<Int>(locale: locale).grouping(.never)
+        return "\(minutes.formatted(minuteStyle)):\(seconds.formatted(padded))"
     }
 
     var formattedEpisodeRemaining: String {
