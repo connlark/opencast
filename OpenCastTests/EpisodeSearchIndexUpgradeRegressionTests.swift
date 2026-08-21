@@ -95,26 +95,24 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
             .map(\.episodeID)
         try downgradeToContentVersion10(databaseURL: databaseURL)
 
-        // Single-document batches give the cancellation a mid-rebuild window,
-        // like the app being killed partway through the upgrade rebuild.
+        let rebuildCheckpoint = EpisodeSearchRebuildCheckpoint()
         let interruptedStore = SQLiteLocalLibraryCacheStore(
             databaseURL: databaseURL,
-            episodeSearchRebuildBatchSize: 1
+            episodeSearchRebuildBatchSize: 1,
+            episodeSearchRebuildCheckpoint: {
+                await rebuildCheckpoint.reach()
+            }
         )
         let rebuildTask = Task {
             try await interruptedStore.prepareEpisodeSearchIndex()
         }
-        var observedRebuild = false
-        for _ in 0..<400 {
-            if try await interruptedStore.episodeSearchIndexStateDescription()
-                == "rebuilding" {
-                observedRebuild = true
-                break
-            }
-            await Task.yield()
-        }
-        try #require(observedRebuild)
+        await rebuildCheckpoint.waitUntilReached()
+        #expect(
+            try await interruptedStore.episodeSearchIndexStateDescription()
+                == "rebuilding"
+        )
         rebuildTask.cancel()
+        await rebuildCheckpoint.release()
         await #expect(throws: CancellationError.self) {
             try await rebuildTask.value
         }
@@ -419,5 +417,34 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
                 message: String(cString: sqlite3_errmsg(handle))
             )
         }
+    }
+}
+
+private actor EpisodeSearchRebuildCheckpoint {
+    private var isReached = false
+    private var reachedContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func reach() async {
+        isReached = true
+        reachedContinuation?.resume()
+        reachedContinuation = nil
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilReached() async {
+        guard !isReached else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            reachedContinuation = continuation
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }

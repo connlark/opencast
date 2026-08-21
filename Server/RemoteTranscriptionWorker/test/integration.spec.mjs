@@ -10,6 +10,7 @@ import {
   createExecutionContext,
   createScheduledController,
   env,
+  runInDurableObject,
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { afterAll, describe, expect, it } from "vitest";
@@ -19,8 +20,11 @@ const BASE = "https://remote-transcription.integration.test";
 const BEARER = "integration-test-bearer-token";
 // Must match DEV_CREDIT_GRANT_SECONDS in vitest.config.mjs. Tests run
 // sequentially against one account, so expected balances are written as
-// GRANT minus the settled spend accumulated up to that point.
-const GRANT = 7000;
+// GRANT minus the settled spend accumulated up to that point. Sized so the
+// awaiting_credits test's 7000 s job stays unaffordable at its point in the
+// suite (GRANT - 1200 < 7000) while the late stranded-job and release tests
+// can still settle/reserve their 60 s jobs.
+const GRANT = 7200;
 const ORIGIN_HOST = "https://origin.example.com";
 const ORIGIN_URL = `${ORIGIN_HOST}/audio.mp3`;
 const ORIGIN_REDIRECT_URL = `${ORIGIN_HOST}/redirect/audio.mp3`;
@@ -1338,15 +1342,26 @@ describe("remote transcription dev lane", () => {
 
   it("scheduled sweeper records and alerts a forced stale-job drill", async () => {
     const jobId = `job-orphan-drill-${Date.now()}`;
+    // A second drill row in `probing`: an active-work state with no state
+    // deadline, listed by the 2026-08-19 active-work arm once its D1
+    // updated_at is older than the sweeper's threshold, and nudged.
+    const probingJobId = `job-probing-drill-${Date.now()}`;
     const staleAt = Math.floor(Date.now() / 1000) - 86_400;
-    await env.TRANSCRIPTION_DB.prepare(
-      `INSERT INTO jobs
-       (job_id, account_id, client_request_id, episode_id, state, created_at, updated_at)
-       VALUES (?1, 'acct-orphan-drill', ?2, 'ep-content-must-not-leak',
-               'staging_origin', ?3, ?3)`,
-    )
-      .bind(jobId, `req-${jobId}`, staleAt)
-      .run();
+    for (const [id, state] of [
+      [jobId, "staging_origin"],
+      [probingJobId, "probing"],
+    ]) {
+      await env.TRANSCRIPTION_DB.prepare(
+        `INSERT INTO jobs
+         (job_id, account_id, client_request_id, episode_id, state, created_at, updated_at)
+         VALUES (?1, 'acct-orphan-drill', ?2, 'ep-content-must-not-leak',
+                 ?3, ?4, ?4)`,
+      )
+        .bind(id, `req-${id}`, state, staleAt)
+        .run();
+    }
+    const nudgedBefore =
+      (await counterValues(["stranded_jobs_nudged"])).stranded_jobs_nudged ?? 0;
 
     const ctx = createExecutionContext();
     const worker = new RemoteTranscriptionWorker(ctx, env);
@@ -1355,14 +1370,18 @@ describe("remote transcription dev lane", () => {
 
     const counters = await env.TRANSCRIPTION_DB.prepare(
       `SELECT name, value FROM counters
-       WHERE name IN ('orphan_sweeper_runs', 'stale_jobs_found', 'orphan_alerts_sent')`,
+       WHERE name IN ('orphan_sweeper_runs', 'stale_jobs_found', 'orphan_alerts_sent',
+                      'stranded_jobs_nudged')`,
     ).all();
     const byName = Object.fromEntries(
       counters.results.map(({ name, value }) => [name, Number(value)]),
     );
     expect(byName.orphan_sweeper_runs).toBeGreaterThanOrEqual(1);
-    expect(byName.stale_jobs_found).toBeGreaterThanOrEqual(1);
+    expect(byName.stale_jobs_found).toBeGreaterThanOrEqual(2);
     expect(byName.orphan_alerts_sent).toBeGreaterThanOrEqual(1);
+    // Both drill rows were nudged; neither has a Durable Object record, so
+    // the objects answered 404 and the sweep still completed and alerted.
+    expect(byName.stranded_jobs_nudged).toBeGreaterThanOrEqual(nudgedBefore + 2);
 
     const alert = pushoverAlerts.find(({ message }) => message?.includes(jobId));
     expect(alert).toMatchObject({
@@ -1370,6 +1389,8 @@ describe("remote transcription dev lane", () => {
       user: "test-pushover-user",
       title: "OpenCast transcription alert (development)",
     });
+    expect(alert.message).toContain(probingJobId);
+    expect(alert.message).toMatch(/ nudged=[1-9]\d* /u);
     expect(alert.message).not.toContain("ep-content-must-not-leak");
   });
 
@@ -1747,6 +1768,219 @@ describe("remote transcription dev lane", () => {
       .all();
     return Object.fromEntries(rows.results.map(({ name, value }) => [name, Number(value)]));
   }
+
+  // --- Stranded-job repair (2026-08-19). A live job whose alarm turn died
+  // (the `probing` walk exceeding the CPU limit on a 164 MB source; a hard
+  // kill never reaches alarm()'s catch) used to sit with no alarm forever,
+  // pinning the account's slot. `fake:strand=N` deletes the alarm on the
+  // first N active-work alarm turns — the only deterministic way to strand
+  // an active state — and the next poll or the hourly sweep repairs it.
+
+  function jobStub(jobId) {
+    return env.TRANSCRIPTION_JOB.get(env.TRANSCRIPTION_JOB.idFromName(jobId));
+  }
+
+  // The repair treats an alarm armed by the object within this window as
+  // "due and being dispatched" (workerd consumes a due alarm a few ms before
+  // its handler starts), so a strand only counts once the object's last arm
+  // is older than this — the hook's own turn was armed moments before it
+  // stranded. Mirrors STRAND_ARM_GRACE_MILLIS in job_do.rs.
+  const STRAND_ARM_GRACE_MS = 3_000;
+
+  async function waitOutStrandGrace() {
+    await sleep(STRAND_ARM_GRACE_MS + 250);
+  }
+
+  async function jobAlarm(jobId) {
+    return runInDurableObject(jobStub(jobId), (_, state) =>
+      state.storage.getAlarm(),
+    );
+  }
+
+  // Waits (without polling — a poll would repair it) until the job's
+  // Durable Object has no alarm set.
+  async function waitForNoAlarm(jobId, timeoutMs = 5_000) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if ((await jobAlarm(jobId)) === null) {
+        return;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`job ${jobId} still has an alarm`);
+      }
+      await sleep(100);
+    }
+  }
+
+  // The repair re-arms a zero-delay alarm, which fires at once — and
+  // getAlarm() is null while that turn runs — so "armed again" is only
+  // observable once the turn has scheduled its successor.
+  async function waitForAlarm(jobId, timeoutMs = 5_000) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const at = await jobAlarm(jobId);
+      if (at !== null) {
+        return at;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`job ${jobId} never re-armed its alarm`);
+      }
+      await sleep(100);
+    }
+  }
+
+  it("re-arms a stranded active job on the next poll and lets it finish", async () => {
+    const before = await counterValues(["stranded_job_rearmed", "stranded_job_failed"]);
+    const balanceBefore = (await bootstrapBalance()).balance;
+    const job = await createJob({
+      clientRequestId: "e2e-strand-once-1",
+      episodeId: "ep-strand-once-1",
+      durationSeconds: 60,
+      languageCode: "fake:strand=1",
+    });
+    // The create-time alarm turn strands in `created`: no alarm, no progress.
+    await waitForNoAlarm(job.job_id);
+    // Inside the arm grace a poll is a plain read...
+    expect((await pollJob(job.job_id)).job.state).toBe("created");
+    expect(await jobAlarm(job.job_id)).toBeNull();
+    expect((await counterValues(["stranded_job_rearmed"])).stranded_job_rearmed ?? 0).toBe(
+      before.stranded_job_rearmed ?? 0,
+    );
+    // ...and past it the poll repairs.
+    await waitOutStrandGrace();
+    expect((await pollJob(job.job_id)).job.state).toBe("created");
+
+    // That poll repaired it — counted before it answered — and the job runs
+    // to completion like any other (the re-armed zero-delay turn is what
+    // moves it out of `created`).
+    expect((await counterValues(["stranded_job_rearmed"])).stranded_job_rearmed).toBe(
+      (before.stranded_job_rearmed ?? 0) + 1,
+    );
+    await reportSource(job.job_id, await deviceIdentity(60));
+    await waitForState(job.job_id, ["result_ready"]);
+    await fetchResultEnvelope(job.job_id);
+    await ackJob(job.job_id);
+    await expectJobStorageEmpty(job.job_id);
+
+    const after = await counterValues(["stranded_job_rearmed", "stranded_job_failed"]);
+    expect(after.stranded_job_rearmed).toBe((before.stranded_job_rearmed ?? 0) + 1);
+    expect(after.stranded_job_failed ?? 0).toBe(before.stranded_job_failed ?? 0);
+    const balanceAfter = (await bootstrapBalance()).balance;
+    expect(balanceAfter.available_seconds).toBe(balanceBefore.available_seconds - 60);
+    expect(balanceAfter.reserved_seconds).toBe(0);
+  });
+
+  it("fails a twice-stranded active job cleanly and releases its reservation", async () => {
+    const before = await counterValues(["stranded_job_rearmed", "stranded_job_failed"]);
+    const balanceBefore = (await bootstrapBalance()).balance;
+    const job = await createJob({
+      clientRequestId: "e2e-strand-twice-1",
+      episodeId: "ep-strand-twice-1",
+      durationSeconds: 60,
+      // Strand the first two alarm turns entered in `transcribing`: the
+      // reservation is held by then, so the clean failure has something
+      // real to release.
+      languageCode: "fake:strand=transcribing:2",
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+    await waitForState(job.job_id, ["transcribing"]);
+    expect((await bootstrapBalance()).balance.reserved_seconds).toBe(60);
+
+    // First strand → (after the arm grace) a poll re-arms once; the turn
+    // strands again → (after the grace) the next poll fails the job with the
+    // internal code instead of retrying forever. Polling is the only driver.
+    const failed = await waitForJob(
+      job.job_id,
+      (status) => status.state === "failed",
+      "failed after the second strand",
+    );
+    expect(failed.job.error.code).toBe("internal_error");
+
+    const after = await counterValues(["stranded_job_rearmed", "stranded_job_failed"]);
+    expect(after.stranded_job_rearmed).toBe((before.stranded_job_rearmed ?? 0) + 1);
+    expect(after.stranded_job_failed).toBe((before.stranded_job_failed ?? 0) + 1);
+    // Reservation released, nothing charged, prefixes gone, no alarm left.
+    const balanceAfter = (await bootstrapBalance()).balance;
+    expect(balanceAfter.available_seconds).toBe(balanceBefore.available_seconds);
+    expect(balanceAfter.reserved_seconds).toBe(0);
+    await waitForJobStorageEmpty(job.job_id);
+    expect(await jobAlarm(job.job_id)).toBeNull();
+    // A later poll is a plain read: terminal, released, nothing to repair.
+    expect((await pollJob(job.job_id)).job.state).toBe("failed");
+  });
+
+  it("only re-arms a stranded parked result, never fails it", async () => {
+    const before = await counterValues(["stranded_job_rearmed", "stranded_job_failed"]);
+    const job = await createJob({
+      clientRequestId: "e2e-strand-parked-1",
+      episodeId: "ep-strand-parked-1",
+      durationSeconds: 60,
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+    await waitForState(job.job_id, ["result_ready"]);
+    // Lose the result TTL alarm (a settled, charged result parked for the
+    // app), then poll twice: the first poll re-arms, the second sees the
+    // armed alarm; the result is never touched.
+    await runInDurableObject(jobStub(job.job_id), (_, state) =>
+      state.storage.deleteAlarm(),
+    );
+    expect(await jobAlarm(job.job_id)).toBeNull();
+    await waitOutStrandGrace();
+    expect((await pollJob(job.job_id)).job.state).toBe("result_ready");
+    expect((await counterValues(["stranded_job_rearmed"])).stranded_job_rearmed).toBe(
+      (before.stranded_job_rearmed ?? 0) + 1,
+    );
+    // The zero-delay re-arm turn must re-arm at the TTL, not expire an
+    // unexpired result: the alarm comes back and the job stays parked.
+    const rearmedAt = await waitForAlarm(job.job_id);
+    expect(rearmedAt).toBeGreaterThan(Date.now() + 6 * 86_400_000);
+    expect((await pollJob(job.job_id)).job.state).toBe("result_ready");
+    await fetchResultEnvelope(job.job_id);
+    await ackJob(job.job_id);
+
+    const after = await counterValues(["stranded_job_rearmed", "stranded_job_failed"]);
+    expect(after.stranded_job_rearmed).toBe((before.stranded_job_rearmed ?? 0) + 1);
+    expect(after.stranded_job_failed ?? 0).toBe(before.stranded_job_failed ?? 0);
+  });
+
+  it("nudges a stranded job's Durable Object from the hourly sweep", async () => {
+    const before = await counterValues(["stranded_job_rearmed", "stranded_jobs_nudged"]);
+    const job = await createJob({
+      clientRequestId: "e2e-strand-sweep-1",
+      episodeId: "ep-strand-sweep-1",
+      durationSeconds: 60,
+      languageCode: "fake:strand=1",
+    });
+    await waitForNoAlarm(job.job_id);
+    await waitOutStrandGrace();
+    // No app is polling this job. Age its D1 row past the created/staging
+    // sweep threshold (STAGING_ORIGIN_DEADLINE_SECONDS, 3600 s by default)
+    // so the sweeper lists and nudges it.
+    await env.TRANSCRIPTION_DB.prepare(
+      "UPDATE jobs SET updated_at = ?1 WHERE job_id = ?2",
+    )
+      .bind(Math.floor(Date.now() / 1000) - 2 * 3_600, job.job_id)
+      .run();
+
+    const ctx = createExecutionContext();
+    const worker = new RemoteTranscriptionWorker(ctx, env);
+    await worker.scheduled(createScheduledController());
+    await waitOnExecutionContext(ctx);
+
+    // The nudge re-armed the alarm with no poll involved (counted by the
+    // object before it answered the nudge)...
+    const after = await counterValues(["stranded_job_rearmed", "stranded_jobs_nudged"]);
+    expect(after.stranded_job_rearmed).toBe((before.stranded_job_rearmed ?? 0) + 1);
+    expect(after.stranded_jobs_nudged).toBeGreaterThanOrEqual(
+      (before.stranded_jobs_nudged ?? 0) + 1,
+    );
+    // ...and the job then runs to completion.
+    await reportSource(job.job_id, await deviceIdentity(60));
+    await waitForState(job.job_id, ["result_ready"]);
+    await fetchResultEnvelope(job.job_id);
+    await ackJob(job.job_id);
+    await expectJobStorageEmpty(job.job_id);
+  });
 
   it("retries a failed terminal credit release until it lands", async () => {
     const before = (await bootstrapBalance()).balance;

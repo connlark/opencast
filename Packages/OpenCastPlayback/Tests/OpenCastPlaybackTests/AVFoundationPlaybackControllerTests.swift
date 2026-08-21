@@ -226,6 +226,40 @@ struct AVFoundationPlaybackControllerTests {
     }
 
     @Test
+    func unloadReleasesAudioSessionAsynchronouslyAndBeforeReactivation() async throws {
+        let activationProbe = AudioSessionActivationProbe(outcomes: [.success])
+        let deactivationProbe = AudioSessionDeactivationProbe()
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await activationProbe.activate() },
+            audioSessionDeactivation: { await deactivationProbe.deactivate() }
+        )
+        defer {
+            controller.unload()
+        }
+
+        try controller.load(episode(duration: 240))
+        controller.isAudioSessionActive = true
+
+        controller.unload()
+
+        #expect(!controller.isAudioSessionActive)
+        try await waitUntil { await deactivationProbe.recordedCallCount() == 1 }
+
+        try controller.load(episode(duration: 240))
+        controller.play()
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        #expect(await activationProbe.recordedCallCount() == 0)
+
+        await deactivationProbe.release()
+        try await waitForActivationCalls(1, probe: activationProbe)
+        await activationProbe.releaseCalls(through: 1)
+        try await waitUntil { controller.isAudioSessionActive }
+    }
+
+    @Test
     func playbackStallTransitionsToBufferingWithAutomaticWaitingEnabled() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
         defer {

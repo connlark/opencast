@@ -240,6 +240,7 @@ struct OpenCastAppModelUpNextTests {
         #expect(!fixture.appModel.isNowPlayingPresented)
         #expect(!fixture.appModel.playback.isAudioSessionActive)
         #expect(flushCount == 1)
+        await fixture.appModel.deferredPlaybackTeardownTask?.value
         #expect(try lastPlaybackEpisodeIDs(in: fixture.context).isEmpty)
     }
 
@@ -256,6 +257,7 @@ struct OpenCastAppModelUpNextTests {
         #expect(fixture.appModel.playback.state == .idle)
         #expect(fixture.appModel.finishedPlaybackPresentation?.episode.episodeID == "first")
         #expect(fixture.appModel.isNowPlayingPresented)
+        await fixture.appModel.deferredPlaybackTeardownTask?.value
         #expect(try lastPlaybackEpisodeIDs(in: fixture.context).isEmpty)
 
         fixture.appModel.isSceneActive = false
@@ -298,6 +300,7 @@ struct OpenCastAppModelUpNextTests {
         #expect(fixture.appModel.playback.currentEpisode == nil)
         #expect(fixture.appModel.finishedPlaybackPresentation == nil)
         #expect(!fixture.appModel.isNowPlayingPresented)
+        await fixture.appModel.deferredPlaybackTeardownTask?.value
         #expect(try lastPlaybackEpisodeIDs(in: fixture.context).isEmpty)
     }
 
@@ -341,6 +344,7 @@ struct OpenCastAppModelUpNextTests {
         #expect(fixture.appModel.lastPlaybackError == nil)
         #expect(fixture.appModel.finishedPlaybackPresentation == nil)
         #expect(flushCount == 1)
+        await fixture.appModel.deferredPlaybackTeardownTask?.value
         #expect(try lastPlaybackEpisodeIDs(in: fixture.context).isEmpty)
     }
 
@@ -381,6 +385,23 @@ struct OpenCastAppModelUpNextTests {
 
         #expect(fixture.appModel.finishedPlaybackPresentation == nil)
         #expect(!fixture.appModel.isNowPlayingPresented)
+    }
+
+    @Test("Deferred teardown bookkeeping keeps the restore key of a Replay started before it runs")
+    func deferredTeardownKeepsReplayRestoreKey() async throws {
+        let fixture = try await makeFixture()
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        try playWithoutAutoplay(first, fixture: fixture)
+        fixture.appModel.isNowPlayingPresented = true
+        fixture.appModel.playback.handleCurrentItemDidPlayToEnd()
+        #expect(fixture.appModel.deferredPlaybackTeardownTask != nil)
+
+        #expect(fixture.appModel.replayFinishedPlayback(modelContext: fixture.context))
+        await fixture.appModel.deferredPlaybackTeardownTask?.value
+
+        #expect(fixture.appModel.deferredPlaybackTeardownTask == nil)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "first")
+        #expect(try lastPlaybackEpisodeIDs(in: fixture.context) == ["first"])
     }
 
     @Test("Replay failure retains the Finished presentation and playback error surface")

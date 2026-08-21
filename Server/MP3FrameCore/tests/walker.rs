@@ -293,6 +293,54 @@ fn results_are_identical_no_matter_how_the_caller_slices_its_reads() {
     }
 }
 
+/// The walk must cost the same whether the caller feeds 64 KiB or 8 MiB
+/// ranges (production reads 8 MiB). Before 2026-08-19 the walker trimmed its
+/// buffer after every accepted frame, and `Vec::drain` memmoves the whole
+/// remaining tail, so an 8 MiB range paid ~20k moves of ~4 MiB each —
+/// quadratic in the range size, 56 s of CPU on a 164 MB episode, and the
+/// cause of a Durable Object alarm exceeding its 30 s CPU limit mid-probe.
+/// `trim_bytes_moved` is the deterministic proxy: linear in feeds (one carry
+/// per feed) after the fix, gigabytes before it. Results must stay identical.
+#[test]
+fn walk_cost_is_linear_in_range_size() {
+    const RANGE_8_MIB: usize = 8 * 1024 * 1024;
+    const RANGE_64_KIB: usize = 64 * 1024;
+    // > 3 × 8 MiB so the production range genuinely spans several feeds.
+    let bytes = frames(64_000);
+    assert!(bytes.len() > 3 * RANGE_8_MIB);
+
+    let walk_counting = |range: usize| -> (WalkResult, u64, usize) {
+        let object_len = bytes.len() as u64;
+        let mut walker = Mp3Walker::new(WalkOptions::new(object_len, object_len));
+        let mut feeds = 0usize;
+        for slice in bytes.chunks(range) {
+            walker.feed(slice).expect("feed");
+            feeds += 1;
+        }
+        let moved = walker.trim_bytes_moved();
+        (walker.finish().expect("finish"), moved, feeds)
+    };
+
+    let (wide, wide_moved, wide_feeds) = walk_counting(RANGE_8_MIB);
+    let (narrow, narrow_moved, narrow_feeds) = walk_counting(RANGE_64_KIB);
+    assert_eq!(wide, narrow, "range size changed the plan");
+    assert_eq!(wide.audio_frames, 64_000);
+
+    // One trim per feed, each moving at most the sub-frame carry plus the
+    // lookahead window (< 4 frames). Unpatched, the 8 MiB walk moves ~80 GB.
+    let bound = |feeds: usize| (feeds as u64) * 4 * FRAME_BYTES as u64;
+    assert!(
+        wide_moved <= bound(wide_feeds),
+        "8 MiB ranges moved {wide_moved} bytes across {wide_feeds} feeds (bound {})",
+        bound(wide_feeds)
+    );
+    assert!(
+        narrow_moved <= bound(narrow_feeds),
+        "64 KiB ranges moved {narrow_moved} bytes across {narrow_feeds} feeds (bound {})",
+        bound(narrow_feeds)
+    );
+}
+
 #[test]
 fn peak_buffering_tracks_range_size_not_source_length() {
     let bytes = frames(20_000);

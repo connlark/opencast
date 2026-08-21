@@ -183,7 +183,44 @@ pub struct FakeAiHooks {
     /// `rfail=N`: the first N credit-release attempts fail — drives the
     /// RTW-5 terminal-path release backstop tests.
     pub release_fail_count: Option<u32>,
+    /// `strand=N` / `strand=<state>:N`: the first N alarm turns that find the
+    /// record in an active-work state (optionally only `<state>`) delete
+    /// their alarm and return without scheduling — the only deterministic way
+    /// to leave an active state with no alarm, which drives the stranded-job
+    /// repair tests (2026-08-19).
+    pub strand: Option<FakeStrandRule>,
     pub failure: Option<FakeAiFailureRule>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FakeStrandRule {
+    /// Restrict the hook to alarm turns entered in this state; `None` means
+    /// any active-work state.
+    pub state: Option<String>,
+    pub count: u32,
+}
+
+impl FakeStrandRule {
+    /// True when a turn entered in `state` (already known to be active work)
+    /// should strand, given `stranded_so_far` turns already have.
+    pub fn applies(&self, state: &str, stranded_so_far: u32) -> bool {
+        stranded_so_far < self.count && self.state.as_deref().is_none_or(|only| only == state)
+    }
+}
+
+impl FakeStrandRule {
+    fn parse(value: &str) -> Option<Self> {
+        match value.split_once(':') {
+            Some((state, count)) => Some(Self {
+                state: Some(state.to_string()),
+                count: count.parse().ok()?,
+            }),
+            None => Some(Self {
+                state: None,
+                count: value.parse().ok()?,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -242,6 +279,7 @@ pub fn parse_fake_hooks(language_code: Option<&str>) -> FakeAiHooks {
                 "mlat" => hooks.media_chunk_latency_ms = value.parse().ok(),
                 "sfail" => hooks.settle_fail_once = value == "1",
                 "rfail" => hooks.release_fail_count = value.parse().ok(),
+                "strand" => hooks.strand = FakeStrandRule::parse(value),
                 _ => {}
             }
         }
@@ -390,6 +428,26 @@ mod tests {
         let release_fail = parse_fake_hooks(Some("fake:rfail=2"));
         assert_eq!(release_fail.release_fail_count, Some(2));
         assert_eq!(latency_only.release_fail_count, None);
+
+        let strand_any = parse_fake_hooks(Some("fake:strand=1"))
+            .strand
+            .expect("strand");
+        assert_eq!(strand_any.state, None);
+        assert_eq!(strand_any.count, 1);
+        assert!(strand_any.applies("created", 0));
+        assert!(strand_any.applies("transcribing", 0));
+        assert!(!strand_any.applies("created", 1));
+
+        let strand_in = parse_fake_hooks(Some("fake:strand=transcribing:2;conc=1"))
+            .strand
+            .expect("strand");
+        assert_eq!(strand_in.state.as_deref(), Some("transcribing"));
+        assert_eq!(strand_in.count, 2);
+        assert!(strand_in.applies("transcribing", 1));
+        assert!(!strand_in.applies("transcribing", 2));
+        assert!(!strand_in.applies("created", 0));
+        assert_eq!(parse_fake_hooks(Some("fake:strand=x")).strand, None);
+        assert_eq!(latency_only.strand, None);
     }
 
     #[test]

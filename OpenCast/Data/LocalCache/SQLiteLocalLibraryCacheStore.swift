@@ -11,6 +11,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
 
     private let databaseURL: URL?
     private let episodeSearchRebuildBatchSize: Int
+    private let episodeSearchRebuildCheckpoint: (@Sendable () async -> Void)?
     private var connection: OpaquePointer?
     private var episodeSearchIndexState = EpisodeSearchIndexState.unknown
     private var hasValidatedEpisodeSearchIndex = false
@@ -28,13 +29,15 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     init(
         databaseURL: URL?,
         episodeSearchRebuildBatchSize: Int =
-            SQLiteEpisodeSearchIndex.rebuildBatchSize
+            SQLiteEpisodeSearchIndex.rebuildBatchSize,
+        episodeSearchRebuildCheckpoint: (@Sendable () async -> Void)? = nil
     ) {
         self.databaseURL = databaseURL
         self.episodeSearchRebuildBatchSize = max(
             episodeSearchRebuildBatchSize,
             1
         )
+        self.episodeSearchRebuildCheckpoint = episodeSearchRebuildCheckpoint
     }
 
     isolated deinit {
@@ -249,6 +252,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 try SQLiteEpisodeSearchIndex.markNeedsRebuild(in: db)
                 try SQLiteEpisodeSearchIndex.clear(in: db)
             }
+            await episodeSearchRebuildCheckpoint?()
 
             var finalEpisodeID: String?
             while true {

@@ -41,6 +41,11 @@ fn main() {
 
     let mut walker = Mp3Walker::new(WalkOptions::new(object_len, tail.audio_end));
     let mut peak_buffered = 0usize;
+    // Wall time of the walk itself (file read and JSON excluded), so the
+    // local differential gate also catches cost regressions: the 2026-08-19
+    // per-frame trim made an 8 MiB-range walk quadratic and this line would
+    // have shown seconds-per-megabyte instead of milliseconds.
+    let walk_started = std::time::Instant::now();
     for range in bytes.chunks(range_bytes.max(1)) {
         if let Err(error) = walker.feed(range) {
             println!("{{\"error\":\"{}\"}}", error.reason());
@@ -48,6 +53,7 @@ fn main() {
         }
         peak_buffered = peak_buffered.max(walker.buffered_bytes());
     }
+    let trim_bytes_moved = walker.trim_bytes_moved();
     let result = match walker.finish() {
         Ok(result) => result,
         Err(error) => {
@@ -55,6 +61,14 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let walk_elapsed = walk_started.elapsed();
+    eprintln!(
+        "walk: {:.3}s range_bytes={} peak_buffered_bytes={} trim_bytes_moved={}",
+        walk_elapsed.as_secs_f64(),
+        range_bytes,
+        peak_buffered,
+        trim_bytes_moved
+    );
 
     let mut out = String::new();
     out.push('{');
@@ -113,6 +127,12 @@ fn main() {
         &result.truncated_tail_bytes.to_string(),
     );
     field(&mut out, "peak_buffered_bytes", &peak_buffered.to_string());
+    field(&mut out, "trim_bytes_moved", &trim_bytes_moved.to_string());
+    field(
+        &mut out,
+        "walk_elapsed_seconds",
+        &format!("{:.3}", walk_elapsed.as_secs_f64()),
+    );
     field(
         &mut out,
         "vbr_kind",

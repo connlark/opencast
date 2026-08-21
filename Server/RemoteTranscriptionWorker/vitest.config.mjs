@@ -28,9 +28,10 @@ export default defineConfig(async () => {
             FAKE_MEDIA: "true",
             FAKE_AI: "true",
             // Small grant so the suite can drive awaiting_credits honestly;
-            // sized so the pass-0.5 fan-out and pass-2 upload tests can
-            // still settle real spends afterwards (cumulative suite).
-            DEV_CREDIT_GRANT_SECONDS: "7000",
+            // sized so the pass-0.5 fan-out, pass-2 upload, and stranded-job
+            // tests can still settle real spends afterwards (cumulative
+            // suite). Must match GRANT in test/integration.spec.mjs.
+            DEV_CREDIT_GRANT_SECONDS: "7200",
             // Exact-device upload (pass 2): presigned URLs point at a fake
             // S3 host the spec's fetch mock maps onto the R2 binding's real
             // multipart machinery. 5 MiB parts (the R2 non-final minimum)

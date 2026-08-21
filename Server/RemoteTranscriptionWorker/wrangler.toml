@@ -16,6 +16,12 @@ invocation_logs = true
 [observability.traces]
 enabled = false
 
+# CPU headroom for the alarm-driven job Durable Object. The 512 MiB source
+# cap can require more than the platform's default CPU budget during probing,
+# and a hard CPU kill cannot be caught by `alarm()` for cleanup.
+[limits]
+cpu_ms = 120_000
+
 [triggers]
 # Enable only after App Attest, storage, purchases, and abuse controls are ready.
 crons = []
@@ -122,6 +128,9 @@ head_sampling_rate = 1
 enabled = true
 invocation_logs = true
 
+[env.prod-staging.limits]
+cpu_ms = 120_000
+
 [env.prod-staging.vars]
 APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
@@ -217,6 +226,9 @@ head_sampling_rate = 1
 enabled = true
 invocation_logs = true
 
+[env.production.limits]
+cpu_ms = 120_000
+
 [env.production.vars]
 APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
@@ -250,6 +262,7 @@ ORIGIN_FETCH_WALL_SECONDS = "840"
 POLL_AFTER_SECONDS = "2"
 ORPHAN_SWEEP_MAX_R2_OBJECTS = "5000"
 ORPHAN_SWEEP_MAX_STALE_JOBS = "100"
+ORPHAN_SWEEP_MAX_NUDGES = "50"
 AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_DEADLINE_SECONDS = "900"
 AD_ANALYSIS_POLL_SECONDS = "5"

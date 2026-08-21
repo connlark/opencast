@@ -17,6 +17,9 @@ pub struct SweepReport {
     pub stale_job_ids: Vec<String>,
     pub object_job_ids: Vec<String>,
     pub scan_truncated: bool,
+    /// Stale jobs whose Durable Object was sent a `/nudge` this run
+    /// (bounded by `ORPHAN_SWEEP_MAX_NUDGES`; not an anomaly, an action).
+    pub nudged_job_count: usize,
 }
 
 impl SweepReport {
@@ -37,9 +40,10 @@ impl SweepReport {
     pub fn alert_message(&self) -> String {
         let ids = self.alert_job_ids();
         format!(
-            "orphan_objects={} stale_jobs={} scan_truncated={} job_ids={}",
+            "orphan_objects={} stale_jobs={} nudged={} scan_truncated={} job_ids={}",
             self.orphan_object_count,
             self.stale_job_ids.len(),
+            self.nudged_job_count,
             usize::from(self.scan_truncated),
             if ids.is_empty() {
                 "none".to_string()
@@ -98,8 +102,15 @@ mod runtime {
     const TRANSCRIPTION_DB: &str = "TRANSCRIPTION_DB";
     const DEFAULT_MAX_R2_OBJECTS: usize = 5_000;
     const DEFAULT_MAX_STALE_JOBS: usize = 100;
+    /// Stale jobs nudged per run. Separate from the 1000-cap stale list so
+    /// the scheduled invocation's subrequest budget is respected: each nudge
+    /// is a Durable Object fetch that may itself run a repair.
+    const DEFAULT_MAX_NUDGES: usize = 50;
     const R2_LIST_PAGE_SIZE: u32 = 1_000;
     const PUSHOVER_URL: &str = "https://api.pushover.net/1/messages.json";
+    /// Internal, body-free stranded-job repair route on the job Durable
+    /// Object (`job_do.rs`); never reachable from the public gateway.
+    const JOB_NUDGE_URL: &str = "https://transcription-job.opencast.internal/nudge";
 
     pub async fn run(env: &Env) -> Result<SweepReport> {
         let config = AppConfig::from_env(env).map_err(|error| {
@@ -119,11 +130,12 @@ mod runtime {
             .clamp(100, 10_000);
         let (orphan_object_count, object_job_ids, r2_truncated) =
             scan_r2(&bucket, now_millis, max_r2_objects).await?;
-        let report = SweepReport {
+        let mut report = SweepReport {
             orphan_object_count,
             stale_job_ids,
             object_job_ids,
             scan_truncated: stale_truncated || r2_truncated,
+            nudged_job_count: 0,
         };
 
         storage::increment_counter(&db, "orphan_sweeper_runs", 1, now_seconds).await?;
@@ -145,6 +157,25 @@ mod runtime {
             &db,
             "orphan_sweeper_truncated",
             i64::from(report.scan_truncated),
+            now_seconds,
+        )
+        .await?;
+
+        // Stranded-job repair (2026-08-19): a stale job's Durable Object may
+        // be sitting with no alarm (its alarm turn was CPU-killed, or the
+        // alarm was lost). Nudging runs the same repair `/poll` runs, so the
+        // job is re-armed or failed cleanly without waiting for the app —
+        // and the account's active-job slot comes back. Best-effort and
+        // content-blind: ids only, no bodies read, 404 (the drill row has no
+        // object) and transport errors are ignored; oldest first because the
+        // stale list is ordered by updated_at.
+        let max_nudges =
+            usize_var(env, "ORPHAN_SWEEP_MAX_NUDGES", DEFAULT_MAX_NUDGES).clamp(0, 200);
+        report.nudged_job_count = nudge_stale_jobs(env, &report.stale_job_ids, max_nudges).await;
+        storage::increment_counter(
+            &db,
+            "stranded_jobs_nudged",
+            report.nudged_job_count as i64,
             now_seconds,
         )
         .await?;
@@ -220,6 +251,36 @@ mod runtime {
         }
 
         Ok((orphan_count, job_ids.into_iter().collect(), truncated))
+    }
+
+    /// POST `/nudge` to each stale job's Durable Object, up to `max_nudges`.
+    /// Returns how many nudges were dispatched (a nudge counts even when the
+    /// object answers 404 or the fetch fails — the counter reports sweeper
+    /// effort; the objects' own `stranded_job_*` counters report outcomes).
+    async fn nudge_stale_jobs(env: &Env, stale_job_ids: &[String], max_nudges: usize) -> usize {
+        if max_nudges == 0 || stale_job_ids.is_empty() {
+            return 0;
+        }
+        let Ok(namespace) = env.durable_object(crate::job::JOB_BINDING) else {
+            return 0;
+        };
+        let mut nudged = 0usize;
+        for job_id in stale_job_ids.iter().take(max_nudges) {
+            if !crate::route::valid_job_id(job_id) {
+                continue;
+            }
+            let Ok(stub) = namespace.get_by_name(job_id) else {
+                continue;
+            };
+            let Ok(request) = crate::job_do::internal_post(JOB_NUDGE_URL, "{}".to_string()) else {
+                continue;
+            };
+            nudged += 1;
+            if let Err(error) = stub.fetch_with_request(request).await {
+                worker::console_error!("stranded-job nudge transport error (ignored): {error:?}");
+            }
+        }
+        nudged
     }
 
     async fn send_pushover(env: &Env, title: &str, message: &str) -> Result<()> {
@@ -319,10 +380,14 @@ mod tests {
             stale_job_ids: vec!["job-b".to_string(), "job-a".to_string()],
             object_job_ids: vec!["job-a".to_string(), "bad/id".to_string()],
             scan_truncated: false,
+            nudged_job_count: 2,
         };
         assert_eq!(
             report.alert_message(),
-            "orphan_objects=3 stale_jobs=2 scan_truncated=0 job_ids=job-a,job-b"
+            "orphan_objects=3 stale_jobs=2 nudged=2 scan_truncated=0 job_ids=job-a,job-b"
         );
+        // Nudges are an action, not an anomaly: they never trip the alert
+        // on their own.
+        assert_eq!(report.anomaly_count(), 5);
     }
 }

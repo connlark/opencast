@@ -9,6 +9,16 @@ No dependencies, `#![forbid(unsafe_code)]`, host and `wasm32-unknown-unknown`.
 It touches no network, no storage and no clock: the Worker owns R2 ranged
 reads, hashing, plan persistence and cancellation, and hands this crate bytes.
 
+Cost is linear in the source and independent of the caller's read range: the
+walker trims consumed bytes once per feed, never per frame. A per-frame
+`Vec::drain` made the walk quadratic in the read range until 2026-08-19 —
+measured at the production 8 MiB range, HH65 (174 MB) went **54.2 s → 1.42 s**
+and a 163 MB 2 h 50 m episode **43.3 s → 0.80 s**, with byte-identical output
+on every field including all chunk hashes. `Mp3Walker::trim_bytes_moved` is the
+deterministic cost counter the walker tests pin (HH65 moved 2.26 TB before,
+5.9 MB after), and `mp3-frame-diff` prints the walk's elapsed seconds so the
+local differential gate catches a cost regression too.
+
 ## Contract
 
 1. Ordinary MPEG-1/2/2.5 Layer III elementary streams, CBR or VBR.

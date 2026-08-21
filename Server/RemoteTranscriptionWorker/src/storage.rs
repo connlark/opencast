@@ -53,10 +53,20 @@ struct StaleJobRow {
 
 // Both job-state SQL constants are assembled at compile time from
 // `job::STATE_*`, so a renamed or retyped state cannot silently diverge
-// from the SQL. Migration 0005's partial indexes were built against these
-// exact predicates (the migration repeats the strings literally and stays
-// untouched); the byte-identity test below pins the assembled SQL to those
-// bytes, and the EXPLAIN QUERY PLAN tests prove the indexes still serve it.
+// from the SQL. Migrations 0005 and 0006's partial indexes were built against
+// these exact predicates (the migrations repeat the strings literally and
+// stay untouched); the byte-identity test below pins the assembled SQL to
+// those bytes, and the EXPLAIN QUERY PLAN tests prove the indexes still
+// serve it.
+
+/// Active-work states carry no `state_deadline_at`, and D1's `updated_at`
+/// moves only on state transitions, so the sweeper lists them once they have
+/// sat in one state this long. Generous on purpose: a limiter-queued
+/// `transcribing` job can legitimately dwell more than an hour, and a nudge
+/// on a healthy job is a harmless read (its alarm is armed, so nothing is
+/// repaired). Post-fix the longest single state (`transcribing` at the 4 h
+/// cap) finishes in ~10 minutes.
+pub const ACTIVE_WORK_STALE_SECONDS: i64 = 3 * 60 * 60;
 const fn concat_len(parts: &[&str]) -> usize {
     let mut length = 0;
     let mut index = 0;
@@ -110,7 +120,19 @@ const STALE_JOB_IDS_SQL_PARTS: &[&str] = &[
     crate::job::STATE_RESULT_READY,
     "', '",
     crate::job::STATE_DELIVERED,
-    "') AND updated_at <= ?7)) ORDER BY updated_at ASC, job_id ASC LIMIT ?8",
+    "') AND updated_at <= ?7) OR (state IN ('",
+    crate::job::STATE_SOURCE_MATCHED,
+    "', '",
+    crate::job::STATE_PROBING,
+    "', '",
+    crate::job::STATE_RESERVED,
+    "', '",
+    crate::job::STATE_CHUNKING,
+    "', '",
+    crate::job::STATE_TRANSCRIBING,
+    "', '",
+    crate::job::STATE_STITCHING,
+    "') AND updated_at <= ?8)) ORDER BY updated_at ASC, job_id ASC LIMIT ?9",
 ];
 const STALE_JOB_IDS_SQL_BYTES: [u8; concat_len(STALE_JOB_IDS_SQL_PARTS)] =
     concat_bytes(STALE_JOB_IDS_SQL_PARTS);
@@ -300,8 +322,10 @@ pub async fn active_job_count(db: &D1Database, account_id: &str) -> Result<i64> 
 }
 
 /// Content-free D1 index scan for jobs whose state-specific deadline has
-/// elapsed. The DO remains authoritative and will perform normal
-/// cancellation; this query is only the operational alarm backstop.
+/// elapsed, plus active-work states parked longer than
+/// `ACTIVE_WORK_STALE_SECONDS`. The DO remains authoritative and will
+/// perform normal cancellation; this query is the operational alarm backstop
+/// and the sweeper's nudge list.
 pub async fn stale_job_ids(
     db: &D1Database,
     config: &crate::config::AppConfig,
@@ -318,6 +342,7 @@ pub async fn stale_job_ids(
         d1_i64(now.saturating_sub(config.exact_uploading_deadline_seconds))?,
         d1_i64(now.saturating_sub(config.ad_analysis_deadline_seconds))?,
         d1_i64(now.saturating_sub(7 * 24 * 60 * 60))?,
+        d1_i64(now.saturating_sub(ACTIVE_WORK_STALE_SECONDS))?,
         d1_i64(i64::try_from(query_limit).unwrap_or(1_001))?,
     ];
     let rows = db
@@ -577,10 +602,10 @@ mod tests {
         assert_eq!(admit("challenge-over-cap", 2), 0);
     }
 
-    /// Migration 0005's partial indexes were built against exactly these
-    /// predicates; the assembled constants must never drift from them.
+    /// Migrations 0005 and 0006's partial indexes were built against exactly
+    /// these predicates; the assembled constants must never drift from them.
     #[test]
-    fn assembled_job_state_sql_is_byte_identical_to_the_migration_0005_literals() {
+    fn assembled_job_state_sql_is_byte_identical_to_the_migration_0005_and_0006_literals() {
         assert_eq!(
             STALE_JOB_IDS_SQL,
             "SELECT job_id FROM jobs WHERE \
@@ -590,8 +615,10 @@ mod tests {
              (state = 'exact_upload_required' AND updated_at <= ?4) OR \
              (state = 'exact_uploading' AND updated_at <= ?5) OR \
              (state = 'detecting_ads' AND updated_at <= ?6) OR \
-             (state IN ('result_ready', 'delivered') AND updated_at <= ?7)) \
-             ORDER BY updated_at ASC, job_id ASC LIMIT ?8"
+             (state IN ('result_ready', 'delivered') AND updated_at <= ?7) OR \
+             (state IN ('source_matched', 'probing', 'reserved', 'chunking', \
+             'transcribing', 'stitching') AND updated_at <= ?8)) \
+             ORDER BY updated_at ASC, job_id ASC LIMIT ?9"
         );
         assert_eq!(
             ACTIVE_JOB_COUNT_SQL,
@@ -663,6 +690,10 @@ mod tests {
             "../migrations/0005_index_stale_job_sweeper.sql"
         ))
         .expect("create stale-job sweeper indexes");
+        db.execute_batch(include_str!(
+            "../migrations/0006_index_stale_active_jobs.sql"
+        ))
+        .expect("create active-work sweeper index");
         db
     }
 
@@ -673,9 +704,10 @@ mod tests {
             .prepare(&format!("EXPLAIN QUERY PLAN {STALE_JOB_IDS_SQL}"))
             .expect("prepare stale-job query plan");
         let plan = statement
-            .query_map(params![NOW, NOW, NOW, NOW, NOW, NOW, NOW, 101_i64], |row| {
-                row.get::<_, String>(3)
-            })
+            .query_map(
+                params![NOW, NOW, NOW, NOW, NOW, NOW, NOW, NOW, 101_i64],
+                |row| row.get::<_, String>(3),
+            )
             .expect("query stale-job plan")
             .collect::<std::result::Result<Vec<_>, _>>()
             .expect("read stale-job plan");
@@ -691,8 +723,66 @@ mod tests {
             "expected result sweep index in plan: {plan:?}"
         );
         assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_jobs_sweep_active_work")),
+            "expected active-work sweep index in plan: {plan:?}"
+        );
+        assert!(
             plan.iter().all(|detail| detail != "SCAN jobs"),
             "unexpected full jobs scan: {plan:?}"
+        );
+    }
+
+    /// The active-work arm lists only jobs parked past the threshold, and a
+    /// job that has just transitioned (fresh `updated_at`) never appears.
+    #[test]
+    fn stale_job_sweep_lists_active_work_past_the_threshold_only() {
+        let db = setup_db();
+        let stale = NOW - super::ACTIVE_WORK_STALE_SECONDS;
+        let rows = [
+            ("job-probing-stale", "probing", stale),
+            ("job-probing-fresh", "probing", NOW - 60),
+            ("job-transcribing-stale", "transcribing", stale - 1),
+            ("job-cancelled-old", "cancelled", stale - 86_400),
+            ("job-detecting-old", "detecting_ads", NOW - 10_000),
+        ];
+        for (job_id, state, updated_at) in rows {
+            db.execute(
+                "INSERT INTO jobs (job_id, account_id, client_request_id, episode_id, state, created_at, updated_at) \
+                 VALUES (?1, 'acct-1', ?1, ?1, ?2, ?3, ?3)",
+                params![job_id, state, updated_at],
+            )
+            .expect("insert job");
+        }
+        // Deadline binds (?1..?7) chosen so only the detecting_ads row's arm
+        // (900 s) and the active-work arm (?8) can match.
+        let far_past = NOW - 10 * 86_400;
+        let mut statement = db.prepare(STALE_JOB_IDS_SQL).expect("prepare");
+        let listed = statement
+            .query_map(
+                params![
+                    far_past,
+                    far_past,
+                    far_past,
+                    far_past,
+                    far_past,
+                    NOW - 900,
+                    far_past,
+                    stale,
+                    100_i64
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("query")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("read");
+        assert_eq!(
+            listed,
+            vec![
+                "job-transcribing-stale".to_string(),
+                "job-probing-stale".to_string(),
+                "job-detecting-old".to_string(),
+            ]
         );
     }
 

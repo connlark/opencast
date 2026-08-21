@@ -4,6 +4,7 @@
 //! reservation. The DO is the state authority; the D1 job index is a lookup
 //! aid kept eventually consistent.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -42,6 +43,21 @@ const RECORD_KEY: &str = "job";
 /// One-shot marker for the dev-lane `fake-source-mismatch-fail` test hook
 /// (see the mismatch branch of `step_evaluate_identities`).
 const TEST_MISMATCH_FAIL_INJECTED_KEY: &str = "test_mismatch_fail_injected";
+/// Turns the dev-lane `fake:strand=N` test hook has already stranded (see
+/// the hook at the top of `advance`).
+const TEST_STRAND_INJECTED_KEY: &str = "test_strand_injected";
+/// The platform's hard wall limit for one alarm invocation. An in-flight
+/// marker older than this belongs to a handler that is no longer running.
+const ALARM_MARKER_STALE_SECONDS: i64 = 15 * 60;
+/// Grace after this instance armed an alarm during which "no alarm set" is
+/// read as "due and being dispatched", not stranded. Measured in workerd: a
+/// due alarm is consumed (`getAlarm` → null) a few milliseconds *before* its
+/// handler starts, and a `/poll` landing in that gap after a zero-delay arm
+/// (from an alarm turn or from `/create`, `/source`, `/upload/complete`)
+/// would otherwise repair a healthy job and spend its one free repair. A
+/// real strand never refreshes the arm time (a CPU kill also resets it), so
+/// the grace only delays a repair by at most this long.
+const STRAND_ARM_GRACE_MILLIS: i64 = 3_000;
 const RESULT_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const BUSY_RETRY_SECONDS: u64 = 10;
 /// RTW-5 backstop budget: the terminal-path release attempt plus three
@@ -109,6 +125,16 @@ struct AckMessage {
 pub struct TranscriptionJob {
     state: Rc<State>,
     env: Env,
+    /// Epoch seconds at which the alarm handler currently running (if any)
+    /// started. In-memory only, so a Durable Object reset clears it. The
+    /// stranded-job repair reads it because `Storage::get_alarm` returns
+    /// `None` while a handler runs (the platform consumes the alarm at
+    /// handler start): the marker is what tells "running" from "stranded".
+    alarm_started_at: Cell<Option<i64>>,
+    /// Epoch milliseconds of the last `schedule` call on this instance (see
+    /// `STRAND_ARM_GRACE_MILLIS`); the other half of "running vs stranded",
+    /// covering the dispatch gap before a due alarm's handler starts.
+    alarm_armed_at: Cell<Option<i64>>,
 }
 
 impl DurableObject for TranscriptionJob {
@@ -116,6 +142,8 @@ impl DurableObject for TranscriptionJob {
         Self {
             state: Rc::new(state),
             env,
+            alarm_started_at: Cell::new(None),
+            alarm_armed_at: Cell::new(None),
         }
     }
 
@@ -133,11 +161,21 @@ impl DurableObject for TranscriptionJob {
             "/upload/start" => self.handle_upload_start(&mut req).await,
             "/upload/parts" => self.handle_upload_parts(&mut req).await,
             "/upload/complete" => self.handle_upload_complete(&mut req).await,
+            "/nudge" => self.handle_nudge().await,
             _ => json_error(404, "not_found"),
         }
     }
 
     async fn alarm(&self) -> Result<Response> {
+        // Mark the turn in flight before anything else (see the field doc).
+        // A marker still set at entry means the previous turn left without
+        // dropping its guard — a wasm trap or a dropped future — so count it
+        // and take over; the guard clears it however this turn ends.
+        let marker_stuck = self.alarm_started_at.get().is_some();
+        let _in_flight = AlarmInFlight::arm(&self.alarm_started_at);
+        if marker_stuck {
+            self.bump("alarm_marker_stuck", 1).await;
+        }
         if let Err(error) = self.advance().await {
             worker::console_error!("transcription job alarm error: {error:?}");
             // Try again later rather than wedging the job.
@@ -197,6 +235,9 @@ impl TranscriptionJob {
                 .phase_timestamps
                 .entry(record.state.clone())
                 .or_insert(now);
+            // Progress earns a fresh stranded-job repair (see
+            // `repair_if_stranded`).
+            record.stranded_repairs = 0;
         }
         record.updated_at = now;
         self.write_record(&record).await?;
@@ -228,6 +269,7 @@ impl TranscriptionJob {
                         .phase_timestamps
                         .entry(record.state.clone())
                         .or_insert(now);
+                    record.stranded_repairs = 0;
                 }
                 record.updated_at = now;
                 self.write_record(&record).await?;
@@ -262,7 +304,9 @@ impl TranscriptionJob {
         })
     }
 
+    /// The one place alarms are armed; `repair_if_stranded` relies on that.
     async fn schedule(&self, delay: Duration) -> Result<()> {
+        self.alarm_armed_at.set(Some(now_millis()));
         self.state.storage().set_alarm(delay).await
     }
 
@@ -345,13 +389,19 @@ impl TranscriptionJob {
         self.write_record(&record).await?;
         // Arm the alarm before the counter bump: a reset between write_record
         // and the alarm must not leave a durable job with no alarm, since
-        // nothing re-arms a stranded job and it pins the account's active-job
-        // slot (Phase 10 review RTW-4). The `jobs_created` D1 subrequest was
-        // that gap; it now runs after the alarm exists. On the origin_unsafe
-        // path enter_upload_path arms its own alarm at its tail.
+        // the account's active-job slot stays pinned until the next poll or
+        // sweep repairs it (Phase 10 review RTW-4; the 2026-08-19 repair
+        // is the backstop, this ordering is the rule). The `jobs_created` D1
+        // subrequest was that gap; it now runs after the alarm exists.
         if message.origin_unsafe {
             // The server will never fetch this origin: skip staging entirely
-            // and wait for the device's exact copy.
+            // and wait for the device's exact copy. Arm the created-state
+            // deadline first — enter_upload_path opens the input gate on an
+            // R2 delete before it arms the exact-upload deadline at its tail,
+            // and the record must never be live with no alarm across that
+            // await (the same storage-gated stretch rule as everywhere else).
+            self.schedule_at(now + config.staging_origin_deadline_seconds)
+                .await?;
             let record = match self.enter_upload_path(&config, job::STATE_CREATED).await? {
                 StateUpdate::Applied(record)
                 | StateUpdate::RefusedTerminal(record)
@@ -415,6 +465,11 @@ impl TranscriptionJob {
             Ok(config) => config,
             Err(error) => return json_error_body(503, error),
         };
+        // Polling stays read-only except for this: a job whose alarm is gone
+        // is repaired here (re-armed, or failed cleanly on a repeat), and the
+        // poll reports the post-repair record, so the app sees a stranded
+        // state for at most a couple of polls.
+        let record = self.repair_if_stranded(record, &config).await?;
         let response = PollResponse {
             schema_version: SCHEMA_VERSION,
             job: job_status(
@@ -426,6 +481,21 @@ impl TranscriptionJob {
             poll_after_seconds: config.poll_after_seconds,
         };
         json_success(200, &response)
+    }
+
+    /// Internal, body-free stranded-job repair entry for the hourly sweeper
+    /// (`sweeper.rs`): the same repair `/poll` runs, answering only the
+    /// resulting state. Not routed from the public gateway.
+    async fn handle_nudge(&self) -> Result<Response> {
+        let Some(record) = self.read_record().await? else {
+            return json_error(404, types::ERROR_JOB_NOT_FOUND);
+        };
+        let config = match self.config() {
+            Ok(config) => config,
+            Err(error) => return json_error_body(503, error),
+        };
+        let record = self.repair_if_stranded(record, &config).await?;
+        json_success(200, &serde_json::json!({ "state": record.state }))
     }
 
     async fn handle_result(&self) -> Result<Response> {
@@ -855,6 +925,40 @@ impl TranscriptionJob {
             return self.retry_pending_credit_release(record, &config).await;
         }
 
+        // Test hook (development lane, FAKE_AI only): `fake:strand=N` or
+        // `fake:strand=<state>:N` makes the first N active-work alarm turns
+        // strand — delete the alarm and return without scheduling — the only
+        // deterministic way to leave an active state with no alarm (the
+        // in-flight marker masks a test-side deleteAlarm during a running
+        // turn), so the workerd suite can drive `repair_if_stranded`.
+        if self.fake_ai_enabled(&config) {
+            if let Some(rule) = ai::parse_fake_hooks(record.language_code.as_deref()).strand {
+                if job::strand_repair(&record.state, record.credit_release_pending)
+                    == Some(job::StrandRepair::RearmOnceThenFail)
+                {
+                    let storage = self.state.storage();
+                    let stranded_so_far: u32 = storage
+                        .get::<u32>(TEST_STRAND_INJECTED_KEY)
+                        .await?
+                        .unwrap_or(0);
+                    if rule.applies(&record.state, stranded_so_far) {
+                        storage
+                            .put(TEST_STRAND_INJECTED_KEY, stranded_so_far + 1)
+                            .await?;
+                        storage.delete_alarm().await?;
+                        worker::console_log!(
+                            "job {} strand hook: turn stranded in {} ({} of {})",
+                            record.job_id,
+                            record.state,
+                            stranded_so_far + 1,
+                            rule.count
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         // Deadlines drive the normal cancellation path — except the ad
         // phase, whose transcript is already stitched and settled: a missed
         // deadline there finalizes with the timeout marker instead.
@@ -885,8 +989,29 @@ impl TranscriptionJob {
             job::STATE_EXACT_UPLOAD_REQUIRED | job::STATE_EXACT_UPLOADING => {
                 // Nothing to drive server-side: the app owns the upload. The
                 // alarm exists only so the state deadline fires.
-                if let Some(deadline) = record.state_deadline_at {
-                    self.schedule_at(deadline).await?;
+                match record.state_deadline_at {
+                    Some(deadline) => self.schedule_at(deadline).await?,
+                    // Unreachable by construction (both transitions stamp a
+                    // deadline), but a live record must never leave an alarm
+                    // turn with no alarm: stamp the state's own deadline from
+                    // config and arm it, so the job still expires normally
+                    // instead of spinning on a retry alarm.
+                    None => {
+                        let deadline = now_seconds()
+                            + if record.state == job::STATE_EXACT_UPLOADING {
+                                config.exact_uploading_deadline_seconds
+                            } else {
+                                config.exact_upload_required_deadline_seconds
+                            };
+                        if let LiveUpdate::Applied(_) = self
+                            .update_record_if_live(|record| {
+                                record.state_deadline_at = Some(deadline);
+                            })
+                            .await?
+                        {
+                            self.schedule_at(deadline).await?;
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -928,6 +1053,102 @@ impl TranscriptionJob {
                 Ok(())
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Stranded-job repair (2026-08-19). Invariant: every non-terminal,
+    /// non-cancelling record has an alarm armed (every transition site arms
+    /// one inside its storage-gated stretch — the RTW-4 rule); a terminal
+    /// record only while a credit release is pending (RTW-5). The one thing
+    /// that used to break it was a hard kill of the alarm handler — the
+    /// `probing` walk exceeding the CPU limit on a 164 MB source — which
+    /// never reaches `alarm()`'s catch, so the platform's six retries burned
+    /// out and the job sat live with no alarm, pinning the account's slot.
+    ///
+    /// Called from the two places that can see such a record: `/poll` and
+    /// the sweeper's `/nudge`. Stranded ⇔ no alarm is set ∧ no alarm turn is
+    /// in flight (the in-memory marker, ignored once older than the
+    /// platform's 15-minute alarm wall) ∧ this instance did not arm an alarm
+    /// within `STRAND_ARM_GRACE_MILLIS` (a due alarm is consumed before its
+    /// handler starts) ∧ the state is one the invariant covers. Then, alarm
+    /// first, counter second — every storage op, so the stretch stays
+    /// input-gated against `/cancel` and `/source`:
+    /// - parked, result, and pending-release records are only re-armed
+    ///   (`advance()` re-derives the deadline or retry idempotently; a lost
+    ///   TTL alarm must never destroy a settled, charged result);
+    /// - active work is re-armed once; the same state stranding again fails
+    ///   the job with the internal code (reservation and limiter released,
+    ///   prefixes deleted) so the app shows the failure card and on-device
+    ///   fallback instead of an endless retry storm.
+    ///
+    /// Returns the record the caller should report.
+    async fn repair_if_stranded(&self, record: JobRecord, config: &AppConfig) -> Result<JobRecord> {
+        let Some(repair) = job::strand_repair(&record.state, record.credit_release_pending) else {
+            return Ok(record);
+        };
+        if self.state.storage().get_alarm().await?.is_some() {
+            return Ok(record);
+        }
+        if let Some(started_at) = self.alarm_started_at.get() {
+            if now_seconds().saturating_sub(started_at) < ALARM_MARKER_STALE_SECONDS {
+                // A turn is running (its alarm was consumed at start); it
+                // will arm the next one itself.
+                return Ok(record);
+            }
+        }
+        if let Some(armed_at) = self.alarm_armed_at.get() {
+            if now_millis().saturating_sub(armed_at) < STRAND_ARM_GRACE_MILLIS {
+                // Armed moments ago: due and being dispatched, not stranded.
+                return Ok(record);
+            }
+        }
+        match repair {
+            job::StrandRepair::Rearm => {
+                self.schedule(Duration::from_secs(0)).await?;
+                worker::console_log!(
+                    "job {} stranded in {}; alarm re-armed",
+                    record.job_id,
+                    record.state
+                );
+                self.bump("stranded_job_rearmed", 1).await;
+                Ok(record)
+            }
+            job::StrandRepair::RearmOnceThenFail if record.stranded_repairs == 0 => {
+                // Alarm before the counter write: a reset between them leaves
+                // an armed job that merely gets a second free repair.
+                self.schedule(Duration::from_secs(0)).await?;
+                let record = match self
+                    .update_record_if_live(|record| {
+                        record.stranded_repairs += 1;
+                    })
+                    .await?
+                {
+                    LiveUpdate::Applied(record)
+                    | LiveUpdate::RefusedTerminal(record)
+                    | LiveUpdate::RefusedCancelling(record) => record,
+                    LiveUpdate::Missing => record,
+                };
+                worker::console_log!(
+                    "job {} stranded in {}; alarm re-armed (repair 1)",
+                    record.job_id,
+                    record.state
+                );
+                self.bump("stranded_job_rearmed", 1).await;
+                Ok(record)
+            }
+            job::StrandRepair::RearmOnceThenFail => {
+                worker::console_error!(
+                    "job {} stranded again in {} after {} repair(s); failing",
+                    record.job_id,
+                    record.state,
+                    record.stranded_repairs
+                );
+                let record = self
+                    .release_and_fail(record, config, types::ERROR_INTERNAL)
+                    .await?;
+                self.bump("stranded_job_failed", 1).await;
+                Ok(record)
+            }
         }
     }
 
@@ -2872,12 +3093,14 @@ impl TranscriptionJob {
         }
     }
 
+    /// Returns the terminal record `finish_terminal` settled on (the
+    /// stranded-job repair reports it from `/poll`); other callers ignore it.
     async fn release_and_fail(
         &self,
         record: JobRecord,
         config: &AppConfig,
         code: &'static str,
-    ) -> Result<()> {
+    ) -> Result<JobRecord> {
         // Best-effort here: finish_terminal owns the authoritative release
         // and its RTW-5 pending/retry backstop.
         if let Ok(credit) = self.credit(config) {
@@ -2887,8 +3110,7 @@ impl TranscriptionJob {
             self.bump("limiter_release_failed", 1).await;
         }
         self.finish_terminal(record, job::STATE_FAILED, code, None)
-            .await?;
-        Ok(())
+            .await
     }
 
     /// One credit-release attempt with the RTW-5 test hook: `rfail=N`
@@ -3900,7 +4122,27 @@ where
     }
 }
 
-fn internal_post(url: &str, body: String) -> Result<Request> {
+/// Guard for `TranscriptionJob::alarm_started_at`: set on construction,
+/// cleared on drop, so every exit from `alarm()` — return, `?`, or the
+/// future being dropped — leaves the marker clear.
+struct AlarmInFlight<'a> {
+    marker: &'a Cell<Option<i64>>,
+}
+
+impl<'a> AlarmInFlight<'a> {
+    fn arm(marker: &'a Cell<Option<i64>>) -> Self {
+        marker.set(Some(now_seconds()));
+        Self { marker }
+    }
+}
+
+impl Drop for AlarmInFlight<'_> {
+    fn drop(&mut self) {
+        self.marker.set(None);
+    }
+}
+
+pub(crate) fn internal_post(url: &str, body: String) -> Result<Request> {
     let headers = Headers::new();
     headers.set("content-type", JSON_CONTENT_TYPE)?;
     let mut init = RequestInit::new();
@@ -3931,6 +4173,10 @@ fn now_seconds() -> i64 {
     (Date::now().as_millis() / 1_000)
         .try_into()
         .unwrap_or(i64::MAX)
+}
+
+fn now_millis() -> i64 {
+    Date::now().as_millis().try_into().unwrap_or(i64::MAX)
 }
 
 // The usage limiter Durable Object lives here so both DO classes are wasm-only.

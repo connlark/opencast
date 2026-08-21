@@ -62,10 +62,12 @@ public final class AVFoundationPlaybackController {
     @ObservationIgnored private let voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics?
     @ObservationIgnored private let voiceBoostAudioTapFactory: VoiceBoostAudioTapFactory
     @ObservationIgnored private let audioSessionActivation: PlaybackAudioSessionActivation
+    @ObservationIgnored private let audioSessionDeactivation: PlaybackAudioSessionDeactivation
     @ObservationIgnored private var voiceBoostConfiguration = VoiceBoostConfiguration.default
     @ObservationIgnored var isAudioSessionActive = false
     @ObservationIgnored private var audioSessionActivationTask: Task<Void, Never>?
     @ObservationIgnored private var audioSessionActivationGeneration = 0
+    @ObservationIgnored private var audioSessionDeactivationTask: Task<Void, Never>?
     @ObservationIgnored private var isPlaybackRequested = false
     @ObservationIgnored private var shouldResumeAfterInterruption = false
     @ObservationIgnored private var sleepTimerTask: Task<Void, Never>?
@@ -103,6 +105,9 @@ public final class AVFoundationPlaybackController {
         audioSessionActivation: @escaping PlaybackAudioSessionActivation = {
             try await activateSystemPlaybackAudioSession()
         },
+        audioSessionDeactivation: @escaping PlaybackAudioSessionDeactivation = {
+            try await deactivateSystemPlaybackAudioSession()
+        },
         voiceBoostAudioTapFactory: @escaping VoiceBoostAudioTapFactory = {
             try VoiceBoostAudioTap(configuration: $0, diagnostics: $1)
         }
@@ -113,6 +118,7 @@ public final class AVFoundationPlaybackController {
         self.voiceBoostTapDiagnostics = voiceBoostTapDiagnostics
         self.voiceBoostAudioTapFactory = voiceBoostAudioTapFactory
         self.audioSessionActivation = audioSessionActivation
+        self.audioSessionDeactivation = audioSessionDeactivation
         observePlayerTimeControlStatus()
         installAudioSessionObservers()
         installRemoteCommands()
@@ -1808,11 +1814,15 @@ public final class AVFoundationPlaybackController {
         audioSessionActivationGeneration += 1
         let generation = audioSessionActivationGeneration
         let activation = audioSessionActivation
+        let pendingDeactivation = audioSessionDeactivationTask
         snapshot.state = .loading
         publishPlaybackState()
 
         audioSessionActivationTask = Task { [weak self] in
             do {
+                // A release still in flight from the previous unload has to reach
+                // the media server before this activation does.
+                await pendingDeactivation?.value
                 let didRetry = try await activation()
                 self?.completeAudioSessionActivation(
                     generation: generation,
@@ -1879,19 +1889,20 @@ public final class AVFoundationPlaybackController {
     }
 
     private func deactivateAudioSession() {
-        #if os(iOS) || os(tvOS) || os(visionOS)
         guard isAudioSessionActive else {
             return
         }
 
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            isAudioSessionActive = false
-        } catch {
-            Self.logger.debug(
-                "Audio session deactivation failed: \(error.localizedDescription, privacy: .public)"
-            )
+        isAudioSessionActive = false
+        let deactivation = audioSessionDeactivation
+        audioSessionDeactivationTask = Task {
+            do {
+                try await deactivation()
+            } catch {
+                Self.logger.debug(
+                    "Audio session deactivation failed: \(error.localizedDescription, privacy: .public)"
+                )
+            }
         }
-        #endif
     }
 }

@@ -1084,6 +1084,7 @@ struct OpenCastModelTests {
         appModel.isNowPlayingPresented = true
 
         #expect(appModel.dismissCurrentPlayback(modelContext: context))
+        await appModel.deferredPlaybackTeardownTask?.value
 
         let progress = try #require(appModel.library.progressRecords.first { $0.episodeID == episodeID })
         let lastEpisodePreferences = try context.fetch(FetchDescriptor<LocalPreferenceRecord>(

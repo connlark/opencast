@@ -112,6 +112,9 @@ final class OpenCastAppModel {
     // cached record makes the unchanged-episode tick a pure no-op instead of
     // a refetch plus a guaranteed dirty save.
     @ObservationIgnored private var lastPlaybackEpisodeRecordCache: LocalPreferenceRecord?
+    /// Pending restore-key clear and played-download sweep from the last
+    /// playback teardown; tests await it before inspecting the store.
+    @ObservationIgnored private(set) var deferredPlaybackTeardownTask: Task<Void, Never>?
     @ObservationIgnored private var skipZoneRefreshTask: Task<Void, Never>?
     /// Which episode the installed zone tiers describe, so a slow document
     /// load can never install zones for a switched-away episode.
@@ -575,8 +578,32 @@ final class OpenCastAppModel {
             dismissNowPlayingAndDiscardFinishedPlayback()
         }
 
+        unloadPlaybackDeferringBookkeeping(modelContext: modelContext)
+    }
+
+    /// Unloads synchronously so the frame that follows already shows the
+    /// post-playback state, then clears the restore key and sweeps played
+    /// downloads one main-actor turn later: neither needs to land in that
+    /// frame, and neither may be lost on process death, so they stay on the
+    /// main actor instead of a background queue.
+    private func unloadPlaybackDeferringBookkeeping(modelContext: ModelContext) {
         playback.unload()
-        clearLastPlaybackEpisode(modelContext: modelContext)
+        guard deferredPlaybackTeardownTask == nil else {
+            return
+        }
+
+        deferredPlaybackTeardownTask = Task { [weak self] in
+            self?.finishDeferredPlaybackTeardown(modelContext: modelContext)
+        }
+    }
+
+    private func finishDeferredPlaybackTeardown(modelContext: ModelContext) {
+        deferredPlaybackTeardownTask = nil
+        // Replay or a restore may have started a new episode in the meantime;
+        // its restore key must survive.
+        if playback.currentEpisode == nil {
+            clearLastPlaybackEpisode(modelContext: modelContext)
+        }
         sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
     }
 
@@ -1524,9 +1551,7 @@ final class OpenCastAppModel {
         let hadCurrentEpisode = playback.currentEpisode != nil
         flushPlaybackProgress(modelContext: modelContext)
         dismissNowPlayingAndDiscardFinishedPlayback()
-        playback.unload()
-        clearLastPlaybackEpisode(modelContext: modelContext)
-        sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
+        unloadPlaybackDeferringBookkeeping(modelContext: modelContext)
         return hadCurrentEpisode
     }
 

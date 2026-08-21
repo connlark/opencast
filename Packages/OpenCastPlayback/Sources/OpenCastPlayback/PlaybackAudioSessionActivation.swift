@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 
 typealias PlaybackAudioSessionActivation = @Sendable () async throws -> Bool
+typealias PlaybackAudioSessionDeactivation = @Sendable () async throws -> Void
 
 @concurrent
 func activateSystemPlaybackAudioSession() async throws -> Bool {
@@ -27,6 +28,15 @@ func activateSystemPlaybackAudioSession() async throws -> Bool {
     }
     #else
     return false
+    #endif
+}
+
+/// Deactivation is a synchronous XPC round trip to the media server (~15 ms
+/// on an M3 iPad), so it runs off the main actor like activation does.
+@concurrent
+func deactivateSystemPlaybackAudioSession() async throws {
+    #if os(iOS) || os(tvOS) || os(visionOS)
+    try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     #endif
 }
 

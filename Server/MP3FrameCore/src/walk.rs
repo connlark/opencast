@@ -1,11 +1,19 @@
 //! Streaming MP3 frame walker.
 //!
 //! The caller feeds the object's bytes in order, in whatever range sizes it
-//! likes; the walker holds only a partial-frame carry plus one open chunk
-//! record per overlapping window, so peak memory is independent of source
-//! length. Frame *payloads* are streamed into each open window's SHA-256 and
-//! then dropped — never retained beyond the planner's single candidate-frame
-//! carry — and the copy pass re-reads the planned spans.
+//! likes; between feeds the walker holds only a partial-frame carry plus one
+//! open chunk record per overlapping window, so peak memory tracks the
+//! caller's range size, never the source length. Frame *payloads* are
+//! streamed into each open window's SHA-256 and then dropped — never retained
+//! beyond the planner's single candidate-frame carry — and the copy pass
+//! re-reads the planned spans.
+//!
+//! Consumed bytes are trimmed from the front of the buffer once per feed (and
+//! once per phase step), not once per frame: `Vec::drain` moves the whole
+//! remaining tail, so a per-frame trim made the walk quadratic in the range
+//! size — 8 MiB ranges cost ~35× more CPU than 8 KiB ranges for identical
+//! output. Every read is offset-based (`cursor - buf_start`), so nothing
+//! depends on the buffer starting at the cursor.
 //!
 //! Ordering mirrors `mp3_read_header` in the pinned `libavformat/mp3dec.c`:
 //! skip consecutive leading ID3v2 tags, inspect the first frame for
@@ -143,6 +151,9 @@ pub struct Mp3Walker {
     resync_events: u32,
     junk_bytes: u64,
     truncated_tail_bytes: u64,
+    /// Bytes `trim` has memmoved so far: the deterministic cost counter that
+    /// pins the once-per-feed trim discipline (test/telemetry only).
+    trim_bytes_moved: u64,
 
     planner: Option<Planner>,
 }
@@ -171,6 +182,7 @@ impl Mp3Walker {
             resync_events: 0,
             junk_bytes: 0,
             truncated_tail_bytes: 0,
+            trim_bytes_moved: 0,
             planner: None,
         }
     }
@@ -179,6 +191,13 @@ impl Mp3Walker {
     /// tracks range size rather than source length.
     pub fn buffered_bytes(&self) -> usize {
         self.buf.len()
+    }
+
+    /// Total bytes `trim` has moved to the front of the buffer. Linear in
+    /// the number of feeds (a carry per feed), never in the number of frames;
+    /// the walker tests pin that bound.
+    pub fn trim_bytes_moved(&self) -> u64 {
+        self.trim_bytes_moved
     }
 
     /// Feeds the next sequential slice of the object, starting at byte 0.
@@ -307,16 +326,29 @@ impl Mp3Walker {
         Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
+    /// Drops the consumed prefix. `Vec::drain` memmoves the remaining tail,
+    /// so this must run once per feed/step — never per frame (see the
+    /// module docs).
     fn trim(&mut self) {
         if self.buf.is_empty() || self.cursor <= self.buf_start {
             return;
         }
         let drop = (self.cursor - self.buf_start).min(self.buf.len() as u64) as usize;
+        self.trim_bytes_moved += (self.buf.len() - drop) as u64;
         self.buf.drain(..drop);
         self.buf_start += drop as u64;
     }
 
+    /// Runs every step the buffered bytes allow, then trims once so the
+    /// buffer between feeds is only the carry (`buffered_bytes` telemetry
+    /// and the peak-buffer bound depend on that).
     fn pump(&mut self, eof: bool) -> Result<(), Mp3Error> {
+        let outcome = self.pump_inner(eof);
+        self.trim();
+        outcome
+    }
+
+    fn pump_inner(&mut self, eof: bool) -> Result<(), Mp3Error> {
         loop {
             self.trim();
             let progressed = match self.phase {
@@ -517,7 +549,6 @@ impl Mp3Walker {
                     }
                 }
             }
-            self.trim();
         }
     }
 

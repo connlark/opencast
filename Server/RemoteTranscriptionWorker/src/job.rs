@@ -159,6 +159,53 @@ pub fn transition_refusal(state: &str) -> Option<TransitionRefusal> {
     }
 }
 
+/// What the stranded-job repair (2026-08-19) may do to a record that has no
+/// alarm armed. The invariant it enforces: every non-terminal, non-cancelling
+/// record has an alarm; a terminal record only when a credit release is still
+/// pending (RTW-5). The Durable Object decides *whether* the record is
+/// stranded (`get_alarm` plus its in-flight marker); this decides *what* the
+/// repair may do, per state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrandRepair {
+    /// Re-arm a zero-delay alarm and let `advance()` re-derive the deadline
+    /// or retry idempotently. Never fails the job: parked states hold nothing
+    /// that a fail would clean up, and the two result states plus
+    /// `detecting_ads` hold a settled, charged result that a lost TTL alarm
+    /// must not destroy.
+    Rearm,
+    /// Active work whose alarm turn died: re-arm once, and if the same state
+    /// strands again fail cleanly with the internal code (reservation and
+    /// limiter released, prefixes deleted) so the app shows the failure card
+    /// and on-device fallback instead of an endless retry storm.
+    RearmOnceThenFail,
+}
+
+/// Classifies `state` for the stranded-job repair; `None` means the record is
+/// allowed to sit with no alarm (a settled terminal record, or a cancel whose
+/// inline `finish_terminal` — retried by the client — owns the record).
+pub fn strand_repair(state: &str, credit_release_pending: bool) -> Option<StrandRepair> {
+    match state {
+        STATE_ACKNOWLEDGED | STATE_CANCELLED | STATE_FAILED => {
+            credit_release_pending.then_some(StrandRepair::Rearm)
+        }
+        STATE_CANCELLING => None,
+        STATE_WAITING_FOR_DEVICE_SOURCE
+        | STATE_EXACT_UPLOAD_REQUIRED
+        | STATE_EXACT_UPLOADING
+        | STATE_AWAITING_CREDITS
+        | STATE_DETECTING_ADS
+        | STATE_RESULT_READY
+        | STATE_DELIVERED => Some(StrandRepair::Rearm),
+        STATE_CREATED | STATE_STAGING_ORIGIN | STATE_SOURCE_MATCHED | STATE_PROBING
+        | STATE_RESERVED | STATE_CHUNKING | STATE_TRANSCRIBING | STATE_STITCHING => {
+            Some(StrandRepair::RearmOnceThenFail)
+        }
+        // Unknown state strings never reach a persisted record; refusing to
+        // repair is the conservative choice.
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChunkRef {
     pub index: u32,
@@ -416,6 +463,13 @@ pub struct JobRecord {
     pub credit_release_pending: bool,
     #[serde(default)]
     pub credit_release_attempts: u32,
+    /// Stranded-job repairs applied in the current state (2026-08-19): a live
+    /// active-work record found with no alarm is re-armed once; a second
+    /// strand in the same state fails the job. Reset to 0 on every state
+    /// transition, so progress earns a fresh repair. Additive
+    /// `#[serde(default)]`: old records decode with 0.
+    #[serde(default)]
+    pub stranded_repairs: u32,
     /// Create-time policy rejection of the enclosure URL (http, userinfo,
     /// IP-literal, unusual port, forbidden host): the server never fetches;
     /// the job goes straight to the exact-device upload path (pass 2
@@ -508,6 +562,7 @@ impl JobRecord {
             cleanup_complete: false,
             credit_release_pending: false,
             credit_release_attempts: 0,
+            stranded_repairs: 0,
             origin_unsafe: false,
             upload_id: None,
             upload_part_size_bytes: None,
@@ -1230,6 +1285,65 @@ mod tests {
         // backstop off.
         assert!(!decoded.credit_release_pending);
         assert_eq!(decoded.credit_release_attempts, 0);
+        // Stranded-job repair counter is additive too.
+        assert_eq!(decoded.stranded_repairs, 0);
+    }
+
+    #[test]
+    fn stranded_repairs_roundtrips() {
+        let mut record = JobRecord::created(
+            "job-strand".into(),
+            "acct-1".into(),
+            "ep-1".into(),
+            None,
+            None,
+            None,
+            None,
+            1,
+        );
+        record.state = STATE_PROBING.to_string();
+        record.stranded_repairs = 1;
+        let json = serde_json::to_string(&record).expect("serialize");
+        assert!(json.contains("\"stranded_repairs\":1"));
+        let decoded: JobRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded.stranded_repairs, 1);
+    }
+
+    /// Every declared state gets an explicit repair decision, and the two
+    /// settled-result states can never be failed by the repair.
+    #[test]
+    fn strand_repair_classifies_every_state() {
+        for state in ALL_STATES {
+            let repair = strand_repair(state, false);
+            let expected = match state {
+                STATE_ACKNOWLEDGED | STATE_CANCELLED | STATE_FAILED | STATE_CANCELLING => None,
+                STATE_WAITING_FOR_DEVICE_SOURCE
+                | STATE_EXACT_UPLOAD_REQUIRED
+                | STATE_EXACT_UPLOADING
+                | STATE_AWAITING_CREDITS
+                | STATE_DETECTING_ADS
+                | STATE_RESULT_READY
+                | STATE_DELIVERED => Some(StrandRepair::Rearm),
+                _ => Some(StrandRepair::RearmOnceThenFail),
+            };
+            assert_eq!(repair, expected, "state {state}");
+        }
+        // A terminal record with a pending credit release lost RTW-5's own
+        // retry alarm: re-arm it, never anything else.
+        for state in [STATE_ACKNOWLEDGED, STATE_CANCELLED, STATE_FAILED] {
+            assert_eq!(strand_repair(state, true), Some(StrandRepair::Rearm));
+        }
+        // A cancel owns its record even with a release pending.
+        assert_eq!(strand_repair(STATE_CANCELLING, true), None);
+        assert_eq!(strand_repair("not_a_state", true), None);
+        // The states that carry a settled, charged result are re-arm only.
+        for state in [STATE_DETECTING_ADS, STATE_RESULT_READY, STATE_DELIVERED] {
+            assert_ne!(
+                strand_repair(state, false),
+                Some(StrandRepair::RearmOnceThenFail),
+                "{state} holds a settled result and must never be failed by the repair"
+            );
+        }
     }
 
     #[test]

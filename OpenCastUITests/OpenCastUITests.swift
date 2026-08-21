@@ -447,8 +447,20 @@ final class OpenCastUITests: XCTestCase {
             openSettings(in: app)
             scrollUntilExists(app.staticTexts["Transcription"], in: app)
             assertExists(app.staticTexts["Transcription"], named: "Whisper transcription settings section")
-            XCTAssertTrue(
-                app.buttons["Install Fast Model"].exists || app.buttons["Check Model"].exists,
+            let modelManagementAvailable = NSPredicate { object, _ in
+                guard let app = object as? XCUIApplication else {
+                    return false
+                }
+                return app.buttons["Install Fast Model"].exists
+                    || app.buttons["Check Model"].exists
+            }
+            let modelManagementExpectation = XCTNSPredicateExpectation(
+                predicate: modelManagementAvailable,
+                object: app
+            )
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [modelManagementExpectation], timeout: 10),
+                .completed,
                 "Expected main Settings to expose Whisper model management."
             )
             XCTAssertFalse(app.buttons["Check Speech Assets"].exists)
@@ -4996,6 +5008,11 @@ final class OpenCastUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) -> XCUIElement {
+        let searchField = app.searchFields.firstMatch
+        if app.navigationBars["Search"].exists, searchField.exists {
+            return searchField
+        }
+
         openSection("Search", in: app, file: file, line: line)
         return presentedSearchField(
             in: app,
