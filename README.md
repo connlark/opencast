@@ -4,7 +4,7 @@
 
 # a libre podcast client, built natively in swift
 
-**opencast** is a native, open-source podcast app for iPhone and iPad. subscribe directly to any feed, keep your listening private, and skip the parts you don't want (_without_ an account or recommendation algorithm).
+**opencast** is a native, open source podcast app for iPhone and iPad. subscribe directly to any feed, keep your listening private, and skip the parts you don't want (_without_ an account or recommendation algorithm).
 
 no ads. no tracking. no analytics SDKs. **ever**.
 
