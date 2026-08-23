@@ -5522,6 +5522,16 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"opencast-podcast-directory-worker@workspace:Server/PodcastDirectoryWorker":
+  version: 0.0.0-use.local
+  resolution: "opencast-podcast-directory-worker@workspace:Server/PodcastDirectoryWorker"
+  dependencies:
+    "@cloudflare/vitest-pool-workers": "catalog:"
+    vitest: "catalog:"
+    wrangler: "catalog:"
+  languageName: unknown
+  linkType: soft
+
 "opencast-purchase-worker@workspace:Server/PurchaseWorker":
   version: 0.0.0-use.local
   resolution: "opencast-purchase-worker@workspace:Server/PurchaseWorker"

@@ -4,7 +4,8 @@ import SwiftUI
 struct SearchDiscoverResultsSection: View {
     @Bindable var searchStore: PodcastSearchStore
     let activePodcastIDs: Set<String>
-    let subscribingFeedURLString: String?
+    let subscribingResultID: String?
+    let isSubscriptionInProgress: Bool
     let onSubscribe: (DirectoryPodcastResult) -> Void
     let onOpenPodcast: (String) -> Void
 
@@ -34,7 +35,7 @@ struct SearchDiscoverResultsSection: View {
                 )
             }
         case .results(let results):
-            Section("Results") {
+            Section {
                 ForEach(results) { result in
                     Button {
                         select(result)
@@ -42,54 +43,49 @@ struct SearchDiscoverResultsSection: View {
                         PodcastSearchResultRow(
                             result: result,
                             isSubscribed: isSubscribed(result),
-                            isSubscribing: isSubscribing(result)
+                            isSubscribing: result.id == subscribingResultID
                         )
                     }
                     .buttonStyle(.plain)
                     .disabled(isSelectionDisabled(result))
                     .accessibilityHint(accessibilityHint(result))
                 }
+            } header: {
+                Text("Results")
+            } footer: {
+                PodcastIndexAttributionFooter(results: results)
             }
         }
     }
 
-    private var isSubscriptionInProgress: Bool {
-        subscribingFeedURLString != nil
-    }
-
     private func select(_ result: DirectoryPodcastResult) {
-        guard let feedURLString = result.feedURLString else {
+        // The active subscription may live under any candidate URL of a
+        // merged result, not just the display feed URL.
+        if let subscribedPodcastID = subscribedPodcastID(result) {
+            onOpenPodcast(subscribedPodcastID)
+            return
+        }
+        guard result.canResolveFeed else {
             return
         }
 
-        if isSubscribed(result) {
-            onOpenPodcast(URLCanonicalizer.canonicalString(forRawString: feedURLString))
-        } else {
-            onSubscribe(result)
-        }
+        onSubscribe(result)
+    }
+
+    private func subscribedPodcastID(_ result: DirectoryPodcastResult) -> String? {
+        result.candidateCanonicalFeedURLStrings.first(where: activePodcastIDs.contains)
     }
 
     private func isSubscribed(_ result: DirectoryPodcastResult) -> Bool {
         result.isSubscribed(activePodcastIDs: activePodcastIDs)
     }
 
-    private func isSubscribing(_ result: DirectoryPodcastResult) -> Bool {
-        guard let feedURLString = result.feedURLString,
-              let subscribingFeedURLString
-        else {
-            return false
-        }
-
-        return URLCanonicalizer.canonicalString(forRawString: feedURLString)
-            == URLCanonicalizer.canonicalString(forRawString: subscribingFeedURLString)
-    }
-
     private func isSelectionDisabled(_ result: DirectoryPodcastResult) -> Bool {
-        isSubscriptionInProgress || result.feedURLString == nil
+        isSubscriptionInProgress || !result.canResolveFeed
     }
 
     private func accessibilityHint(_ result: DirectoryPodcastResult) -> String {
-        if result.feedURLString == nil {
+        if !result.canResolveFeed {
             return "This podcast cannot be opened because the directory did not provide an RSS feed."
         }
 

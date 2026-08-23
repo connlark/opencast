@@ -2,6 +2,15 @@ import Foundation
 
 public protocol PodcastDirectoryService: Sendable {
     func search(query: String) async throws -> [DirectoryPodcastResult]
+    /// Selection-time enrichment for a known Apple collection ID.
+    /// Directories without that capability use the no-result default.
+    func lookup(appleID: Int) async throws -> DirectoryPodcastResult?
+}
+
+public extension PodcastDirectoryService {
+    func lookup(appleID: Int) async throws -> DirectoryPodcastResult? {
+        nil
+    }
 }
 
 public struct ITunesPodcastDirectoryService: PodcastDirectoryService {

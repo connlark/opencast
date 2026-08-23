@@ -3,7 +3,8 @@ import SwiftUI
 
 struct PodcastSearchView: View {
     @Bindable var store: PodcastSearchStore
-    let subscribingFeedURLString: String?
+    let isSubscriptionInProgress: Bool
+    let subscribingResultID: String?
     let onSubscribe: (DirectoryPodcastResult) -> Void
 
     @FocusState private var isSearchFocused: Bool
@@ -44,30 +45,30 @@ struct PodcastSearchView: View {
                     )
                 }
             case .results(let results):
-                Section("Results") {
+                Section {
                     ForEach(results) { result in
                         Button {
                             subscribe(to: result)
                         } label: {
                             PodcastSearchResultRow(
                                 result: result,
-                                isSubscribing: isSubscribingResult(result)
+                                isSubscribing: result.id == subscribingResultID
                             )
                         }
                         .buttonStyle(.plain)
-                        .disabled(isSubscribing || result.feedURLString == nil)
+                        .disabled(isSubscriptionInProgress || !result.canResolveFeed)
                         .accessibilityHint(accessibilityHint(for: result))
                     }
+                } header: {
+                    Text("Results")
+                } footer: {
+                    PodcastIndexAttributionFooter(results: results)
                 }
             }
         }
         .onDisappear {
             store.cancelSearch()
         }
-    }
-
-    private var isSubscribing: Bool {
-        subscribingFeedURLString != nil
     }
 
     private func hideKeyboard() {
@@ -79,16 +80,8 @@ struct PodcastSearchView: View {
         onSubscribe(result)
     }
 
-    private func isSubscribingResult(_ result: DirectoryPodcastResult) -> Bool {
-        guard let feedURLString = result.feedURLString else {
-            return false
-        }
-
-        return feedURLString == subscribingFeedURLString
-    }
-
     private func accessibilityHint(for result: DirectoryPodcastResult) -> String {
-        if result.feedURLString == nil {
+        if !result.canResolveFeed {
             return "This podcast cannot be subscribed because the directory did not provide an RSS feed."
         }
 

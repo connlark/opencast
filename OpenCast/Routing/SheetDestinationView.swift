@@ -9,7 +9,10 @@ struct SheetDestinationView: View {
     var body: some View {
         switch destination {
         case .addPodcast:
-            AddPodcastView(directoryService: appModel.podcastDirectoryService)
+            AddPodcastView(
+                directoryService: appModel.podcastDirectoryService,
+                directoryResolver: appModel.podcastDirectoryResolver
+            )
         case .episodeInfo(let episodeID):
             EpisodeInfoSheet(episodeID: episodeID)
         case .importOPMLFile(let url):
@@ -19,6 +22,7 @@ struct SheetDestinationView: View {
         case .onboarding:
             OnboardingView(
                 directoryService: appModel.podcastDirectoryService,
+                directoryResolver: appModel.podcastDirectoryResolver,
                 onCompleted: onDismiss
             )
         case .podcastPlaybackSettings(let feedURL):

@@ -5,7 +5,8 @@ struct OnboardingPodcastSearchSection: View {
     @Bindable var store: PodcastSearchStore
     let focusedField: FocusState<OnboardingFocusedField?>.Binding
     let activePodcastIDs: Set<String>
-    let subscribingFeedURLString: String?
+    let isSubscribing: Bool
+    let subscribingResultID: String?
     let onSubscribe: (DirectoryPodcastResult) -> Void
 
     var body: some View {
@@ -77,7 +78,7 @@ struct OnboardingPodcastSearchSection: View {
                         PodcastSearchResultRow(
                             result: result,
                             isSubscribed: isSubscribed(result),
-                            isSubscribing: isSubscribingResult(result)
+                            isSubscribing: result.id == subscribingResultID
                         )
                     }
                     .buttonStyle(.plain)
@@ -89,12 +90,11 @@ struct OnboardingPodcastSearchSection: View {
                             .padding(.leading, 64)
                     }
                 }
+
+                PodcastIndexAttributionFooter(results: results)
+                    .padding(.top, 8)
             }
         }
-    }
-
-    private var isSubscribing: Bool {
-        subscribingFeedURLString != nil
     }
 
     private func hideKeyboard() {
@@ -106,24 +106,16 @@ struct OnboardingPodcastSearchSection: View {
         onSubscribe(result)
     }
 
-    private func isSubscribingResult(_ result: DirectoryPodcastResult) -> Bool {
-        guard let feedURLString = result.feedURLString else {
-            return false
-        }
-
-        return feedURLString == subscribingFeedURLString
-    }
-
     private func isSubscribed(_ result: DirectoryPodcastResult) -> Bool {
         result.isSubscribed(activePodcastIDs: activePodcastIDs)
     }
 
     private func isSubscribeDisabled(for result: DirectoryPodcastResult) -> Bool {
-        isSubscribing || result.feedURLString == nil || isSubscribed(result)
+        isSubscribing || !result.canResolveFeed || isSubscribed(result)
     }
 
     private func accessibilityHint(for result: DirectoryPodcastResult) -> String {
-        if result.feedURLString == nil {
+        if !result.canResolveFeed {
             return "This podcast cannot be subscribed because the directory did not provide an RSS feed."
         }
 

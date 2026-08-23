@@ -75,7 +75,6 @@ final class OpenCastAppRuntime {
                     cacheDirectory: cacheController.httpCacheDirectory
                 )
             )
-            let podcastDirectoryService = ITunesPodcastDirectoryService(httpClient: httpClient)
             let playback = AVFoundationPlaybackController(
                 voiceBoostTapDiagnostics: voiceBoostDiagnostics,
                 nowPlayingArtworkLoader: SharedNowPlayingArtworkLoader()
@@ -112,7 +111,6 @@ final class OpenCastAppRuntime {
                 voiceBoostDiagnostics: voiceBoostDiagnostics,
                 exposesVoiceBoostDiagnosticsStatus: launchConfiguration.exposesVoiceBoostDiagnosticsStatus,
                 runsVoiceBoostDeviceProbe: launchConfiguration.runsVoiceBoostDeviceProbe,
-                podcastDirectoryService: podcastDirectoryService,
                 syncStatus: syncStatus,
                 allowsAutomaticFeedRefresh: !launchConfiguration.usesInMemoryStore,
                 adFreePassPresentationOverride: launchConfiguration.adFreePassPresentationOverride

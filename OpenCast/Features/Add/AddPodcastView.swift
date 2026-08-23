@@ -10,6 +10,7 @@ struct AddPodcastView: View {
     @State private var feedURLString: String
     @State private var selectedMode = AddPodcastMode.rss
     @State private var searchStore: PodcastSearchStore
+    @State private var subscriptionFlow: DirectorySubscriptionFlowStore
     @State private var subscriptionErrorMessage: String?
     @State private var subscribingFeedURLString: String?
     @State private var clipboardErrorMessage: String?
@@ -17,10 +18,17 @@ struct AddPodcastView: View {
 
     init(
         initialFeedURL: String = OpenCastConstants.addPodcastInitialFeedURL,
-        directoryService: any PodcastDirectoryService = ITunesPodcastDirectoryService()
+        directoryService: any PodcastDirectoryService = ITunesPodcastDirectoryService(),
+        directoryResolver: DirectoryFeedCandidateResolver = DirectoryFeedCandidateResolver()
     ) {
         _feedURLString = State(initialValue: initialFeedURL)
         _searchStore = State(initialValue: PodcastSearchStore(directoryService: directoryService))
+        _subscriptionFlow = State(
+            initialValue: DirectorySubscriptionFlowStore(
+                directoryService: directoryService,
+                resolver: directoryResolver
+            )
+        )
     }
 
     var body: some View {
@@ -44,13 +52,14 @@ struct AddPodcastView: View {
 
                         PodcastSearchView(
                             store: searchStore,
-                            subscribingFeedURLString: subscribingFeedURLString,
+                            isSubscriptionInProgress: isSubscribing,
+                            subscribingResultID: subscriptionFlow.subscribingResultID,
                             onSubscribe: subscribeToSearchResult
                         )
 
-                        if let subscriptionErrorMessage {
+                        if let searchErrorMessage {
                             Section {
-                                Label(subscriptionErrorMessage, systemImage: "exclamationmark.triangle")
+                                Label(searchErrorMessage, systemImage: "exclamationmark.triangle")
                                     .foregroundStyle(.red)
                             }
                         }
@@ -81,7 +90,24 @@ struct AddPodcastView: View {
         .task {
             requestClipboardURLOnOpen()
         }
-        .onDisappear(perform: searchStore.cancelSearch)
+        .sheet(item: Bindable(subscriptionFlow).pendingChoice) { pending in
+            DirectoryFeedChoiceView(
+                pending: pending,
+                onSelect: { candidate in
+                    subscribeToChoice(candidate, pending: pending)
+                },
+                onCancel: subscriptionFlow.dismissChoice
+            )
+        }
+        .onDisappear(perform: handleDisappear)
+    }
+
+    private func handleDisappear() {
+        searchStore.cancelSearch()
+        subscriptionFlow.presenterDidDisappear(
+            library: appModel.library,
+            modelContext: modelContext
+        )
     }
 
     private var canSubscribeToRawFeed: Bool {
@@ -89,7 +115,11 @@ struct AddPodcastView: View {
     }
 
     private var isSubscribing: Bool {
-        subscribingFeedURLString != nil
+        subscribingFeedURLString != nil || subscriptionFlow.isSubscribing
+    }
+
+    private var searchErrorMessage: String? {
+        subscriptionErrorMessage ?? subscriptionFlow.errorMessage
     }
 
     private var hasFeedURLText: Bool {
@@ -144,11 +174,31 @@ struct AddPodcastView: View {
     }
 
     private func subscribeToSearchResult(_ result: DirectoryPodcastResult) {
-        guard let feedURLString = result.feedURLString else {
+        guard !isSubscribing else {
             return
         }
 
-        startSubscription(to: feedURLString)
+        subscriptionErrorMessage = nil
+        clipboardErrorMessage = nil
+        subscriptionFlow.subscribe(
+            to: result,
+            library: appModel.library,
+            modelContext: modelContext,
+            onSubscribed: { dismiss() }
+        )
+    }
+
+    private func subscribeToChoice(
+        _ candidate: ResolvedFeedCandidate,
+        pending: DirectorySubscriptionFlowStore.PendingChoice
+    ) {
+        subscriptionFlow.subscribe(
+            candidate: candidate,
+            for: pending,
+            library: appModel.library,
+            modelContext: modelContext,
+            onSubscribed: { dismiss() }
+        )
     }
 
     private func startSubscription(to feedURLString: String) {
@@ -160,6 +210,7 @@ struct AddPodcastView: View {
 
     private func subscribe(to feedURLString: String) async {
         subscriptionErrorMessage = nil
+        subscriptionFlow.clearError()
         clipboardErrorMessage = nil
         subscribingFeedURLString = feedURLString
         defer {

@@ -2,7 +2,7 @@ import Foundation
 @testable import OpenCast
 
 @MainActor
-final class PlaybackVoiceBoostControllerSpy: PlaybackSettingsControlling {
+final class PlaybackVoiceBoostControllerSpy: @MainActor PlaybackSettingsControlling {
     private(set) var rate: Float = 1
     private(set) var appliedRates: [Float] = []
     private(set) var appliedValues: [Bool] = []

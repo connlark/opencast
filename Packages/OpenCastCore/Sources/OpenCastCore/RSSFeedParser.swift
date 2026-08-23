@@ -124,7 +124,8 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             summary: channel.summary.nilIfBlank,
             websiteURL: channel.websiteURL,
             artworkURL: channel.artworkURL,
-            languageCode: RSSLanguageNormalizer.normalized(channel.language)
+            languageCode: RSSLanguageNormalizer.normalized(channel.language),
+            podcastGUID: channel.podcastGUID.nilIfBlank
         )
 
         var episodes: [Episode] = []
@@ -370,6 +371,8 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             channel.author = RSSTextEntityDecoder.decoded(value)
         case "itunes:new-feed-url":
             channel.newFeedURL = URL(string: value)
+        case "podcast:guid":
+            channel.podcastGUID = value
         case "language":
             channel.language = value
         case "url" where elementStack.contains("image"):
@@ -437,6 +440,7 @@ private struct ChannelAccumulator {
     var artworkURL: URL?
     var language: String?
     var newFeedURL: URL?
+    var podcastGUID: String?
 }
 
 private struct ItemAccumulator {

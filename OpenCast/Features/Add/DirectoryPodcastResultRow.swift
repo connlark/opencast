@@ -29,7 +29,13 @@ struct DirectoryPodcastResultRow<TrailingContent: View>: View {
                         .lineLimit(1)
                 }
 
-                PodcastFeedAvailabilityLabel(hasFeedURL: result.feedURLString != nil)
+                PodcastFeedAvailabilityLabel(canResolveFeed: result.canResolveFeed)
+
+                if let provenanceLabel {
+                    Text(provenanceLabel)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             Spacer(minLength: 8)
@@ -39,5 +45,14 @@ struct DirectoryPodcastResultRow<TrailingContent: View>: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
+    }
+
+    /// Provenance only when Podcast Index contributed; Apple-only rows
+    /// keep the unadorned look.
+    private var provenanceLabel: String? {
+        guard result.sources.contains(.podcastIndex) else {
+            return nil
+        }
+        return result.sources.contains(.apple) ? "Apple & Podcast Index" : "Podcast Index"
     }
 }

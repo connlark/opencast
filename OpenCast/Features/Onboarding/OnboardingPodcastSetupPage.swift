@@ -9,7 +9,8 @@ struct OnboardingPodcastSetupPage: View {
     let focusedField: FocusState<OnboardingFocusedField?>.Binding
     let subscriptions: [SubscriptionRecord]
     let activePodcastIDs: Set<String>
-    let subscribingFeedURLString: String?
+    let isSubscribing: Bool
+    let subscribingResultID: String?
     let subscriptionErrorMessage: String?
     let clipboardErrorMessage: String?
     let canSubscribeToRawFeed: Bool
@@ -52,7 +53,8 @@ struct OnboardingPodcastSetupPage: View {
                                 store: searchStore,
                                 focusedField: focusedField,
                                 activePodcastIDs: activePodcastIDs,
-                                subscribingFeedURLString: subscribingFeedURLString,
+                                isSubscribing: isSubscribing,
+                                subscribingResultID: subscribingResultID,
                                 onSubscribe: onSubscribeSearchResult
                             )
                         }
@@ -60,7 +62,8 @@ struct OnboardingPodcastSetupPage: View {
                         if subscriptions.isEmpty {
                             OnboardingSamplePodcastsSection(
                                 activePodcastIDs: activePodcastIDs,
-                                subscribingFeedURLString: subscribingFeedURLString,
+                                isSubscribing: isSubscribing,
+                                subscribingResultID: subscribingResultID,
                                 onSubscribe: onSubscribeSample
                             )
                         } else {
@@ -90,10 +93,6 @@ struct OnboardingPodcastSetupPage: View {
         .scrollDismissesKeyboard(.interactively)
         .scrollIndicators(.hidden)
         .scrollContentBackground(.visible)
-    }
-
-    private var isSubscribing: Bool {
-        subscribingFeedURLString != nil
     }
 
     private var instructionText: String {

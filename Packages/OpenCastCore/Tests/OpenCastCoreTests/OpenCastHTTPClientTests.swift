@@ -5,6 +5,32 @@ import Testing
 
 @Suite("OpenCast HTTP client")
 struct OpenCastHTTPClientTests {
+    @MainActor
+    @Test("Default feed service does not inherit a MainActor caller")
+    func defaultFeedServiceDoesNotInheritMainActorCaller() async throws {
+        let feedURL = URL(string: "https://example.com/feed.xml")!
+        let fixtureURL = try #require(Bundle.module.url(forResource: "examplecurrentaffairs", withExtension: "xml"))
+        let data = try Data(contentsOf: fixtureURL)
+        let client = IsolationRecordingHTTPClient(
+            result: OpenCastHTTPResult(
+                data: data,
+                response: OpenCastHTTPResponse(
+                    url: feedURL,
+                    mimeType: "application/rss+xml",
+                    expectedContentLength: Int64(data.count),
+                    statusCode: 200,
+                    headers: [:]
+                )
+            )
+        )
+        let service: any FeedService = DefaultFeedService(httpClient: client)
+
+        let outcome = try await service.fetchFeedOutcome(at: feedURL, validators: nil)
+
+        #expect(outcome.snapshot?.podcast.title == "Example Current Affairs")
+        #expect(client.inheritedCallerActorDescription == "nil")
+    }
+
     @Test("Feed service uses injected HTTP client")
     func feedServiceUsesInjectedHTTPClient() async throws {
         let feedURL = URL(string: "https://example.com/feed.xml")!
@@ -399,5 +425,29 @@ private actor RecordingHTTPClient: OpenCastHTTPClient {
         }
 
         return results.removeFirst()
+    }
+}
+
+private final class IsolationRecordingHTTPClient: OpenCastHTTPClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private let result: OpenCastHTTPResult
+    private var inheritedCallerActorDescriptionValue: String?
+
+    var inheritedCallerActorDescription: String? {
+        lock.withLock {
+            inheritedCallerActorDescriptionValue
+        }
+    }
+
+    init(result: OpenCastHTTPResult) {
+        self.result = result
+    }
+
+    func data(for request: URLRequest) async throws -> OpenCastHTTPResult {
+        let inheritedCallerActorDescription = String(describing: #isolation)
+        lock.withLock {
+            inheritedCallerActorDescriptionValue = inheritedCallerActorDescription
+        }
+        return result
     }
 }

@@ -1,6 +1,11 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 
 import PackageDescription
+
+let swift63Settings: [SwiftSetting] = [
+    .enableUpcomingFeature("InferIsolatedConformances"),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault")
+]
 
 let package = Package(
     name: "OpenCastPlayback",
@@ -24,7 +29,7 @@ let package = Package(
             ],
             swiftSettings: [
                 .defaultIsolation(MainActor.self)
-            ]
+            ] + swift63Settings
         ),
         .testTarget(
             name: "OpenCastPlaybackTests",
@@ -32,7 +37,8 @@ let package = Package(
                 "OpenCastPlayback",
                 .product(name: "OpenCastCore", package: "OpenCastCore"),
                 .product(name: "OpenCastVoiceBoost", package: "OpenCastVoiceBoost")
-            ]
+            ],
+            swiftSettings: swift63Settings
         )
     ],
     swiftLanguageModes: [.v6]

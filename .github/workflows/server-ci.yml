@@ -65,6 +65,10 @@ jobs:
             directory: Server/ModelGatewayWorker
             wasm: true
             check_args: "--lib"
+          - name: PodcastDirectoryWorker
+            directory: Server/PodcastDirectoryWorker
+            wasm: true
+            check_args: ""
           - name: RemoteTranscriptionWorker
             directory: Server/RemoteTranscriptionWorker
             wasm: true
@@ -119,6 +123,8 @@ jobs:
         include:
           - name: AdAnalysisWorker
             directory: Server/AdAnalysisWorker
+          - name: PodcastDirectoryWorker
+            directory: Server/PodcastDirectoryWorker
           - name: RemoteTranscriptionWorker
             directory: Server/RemoteTranscriptionWorker
     steps:
@@ -174,6 +180,22 @@ jobs:
           node --input-type=module --eval \
             "import { writeFileSync } from 'node:fs'; writeFileSync('tests/fixtures/ad_analysis_app_attest_development_fixture.json', '{}\n');"
 
+      - name: Prepare public PodcastDirectory integration harness
+        if: matrix.name == 'PodcastDirectoryWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          cp wrangler.example.toml wrangler.toml
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("wrangler.toml")
+          contents = path.read_text()
+          public_flag = 'PUBLIC_PODCAST_DIRECTORY_ENABLED = "false"'
+          if contents.count(public_flag) != 3:
+              raise SystemExit("expected three public podcast-directory defaults")
+          path.write_text(contents.replace(public_flag, public_flag.replace("false", "true"), 1))
+          PY
+
       - name: Prepare local RemoteTranscription bindings
         if: matrix.name == 'RemoteTranscriptionWorker'
         working-directory: ${{ matrix.directory }}
@@ -209,6 +231,11 @@ jobs:
           yarn build:worker
           yarn exec vitest run -t \
             'routing|rejects an unauthenticated request|challenges|404s internal paths on the public host|rejects malformed internal envelopes and invalid payloads|404s an unknown internal job id'
+
+      - name: Run deterministic PodcastDirectory integration tests
+        if: matrix.name == 'PodcastDirectoryWorker'
+        working-directory: ${{ matrix.directory }}
+        run: yarn test:integration
 
       - name: Run deterministic RemoteTranscription integration tests
         if: matrix.name == 'RemoteTranscriptionWorker'

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct PodcastFeedAvailabilityLabel: View {
-    let hasFeedURL: Bool
+    let canResolveFeed: Bool
 
     var body: some View {
         Label(title, systemImage: systemImage)
@@ -10,10 +10,10 @@ struct PodcastFeedAvailabilityLabel: View {
     }
 
     private var title: String {
-        hasFeedURL ? "RSS feed available" : "No RSS feed"
+        canResolveFeed ? "RSS feed available" : "No RSS feed"
     }
 
     private var systemImage: String {
-        hasFeedURL ? "checkmark.circle" : "exclamationmark.circle"
+        canResolveFeed ? "checkmark.circle" : "exclamationmark.circle"
     }
 }

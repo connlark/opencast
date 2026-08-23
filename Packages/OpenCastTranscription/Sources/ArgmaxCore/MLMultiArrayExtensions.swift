@@ -71,7 +71,7 @@ public extension MLMultiArray {
 
 public extension MLMultiArray {
     /// Computes the linear offset from multi-dimensional indices using strides.
-    @inline(__always)
+    @inline(always)
     func linearOffset(for index: [Int], strides strideInts: [Int]? = nil) -> Int {
         var linearOffset = 0
         let strideInts = strideInts ?? strides.map { $0.intValue }
@@ -82,7 +82,7 @@ public extension MLMultiArray {
     }
 
     @available(*, deprecated, message: "Use linearOffset(for: [Int], strides:) instead.")
-    @inline(__always)
+    @inline(always)
     func linearOffset(for index: [NSNumber], strides strideInts: [Int]? = nil) -> Int {
         linearOffset(for: index.map(\.intValue), strides: strideInts)
     }
@@ -150,4 +150,3 @@ public enum MLMultiArrayCreationError: Error, LocalizedError {
         }
     }
 }
-

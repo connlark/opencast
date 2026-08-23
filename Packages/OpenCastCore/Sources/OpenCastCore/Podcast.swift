@@ -9,6 +9,8 @@ public struct Podcast: Codable, Hashable, Identifiable, Sendable {
     public var websiteURL: URL?
     public var artworkURL: URL?
     public var languageCode: String?
+    /// The channel's `podcast:guid` declaration, when present.
+    public var podcastGUID: String?
 
     public init(
         id: PodcastID,
@@ -18,7 +20,8 @@ public struct Podcast: Codable, Hashable, Identifiable, Sendable {
         summary: String? = nil,
         websiteURL: URL? = nil,
         artworkURL: URL? = nil,
-        languageCode: String? = nil
+        languageCode: String? = nil,
+        podcastGUID: String? = nil
     ) {
         self.id = id
         self.feedURL = feedURL
@@ -28,5 +31,6 @@ public struct Podcast: Codable, Hashable, Identifiable, Sendable {
         self.websiteURL = websiteURL
         self.artworkURL = artworkURL
         self.languageCode = languageCode
+        self.podcastGUID = podcastGUID
     }
 }

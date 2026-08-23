@@ -49,6 +49,7 @@ final class OpenCastAppModel {
     let exposesVoiceBoostDiagnosticsStatus: Bool
     let runsVoiceBoostDeviceProbe: Bool
     let podcastDirectoryService: any PodcastDirectoryService
+    let podcastDirectoryResolver: DirectoryFeedCandidateResolver
     let syncStatus: SyncStatusStore
     let allowsAutomaticFeedRefresh: Bool
     let adFreePassPresentationOverride: EpisodeAdFreePassPresentation?
@@ -261,9 +262,12 @@ final class OpenCastAppModel {
         self.voiceBoostDiagnostics = voiceBoostDiagnostics
         self.exposesVoiceBoostDiagnosticsStatus = exposesVoiceBoostDiagnosticsStatus
         self.runsVoiceBoostDeviceProbe = runsVoiceBoostDeviceProbe
-        let defaultPodcastDirectoryService = ITunesPodcastDirectoryService(httpClient: resolvedHTTPClient)
-        let resolvedPodcastDirectoryService = podcastDirectoryService ?? defaultPodcastDirectoryService
+        let resolvedPodcastDirectoryService = podcastDirectoryService
+            ?? Self.defaultPodcastDirectoryService(httpClient: resolvedHTTPClient)
         self.podcastDirectoryService = resolvedPodcastDirectoryService
+        podcastDirectoryResolver = DirectoryFeedCandidateResolver(
+            feedService: DefaultFeedService(httpClient: resolvedHTTPClient)
+        )
         self.syncStatus = syncStatus
         self.allowsAutomaticFeedRefresh = allowsAutomaticFeedRefresh
         self.adFreePassPresentationOverride = adFreePassPresentationOverride
@@ -2204,4 +2208,23 @@ final class OpenCastAppModel {
         }
     }
 
+    /// Apple stays the ranking authority; the Podcast Index Worker is a
+    /// supplement, so a disabled directory backend degrades to the
+    /// Apple-only service.
+    private static func defaultPodcastDirectoryService(
+        httpClient: any OpenCastHTTPClient
+    ) -> any PodcastDirectoryService {
+        let apple = ITunesPodcastDirectoryService(httpClient: httpClient)
+        let configuration = PodcastDirectoryBackendConfiguration.current
+        guard configuration.isEnabled else {
+            return apple
+        }
+        return CompositePodcastDirectoryService(
+            apple: apple,
+            podcastIndex: PodcastIndexWorkerDirectoryService(
+                baseURL: configuration.workerBaseURL,
+                httpClient: httpClient
+            )
+        )
+    }
 }

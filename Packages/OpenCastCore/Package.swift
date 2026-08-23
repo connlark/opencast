@@ -1,6 +1,11 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 
 import PackageDescription
+
+let swift63Settings: [SwiftSetting] = [
+    .enableUpcomingFeature("InferIsolatedConformances"),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault")
+]
 
 let package = Package(
     name: "OpenCastCore",
@@ -22,14 +27,16 @@ let package = Package(
         ),
         .target(
             name: "OpenCastCore",
-            dependencies: ["OpenCastDateParsing"]
+            dependencies: ["OpenCastDateParsing"],
+            swiftSettings: swift63Settings
         ),
         .testTarget(
             name: "OpenCastCoreTests",
             dependencies: ["OpenCastCore"],
             resources: [
                 .process("Fixtures")
-            ]
+            ],
+            swiftSettings: swift63Settings
         )
     ],
     swiftLanguageModes: [.v6]

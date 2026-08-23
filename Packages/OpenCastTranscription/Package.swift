@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 
 import PackageDescription
 
@@ -15,12 +15,12 @@ let package = Package(
     targets: [
         .target(
             name: "ArgmaxCore",
-            swiftSettings: vendoredArgmaxSwiftSettings()
+            swiftSettings: swift63Settings()
         ),
         .target(
             name: "WhisperKit",
             dependencies: ["ArgmaxCore"],
-            swiftSettings: vendoredArgmaxSwiftSettings()
+            swiftSettings: swift63Settings()
         ),
         .target(
             name: "OpenCastTranscription",
@@ -32,16 +32,12 @@ let package = Package(
             resources: [
                 .copy("Resources/Licenses")
             ],
-            swiftSettings: [
-                .swiftLanguageMode(.v6)
-            ]
+            swiftSettings: swift63Settings()
         ),
         .executableTarget(
             name: "OpenCastTranscriptionExport",
             dependencies: ["OpenCastTranscription"],
-            swiftSettings: [
-                .swiftLanguageMode(.v6)
-            ]
+            swiftSettings: swift63Settings()
         ),
         .testTarget(
             name: "OpenCastTranscriptionTests",
@@ -54,17 +50,16 @@ let package = Package(
             // generates a test-local `Bundle.module` that shadows the main
             // module's and breaks the resource-bundle tests. Test fixtures
             // (Fixtures/) load via #filePath instead.
-            swiftSettings: [
-                .swiftLanguageMode(.v6)
-            ]
+            swiftSettings: swift63Settings()
         )
     ],
-    swiftLanguageModes: [.v5, .v6]
+    swiftLanguageModes: [.v6]
 )
 
-func vendoredArgmaxSwiftSettings() -> [SwiftSetting] {
+func swift63Settings() -> [SwiftSetting] {
     [
-        .swiftLanguageMode(.v5),
-        .enableExperimentalFeature("StrictConcurrency")
+        .swiftLanguageMode(.v6),
+        .enableUpcomingFeature("InferIsolatedConformances"),
+        .enableUpcomingFeature("NonisolatedNonsendingByDefault")
     ]
 }

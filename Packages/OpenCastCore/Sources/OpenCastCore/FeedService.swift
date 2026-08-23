@@ -39,6 +39,7 @@ public struct DefaultFeedService: FeedService {
         self.httpClient = httpClient
     }
 
+    @concurrent
     public func fetchFeed(at url: URL) async throws -> FeedSnapshot {
         guard let snapshot = try await fetchFeedOutcome(at: url, validators: nil).snapshot else {
             throw OpenCastCoreError.invalidHTTPResponse
@@ -46,6 +47,7 @@ public struct DefaultFeedService: FeedService {
         return snapshot
     }
 
+    @concurrent
     public func fetchFeedOutcome(at url: URL, validators: FeedValidators?) async throws -> FeedFetchOutcome {
         // Owned validators and URLCache revalidation are mutually exclusive on
         // one request: URLSession transparently replays a cached 200 for a

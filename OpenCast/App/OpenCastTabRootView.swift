@@ -73,6 +73,7 @@ struct OpenCastTabRootView: View {
                 NavigationStack(path: $navigationPaths[.search]) {
                     SearchView(
                         directoryService: appModel.podcastDirectoryService,
+                        directoryResolver: appModel.podcastDirectoryResolver,
                         isSearchPresented: $isSearchPresented,
                         onOpenEpisode: openEpisode(on: .search),
                         onOpenPodcast: { feedURL in

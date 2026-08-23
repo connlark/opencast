@@ -69,6 +69,11 @@ export default function PrivacyPage() {
                 directory or search requests go to the services needed to load
                 them.
               </p>
+              <p>
+                Podcast search terms go directly to Apple and, through
+                opencast&apos;s Cloudflare Worker, to Podcast Index. opencast
+                does not persist or application-log raw search queries.
+              </p>
             </PolicySection>
             <PolicySection icon={<Bell aria-hidden="true" />} title="Notifications" wide>
               <p>
@@ -214,7 +219,7 @@ export default function PrivacyPage() {
                   {supportEmail}
                 </Link>{" "}
                 with privacy questions. Effective date: June 21, 2026. Last
-                updated: July 18, 2026.
+                updated: August 22, 2026.
               </p>
             </PolicySection>
           </div>

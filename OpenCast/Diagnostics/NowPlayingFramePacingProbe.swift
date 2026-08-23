@@ -5,7 +5,7 @@ import Foundation
 /// No-op unless the DEBUG frame probe is enabled (`--opencast-frame-probe` /
 /// `OPENCAST_FRAME_PROBE=1`). Used to measure presentation smoothness independent
 /// of screen recording, which warms the compositor and masks first-frame stalls.
-@inline(__always)
+@inline(always)
 func nowPlayingProbeMark(_ label: String) {
     #if DEBUG
     NowPlayingFramePacingProbe.shared.mark(label)

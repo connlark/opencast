@@ -1,4 +1,4 @@
-import CoreML
+@preconcurrency import CoreML
 import Foundation
 
 /// Whisper-perf pass 3 Phase I3 / pass 4 Phase K2 (opt-in, measure-only):

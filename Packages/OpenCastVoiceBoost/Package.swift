@@ -1,6 +1,11 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 
 import PackageDescription
+
+let swift63Settings: [SwiftSetting] = [
+    .enableUpcomingFeature("InferIsolatedConformances"),
+    .enableUpcomingFeature("NonisolatedNonsendingByDefault")
+]
 
 let package = Package(
     name: "OpenCastVoiceBoost",
@@ -29,22 +34,26 @@ let package = Package(
         ),
         .target(
             name: "OpenCastVoiceBoost",
-            dependencies: ["OpenCastVoiceBoostC"]
+            dependencies: ["OpenCastVoiceBoostC"],
+            swiftSettings: swift63Settings
         ),
         .target(
             name: "VoiceBoostLabSupport",
-            dependencies: ["OpenCastVoiceBoost"]
+            dependencies: ["OpenCastVoiceBoost"],
+            swiftSettings: swift63Settings
         ),
         .executableTarget(
             name: "VoiceBoostLab",
-            dependencies: ["VoiceBoostLabSupport"]
+            dependencies: ["VoiceBoostLabSupport"],
+            swiftSettings: swift63Settings
         ),
         .testTarget(
             name: "OpenCastVoiceBoostTests",
             dependencies: [
                 "OpenCastVoiceBoost",
                 "VoiceBoostLabSupport"
-            ]
+            ],
+            swiftSettings: swift63Settings
         )
     ],
     swiftLanguageModes: [.v6]

@@ -12,6 +12,7 @@ struct SearchView: View {
     @State private var scope = SearchScope.library
     @State private var searchSession = EpisodeSearchSession()
     @State private var searchStore: PodcastSearchStore
+    @State private var subscriptionFlow: DirectorySubscriptionFlowStore
     @State private var subscribingFeedURLString: String?
     @State private var subscriptionErrorMessage: String?
 
@@ -20,12 +21,19 @@ struct SearchView: View {
 
     init(
         directoryService: any PodcastDirectoryService,
+        directoryResolver: DirectoryFeedCandidateResolver = DirectoryFeedCandidateResolver(),
         isSearchPresented: Binding<Bool>,
         onOpenEpisode: @escaping (String) -> Void,
         onOpenPodcast: @escaping (String) -> Void
     ) {
         _isSearchPresented = isSearchPresented
         _searchStore = State(initialValue: PodcastSearchStore(directoryService: directoryService))
+        _subscriptionFlow = State(
+            initialValue: DirectorySubscriptionFlowStore(
+                directoryService: directoryService,
+                resolver: directoryResolver
+            )
+        )
         self.onOpenEpisode = onOpenEpisode
         self.onOpenPodcast = onOpenPodcast
     }
@@ -51,9 +59,9 @@ struct SearchView: View {
                 )
             }
 
-            if let subscriptionErrorMessage {
+            if let displayedSubscriptionErrorMessage {
                 Section {
-                    Label(subscriptionErrorMessage, systemImage: "exclamationmark.triangle")
+                    Label(displayedSubscriptionErrorMessage, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.red)
                 }
             }
@@ -103,7 +111,8 @@ struct SearchView: View {
                     SearchDiscoverResultsSection(
                         searchStore: searchStore,
                         activePodcastIDs: appModel.library.activePodcastIDs,
-                        subscribingFeedURLString: subscribingFeedURLString,
+                        subscribingResultID: subscriptionFlow.subscribingResultID,
+                        isSubscriptionInProgress: isSubscriptionInProgress,
                         onSubscribe: subscribe,
                         onOpenPodcast: openPodcast
                     )
@@ -121,6 +130,15 @@ struct SearchView: View {
         .autocorrectionDisabled()
         .searchScopes($scope) {
             SearchScopePicker()
+        }
+        .sheet(item: Bindable(subscriptionFlow).pendingChoice) { pending in
+            DirectoryFeedChoiceView(
+                pending: pending,
+                onSelect: { candidate in
+                    subscribeToChoice(candidate, pending: pending)
+                },
+                onCancel: subscriptionFlow.dismissChoice
+            )
         }
         .onSubmit(of: .search, recordRecentSearch)
         .onChange(of: query) { _, _ in
@@ -185,16 +203,44 @@ struct SearchView: View {
         onOpenPodcast(feedURLString)
     }
 
+    private var isSubscriptionInProgress: Bool {
+        subscribingFeedURLString != nil || subscriptionFlow.isSubscribing
+    }
+
+    private var displayedSubscriptionErrorMessage: String? {
+        subscriptionErrorMessage ?? subscriptionFlow.errorMessage
+    }
+
     private func subscribe(to result: DirectoryPodcastResult) {
-        guard let feedURLString = result.feedURLString else {
+        guard !isSubscriptionInProgress else {
             return
         }
 
-        subscribe(to: feedURLString)
+        KeyboardDismissal.dismiss()
+        subscriptionErrorMessage = nil
+        subscriptionFlow.subscribe(
+            to: result,
+            library: appModel.library,
+            modelContext: modelContext,
+            onSubscribed: recordRecentSearch
+        )
+    }
+
+    private func subscribeToChoice(
+        _ candidate: ResolvedFeedCandidate,
+        pending: DirectorySubscriptionFlowStore.PendingChoice
+    ) {
+        subscriptionFlow.subscribe(
+            candidate: candidate,
+            for: pending,
+            library: appModel.library,
+            modelContext: modelContext,
+            onSubscribed: recordRecentSearch
+        )
     }
 
     private func subscribe(to feedURLString: String) {
-        guard subscribingFeedURLString == nil else {
+        guard !isSubscriptionInProgress else {
             return
         }
 
@@ -206,6 +252,7 @@ struct SearchView: View {
 
     private func performSubscription(to feedURLString: String) async {
         subscriptionErrorMessage = nil
+        subscriptionFlow.clearError()
         subscribingFeedURLString = feedURLString
         defer {
             subscribingFeedURLString = nil

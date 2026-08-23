@@ -248,6 +248,7 @@ final class RemoteTranscriptionUploadSession {
         )
     }
 
+    @concurrent
     nonisolated private static func writePartFile(
         source: URL,
         to partURL: URL,

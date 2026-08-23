@@ -3,7 +3,8 @@ import SwiftUI
 
 struct OnboardingSamplePodcastsSection: View {
     let activePodcastIDs: Set<String>
-    let subscribingFeedURLString: String?
+    let isSubscribing: Bool
+    let subscribingResultID: String?
     let onSubscribe: (DirectoryPodcastResult) -> Void
 
     var body: some View {
@@ -17,7 +18,7 @@ struct OnboardingSamplePodcastsSection: View {
                     PopularPodcastSuggestionRow(
                         result: result,
                         isSubscribed: isSubscribed(result),
-                        isSubscribing: isSubscribing(result),
+                        isSubscribing: result.id == subscribingResultID,
                         isDisabled: isSubscribeDisabled(for: result),
                         onSubscribe: { onSubscribe(result) }
                     )
@@ -33,23 +34,11 @@ struct OnboardingSamplePodcastsSection: View {
         }
     }
 
-    private var isSubscribingAnyPodcast: Bool {
-        subscribingFeedURLString != nil
-    }
-
     private func isSubscribed(_ result: DirectoryPodcastResult) -> Bool {
         result.isSubscribed(activePodcastIDs: activePodcastIDs)
     }
 
-    private func isSubscribing(_ result: DirectoryPodcastResult) -> Bool {
-        guard let feedURLString = result.feedURLString else {
-            return false
-        }
-
-        return subscribingFeedURLString == feedURLString
-    }
-
     private func isSubscribeDisabled(for result: DirectoryPodcastResult) -> Bool {
-        isSubscribingAnyPodcast || result.feedURLString == nil || isSubscribed(result)
+        isSubscribing || !result.canResolveFeed || isSubscribed(result)
     }
 }

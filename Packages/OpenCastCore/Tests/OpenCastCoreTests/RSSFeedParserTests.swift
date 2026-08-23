@@ -181,6 +181,34 @@ struct RSSFeedParserTests {
         #expect(snapshot.newFeedURL?.absoluteString == "https://example.net/moved.xml")
     }
 
+    @Test("Parses the channel's podcast:guid declaration")
+    func parsesPodcastGUIDDeclaration() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Identified Show</title>
+                <podcast:guid>2d7400e3-bacb-52fd-aabc-0da55e39f98b</podcast:guid>
+                <item>
+                  <title>One</title>
+                  <guid>identified-1</guid>
+                  <enclosure url="https://example.com/audio/identified-1.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/identified.xml")!
+        )
+
+        #expect(snapshot.podcast.podcastGUID == "2d7400e3-bacb-52fd-aabc-0da55e39f98b")
+        #expect(snapshot.episodes.first?.guid == "identified-1")
+    }
+
     @Test("Parses PDT item pubDate values")
     func parsesPDTItemPubDateValues() throws {
         let data = Data(
