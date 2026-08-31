@@ -56,6 +56,7 @@ struct EpisodeTranscriptContentView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
         }
+        .scrollIndicators(.visible)
         .scrollPosition($scrollPosition, anchor: .center)
         .scrollDismissesKeyboard(.interactively)
         .onScrollPhaseChange(handleScrollPhaseChange)

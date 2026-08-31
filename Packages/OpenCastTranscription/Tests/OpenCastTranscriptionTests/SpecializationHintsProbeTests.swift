@@ -4,12 +4,12 @@ import Testing
 @testable import OpenCastTranscription
 @preconcurrency import WhisperKit
 
-/// E3 probe (whisper-perf pass 2, measure-only): decoder-only specialization
+/// Measure-only probe: decoder-only specialization
 /// hint matrix — default vs .fastPrediction vs .fastPrediction + infrequent
 /// reshapes. Reports load time (per fresh MLModel.load in this process),
 /// warm per-token latency over production decode shapes (width-3 prefill +
 /// width-1 loop), peak footprint delta, and Core ML cache growth.
-/// Production adoption is a pass-3 decision.
+/// Production adoption remains a separate decision.
 ///
 /// OPENCAST_SPECIALIZATION_PROBE=1 enables it. Cache-cold "first ever" load
 /// numbers require wiping the e5rt bundle cache between runs, which this

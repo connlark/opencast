@@ -33,6 +33,7 @@ final class OpenCastAppModel {
     @ObservationIgnored private let remoteTranscriptionRunner: RemoteTranscriptionJobRunner
     let remoteTranscriptionPurchases: RemoteTranscriptionPurchaseStore
     let adAnalyses: EpisodeAdAnalysisStore
+    let transcriptAnalyses: EpisodeTranscriptAnalysisStore
     let adFreePass: EpisodeAdFreePassCoordinator
     let upNextQueue: UpNextQueueStore
     let adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession
@@ -125,6 +126,15 @@ final class OpenCastAppModel {
     @ObservationIgnored private var hasRunVoiceBoostDeviceProbe = false
     @ObservationIgnored private var importedSubscriptionsNotificationID = 0
     @ObservationIgnored private let unsubscribeSidecarCleanupOverride: ((String, [String], ModelContext) throws -> Void)?
+    /// Chapters & Summary queue coordination (C3): manual generate requests
+    /// and deferred-retry sweeps queue here and drain one at a time through
+    /// the single-flight analysis store. The main context is captured at
+    /// store load because retry sweeps can fire from contexts that carry
+    /// none of their own.
+    @ObservationIgnored private var pendingTranscriptAnalysisEpisodeIDs: [String] = []
+    @ObservationIgnored private var transcriptAnalysisDrainTask: Task<Void, Never>?
+    @ObservationIgnored private var transcriptAnalysisModelContext: ModelContext?
+    @ObservationIgnored private var hasProbedDeferredTranscriptAnalysesThisForegroundSession = false
 
     init(
         cacheController: OpenCastCacheController = OpenCastCacheController(),
@@ -138,6 +148,7 @@ final class OpenCastAppModel {
         appleSpeechAssets: AppleSpeechAssetStore = AppleSpeechAssetStore(),
         transcriptions: EpisodeTranscriptionStore = EpisodeTranscriptionStore(),
         adAnalyses: EpisodeAdAnalysisStore = EpisodeAdAnalysisStore(),
+        transcriptAnalyses: EpisodeTranscriptAnalysisStore = EpisodeTranscriptAnalysisStore(),
         adFreePass: EpisodeAdFreePassCoordinator = EpisodeAdFreePassCoordinator(),
         upNextQueue: UpNextQueueStore = UpNextQueueStore(),
         adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession = EpisodeAdFreePassBackgroundSession(),
@@ -238,7 +249,8 @@ final class OpenCastAppModel {
         }
         #endif
         self.adAnalyses = adAnalyses
-        resolvedLibrary.episodeSidecarMigrators = [downloads, transcriptions, adAnalyses]
+        self.transcriptAnalyses = transcriptAnalyses
+        resolvedLibrary.episodeSidecarMigrators = [downloads, transcriptions, adAnalyses, transcriptAnalyses]
         notificationSettings.feedHealthRecorder = { [weak resolvedLibrary] records in
             await resolvedLibrary?.recordNotificationFeedHealth(records)
         }
@@ -276,6 +288,9 @@ final class OpenCastAppModel {
         self.unsubscribeSidecarCleanupOverride = unsubscribeSidecarCleanupOverride
         self.transcriptions.onEpisodeStateChanged = { [weak self] episodeID in
             self?.refreshPlaybackSkipZonesIfCurrentEpisode(episodeID: episodeID)
+        }
+        remoteTranscriptionPurchases.onBalanceIncreased = { [weak self] in
+            self?.retryDeferredTranscriptAnalysesAfterBalanceIncrease()
         }
         self.transcriptions.onAppleSpeechRunInterrupted = { [weak self] episodeID, restoredPriorTranscript in
             self?.scheduleTranscriptionInterruptedNotificationIfNeeded(
@@ -734,6 +749,7 @@ final class OpenCastAppModel {
         } else {
             do {
                 try adAnalyses.deleteAnalyses(forPodcastID: feedURL, modelContext: modelContext)
+                try transcriptAnalyses.deleteAnalyses(forPodcastID: feedURL, modelContext: modelContext)
                 try transcriptions.deleteTranscripts(forPodcastID: feedURL, modelContext: modelContext)
             } catch {
                 sidecarErrorMessage = sidecarErrorMessage ?? error.localizedDescription
@@ -765,6 +781,11 @@ final class OpenCastAppModel {
         adDetectionSettings.load(modelContext: modelContext)
         transcriptions.load(modelContext: modelContext)
         adAnalyses.load(modelContext: modelContext)
+        transcriptAnalyses.load(modelContext: modelContext)
+        transcriptAnalysisModelContext = modelContext
+        // Launch is the "retry next day" moment for cap-deferred runs; the
+        // scene-activation probe can fire before this load and find nothing.
+        retryDeferredTranscriptAnalyses(modelContext: modelContext)
         refreshPlaybackSkipZonesForCurrentEpisode()
         Task { [appleSpeechAssets] in
             await appleSpeechAssets.refresh()
@@ -995,6 +1016,7 @@ final class OpenCastAppModel {
 
     func deleteEpisodeTranscript(episodeID: String, modelContext: ModelContext) {
         adAnalyses.deleteAnalysis(episodeID: episodeID, modelContext: modelContext)
+        transcriptAnalyses.deleteAnalysis(episodeID: episodeID, modelContext: modelContext)
         transcriptions.deleteTranscript(episodeID: episodeID, modelContext: modelContext)
     }
 
@@ -1008,6 +1030,227 @@ final class OpenCastAppModel {
 
     func deleteEpisodeAdAnalysis(episodeID: String, modelContext: ModelContext) {
         adAnalyses.deleteAnalysis(episodeID: episodeID, modelContext: modelContext)
+    }
+
+    // MARK: - Chapters & Summary (transcript analysis)
+
+    enum TranscriptAnalysisRetryTrigger {
+        case sceneActivated
+        /// Launch sweeps both deferral buckets without touching the
+        /// once-per-foreground-session probe — the scene-activation probe
+        /// can fire before the store load and must still get its turn.
+        case launch
+        /// A redeem credited the shared transcription balance: re-probe the
+        /// pay-gate deferrals (H8). Cap deferrals stay parked — new credit
+        /// cannot clear a daily cap.
+        case balanceIncreased
+    }
+
+    /// Explicit episode-detail action for an already-transcribed episode —
+    /// the only way a new analysis starts. Eligibility (current transcript,
+    /// creator-chapters gate) is re-checked before any network call, and
+    /// ineligible requests skip quietly.
+    func generateChaptersAndSummary(episodeID: String, modelContext: ModelContext) {
+        transcriptAnalysisModelContext = modelContext
+        enqueueTranscriptAnalysis(episodeID: episodeID, atFront: true, modelContext: modelContext)
+    }
+
+    /// Re-probes deferred runs: typed daily-cap denials and pay-gate 402s
+    /// queue rather than fail (a transcription backlog can legitimately hit
+    /// the per-key cap; a long episode can legitimately outprice the
+    /// balance). The scene-activation trigger probes at most once per
+    /// foreground session, mirroring `AdFreePassCapDeferralPolicy`; a
+    /// balance increase sweeps only the pay-gate bucket. Consent rides on
+    /// the deferral buckets themselves: the store demotes any typed
+    /// deferral that predates the generate disclosure acknowledgement at
+    /// load, so these sweeps only ever re-upload manually started runs.
+    func retryDeferredTranscriptAnalyses(
+        modelContext: ModelContext,
+        trigger: TranscriptAnalysisRetryTrigger = .launch
+    ) {
+        if trigger == .sceneActivated {
+            guard !hasProbedDeferredTranscriptAnalysesThisForegroundSession else {
+                return
+            }
+        }
+        transcriptAnalysisModelContext = modelContext
+
+        let deferredCandidateIDs: [String] = switch trigger {
+        case .balanceIncreased:
+            transcriptAnalyses.insufficientSecondsDeferredEpisodeIDs
+        case .sceneActivated, .launch:
+            transcriptAnalyses.capDeferredEpisodeIDs
+                + transcriptAnalyses.insufficientSecondsDeferredEpisodeIDs
+        }
+        // The probe flag is consumed only when something was actually
+        // enqueued: the first activation can precede the store load, and an
+        // empty sweep must not spend the session's one probe. A deferred
+        // record whose episode has left the library can never run, so it
+        // must not spend the probe either.
+        let deferredEpisodeIDs = deferredCandidateIDs.filter { episodeID in
+            episodeSnapshot(for: episodeID) != nil
+        }
+        guard !deferredEpisodeIDs.isEmpty else {
+            return
+        }
+        if trigger == .sceneActivated {
+            hasProbedDeferredTranscriptAnalysesThisForegroundSession = true
+        }
+        for episodeID in deferredEpisodeIDs {
+            enqueueTranscriptAnalysis(episodeID: episodeID, modelContext: modelContext)
+        }
+    }
+
+    func resetTranscriptAnalysisForegroundProbe() {
+        hasProbedDeferredTranscriptAnalysesThisForegroundSession = false
+    }
+
+    /// Balance top-ups re-probe pay-gate deferrals (H8): the purchase store
+    /// fires this after a redeem credits the shared balance. Before the
+    /// first store load there is no context and nothing deferred to sweep.
+    private func retryDeferredTranscriptAnalysesAfterBalanceIncrease() {
+        guard let modelContext = transcriptAnalysisModelContext else {
+            return
+        }
+        retryDeferredTranscriptAnalyses(modelContext: modelContext, trigger: .balanceIncreased)
+    }
+
+    private func enqueueTranscriptAnalysis(
+        episodeID: String,
+        atFront: Bool = false,
+        modelContext: ModelContext
+    ) {
+        if !pendingTranscriptAnalysisEpisodeIDs.contains(episodeID) {
+            if atFront {
+                pendingTranscriptAnalysisEpisodeIDs.insert(episodeID, at: 0)
+            } else {
+                pendingTranscriptAnalysisEpisodeIDs.append(episodeID)
+            }
+        }
+        drainPendingTranscriptAnalyses(modelContext: modelContext)
+    }
+
+    private func drainPendingTranscriptAnalyses(modelContext: ModelContext) {
+        guard transcriptAnalysisDrainTask == nil else {
+            return
+        }
+        transcriptAnalysisDrainTask = Task { [weak self] in
+            await self?.runPendingTranscriptAnalyses(modelContext: modelContext)
+            self?.transcriptAnalysisDrainTask = nil
+        }
+    }
+
+    private func runPendingTranscriptAnalyses(modelContext: ModelContext) async {
+        while !pendingTranscriptAnalysisEpisodeIDs.isEmpty {
+            guard await waitForIdleTranscriptAnalysisStore() else {
+                return
+            }
+            guard !pendingTranscriptAnalysisEpisodeIDs.isEmpty else {
+                return
+            }
+            let episodeID = pendingTranscriptAnalysisEpisodeIDs.removeFirst()
+            let recordStampBeforeRun = transcriptAnalyses.record(for: episodeID)?.updatedAt
+            await startEligibleTranscriptAnalysis(episodeID: episodeID, modelContext: modelContext)
+            guard await waitForIdleTranscriptAnalysisStore() else {
+                return
+            }
+            let record = transcriptAnalyses.record(for: episodeID)
+            if let failureKind = record?.failureKind,
+               failureKind == .capExceeded || failureKind == .insufficientSeconds,
+               record?.updatedAt != recordStampBeforeRun {
+                // This run was just denied by the worker. A cap denial would
+                // deny every remaining run today; an insufficient-balance
+                // denial would burn one daily-cap admission per queued
+                // episode (denied reserves still consume admission), eating
+                // the quota the post-top-up retries need. Stop draining —
+                // the launch sweep, foreground probe, and balance-increase
+                // sweep re-discover the backlog.
+                // The stamp comparison matters: skip paths leave the record
+                // untouched, so a stale denial from an earlier session must
+                // not halt the queue behind it.
+                pendingTranscriptAnalysisEpisodeIDs.removeAll()
+                return
+            }
+        }
+    }
+
+    /// Stops the pending-analysis queue and waits for the drain to finish,
+    /// so no suspended iteration can dequeue another episode afterwards.
+    private func cancelPendingTranscriptAnalyses() async {
+        pendingTranscriptAnalysisEpisodeIDs.removeAll()
+        guard let drainTask = transcriptAnalysisDrainTask else {
+            return
+        }
+        drainTask.cancel()
+        await drainTask.value
+    }
+
+    /// Returns false when cancelled.
+    private func waitForIdleTranscriptAnalysisStore() async -> Bool {
+        while transcriptAnalyses.hasActiveJob {
+            let sequence = transcriptAnalyses.changeSequence
+            guard transcriptAnalyses.hasActiveJob else {
+                break
+            }
+            do {
+                try await transcriptAnalyses.waitForChange(after: sequence)
+            } catch {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Every guard exits quietly (fail-open): no chapters, no summary, never
+    /// a user-facing error. Titles must be real (decision H2) — a missing
+    /// episode snapshot skips the run rather than sending nil titles.
+    private func startEligibleTranscriptAnalysis(
+        episodeID: String,
+        modelContext: ModelContext
+    ) async {
+        guard transcriptions.record(for: episodeID)?.state == .completed,
+              let episode = episodeSnapshot(for: episodeID),
+              transcriptAnalyses.canStartAnalysis,
+              !transcriptAnalyses.hasActiveJob
+        else {
+            return
+        }
+
+        // Creator metadata wins (D3): a feed-declared chapters document
+        // suppresses generation for that episode entirely.
+        if let detail = await library.episodeDetail(for: episodeID),
+           detail.chaptersURL != nil {
+            return
+        }
+
+        guard let document = try? await transcriptions.loadDocument(for: episodeID),
+              document.episodeID == episodeID
+        else {
+            return
+        }
+        guard await !transcriptAnalyses.hasCurrentCompletedAnalysis(for: document) else {
+            return
+        }
+        // The cancellation check closes the nuke race: a drain cancelled
+        // between this method's awaits must never launch the (unstructured,
+        // cancellation-blind) store task. The transcript state is rechecked
+        // for the same reason: a transcript deleted while an await above was
+        // suspended must stop the upload here.
+        guard transcriptions.record(for: episodeID)?.state == .completed,
+              !transcriptAnalyses.hasActiveJob,
+              !Task.isCancelled
+        else {
+            return
+        }
+
+        transcriptAnalyses.startAnalysis(
+            transcript: document,
+            episodeTitle: episode.title,
+            podcastTitle: episode.podcastTitle,
+            transcriptState: .completed,
+            allowShared: TranscriptAnalysisFeatureFlags.isSharingEnabled,
+            modelContext: modelContext
+        )
     }
 
     var currentAdFreePassPresentation: EpisodeAdFreePassPresentation {
@@ -1626,7 +1869,12 @@ final class OpenCastAppModel {
             transcriptionRequests.resetForDataNuke()
             await notificationSettings.deleteInstallIfRegistered()
             library.prepareForDataNuke()
+            // Before the store nuke cancels the active analysis: that cancel
+            // wakes a drain suspended on the store's change stream, which
+            // would otherwise start a fresh network analysis mid-nuke.
+            await cancelPendingTranscriptAnalyses()
             try await adAnalyses.nukeAllAnalyses(modelContext: modelContext)
+            try await transcriptAnalyses.nukeAllAnalyses(modelContext: modelContext)
             try await transcriptions.nukeAllTranscripts(modelContext: modelContext)
             try await downloads.nukeAllDownloads(modelContext: modelContext)
             try transcriptionModels.deleteInstalledModelImmediately()
@@ -1873,6 +2121,7 @@ final class OpenCastAppModel {
         try deleteAll(EpisodeDownloadRecord.self, modelContext: modelContext)
         try deleteAll(EpisodeTranscriptRecord.self, modelContext: modelContext)
         try deleteAll(EpisodeAdAnalysisRecord.self, modelContext: modelContext)
+        try deleteAll(EpisodeTranscriptAnalysisRecord.self, modelContext: modelContext)
         try deleteAll(AdFreePassQueueItemRecord.self, modelContext: modelContext)
         try deleteAll(UpNextQueueItemRecord.self, modelContext: modelContext)
         try modelContext.save()
@@ -1898,6 +2147,8 @@ final class OpenCastAppModel {
         await downloads.load(modelContext: modelContext)
         transcriptions.load(modelContext: modelContext)
         adAnalyses.load(modelContext: modelContext)
+        pendingTranscriptAnalysisEpisodeIDs.removeAll()
+        transcriptAnalyses.load(modelContext: modelContext)
         adFreePass.reset()
         upNextQueue.resetAfterDataNuke()
         adFreePassBackgroundSession.reset()
@@ -2027,9 +2278,9 @@ final class OpenCastAppModel {
             return
         }
 
-        // Auto passes never arm the background session (decision 1);
+        // Auto passes never arm the background session;
         // continuation requires an explicit tap. They follow the stored
-        // detection mode (decision 3): cloud mode enqueues a cloud job on
+        // detection mode: cloud mode enqueues a cloud job on
         // play with no per-episode confirmation; the authoritative credits
         // check lives inside the cloud pass itself.
         adFreePass.enqueue(

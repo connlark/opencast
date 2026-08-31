@@ -171,7 +171,7 @@ const ACTIVE_JOB_COUNT_SQL_BYTES: [u8; concat_len(ACTIVE_JOB_COUNT_SQL_PARTS)] =
     concat_bytes(ACTIVE_JOB_COUNT_SQL_PARTS);
 const ACTIVE_JOB_COUNT_SQL: &str = concat_str(&ACTIVE_JOB_COUNT_SQL_BYTES);
 
-// --- Accounts (pass 0: keyed by registered App Attest install) ---
+// --- Accounts keyed by registered App Attest install ---
 
 pub async fn ensure_account(
     db: &D1Database,
@@ -212,7 +212,7 @@ pub async fn account_for_install(db: &D1Database, install_id: &str) -> Result<Op
     Ok(row.map(|row| row.value))
 }
 
-// --- Purchase-backend install→account links (pass 1): many installs may
+// --- Purchase-backend install→account links: many installs may
 // share one purchase account, and only a verified bootstrap writes here. ---
 
 pub async fn purchase_account_for_install(

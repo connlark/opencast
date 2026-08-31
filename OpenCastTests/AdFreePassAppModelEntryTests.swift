@@ -68,7 +68,7 @@ struct AdFreePassAppModelEntryTests {
         #expect(await waitUntil {
             fixture.appModel.adFreePass.activeEpisodeID == episode.episodeID
         })
-        // Auto passes never arm background continuation (decision 1).
+        // Auto passes never arm background continuation.
         #expect(fixture.scheduler.submitCallCount == 0)
 
         // Playing the same episode again while its pass runs is a no-op.

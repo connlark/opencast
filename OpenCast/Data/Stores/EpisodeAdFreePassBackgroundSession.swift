@@ -107,7 +107,7 @@ final class EpisodeAdFreePassBackgroundSession {
         }
     }
 
-    /// Decision 16 retry ladder: a GPU-required submission retries once
+    /// A GPU-required submission retries once
     /// without GPU before the caller degrades to foreground-only.
     private func submitRequest(subtitle: String, requiresGPU: Bool) throws {
         do {
@@ -165,7 +165,7 @@ final class EpisodeAdFreePassBackgroundSession {
         apply(newStage, to: handle)
     }
 
-    /// Queue-terminal events are coordinator-driven (decision 14): mid-queue
+    /// Queue-terminal events are coordinator-driven: mid-queue
     /// per-episode completions and failures are progress only; this is the
     /// single place a run ends.
     func noteQueueTerminal(_ outcome: AdFreePassQueueTerminalOutcome) {

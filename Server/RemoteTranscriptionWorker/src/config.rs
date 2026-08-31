@@ -5,7 +5,7 @@ pub const LANE_DEVELOPMENT: &str = "development";
 pub const LANE_PROD_STAGING: &str = "prod-staging";
 pub const LANE_PRODUCTION: &str = "production";
 
-/// Which authority backs the credit seam (pass 1 decision: same call sites,
+/// Which authority backs the credit seam (same call sites,
 /// swapped backend). `Dev` is the D1 fake and may only exist in the
 /// development lane; `Purchase` is the private PurchaseWorker service
 /// binding. Selection is explicit config — a non-development lane that does
@@ -24,17 +24,17 @@ pub struct AppConfig {
     pub model: String,
     pub dev_bearer_enabled: bool,
     pub credit_backend: CreditBackend,
-    /// Purchase kill switch (decision 12): hides store/purchase routes only.
+    /// Purchase kill switch: hides store/purchase routes only.
     pub purchases_enabled: bool,
     pub dev_credit_grant_seconds: i64,
     pub max_canonical_duration_seconds: f64,
     pub max_source_bytes: i64,
     pub max_active_jobs_per_account: i64,
     pub max_chunk_attempts: u32,
-    /// Bounded chunk fan-out (pass 0.5 decision 1): chunks in flight per
-    /// wave. `1` reproduces the pass-0 sequential walk — the rollback story.
+    /// Bounded chunk fan-out: chunks in flight per wave. `1` reproduces the
+    /// sequential walk — the rollback story.
     pub chunk_ai_concurrency: u32,
-    /// Concurrent transcribing jobs platform-wide (pass 1 decision 8),
+    /// Concurrent transcribing jobs platform-wide,
     /// clamped so `slots × chunk_ai_concurrency ≤ 8` until Workers AI
     /// rate-limit headroom is measured.
     pub global_inference_concurrency: u32,
@@ -44,14 +44,14 @@ pub struct AppConfig {
     pub daily_spend_cap_usd_micro: i64,
     pub waiting_for_device_source_deadline_seconds: i64,
     pub awaiting_credits_deadline_seconds: i64,
-    /// Exact-device upload deadlines (pass 2 decision 2): both default 12 h,
+    /// Exact-device upload deadlines: both default 12 h,
     /// comfortably inside the one-day R2 lifecycle/multipart-abort backstops.
     pub exact_upload_required_deadline_seconds: i64,
     pub exact_uploading_deadline_seconds: i64,
-    /// Uniform non-final part size (pass 2 decision 4). Default 16 MiB;
+    /// Uniform non-final part size. Default 16 MiB;
     /// clamped to R2's 5 MiB non-final minimum.
     pub upload_part_bytes: i64,
-    /// Presigned URL expiries (pass 2 decision 3): foreground batches ~15 min,
+    /// Presigned URL expiries: foreground batches ~15 min,
     /// background-enqueued batches a bounded 4 h.
     pub upload_url_expires_seconds: u32,
     pub upload_background_url_expires_seconds: u32,
@@ -110,7 +110,7 @@ impl AppConfig {
             validate_credit_backend(&lane, optional_var(env, "CREDIT_BACKEND").as_deref())?;
 
         let chunk_ai_concurrency = int_var(env, "CHUNK_AI_CONCURRENCY", 4).clamp(1, 8) as u32;
-        // Keep slots × chunk fan-out ≤ 8 (decision 8) until Workers AI
+        // Keep slots × chunk fan-out ≤ 8 until Workers AI
         // rate-limit headroom is measured; misconfiguration clamps, never
         // fails, because it only shrinks capacity.
         let max_slots = (8 / chunk_ai_concurrency).max(1);
@@ -200,7 +200,7 @@ impl AppConfig {
 /// Everything needed to mint presigned `UploadPart` URLs. The S3 credential
 /// is a narrow Worker secret; absence fails closed (`upload_unavailable`)
 /// without affecting any other route — that is how prod-staging behaves until
-/// its scoped token is set (pass 2 decision 12).
+/// its scoped token is set.
 pub struct UploadPresignSettings {
     pub host: String,
     pub bucket: String,
@@ -226,7 +226,7 @@ impl UploadPresignSettings {
     }
 }
 
-/// Fail-closed lane rule (pass-0 decision 2): the dev bearer gate and the
+/// Fail-closed lane rule: the dev bearer gate and the
 /// DevCreditAuthority may only exist in the development lane. Any
 /// production-shaped configuration that still carries the gate refuses to
 /// serve rather than exposing it.
@@ -241,7 +241,7 @@ pub fn validate_lane(
     // responses gates on `lane == "production"` and otherwise retains raw
     // model responses outside the cleanup prefixes), so a typo'd or renamed
     // lane would fail OPEN — serving normally while persisting content
-    // indefinitely. Fail closed here instead (Phase 10 review RTW-8).
+    // indefinitely. Fail closed here instead.
     if !matches!(lane, LANE_DEVELOPMENT | LANE_PROD_STAGING | LANE_PRODUCTION) {
         return Err(ErrorResponse::with_detail(
             "lane_misconfigured",
@@ -266,12 +266,12 @@ pub fn validate_lane(
         ));
     }
 
-    // Pass 0 provisions no non-development lane; when one arrives it must not
+    // No non-development lane is provisioned initially; when one arrives it must not
     // resolve the DevCreditAuthority. Callers check is_development_lane().
     Ok(false)
 }
 
-/// Fail-closed credit-backend rule (pass 1): the D1 dev fake never leaves the
+/// Fail-closed credit-backend rule: the D1 dev fake never leaves the
 /// development lane, and a non-development lane must opt into the purchase
 /// backend explicitly — a missing/unknown value refuses to serve rather than
 /// silently granting free dev credits. The development lane may select the

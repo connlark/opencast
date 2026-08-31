@@ -5,7 +5,7 @@ import Testing
 @testable import OpenCastTranscription
 @preconcurrency import WhisperKit
 
-/// G2 gates (whisper-perf pass 3): the spilled-PCM audio path must be
+/// The spilled-PCM audio path must be
 /// bit-identical to the in-memory `[Float]` path it replaces — the spill
 /// file's samples vs `loadAudioAsFloatArray`, and every window served by
 /// `PCMFileAudioSampleSource` vs the `padOrTrimAudio` array copy, including

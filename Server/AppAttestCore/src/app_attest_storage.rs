@@ -304,7 +304,10 @@ pub async fn update_key_counter(
     ))
 }
 
-fn d1_i64(value: i64) -> Result<D1Type<'static>> {
+/// Bind an i64 for D1 (shared across the App Attest workers): guarded to
+/// the f64-exact integer range and bound as Real, since the worker crate's
+/// D1Type::Integer is narrower than i64.
+pub fn d1_i64(value: i64) -> Result<D1Type<'static>> {
     if !(-MAX_EXACT_F64_INTEGER..=MAX_EXACT_F64_INTEGER).contains(&value) {
         return Err(worker::Error::RustError(format!(
             "D1 i64 value {value} exceeds f64 exact integer range"

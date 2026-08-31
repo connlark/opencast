@@ -157,6 +157,12 @@ final class EpisodeAdAnalysisStore {
         return try await fileStore.readOffCaller(relativePath: relativePath)
     }
 
+    /// Resolved by the store so the diagnostics sheet never duplicates the
+    /// Application Support layout rules.
+    func diagnosticsDocumentFileURL(for episodeID: String) -> URL? {
+        record(for: episodeID)?.analysisRelativePath.map(fileStore.fileURL(relativePath:))
+    }
+
     func isCurrentAnalysisDocument(
         _ analysisDocument: EpisodeAdAnalysisDocument,
         for transcriptDocument: EpisodeTranscriptDocument
@@ -280,14 +286,16 @@ final class EpisodeAdAnalysisStore {
         segments: [OpenCastTranscriptSegment],
         transcriptFingerprint: String? = nil
     ) -> EpisodeAdAnalysisJobState {
+        // Running is reported only for the episode the active task belongs
+        // to. A store-global "any job active" signal here would mark every
+        // other episode's detail and transcript surfaces as detecting ads,
+        // and would mask a real failed record for as long as the unrelated
+        // job runs.
         if activeEpisodeID == document.episodeID && activeTask != nil {
             return .running
         }
 
         guard let record = record(for: document.episodeID) else {
-            if activeTask != nil {
-                return .running
-            }
             if let analysisUnavailableMessage {
                 return .unavailable(analysisUnavailableMessage)
             }
@@ -306,14 +314,8 @@ final class EpisodeAdAnalysisStore {
                 transcriptFingerprint: fingerprint,
                 transcriptSegmentCount: segments.count
             )
-            if isStale && activeTask != nil {
-                return .running
-            }
             return .completed(record, isStale: isStale)
         case .failed:
-            if activeTask != nil {
-                return .running
-            }
             let fingerprint = transcriptFingerprint
                 ?? fileStore.transcriptFingerprint(for: document, segments: segments)
             let isStale = !isUsableCurrentRecord(

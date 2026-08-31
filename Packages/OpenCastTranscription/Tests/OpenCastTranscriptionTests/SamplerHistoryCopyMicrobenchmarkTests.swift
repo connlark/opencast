@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @preconcurrency import WhisperKit
 
-/// Measure-only C2 harness (whisper-perf pass 1): quantifies what
+/// Measure-only harness: quantifies what
 /// GreedyTokenSampler.update spends copying complete token/log-prob history
 /// arrays per token versus the delta the decoder actually consumes.
 /// Opt-in via OPENCAST_SAMPLER_MICROBENCH=1.

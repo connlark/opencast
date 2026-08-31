@@ -3,12 +3,12 @@
 # deliberate byte-level contract across three languages: the device
 # downloader (Swift), the transcription backend's origin fetch (Rust), and
 # the benchmark harness (Python) must present the same UA so all three fetch
-# the same origin representation. Nothing enforced that before Phase 10 H —
+# the same origin representation. Nothing enforced that before this guard —
 # the literals could drift silently. Any future UA flip (the CBC/Akamai
 # URL-bearing-UA concern) must edit all three sites and this script's
 # expectation together, with a transition plan for in-field app binaries.
 #
-# Phase 10.5 G hardening: the original script pinned only the three constant
+# The original script pinned only the three constant
 # DECLARATIONS (via `head -1`, so a shadowed second declaration hid), not the
 # REQUEST SITES — a raw literal in the downloader's setValue, job_do's header
 # set, or the benchmark's header dict would have passed unnoticed. Now:

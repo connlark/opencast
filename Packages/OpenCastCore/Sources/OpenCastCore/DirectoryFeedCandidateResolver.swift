@@ -4,10 +4,9 @@ import Foundation
 /// whether to subscribe directly or present a choice. Parsed catalogs
 /// drive every decision; provider counts and timestamps are hints only.
 public struct DirectoryFeedCandidateResolver: Sendable {
-    /// A material difference is at least this many episodes…
-    public static let materialEpisodeGap = 10
-    /// …and at least this fraction of the larger parsed catalog.
-    public static let materialFractionOfLarger = 0.2
+    /// Any parsed episode-count difference is material. Even one
+    /// additional RSS item can expose a truncated directory feed.
+    public static let materialEpisodeGap = 1
     /// A fuller feed is promoted only when its newest parsed episode is
     /// no more than this much older than the other candidate's newest.
     public static let stalenessTolerance: TimeInterval = 30 * 24 * 60 * 60
@@ -66,12 +65,7 @@ public struct DirectoryFeedCandidateResolver: Sendable {
 
     public static func isMaterialDifference(_ first: Int, _ second: Int) -> Bool {
         let gap = abs(first - second)
-        let larger = max(first, second)
-        guard larger > 0 else {
-            return false
-        }
         return gap >= materialEpisodeGap
-            && Double(gap) >= materialFractionOfLarger * Double(larger)
     }
 
     /// The staleness guard: an alternate with no parsed dates never

@@ -3,7 +3,7 @@ import Testing
 @testable import OpenCastTranscription
 @preconcurrency import WhisperKit
 
-/// Opt-in real-model gate for the pass-1 exact-output stack: cancel after the
+/// Opt-in real-model gate for the exact-output stack: cancel after the
 /// first durable checkpoint, resume from it, and verify the stitched segments
 /// cover the clip with no gaps or duplicates. Requires the local Tiny model:
 /// OPENCAST_TINY_RESUME_PROBE=1 OPENCAST_TRANSCRIPTION_AUDIO=<file>.

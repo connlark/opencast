@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct EpisodeAdAnalysisControlsView: View {
-    /// Step-4 settled copy for any outdated analysis (transcript drift or a
+    /// Settled copy for any outdated analysis (transcript drift or a
     /// pre-`promo_ad_breaks_v2` policy) — shared with the Sound Lab panel.
     static let outdatedStatusTitle = "Outdated — run again"
 

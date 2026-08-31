@@ -2,7 +2,7 @@ import Foundation
 import OpenCastTranscription
 import OSLog
 
-/// Purchase + balance state for remote transcription (pass 1, decision 10).
+/// Purchase + balance state for remote transcription.
 /// Money invariants live here: the catalog cross-check fails closed, a
 /// transaction is finished ONLY after the server acknowledges the credit
 /// (credited / already credited / refunded), and reconciliation retries
@@ -38,7 +38,7 @@ final class RemoteTranscriptionPurchaseStore {
 
     private(set) var availability: Availability = .unknown
 
-    /// Synchronous gate for remote-transcription surfaces (decision 9): the
+    /// Synchronous gate for remote-transcription surfaces: the
     /// DEBUG dev flag opens them immediately (fixtures/UI tests never wait on
     /// resolution); otherwise the async StoreKit-environment gate decides.
     var isSurfaceVisible: Bool {
@@ -54,6 +54,10 @@ final class RemoteTranscriptionPurchaseStore {
     private(set) var purchasePhase: PurchasePhase = .idle
     private(set) var isRefreshing = false
     private(set) var refundCandidates: [RemoteTranscriptionRefundCandidate] = []
+
+    /// Fires after a redeem lands seconds on the account, so balance-
+    /// deferred work (the Chapters & Summary pay gate) can re-probe (H8).
+    @ObservationIgnored var onBalanceIncreased: (() -> Void)?
 
     @ObservationIgnored private var appAccountToken: UUID?
     @ObservationIgnored private var redeemedTransactionIDs: Set<UInt64> = []
@@ -300,9 +304,27 @@ final class RemoteTranscriptionPurchaseStore {
     #endif
 
     /// Consumption preview for the pre-create sheet, mirroring the server's
-    /// reserve arithmetic.
+    /// reserve arithmetic. Transcription charges audio-seconds 1:1.
     func estimate(durationSeconds: Double) -> RemoteTranscriptionConsumptionEstimate {
-        let estimated = Int64(durationSeconds.rounded(.up))
+        estimate(chargeSeconds: Int64(durationSeconds.rounded(.up)))
+    }
+
+    /// Chapters & Summary preview (the H6 unit bridge): analysis charges the
+    /// flat blended rate per audio-hour, then settles against the same
+    /// shared balance (H7). Nil when the duration cannot price a run.
+    /// Display-only — the worker recomputes the charge from its own
+    /// authoritative duration at reserve.
+    func analysisEstimate(durationSeconds: Double) -> RemoteTranscriptionConsumptionEstimate? {
+        guard let chargeSeconds = TranscriptAnalysisBillingRate.estimatedChargeSeconds(
+            durationSeconds: durationSeconds
+        ) else {
+            return nil
+        }
+        return estimate(chargeSeconds: chargeSeconds)
+    }
+
+    private func estimate(chargeSeconds: Int64) -> RemoteTranscriptionConsumptionEstimate {
+        let estimated = chargeSeconds
         let available = balance?.availableSeconds ?? 0
         let reserved = balance?.reservedSeconds ?? 0
         let debt = balance?.debtSeconds ?? 0
@@ -565,6 +587,12 @@ final class RemoteTranscriptionPurchaseStore {
             redeemedTransactionIDs.insert(transaction.id)
             await storeKit.finish(transactionID: transaction.id)
             balance = response.balance
+            // The server echoes the original positive creditedSeconds for
+            // already_credited and refunded acknowledgements; only a fresh
+            // credit means the balance actually went up.
+            if response.outcome == .credited {
+                onBalanceIncreased?()
+            }
             return response
         } catch {
             return nil

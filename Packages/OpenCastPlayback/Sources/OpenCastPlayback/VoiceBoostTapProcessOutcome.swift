@@ -1,6 +1,6 @@
 /// Where one tap process callback's frames went. Splitting the bypass
 /// reasons keeps lock contention distinguishable from an intentional
-/// disable (MASTER_PLAN I2) and gives the drain path a visible state.
+/// disable and gives the drain path a visible state.
 nonisolated enum VoiceBoostTapProcessOutcome: Equatable {
     /// Frames ran through the processor in steady state.
     case processedEngaged

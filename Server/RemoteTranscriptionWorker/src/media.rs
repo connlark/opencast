@@ -12,7 +12,7 @@ const FINAL_COVERAGE_TOLERANCE_SECONDS: f64 = 0.1;
 pub const MEDIA_BINDING: &str = "TRANSCRIPTION_MEDIA_WORKER";
 pub const MEDIA_PROBE_PATH: &str = "/probe";
 pub const MEDIA_CHUNK_PATH: &str = "/chunk";
-/// Create-time wake ping (pass 0.5 A3): starts the container without waiting
+/// Create-time wake ping: starts the container without waiting
 /// for readiness so its cold start overlaps staging and the hash-match wait.
 pub const MEDIA_WAKE_PATH: &str = "/wake";
 pub const MEDIA_INTERNAL_ORIGIN: &str = "https://transcription-media.opencast.internal";
@@ -88,7 +88,7 @@ pub fn classify_media_failure(status: u16, error_code: Option<&str>) -> MediaCal
 }
 
 /// Post-probe validation (parent plan): exact identity recomputation, MP3
-/// only in pass 0, one audio stream, caps. Returns a stable error code.
+/// for one audio stream and enforces caps. Returns a stable error code.
 pub fn validate_probe(
     probe: &MediaProbeResponse,
     expected_sha256: &str,

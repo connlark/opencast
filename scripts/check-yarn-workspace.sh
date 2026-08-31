@@ -3,10 +3,8 @@
 # provisioning scripts carrying Yarn 1 flags. CI never executes them (they
 # need live Cloudflare credentials, which the lane deliberately does not
 # hold), so the breakage would have surfaced only on the next real
-# provisioning run. Fail fast instead: syntax-check every tracked shell
-# script and enforce the workspace invariants that a Yarn 1 relapse would
-# violate. notes/ is exempt from the pattern ban — historical records quote
-# the old commands.
+# provisioning run. Fail fast instead: syntax-check every shipped shell script
+# and enforce the workspace invariants that a Yarn 1 relapse would violate.
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"

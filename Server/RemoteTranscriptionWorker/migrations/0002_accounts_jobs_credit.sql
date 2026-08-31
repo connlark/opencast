@@ -1,5 +1,5 @@
 -- Dev-lane account identity: one opaque account per registered App Attest
--- install (pass 0). The versioned bootstrap wire shape already carries an
+-- install. The versioned bootstrap wire shape already carries an
 -- optional app-transaction JWS; real appTransactionID identity replaces this
 -- keying in the purchase pass.
 CREATE TABLE IF NOT EXISTS accounts (

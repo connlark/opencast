@@ -3,8 +3,7 @@ import OpenCastVoiceBoost
 import Testing
 @testable import OpenCastPlayback
 
-/// MASTER_PLAN I1/V5, flipped to a hard requirement in Pass 4: disabling
-/// Voice Boost drains through the C crossfade (time-aligned wet/dry legs),
+/// Disabling Voice Boost drains through the C crossfade (time-aligned wet/dry legs),
 /// splices the delayed dry output back onto the live signal over ~5 ms, and
 /// only then parks in the bit-identical zero-latency bypass. Enabling takes
 /// the mirrored path. No cuts, no forward skips, no wedged states.

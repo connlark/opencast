@@ -23,3 +23,4 @@ protocol EpisodeIdentitySidecarMigrating: AnyObject {
 extension DownloadStore: EpisodeIdentitySidecarMigrating {}
 extension EpisodeTranscriptionStore: EpisodeIdentitySidecarMigrating {}
 extension EpisodeAdAnalysisStore: EpisodeIdentitySidecarMigrating {}
+extension EpisodeTranscriptAnalysisStore: EpisodeIdentitySidecarMigrating {}

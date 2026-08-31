@@ -11,10 +11,10 @@ struct OnboardingView: View {
     let onCompleted: () -> Void
 
     @State private var selectedPage: OnboardingPage
-    /// Every case shows, in declaration order. Decision 4 revision
+    /// Every case shows, in declaration order. The current revision
     /// (2026-07-07): the Tiny Whisper step always shows. Whisper is
     /// load-bearing — it's the ad-free-pass engine on devices without
-    /// background GPU (decision 1 amendment) and the fallback everywhere
+    /// background GPU and the fallback everywhere
     /// else — so onboarding fronts its download for everyone. Apple speech
     /// assets install lazily when a surface first needs them.
     private let pages = OnboardingPage.allCases

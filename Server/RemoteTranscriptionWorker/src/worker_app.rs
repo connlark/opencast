@@ -271,7 +271,7 @@ async fn handle_purchase_redeem(
         return json_error_code(503, types::ERROR_FEATURE_DISABLED);
     }
     if !config.purchases_enabled {
-        // Kill switch (decision 12): store surfaces disappear; balances,
+        // Kill switch: store surfaces disappear; balances,
         // jobs, and notification processing stay untouched.
         return json_error_code(503, types::ERROR_PURCHASES_DISABLED);
     }
@@ -383,7 +383,7 @@ async fn handle_create_job(
     {
         return json_error_code(400, types::ERROR_INVALID_REQUEST);
     }
-    // Pass 2 decision 1: a policy-unsafe URL (http, userinfo, IP-literal,
+    // A policy-unsafe URL (http, userinfo, IP-literal,
     // unusual port, forbidden host) is no longer a create-time failure — the
     // server just never fetches it and the job goes straight to the
     // exact-device upload path. Only an unparseable URL still rejects.
@@ -589,7 +589,7 @@ async fn handle_job_action(
 }
 
 /// Resolve the account behind an authenticated install. The dev backend
-/// auto-creates install-keyed fake accounts (pass 0); the purchase backend
+/// auto-creates install-keyed fake accounts; the purchase backend
 /// only reads links established by a verified bootstrap — `None` means the
 /// caller must bootstrap first.
 async fn resolve_account(

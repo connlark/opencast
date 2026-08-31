@@ -12,6 +12,9 @@ public struct Episode: Codable, Hashable, Identifiable, Sendable {
     public var audioURL: URL?
     public var artworkURL: URL?
     public var guid: String?
+    /// Feed-declared `podcast:chapters` document URL. v1 uses presence only:
+    /// creator chapters suppress generated ones (rendering is v1.5).
+    public var chaptersURL: URL?
 
     public init(
         id: EpisodeID,
@@ -24,7 +27,8 @@ public struct Episode: Codable, Hashable, Identifiable, Sendable {
         duration: TimeInterval? = nil,
         audioURL: URL? = nil,
         artworkURL: URL? = nil,
-        guid: String? = nil
+        guid: String? = nil,
+        chaptersURL: URL? = nil
     ) {
         self.id = id
         self.podcastID = podcastID
@@ -37,5 +41,6 @@ public struct Episode: Codable, Hashable, Identifiable, Sendable {
         self.audioURL = audioURL
         self.artworkURL = artworkURL
         self.guid = guid
+        self.chaptersURL = chaptersURL
     }
 }

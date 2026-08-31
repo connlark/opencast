@@ -863,7 +863,7 @@ describe("internal transcription surface", () => {
   });
 });
 
-// --- Phase 10.5 E (AA-5): an over-budget result fails with a stable code
+// An over-budget result fails with a stable code
 // instead of stranding the job. Pre-fix there was NO in-code size cap on
 // the result path: the post-paid-call record write died on the DO's
 // 128 KiB per-value platform limit, the error vanished into the spawn

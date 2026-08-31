@@ -76,7 +76,7 @@ pub struct CreateMessage {
     pub declared_duration_seconds: Option<f64>,
     pub enclosure_url: String,
     pub device_identity: Option<SourceIdentity>,
-    /// Policy-unsafe enclosure URL (pass 2 decision 1): never fetched, never
+    /// Policy-unsafe enclosure URL: never fetched, never
     /// stored; the job goes straight to the exact-device upload path.
     #[serde(default)]
     pub origin_unsafe: bool,
@@ -390,7 +390,7 @@ impl TranscriptionJob {
         // Arm the alarm before the counter bump: a reset between write_record
         // and the alarm must not leave a durable job with no alarm, since
         // the account's active-job slot stays pinned until the next poll or
-        // sweep repairs it (Phase 10 review RTW-4; the 2026-08-19 repair
+        // sweep repairs it (the repair
         // is the backstop, this ordering is the rule). The `jobs_created` D1
         // subrequest was that gap; it now runs after the alarm exists.
         if message.origin_unsafe {
@@ -613,7 +613,7 @@ impl TranscriptionJob {
         self.status_response(&record, None)
     }
 
-    // --- Exact-device upload routes (pass 2 decision 3) ---
+    // --- Exact-device upload routes ---
 
     /// Mint presigned `UploadPart` URLs for the given part numbers. URLs are
     /// bearer credentials: bounded expiry, never logged.
@@ -715,7 +715,7 @@ impl TranscriptionJob {
             Some(existing) => existing,
             None => {
                 if crate::config::UploadPresignSettings::from_env(&self.env).is_none() {
-                    // Fail closed BEFORE creating server state (decision 12).
+                    // Fail closed BEFORE creating server state.
                     return json_error(503, types::ERROR_UPLOAD_UNAVAILABLE);
                 }
                 let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
@@ -867,7 +867,7 @@ impl TranscriptionJob {
         };
         if completed_size != device.byte_count {
             // Cheap early identity failure; the container hash check
-            // (decision 5) is the authoritative gate for equal-size bytes.
+            // is the authoritative gate for equal-size bytes.
             self.bump("upload_identity_mismatched", 1).await;
             self.finish_terminal(
                 record,
@@ -1029,7 +1029,7 @@ impl TranscriptionJob {
                 // redelivery, or the alarm() catch's 60 s retry after a
                 // post-write error) must NOT destroy an unexpired, already
                 // settled+published result — re-arm at the deadline instead
-                // (Phase 10 review RTW-2).
+                // before returning.
                 match record.state_deadline_at {
                     Some(deadline) if now_seconds() < deadline => {
                         self.schedule_at(deadline).await?;
@@ -1211,7 +1211,7 @@ impl TranscriptionJob {
                 self.step_evaluate_identities(config).await.map(|_| ())
             }
             Err(code) => {
-                // Pass 2 decision 1: the server couldn't stage the origin
+                // The server couldn't stage the origin
                 // (podtrac/mgln class, over-cap mid-stream, transport). The
                 // device's exact copy is the deterministic fallback — never
                 // the failure card. `code` is deliberately dropped; the
@@ -1227,7 +1227,7 @@ impl TranscriptionJob {
         }
     }
 
-    /// Route the job onto the exact-device upload path (pass 2 decision 1):
+    /// Route the job onto the exact-device upload path:
     /// any partial server copy is already gone (staging aborts its multipart;
     /// the mismatch path deletes the raw object before calling this), the
     /// encrypted URL is cleared, and the job waits for the device's bytes
@@ -1270,7 +1270,7 @@ impl TranscriptionJob {
         // this durable record with no alarm — the exact stranding RTW-4
         // closed on the create paths (schedule_at is a storage op, so the
         // record write and the alarm arm commit as one gated stretch).
-        // Phase 10 re-review: the original RTW-4 fix reordered handle_create
+        // The first repair reordered handle_create
         // but left this interior gap.
         self.schedule_at(deadline).await?;
         self.sync_index(&updated).await;
@@ -1357,7 +1357,7 @@ impl TranscriptionJob {
             job::IdentityComparison::Mismatched => {
                 // DAI variant or stale device copy: delete the server copy
                 // FIRST (parent rule), then request the device's exact bytes
-                // instead of failing (pass 2 decision 1). Nothing is spent.
+                // instead of failing. Nothing is spent.
                 //
                 // The R2 delete and the upload-path entry are fallible, and
                 // a landed 5xx from the inline `/source` path is not retried
@@ -1443,7 +1443,7 @@ impl TranscriptionJob {
             config.max_canonical_duration_seconds,
             config.max_source_bytes,
         ) {
-            // Decision 5: for an uploaded source, an identity mismatch means
+            // For an uploaded source, an identity mismatch means
             // the uploaded bytes are not the authenticated device report —
             // its own stable code, zero spend, prefix deleted.
             let code = if updated.upload_completed && code == types::ERROR_SOURCE_MISMATCH {
@@ -1611,7 +1611,7 @@ impl TranscriptionJob {
                 defer_seconds: None,
             }
         } else {
-            // Lever 2 (pass 0.5): transcribe chunks while the container is
+            // Transcribe chunks while the container is
             // still writing the rest of them. Concurrency 1 keeps the strict
             // pass-0 chunk-then-transcribe walk — the rollback story.
             let concurrency = self.chunk_concurrency(&record, config);
@@ -2019,7 +2019,7 @@ impl TranscriptionJob {
             .collect())
     }
 
-    /// Bounded chunk fan-out (pass 0.5 A1): one alarm turn runs one wave of
+    /// Bounded chunk fan-out: one alarm turn runs one wave of
     /// up to `CHUNK_AI_CONCURRENCY` chunk futures joined together, persisting
     /// each completion as it lands. `CHUNK_AI_CONCURRENCY=1` reproduces the
     /// pass-0 sequential walk. All record writes happen in this driver loop
@@ -2108,7 +2108,7 @@ impl TranscriptionJob {
             })
             .collect();
 
-        // Decision 3: a fatal outcome stops new waves, but in-flight siblings
+        // A fatal outcome stops new waves, but in-flight siblings
         // are always awaited — their spend is counted, then discarded.
         let mut fatal: Option<&'static str> = None;
         let mut saw_transport_error = false;
@@ -2145,7 +2145,7 @@ impl TranscriptionJob {
                 ChunkCallResult::MissingChunkObject => fatal = Some(types::ERROR_INTERNAL),
                 ChunkCallResult::TransportError => saw_transport_error = true,
                 ChunkCallResult::AiError { sanitized, class } => {
-                    // Jittered per-chunk retry backoff, same shape as pass 0.
+                    // Jittered per-chunk retry backoff, same shape as the sequential path.
                     let backoff = 5 + (Date::now().as_millis() % 3_000) / 1_000;
                     let retry_at = now_seconds() + backoff as i64;
                     let mut failed_attempts = 0;
@@ -2741,7 +2741,7 @@ impl TranscriptionJob {
                     "chunk_audio_profile": record.chunk_audio_profile.as_deref().unwrap_or("mp3-stream-copy-v1"),
                     "normalized_transcript_sha256": stitched.normalized_transcript_sha256,
                     "pipeline_version": stitch::PIPELINE_VERSION,
-                    // Additive (pass 2): how the source bytes were proven.
+                    // Additive provenance: how the source bytes were proven.
                     "source_match_mode": if record.upload_completed {
                         "exact_device_upload"
                     } else {

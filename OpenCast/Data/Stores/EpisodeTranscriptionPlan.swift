@@ -12,7 +12,7 @@ struct EpisodeTranscriptionPlan: Equatable {
     var runLanguageCode: String
     /// True only for explicit DEBUG engine overrides: completed transcripts
     /// then match by exact model identity instead of counting any completed
-    /// transcript as done (decision 3).
+    /// transcript as done.
     var isEngineStrict: Bool
 
     var requiresInstalledWhisperModel: Bool {

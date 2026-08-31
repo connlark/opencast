@@ -4,7 +4,7 @@
 # never compiles test code. (High 1: this recurred twice before this tripwire
 # existed.)
 #
-# Phase 10.5 G hardening (the awk version only enumerated lib.rs-declared
+# The first version only enumerated lib.rs-declared
 # modules and read `not(test)` as a test arm):
 #   - every .rs file in every Server crate is scanned, including INLINE
 #     wasm-only `mod x { … }` blocks (the sweeper.rs `mod runtime` shape);

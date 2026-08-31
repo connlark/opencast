@@ -209,6 +209,180 @@ struct RSSFeedParserTests {
         #expect(snapshot.episodes.first?.guid == "identified-1")
     }
 
+    @Test("Parses per-item podcast:chapters URLs and leaves others nil")
+    func parsesPodcastChaptersURLs() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Chaptered Show</title>
+                <item>
+                  <title>With Chapters</title>
+                  <guid>chaptered-1</guid>
+                  <podcast:chapters url="https://example.com/chapters/1.json" type="application/json+chapters" />
+                  <enclosure url="https://example.com/audio/chaptered-1.mp3" type="audio/mpeg" />
+                </item>
+                <item>
+                  <title>Without Chapters</title>
+                  <guid>chaptered-2</guid>
+                  <enclosure url="https://example.com/audio/chaptered-2.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/chaptered.xml")!
+        )
+
+        #expect(snapshot.episodes.count == 2)
+        #expect(snapshot.episodes[0].chaptersURL?.absoluteString == "https://example.com/chapters/1.json")
+        #expect(snapshot.episodes[1].chaptersURL == nil)
+    }
+
+    @Test("Captures chapters declared under a non-canonical Podcast Index namespace prefix")
+    func capturesChaptersUnderNonCanonicalNamespacePrefix() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0" xmlns:pc="https://podcastindex.org/namespace/1.0">
+              <channel>
+                <title>Renamed Prefix Show</title>
+                <item>
+                  <title>Root-Declared Prefix</title>
+                  <guid>renamed-1</guid>
+                  <pc:chapters url="https://example.com/chapters/renamed-1.json" type="application/json+chapters" />
+                  <enclosure url="https://example.com/audio/renamed-1.mp3" type="audio/mpeg" />
+                </item>
+                <item>
+                  <title>Element-Declared Prefix</title>
+                  <guid>renamed-2</guid>
+                  <ch:chapters xmlns:ch="https://github.com/Podcastindex-org/podcast-namespace/blob/main/docs/1.0.md" url="https://example.com/chapters/renamed-2.json" />
+                  <enclosure url="https://example.com/audio/renamed-2.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/renamed-prefix.xml")!
+        )
+
+        #expect(snapshot.episodes.count == 2)
+        #expect(snapshot.episodes[0].chaptersURL?.absoluteString == "https://example.com/chapters/renamed-1.json")
+        #expect(snapshot.episodes[1].chaptersURL?.absoluteString == "https://example.com/chapters/renamed-2.json")
+    }
+
+    @Test("Ignores chapters elements from prefixes bound to other namespaces")
+    func ignoresChaptersFromForeignNamespacePrefixes() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0" xmlns:other="https://example.com/not-the-podcast-namespace">
+              <channel>
+                <title>Foreign Prefix Show</title>
+                <item>
+                  <title>Foreign Chapters</title>
+                  <guid>foreign-1</guid>
+                  <other:chapters url="https://example.com/chapters/foreign-1.json" />
+                  <enclosure url="https://example.com/audio/foreign-1.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/foreign-prefix.xml")!
+        )
+
+        #expect(snapshot.episodes.count == 1)
+        #expect(snapshot.episodes[0].chaptersURL == nil)
+    }
+
+    @Test("A prefix rebound to a foreign namespace stops matching within that scope")
+    func reboundPrefixStopsMatchingWithinScope() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0" xmlns:pc="https://podcastindex.org/namespace/1.0">
+              <channel>
+                <title>Rebound Prefix Show</title>
+                <item>
+                  <title>Rebound On Item</title>
+                  <guid>rebound-1</guid>
+                  <pc:chapters xmlns:pc="https://example.com/not-the-podcast-namespace" url="https://example.com/chapters/rebound-1.json" />
+                  <enclosure url="https://example.com/audio/rebound-1.mp3" type="audio/mpeg" />
+                </item>
+                <item>
+                  <title>Canonical Prefix Rebound</title>
+                  <guid>rebound-2</guid>
+                  <podcast:chapters xmlns:podcast="https://example.com/not-the-podcast-namespace" url="https://example.com/chapters/rebound-2.json" />
+                  <enclosure url="https://example.com/audio/rebound-2.mp3" type="audio/mpeg" />
+                </item>
+                <item>
+                  <title>Outer Binding Restored</title>
+                  <guid>rebound-3</guid>
+                  <pc:chapters url="https://example.com/chapters/rebound-3.json" />
+                  <enclosure url="https://example.com/audio/rebound-3.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/rebound-prefix.xml")!
+        )
+
+        #expect(snapshot.episodes.count == 3)
+        #expect(snapshot.episodes[0].chaptersURL == nil)
+        #expect(snapshot.episodes[1].chaptersURL == nil)
+        #expect(snapshot.episodes[2].chaptersURL?.absoluteString == "https://example.com/chapters/rebound-3.json")
+    }
+
+    @Test("A podcast namespace binding does not outlive its element scope")
+    func podcastNamespaceBindingDoesNotOutliveScope() throws {
+        let data = Data(
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <rss version="2.0">
+              <channel>
+                <title>Scoped Binding Show</title>
+                <item xmlns:sc="https://podcastindex.org/namespace/1.0">
+                  <title>In Scope</title>
+                  <guid>scoped-1</guid>
+                  <sc:chapters url="https://example.com/chapters/scoped-1.json" />
+                  <enclosure url="https://example.com/audio/scoped-1.mp3" type="audio/mpeg" />
+                </item>
+                <item>
+                  <title>Out Of Scope</title>
+                  <guid>scoped-2</guid>
+                  <sc:chapters url="https://example.com/chapters/scoped-2.json" />
+                  <enclosure url="https://example.com/audio/scoped-2.mp3" type="audio/mpeg" />
+                </item>
+              </channel>
+            </rss>
+            """.utf8
+        )
+
+        let snapshot = try RSSFeedParser().parse(
+            data: data,
+            feedURL: URL(string: "https://example.com/scoped-binding.xml")!
+        )
+
+        #expect(snapshot.episodes.count == 2)
+        #expect(snapshot.episodes[0].chaptersURL?.absoluteString == "https://example.com/chapters/scoped-1.json")
+        #expect(snapshot.episodes[1].chaptersURL == nil)
+    }
+
     @Test("Parses PDT item pubDate values")
     func parsesPDTItemPubDateValues() throws {
         let data = Data(

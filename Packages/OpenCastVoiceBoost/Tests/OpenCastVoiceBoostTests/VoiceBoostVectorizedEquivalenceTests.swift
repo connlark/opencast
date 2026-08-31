@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Pass 5: the vectorized planar engine against the retained scalar
+/// The vectorized planar engine against the retained scalar
 /// reference (the oracle), and the interleaved wrapper against the planar
 /// entry point. The oracle is the pre-vectorization implementation compiled
 /// permanently behind `setScalarReferenceProcessing(true)`.

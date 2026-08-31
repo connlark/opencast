@@ -3,7 +3,7 @@ import Testing
 @testable import OpenCastTranscription
 @preconcurrency import WhisperKit
 
-/// F gate (whisper-perf pass 2): seed derivation is a pure function of
+/// Seed derivation is a pure function of
 /// (audio hash, absolute window seek, attempt index) — the property that
 /// makes a resumed window sample identically to the uninterrupted run, with
 /// no global state and no cross-window coupling.

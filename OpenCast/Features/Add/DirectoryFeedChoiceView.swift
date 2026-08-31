@@ -10,28 +10,40 @@ struct DirectoryFeedChoiceView: View {
     let onCancel: () -> Void
 
     var body: some View {
+        let presentation = DirectoryFeedChoicePresentation(reason: pending.choice.reason)
+
         NavigationStack {
-            Form {
-                Section {
-                    Text(explanation)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+            ScrollView {
+                GlassEffectContainer(spacing: 20) {
+                    VStack(alignment: .leading, spacing: 20) {
+                        DirectoryFeedChoiceExplanationCard(
+                            title: presentation.explanationTitle,
+                            systemImage: presentation.explanationSystemImage,
+                            bodyText: presentation.explanationBody
+                        )
 
-                Section("Recommended") {
-                    DirectoryFeedCandidateOptionRow(
-                        candidate: pending.choice.primary,
-                        onSubscribe: selectPrimary
-                    )
-                }
+                        DirectoryFeedCandidateOptionRow(
+                            candidate: pending.choice.primary,
+                            title: presentation.primaryTitle,
+                            isRecommended: true,
+                            actionTitle: "Subscribe",
+                            onSubscribe: selectPrimary
+                        )
 
-                Section(secondarySectionTitle) {
-                    DirectoryFeedCandidateOptionRow(
-                        candidate: pending.choice.secondary,
-                        onSubscribe: selectSecondary
-                    )
+                        DirectoryFeedCandidateOptionRow(
+                            candidate: pending.choice.secondary,
+                            title: presentation.secondaryTitle,
+                            isRecommended: false,
+                            actionTitle: presentation.secondaryActionTitle,
+                            onSubscribe: selectSecondary
+                        )
+                    }
                 }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 24)
             }
+            .scrollContentBackground(.visible)
+            .background(.background)
             .navigationTitle(pending.result.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -40,29 +52,8 @@ struct DirectoryFeedChoiceView: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
-    }
-
-    private var explanation: String {
-        switch pending.choice.reason {
-        case .fullerFeedPromoted:
-            "Another feed for this show is up to date and carries many more episodes. The fuller feed is recommended."
-        case .fullerFeedStale:
-            "A fuller feed exists for this show, but it is no longer updating. The current feed stays recommended."
-        case .fullerFeedSalvaged:
-            "A fuller feed exists for this show, but it could not be fully read. The current feed stays recommended."
-        }
-    }
-
-    private var secondarySectionTitle: String {
-        switch pending.choice.reason {
-        case .fullerFeedPromoted:
-            "Original Feed"
-        case .fullerFeedStale:
-            "Full Archive — No Longer Updating"
-        case .fullerFeedSalvaged:
-            "Fuller Feed — Partially Read"
-        }
+        .presentationSizing(.form)
+        .presentationDragIndicator(.visible)
     }
 
     private func selectPrimary() {
@@ -74,43 +65,26 @@ struct DirectoryFeedChoiceView: View {
     }
 }
 
-struct DirectoryFeedCandidateOptionRow: View {
-    let candidate: ResolvedFeedCandidate
-    let onSubscribe: () -> Void
+#Preview("Fuller feed promoted") {
+    DirectoryFeedChoiceView(
+        pending: DirectoryFeedChoicePreviewSamples.promoted,
+        onSelect: { _ in },
+        onCancel: {}
+    )
+}
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LabeledContent("Source", value: sourceName)
-            if let host = candidate.candidate.feedURL.host() {
-                LabeledContent("Host", value: host)
-            }
-            LabeledContent("Episodes", value: episodeCountText)
-            if let newestEpisodeDate = candidate.newestEpisodeDate {
-                LabeledContent("Newest Episode") {
-                    Text(newestEpisodeDate, format: .dateTime.day().month().year())
-                }
-            }
+#Preview("Stale archive") {
+    DirectoryFeedChoiceView(
+        pending: DirectoryFeedChoicePreviewSamples.stale,
+        onSelect: { _ in },
+        onCancel: {}
+    )
+}
 
-            Button("Subscribe", systemImage: "plus", action: onSubscribe)
-                .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .font(.subheadline)
-        .padding(.vertical, 4)
-    }
-
-    private var sourceName: String {
-        switch candidate.candidate.source {
-        case .apple:
-            "Apple"
-        case .podcastIndex:
-            "Podcast Index"
-        }
-    }
-
-    private var episodeCountText: String {
-        candidate.isSalvaged
-            ? "At least \(candidate.episodeCount)"
-            : "\(candidate.episodeCount)"
-    }
+#Preview("Partially read") {
+    DirectoryFeedChoiceView(
+        pending: DirectoryFeedChoicePreviewSamples.salvaged,
+        onSelect: { _ in },
+        onCancel: {}
+    )
 }

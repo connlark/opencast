@@ -5,7 +5,7 @@ import OpenCastTranscription
 import XCTest
 @testable import OpenCast
 
-/// Dev-lane harness (pass 2, W6): runs the real app-side upload engine —
+/// Dev-lane harness: runs the real app-side upload engine —
 /// `RemoteTranscriptionUploadSession` over `BackgroundRemoteTranscriptionUploadTransport`
 /// and `RemoteTranscriptionAPIClient` — against the live development worker
 /// end-to-end: create with a deliberately mismatched enclosure, ride

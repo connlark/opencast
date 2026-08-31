@@ -1,4 +1,4 @@
--- Pass-3 operations floor. These rows are content-free aggregates only;
+-- Operations floor. These rows are content-free aggregates only;
 -- PurchaseAccount Durable Objects remain the sole balance authority.
 
 CREATE TABLE IF NOT EXISTS liability_snapshots (

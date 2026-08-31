@@ -194,6 +194,13 @@ final class DownloadStore {
         return fileStore.fileExists(relativePath: relativePath)
     }
 
+    /// Unlike `localFileURL(for:)` this resolves the path for any state, so
+    /// the diagnostics sheet can report exactly which location it checked
+    /// even when the record is partial, failed, or missing.
+    func diagnosticsFileURL(for record: EpisodeDownloadRecord) -> URL? {
+        record.localRelativePath.map(fileStore.fileURL(relativePath:))
+    }
+
     func markDownloadedFileMissing(
         _ record: EpisodeDownloadRecord,
         modelContext: ModelContext

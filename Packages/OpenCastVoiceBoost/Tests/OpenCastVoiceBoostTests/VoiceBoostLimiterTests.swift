@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Pass 3 requirements for the true-peak lookahead limiter: exact ceiling
+/// Requirements for the true-peak lookahead limiter: exact ceiling
 /// compliance with no hidden headroom, null transparency below threshold,
 /// latency == lookahead, sliding-minimum attack that never overshoots,
 /// smooth exponential release, clean reset, and a stable interplay with the

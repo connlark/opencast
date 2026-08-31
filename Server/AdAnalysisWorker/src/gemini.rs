@@ -76,7 +76,7 @@ impl GeminiParseError {
 }
 
 /// Parse result for one Gemini window response. Malformed or truncated model
-/// output is not an error path (step-4 PLAN §A5): `output` is `None`, the
+/// output is not an error path: `output` is `None`, the
 /// failure code and any extractable finish-reason warning ride along, and the
 /// caller decides between one full re-request and degrading the window to
 /// zero spans plus warnings. Transport-level failures never reach this type.

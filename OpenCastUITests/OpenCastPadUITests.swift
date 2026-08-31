@@ -201,6 +201,39 @@ final class OpenCastPadUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededPadEpisodeDiagnosticsSheetAndShare() throws {
+        try skipUnlessPad()
+
+        let app = makeSeededApp()
+        app.launchArguments.append("--opencast-seed-completed-download")
+        app.launchEnvironment["OPENCAST_SEED_COMPLETED_DOWNLOAD"] = "1"
+        app.launch()
+
+        openSeededPodcastDetail(in: app)
+        openEpisodeDetailFromContextMenu(seededEpisodeRow(in: app), in: app, named: "podcast episode")
+
+        let actionsButton = app.buttons["Episode Actions"].firstMatch
+        assertExists(actionsButton, named: "Episode Actions menu")
+        actionsButton.tap()
+        let diagnosticsEntry = app.buttons["Episode Diagnostics"].firstMatch
+        assertExists(diagnosticsEntry, named: "Episode Diagnostics menu entry")
+        diagnosticsEntry.tap()
+
+        assertExists(app.navigationBars["Episode Diagnostics"].firstMatch, named: "diagnostics sheet on iPad")
+        attachSmokeScreenshot(named: "ipad_episode_diagnostics")
+
+        let shareButton = app.buttons["Download & Share Audio"].firstMatch
+        assertExists(shareButton, named: "download and share audio action")
+        shareButton.tap()
+
+        let shareHeader = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "UI Test Show - Deterministic UI Episode")
+        ).firstMatch
+        assertExists(shareHeader, named: "activity sheet with sanitized share filename")
+        attachSmokeScreenshot(named: "ipad_episode_diagnostics_share")
+    }
+
+    @MainActor
     private func makeSeededApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -227,7 +260,7 @@ final class OpenCastPadUITests: XCTestCase {
 
     /// Pure destination decision so the hardware and override paths stay
     /// unit-covered (`OpenCastPadDestinationDecisionTests`). The runner's own
-    /// idiom evaluated non-pad on a physical iPad (Phase 8 closeout), so the
+    /// idiom evaluated non-pad on a physical iPad during closeout, so the
     /// hardware model string and an explicit orchestrator override are
     /// affirmative disjuncts that don't depend on it.
     static func isPadDestination(

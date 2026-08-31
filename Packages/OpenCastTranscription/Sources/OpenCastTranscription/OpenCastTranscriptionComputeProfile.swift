@@ -6,7 +6,7 @@ public enum OpenCastTranscriptionComputeProfile: String, Sendable, Equatable {
     case cpuOnly
     case cpuAndNeuralEngine
     /// WhisperKit's own defaults (GPU-backed mel). Only safe where the
-    /// platform grants background GPU — callers opt in per decision 16;
+    /// platform grants background GPU — callers opt in explicitly;
     /// the package default stays `backgroundSafe`.
     case whisperKitDefault
 

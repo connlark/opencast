@@ -67,12 +67,14 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             if transcriptionInterruptionDecision == .interruptNow {
                 interruptActiveTranscriptionForLifecycleExit()
             }
+            appModel.resetTranscriptAnalysisForegroundProbe()
             flushProgressForLifecycleExitIfNeeded()
         case .active:
             deferredTranscriptionInterruptionTask?.cancel()
             deferredTranscriptionInterruptionTask = nil
             hasFlushedProgressForLifecycleExit = false
             appModel.resumeEnvironmentalAdFreePassIfNeeded(modelContext: modelContext)
+            appModel.retryDeferredTranscriptAnalyses(modelContext: modelContext, trigger: .sceneActivated)
             startForegroundSyncedDataRefresh()
             runOrDeferForegroundMaintenance()
         @unknown default:

@@ -9,7 +9,7 @@
 //! - `settle(job_id)` -> (); idempotent; only a reserved reservation settles
 //! - `release(job_id)` -> (); idempotent; releasing after settle is a no-op
 //!
-//! Integer seconds everywhere; stable error codes below. Pass 0 ships only
+//! Integer seconds everywhere; stable error codes below. Development uses only
 //! `DevCreditAuthority`, which exists exclusively in the development lane and
 //! enforces real reserve/settle/release semantics against D1 so the job
 //! state machine and the "no model call before successful reservation"

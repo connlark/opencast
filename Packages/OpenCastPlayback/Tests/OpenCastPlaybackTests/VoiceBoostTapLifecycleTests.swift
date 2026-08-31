@@ -4,9 +4,9 @@ import OpenCastVoiceBoost
 import Testing
 @testable import OpenCastPlayback
 
-/// Pass 4 lifecycle coverage: adaptation carryover across re-prepare (I3),
+/// Lifecycle coverage: adaptation carryover across re-prepare,
 /// the seek re-seed policy, drain interruptions (teardown mid-drain), the
-/// enable-from-never-engaged path, and the split bypass counters (I2).
+/// enable-from-never-engaged path, and the split bypass counters.
 struct VoiceBoostTapLifecycleTests {
     private let sampleRate = 48_000.0
     private let blockFrames = 1_024

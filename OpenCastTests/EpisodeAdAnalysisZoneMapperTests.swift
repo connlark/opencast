@@ -147,7 +147,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
             PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
         ])
 
-        // A pre-step-4 ads_only document is outdated even with current
+        // A legacy ads_only document is outdated even with current
         // transcript inputs: zero zones in either tier.
         var outdatedPolicyAnalysis = analysis
         outdatedPolicyAnalysis.policy = "ads_only"

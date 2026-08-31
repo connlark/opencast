@@ -126,7 +126,7 @@ final class NotificationSecurityUITests: XCTestCase {
         app.buttons["Skip"].tap()
         XCTAssertTrue(app.staticTexts["Find Podcasts"].waitForExistence(timeout: 10))
         app.buttons["Continue"].tap()
-        // The transcription step is conditional (decision 4): Apple-capable
+        // The transcription step is conditional: Apple-capable
         // devices show the Apple setup page or no page at all; only
         // Apple-unavailable devices show the Tiny Whisper page.
         let notificationsPage = app.staticTexts["New Episode Alerts"]

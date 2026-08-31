@@ -2,7 +2,7 @@ import Foundation
 
 /// The requested transcription engine for an Ad-Free Pass run.
 /// `.productDefault` resolves Apple-first via `EpisodeTranscriptionPlanResolver`
-/// (decision 1); the explicit cases are the permanent DEBUG benchmark/control
+/// by default; the explicit cases are the permanent DEBUG benchmark/control
 /// surface and stay engine-strict.
 enum AdFreePassTranscriptionEngine: String, Sendable, Equatable {
     case productDefault

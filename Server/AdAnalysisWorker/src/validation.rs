@@ -797,7 +797,7 @@ pub fn validate_model_output(
     // re-apply to merged spans so a contiguous degenerate chain cannot dodge
     // either via fragmentation. The coverage re-check is what stops ~30 small
     // same-kind fragments from merging into one whole-short-episode span the
-    // client would auto-skip (Phase 10 review AA-1); the pre-merge check only
+    // client would auto-skip; the pre-merge check only
     // bounds individual raw spans.
     let mut survivors: Vec<IndexedSpan> = Vec::new();
     for span in merged {

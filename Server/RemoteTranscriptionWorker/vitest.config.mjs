@@ -32,7 +32,7 @@ export default defineConfig(async () => {
             // tests can still settle real spends afterwards (cumulative
             // suite). Must match GRANT in test/integration.spec.mjs.
             DEV_CREDIT_GRANT_SECONDS: "7200",
-            // Exact-device upload (pass 2): presigned URLs point at a fake
+            // Exact-device upload: presigned URLs point at a fake
             // S3 host the spec's fetch mock maps onto the R2 binding's real
             // multipart machinery. 5 MiB parts (the R2 non-final minimum)
             // keep multi-part fixtures small.

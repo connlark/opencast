@@ -9,6 +9,23 @@ struct NowPlayingInfoBuilderTests {
     private let builder = NowPlayingInfoBuilder()
 
     @Test
+    func publishesPodcastTitleAsArtistAndAlbumTitle() throws {
+        let snapshot = PlaybackSnapshot(
+            state: .paused,
+            currentEpisode: episode(duration: 300),
+            position: 0,
+            duration: 300,
+            rate: 1
+        )
+
+        let info = try #require(builder.info(for: snapshot, resolvedDuration: nil, artwork: nil))
+
+        #expect(info[MPMediaItemPropertyTitle] as? String == "Episode Title")
+        #expect(info[MPMediaItemPropertyArtist] as? String == "Podcast Title")
+        #expect(info[MPMediaItemPropertyAlbumTitle] as? String == "Podcast Title")
+    }
+
+    @Test
     func omitsDurationWhenNoFiniteDurationIsAvailable() throws {
         let snapshot = PlaybackSnapshot(
             state: .playing,
@@ -20,9 +37,6 @@ struct NowPlayingInfoBuilderTests {
 
         let info = try #require(builder.info(for: snapshot, resolvedDuration: nil, artwork: nil))
 
-        #expect(info[MPMediaItemPropertyTitle] as? String == "Episode Title")
-        #expect(info[MPMediaItemPropertyAlbumTitle] as? String == "Podcast Title")
-        #expect(info[MPMediaItemPropertyArtist] as? String == "Podcast Title")
         #expect(info[MPMediaItemPropertyPlaybackDuration] == nil)
         #expect(doubleValue(info[MPNowPlayingInfoPropertyElapsedPlaybackTime]) == 42)
         #expect(floatValue(info[MPNowPlayingInfoPropertyPlaybackRate]) == 1.25)

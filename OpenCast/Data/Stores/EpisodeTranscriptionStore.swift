@@ -69,7 +69,7 @@ final class EpisodeTranscriptionStore {
     /// Set when a run's protected default-compute attempt was classified as an
     /// environmental compute failure and retried on `.cpuOnly` — the queue
     /// coordinator reads this to carry the degraded profile across items
-    /// within one protected drain (decision 20).
+    /// within one protected drain.
     @ObservationIgnored private(set) var lastEnvironmentalComputeFallbackEpisodeID: String?
 
     init(
@@ -226,6 +226,12 @@ final class EpisodeTranscriptionStore {
             throw EpisodeTranscriptionError.transcriptDocumentMissing
         }
         return try await fileStore.readOffCaller(relativePath: relativePath)
+    }
+
+    /// Resolved by the store so the diagnostics sheet never duplicates the
+    /// Application Support layout rules.
+    func diagnosticsDocumentFileURL(for episodeID: String) -> URL? {
+        record(for: episodeID)?.transcriptRelativePath.map(fileStore.fileURL(relativePath:))
     }
 
     func jobState(
@@ -930,7 +936,7 @@ final class EpisodeTranscriptionStore {
             recordFailureDiagnostics(error: error, record: record)
 
             // The CoreML CPU-only retry is a whisper mechanism; Apple runs
-            // restart from zero instead (decision 6).
+            // restart from zero instead.
             guard engine == .whisper, attemptedComputeProfile != .cpuOnly else {
                 markInterruptedAfterEnvironmentalFailure(
                     record: record,
@@ -1504,7 +1510,7 @@ final class EpisodeTranscriptionStore {
         modelIdentity: EpisodeTranscriptionModelIdentity,
         engine: EpisodeTranscriptionEngine
     ) async -> (start: TimeInterval, document: EpisodeTranscriptDocument)? {
-        // Apple Speech restarts from zero (decision 6); resume is a
+        // Apple Speech restarts from zero; resume is a
         // whisper-checkpoint mechanism.
         guard engine == .whisper,
               let record,

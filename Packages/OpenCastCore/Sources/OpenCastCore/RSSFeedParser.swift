@@ -101,6 +101,22 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     private let fallbackCDATAEncoding: String.Encoding?
     private(set) var rootElementName: String?
     private(set) var didExceedWorkBudget = false
+    /// Per-prefix stacks of "is this the Podcast Index namespace?", seeded
+    /// with the canonical prefix. `podcast:chapters` presence gates paid
+    /// chapter generation, so a feed binding the namespace to a non-canonical
+    /// prefix must not defeat it. Namespace processing is off (prefixes
+    /// arrive verbatim), so xmlns declarations are tracked by element scope:
+    /// each element's declarations shadow outer ones and are unwound when it
+    /// closes, so a prefix rebound to a foreign namespace stops matching for
+    /// exactly that subtree — and vice versa.
+    private var podcastPrefixBindings: [String: [Bool]] = ["podcast": [true]]
+    /// Aligned with `elementStack`: the prefixes each open element declared.
+    private var declaredNamespacePrefixStack: [[String]] = []
+
+    private static let podcastNamespaceURIs: Set<String> = [
+        "https://podcastindex.org/namespace/1.0",
+        "https://github.com/podcastindex-org/podcast-namespace/blob/main/docs/1.0.md"
+    ]
 
     /// - Parameter fallbackCDATAEncoding: the document's prolog-declared
     ///   encoding; CDATA blocks arrive as raw bytes in that encoding.
@@ -165,7 +181,8 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
                     duration: item.duration,
                     audioURL: item.audioURL,
                     artworkURL: item.artworkURL ?? channel.artworkURL,
-                    guid: item.guid.nilIfBlank
+                    guid: item.guid.nilIfBlank,
+                    chaptersURL: item.chaptersURL
                 )
             )
         }
@@ -246,11 +263,19 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             didExceedWorkBudget = true
         }
 
+        pushNamespaceBindings(attributes: attributeDict)
         switch name {
         case "item":
             currentItem = ItemAccumulator()
         case "enclosure":
             captureEnclosure(attributes: attributeDict)
+        case _ where isPodcastChaptersElement(name):
+            // Attribute-bearing element (url/type); presence gates generated
+            // chapters — creator metadata wins.
+            if currentItem != nil,
+               let url = attributeDict.caseInsensitiveValue(for: "url").flatMap(URL.init(string:)) {
+                currentItem?.chaptersURL = url
+            }
         case "itunes:image":
             if let url = attributeDict.caseInsensitiveValue(for: "href").flatMap(URL.init(string:)) {
                 if currentItem == nil {
@@ -317,6 +342,7 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
 
         if !elementStack.isEmpty {
             elementStack.removeLast()
+            popNamespaceBindings()
         }
         // Bubble closed-element text up into text-bearing parents only: it
         // exists so unescaped inline elements (<b>, <em>) keep accumulating
@@ -386,6 +412,42 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         elementStack.contains("image") || elementStack.contains("textinput")
     }
 
+    private func pushNamespaceBindings(attributes: [String: String]) {
+        var declaredPrefixes: [String] = []
+        for (key, value) in attributes {
+            let loweredKey = key.lowercased()
+            guard loweredKey.hasPrefix("xmlns:") else {
+                continue
+            }
+            let prefix = String(loweredKey.dropFirst("xmlns:".count))
+            let isPodcastNamespace = Self.podcastNamespaceURIs.contains(
+                value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            )
+            podcastPrefixBindings[prefix, default: []].append(isPodcastNamespace)
+            declaredPrefixes.append(prefix)
+        }
+        declaredNamespacePrefixStack.append(declaredPrefixes)
+    }
+
+    private func popNamespaceBindings() {
+        guard let declaredPrefixes = declaredNamespacePrefixStack.popLast() else {
+            return
+        }
+        for prefix in declaredPrefixes {
+            podcastPrefixBindings[prefix]?.removeLast()
+            if podcastPrefixBindings[prefix]?.isEmpty == true {
+                podcastPrefixBindings[prefix] = nil
+            }
+        }
+    }
+
+    private func isPodcastChaptersElement(_ name: String) -> Bool {
+        guard name.hasSuffix(":chapters") else {
+            return false
+        }
+        return podcastPrefixBindings[String(name.dropLast(":chapters".count))]?.last == true
+    }
+
     private func captureEnclosure(attributes: [String: String]) {
         guard
             currentItem != nil,
@@ -453,6 +515,7 @@ private struct ItemAccumulator {
     var audioURL: URL?
     var enclosureType: String?
     var artworkURL: URL?
+    var chaptersURL: URL?
 }
 
 private extension Dictionary where Key == String, Value == String {

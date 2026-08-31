@@ -1,4 +1,4 @@
--- Purchase-backend install→account links (pass 1). Unlike the pass-0
+-- Purchase-backend install→account links. Unlike the development
 -- `accounts` table (one install per account), several installs may share one
 -- purchase account — the same Apple Account bootstrapping from a second
 -- device maps to the same appTransactionID-derived account. Links are

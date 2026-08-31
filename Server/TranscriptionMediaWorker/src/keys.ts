@@ -1,10 +1,10 @@
 // Pure key/routing predicates for the media worker, separated from the
 // Cloudflare runtime wiring in index.ts so the security boundary (the R2
 // allow-list, the per-job binding, the shim deadline map) is unit-testable
-// with no container harness (Phase 10 TMW-5).
+// with no container harness.
 
 const ALLOWED_KEY_PATTERN = /^(raw|chunks)\/job-[A-Za-z0-9_-]+\//;
-// Exact-device uploads (pass 2) are probe/chunk inputs, never container
+// Exact-device uploads are probe/chunk inputs, never container
 // outputs: readable, not writable.
 const READ_ONLY_KEY_PATTERN = /^uploads\/job-[A-Za-z0-9_-]+\//;
 
@@ -58,7 +58,7 @@ function chunkPrefixBelongsToJob(chunkPrefix: string, jobId: string): boolean {
 
 /// Binds a probe/chunk request's object keys to the job_id already in its
 /// body, so one container instance (shared across jobs) cannot be steered to
-/// read or overwrite another job's audio (Phase 10 TMW-3). Returns an error
+/// read or overwrite another job's audio. Returns an error
 /// code string when the binding fails, or null when the body is well-bound.
 export function jobBindingError(pathname: string, payload: unknown): string | null {
   const jobId = jobIdFromPayload(payload);

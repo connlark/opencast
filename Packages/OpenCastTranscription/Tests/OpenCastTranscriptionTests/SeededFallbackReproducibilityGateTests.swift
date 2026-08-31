@@ -4,12 +4,12 @@ import Testing
 @testable import OpenCastTranscription
 @preconcurrency import WhisperKit
 
-/// F gate (whisper-perf pass 2): with deterministic fallback seeding, two
+/// With deterministic fallback seeding, two
 /// same-build full-episode runs — product decode options, fallback retries
 /// ENABLED — must produce bit-identical tokens/segments/timestamps, and the
 /// workload must actually exercise fallbacks (otherwise the gate is
 /// vacuous). Unseeded runs of the same workload are nondeterministic on any
-/// build (pass-1 evidence: 13 vs 6 fallbacks on identical binaries).
+/// build (13 vs 6 fallbacks on identical binaries during validation).
 /// OPENCAST_F_GATE=1 OPENCAST_TRANSCRIPTION_AUDIO=<mp3>
 @Suite("Seeded fallback reproducibility gate")
 struct SeededFallbackReproducibilityGateTests {
@@ -26,7 +26,7 @@ struct SeededFallbackReproducibilityGateTests {
         let audioData = try Data(contentsOf: URL(fileURLWithPath: audioPath))
         let sourceSHA = SHA256.hash(data: audioData).map { String(format: "%02x", $0) }.joined()
 
-        // Whisper-perf pass 5 (Q3): OPENCAST_GATE_MODEL_VERSION selects a
+        // OPENCAST_GATE_MODEL_VERSION selects a
         // sideloaded candidate tree; unset runs the shipped default.
         let location = try DownloadedWhisperModelLocator(
             model: .tinyEnglish,
@@ -130,7 +130,7 @@ struct SeededFallbackReproducibilityGateTests {
         print("F_GATE mode=\(unseeded ? "unseeded" : "seeded") runs=\(runCount) fallbacks=\(fallbackCounts) identical=\(allIdentical) sha=\(OpenCastSHA256.hash(Data(dumps[0].utf8)))")
         if !unseeded {
             #expect(allIdentical, "seeded runs must be bit-identical")
-            // Whisper-perf pass 5: OPENCAST_F_GATE_ALLOW_ZERO=1 admits
+            // OPENCAST_F_GATE_ALLOW_ZERO=1 admits
             // content that decodes without fallbacks on this surface (the
             // 3-h stress episode and logfiles are zero-fallback on host);
             // the anchor keeps the strict non-vacuous default.

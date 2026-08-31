@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Pins the Pass 4 D11 decision: DC protection comes from the 70 Hz HPF in
+/// Pins the DC-protection decision: protection comes from the 70 Hz HPF in
 /// the default (EQ-on) chain, and EQ-off configurations are documented as
 /// unprotected — an always-on DC blocker in the signal path would break the
 /// limiterOnly null-transparency invariant, which requires passing the

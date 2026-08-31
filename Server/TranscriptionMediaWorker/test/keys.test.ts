@@ -1,4 +1,4 @@
-// First TS tests for the media worker (Phase 10 TMW-5): the R2 allow-list,
+// Focused TS tests for the media worker: the R2 allow-list,
 // the per-job binding, and the shim deadline map. Pure logic, no container
 // harness needed.
 import { describe, expect, it } from "vitest";

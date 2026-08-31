@@ -5,8 +5,8 @@ struct SettingsTranscriptionModelSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
 
-    /// The Fast/Accurate model picker is a diagnostics-only affordance
-    /// (decision 5); the product path pins whisper tiny.
+    /// The Fast/Accurate model picker is a diagnostics-only affordance; the
+    /// product path pins whisper tiny.
     var includesModelPicker = false
     var sectionTitle = "Transcription"
 

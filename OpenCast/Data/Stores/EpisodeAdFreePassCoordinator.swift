@@ -410,7 +410,7 @@ final class EpisodeAdFreePassCoordinator {
                 mode: mode
             )
             // Restored items drain foreground-opportunistically; background
-            // continuation always requires a fresh explicit tap (decision 5).
+            // continuation always requires a fresh explicit tap.
             // A restored cloud item re-attaches server-side through its
             // stable purpose-keyed clientRequestID.
             let entry = QueueEntry(
@@ -905,7 +905,7 @@ final class EpisodeAdFreePassCoordinator {
                 modelContext: deps.modelContext
             )
 
-            // Decision 3: a completed transcript counts as done for the
+            // A completed transcript counts as done for the
             // default path regardless of engine — skip engine resolution and
             // resource setup entirely.
             let transcriptDocument: EpisodeTranscriptDocument
@@ -979,7 +979,7 @@ final class EpisodeAdFreePassCoordinator {
         let deps = entry.deps
 
         do {
-            // Decision 5: a current completed local transcript never buys a
+            // A current completed local transcript never buys a
             // cloud job — the analysis-only device path is free.
             if let reusableDocument = await reusableCompletedTranscriptDocument(
                 for: episode.episodeID,
@@ -1485,7 +1485,7 @@ final class EpisodeAdFreePassCoordinator {
             )
         } catch EpisodeTranscriptionError.missingSpeechModel where engine == .productDefault {
             // Whisper fallback with no installed model: pin the tiny model
-            // (decision 1's fallback target) and run the existing
+            // (the fallback target) and run the existing
             // consent/install flow, then re-resolve.
             if transcriptionModels.selectedChoice != .fastTinyEnglish {
                 _ = transcriptionModels.setSelectedChoice(.fastTinyEnglish, modelContext: modelContext)
@@ -1762,7 +1762,7 @@ final class EpisodeAdFreePassCoordinator {
             throw EpisodeTranscriptionError.missingDownloadedFile
         }
 
-        // Decision 20: after a classified cpuOnly fallback inside a protected
+        // After a classified cpuOnly fallback inside a protected
         // drain, subsequent whisper items skip the doomed default attempt.
         let initialComputeProfile: OpenCastTranscriptionComputeProfile =
             transcriptionPlan.runEngine == .whisper

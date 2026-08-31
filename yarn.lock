@@ -5557,6 +5557,17 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"opencast-transcript-analysis-worker@workspace:Server/TranscriptAnalysisWorker":
+  version: 0.0.0-use.local
+  resolution: "opencast-transcript-analysis-worker@workspace:Server/TranscriptAnalysisWorker"
+  dependencies:
+    "@cloudflare/vitest-pool-workers": "catalog:"
+    jsonwebtoken: "catalog:"
+    vitest: "catalog:"
+    wrangler: "catalog:"
+  languageName: unknown
+  linkType: soft
+
 "opencast-transcription-media-worker@workspace:Server/TranscriptionMediaWorker":
   version: 0.0.0-use.local
   resolution: "opencast-transcription-media-worker@workspace:Server/TranscriptionMediaWorker"

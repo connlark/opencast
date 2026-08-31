@@ -2,7 +2,7 @@ import Foundation
 
 struct EpisodeAdAnalysisHTTPError: LocalizedError, Sendable, Equatable {
     /// Worker cap-rejection codes (`Server/AdAnalysisWorker`): all three defer
-    /// the queue identically (decision 9). Classification is status + code —
+    /// the queue identically. Classification is status + code —
     /// never the user-facing message string.
     static let capExceededCodes: Set<String> = [
         "daily_request_cap_exceeded",

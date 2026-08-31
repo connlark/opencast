@@ -10,7 +10,7 @@ enum NowPlayingAutoSkipUndo {
     /// A seek to exactly `zone.startTime` can land a frame *before* the zone
     /// (AVPlayer landing wobble), so the `.scrub` landing misses the zone, no
     /// disarm happens, and the very next tick re-skips — measured live on the
-    /// step-4 bug-report episode (undo landed at 0:50 against a 0:50.x zone
+    /// original bug-report episode (undo landed at 0:50 against a 0:50.x zone
     /// start and instantly re-skipped to 2:10). Land safely inside instead.
     nonisolated static let landingMargin: TimeInterval = 0.5
 

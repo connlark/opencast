@@ -2,7 +2,7 @@ import Foundation
 import OpenCastTranscription
 
 #if DEBUG
-/// Launch-argument UI fixtures for the remote transcription states pass 0
+/// Launch-argument UI fixtures for the remote transcription states
 /// actually has: `-OPENCAST_REMOTE_TRANSCRIPTION_FIXTURE <name>[:<episodeID>]`
 /// drives the observable job store into one state with no server, StoreKit,
 /// or network involved. Combine with `-OPENCAST_REMOTE_TRANSCRIPTION_DEV` so
@@ -11,7 +11,7 @@ enum RemoteTranscriptionUIFixture: String, CaseIterable {
     case devBalance = "dev-balance"
     case hashMatchInProgress = "hash-match"
     case transcribing
-    /// Exact-device upload fallback in flight (pass 2).
+    /// Exact-device upload fallback in flight.
     case uploading
     case resultImported = "result-imported"
     case mismatchLocalFallback = "mismatch"

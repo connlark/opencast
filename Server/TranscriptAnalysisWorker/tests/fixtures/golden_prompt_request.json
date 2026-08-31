@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "request_id": "golden-prompt-fixture",
+  "episode_id": "golden-episode-id",
+  "podcast_id": "https://example.com/feed.xml",
+  "episode_title": "Golden Prompt Fixture — Épisode 42",
+  "podcast_title": "The Synthetic Show",
+  "transcript": {
+    "language_code": "en-US",
+    "audio_duration": 123.456,
+    "fingerprint": "golden-fingerprint-0123456789abcdef",
+    "updated_at": "2026-08-23T00:00:00Z",
+    "state": "completed",
+    "segment_count": 6
+  },
+  "segments": [
+    {"id": 0, "start": 0.0, "end": 9.9996, "text": "Welcome to the synthetic show."},
+    {"id": 1, "start": 9.9996, "end": 20.5, "text": "Ceci est un segment — with unicode, naïve café."},
+    {"id": 2, "start": 20.5, "end": 30.25, "text": "A segment with \"quotes\" and a backslash \\ character."},
+    {"id": 3, "start": 30.25, "end": 60.125, "text": "Numbers 1234567890 and [brackets | pipes] inline."},
+    {"id": 4, "start": 60.125, "end": 100.0, "text": "Penultimate segment text stays plain."},
+    {"id": 5, "start": 100.0, "end": 123.456, "text": "The final segment ends the fixture."}
+  ]
+}

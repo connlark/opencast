@@ -4,7 +4,7 @@ import Testing
 @testable import OpenCastTranscription
 @preconcurrency import WhisperKit
 
-/// D4 probe (whisper-perf pass 2, measure-first): does Core ML honor
+/// Measure-first probe: does Core ML honor
 /// caller-owned `MLPredictionOptions.outputBackings` for the Tiny decoder's
 /// ML Program, and do allocations actually fall? Hard stop if not honored —
 /// that answers the open question either way; no production change happens

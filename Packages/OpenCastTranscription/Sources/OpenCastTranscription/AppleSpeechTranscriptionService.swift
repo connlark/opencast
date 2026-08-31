@@ -223,7 +223,7 @@ public actor AppleSpeechTranscriptionService {
         // normalize + JSON encode + file write, all O(transcript)), which
         // saturates the main thread as the transcript grows and trips the
         // background 80%/60s CPU kill. Checkpoints are UI/bookkeeping only
-        // for Apple Speech (resume restarts from zero, decision 6), so a
+        // for Apple Speech (resume restarts from zero), so a
         // coarse audio-time stride loses nothing.
         var throttle = AppleSpeechEventThrottle()
         for try await result in transcriber.results {

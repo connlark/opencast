@@ -565,6 +565,64 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(!blocked.fitsWithinHeadroom)
     }
 
+    @Test("Analysis preview bridges units: the flat rate scales the charge against the same balance")
+    func analysisEstimateBridgesUnits() async {
+        let api = FakePurchaseAPI()
+        api.balance = OpenCastRemoteTranscriptionBalance(
+            availableSeconds: 3600,
+            reservedSeconds: 0,
+            debtSeconds: 0
+        )
+        let storeKit = FakeStoreKitClient()
+        let store = Self.makeStore(api: api, storeKit: storeKit)
+        await store.prepare()
+
+        // One analyzed audio-hour charges the full flat rate (7,850 s),
+        // which overdrafts a fresh 3,600 s grant but fits inside the debt
+        // headroom — the H7 worked example.
+        let hour = store.analysisEstimate(durationSeconds: 3600)
+        #expect(hour?.estimatedSeconds == 7850)
+        #expect(hour?.overdraftSeconds == 4250)
+        #expect(hour?.fitsWithinHeadroom == true)
+
+        // A 3.454 h episode outprices new-account headroom entirely (H7).
+        let long = store.analysisEstimate(durationSeconds: 12_434.5)
+        #expect(long?.estimatedSeconds == 27_115)
+        #expect(long?.fitsWithinHeadroom == false)
+
+        #expect(store.analysisEstimate(durationSeconds: 0) == nil)
+        #expect(store.analysisEstimate(durationSeconds: -30) == nil)
+    }
+
+    @Test("Balance-increase callback fires only when a redeem actually credits")
+    func balanceIncreaseCallbackFiresOnlyOnCredit() async {
+        let api = FakePurchaseAPI()
+        let storeKit = FakeStoreKitClient()
+        storeKit.purchaseResult = .success(Self.transaction(id: 21))
+        let store = Self.makeStore(api: api, storeKit: storeKit)
+        var balanceIncreaseCount = 0
+        store.onBalanceIncreased = { balanceIncreaseCount += 1 }
+
+        await store.prepare()
+        await store.purchase(store.products[0])
+        #expect(balanceIncreaseCount == 1)
+
+        // An already-credited replay moves no money and must not re-probe
+        // balance-deferred work, even though the server echoes the original
+        // positive creditedSeconds.
+        api.redeemOutcome = .alreadyCredited
+        storeKit.purchaseResult = .success(Self.transaction(id: 22))
+        await store.purchase(store.products[0])
+        #expect(balanceIncreaseCount == 1)
+
+        // A refund acknowledgement also echoes the original grant while the
+        // balance went DOWN — it must not fire either.
+        api.redeemOutcome = .refunded
+        storeKit.purchaseResult = .success(Self.transaction(id: 23))
+        await store.purchase(store.products[0])
+        #expect(balanceIncreaseCount == 1)
+    }
+
     // MARK: - Fixtures
 
     private static func makeStore(
@@ -643,16 +701,17 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
         if let redeemError {
             throw redeemError
         }
-        let credited = redeemOutcome == .credited ? Int64(72_000) : 0
-        let newBalance = OpenCastRemoteTranscriptionBalance(
-            availableSeconds: balance.availableSeconds + credited,
-            reservedSeconds: balance.reservedSeconds,
-            debtSeconds: balance.debtSeconds
-        )
+        // Like the real PurchaseWorker: every acknowledgement echoes the
+        // original positive grant, but only `credited` moves the balance.
+        let credited = Int64(72_000)
         lock.withLock {
             recordedRedeemedJWS.append(transactionJWS)
             if redeemOutcome == .credited {
-                balance = newBalance
+                balance = OpenCastRemoteTranscriptionBalance(
+                    availableSeconds: balance.availableSeconds + credited,
+                    reservedSeconds: balance.reservedSeconds,
+                    debtSeconds: balance.debtSeconds
+                )
             }
         }
         return OpenCastRemoteTranscriptionRedeemResponse(

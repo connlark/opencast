@@ -1,8 +1,8 @@
 /// Stable machine error codes shared by every remote transcription route.
 /// Localized copy stays app-side; unknown future codes are preserved.
 public enum OpenCastRemoteTranscriptionErrorCode: Sendable, Equatable, Hashable {
-    /// Server and device bytes differ (DAI variant or changed file). In pass 0
-    /// this is terminal and the app falls back to local transcription.
+    /// Server and device bytes differ (DAI variant or changed file). This is
+    /// terminal and the app falls back to local transcription.
     case sourceMismatch
     case unsupportedMediaType
     case sourceTooLarge

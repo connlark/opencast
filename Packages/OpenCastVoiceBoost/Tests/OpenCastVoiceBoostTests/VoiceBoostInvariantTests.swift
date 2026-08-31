@@ -89,7 +89,7 @@ struct VoiceBoostInvariantTests {
         }
     }
 
-    /// Since Pass 3 the C pipeline always runs through the limiter delay
+    /// The C pipeline always runs through the limiter delay
     /// line, so C-level disabled output is the dry signal delayed by exactly
     /// `latencyFrames`, bit-identically. The zero-latency bit-identical
     /// bypass invariant lives at the tap level, whose `!isEnabled`

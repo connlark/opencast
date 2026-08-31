@@ -1,4 +1,4 @@
-// Focused first tests (Phase 10 G): the constant-time admin compare and
+// Focused tests for the constant-time admin compare and
 // the flip endpoint's 403 paths. The feed itself is a fixture exercised by
 // the device flows; this suite stays minimal on purpose.
 import { SELF } from "cloudflare:test";
@@ -64,6 +64,35 @@ describe("admin flip", () => {
   });
 });
 
+describe("creator chapters fixture", () => {
+  it("declares podcast:chapters on Bridge Three only, in both GUID states", async () => {
+    for (const state of ["v1", "v2"]) {
+      await SELF.fetch(`${ORIGIN}/state/${state}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+      const feed = await SELF.fetch(`${ORIGIN}/feed.xml`);
+      const xml = await feed.text();
+      expect(xml).toContain('xmlns:podcast="https://podcastindex.org/namespace/1.0"');
+      const tags = xml.match(/<podcast:chapters /g) ?? [];
+      expect(tags.length).toBe(1);
+      const bridgeItem = xml.slice(xml.indexOf("<title>Bridge Three</title>"));
+      expect(bridgeItem).toContain(
+        '<podcast:chapters url="https://graft.example.com/chapters/003.json" type="application/json+chapters">',
+      );
+    }
+  });
+
+  it("serves the chapters document", async () => {
+    const response = await SELF.fetch(`${ORIGIN}/chapters/003.json`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/json+chapters");
+    const body = await response.json();
+    expect(body.version).toBe("1.2.0");
+    expect(body.chapters.length).toBe(2);
+  });
+});
+
 describe("HEAD /feed.xml", () => {
   it("returns the feed headers with no body (EFW-1)", async () => {
     const response = await SELF.fetch(`${ORIGIN}/feed.xml`, { method: "HEAD" });
@@ -76,7 +105,7 @@ describe("HEAD /feed.xml", () => {
 
 describe("unset ADMIN_TOKEN", () => {
   it("fails closed on the flip endpoint when no admin token is configured", async () => {
-    // The only previously untested arm of the auth guard (Phase 10.5 G):
+    // Exercise the remaining auth-guard arm:
     // a lane with no ADMIN_TOKEN binding must 403 every flip — including a
     // caller presenting an empty bearer against an empty configured token,
     // which the constant-time compare alone would accept.

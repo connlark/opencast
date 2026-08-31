@@ -7,7 +7,7 @@ import Testing
 @MainActor
 @Suite("Episode ad-free pass coordinator")
 struct EpisodeAdFreePassCoordinatorTests {
-    @Test("Outdated presentation offers a manual re-run with the step-4 copy")
+    @Test("Outdated presentation offers a manual re-run with settled copy")
     func outdatedPresentationOffersManualRerun() {
         let outdated = EpisodeAdFreePassPresentation.outdated
         #expect(outdated.statusText == "Outdated — run again")
@@ -356,7 +356,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(stages.contains(.interrupted))
         #expect(terminals == [.interrupted])
         #expect(fixture.coordinator.activeEpisodeID == nil)
-        // The interrupted item leaves the queue (step-5 re-tap semantics); the rest stay queued.
+        // The interrupted item leaves the queue (re-tap semantics); the rest stay queued.
         #expect(fixture.coordinator.queueItems.map(\.episodeID) == [second.episodeID])
         #expect(!fixture.coordinator.isQueuePausedForEnvironmentalInterrupt)
 
@@ -974,7 +974,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(fixture.transcriptions.record(for: episode.episodeID)?.modelIdentifier == OpenCastWhisperModel.tinyEnglish.rawValue)
     }
 
-    @Test("A queue of one publishes the step-5 stage sequence with single-item queue context")
+    @Test("A queue of one publishes the stage sequence with single-item queue context")
     func singleItemQueuePublishesStepFiveStageSequence() async throws {
         let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))

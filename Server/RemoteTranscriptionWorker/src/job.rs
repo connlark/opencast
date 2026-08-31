@@ -96,13 +96,13 @@ pub fn chunk_ai_concurrency(max_chunk_bytes: i64, configured: u32) -> u32 {
     configured.min(affordable as u32).max(1)
 }
 
-/// Bounded presigned-URL batches (pass 2 decision 3).
+/// Bounded presigned-URL batches.
 pub const UPLOAD_MAX_PARTS_PER_BATCH: usize = 8;
 /// R2's S3 surface caps multipart uploads at 10,000 parts; the 512 MiB cap
 /// with 16 MiB parts stays ≤ 32, so anything past u16 is malformed.
 pub const UPLOAD_MAX_PART_COUNT: i64 = 10_000;
 
-/// Uniform-part geometry for the exact-device upload (pass 2 decision 4):
+/// Uniform-part geometry for the exact-device upload:
 /// every non-final part is exactly `part_bytes`; the final part is the
 /// remainder. Returns None when the byte count can't form a valid upload.
 pub fn upload_part_count(byte_count: i64, part_bytes: i64) -> Option<u16> {
@@ -221,7 +221,7 @@ pub struct ChunkRef {
     pub sha256: String,
 }
 
-/// Per-chunk fan-out state (pass 0.5): scheduling truth for the bounded wave
+/// Per-chunk fan-out state: scheduling truth for the bounded wave
 /// driver plus content-free AI timing telemetry (indices and epoch seconds
 /// only). Pass-0 records carry none of this; `init_chunk_work` migrates
 /// their `next_chunk_index` walk position.
@@ -244,7 +244,7 @@ pub struct ChunkWork {
     pub retry_not_before: Option<i64>,
 }
 
-/// Overlap-driver selection (pass 0.5 lever 2): chunks the container has
+/// Overlap-driver selection: chunks the container has
 /// already written to R2, minus everything excluded (completed, in flight,
 /// or already attempted this turn), capacity-capped and budgeted against the
 /// retry-audio ceiling at the requested chunk duration — actual durations
@@ -421,7 +421,7 @@ pub struct JobRecord {
     pub current_chunk_attempts: u32,
     #[serde(default)]
     pub chunk_work: Vec<ChunkWork>,
-    /// Content-free phase telemetry (pass 0.5 decision 4): first entry into
+    /// Content-free phase telemetry: first entry into
     /// each state, epoch seconds. Never URLs, titles, hashes, or text.
     #[serde(default)]
     pub phase_timestamps: BTreeMap<String, i64>,
@@ -472,8 +472,7 @@ pub struct JobRecord {
     pub stranded_repairs: u32,
     /// Create-time policy rejection of the enclosure URL (http, userinfo,
     /// IP-literal, unusual port, forbidden host): the server never fetches;
-    /// the job goes straight to the exact-device upload path (pass 2
-    /// decision 1).
+    /// the job goes straight to the exact-device upload path.
     #[serde(default)]
     pub origin_unsafe: bool,
     /// R2 multipart upload id for `uploads/<job>/source`; present from
@@ -673,7 +672,7 @@ pub fn retry_audio_ceiling_seconds(canonical_duration_seconds: f64, chunk_count:
 
 /// Per-state deadline in seconds, if the state has one (parent plan decision:
 /// every waiting state drives normal cancellation on expiry). The two upload
-/// states carry their own deadlines (pass 2 decision 2) and take them from
+/// states carry their own deadlines and take them from
 /// config at the transition site.
 pub fn state_deadline_seconds(
     state: &str,

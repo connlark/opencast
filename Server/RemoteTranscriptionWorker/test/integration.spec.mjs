@@ -31,7 +31,7 @@ const ORIGIN_REDIRECT_URL = `${ORIGIN_HOST}/redirect/audio.mp3`;
 const LARGE_ORIGIN_URL = `${ORIGIN_HOST}/large.mp3`;
 // Podtrac/mgln class: the origin refuses Workers fetches outright.
 const FAILING_ORIGIN_URL = `${ORIGIN_HOST}/blocked.mp3`;
-// In-flight-cancel staging hook (Phase 10.5 A): the streamed body delivers
+// In-flight-cancel staging hook: the streamed body delivers
 // one chunk, then parks on a test-controlled gate so stage_origin sits on
 // `stream.next().await` until the spec releases it. The gate is a plain
 // mutable flag polled with an in-context setTimeout — a promise resolved
@@ -1070,7 +1070,7 @@ describe("remote transcription dev lane", () => {
     await expectJobStorageEmpty(job.job_id);
   });
 
-  // --- Pass 0.5: bounded chunk fan-out (A4). 900 s spans four 298 s steps;
+  // --- Bounded chunk fan-out. 900 s spans four 298 s steps;
   // the fake:latency hook makes each chunk's AI call take a fixed wall time
   // so overlap (or its absence) is visible in phase_timestamps. ---
 
@@ -1183,7 +1183,7 @@ describe("remote transcription dev lane", () => {
     expect(balance.reserved_seconds).toBe(0);
   });
 
-  // --- Pass 0.5 lever 2: chunking/transcription overlap. The mlat hook
+  // --- Chunking/transcription overlap. The mlat hook
   // paces fake-media chunk writes; the latency hook paces fake AI calls. ---
 
   it("transcribes chunks while chunking is still writing the rest", async () => {
@@ -1573,7 +1573,7 @@ describe("remote transcription dev lane", () => {
     }
   });
 
-  // --- Cancel/reset safety pass (Phase 10.5 A). The DO's input gate stays
+  // --- Cancel/reset safety pass. The DO's input gate stays
   // open across subrequest awaits, so /cancel runs its terminal cleanup
   // while a step is parked mid-await; the resumed step must never resurrect
   // the terminal record, re-arm the deleted alarm, or leave a charge. These
@@ -1721,7 +1721,7 @@ describe("remote transcription dev lane", () => {
     await expectJobStorageEmpty(job.job_id);
   });
 
-  // --- RTW-7 (Phase 10.5 D): the origin wall clock must bind the awaits
+  // --- The origin wall clock must bind the awaits
   // themselves, not just fire after a chunk arrives.
 
   it("fails a stalled origin stream at the wall budget instead of riding the staging deadline", async () => {
@@ -1755,7 +1755,7 @@ describe("remote transcription dev lane", () => {
     expect(after.reserved_seconds).toBe(0);
   });
 
-  // --- RTW-5 credit-release backstop (Phase 10.5 C): a terminal path that
+  // --- Credit-release backstop: a terminal path that
   // fails to release the reservation must never abandon it silently — the
   // pending flag drives bounded alarm retries, and the counters are the
   // operator signal.

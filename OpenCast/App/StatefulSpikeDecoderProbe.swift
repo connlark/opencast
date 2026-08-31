@@ -1,7 +1,7 @@
 @preconcurrency import CoreML
 import Foundation
 
-/// Whisper-perf pass 3 Phase I3 / pass 4 Phase K2 (opt-in, measure-only):
+/// Opt-in, measure-only stateful decoder probe:
 /// per-forward microbenchmark for Tiny bundle candidates.
 ///
 /// Loads compiled bundles from `Documents/StatefulSpike/*.mlmodelc` in the

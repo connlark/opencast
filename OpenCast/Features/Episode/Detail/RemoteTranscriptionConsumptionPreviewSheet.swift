@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Pre-create consumption preview (pass 1 decision 10): the episode's
+/// Pre-create consumption preview: the episode's
 /// estimated cost against the current balance, honest overdraft copy when
 /// the job would ride debt, a blocked state at zero headroom, and an inline
 /// top-up that resumes the flow once credits land.

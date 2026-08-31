@@ -35,8 +35,23 @@ const EPISODES = [
     length: 36210,
     duration: "00:00:09",
     pubDate: "Sun, 10 May 2026 12:00:00 -0500",
+    // Creator-declared chapters: the transcript-analysis gate ("creator
+    // metadata wins") suppresses generated chapters for this episode only.
+    chaptersPath: "/chapters/003.json",
   },
 ];
+
+// Minimal Podcasting 2.0 chapters document for Bridge Three. The app never
+// fetches this at v1 (presence of the tag alone gates generation), but the
+// fixture stays a real document so a future creator-chapters renderer can
+// exercise it unchanged.
+const CHAPTERS_003 = {
+  version: "1.2.0",
+  chapters: [
+    { startTime: 0, title: "Rootstock" },
+    { startTime: 4, title: "Scion" },
+  ],
+};
 
 const FEED_URL = "https://graft.example.com/feed.xml";
 const MEDIA_BASE = "https://seed.example.com/media";
@@ -59,12 +74,16 @@ function feedXML(state) {
       <guid isPermaLink="false">${guidFor(state, episode.slug)}</guid>
       <enclosure url="${MEDIA_BASE}/${episode.media}" length="${episode.length}" type="audio/mpeg"></enclosure>
       <itunes:duration>${episode.duration}</itunes:duration>
-      <itunes:explicit>false</itunes:explicit>
+      <itunes:explicit>false</itunes:explicit>${
+        episode.chaptersPath
+          ? `\n      <podcast:chapters url="https://graft.example.com${episode.chaptersPath}" type="application/json+chapters"></podcast:chapters>`
+          : ""
+      }
     </item>`
   ).join("\n");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom">
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:podcast="https://podcastindex.org/namespace/1.0">
   <channel>
     <title>The Grafted Podcast</title>
     <link>https://graft.example.com</link>
@@ -123,6 +142,15 @@ export default {
       // reads as a live route instead of a 404.
       const body = request.method === "HEAD" ? null : feedXML(state);
       return new Response(body, { headers });
+    }
+
+    if (url.pathname === "/chapters/003.json" && request.method === "GET") {
+      return new Response(JSON.stringify(CHAPTERS_003), {
+        headers: {
+          "Content-Type": "application/json+chapters",
+          "Cache-Control": "no-store",
+        },
+      });
     }
 
     if (url.pathname === "/state" && request.method === "GET") {

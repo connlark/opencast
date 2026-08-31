@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @preconcurrency import WhisperKit
 
-/// E2 gate (whisper-perf pass 2): the direct-copy audio load path must
+/// The direct-copy audio load path must
 /// produce identical sample counts and bit-identical samples to the upstream
 /// chunked implementation it replaced. The upstream conversion (1,024-frame
 /// temporaries + source zeroing) is preserved here as the reference.

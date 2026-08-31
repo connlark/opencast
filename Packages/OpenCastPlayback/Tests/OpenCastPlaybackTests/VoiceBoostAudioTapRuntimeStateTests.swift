@@ -4,8 +4,8 @@ import OpenCastVoiceBoost
 import Testing
 @testable import OpenCastPlayback
 
-/// Covers the tap runtime-state paths that previously had no tests
-/// (MASTER_PLAN V4): planar processing, unsupported-format bypass, and
+/// Covers the tap runtime-state paths that previously had no tests:
+/// planar processing, unsupported-format bypass, and
 /// prepare -> unprepare -> prepare processor recreation.
 struct VoiceBoostAudioTapRuntimeStateTests {
     @Test("Planar processing matches interleaved processing")
@@ -172,12 +172,12 @@ struct VoiceBoostAudioTapRuntimeStateTests {
 
     @Test("Planar processing survives frame counts beyond the prepared capacity")
     func planarSurvivesFrameCountBeyondPreparedCapacity() {
-        // Pass 5: the planar path hands the tap's channel pointers straight
+        // The planar path hands the tap's channel pointers straight
         // to the C engine, so an over-capacity callback processes in place
         // exactly like the interleaved path always has (per-buffer byte
         // sizes are still validated); only the transition blend degrades to
         // unblended processing when the dry scratch cannot hold the
-        // callback. The pre-pass-5 marshal bypassed these because its
+        // callback. The old marshal bypassed these because its
         // scratch was fixed at prepare time.
         var state = VoiceBoostAudioTapRuntimeState(configuration: .default)
         state.prepare(

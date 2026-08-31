@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @preconcurrency import WhisperKit
 
-/// D2 gate (whisper-perf pass 2): the raw-logit timestamp filter must
+/// The raw-logit timestamp filter must
 /// produce bit-identical filtered tensors — and therefore exactly the same
 /// Boolean sample-timestamp decision — as the upstream full-vocabulary
 /// log-softmax implementation, on randomized Float16 tensors plus

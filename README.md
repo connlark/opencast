@@ -74,6 +74,7 @@ Every public Worker configuration is a disabled, self-hostable template.
 | --- | --- |
 | New-episode notifications | [`NotificationsWorker`](Server/NotificationsWorker/README.md) |
 | Transcript-based ad analysis | [`AdAnalysisWorker`](Server/AdAnalysisWorker/README.md) |
+| Transcript chapters and summaries | [`TranscriptAnalysisWorker`](Server/TranscriptAnalysisWorker/README.md) |
 | Whisper model manifests and assets | [`ModelGatewayWorker`](Server/ModelGatewayWorker/README.md) |
 | Remote transcription | [`RemoteTranscriptionWorker`](Server/RemoteTranscriptionWorker/README.md) and [`TranscriptionMediaWorker`](Server/TranscriptionMediaWorker/README.md) |
 | Remote-transcription purchases | [`PurchaseWorker`](Server/PurchaseWorker/README.md) |

@@ -179,7 +179,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         var detail: EpisodeDetailSnapshot?
         try query(
             """
-            SELECT \(Self.episodeListColumns), show_notes_html
+            SELECT \(Self.episodeListColumns), show_notes_html, chapters_url
             FROM episode_cache
             WHERE episode_id = ?
             LIMIT 1
@@ -192,7 +192,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         ) { statement in
             detail = EpisodeDetailSnapshot(
                 listItem: episodeListItemSnapshot(from: statement),
-                showNotesHTML: columnText(statement, 17)
+                showNotesHTML: columnText(statement, 17),
+                chaptersURL: columnText(statement, 18)
             )
         }
         return detail
@@ -433,8 +434,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 """
                 INSERT INTO episode_cache (episode_id, podcast_id, podcast_title, title, summary,
                                            show_notes_html, published_at, duration, audio_url,
-                                           artwork_url, guid, cached_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                           artwork_url, guid, cached_at, chapters_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(episode_id) DO UPDATE SET
                     podcast_id = excluded.podcast_id,
                     podcast_title = excluded.podcast_title,
@@ -446,7 +447,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     audio_url = excluded.audio_url,
                     artwork_url = excluded.artwork_url,
                     guid = excluded.guid,
-                    cached_at = excluded.cached_at
+                    cached_at = excluded.cached_at,
+                    chapters_url = excluded.chapters_url
                 WHERE podcast_id IS NOT excluded.podcast_id
                    OR podcast_title IS NOT excluded.podcast_title
                    OR title IS NOT excluded.title
@@ -457,6 +459,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                    OR audio_url IS NOT excluded.audio_url
                    OR artwork_url IS NOT excluded.artwork_url
                    OR guid IS NOT excluded.guid
+                   OR chapters_url IS NOT excluded.chapters_url
                 """,
                 operation: operation,
                 db: db
@@ -495,6 +498,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 try bind(artworkURL, at: 10, statement: episodeUpsert, db: db, operation: operation)
                 try bind(episode.guid, at: 11, statement: episodeUpsert, db: db, operation: operation)
                 try bind(refreshedAt, at: 12, statement: episodeUpsert, db: db, operation: operation)
+                try bind(episode.chaptersURL?.absoluteString, at: 13, statement: episodeUpsert, db: db, operation: operation)
                 try step(episodeUpsert, operation: operation, db: db)
                 let didChangeSearchableContent = sqlite3_changes(db) > 0
                 try reset(episodeUpsert, operation: operation, db: db)
@@ -878,8 +882,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                                                      artwork_preview_version, artwork_preview_canonical_url_key,
                                                      artwork_preview_source_hash, artwork_preview_pixel_width,
                                                      artwork_preview_pixel_height, artwork_preview_rgb_data,
-                                                     guid, cached_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                     guid, cached_at, chapters_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 operation: operation,
                 db: db
@@ -903,6 +907,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 try bind(listItem.artworkPreview, startingAt: 11, statement: episodeInsert, db: db, operation: operation)
                 try bind(listItem.guid, at: 17, statement: episodeInsert, db: db, operation: operation)
                 try bind(listItem.cachedAt, at: 18, statement: episodeInsert, db: db, operation: operation)
+                try bind(episode.chaptersURL, at: 19, statement: episodeInsert, db: db, operation: operation)
                 try step(episodeInsert, operation: operation, db: db)
                 let didInsert = sqlite3_changes(db) > 0
                 try reset(episodeInsert, operation: operation, db: db)
@@ -999,6 +1004,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             // Pre-language databases: CREATE TABLE IF NOT EXISTS leaves the
             // existing schema untouched, so add the column when missing.
             try? exec("ALTER TABLE podcast_cache ADD COLUMN language TEXT", operation: "schema migration", db: handle)
+            try? exec("ALTER TABLE episode_cache ADD COLUMN chapters_url TEXT", operation: "schema migration", db: handle)
             // Installed caches created the index before it was removed from
             // schemaSQL; no query shape ever chooses it.
             try? exec("DROP INDEX IF EXISTS episode_cache_published_idx", operation: "schema migration", db: handle)
@@ -1083,7 +1089,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
       artwork_preview_pixel_height INTEGER,
       artwork_preview_rgb_data BLOB,
       guid TEXT,
-      cached_at REAL NOT NULL
+      cached_at REAL NOT NULL,
+      chapters_url TEXT
     );
 
     CREATE TABLE IF NOT EXISTS refresh_log (

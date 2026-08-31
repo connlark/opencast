@@ -12,7 +12,7 @@ struct EpisodeMoreMenu: View {
     let isPlayed: Bool
     let hasProgressRecord: Bool
     let onClearProgress: () -> Void
-    let onShowEpisodeInfo: () -> Void
+    let onShowEpisodeDiagnostics: () -> Void
     let onActionError: (String) -> Void
 
     var body: some View {
@@ -23,7 +23,7 @@ struct EpisodeMoreMenu: View {
             transcriptActions
             adAnalysisActions
             Divider()
-            Button("Episode Info", systemImage: "info.circle", action: onShowEpisodeInfo)
+            Button("Episode Diagnostics", systemImage: "stethoscope", action: onShowEpisodeDiagnostics)
         } label: {
             Label("Episode Actions", systemImage: "ellipsis.circle")
         }
@@ -197,7 +197,7 @@ struct EpisodeMoreMenu: View {
                         isPlayed: false,
                         hasProgressRecord: true,
                         onClearProgress: {},
-                        onShowEpisodeInfo: {},
+                        onShowEpisodeDiagnostics: {},
                         onActionError: { _ in }
                     )
                 }
@@ -217,7 +217,7 @@ struct EpisodeMoreMenu: View {
                         isPlayed: true,
                         hasProgressRecord: false,
                         onClearProgress: {},
-                        onShowEpisodeInfo: {},
+                        onShowEpisodeDiagnostics: {},
                         onActionError: { _ in }
                     )
                 }

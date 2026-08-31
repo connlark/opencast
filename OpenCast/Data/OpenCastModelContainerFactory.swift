@@ -23,6 +23,7 @@ enum OpenCastModelContainerFactory {
             EpisodeDownloadRecord.self,
             EpisodeTranscriptRecord.self,
             EpisodeAdAnalysisRecord.self,
+            EpisodeTranscriptAnalysisRecord.self,
             AdFreePassQueueItemRecord.self,
             UpNextQueueItemRecord.self
         ])
@@ -40,6 +41,7 @@ enum OpenCastModelContainerFactory {
             EpisodeDownloadRecord.self,
             EpisodeTranscriptRecord.self,
             EpisodeAdAnalysisRecord.self,
+            EpisodeTranscriptAnalysisRecord.self,
             AdFreePassQueueItemRecord.self,
             UpNextQueueItemRecord.self
         ])

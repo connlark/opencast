@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @preconcurrency import WhisperKit
 
-/// D3 gate (whisper-perf pass 2): the CPU greedy sampler must pick exactly
+/// The CPU greedy sampler must pick exactly
 /// the same token as the MLTensor path it replaces on randomized and
 /// adversarial Float16 tensors (including exact-value ties, suppressed
 /// ranges, ±inf, NaN), and its log-prob must stay within the declared

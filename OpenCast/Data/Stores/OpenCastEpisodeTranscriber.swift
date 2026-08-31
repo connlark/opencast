@@ -193,8 +193,8 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
         )
     }
 
-    /// Decision 16: devices granted background GPU get WhisperKit-default
-    /// compute back; everything else keeps the step-5 CPU+ANE pin. Explicit
+    /// Devices granted background GPU get WhisperKit-default compute back;
+    /// everything else keeps the CPU+ANE pin. Explicit
     /// profiles (the cpuOnly fallback/sticky rung) are never upgraded.
     static func resolvedComputeProfile(
         requestedProfile: OpenCastTranscriptionComputeProfile,

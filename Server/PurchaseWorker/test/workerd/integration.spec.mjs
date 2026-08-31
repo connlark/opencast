@@ -674,7 +674,7 @@ describe('operations floor', () => {
   });
 });
 
-// --- Phase 10.5 B: money-store correctness (PW-1/2/3) -----------------------
+// --- Money-store correctness ------------------------------------------------
 
 describe('money-store correctness (PW-1/2/3)', () => {
   it('no-ops a REFUND replay after REFUND_REVERSED; a fresh revocation re-applies (PW-1)', async () => {

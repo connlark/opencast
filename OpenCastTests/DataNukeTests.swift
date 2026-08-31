@@ -214,6 +214,112 @@ struct DataNukeTests {
         #expect(scheduler.submitCallCount == 2)
     }
 
+    @Test("Nuke cancels the transcript-analysis queue before the drain can start a fresh run")
+    func nukeCancelsPendingTranscriptAnalysisQueue() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let cacheController = OpenCastCacheController(
+            rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+        )
+        let fileStore = EpisodeDownloadFileStore(
+            baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+        )
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory)
+        let adAnalysisFileStore = EpisodeAdAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
+        let client = HangingEpisodeTranscriptAnalysisClient()
+        let transcriptAnalyses = EpisodeTranscriptAnalysisStore(
+            client: client,
+            fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
+        )
+        let appModel = OpenCastAppModel(
+            cacheController: cacheController,
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(fileStore: fileStore),
+            transcriptions: EpisodeTranscriptionStore(fileStore: transcriptFileStore),
+            adAnalyses: EpisodeAdAnalysisStore(
+                client: UnusedEpisodeAdAnalysisClient(),
+                fileStore: adAnalysisFileStore
+            ),
+            transcriptAnalyses: transcriptAnalyses,
+            syncStatus: SyncStatusStore(
+                accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
+            ),
+            allowsAutomaticFeedRefresh: false
+        )
+        let episodeID = try seedAllData(
+            fileStore: fileStore,
+            transcriptFileStore: transcriptFileStore,
+            adAnalysisFileStore: adAnalysisFileStore,
+            context: context
+        ).episodeID
+        await appModel.library.load(modelContext: context)
+        await appModel.downloads.load(modelContext: context)
+        appModel.transcriptions.load(modelContext: context)
+        appModel.transcriptAnalyses.load(modelContext: context)
+
+        // The first explicit run parks inside the hanging client; the second
+        // queues behind it, leaving a suspended drain holding a pending
+        // episode when the nuke starts.
+        appModel.generateChaptersAndSummary(episodeID: episodeID, modelContext: context)
+        #expect(await waitUntil { transcriptAnalyses.isRunning(for: episodeID) })
+        appModel.generateChaptersAndSummary(episodeID: episodeID, modelContext: context)
+
+        try await appModel.nukeAllData(modelContext: context)
+
+        // Cancelling the active job wakes the suspended drain; it must not
+        // dequeue the pending episode and start a fresh network analysis
+        // mid-nuke.
+        #expect(client.analyzeCallCount == 1)
+        #expect(!transcriptAnalyses.hasActiveJob)
+        #expect(transcriptAnalyses.records.isEmpty)
+        #expect(try context.fetch(FetchDescriptor<EpisodeTranscriptAnalysisRecord>()).isEmpty)
+    }
+
+    @Test("Nuke resets the Chapters & Summary disclosure acknowledgement")
+    func nukeResetsGenerateDisclosureAcknowledgement() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let cacheController = OpenCastCacheController(
+            rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+        )
+        let fileStore = EpisodeDownloadFileStore(
+            baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+        )
+        let transcriptAnalyses = EpisodeTranscriptAnalysisStore(
+            client: HangingEpisodeTranscriptAnalysisClient(),
+            fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
+        )
+        let appModel = OpenCastAppModel(
+            cacheController: cacheController,
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(fileStore: fileStore),
+            transcriptions: EpisodeTranscriptionStore(
+                fileStore: EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory)
+            ),
+            adAnalyses: EpisodeAdAnalysisStore(
+                client: UnusedEpisodeAdAnalysisClient(),
+                fileStore: EpisodeAdAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
+            ),
+            transcriptAnalyses: transcriptAnalyses,
+            syncStatus: SyncStatusStore(
+                accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
+            ),
+            allowsAutomaticFeedRefresh: false
+        )
+        transcriptAnalyses.load(modelContext: context)
+        transcriptAnalyses.acknowledgeGenerateDisclosure(modelContext: context)
+        #expect(transcriptAnalyses.hasAcknowledgedGenerateDisclosure)
+
+        try await appModel.nukeAllData(modelContext: context)
+
+        // The next generate after a nuke must disclose again: the
+        // preference row is gone and the post-nuke reload reflects it.
+        #expect(!transcriptAnalyses.hasAcknowledgedGenerateDisclosure)
+        #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).isEmpty)
+    }
+
     @Test("Refresh finishing after nuke cannot recreate cache rows")
     func refreshFinishingAfterNukeCannotRecreateCacheRows() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -417,6 +523,7 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeTranscriptRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeAdAnalysisRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<EpisodeTranscriptAnalysisRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).isEmpty)
     }
 
@@ -594,6 +701,16 @@ struct DataNukeTests {
         return url
     }
 
+    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
+        for _ in 0..<100 {
+            if condition() {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return condition()
+    }
+
     private func writeCacheFixture(in directory: URL, fileName: String) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("cache".utf8).write(to: directory.appending(path: fileName), options: .atomic)
@@ -673,6 +790,21 @@ private actor HangingFeedService: FeedService {
         }
 
         return didRequest
+    }
+}
+
+private final class HangingEpisodeTranscriptAnalysisClient: EpisodeTranscriptAnalysisClient, @unchecked Sendable {
+    private(set) var analyzeCallCount = 0
+
+    func analyze(_ request: EpisodeTranscriptAnalysisAPIRequest) async throws -> EpisodeTranscriptAnalysisSubmitOutcome {
+        analyzeCallCount += 1
+        // Parks until the nuke cancels the run; cancellation throws here.
+        try await Task.sleep(for: .seconds(600))
+        throw CancellationError()
+    }
+
+    func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
+        throw EpisodeTranscriptAnalysisError.clientDisabled
     }
 }
 

@@ -305,6 +305,36 @@ struct EpisodeAdAnalysisStoreTests {
         #expect(!store.hasActiveJob)
     }
 
+    @Test("An active job never marks other episodes as running")
+    func activeJobNeverMarksOtherEpisodesRunning() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let client = HangingEpisodeAdAnalysisClient()
+        let store = EpisodeAdAnalysisStore(
+            client: client,
+            fileStore: EpisodeAdAnalysisFileStore(baseDirectory: try makeTemporaryDirectory())
+        )
+        let runningTranscript = makeTranscriptDocument(episodeID: "ad-running-first")
+        let otherTranscript = makeTranscriptDocument(episodeID: "ad-idle-second")
+
+        store.startAnalysis(transcript: runningTranscript, modelContext: context)
+        #expect(store.isRunning(for: runningTranscript.episodeID))
+
+        // The uninvolved episode was never queued: while the first job is in
+        // flight it must offer detection, not report that run as its own.
+        #expect(!store.isRunning(for: otherTranscript.episodeID))
+        if case .ready = store.jobState(for: otherTranscript) {
+        } else {
+            Issue.record("Expected the uninvolved episode to stay ready, got \(store.jobState(for: otherTranscript))")
+        }
+
+        await client.release()
+
+        #expect(await waitUntil {
+            !store.hasActiveJob
+        })
+    }
+
     @Test("Store reports running while normalization and fingerprint preparation is held")
     func reportsRunningDuringHeldPreparation() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -559,7 +589,7 @@ struct EpisodeAdAnalysisStoreTests {
 
         await startAndWait(store: store, transcript: transcript, modelContext: context)
         let record = try #require(store.record(for: transcript.episodeID))
-        // Rewrite the stored analysis as a pre-step-4 ads_only result whose
+        // Rewrite the stored analysis as a legacy ads_only result whose
         // transcript inputs are still perfectly current.
         record.policy = "ads_only"
         var document = try #require(store.document(for: transcript.episodeID))

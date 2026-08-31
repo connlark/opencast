@@ -1,7 +1,7 @@
 import Foundation
 import OpenCastTranscription
 
-/// Product engine resolution (decision 1): Apple Speech whenever the device
+/// Product engine resolution: Apple Speech whenever the device
 /// and the podcast's locale support it — installing assets on demand — with
 /// whisper tiny.en as the automatic fallback. Explicit DEBUG overrides stay
 /// engine-strict.
@@ -11,7 +11,7 @@ struct EpisodeTranscriptionPlanResolver {
 
     let transcriptionModels: TranscriptionModelStore
     let appleSpeechAssets: AppleSpeechAssetStore
-    /// Decision 1 amendment (2026-07-07): armed pass drains run under a
+    /// Armed pass drains run under a
     /// continued-processing task the system may revoke at any time — no
     /// documented budget, no background resubmission (DTS-confirmed). Apple
     /// Speech restarts from zero after revocation, so on devices without
@@ -97,7 +97,7 @@ struct EpisodeTranscriptionPlanResolver {
         }
 
         // Fallback documents keep the honest podcast language while tiny.en
-        // decodes as English (decision 2).
+        // decodes as English.
         return whisperPlan(
             summary: tinySummary,
             languageCode: languageCode,

@@ -61,6 +61,10 @@ jobs:
             directory: Server/AdAnalysisWorker
             wasm: true
             check_args: ""
+          - name: TranscriptAnalysisWorker
+            directory: Server/TranscriptAnalysisWorker
+            wasm: true
+            check_args: ""
           - name: ModelGatewayWorker
             directory: Server/ModelGatewayWorker
             wasm: true
@@ -88,7 +92,7 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - name: Run host tests
-        if: matrix.name != 'AdAnalysisWorker'
+        if: matrix.name != 'AdAnalysisWorker' && matrix.name != 'TranscriptAnalysisWorker'
         working-directory: ${{ matrix.directory }}
         run: cargo test --locked
 
@@ -105,6 +109,20 @@ jobs:
             --test routing \
             --test validation \
             --test windowing
+
+      - name: Run public TranscriptAnalysisWorker host tests
+        if: matrix.name == 'TranscriptAnalysisWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          cargo test --locked \
+            --lib \
+            --test app_attest_migrations \
+            --test coalescing \
+            --test gemini_retry \
+            --test job_state \
+            --test prompt \
+            --test routing \
+            --test validation
 
       - name: Check the Worker WebAssembly target
         if: matrix.wasm
@@ -123,6 +141,8 @@ jobs:
         include:
           - name: AdAnalysisWorker
             directory: Server/AdAnalysisWorker
+          - name: TranscriptAnalysisWorker
+            directory: Server/TranscriptAnalysisWorker
           - name: PodcastDirectoryWorker
             directory: Server/PodcastDirectoryWorker
           - name: RemoteTranscriptionWorker
@@ -180,6 +200,25 @@ jobs:
           node --input-type=module --eval \
             "import { writeFileSync } from 'node:fs'; writeFileSync('tests/fixtures/ad_analysis_app_attest_development_fixture.json', '{}\n');"
 
+      - name: Prepare public TranscriptAnalysis integration harness
+        if: matrix.name == 'TranscriptAnalysisWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          cp wrangler.example.toml wrangler.toml
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("wrangler.toml")
+          contents = path.read_text()
+          public_flag = 'PUBLIC_TRANSCRIPT_ANALYSIS_ENABLED = "false"'
+          billing_flag = 'BILLING_REQUIRED = "false"'
+          if contents.count(public_flag) != 3:
+              raise SystemExit("expected three public transcript-analysis defaults")
+          if contents.count(billing_flag) != 3:
+              raise SystemExit("expected three public transcript-analysis billing defaults")
+          path.write_text(contents.replace(public_flag, public_flag.replace("false", "true"), 1))
+          PY
+
       - name: Prepare public PodcastDirectory integration harness
         if: matrix.name == 'PodcastDirectoryWorker'
         working-directory: ${{ matrix.directory }}
@@ -231,6 +270,16 @@ jobs:
           yarn build:worker
           yarn exec vitest run -t \
             'routing|rejects an unauthenticated request|challenges|404s internal paths on the public host|rejects malformed internal envelopes and invalid payloads|404s an unknown internal job id'
+
+      - name: Run deterministic TranscriptAnalysis integration tests
+        if: matrix.name == 'TranscriptAnalysisWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          yarn build:worker
+          yarn exec vitest run
+          yarn exec vitest run -c vitest.billing.config.mjs
+          yarn workspace opencast-purchase-worker build:test-bundle
+          yarn exec vitest run -c vitest.purchase.config.mjs
 
       - name: Run deterministic PodcastDirectory integration tests
         if: matrix.name == 'PodcastDirectoryWorker'

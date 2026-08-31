@@ -1,4 +1,4 @@
-/// Decision 10: while the queue is cap-deferred, at most one probe per
+/// While the queue is cap-deferred, at most one probe per
 /// foreground session (the head item's analysis call is the probe); the
 /// probed flag resets on each background→foreground cycle; a manual tap on
 /// the deferred episode always probes.

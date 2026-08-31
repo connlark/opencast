@@ -2,10 +2,10 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Pass 2 requirements for the gated loudness engine: output convergence to
-/// target (flipped from the Pass-1 `withKnownIssue` spec gap to a hard
+/// Requirements for the gated loudness engine: output convergence to
+/// target (flipped from a `withKnownIssue` spec gap to a hard
 /// requirement), runtime/offline agreement on one fixture, honest K-weighted
-/// output metering (D7), and silence robustness (never chase silence).
+/// output metering, and silence robustness (never chase silence).
 struct VoiceBoostLoudnessEngineTests {
     @Test("Output integrated LUFS converges to targetLUFS within ±1 LU")
     func outputIntegratedLoudnessConvergesToTarget() throws {

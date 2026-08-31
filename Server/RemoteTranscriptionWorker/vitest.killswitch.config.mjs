@@ -1,4 +1,4 @@
-// Purchase kill switch (decision 12) + limiter daily spend cap: env-level
+// Purchase kill switch + limiter daily spend cap: env-level
 // flags need their own worker environment, so this config reruns the shared
 // purchase harness with PURCHASES_ENABLED=false and a tiny AI spend cap.
 import { defineConfig } from "vitest/config";

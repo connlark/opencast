@@ -1779,7 +1779,7 @@ struct OpenCastModelTests {
 
         #expect(result.progressRecordsChanged)
         // Progress-only imports reach the imported-subscription processing
-        // path so duplicate repair runs mid-session (Phase 2 A2).
+        // path so duplicate repair runs mid-session.
         #expect(result.shouldProcessImportedSubscriptions)
         #expect(store.progressRecords.first?.position == 78)
         #expect(await service.requestedURLStrings().isEmpty)

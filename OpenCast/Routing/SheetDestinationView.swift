@@ -13,8 +13,8 @@ struct SheetDestinationView: View {
                 directoryService: appModel.podcastDirectoryService,
                 directoryResolver: appModel.podcastDirectoryResolver
             )
-        case .episodeInfo(let episodeID):
-            EpisodeInfoSheet(episodeID: episodeID)
+        case .episodeDiagnostics(let episodeID):
+            EpisodeDiagnosticsSheet(episodeID: episodeID)
         case .importOPMLFile(let url):
             OPMLFileImportView(url: url)
         case .nukeConfirmation:

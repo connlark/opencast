@@ -1560,6 +1560,7 @@ final class LibraryStore {
                   lhsRecord.isArchived == rhsRecord.isArchived,
                   lhsRecord.isVoiceBoostEnabled == rhsRecord.isVoiceBoostEnabled,
                   lhsRecord.isAdAutoDetectEnabled == rhsRecord.isAdAutoDetectEnabled,
+                  lhsRecord.isTranscriptAnalysisEnabled == rhsRecord.isTranscriptAnalysisEnabled,
                   lhsRecord.skipIntroSeconds == rhsRecord.skipIntroSeconds,
                   lhsRecord.skipOutroSeconds == rhsRecord.skipOutroSeconds
             else {
@@ -1852,6 +1853,7 @@ final class LibraryStore {
                     isArchived: template.isArchived,
                     isVoiceBoostEnabled: template.isVoiceBoostEnabled,
                     isAdAutoDetectEnabled: template.isAdAutoDetectEnabled,
+                    isTranscriptAnalysisEnabled: template.isTranscriptAnalysisEnabled,
                     skipIntroSeconds: migrationSkipSettings.skipIntroSeconds,
                     skipOutroSeconds: migrationSkipSettings.skipOutroSeconds
                 )

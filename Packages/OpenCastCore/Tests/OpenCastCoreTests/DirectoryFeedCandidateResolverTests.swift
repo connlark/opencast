@@ -28,6 +28,22 @@ struct DirectoryFeedCandidateResolverTests {
         #expect(choice.secondary.episodeCount == 33)
     }
 
+    @Test("S-Town-shaped 3/9 candidates promote the fuller current feed")
+    func shortSeriesCandidatesPromoteFullerCurrentFeed() async throws {
+        let resolver = makeResolver([
+            windowedURL: makeSnapshot(feedURL: windowedURL, episodeCount: 3, newest: Self.newestEpisodeDate),
+            fullURL: makeSnapshot(feedURL: fullURL, episodeCount: 9, newest: Self.newestEpisodeDate),
+        ])
+
+        let resolution = try await resolver.resolve(candidates: serialShapedCandidates())
+
+        let choice = try #require(choiceCase(from: resolution))
+        #expect(choice.reason == .fullerFeedPromoted)
+        #expect(choice.primary.candidate.feedURL == fullURL)
+        #expect(choice.primary.episodeCount == 9)
+        #expect(choice.secondary.episodeCount == 3)
+    }
+
     @Test("A fuller but stale feed stays secondary as an archive")
     func fullerButStaleFeedStaysSecondary() async throws {
         let staleNewest = Self.newestEpisodeDate.addingTimeInterval(-45 * 24 * 60 * 60)
@@ -79,11 +95,11 @@ struct DirectoryFeedCandidateResolverTests {
         #expect(choice.secondary.isSalvaged)
     }
 
-    @Test("Immaterial differences subscribe to the primary feed directly")
-    func immaterialDifferenceSubscribesDirectly() async throws {
+    @Test("Equal episode counts subscribe to the primary feed directly")
+    func equalEpisodeCountsSubscribeDirectly() async throws {
         let resolver = makeResolver([
             windowedURL: makeSnapshot(feedURL: windowedURL, episodeCount: 120, newest: Self.newestEpisodeDate),
-            fullURL: makeSnapshot(feedURL: fullURL, episodeCount: 124, newest: Self.newestEpisodeDate),
+            fullURL: makeSnapshot(feedURL: fullURL, episodeCount: 120, newest: Self.newestEpisodeDate),
         ])
 
         let resolution = try await resolver.resolve(candidates: serialShapedCandidates())
@@ -177,14 +193,11 @@ struct DirectoryFeedCandidateResolverTests {
     @Test("Material difference thresholds")
     func materialDifferenceThresholds() {
         #expect(DirectoryFeedCandidateResolver.isMaterialDifference(33, 124))
-        #expect(!DirectoryFeedCandidateResolver.isMaterialDifference(120, 124))
-        // Ten-episode floor: 9 fails even at a high fraction.
-        #expect(!DirectoryFeedCandidateResolver.isMaterialDifference(1, 10))
-        #expect(DirectoryFeedCandidateResolver.isMaterialDifference(0, 10))
-        // Twenty-percent floor: 10 of 1000 fails.
-        #expect(!DirectoryFeedCandidateResolver.isMaterialDifference(990, 1000))
-        #expect(DirectoryFeedCandidateResolver.isMaterialDifference(100, 125))
+        #expect(DirectoryFeedCandidateResolver.isMaterialDifference(3, 9))
+        #expect(DirectoryFeedCandidateResolver.isMaterialDifference(99, 100))
+        #expect(DirectoryFeedCandidateResolver.isMaterialDifference(0, 1))
         #expect(!DirectoryFeedCandidateResolver.isMaterialDifference(0, 0))
+        #expect(!DirectoryFeedCandidateResolver.isMaterialDifference(100, 100))
     }
 
     private func serialShapedCandidates() -> [DirectoryFeedCandidate] {

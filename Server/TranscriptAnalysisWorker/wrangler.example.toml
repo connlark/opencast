@@ -1,0 +1,140 @@
+name = "your-transcript-analysis-worker"
+main = "build/index.js"
+compatibility_date = "2026-08-14"
+workers_dev = true
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+
+[build]
+command = "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release"
+
+[vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "development"
+PUBLIC_TRANSCRIPT_ANALYSIS_ENABLED = "false"
+TRANSCRIPT_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
+# The development lane has no PURCHASE_WORKER binding; its credit backend is
+# the D1 development fake derived from LANE. Keep billing disabled until the
+# deployment and credit policy are ready.
+LANE = "development"
+BILLING_REQUIRED = "false"
+
+[[d1_databases]]
+binding = "TRANSCRIPT_ANALYSIS_DB"
+database_name = "your-transcript-analysis-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "TRANSCRIPT_ANALYSIS_USAGE_LIMITER"
+class_name = "TranscriptAnalysisUsageLimiter"
+
+[[durable_objects.bindings]]
+name = "TRANSCRIPT_ANALYSIS_JOB"
+class_name = "TranscriptAnalysisJob"
+
+# Declarative class exports (replaces the legacy migrations array). This map is
+# the source of truth: a class missing here is deprovisioned, not ignored.
+[exports.TranscriptAnalysisUsageLimiter]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.TranscriptAnalysisJob]
+type = "durable-object"
+storage = "sqlite"
+
+[env.prod-staging]
+name = "your-transcript-analysis-worker-prod-staging"
+workers_dev = true
+
+[env.prod-staging.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+PUBLIC_TRANSCRIPT_ANALYSIS_ENABLED = "false"
+TRANSCRIPT_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
+LANE = "prod-staging"
+BILLING_REQUIRED = "false"
+# Money lanes choose their backend explicitly; a missing selection refuses to
+# serve instead of booting on a default.
+CREDIT_BACKEND = "purchase"
+
+[[env.prod-staging.services]]
+binding = "PURCHASE_WORKER"
+service = "your-purchase-worker-prod-staging"
+
+[[env.prod-staging.d1_databases]]
+binding = "TRANSCRIPT_ANALYSIS_DB"
+database_name = "your-transcript-analysis-db-prod-staging"
+database_id = "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.prod-staging.durable_objects.bindings]]
+name = "TRANSCRIPT_ANALYSIS_USAGE_LIMITER"
+class_name = "TranscriptAnalysisUsageLimiter"
+
+[[env.prod-staging.durable_objects.bindings]]
+name = "TRANSCRIPT_ANALYSIS_JOB"
+class_name = "TranscriptAnalysisJob"
+
+[env.prod-staging.exports.TranscriptAnalysisUsageLimiter]
+type = "durable-object"
+storage = "sqlite"
+
+[env.prod-staging.exports.TranscriptAnalysisJob]
+type = "durable-object"
+storage = "sqlite"
+
+[env.production]
+name = "your-transcript-analysis-worker-production"
+workers_dev = false
+
+[[env.production.routes]]
+pattern = "transcript-analysis.example.com"
+custom_domain = true
+
+[env.production.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+PUBLIC_TRANSCRIPT_ANALYSIS_ENABLED = "false"
+TRANSCRIPT_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
+LANE = "production"
+BILLING_REQUIRED = "false"
+CREDIT_BACKEND = "purchase"
+
+[[env.production.services]]
+binding = "PURCHASE_WORKER"
+service = "your-purchase-worker-production"
+
+[[env.production.d1_databases]]
+binding = "TRANSCRIPT_ANALYSIS_DB"
+database_name = "your-transcript-analysis-db-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[env.production.durable_objects.bindings]]
+name = "TRANSCRIPT_ANALYSIS_USAGE_LIMITER"
+class_name = "TranscriptAnalysisUsageLimiter"
+
+[[env.production.durable_objects.bindings]]
+name = "TRANSCRIPT_ANALYSIS_JOB"
+class_name = "TranscriptAnalysisJob"
+
+[env.production.exports.TranscriptAnalysisUsageLimiter]
+type = "durable-object"
+storage = "sqlite"
+
+[env.production.exports.TranscriptAnalysisJob]
+type = "durable-object"
+storage = "sqlite"

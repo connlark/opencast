@@ -24,7 +24,7 @@ struct FullEpisodeDeterministicGateTests {
         let audioPath = try #require(environment["OPENCAST_TRANSCRIPTION_AUDIO"])
         let outPath = try #require(environment["OPENCAST_FULL_GATE_OUT"])
 
-        // Whisper-perf pass 5 (Q3): OPENCAST_GATE_MODEL_VERSION selects a
+        // OPENCAST_GATE_MODEL_VERSION selects a
         // sideloaded candidate tree; unset runs the shipped default.
         let location = try DownloadedWhisperModelLocator(
             model: .tinyEnglish,

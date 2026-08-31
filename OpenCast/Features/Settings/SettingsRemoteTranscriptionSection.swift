@@ -1,7 +1,7 @@
 import OpenCastTranscription
 import SwiftUI
 
-/// Remote transcription balance + store (pass 1 decision 10). The section is
+/// Remote transcription balance + store. The section is
 /// always discoverable; unresolved StoreKit identity provides a retry action,
 /// while actual remote and purchase actions remain gated.
 struct SettingsRemoteTranscriptionSection: View {

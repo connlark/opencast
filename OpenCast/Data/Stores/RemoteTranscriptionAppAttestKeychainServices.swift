@@ -2,7 +2,7 @@ import Foundation
 
 nonisolated enum RemoteTranscriptionAppAttestKeychainServices {
     static let development = "com.connor.opencast.remote-transcription-security.development"
-    /// Retains pass 1's service name so existing prod-staging installs do not
+    /// Retains the original service name so existing prod-staging installs do not
     /// unnecessarily attest a replacement key.
     static let prodStaging = "com.connor.opencast.remote-transcription-security.production"
     /// The production money/state lane must never share an App Attest key

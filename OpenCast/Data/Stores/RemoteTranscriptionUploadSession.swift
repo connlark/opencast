@@ -2,7 +2,7 @@ import Foundation
 import OpenCastTranscription
 import OSLog
 
-/// Exact-device upload engine (pass 2): drives one job's multipart upload of
+/// Exact-device upload engine: drives one job's multipart upload of
 /// the completed local download through presigned part URLs. Part-level
 /// resume is the correctness mechanism — part state (number, ETag, attempts)
 /// persists across relaunches and a re-run re-PUTs only missing parts on

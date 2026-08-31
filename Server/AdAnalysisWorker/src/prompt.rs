@@ -3,7 +3,7 @@ use serde_json::json;
 use crate::types::{AdAnalysisRequest, TranscriptSegment, POLICY_NAME};
 
 /// Thinking models spend from this budget; 4 096 was the measured truncation
-/// trigger in production (step-4 research §3).
+/// trigger in production.
 pub const GEMINI_MAX_OUTPUT_TOKENS: u32 = 16_384;
 
 /// Chars the assembled prompt adds on top of raw transcript text from the
@@ -63,7 +63,7 @@ pub const RESPONSE_SCHEMA: &str = r#"{
   "required": ["spans"]
 }"#;
 
-// The live-tested `breaks_v2` contract (step-4 Stage A) plus exactly one
+// The live-tested `breaks_v2` contract plus exactly one
 // addition: the explicit empty-valid final rule. The eval runner at
 // Keep this policy text byte-identical to any external evaluation harness.
 pub fn build_prompt(request: &AdAnalysisRequest) -> String {
@@ -116,7 +116,7 @@ pub fn build_prompt(request: &AdAnalysisRequest) -> String {
 /// (the pin tests assert the two never drift), so the spend estimate is
 /// byte-exact by construction — arithmetic width prediction was retired
 /// after `{:.3}`'s rounding (9.9996 → "10.000") defeated it at power-of-ten
-/// boundaries (Phase 10 re-review). One short allocation per segment,
+/// boundaries. One short allocation per segment,
 /// still without rendering the whole prompt (AA-3).
 pub fn segment_framing_chars(segment: &TranscriptSegment) -> usize {
     format!(

@@ -188,7 +188,7 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
 
     #if DEBUG
     /// The documented way to reproduce cap states without spending real
-    /// worker requests (decision 10). Environment variable or launch argument.
+    /// worker requests. Environment variable or launch argument.
     static func forcesCapRejection(environment: [String: String], arguments: [String]) -> Bool {
         environment["OPENCAST_ADANALYSIS_FORCE_CAP"] == "1"
             || arguments.contains("-OPENCAST_ADANALYSIS_FORCE_CAP")

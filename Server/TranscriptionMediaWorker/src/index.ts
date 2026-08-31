@@ -30,7 +30,7 @@ export class TranscriptionMediaContainer extends Container<Env> {
 
   override async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).pathname === "/wake") {
-      // Create-time wake (pass 0.5 A3): issue the container start command
+      // Create-time wake: issue the container start command
       // without waiting for port readiness, so a cold start overlaps the
       // gateway's staging and hash-match wait. The ping must return
       // immediately and its failure must change nothing — probe/chunk
@@ -60,7 +60,7 @@ TranscriptionMediaContainer.outboundByHost = {
     } catch {
       // A malformed percent-escape must fail closed as a forbidden key, not
       // throw a URIError out of the handler (which surfaces as a 5xx/network
-      // error instead of the intended 403). Phase 10 TMW-6.
+      // error instead of the intended 403).
       return Response.json({ error: "forbidden_key" }, { status: 403 });
     }
     if (!isKeyAllowed(request.method, key)) {
@@ -71,7 +71,7 @@ TranscriptionMediaContainer.outboundByHost = {
       if (!object) {
         return Response.json({ error: "not_found" }, { status: 404 });
       }
-      // Streamed: the pass-2 source cap (512 MiB) exceeds Worker memory, so
+      // Streamed: the 512 MiB source cap exceeds Worker memory, so
       // buffering OOMs the isolate on long episodes. R2 bodies are
       // length-aware, so exact content-length framing still reaches the
       // container egress tunnel.
@@ -101,7 +101,7 @@ export default {
 
     // Bind the request's object keys to the job_id in its body before the
     // container (one shared instance) can be steered at another job's audio
-    // (Phase 10 TMW-3). The container itself ignores job_id, so this is the
+    // The container itself ignores job_id, so this is the
     // only place the binding is enforced. Wake carries no body/keys.
     let forwardBody: string | null = null;
     if (url.pathname === "/probe" || url.pathname === "/chunk") {
@@ -119,7 +119,7 @@ export default {
       forwardBody = raw;
     }
 
-    // One small pinned instance; media work is sequential in pass 0. The
+    // One small pinned instance; media work is sequential. The
     // instance name tracks the image tag so an image rollout always gets a
     // fresh container instead of waiting out a sleepy old instance.
     let response: Response;

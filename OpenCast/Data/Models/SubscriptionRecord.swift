@@ -12,6 +12,11 @@ final class SubscriptionRecord {
     var isArchived: Bool = false
     var isVoiceBoostEnabled: Bool = true
     var isAdAutoDetectEnabled: Bool = false
+    /// Retired Chapters & Summary per-show opt-in. Generation is a manual
+    /// per-episode action now, so nothing reads this — but the field stays:
+    /// `CD_isTranscriptAnalysisEnabled` is deployed in production CloudKit
+    /// (prod fields can't be dropped) and older builds still sync it.
+    var isTranscriptAnalysisEnabled: Bool = false
     var skipIntroSeconds: Double = 0
     var skipOutroSeconds: Double = 0
     /// Stable per-record identity so duplicate repair picks the same winner on
@@ -30,6 +35,7 @@ final class SubscriptionRecord {
         isArchived: Bool = false,
         isVoiceBoostEnabled: Bool = true,
         isAdAutoDetectEnabled: Bool = false,
+        isTranscriptAnalysisEnabled: Bool = false,
         skipIntroSeconds: Double = 0,
         skipOutroSeconds: Double = 0,
         dedupeUUID: String = UUID().uuidString
@@ -43,6 +49,7 @@ final class SubscriptionRecord {
         self.isArchived = isArchived
         self.isVoiceBoostEnabled = isVoiceBoostEnabled
         self.isAdAutoDetectEnabled = isAdAutoDetectEnabled
+        self.isTranscriptAnalysisEnabled = isTranscriptAnalysisEnabled
         self.skipIntroSeconds = skipIntroSeconds
         self.skipOutroSeconds = skipOutroSeconds
         self.dedupeUUID = dedupeUUID

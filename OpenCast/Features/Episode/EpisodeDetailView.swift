@@ -19,7 +19,14 @@ struct EpisodeDetailView: View {
     @State private var hasCurrentCompletedAnalysis = false
     @State private var currentAdAnalysisZoneTiers: EpisodeAdAnalysisZoneTiers = .empty
     @State private var loadedAdAnalysisContentIdentifier: String?
+    @State private var transcriptAnalysisTranscriptDocument: EpisodeTranscriptDocument?
+    @State private var transcriptAnalysisDocument: EpisodeTranscriptAnalysisDocument?
+    @State private var transcriptAnalysisJobState: EpisodeTranscriptAnalysisJobState = .unavailable("Transcript unavailable.")
+    @State private var hasCurrentTranscriptAnalysis = false
+    @State private var creatorChaptersURL: String?
+    @State private var loadedTranscriptAnalysisContentIdentifier: String?
     @State private var isConfirmingClearProgress = false
+    @State private var isConfirmingGenerateDisclosure = false
     @State private var sheetDestination: SheetDestination?
     @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
     @State private var episodeActionErrorTitle = "Couldn’t Complete Action"
@@ -35,6 +42,7 @@ struct EpisodeDetailView: View {
         let progressSummary = episode.map { appModel.library.progressSummary(for: $0) }
         let progressRecord = episode.flatMap { appModel.library.progressRecord(for: $0.episodeID) }
         let adAnalysisContentIdentifier = adAnalysisContentLoadIdentifier(for: episode?.episodeID)
+        let transcriptAnalysisContentIdentifier = transcriptAnalysisContentLoadIdentifier(for: episode?.episodeID)
 
         Group {
             if let episode {
@@ -57,7 +65,7 @@ struct EpisodeDetailView: View {
                         isPlayed: progressSummary.isCompleted,
                         hasProgressRecord: progressRecord != nil,
                         onClearProgress: confirmClearProgress,
-                        onShowEpisodeInfo: showEpisodeInfo,
+                        onShowEpisodeDiagnostics: showEpisodeDiagnostics,
                         onActionError: { showEpisodeActionError($0) }
                     )
                 }
@@ -104,6 +112,12 @@ struct EpisodeDetailView: View {
             await updateAdAnalysisContent(
                 for: episode,
                 identifier: adAnalysisContentIdentifier
+            )
+        }
+        .task(id: transcriptAnalysisContentIdentifier) {
+            await updateTranscriptAnalysisContent(
+                for: episode,
+                identifier: transcriptAnalysisContentIdentifier
             )
         }
     }
@@ -206,6 +220,23 @@ struct EpisodeDetailView: View {
                     )
                 }
 
+                // Creator metadata wins (D3) at render time too: an analysis
+                // generated while chapters_url was still unpopulated (the
+                // pre-upgrade cache window) stops rendering as soon as a feed
+                // refresh reveals the creator declaration.
+                let showsGeneratedCards = hasCurrentChaptersAnalysis(for: episode)
+                    && creatorChaptersURL == nil
+                if showsGeneratedCards, let analysisDocument = transcriptAnalysisDocument {
+                    if !analysisDocument.chapters.isEmpty {
+                        EpisodeChaptersCard(chapters: analysisDocument.chapters) { chapter in
+                            seekToChapter(chapter, episode: episode)
+                        }
+                    }
+                    if let summary = analysisDocument.summary {
+                        EpisodeGeneratedSummaryCard(summary: summary)
+                    }
+                }
+
                 if case .completed(let record) = transcription, record.transcriptRelativePath != nil {
                     EpisodeTranscriptEntryCard(episodeID: episode.episodeID, snippet: transcriptSnippet)
                 }
@@ -217,6 +248,31 @@ struct EpisodeDetailView: View {
                             alignment: .leading
                         )
                         .frame(maxWidth: .infinity)
+                }
+
+                // Generation stays below the show notes, out of the way — the
+                // app is a podcast listener first. The !showsGeneratedCards
+                // gate keeps the old if/else mutual exclusivity: the controls
+                // presentation maps a completed analysis to .ready, which
+                // must not re-offer Generate under the rendered cards.
+                if !showsGeneratedCards,
+                   let controlsPresentation = chaptersSummaryControlsPresentation(for: episode) {
+                    EpisodeChaptersSummaryControlsCard(presentation: controlsPresentation) {
+                        generateChaptersAndSummary(episode)
+                    }
+                    .confirmationDialog(
+                        TranscriptAnalysisGenerateDisclosureCopy.title,
+                        isPresented: $isConfirmingGenerateDisclosure,
+                        titleVisibility: .visible
+                    ) {
+                        Button(
+                            TranscriptAnalysisGenerateDisclosureCopy.confirmButtonTitle,
+                            action: acknowledgeGenerateDisclosure
+                        )
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text(TranscriptAnalysisGenerateDisclosureCopy.confirmationBody())
+                    }
                 }
             }
             .padding()
@@ -381,8 +437,8 @@ struct EpisodeDetailView: View {
         appModel.clearEpisodeProgress(episode, modelContext: modelContext)
     }
 
-    private func showEpisodeInfo() {
-        sheetDestination = .episodeInfo(episodeID: episodeID)
+    private func showEpisodeDiagnostics() {
+        sheetDestination = .episodeDiagnostics(episodeID: episodeID)
     }
 
     private func dismissSheet() {
@@ -550,6 +606,247 @@ struct EpisodeDetailView: View {
             currentAdAnalysisZoneTiers = .empty
         }
         loadedAdAnalysisContentIdentifier = identifier
+    }
+
+    private func hasCurrentChaptersAnalysis(for episode: EpisodeListItemSnapshot) -> Bool {
+        loadedTranscriptAnalysisContentIdentifier == transcriptAnalysisContentLoadIdentifier(for: episode.episodeID)
+            && hasCurrentTranscriptAnalysis
+            && transcriptAnalysisDocument?.episodeID == episode.episodeID
+    }
+
+    /// Fail-open surface: failures render the ready state again (a manual tap
+    /// re-probes, which is also the cap-deferral retry path) — never an
+    /// error. The pay gate's insufficient-balance denial is the deliberate
+    /// exception: it renders the needs-minutes state with a buy path (H8).
+    /// Offered for any episode with a completed transcript — generation is a
+    /// per-episode manual action, with no show-wide setting gating it.
+    private func chaptersSummaryControlsPresentation(
+        for episode: EpisodeListItemSnapshot
+    ) -> EpisodeChaptersSummaryControlsCard.Presentation? {
+        guard loadedTranscriptAnalysisContentIdentifier
+                == transcriptAnalysisContentLoadIdentifier(for: episode.episodeID),
+              transcriptAnalysisTranscriptDocument?.episodeID == episode.episodeID
+        else {
+            return nil
+        }
+        if creatorChaptersURL != nil {
+            return .creatorChaptersAvailable
+        }
+        switch transcriptAnalysisJobState {
+        case .running:
+            return .running
+        case .failed(let record, _) where record.failureKind == .insufficientSeconds:
+            return .needsMinutes(chargeDescription: transcriptAnalysisNeedsMinutesDescription())
+        case .ready, .completed, .failed:
+            return .ready(costDescription: transcriptAnalysisCostDescription())
+        case .unavailable:
+            return nil
+        }
+    }
+
+    /// Display-only estimate: the server recomputes the charge from its own
+    /// authoritative duration at reserve, so this can mis-display but never
+    /// mis-charge. Mirrors the server's duration basis (declared duration or
+    /// the last segment end, whichever is larger).
+    private var transcriptAnalysisChargeSeconds: Int64? {
+        guard let document = transcriptAnalysisTranscriptDocument else {
+            return nil
+        }
+        let duration = max(document.audioDuration, document.segments.last?.end ?? 0)
+        return appModel.remoteTranscriptionPurchases
+            .analysisEstimate(durationSeconds: duration)?
+            .estimatedSeconds
+    }
+
+    private func transcriptAnalysisCostDescription() -> String? {
+        guard TranscriptAnalysisFeatureFlags.chargesTranscriptionMinutes,
+              let chargeSeconds = transcriptAnalysisChargeSeconds
+        else {
+            return nil
+        }
+        return String(
+            localized: "Uses ~\(RemoteTranscriptionBalanceFormatting.hours(chargeSeconds)) of transcription time."
+        )
+    }
+
+    private func transcriptAnalysisNeedsMinutesDescription() -> String {
+        guard let chargeSeconds = transcriptAnalysisChargeSeconds else {
+            return String(localized: "Not enough transcription time for this episode.")
+        }
+        return String(
+            localized: "Not enough transcription time — generating needs ~\(RemoteTranscriptionBalanceFormatting.hours(chargeSeconds))."
+        )
+    }
+
+    private func generateChaptersAndSummary(_ episode: EpisodeListItemSnapshot) {
+        guard appModel.transcriptAnalyses.hasAcknowledgedGenerateDisclosure else {
+            isConfirmingGenerateDisclosure = true
+            return
+        }
+        appModel.generateChaptersAndSummary(episodeID: episode.episodeID, modelContext: modelContext)
+    }
+
+    private func acknowledgeGenerateDisclosure() {
+        appModel.transcriptAnalyses.acknowledgeGenerateDisclosure(modelContext: modelContext)
+        guard let episode else {
+            return
+        }
+        appModel.generateChaptersAndSummary(episodeID: episode.episodeID, modelContext: modelContext)
+    }
+
+    private func seekToChapter(
+        _ chapter: EpisodeTranscriptAnalysisChapter,
+        episode: EpisodeListItemSnapshot
+    ) {
+        guard let transcriptDocument = transcriptAnalysisTranscriptDocument,
+              transcriptDocument.episodeID == episode.episodeID
+        else {
+            return
+        }
+
+        // Chapter times are exact only against the transcribed audio asset;
+        // a dynamic enclosure can be a different assembly offset by tens of
+        // seconds. Same verdict ladder as the transcript view's playFrom.
+        if appModel.playback.currentEpisode?.id.rawValue == episode.episodeID {
+            let downloadRecord = appModel.downloads.record(for: episode.episodeID)
+            let alignment = TranscriptSourceAlignment.resolve(
+                documentSHA256: transcriptDocument.sourceFileSHA256,
+                trustedDownloadSHA256: appModel.downloads.completedSourceIdentity(for: episode.episodeID)?.sha256,
+                downloadFileURL: downloadRecord.flatMap(appModel.downloads.localFileURL(for:)),
+                playerItemURL: appModel.playback.currentItemSourceIdentity?.assetURL
+            )
+            switch alignment {
+            case .verified, .mismatched(canSwitchToTranscribedCopy: false):
+                // Verified: exact seek. No matched copy anywhere: explicit
+                // best-effort jump — a restart could not land closer.
+                appModel.playback.seek(to: chapter.startTime, intent: .scrub)
+                if appModel.playback.state != .playing {
+                    appModel.playback.play()
+                }
+                return
+            case .mismatched(canSwitchToTranscribedCopy: true):
+                // Seeking the unproven item cannot honor the chapter time;
+                // restarting from the matched download at that time can.
+                break
+            }
+        }
+
+        runPlaybackAction {
+            try appModel.playEpisode(
+                episode,
+                at: chapter.startTime,
+                matchingSourceSHA256: transcriptDocument.sourceFileSHA256,
+                presentsNowPlaying: false,
+                modelContext: modelContext
+            )
+        }
+    }
+
+    private func updateTranscriptAnalysisContent(
+        for episode: EpisodeListItemSnapshot?,
+        identifier: String
+    ) async {
+        loadedTranscriptAnalysisContentIdentifier = nil
+        transcriptAnalysisTranscriptDocument = nil
+        transcriptAnalysisDocument = nil
+        transcriptAnalysisJobState = .unavailable("Transcript unavailable.")
+        hasCurrentTranscriptAnalysis = false
+        creatorChaptersURL = nil
+
+        guard let episode,
+              appModel.transcriptions.record(for: episode.episodeID)?.state == .completed
+        else {
+            loadedTranscriptAnalysisContentIdentifier = identifier
+            return
+        }
+
+        let detail = await appModel.library.episodeDetail(for: episode.episodeID)
+        guard !Task.isCancelled else {
+            return
+        }
+
+        // Settling this identifier with a nil document is permanent until the
+        // user re-enters (nothing re-keys the task), so a transient read
+        // failure retries briefly before the surface is allowed to go dark.
+        var loadedTranscriptDocument: EpisodeTranscriptDocument?
+        for attempt in 1...3 {
+            do {
+                loadedTranscriptDocument = try await appModel.transcriptions.loadDocument(for: episode.episodeID)
+                break
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled, attempt < 3 else {
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+        }
+        guard !Task.isCancelled else {
+            return
+        }
+        guard let transcriptDocument = loadedTranscriptDocument else {
+            creatorChaptersURL = detail?.chaptersURL
+            loadedTranscriptAnalysisContentIdentifier = identifier
+            return
+        }
+
+        let analysisDocument: EpisodeTranscriptAnalysisDocument?
+        if appModel.transcriptAnalyses.record(for: episode.episodeID)?.state == .completed {
+            do {
+                analysisDocument = try await appModel.transcriptAnalyses.loadDocument(for: episode.episodeID)
+            } catch is CancellationError {
+                return
+            } catch {
+                analysisDocument = nil
+            }
+        } else {
+            analysisDocument = nil
+        }
+        guard !Task.isCancelled else {
+            return
+        }
+
+        let state = appModel.transcriptAnalyses.episodeDetailState(
+            for: transcriptDocument,
+            transcriptState: appModel.transcriptions.record(for: episode.episodeID)?.state,
+            analysisDocument: analysisDocument
+        )
+        transcriptAnalysisTranscriptDocument = transcriptDocument
+        transcriptAnalysisDocument = analysisDocument
+        transcriptAnalysisJobState = state.jobState
+        hasCurrentTranscriptAnalysis = state.hasCurrentCompletedAnalysis
+        creatorChaptersURL = detail?.chaptersURL
+        loadedTranscriptAnalysisContentIdentifier = identifier
+    }
+
+    private func transcriptAnalysisContentLoadIdentifier(for episodeID: String?) -> String {
+        guard let episodeID else {
+            return "missing"
+        }
+
+        let transcriptRecord = appModel.transcriptions.record(for: episodeID)
+        let transcriptStamp = transcriptRecord?.state == .completed
+            ? "completed:\(transcriptRecord?.updatedAt.timeIntervalSinceReferenceDate ?? -1)"
+            : "incomplete"
+        let analysisStamp: String
+        if let analysisRecord = appModel.transcriptAnalyses.record(for: episodeID) {
+            analysisStamp = "\(analysisRecord.state.rawValue):\(analysisRecord.updatedAt.timeIntervalSinceReferenceDate)"
+        } else {
+            analysisStamp = "missing"
+        }
+        // isRunning reads the store's only Observation-tracked property this
+        // identifier touches (record lookups go through an @ObservationIgnored
+        // index), so run start/end are what invalidate this view — without it
+        // the running and completed states render only after an unrelated
+        // re-render (found on device: an explicit Generate tap showed nothing
+        // until a scroll). The store-global changeSequence stays out: it
+        // would re-run this load — a main-actor SHA256 over a 100–400 KB
+        // transcript — on every OTHER episode's analysis events, while the
+        // per-episode stamps plus this running flag already cover every
+        // invalidation this episode needs.
+        let runningStamp = appModel.transcriptAnalyses.isRunning(for: episodeID) ? "active" : "idle"
+        return "\(episodeID)|\(transcriptStamp)|\(analysisStamp)|\(runningStamp)"
     }
 
     private func completedTranscriptUpdatedAt(for episodeID: String?) -> Date? {

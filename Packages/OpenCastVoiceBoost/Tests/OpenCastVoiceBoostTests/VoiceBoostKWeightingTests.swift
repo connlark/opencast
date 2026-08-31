@@ -3,7 +3,7 @@ import Testing
 import OpenCastVoiceBoostC
 @testable import OpenCastVoiceBoost
 
-/// Pass 2 (D6): the K-weighting coefficients are derived analytically in C
+/// The K-weighting coefficients are derived analytically in C
 /// for any sample rate and are the single source of truth for the realtime
 /// engine and the Swift offline analyzer.
 struct VoiceBoostKWeightingTests {

@@ -1,4 +1,4 @@
-// Kill switch (decision 12) + limiter daily spend cap, on the purchase
+// Kill switch + limiter daily spend cap, on the purchase
 // backend with the real PurchaseWorker. This config runs with
 // PURCHASES_ENABLED=false and DAILY_SPEND_CAP_USD_MICRO=1000 (≈120 s of
 // audio), so store surfaces are hidden and any real job trips the cap.

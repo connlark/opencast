@@ -1,8 +1,8 @@
 use crate::types::AdAnalysisRequest;
 
 /// Single-shot analysis is the whole fix for the island bug: 240-segment
-/// windows drove hallucinated spans and MAX_TOKENS degeneration (step-4
-/// research §3/§4b). One Gemini call for anything <= 2000 segments; a coarse
+/// windows drove hallucinated spans and MAX_TOKENS degeneration during
+/// validation. One Gemini call for anything <= 2000 segments; a coarse
 /// fallback split above that (`MAX_SEGMENTS` 6000 => at most 4 windows).
 pub const SINGLE_WINDOW_MAX_SEGMENTS: usize = 2_000;
 pub const FALLBACK_WINDOW_SEGMENTS: usize = 2_000;

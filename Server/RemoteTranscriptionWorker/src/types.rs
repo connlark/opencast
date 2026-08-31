@@ -16,7 +16,7 @@ pub const ERROR_DEADLINE_EXPIRED: &str = "deadline_expired";
 pub const ERROR_JOB_NOT_FOUND: &str = "job_not_found";
 pub const ERROR_ACCOUNT_MISMATCH: &str = "account_mismatch";
 pub const ERROR_FEATURE_DISABLED: &str = "feature_disabled";
-/// Purchase kill switch (pass 1 decision 12): store/purchase routes hidden
+/// Purchase kill switch: store/purchase routes hidden
 /// without touching balances, jobs, or notification processing.
 pub const ERROR_PURCHASES_DISABLED: &str = "purchases_disabled";
 /// Purchase-backend lanes require a bootstrap-established install→account
@@ -28,11 +28,11 @@ pub const ERROR_INVALID_REQUEST: &str = "invalid_request";
 pub const ERROR_TRANSCRIPTION_FAILED: &str = "transcription_failed";
 pub const ERROR_CANCELLED: &str = "cancelled";
 pub const ERROR_INTERNAL: &str = "internal_error";
-/// Upload routes exist but the lane has no R2 S3 signing credential yet
-/// (pass 2 decision 12): fail closed, dev lane unaffected.
+/// Upload routes exist but the lane has no R2 S3 signing credential yet:
+/// fail closed, leaving the development lane unaffected.
 pub const ERROR_UPLOAD_UNAVAILABLE: &str = "upload_unavailable";
 /// The completed exact-device upload's recomputed identity does not equal the
-/// authenticated device report (pass 2 decision 5): terminal, zero spend.
+/// authenticated device report: terminal, zero spend.
 pub const ERROR_UPLOAD_IDENTITY_MISMATCH: &str = "upload_identity_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,7 +104,7 @@ pub struct JobError {
     pub message: Option<String>,
 }
 
-/// Per-chunk AI span (pass 0.5 decision 4): index, first-attempt start,
+/// Per-chunk AI span: index, first-attempt start,
 /// successful-attempt end (epoch seconds), and how many attempts failed.
 /// Content-free by construction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,7 +230,7 @@ pub struct AckRequest {
     pub normalized_transcript_sha256: Option<String>,
 }
 
-// --- Exact-device upload fallback wire shapes (pass 2 decision 3) ---
+// --- Exact-device upload fallback wire shapes ---
 
 #[derive(Debug, Deserialize)]
 pub struct UploadStartRequest {

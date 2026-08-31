@@ -12,7 +12,7 @@ public struct OpenCastRemoteTranscriptionModelProvenance: Codable, Sendable, Equ
     public var chunkManifestSHA256: String
     public var normalizedTranscriptSHA256: String
     public var pipelineVersion: String
-    /// How the source bytes were proven (additive, pass 2):
+    /// How the source bytes were proven (an additive field):
     /// `server_device_hash_match` or `exact_device_upload`. Absent from
     /// pre-pass-2 servers, which only ever hash-matched.
     public var sourceMatchMode: String?

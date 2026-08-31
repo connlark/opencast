@@ -637,9 +637,9 @@ describe("gateway with the real PurchaseWorker credit backend", () => {
 
   it("fails upload/start closed with upload_unavailable when the lane has no R2 S3 credential", async () => {
     // This config deliberately carries no R2_S3_ACCESS_KEY_ID /
-    // R2_S3_SECRET_ACCESS_KEY — the exact prod-staging posture until Connor
-    // mints the scoped token (pass 2 decision 12). A policy-unsafe origin
-    // routes the job to the upload path without any fetch.
+    // R2_S3_SECRET_ACCESS_KEY. A policy-unsafe origin routes the job to the
+    // upload path without any fetch, proving that the lane fails closed until
+    // an operator supplies scoped credentials.
     const identity = uid("apptx");
     await bootstrap(identity);
     const tag = uid("uploadgate");

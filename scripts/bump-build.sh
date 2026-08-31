@@ -3,8 +3,8 @@
 # configuration in opencast.xcodeproj/project.pbxproj.
 #
 # Usage:
-#   notes/bump-build.sh           # bump by 1
-#   notes/bump-build.sh 42        # set explicitly to 42
+#   scripts/bump-build.sh           # bump by 1
+#   scripts/bump-build.sh 42        # set explicitly to 42
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

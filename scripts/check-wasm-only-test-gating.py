@@ -2,7 +2,7 @@
 """Fail when Rust test code sits inside a wasm-only module.
 
 Backing implementation for scripts/check-wasm-only-test-gating.sh — see the
-wrapper's header for the contract and the Phase 10.5 G hardening rationale.
+wrapper's header for the contract and the hardening rationale.
 Conservative by design: shapes the scanner cannot resolve (#[path], modules
 with no file on disk, unbalanced braces, an attribute still open at EOF)
 fail loud instead of passing silent.

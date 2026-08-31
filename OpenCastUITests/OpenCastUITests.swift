@@ -110,9 +110,9 @@ final class OpenCastUITests: XCTestCase {
 
     @MainActor
     func testEpisodeMenuShowsRemoteSurfacesOnFreshLaunchWithoutSettings() throws {
-        // Launch-scoped gate resolution (pass 2 decision 10): remote surfaces
+        // Launch-scoped gate resolution: remote surfaces
         // must appear in the episode menu on a fresh launch without Settings
-        // ever mounting (pass 1 resolved the gate only from Settings' task).
+        // ever mounting (the gate was previously resolved only from Settings' task).
         let app = makeSeededApp(
             forcesDarkMode: false,
             forcesLightMode: true
@@ -135,6 +135,109 @@ final class OpenCastUITests: XCTestCase {
             remoteAction.waitForExistence(timeout: 8),
             "Remote transcription menu entry should be present on fresh launch without opening Settings"
         )
+    }
+
+    @MainActor
+    func testSeededEpisodeDiagnosticsSheetShowsSectionsAndReportActions() throws {
+        let app = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true,
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true
+        )
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        openEpisodeDetailFromContextMenu(inboxEpisode, in: app, named: "seeded inbox episode")
+
+        let actionsButton = app.buttons["Episode Actions"].firstMatch
+        assertExists(actionsButton, named: "Episode Actions menu", timeout: 8)
+        actionsButton.tap()
+
+        let diagnosticsEntry = app.buttons["Episode Diagnostics"].firstMatch
+        assertExists(diagnosticsEntry, named: "Episode Diagnostics menu entry")
+        diagnosticsEntry.tap()
+
+        assertExists(
+            app.navigationBars["Episode Diagnostics"].firstMatch,
+            named: "diagnostics sheet",
+            timeout: 8
+        )
+        assertExists(app.buttons["Refresh Diagnostics"].firstMatch, named: "refresh diagnostics action")
+        assertExists(app.buttons["Copy Report"].firstMatch, named: "copy report action")
+        assertExists(app.buttons["Share Report"].firstMatch, named: "share report action")
+        assertExists(app.buttons["Download & Share MP3"].firstMatch, named: "download and share MP3 action")
+
+        // The seeded transcript/analysis data and the explicit missing-data
+        // state for the unseeded download coexist in one report; deeper
+        // sections require scrolling the sheet list. LabeledContent rows
+        // expose one combined "Label, Value" static text, so match by
+        // containment.
+        let missingDownloadRow = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "No download record.")
+        ).firstMatch
+        scrollDiagnosticsSheet(to: missingDownloadRow, in: app)
+        assertExists(missingDownloadRow, named: "missing download state")
+        let zoneMatrixHeader = app.staticTexts["Zone Matrix"].firstMatch
+        scrollDiagnosticsSheet(to: zoneMatrixHeader, in: app)
+        assertExists(zoneMatrixHeader, named: "zone matrix section")
+
+        app.buttons["Done"].firstMatch.tap()
+        assertExists(actionsButton, named: "episode detail after dismissing diagnostics", timeout: 8)
+    }
+
+    @MainActor
+    func testSeededEpisodeDiagnosticsDownloadShareOpensActivitySheet() throws {
+        let app = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true,
+            seedsCompletedDownload: true
+        )
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        // The shared context-menu helper expects a Download action, which the
+        // seeded completed download replaces; open the detail directly.
+        inboxEpisode.press(forDuration: 1.2)
+        let detailsAction = app.buttons["View Episode Details"]
+        assertExists(detailsAction, named: "seeded inbox episode details context action")
+        detailsAction.tap()
+        assertExists(app.buttons["Play Episode"], named: "seeded episode detail")
+
+        let actionsButton = app.buttons["Episode Actions"].firstMatch
+        assertExists(actionsButton, named: "Episode Actions menu", timeout: 8)
+        actionsButton.tap()
+        let diagnosticsEntry = app.buttons["Episode Diagnostics"].firstMatch
+        assertExists(diagnosticsEntry, named: "Episode Diagnostics menu entry")
+        diagnosticsEntry.tap()
+        assertExists(
+            app.navigationBars["Episode Diagnostics"].firstMatch,
+            named: "diagnostics sheet",
+            timeout: 8
+        )
+
+        let shareButton = app.buttons["Download & Share MP3"].firstMatch
+        assertExists(shareButton, named: "download and share MP3 action")
+        shareButton.tap()
+
+        // The seeded completed download shares immediately; the activity
+        // sheet's header carries the sanitized hard-link filename, proving
+        // the share file preparation end to end.
+        let shareHeader = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "UI Test Show - Deterministic UI Episode")
+        ).firstMatch
+        assertExists(shareHeader, named: "activity sheet with sanitized share filename", timeout: 10)
+    }
+
+    @MainActor
+    private func scrollDiagnosticsSheet(to element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<10 where !element.exists {
+            app.swipeUp()
+        }
     }
 
     @MainActor
@@ -1058,6 +1161,7 @@ final class OpenCastUITests: XCTestCase {
         libraryPodcast.tap()
 
         let completedEpisode = seededCompletedEpisodeRow(in: app)
+        scrollUntilExists(completedEpisode, in: app)
         assertExists(completedEpisode, named: "completed podcast episode row")
         openEpisodeDetailFromContextMenu(
             completedEpisode,
@@ -1100,6 +1204,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(libraryPodcast, named: "seeded library podcast")
         libraryPodcast.tap()
         let completedEpisode = seededCompletedEpisodeRow(in: app)
+        scrollUntilExists(completedEpisode, in: app)
         assertExists(completedEpisode, named: "completed podcast episode row")
         openEpisodeDetailFromContextMenu(
             completedEpisode,
@@ -1137,6 +1242,7 @@ final class OpenCastUITests: XCTestCase {
         libraryPodcast.tap()
 
         let completedEpisode = seededCompletedEpisodeRow(in: app)
+        scrollUntilExists(completedEpisode, in: app)
         assertExists(completedEpisode, named: "completed podcast episode row")
         XCTAssertTrue((completedEpisode.value as? String)?.contains("Completed") == true)
         attachSmokeScreenshot(named: "podcast_detail_episode_progress")
@@ -1419,8 +1525,9 @@ final class OpenCastUITests: XCTestCase {
         // Playing the unanalyzed episode of the opted-in show enqueues an
         // auto pass; playing the analyzed one enqueues nothing. The queue's
         // run log in the app container is the proof artifact — this test is
-        // the deterministic driver for it (step6/runs/stage-d).
+        // the deterministic driver for it.
         let unanalyzedRow = seededCompletedEpisodeRow(in: app)
+        scrollUntilExists(unanalyzedRow, in: app)
         assertExists(unanalyzedRow, named: "unanalyzed seeded episode row")
         unanalyzedRow.tap()
         assertNowPlayingOverlay(in: app)
@@ -2301,7 +2408,7 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "seeded_low_confidence_dimmed_zone_no_auto_skip")
     }
 
-    /// Step-4 Stage-F proof leg: drives the REAL app container (no seeding) on
+    /// Device proof leg: drives the REAL app container (no seeding) on
     /// a simulator that already holds the bugged-pod episode with a completed
     /// live `promo_ad_breaks_v2` analysis. Verifies the intro-pod auto-skip on
     /// the actual bug-report audio and the pill-tap undo returning into the
@@ -2351,7 +2458,7 @@ final class OpenCastUITests: XCTestCase {
         let actionsButton = app.buttons["Episode Actions"].firstMatch
         assertExists(actionsButton, named: "Episode Actions menu", timeout: 8)
         actionsButton.tap()
-        attachSmokeScreenshot(named: "step4_bug_episode_actions_menu")
+        attachSmokeScreenshot(named: "auto_skip_bug_episode_actions_menu")
         let clearProgress = app.descendants(matching: .any)["Clear Progress"].firstMatch
         if clearProgress.waitForExistence(timeout: 3) {
             clearProgress.tap()
@@ -2386,12 +2493,12 @@ final class OpenCastUITests: XCTestCase {
         let pill = app.buttons["Skipped promo"].firstMatch
         assertExists(pill, named: "auto-skip pill on the intro pod", timeout: 75)
         pill.tap()
-        attachSmokeScreenshot(named: "step4_bug_episode_intro_auto_skip_pill_tapped")
+        attachSmokeScreenshot(named: "auto_skip_bug_episode_intro_auto_skip_pill_tapped")
         // Undo returns into the pod and plays through without re-skipping.
         // This device's live analysis marks the intro pod at ~0:50-2:10, so
         // anything under 2:00 is unambiguously "back inside".
         let backInside = waitForPlaybackElapsed(progress, in: 49..<120, timeout: 8)
-        attachSmokeScreenshot(named: "step4_bug_episode_pill_undo_back_inside_pod")
+        attachSmokeScreenshot(named: "auto_skip_bug_episode_pill_undo_back_inside_pod")
         XCTAssertLessThan(backInside, 120)
         assertDoesNotExist(pill, named: "pill after undo (no immediate re-skip)", timeout: 1)
         let playingThrough = waitForPlaybackElapsed(progress, atLeast: backInside + 6, timeout: 15)
@@ -2400,7 +2507,7 @@ final class OpenCastUITests: XCTestCase {
             125,
             "Playback should continue inside the disarmed pod instead of re-skipping."
         )
-        attachSmokeScreenshot(named: "step4_bug_episode_pill_undo_playthrough")
+        attachSmokeScreenshot(named: "auto_skip_bug_episode_pill_undo_playthrough")
     }
 
     @MainActor
@@ -2643,7 +2750,7 @@ final class OpenCastUITests: XCTestCase {
         openSettings(in: app)
         scrollUntilExists(app.staticTexts["Transcription"], in: app)
         assertExists(app.staticTexts["Transcription"], named: "Transcription settings section")
-        // The Fast/Accurate model picker left the product path (decision 5);
+        // The Fast/Accurate model picker left the product path;
         // whisper management in main Settings is tiny-pinned.
         XCTAssertFalse(app.buttons["Fast"].exists, "Fast/Accurate picker must be out of the product path")
         XCTAssertFalse(app.buttons["Accurate"].exists, "Fast/Accurate picker must be out of the product path")
@@ -2980,7 +3087,7 @@ final class OpenCastUITests: XCTestCase {
 
         // Backstop-only budget: the wait returns the moment the banner
         // clears, but the delete's save→reload propagation can exceed 5s
-        // under full-suite clone load (observed once in the Phase 9 close
+        // under full-suite clone load (observed once during closeout
         // lane; green in isolation).
         XCTAssertTrue(
             app.staticTexts["Outdated — run again"].waitForNonExistence(timeout: 15),
@@ -4538,7 +4645,7 @@ final class OpenCastUITests: XCTestCase {
                 line: line
             )
         }
-        // The shared row menu carries the step-6 actions on every surface.
+        // The shared row menu carries these actions on every surface.
         assertExists(
             app.buttons["Play Next"].firstMatch,
             named: "\(name) Play Next context action",

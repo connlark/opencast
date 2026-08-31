@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Pass 4 dynamics coverage: the configurable soft-knee compressor's static
+/// Dynamics coverage: the configurable soft-knee compressor's static
 /// curve (D8) and the adaptation control snapshot that survives processor
 /// recreation (I3).
 struct VoiceBoostDynamicsTests {

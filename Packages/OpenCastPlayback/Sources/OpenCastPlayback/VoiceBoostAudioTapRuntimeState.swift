@@ -4,7 +4,7 @@ import OpenCastVoiceBoost
 
 nonisolated struct VoiceBoostAudioTapRuntimeState {
     /// The tap's engagement state machine. Steady states are `bypassed`
-    /// (untouched zero-latency dry — the Pass-1 invariant) and `engaged`
+    /// (untouched zero-latency dry) and `engaged`
     /// (pure processor output). The transitions exist because the processor
     /// output is delayed by its lookahead: leaving or entering the C path
     /// needs a drain (wet ramps to dry inside C on time-aligned legs) and a
@@ -162,7 +162,7 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         }
     }
 
-    /// Seek policy (Pass 4): signal and measurement state reset, adaptation
+    /// Seek policy: signal and measurement state reset, adaptation
     /// control state re-seeded — a skip inside the same programme must not
     /// step gain or re-engage the low-confidence cap.
     func reset() {
@@ -239,7 +239,7 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
 
     /// The production path on the simulator and (per format) devices: the
     /// tap's non-interleaved channel pointers go straight into the planar C
-    /// engine — no marshalling copies (Pass 5; the per-sample Swift copy
+    /// engine — no marshalling copies (the per-sample Swift copy
     /// loops this replaces were most of the Debug-build CPU delta).
     private mutating func processPlanar(
         buffers: inout UnsafeMutableAudioBufferListPointer,

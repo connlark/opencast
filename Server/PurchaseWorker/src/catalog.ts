@@ -13,7 +13,7 @@ export const EXPECTED_CATALOG_SHA256 =
 export const FREE_GRANT_SECONDS = 3600;
 export const FREE_GRANT_LEDGER_KIND = 'free_grant_v1';
 
-/** Overdraft cap (Connor's 2026-07-16 call): 3 hours of debt. */
+/** Maximum debt admitted by a new reservation: 3 hours. */
 export const DEBT_CAP_SECONDS = 10_800;
 
 export const CATALOG: CatalogProduct[] = [

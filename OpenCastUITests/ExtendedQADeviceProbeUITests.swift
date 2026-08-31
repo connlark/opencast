@@ -1,10 +1,9 @@
 import XCTest
 
-/// Phase 11 Extended-QA device probes (`notes/plans/bugfixes-galore/STATUS.md`):
-/// the model-download watch (workstream A), the checkpoint kill-soak driver
-/// (F), the long-episode transcript screens pass (E/D), and the real-library
-/// artwork scroll (C/H/I). Launches the real app — no seeding seams, real
-/// store — on a physical device.
+/// Extended-QA device probes: the model-download watch, checkpoint kill-soak
+/// driver, long-episode transcript screens pass, and real-library artwork
+/// scroll. Launches the real app — no seeding seams, real store — on a
+/// physical device.
 ///
 /// Opt-in via `TEST_RUNNER_OPENCAST_EXTENDED_QA=1`; each leg is a separate
 /// test method addressed with `-only-testing` so device state can be arranged
@@ -37,7 +36,7 @@ final class ExtendedQADeviceProbeUITests: XCTestCase {
     private static var longPodcastTitle: String { environmentValue("LONG_PODCAST", default: "") }
     private static var longEpisodeTitle: String { environmentValue("LONG_EPISODE", default: "") }
 
-    // MARK: - A: model-download watch
+    // MARK: - Model-download watch
 
     /// Fresh tiny.en install watching the bar move mid-file: deletes the Fast
     /// model if installed, reinstalls it, and samples the settings status row

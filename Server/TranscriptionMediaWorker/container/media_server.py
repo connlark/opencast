@@ -80,7 +80,7 @@ def download_source(source_key: str, destination: Path) -> tuple[str, int]:
             # CPython's bounded read() returns b"" on a premature EOF without
             # raising, so without this check the truncated prefix's hash/count
             # would be returned as the object identity and terminally blame a
-            # healthy device (source/upload identity mismatch). Phase 10 AA/TMW-1.
+            # healthy device (source/upload identity mismatch).
             content_length = response.headers.get("content-length")
             if content_length is not None:
                 try:
@@ -365,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
             # The framing read is inside the try so a missing/non-numeric
             # content-length (e.g. chunked encoding) becomes a clean 400
             # instead of a KeyError-driven generic 500 (or, for a non-numeric
-            # header, no response at all). Phase 10 TMW-7.
+            # header, no response at all).
             raw_length = self.headers.get("content-length")
             if raw_length is None:
                 raise MediaError(400, "content_length_required")

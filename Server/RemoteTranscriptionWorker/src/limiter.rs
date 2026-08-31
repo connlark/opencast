@@ -105,7 +105,7 @@ pub struct LimiterState {
     pub active: Vec<LimiterSlot>,
     #[serde(default)]
     pub tickets: Vec<LimiterTicket>,
-    // Legacy single-slot fields (pass 0 shape): read once so a deploy does
+    // Legacy single-slot fields: read once so a deploy does
     // not drop the active slot or the day's spend, never written back.
     #[serde(default, skip_serializing)]
     active_job_id: Option<String>,

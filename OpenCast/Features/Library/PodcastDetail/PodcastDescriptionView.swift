@@ -10,26 +10,28 @@ struct PodcastDescriptionView: View {
         let summary = summaryHTML.map { HTMLPlainText.collapsedText(from: $0) } ?? ""
         let canExpand = summary.count > 160
 
-        if !summary.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(summary)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(isExpanded ? nil : 3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 12) {
+            if !summary.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(summary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(isExpanded ? nil : 3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                if canExpand {
-                    Button(
-                        isExpanded ? "Show Less" : "Show More",
-                        systemImage: isExpanded ? "chevron.up" : "chevron.down",
-                        action: toggleExpanded
-                    )
-                    .font(.subheadline)
-                    .bold()
-                    .buttonStyle(.plain)
+                    if canExpand {
+                        Button(
+                            isExpanded ? "Show Less" : "Show More",
+                            systemImage: isExpanded ? "chevron.up" : "chevron.down",
+                            action: toggleExpanded
+                        )
+                        .font(.subheadline)
+                        .bold()
+                        .buttonStyle(.plain)
+                    }
                 }
+                .animation(reduceMotion ? nil : .smooth, value: isExpanded)
             }
-            .animation(reduceMotion ? nil : .smooth, value: isExpanded)
         }
     }
 

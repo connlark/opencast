@@ -26,10 +26,10 @@ fn prompt_carries_the_promo_ad_breaks_v2_contract() {
     assert!(prompt.contains("never start a span on hosts merely joking about sponsors"));
     assert!(prompt.contains("pick the kind covering most of the break; do not split the break"));
     assert!(prompt.contains("Use only submitted segment IDs for boundaries"));
-    // The single tested addition to the proven breaks_v2 text (step-4 stage A).
+    // The single tested addition to the proven breaks_v2 text.
     assert!(prompt.contains("- If the segments contain no ad breaks, return {\"spans\": []}.\n"));
     // The verbatim evidence addition was dropped after it measurably regressed
-    // gemini-3.1-flash-lite (stage-a bisect); it must not resurface.
+    // gemini-3.1-flash-lite during a prompt bisect; it must not resurface.
     assert!(!prompt.contains("copied verbatim"));
     assert!(prompt.contains(
         "- evidence_quote: quote one promotional cue from inside the span, under 12 words.\n"
@@ -66,7 +66,7 @@ fn gemini_payload_requests_structured_json_with_thinking_headroom() {
             ["properties"]["kind"]["enum"],
         serde_json::json!(["host_read_ad", "inserted_ad", "house_or_network_promo"])
     );
-    // Model defaults were what the stage-a experiments measured — no
+    // Model defaults were what the validation experiments measured — no
     // thinkingConfig may be sent.
     assert!(payload["generationConfig"].get("thinkingConfig").is_none());
 }
@@ -224,7 +224,7 @@ fn per_segment_framing_reconciles_the_rendered_prompt() {
 
 /// `{:.3}` rounds before printing, so a timing just under a power of ten
 /// gains an integer digit (9.9996 renders "10.000"). The width helper must
-/// round the same way, not truncate (Phase 10 re-review).
+/// round the same way, not truncate.
 #[test]
 fn framing_width_survives_round_up_across_a_power_of_ten() {
     for (start, end) in [(9.999_6, 99.999_5), (0.999_9, 9.999_9), (7.25, 999.999_6)] {

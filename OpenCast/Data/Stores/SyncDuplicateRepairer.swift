@@ -201,6 +201,9 @@ enum SyncDuplicateRepairer {
             isVoiceBoostEnabled: records.allSatisfy(\.isVoiceBoostEnabled),
             // Auto-detect defaults off, so an explicit opt-in on any duplicate wins.
             isAdAutoDetectEnabled: records.contains(where: \.isAdAutoDetectEnabled),
+            // Same OR-merge: the opt-in defaults off, so any duplicate that
+            // carries an explicit consent wins the merge.
+            isTranscriptAnalysisEnabled: records.contains(where: \.isTranscriptAnalysisEnabled),
             skipIntroSeconds: mergedSkipSettings.skipIntroSeconds,
             skipOutroSeconds: mergedSkipSettings.skipOutroSeconds
         )
@@ -215,6 +218,7 @@ enum SyncDuplicateRepairer {
             setIfChanged(keep, \.isArchived, merged.isArchived)
             setIfChanged(keep, \.isVoiceBoostEnabled, merged.isVoiceBoostEnabled)
             setIfChanged(keep, \.isAdAutoDetectEnabled, merged.isAdAutoDetectEnabled)
+            setIfChanged(keep, \.isTranscriptAnalysisEnabled, merged.isTranscriptAnalysisEnabled)
             setIfChanged(keep, \.skipIntroSeconds, merged.skipIntroSeconds)
             setIfChanged(keep, \.skipOutroSeconds, merged.skipOutroSeconds)
 
@@ -238,6 +242,7 @@ enum SyncDuplicateRepairer {
                     isArchived: merged.isArchived,
                     isVoiceBoostEnabled: merged.isVoiceBoostEnabled,
                     isAdAutoDetectEnabled: merged.isAdAutoDetectEnabled,
+                    isTranscriptAnalysisEnabled: merged.isTranscriptAnalysisEnabled,
                     skipIntroSeconds: merged.skipIntroSeconds,
                     skipOutroSeconds: merged.skipOutroSeconds
                 )
@@ -384,6 +389,7 @@ enum SyncDuplicateRepairer {
         var isArchived: Bool
         var isVoiceBoostEnabled: Bool
         var isAdAutoDetectEnabled: Bool
+        var isTranscriptAnalysisEnabled: Bool
         var skipIntroSeconds: Double
         var skipOutroSeconds: Double
     }

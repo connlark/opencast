@@ -53,7 +53,7 @@
 #define OCVB_CHAIN_LOSS_MIN_DB (-2.0)
 #define OCVB_CHAIN_LOSS_MAX_DB 4.0
 
-/* Pass 5 vectorized engine geometry. Process calls split into engine blocks
+/* Vectorized engine geometry. Process calls split into engine blocks
    (sub-block-boundary and OCVB_ENGINE_BLOCK_FRAMES bounded); sanitizing and
    metering run block-wide to amortize vDSP call overhead, while the wet
    chain runs in cache-resident tiles (48 k stereo sweep: 128 beat 64/96/
@@ -272,10 +272,10 @@ struct OCVBProcessor {
     double integratedOutputEnergy;
     int32_t hasIntegratedOutput;
 
-    /* ---- Pass 5: vectorized planar engine ----
+    /* ---- Vectorized planar engine ----
        The production path processes planar float32 tiles through vDSP with
        double-precision coefficients (meter biquads stay double end to end).
-       The pre-pass-5 per-frame scalar implementation above is retained,
+       The per-frame scalar implementation above is retained,
        selectable via usesScalarReference, as the permanent test oracle; it
        keeps its own interleaved double delay rings and filter states, so an
        instance must use one path consistently from creation. */
@@ -1377,7 +1377,7 @@ static void ocvb_process_chunk(
     }
 }
 
-/* ==================== Pass 5: vectorized planar engine ====================
+/* ==================== Vectorized planar engine =============================
    Stage-structured tile processing (planar float32 through vDSP, double
    coefficients everywhere, double samples on the meter path) that reproduces
    the scalar reference implementation above: identical control decisions and
