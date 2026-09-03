@@ -400,11 +400,70 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(library.podcastsByFeedURL[Self.feedURL]?.updatedAt == refreshedAt)
     }
 
-    @Test("The schema reports the versioned-migration user_version")
+    @Test("The schema reports both version counters")
     func schemaReportsUserVersion() async throws {
         let store = SQLiteLocalLibraryCacheStore.inMemory()
         _ = try await store.loadLibrary(activePodcastIDs: [])
-        #expect(try await store.currentSchemaVersion() == 5)
+        #expect(try await store.currentSchemaVersion() == SQLiteEpisodeSearchIndex.schemaVersion)
+        #expect(
+            try await store.currentCanonicalSchemaVersion()
+                == SQLiteLocalLibraryCacheStore.canonicalSchemaVersion
+        )
+    }
+
+    @Test("Canonical migrations run on a database the search index already stamped")
+    func canonicalMigrationRunsUnderStampedSearchVersion() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "SQLiteSchemaVersionTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
+        let store = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        _ = try await store.loadLibrary(activePodcastIDs: [])
+        #expect(try await store.currentSchemaVersion() == SQLiteEpisodeSearchIndex.schemaVersion)
+
+        // The shape the shared user_version ladder produced: the search
+        // stamp is current while a canonical migration never ran.
+        for column in ["etag", "last_modified", "body_hash"] {
+            try execRawSQL("ALTER TABLE podcast_cache DROP COLUMN \(column)", databaseURL: databaseURL)
+        }
+        try execRawSQL("DELETE FROM local_cache_meta WHERE key = 'canonical_schema_version'", databaseURL: databaseURL)
+
+        let reopenedStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        _ = try await reopenedStore.loadLibrary(activePodcastIDs: [])
+        #expect(
+            try await reopenedStore.currentCanonicalSchemaVersion()
+                == SQLiteLocalLibraryCacheStore.canonicalSchemaVersion
+        )
+        #expect(
+            try columnNames(of: "podcast_cache", databaseURL: databaseURL)
+                .isSuperset(of: ["etag", "last_modified", "body_hash"])
+        )
+    }
+
+    @Test("Installed transcript-segment episode index is dropped on open")
+    func installedTranscriptSegmentEpisodeIndexIsDropped() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "SQLiteSchemaVersionTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
+        let store = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        _ = try await store.loadLibrary(activePodcastIDs: [])
+        try execRawSQL(
+            "CREATE INDEX IF NOT EXISTS episode_transcript_search_segment_episode ON episode_transcript_search_segment (episode_id)",
+            databaseURL: databaseURL
+        )
+        #expect(try indexNames(databaseURL: databaseURL).contains("episode_transcript_search_segment_episode"))
+
+        let reopenedStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        _ = try await reopenedStore.loadLibrary(activePodcastIDs: [])
+
+        let names = try indexNames(databaseURL: databaseURL)
+        #expect(!names.contains("episode_transcript_search_segment_episode"))
+        #expect(names.contains("episode_transcript_search_segment_podcast"))
     }
 
     @Test("Episode search rebuild enables fielded and scoped retrieval")
@@ -555,6 +614,69 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(hits.first?.scoreTrace.matchedFields.contains(.showNotes) == true)
         #expect(hits.first?.snippet?.contains("Mesosphere aurora coupling") == true)
         #expect(hits.first?.snippet?.contains("& measurable") == true)
+    }
+
+    @Test("A content-only update in the ready-unvalidated window reaches the index")
+    func contentOnlyUpdateBeforeValidationReachesSearchIndex() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(
+                path: "SQLiteSearchUnvalidatedWindow-\(UUID().uuidString)",
+                directoryHint: .isDirectory
+            )
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
+        let firstSession = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        try await firstSession.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "unvalidated-window",
+                    title: "Ceramic Receiver",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
+        )
+        try await firstSession.prepareEpisodeSearchIndex()
+        #expect(try await firstSession.episodeSearchIndexStateDescription() == "ready")
+
+        // Next launch: the stored contentVersion matches (.ready) but this
+        // session has not validated yet. A refresh lands a content-only
+        // retitle inside that window — the row count never changes, so a
+        // dropped index write would pass the count-only validation as
+        // permanently stale search text.
+        let secondSession = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        try await secondSession.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "unvalidated-window",
+                    title: "Optical Compass",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200)
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        #expect(try await secondSession.episodeSearchIndexStateDescription() == "validating")
+        try await secondSession.prepareEpisodeSearchIndex()
+        #expect(try await secondSession.episodeSearchIndexStateDescription() == "ready")
+
+        let newTitleHits = try await secondSession.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "optical compass",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(newTitleHits.map(\.episodeID) == ["unvalidated-window"])
+        let staleTitleHits = try await secondSession.searchEpisodes(
+            EpisodeSearchIndexRequest(
+                query: "ceramic receiver",
+                mode: .episodes,
+                activePodcastIDs: [Self.feedURL]
+            )
+        )
+        #expect(staleTitleHits.isEmpty)
     }
 
     @Test("Episode search maintenance follows content updates and deletes")
@@ -1183,7 +1305,7 @@ struct SQLiteLocalLibraryCacheStoreTests {
         try execRawSQL("PRAGMA user_version = 1", databaseURL: databaseURL)
         let upgradedStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
         _ = try await upgradedStore.loadLibrary(activePodcastIDs: [Self.feedURL])
-        #expect(try await upgradedStore.currentSchemaVersion() == 5)
+        #expect(try await upgradedStore.currentSchemaVersion() == SQLiteEpisodeSearchIndex.schemaVersion)
         try await upgradedStore.prepareEpisodeSearchIndex()
         #expect(
             try await upgradedStore.searchEpisodes(request).map(\.episodeID)
@@ -1501,7 +1623,15 @@ struct SQLiteLocalLibraryCacheStoreTests {
         }
     }
 
+    private func columnNames(of table: String, databaseURL: URL) throws -> Set<String> {
+        try rawStringColumn("PRAGMA table_info(\(table))", column: 1, databaseURL: databaseURL)
+    }
+
     private func indexNames(databaseURL: URL) throws -> Set<String> {
+        try rawStringColumn("SELECT name FROM sqlite_master WHERE type = 'index'", column: 0, databaseURL: databaseURL)
+    }
+
+    private func rawStringColumn(_ sql: String, column: Int32, databaseURL: URL) throws -> Set<String> {
         var handle: OpaquePointer?
         guard sqlite3_open_v2(
             databaseURL.path(percentEncoded: false),
@@ -1514,20 +1644,14 @@ struct SQLiteLocalLibraryCacheStoreTests {
         defer { sqlite3_close_v2(handle) }
 
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(
-            handle,
-            "SELECT name FROM sqlite_master WHERE type = 'index'",
-            -1,
-            &statement,
-            nil
-        ) == SQLITE_OK, let statement else {
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
             throw LocalLibraryCacheStoreError(operation: "test prepare", message: String(cString: sqlite3_errmsg(handle)))
         }
         defer { sqlite3_finalize(statement) }
 
         var names: Set<String> = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            if let name = sqlite3_column_text(statement, 0) {
+            if let name = sqlite3_column_text(statement, column) {
                 names.insert(String(cString: name))
             }
         }

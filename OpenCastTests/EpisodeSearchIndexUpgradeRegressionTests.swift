@@ -6,19 +6,20 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// Regression coverage for the derived-index content-version upgrade
-/// (v10 → v11, 2026-08-11 fix pass): an installed cache must rebuild exactly
-/// once, persist the new version, and never rebuild again on later launches —
-/// including launches that interrupt the upgrade rebuild and the real
-/// composition ordering where the transcription store's reconciliation races
-/// the library's index preparation.
+/// Regression coverage for the derived-index upgrade path: an installed cache
+/// on the previous schema/content version (schema 5, the single evidence
+/// table carrying body_data) must rebuild exactly once, persist the current
+/// version, and never rebuild again on later launches — including launches
+/// that interrupt the upgrade rebuild and the real composition ordering where
+/// the transcription store's reconciliation races the library's index
+/// preparation.
 @MainActor
 @Suite("Episode search index upgrade regression")
 struct EpisodeSearchIndexUpgradeRegressionTests {
     private static let feedURL = "https://example.com/upgrade-feed.xml"
 
-    @Test("A content-version-10 cache rebuilds exactly once and stays ready")
-    func contentVersion10UpgradeRebuildsExactlyOnce() async throws {
+    @Test("An installed schema-5 cache rebuilds exactly once and stays ready")
+    func installedSchema5UpgradeRebuildsExactlyOnce() async throws {
         let databaseURL = try makeDatabaseURL()
         defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
         let request = EpisodeSearchIndexRequest(
@@ -33,9 +34,10 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
         let expectedIDs = try await installedStore.searchEpisodes(request)
             .map(\.episodeID)
         try #require(!expectedIDs.isEmpty)
-        #expect(try readStoredContentVersion(databaseURL: databaseURL) == "11")
+        #expect(try readStoredContentVersion(databaseURL: databaseURL)
+                == String(SQLiteEpisodeSearchIndex.contentVersion))
 
-        try downgradeToContentVersion10(databaseURL: databaseURL)
+        try downgradeToInstalledSchema5(contentVersion: "11", databaseURL: databaseURL)
 
         // First launch after the update: stale version means the index is not
         // ready, search uses the fallback, and preparation runs one rebuild.
@@ -52,7 +54,8 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
             try await upgradeStore.episodeSearchIndexStateDescription()
                 == "ready"
         )
-        #expect(try readStoredContentVersion(databaseURL: databaseURL) == "11")
+        #expect(try readStoredContentVersion(databaseURL: databaseURL)
+                == String(SQLiteEpisodeSearchIndex.contentVersion))
         #expect(
             try await upgradeStore.searchEpisodes(request).map(\.episodeID)
                 == expectedIDs
@@ -93,7 +96,7 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
         try await installedStore.prepareEpisodeSearchIndex()
         let expectedIDs = try await installedStore.searchEpisodes(request)
             .map(\.episodeID)
-        try downgradeToContentVersion10(databaseURL: databaseURL)
+        try downgradeToInstalledSchema5(contentVersion: "10", databaseURL: databaseURL)
 
         let rebuildCheckpoint = EpisodeSearchRebuildCheckpoint()
         let interruptedStore = SQLiteLocalLibraryCacheStore(
@@ -123,7 +126,8 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
                 == "needsRebuild"
         )
         try await relaunchStore.prepareEpisodeSearchIndex()
-        #expect(try readStoredContentVersion(databaseURL: databaseURL) == "11")
+        #expect(try readStoredContentVersion(databaseURL: databaseURL)
+                == String(SQLiteEpisodeSearchIndex.contentVersion))
         #expect(
             try await relaunchStore.searchEpisodes(request).map(\.episodeID)
                 == expectedIDs
@@ -167,7 +171,7 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
             try await installedStore.searchEpisodes(transcriptRequest)
                 .map(\.episodeID) == ["upgrade-3"]
         )
-        try downgradeToContentVersion10(databaseURL: databaseURL)
+        try downgradeToInstalledSchema5(contentVersion: "10", databaseURL: databaseURL)
 
         // Launch after the update, in composition order: index store assigned
         // before load, library preparation racing the transcription store's
@@ -202,7 +206,8 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
             try await launchStore.episodeSearchIndexStateDescription()
                 == "ready"
         )
-        #expect(try readStoredContentVersion(databaseURL: databaseURL) == "11")
+        #expect(try readStoredContentVersion(databaseURL: databaseURL)
+                == String(SQLiteEpisodeSearchIndex.contentVersion))
 
         // Converged means quiet: once ready, further sync passes must not
         // rewrite transcript rows (version short-circuit) or re-trigger a
@@ -238,20 +243,32 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
 
     // MARK: - Fixtures
 
-    /// Restores the pre-fix-pass derived shape: stored content version 10 and
-    /// none of the v11 columns (canonical visible-title text, segment text).
-    private func downgradeToContentVersion10(databaseURL: URL) throws {
-        try execRawSQL(
-            """
-            UPDATE local_cache_meta
-            SET value = '10'
-            WHERE key = 'episode_search_content_version';
+    /// Restores the installed pre-current derived shape: PRAGMA user_version
+    /// 5 with the single evidence table carrying body_data (content version
+    /// 11), optionally downgraded further to the version-10 column set. The
+    /// schema-version bump then drops and recreates every derived table and
+    /// the content-version mismatch forces the one-time rebuild.
+    private func downgradeToInstalledSchema5(
+        contentVersion: String,
+        databaseURL: URL
+    ) throws {
+        var sql = """
+        PRAGMA user_version = 5;
+        UPDATE local_cache_meta
+        SET value = '\(contentVersion)'
+        WHERE key = 'episode_search_content_version';
+        DROP TABLE IF EXISTS episode_search_evidence_body;
+        ALTER TABLE episode_search_evidence ADD COLUMN body_data BLOB;
+        """
+        if contentVersion == "10" {
+            sql += """
+
             ALTER TABLE episode_search_evidence DROP COLUMN title_canonical;
             ALTER TABLE episode_search_evidence DROP COLUMN podcast_title_canonical;
             ALTER TABLE episode_transcript_search_segment DROP COLUMN text;
-            """,
-            databaseURL: databaseURL
-        )
+            """
+        }
+        try execRawSQL(sql, databaseURL: databaseURL)
     }
 
     private func seedCorpus(in store: SQLiteLocalLibraryCacheStore) async throws {

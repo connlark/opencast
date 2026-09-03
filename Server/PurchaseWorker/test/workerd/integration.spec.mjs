@@ -606,6 +606,64 @@ describe('credit seam (reserve/settle/release)', () => {
     expect(release.status).toBe(200);
   });
 
+  it('release falls back to a caller-supplied account_id when the index row is missing', async () => {
+    const account = await bootstrap(uid('apptx'));
+    const jobId = uid('job');
+    await post('/internal/v1/reserve', {
+      account_id: account.account_id,
+      job_id: jobId,
+      seconds: 1_000,
+    });
+    // Simulate the reserve window where the DO admitted the hold but the
+    // reservation_index write never landed.
+    await env.PURCHASE_DB.prepare('DELETE FROM reservation_index WHERE job_id = ?1')
+      .bind(jobId)
+      .run();
+
+    // Without the fallback the hold is unreachable.
+    const blind = await post('/internal/v1/release', { job_id: jobId });
+    expect(blind.status).toBe(200);
+    expect((await blind.json()).released).toBe(false);
+
+    const release = await post('/internal/v1/release', {
+      job_id: jobId,
+      account_id: account.account_id,
+    });
+    expect(release.status).toBe(200);
+    expect((await release.json()).balance.reserved_seconds).toBe(0);
+
+    // The fallback re-pinned the index row.
+    const row = await env.PURCHASE_DB.prepare(
+      'SELECT account_id FROM reservation_index WHERE job_id = ?1',
+    )
+      .bind(jobId)
+      .first();
+    expect(row.account_id).toBe(account.account_id);
+  });
+
+  it('settle falls back to a caller-supplied account_id when the index row is missing', async () => {
+    const account = await bootstrap(uid('apptx'));
+    const jobId = uid('job');
+    await post('/internal/v1/reserve', {
+      account_id: account.account_id,
+      job_id: jobId,
+      seconds: 1_000,
+    });
+    await env.PURCHASE_DB.prepare('DELETE FROM reservation_index WHERE job_id = ?1')
+      .bind(jobId)
+      .run();
+
+    const blind = await post('/internal/v1/settle', { job_id: jobId });
+    expect(blind.status).toBe(404);
+
+    const settle = await post('/internal/v1/settle', {
+      job_id: jobId,
+      account_id: account.account_id,
+    });
+    expect(settle.status).toBe(200);
+    expect((await settle.json()).balance.reserved_seconds).toBe(0);
+  });
+
   it('release returns reserved seconds and settling a released reservation conflicts', async () => {
     const account = await bootstrap(uid('apptx'));
     const jobId = uid('job');
@@ -630,11 +688,34 @@ describe('credit seam (reserve/settle/release)', () => {
   });
 });
 
+// The suite pins LIABILITY_SNAPSHOT_MAX_ACCOUNTS to 3 (vitest.workerd.config),
+// so a sweep over this file's accounts spans several cron ticks. Each call
+// advances one page; the snapshot row lands on the short final page.
+async function runLiabilitySweep() {
+  const pages = [];
+  for (;;) {
+    const response = await post('/internal/v1/liability-snapshot', {});
+    expect(response.status).toBe(200);
+    const step = await response.json();
+    pages.push(step);
+    if (step.sweep_complete) {
+      return { snapshot: step, pages };
+    }
+    expect(step.complete).toBe(false);
+    expect(step.accounts_read).toBe(3);
+    expect(pages.length).toBeLessThan(1_000);
+  }
+}
+
+async function liabilitySweepStateRow() {
+  return env.PURCHASE_DB
+    .prepare('SELECT cursor, accounts_sampled FROM liability_sweep_state WHERE sweep_key = 1')
+    .first();
+}
+
 describe('operations floor', () => {
   it('records accumulating liability snapshots from authoritative account DO totals', async () => {
-    const baselineResponse = await post('/internal/v1/liability-snapshot', {});
-    expect(baselineResponse.status).toBe(200);
-    const baseline = await baselineResponse.json();
+    const { snapshot: baseline } = await runLiabilitySweep();
     expect(baseline.complete).toBe(true);
 
     await bootstrap(uid('liability-available'));
@@ -647,14 +728,17 @@ describe('operations floor', () => {
     })).status).toBe(200);
     expect((await post('/internal/v1/settle', { job_id: debtJob })).status).toBe(200);
 
-    const response = await post('/internal/v1/liability-snapshot', {});
-    expect(response.status).toBe(200);
-    const snapshot = await response.json();
+    const { snapshot, pages } = await runLiabilitySweep();
     expect(snapshot.complete).toBe(true);
     expect(snapshot.account_count).toBe(baseline.account_count + 2);
     expect(snapshot.accounts_sampled).toBe(snapshot.account_count);
     expect(snapshot.outstanding_seconds).toBe(baseline.outstanding_seconds + 3_600);
     expect(snapshot.debt_seconds).toBe(baseline.debt_seconds + 1_400);
+    // The sweep paged: every full page carried its running totals forward
+    // in D1 and only the short final page wrote the snapshot.
+    expect(pages.length).toBe(Math.floor(snapshot.account_count / 3) + 1);
+    expect(pages.slice(0, -1).every((page) => page.accounts_sampled < snapshot.account_count)).toBe(true);
+    expect(await liabilitySweepStateRow()).toBeNull();
 
     const rows = await env.PURCHASE_DB
       .prepare('SELECT COUNT(*) AS count FROM liability_snapshots')
@@ -664,6 +748,10 @@ describe('operations floor', () => {
       .prepare("SELECT value FROM purchase_ops_counters WHERE name = 'liability_snapshot_runs'")
       .first();
     expect(Number(counter.value)).toBeGreaterThanOrEqual(2);
+    const continued = await env.PURCHASE_DB
+      .prepare("SELECT value FROM purchase_ops_counters WHERE name = 'liability_sweep_continued'")
+      .first();
+    expect(Number(continued.value)).toBeGreaterThanOrEqual(pages.length - 1);
     const rawAccountCount = await env.PURCHASE_DB
       .prepare('SELECT COUNT(*) AS count FROM purchase_accounts')
       .first();
@@ -671,6 +759,33 @@ describe('operations floor', () => {
       .prepare("SELECT value FROM purchase_ops_counters WHERE name = 'purchase_account_count'")
       .first();
     expect(Number(maintainedAccountCount.value)).toBe(Number(rawAccountCount.count));
+  });
+
+  it('carries the liability sweep cursor and running totals across cron ticks', async () => {
+    expect(await liabilitySweepStateRow()).toBeNull();
+
+    const firstResponse = await post('/internal/v1/liability-snapshot', {});
+    const first = await firstResponse.json();
+    expect(first.sweep_complete).toBe(false);
+    expect(first.accounts_read).toBe(3);
+    expect(first.accounts_sampled).toBe(3);
+    const firstPage = await env.PURCHASE_DB
+      .prepare('SELECT account_id FROM purchase_accounts ORDER BY account_id ASC LIMIT 3')
+      .all();
+    const midSweep = await liabilitySweepStateRow();
+    expect(midSweep.cursor).toBe(firstPage.results[2].account_id);
+    expect(Number(midSweep.accounts_sampled)).toBe(3);
+
+    const secondResponse = await post('/internal/v1/liability-snapshot', {});
+    const second = await secondResponse.json();
+    expect(second.accounts_sampled).toBe(6);
+    const cursor = (await liabilitySweepStateRow()).cursor;
+    expect(cursor > midSweep.cursor).toBe(true);
+
+    const { snapshot } = await runLiabilitySweep();
+    expect(snapshot.complete).toBe(true);
+    expect(snapshot.accounts_sampled).toBe(snapshot.account_count);
+    expect(await liabilitySweepStateRow()).toBeNull();
   });
 });
 

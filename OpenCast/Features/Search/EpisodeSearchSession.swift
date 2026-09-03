@@ -90,7 +90,7 @@ final class EpisodeSearchSession {
             )
             if !unindexedEpisodes.isEmpty {
                 let matches = await EpisodeSearch.matches(
-                    in: EpisodeSearch.documents(from: unindexedEpisodes),
+                    in: unindexedEpisodes,
                     query: query,
                     mode: mode
                 )
@@ -154,12 +154,9 @@ final class EpisodeSearchSession {
             }
         }
 
-        let documents = EpisodeSearch.documents(
-            from: episodes,
-            showNotesHTMLByEpisodeID: showNotesHTMLByEpisodeID
-        )
         let matches = await EpisodeSearch.matches(
-            in: documents,
+            in: episodes,
+            showNotesHTMLByEpisodeID: showNotesHTMLByEpisodeID,
             query: query,
             mode: isBoundedFallback ? .episodes : mode
         )

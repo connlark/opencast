@@ -2,7 +2,8 @@
 
 use crate::d1_changes::changed_exactly_one_row;
 use serde::Deserialize;
-use worker::{D1Database, D1Type, Result};
+use std::collections::BTreeMap;
+use worker::{D1Database, D1PreparedStatement, D1Type, Result};
 
 // App Attest challenge/key storage lives in the shared core crate (one copy
 // for AdAnalysisWorker, RemoteTranscriptionWorker, and this worker). This
@@ -25,6 +26,7 @@ pub struct DeviceRow {
 
 #[derive(Debug, Deserialize)]
 pub struct FeedSummaryRow {
+    pub feed_url: String,
     pub title: Option<String>,
     #[serde(default)]
     pub consecutive_failures: i64,
@@ -62,6 +64,12 @@ pub struct EnabledDeviceRow {
 
 #[derive(Debug, Deserialize)]
 struct CountRow {
+    count: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct HostCountRow {
+    host: String,
     count: i64,
 }
 
@@ -150,6 +158,60 @@ const INSERT_PENDING_FEED_SQL: &str = "INSERT INTO feeds \
          (feed_url, source_url, poll_interval_seconds, consecutive_failures, created_at, updated_at) \
          VALUES (?1, ?2, ?3, 0, ?4, ?4) \
          ON CONFLICT(feed_url) DO NOTHING";
+
+const UPSERT_FEED_SUBSCRIPTION_SQL: &str = "INSERT INTO feed_subscriptions \
+         (install_id, feed_url, notifications_enabled, created_at, updated_at, deleted_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL) \
+         ON CONFLICT(install_id, feed_url) DO UPDATE SET \
+         created_at = CASE \
+           WHEN feed_subscriptions.notifications_enabled = 1 AND feed_subscriptions.deleted_at IS NULL \
+           THEN feed_subscriptions.created_at \
+           ELSE excluded.created_at \
+         END, \
+         notifications_enabled = excluded.notifications_enabled, \
+         updated_at = excluded.updated_at, \
+         deleted_at = NULL";
+
+const MARK_SUBSCRIPTION_DELETED_SQL: &str = "UPDATE feed_subscriptions \
+         SET notifications_enabled = 0, updated_at = ?1, deleted_at = ?1 \
+         WHERE install_id = ?2 AND feed_url = ?3 AND deleted_at IS NULL";
+
+const INSERT_FEED_ADMISSION_ATTEMPT_SQL: &str = "INSERT INTO feed_admission_attempts \
+         (attempt_id, install_id, key_id, host, accepted, error_code, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+
+/// D1 rejects statements binding more than 100 parameters, so IN-list
+/// readers chunk their keys under that ceiling (leaving room for the fixed
+/// bindings a query carries alongside the list).
+pub const D1_MAX_BOUND_PARAMETERS: usize = 100;
+pub const IN_LIST_CHUNK_KEYS: usize = 90;
+// The host-count reader binds one fixed parameter ahead of its list.
+const _: () = assert!(IN_LIST_CHUNK_KEYS < D1_MAX_BOUND_PARAMETERS);
+
+fn in_list_placeholders(first_index: usize, count: usize) -> String {
+    (first_index..first_index + count)
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub fn feed_summaries_sql(count: usize) -> String {
+    format!(
+        "SELECT feed_url, title, consecutive_failures, last_http_status, last_error, last_polled_at \
+         FROM feeds WHERE feed_url IN ({})",
+        in_list_placeholders(1, count)
+    )
+}
+
+pub fn accepted_admission_counts_for_hosts_since_sql(count: usize) -> String {
+    format!(
+        "SELECT host, COUNT(*) AS count \
+         FROM feed_admission_attempts \
+         WHERE accepted = 1 AND created_at >= ?1 AND host IN ({}) \
+         GROUP BY host",
+        in_list_placeholders(2, count)
+    )
+}
 
 const ESTABLISH_FEED_BASELINE_SQL: &str =
     "UPDATE feeds SET baseline_established_at = ?1 WHERE feed_url = ?2 AND baseline_established_at IS NULL";
@@ -253,12 +315,20 @@ const CLAIM_DUE_FEED_SQL_BYTES: [u8; concat_len(CLAIM_DUE_FEED_SQL_PARTS)] =
     concat_bytes(CLAIM_DUE_FEED_SQL_PARTS);
 const CLAIM_DUE_FEED_SQL: &str = concat_str(&CLAIM_DUE_FEED_SQL_BYTES);
 
-const ENABLED_DEVICES_FOR_FEED_SQL: &str = "SELECT devices.install_id, devices.device_token, devices.device_token_hash, feed_subscriptions.created_at AS subscription_created_at \
+// One episode's fanout candidates: the latest enabled token per install
+// among the feed's live, enabled subscriptions that predate the episode,
+// minus every device that already holds a send row for the episode (by id
+// or fingerprint — the same pair the claim's unique indexes enforce). The
+// exclusion is what makes a bounded fanout resumable: a truncated poll keeps
+// the feed checkpoint, and the next poll's page starts at the first device
+// that has not been claimed yet instead of re-walking the sent ones.
+const EPISODE_FANOUT_DEVICES_SQL: &str = "SELECT devices.install_id, devices.device_token, devices.device_token_hash, feed_subscriptions.created_at AS subscription_created_at \
          FROM devices \
          INNER JOIN feed_subscriptions ON feed_subscriptions.install_id = devices.install_id \
          WHERE feed_subscriptions.feed_url = ?1 \
            AND feed_subscriptions.notifications_enabled = 1 \
            AND feed_subscriptions.deleted_at IS NULL \
+           AND feed_subscriptions.created_at < ?3 \
            AND devices.apns_environment = ?2 \
            AND devices.notifications_enabled = 1 \
            AND NOT EXISTS ( \
@@ -273,7 +343,26 @@ const ENABLED_DEVICES_FOR_FEED_SQL: &str = "SELECT devices.install_id, devices.d
                  OR (newer.last_seen_at = devices.last_seen_at AND newer.device_token_hash > devices.device_token_hash) \
                ) \
            ) \
-         ORDER BY devices.install_id";
+           AND NOT EXISTS ( \
+             SELECT 1 \
+             FROM episode_notification_sends sends \
+             WHERE sends.install_id = devices.install_id \
+               AND sends.device_token_hash = devices.device_token_hash \
+               AND sends.feed_url = ?1 \
+               AND (sends.episode_id = ?4 OR (?5 IS NOT NULL AND sends.episode_fingerprint = ?5)) \
+           ) \
+         ORDER BY devices.install_id, devices.device_token_hash \
+         LIMIT ?6";
+
+// A send row claimed before the push but never given an outcome belongs to
+// an invocation that died mid-fanout; once it is older than a poll lease no
+// invocation can still own it, and releasing it lets the device be notified.
+const RELEASE_STALE_EPISODE_SEND_CLAIMS_SQL: &str = "DELETE FROM episode_notification_sends \
+         WHERE feed_url = ?1 \
+           AND (episode_id = ?2 OR (?3 IS NOT NULL AND episode_fingerprint = ?3)) \
+           AND apns_status IS NULL \
+           AND apns_error IS NULL \
+           AND created_at <= ?4";
 
 const ENABLED_DEVICE_COUNT_SQL: &str = "SELECT COUNT(*) AS count \
          FROM devices \
@@ -380,12 +469,12 @@ pub async fn upsert_device(db: &D1Database, device: DeviceUpsert<'_>) -> Result<
     Ok(())
 }
 
-pub async fn disable_device(
+pub fn disable_device_statement(
     db: &D1Database,
     install_id: &str,
     device_token_hash: &str,
     now: i64,
-) -> Result<()> {
+) -> Result<D1PreparedStatement> {
     let args = [
         D1Type::Text(""),
         D1Type::Integer(0),
@@ -393,15 +482,23 @@ pub async fn disable_device(
         D1Type::Text(install_id),
         D1Type::Text(device_token_hash),
     ];
-
     db.prepare(
         "UPDATE devices \
          SET device_token = ?1, notifications_enabled = ?2, last_seen_at = ?3 \
          WHERE install_id = ?4 AND device_token_hash = ?5",
     )
-    .bind_refs(&args)?
-    .run()
-    .await?;
+    .bind_refs(&args)
+}
+
+pub async fn disable_device(
+    db: &D1Database,
+    install_id: &str,
+    device_token_hash: &str,
+    now: i64,
+) -> Result<()> {
+    disable_device_statement(db, install_id, device_token_hash, now)?
+        .run()
+        .await?;
 
     Ok(())
 }
@@ -467,6 +564,17 @@ pub async fn insert_push_send_attempt(
     db: &D1Database,
     attempt: PushSendAttemptInsert<'_>,
 ) -> Result<()> {
+    insert_push_send_attempt_statement(db, attempt)?
+        .run()
+        .await?;
+
+    Ok(())
+}
+
+pub fn insert_push_send_attempt_statement(
+    db: &D1Database,
+    attempt: PushSendAttemptInsert<'_>,
+) -> Result<D1PreparedStatement> {
     let install_id = attempt.install_id.map(D1Type::Text).unwrap_or(D1Type::Null);
     let device_token_hash = attempt
         .device_token_hash
@@ -494,23 +602,34 @@ pub async fn insert_push_send_attempt(
          (attempt_id, install_id, device_token_hash, apns_environment, apns_status, apns_id, apns_error, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-
-    Ok(())
+    .bind_refs(&args)
 }
 
-pub const FEED_SUMMARY_SQL: &str =
-    "SELECT title, consecutive_failures, last_http_status, last_error, last_polled_at \
-     FROM feeds WHERE feed_url = ?1 LIMIT 1";
+/// Resolves the known feeds among `feed_urls` in IN-list chunks — one query
+/// per `IN_LIST_CHUNK_KEYS` URLs instead of one per feed. Unknown URLs are
+/// simply absent from the map.
+pub async fn feed_summaries(
+    db: &D1Database,
+    feed_urls: &[&str],
+) -> Result<BTreeMap<String, FeedSummaryRow>> {
+    let mut summaries = BTreeMap::new();
+    for chunk in feed_urls.chunks(IN_LIST_CHUNK_KEYS) {
+        let args = chunk
+            .iter()
+            .map(|feed_url| D1Type::Text(feed_url))
+            .collect::<Vec<_>>();
+        let rows = db
+            .prepare(feed_summaries_sql(chunk.len()))
+            .bind_refs(&args)?
+            .all()
+            .await?
+            .results::<FeedSummaryRow>()?;
+        for row in rows {
+            summaries.insert(row.feed_url.clone(), row);
+        }
+    }
 
-pub async fn feed_summary(db: &D1Database, feed_url: &str) -> Result<Option<FeedSummaryRow>> {
-    let args = [D1Type::Text(feed_url)];
-    db.prepare(FEED_SUMMARY_SQL)
-        .bind_refs(&args)?
-        .first::<FeedSummaryRow>(None)
-        .await
+    Ok(summaries)
 }
 
 pub async fn accepted_admission_count_since(
@@ -532,23 +651,30 @@ pub async fn accepted_admission_count_since(
     Ok(row.map(|row| row.count).unwrap_or(0))
 }
 
-pub async fn accepted_admission_count_for_host_since(
+/// Accepted-admission counts since `since`, grouped per host, in IN-list
+/// chunks. Hosts without an accepted attempt in the window are absent.
+pub async fn accepted_admission_counts_for_hosts_since(
     db: &D1Database,
-    host: &str,
+    hosts: &[&str],
     since: i64,
-) -> Result<i64> {
-    let args = [D1Type::Text(host), d1_i64(since)];
-    let row = db
-        .prepare(
-            "SELECT COUNT(*) AS count \
-             FROM feed_admission_attempts \
-             WHERE host = ?1 AND accepted = 1 AND created_at >= ?2",
-        )
-        .bind_refs(&args)?
-        .first::<CountRow>(None)
-        .await?;
+) -> Result<BTreeMap<String, i64>> {
+    let mut counts = BTreeMap::new();
+    for chunk in hosts.chunks(IN_LIST_CHUNK_KEYS) {
+        let mut args = Vec::with_capacity(chunk.len() + 1);
+        args.push(d1_i64(since));
+        args.extend(chunk.iter().map(|host| D1Type::Text(host)));
+        let rows = db
+            .prepare(accepted_admission_counts_for_hosts_since_sql(chunk.len()))
+            .bind_refs(&args)?
+            .all()
+            .await?
+            .results::<HostCountRow>()?;
+        for row in rows {
+            counts.insert(row.host, row.count);
+        }
+    }
 
-    Ok(row.map(|row| row.count).unwrap_or(0))
+    Ok(counts)
 }
 
 pub async fn global_accepted_admission_count_since(db: &D1Database, since: i64) -> Result<i64> {
@@ -566,28 +692,34 @@ pub async fn global_accepted_admission_count_since(db: &D1Database, since: i64) 
     Ok(row.map(|row| row.count).unwrap_or(0))
 }
 
-/// Enqueues a pending-admission feed: a row with no fetched baseline
-/// (`baseline_established_at` and `next_poll_at` both NULL), which the
-/// scheduled tick admits with its first real fetch — NULL sorts ahead of
+/// Statement that enqueues a pending-admission feed: a row with no fetched
+/// baseline (`baseline_established_at` and `next_poll_at` both NULL), which
+/// the scheduled tick admits with its first real fetch — NULL sorts ahead of
 /// every scheduled feed in the due scan's COALESCE order. Racing enqueues
 /// (or an already-admitted feed) leave the existing row untouched.
-pub async fn insert_pending_feed(
+pub fn insert_pending_feed_statement(
     db: &D1Database,
     feed_url: &str,
     source_url: &str,
     poll_interval_seconds: i64,
     now: i64,
-) -> Result<()> {
+) -> Result<D1PreparedStatement> {
     let args = [
         D1Type::Text(feed_url),
         D1Type::Text(source_url),
         d1_i64(poll_interval_seconds),
         d1_i64(now),
     ];
-    db.prepare(INSERT_PENDING_FEED_SQL)
-        .bind_refs(&args)?
-        .run()
-        .await?;
+    db.prepare(INSERT_PENDING_FEED_SQL).bind_refs(&args)
+}
+
+/// Runs the subscription-sync write set as one D1 batch (a single
+/// transaction and a single subrequest); an empty set is a no-op.
+pub async fn run_write_batch(db: &D1Database, statements: Vec<D1PreparedStatement>) -> Result<()> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+    db.batch(statements).await?;
 
     Ok(())
 }
@@ -604,13 +736,13 @@ pub async fn establish_feed_baseline(db: &D1Database, feed_url: &str, now: i64) 
     Ok(())
 }
 
-pub async fn upsert_feed_subscription(
+pub fn upsert_feed_subscription_statement(
     db: &D1Database,
     install_id: &str,
     feed_url: &str,
     notifications_enabled: bool,
     now: i64,
-) -> Result<()> {
+) -> Result<D1PreparedStatement> {
     let args = [
         D1Type::Text(install_id),
         D1Type::Text(feed_url),
@@ -618,26 +750,7 @@ pub async fn upsert_feed_subscription(
         d1_i64(now),
         d1_i64(now),
     ];
-
-    db.prepare(
-        "INSERT INTO feed_subscriptions \
-         (install_id, feed_url, notifications_enabled, created_at, updated_at, deleted_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL) \
-         ON CONFLICT(install_id, feed_url) DO UPDATE SET \
-         created_at = CASE \
-           WHEN feed_subscriptions.notifications_enabled = 1 AND feed_subscriptions.deleted_at IS NULL \
-           THEN feed_subscriptions.created_at \
-           ELSE excluded.created_at \
-         END, \
-         notifications_enabled = excluded.notifications_enabled, \
-         updated_at = excluded.updated_at, \
-         deleted_at = NULL",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-
-    Ok(())
+    db.prepare(UPSERT_FEED_SUBSCRIPTION_SQL).bind_refs(&args)
 }
 
 pub async fn install_subscription_feed_urls(
@@ -656,27 +769,18 @@ pub async fn install_subscription_feed_urls(
     .results::<InstallSubscriptionRow>()
 }
 
-pub async fn mark_subscription_deleted(
+pub fn mark_subscription_deleted_statement(
     db: &D1Database,
     install_id: &str,
     feed_url: &str,
     now: i64,
-) -> Result<()> {
+) -> Result<D1PreparedStatement> {
     let args = [
         d1_i64(now),
         D1Type::Text(install_id),
         D1Type::Text(feed_url),
     ];
-    db.prepare(
-        "UPDATE feed_subscriptions \
-         SET notifications_enabled = 0, updated_at = ?1, deleted_at = ?1 \
-         WHERE install_id = ?2 AND feed_url = ?3 AND deleted_at IS NULL",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-
-    Ok(())
+    db.prepare(MARK_SUBSCRIPTION_DELETED_SQL).bind_refs(&args)
 }
 
 pub async fn delete_install_data(db: &D1Database, install_id: &str) -> Result<()> {
@@ -701,10 +805,10 @@ pub async fn delete_install_data(db: &D1Database, install_id: &str) -> Result<()
     Ok(())
 }
 
-pub async fn insert_feed_admission_attempt(
+pub fn insert_feed_admission_attempt_statement(
     db: &D1Database,
     attempt: FeedAdmissionAttemptInsert<'_>,
-) -> Result<()> {
+) -> Result<D1PreparedStatement> {
     let host = attempt.host.map(D1Type::Text).unwrap_or(D1Type::Null);
     let error_code = attempt.error_code.map(D1Type::Text).unwrap_or(D1Type::Null);
     let args = [
@@ -716,17 +820,8 @@ pub async fn insert_feed_admission_attempt(
         error_code,
         d1_i64(attempt.created_at),
     ];
-
-    db.prepare(
-        "INSERT INTO feed_admission_attempts \
-         (attempt_id, install_id, key_id, host, accepted, error_code, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-
-    Ok(())
+    db.prepare(INSERT_FEED_ADMISSION_ATTEMPT_SQL)
+        .bind_refs(&args)
 }
 
 pub async fn prune_feed_admission_attempts_before(db: &D1Database, cutoff: i64) -> Result<usize> {
@@ -931,17 +1026,67 @@ pub async fn enabled_subscription_count_for_feed(db: &D1Database, feed_url: &str
     Ok(row.map(|row| row.count).unwrap_or(0))
 }
 
-pub async fn enabled_devices_for_feed(
+pub struct EpisodeFanoutQuery<'a> {
+    pub feed_url: &'a str,
+    pub apns_environment: &'a str,
+    /// Only subscriptions created strictly before this instant are notified
+    /// (the back-catalog guard `episode_should_notify_subscription` applies).
+    pub episode_published_at: i64,
+    pub episode_id: &'a str,
+    pub episode_fingerprint: Option<&'a str>,
+    pub limit: i64,
+}
+
+/// The next page of devices still owed one episode's push; see
+/// `EPISODE_FANOUT_DEVICES_SQL`.
+pub async fn episode_fanout_devices(
     db: &D1Database,
-    feed_url: &str,
-    apns_environment: &str,
+    query: EpisodeFanoutQuery<'_>,
 ) -> Result<Vec<EnabledDeviceRow>> {
-    let args = [D1Type::Text(feed_url), D1Type::Text(apns_environment)];
-    db.prepare(ENABLED_DEVICES_FOR_FEED_SQL)
+    let episode_fingerprint = query
+        .episode_fingerprint
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let args = [
+        D1Type::Text(query.feed_url),
+        D1Type::Text(query.apns_environment),
+        d1_i64(query.episode_published_at),
+        D1Type::Text(query.episode_id),
+        episode_fingerprint,
+        d1_i64(query.limit),
+    ];
+    db.prepare(EPISODE_FANOUT_DEVICES_SQL)
         .bind_refs(&args)?
         .all()
         .await?
         .results::<EnabledDeviceRow>()
+}
+
+/// Releases outcome-less send claims for one episode created at or before
+/// `before`; returns how many were released.
+pub async fn release_stale_episode_send_claims(
+    db: &D1Database,
+    feed_url: &str,
+    episode_id: &str,
+    episode_fingerprint: Option<&str>,
+    before: i64,
+) -> Result<usize> {
+    let episode_fingerprint = episode_fingerprint
+        .map(D1Type::Text)
+        .unwrap_or(D1Type::Null);
+    let args = [
+        D1Type::Text(feed_url),
+        D1Type::Text(episode_id),
+        episode_fingerprint,
+        d1_i64(before),
+    ];
+    let result = db
+        .prepare(RELEASE_STALE_EPISODE_SEND_CLAIMS_SQL)
+        .bind_refs(&args)?
+        .run()
+        .await?;
+
+    Ok(result.meta()?.and_then(|meta| meta.changes).unwrap_or(0))
 }
 
 pub async fn update_feed_poll_not_modified(
@@ -1132,10 +1277,10 @@ pub async fn claim_episode_notification_send(
     ))
 }
 
-pub async fn update_episode_notification_send(
+pub fn update_episode_notification_send_statement(
     db: &D1Database,
     outcome: EpisodeNotificationSendOutcome<'_>,
-) -> Result<()> {
+) -> Result<D1PreparedStatement> {
     let apns_status = outcome
         .apns_status
         .map(D1Type::Integer)
@@ -1149,27 +1294,21 @@ pub async fn update_episode_notification_send(
         d1_i64(outcome.now),
         D1Type::Text(outcome.send_id),
     ];
-
     db.prepare(
         "UPDATE episode_notification_sends \
          SET apns_status = ?1, apns_id = ?2, apns_error = ?3, updated_at = ?4 \
          WHERE send_id = ?5",
     )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-
-    Ok(())
+    .bind_refs(&args)
 }
 
-pub async fn delete_episode_notification_send(db: &D1Database, send_id: &str) -> Result<()> {
+pub fn delete_episode_notification_send_statement(
+    db: &D1Database,
+    send_id: &str,
+) -> Result<D1PreparedStatement> {
     let args = [D1Type::Text(send_id)];
     db.prepare("DELETE FROM episode_notification_sends WHERE send_id = ?1")
-        .bind_refs(&args)?
-        .run()
-        .await?;
-
-    Ok(())
+        .bind_refs(&args)
 }
 
 fn d1_i64(value: i64) -> D1Type<'static> {
@@ -1265,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn feed_summary_selects_the_health_columns() {
+    fn feed_summaries_select_the_health_columns_keyed_by_url() {
         let db = setup_db();
         db.execute(
             "INSERT INTO feeds \
@@ -1276,28 +1415,174 @@ mod tests {
             params![],
         )
         .expect("seed feed row");
+        insert_feed(&db, "https://example.com/other.xml", None, NOW);
 
-        let row = db
-            .query_row(
-                FEED_SUMMARY_SQL,
-                params!["https://example.com/f.xml"],
+        // Two known URLs plus an unknown one: the unknown URL is simply absent.
+        let mut statement = db
+            .prepare(&feed_summaries_sql(3))
+            .expect("prepare feed summaries");
+        let rows = statement
+            .query_map(
+                params![
+                    "https://example.com/f.xml",
+                    "https://example.com/missing.xml",
+                    "https://example.com/other.xml"
+                ],
                 |row| {
                     Ok((
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, Option<i64>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<i64>>(4)?,
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
                     ))
                 },
             )
-            .expect("feed summary row");
+            .expect("feed summary rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read feed summary rows");
 
-        assert_eq!(row.0.as_deref(), Some("Show"));
-        assert_eq!(row.1, 3);
-        assert_eq!(row.2, Some(503));
-        assert_eq!(row.3.as_deref(), Some("http_error"));
-        assert_eq!(row.4, Some(1_780_000_000));
+        assert_eq!(rows.len(), 2);
+        let row = rows
+            .iter()
+            .find(|row| row.0 == "https://example.com/f.xml")
+            .expect("seeded feed present");
+        assert_eq!(row.1.as_deref(), Some("Show"));
+        assert_eq!(row.2, 3);
+        assert_eq!(row.3, Some(503));
+        assert_eq!(row.4.as_deref(), Some("http_error"));
+        assert_eq!(row.5, Some(1_780_000_000));
+        assert!(rows
+            .iter()
+            .any(|row| row.0 == "https://example.com/other.xml"));
+    }
+
+    #[test]
+    fn in_list_readers_stay_under_the_d1_parameter_ceiling_and_use_indexes() {
+        assert_eq!(in_list_placeholders(1, 3), "?1, ?2, ?3");
+        assert_eq!(in_list_placeholders(2, 2), "?2, ?3");
+
+        let db = setup_db();
+        let feed_plan = query_plan(&db, &feed_summaries_sql(1));
+        assert!(
+            feed_plan
+                .iter()
+                .any(|detail| detail.contains("SEARCH feeds USING INDEX sqlite_autoindex_feeds_1")),
+            "expected the feeds primary key: {feed_plan:?}"
+        );
+
+        let host_sql = accepted_admission_counts_for_hosts_since_sql(1);
+        let mut statement = db
+            .prepare(&format!("EXPLAIN QUERY PLAN {host_sql}"))
+            .expect("prepare host count plan");
+        let host_plan = statement
+            .query_map(params![NOW, "example.com"], |row| row.get::<_, String>(3))
+            .expect("host count plan")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read host count plan");
+        assert!(
+            host_plan
+                .iter()
+                .any(|detail| detail.contains("idx_feed_admission_attempts_host_created")),
+            "expected the host admission index: {host_plan:?}"
+        );
+    }
+
+    #[test]
+    fn host_admission_counts_group_accepted_attempts_inside_the_window() {
+        let db = setup_db();
+        let insert = |attempt_id: &str, host: &str, accepted: i64, created_at: i64| {
+            db.execute(
+                INSERT_FEED_ADMISSION_ATTEMPT_SQL,
+                params![
+                    attempt_id,
+                    "install-a",
+                    "key-a",
+                    host,
+                    accepted,
+                    Option::<&str>::None,
+                    created_at
+                ],
+            )
+            .expect("insert admission attempt");
+        };
+        insert("a1", "a.example", 1, NOW - 10);
+        insert("a2", "a.example", 1, NOW - 20);
+        insert("a3", "a.example", 0, NOW - 30);
+        insert("a4", "a.example", 1, NOW - 100_000);
+        insert("b1", "b.example", 1, NOW - 5);
+        insert("c1", "c.example", 1, NOW - 5);
+
+        let mut statement = db
+            .prepare(&accepted_admission_counts_for_hosts_since_sql(2))
+            .expect("prepare host counts");
+        let counts = statement
+            .query_map(params![NOW - 3_600, "a.example", "b.example"], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .expect("host counts")
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .expect("read host counts");
+
+        assert_eq!(counts.get("a.example"), Some(&2));
+        assert_eq!(counts.get("b.example"), Some(&1));
+        assert_eq!(counts.get("c.example"), None);
+    }
+
+    #[test]
+    fn subscription_upsert_and_delete_statements_round_trip() {
+        let db = setup_db();
+        let install = "install-a";
+        let feed_url = "https://example.com/f.xml";
+        let read = |db: &Connection| -> (i64, i64, i64, Option<i64>) {
+            db.query_row(
+                "SELECT notifications_enabled, created_at, updated_at, deleted_at \
+                 FROM feed_subscriptions WHERE install_id = ?1 AND feed_url = ?2",
+                params![install, feed_url],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read subscription")
+        };
+
+        db.execute(
+            UPSERT_FEED_SUBSCRIPTION_SQL,
+            params![install, feed_url, 1, NOW, NOW],
+        )
+        .expect("insert subscription");
+        assert_eq!(read(&db), (1, NOW, NOW, None));
+
+        // A live enabled subscription keeps its original created_at.
+        db.execute(
+            UPSERT_FEED_SUBSCRIPTION_SQL,
+            params![install, feed_url, 1, NOW + 10, NOW + 10],
+        )
+        .expect("re-upsert subscription");
+        assert_eq!(read(&db), (1, NOW, NOW + 10, None));
+
+        db.execute(
+            MARK_SUBSCRIPTION_DELETED_SQL,
+            params![NOW + 20, install, feed_url],
+        )
+        .expect("mark deleted");
+        assert_eq!(read(&db), (0, NOW, NOW + 20, Some(NOW + 20)));
+
+        // Marking an already-deleted row again is a no-op.
+        let changed = db
+            .execute(
+                MARK_SUBSCRIPTION_DELETED_SQL,
+                params![NOW + 25, install, feed_url],
+            )
+            .expect("mark deleted again");
+        assert_eq!(changed, 0);
+
+        // Resubscribing resurrects the row with a fresh created_at.
+        db.execute(
+            UPSERT_FEED_SUBSCRIPTION_SQL,
+            params![install, feed_url, 1, NOW + 30, NOW + 30],
+        )
+        .expect("resubscribe");
+        assert_eq!(read(&db), (1, NOW + 30, NOW + 30, None));
     }
 
     #[test]
@@ -1533,21 +1818,72 @@ mod tests {
             .expect("read due feed rows")
     }
 
+    const FANOUT_EPISODE_ID: &str = "episode-fanout";
+    const FANOUT_FINGERPRINT: &str = "fingerprint-fanout";
+
     fn enabled_device_hashes(
         db: &Connection,
         feed_url: &str,
         apns_environment: &str,
     ) -> Vec<String> {
+        fanout_device_hashes(db, feed_url, apns_environment, NOW, 100)
+    }
+
+    /// Runs `EPISODE_FANOUT_DEVICES_SQL` for an episode published at
+    /// `published_at` with the fixed fanout id/fingerprint.
+    fn fanout_device_hashes(
+        db: &Connection,
+        feed_url: &str,
+        apns_environment: &str,
+        published_at: i64,
+        limit: i64,
+    ) -> Vec<String> {
         let mut statement = db
-            .prepare(ENABLED_DEVICES_FOR_FEED_SQL)
-            .expect("prepare enabled-device query");
+            .prepare(EPISODE_FANOUT_DEVICES_SQL)
+            .expect("prepare fanout-device query");
         statement
-            .query_map(params![feed_url, apns_environment], |row| {
-                row.get::<_, String>("device_token_hash")
-            })
-            .expect("query enabled devices")
+            .query_map(
+                params![
+                    feed_url,
+                    apns_environment,
+                    published_at,
+                    FANOUT_EPISODE_ID,
+                    Some(FANOUT_FINGERPRINT),
+                    limit
+                ],
+                |row| row.get::<_, String>("device_token_hash"),
+            )
+            .expect("query fanout devices")
             .collect::<Result<Vec<_>, _>>()
-            .expect("read enabled devices")
+            .expect("read fanout devices")
+    }
+
+    /// Inserts a send row for `install_id`'s `{install_id}-token` device,
+    /// stamped at `NOW`; the fanout tests register their devices that way.
+    fn insert_fanout_send(
+        db: &Connection,
+        install_id: &str,
+        feed_url: &str,
+        episode_id: &str,
+        episode_fingerprint: Option<&str>,
+        apns_status: Option<i64>,
+    ) {
+        db.execute(
+            "INSERT INTO episode_notification_sends \
+             (send_id, install_id, device_token_hash, feed_url, episode_id, episode_fingerprint, apns_environment, apns_status, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'production', ?7, ?8, ?8)",
+            params![
+                format!("send-{install_id}"),
+                install_id,
+                format!("{install_id}-token"),
+                feed_url,
+                episode_id,
+                episode_fingerprint,
+                apns_status,
+                NOW
+            ],
+        )
+        .expect("insert fanout send row");
     }
 
     fn insert_episode_send(
@@ -1677,6 +2013,340 @@ mod tests {
         assert_eq!(
             enabled_device_hashes(&db, feed_url, CURRENT_APNS_ENVIRONMENT),
             vec!["newer-token", "install-b-token"]
+        );
+    }
+
+    #[test]
+    fn fanout_devices_skip_subscriptions_created_at_or_after_publish() {
+        let db = setup_db();
+        let feed_url = "https://example.com/back-catalog.xml";
+        insert_feed(&db, feed_url, Some(NOW - 1), NOW);
+        // insert_subscription stamps created_at = NOW - 50.
+        insert_subscription(&db, "install-a", feed_url, true, None);
+        insert_device(&db, "install-a", "token-a", CURRENT_APNS_ENVIRONMENT, true);
+
+        assert_eq!(
+            fanout_device_hashes(&db, feed_url, CURRENT_APNS_ENVIRONMENT, NOW, 100),
+            vec!["token-a"]
+        );
+        assert!(
+            fanout_device_hashes(&db, feed_url, CURRENT_APNS_ENVIRONMENT, NOW - 50, 100).is_empty()
+        );
+        assert!(
+            fanout_device_hashes(&db, feed_url, CURRENT_APNS_ENVIRONMENT, NOW - 100, 100)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn fanout_devices_exclude_devices_already_holding_a_send_row() {
+        let db = setup_db();
+        let feed_url = "https://example.com/fanout.xml";
+        insert_feed(&db, feed_url, Some(NOW - 1), NOW);
+        for install in ["install-a", "install-b", "install-c", "install-d"] {
+            insert_subscription(&db, install, feed_url, true, None);
+            insert_device(
+                &db,
+                install,
+                &format!("{install}-token"),
+                CURRENT_APNS_ENVIRONMENT,
+                true,
+            );
+        }
+        // Same episode id, different fingerprint: consumed.
+        insert_fanout_send(
+            &db,
+            "install-a",
+            feed_url,
+            FANOUT_EPISODE_ID,
+            Some("fingerprint-other"),
+            Some(200),
+        );
+        // Different episode id, same fingerprint (a GUID flip): consumed.
+        insert_fanout_send(
+            &db,
+            "install-b",
+            feed_url,
+            "episode-flipped",
+            Some(FANOUT_FINGERPRINT),
+            Some(200),
+        );
+        // An outcome-less claim still counts as held until it is released.
+        insert_fanout_send(
+            &db,
+            "install-c",
+            feed_url,
+            FANOUT_EPISODE_ID,
+            Some(FANOUT_FINGERPRINT),
+            None,
+        );
+        // A send row for another episode does not consume this one.
+        insert_fanout_send(
+            &db,
+            "install-d",
+            feed_url,
+            "episode-unrelated",
+            Some("fingerprint-unrelated"),
+            Some(200),
+        );
+
+        assert_eq!(
+            fanout_device_hashes(&db, feed_url, CURRENT_APNS_ENVIRONMENT, NOW, 100),
+            vec!["install-d-token"]
+        );
+    }
+
+    #[test]
+    fn fanout_page_is_ordered_and_bounded_by_the_limit() {
+        let db = setup_db();
+        let feed_url = "https://example.com/big-fanout.xml";
+        insert_feed(&db, feed_url, Some(NOW - 1), NOW);
+        for install in ["install-c", "install-a", "install-b"] {
+            insert_subscription(&db, install, feed_url, true, None);
+            insert_device(
+                &db,
+                install,
+                &format!("{install}-token"),
+                CURRENT_APNS_ENVIRONMENT,
+                true,
+            );
+        }
+
+        assert_eq!(
+            fanout_device_hashes(&db, feed_url, CURRENT_APNS_ENVIRONMENT, NOW, 2),
+            vec!["install-a-token", "install-b-token"]
+        );
+        // Once the first page's devices hold send rows, the next page
+        // continues with the rest instead of re-walking them.
+        for install in ["install-a", "install-b"] {
+            insert_fanout_send(
+                &db,
+                install,
+                feed_url,
+                FANOUT_EPISODE_ID,
+                Some(FANOUT_FINGERPRINT),
+                Some(200),
+            );
+        }
+        assert_eq!(
+            fanout_device_hashes(&db, feed_url, CURRENT_APNS_ENVIRONMENT, NOW, 2),
+            vec!["install-c-token"]
+        );
+    }
+
+    #[test]
+    fn stale_send_claim_release_only_frees_outcome_less_rows_older_than_the_window() {
+        let db = setup_db();
+        let feed_url = "https://example.com/stale-claims.xml";
+        let window_start = NOW - 900;
+        // (send_id, episode_id, fingerprint, apns_status, apns_error, created_at)
+        type SendRow = (
+            &'static str,
+            &'static str,
+            Option<&'static str>,
+            Option<i64>,
+            Option<&'static str>,
+            i64,
+        );
+        let rows: [SendRow; 7] = [
+            // Killed mid-fanout before the window: released.
+            (
+                "stale-pending",
+                FANOUT_EPISODE_ID,
+                Some(FANOUT_FINGERPRINT),
+                None,
+                None,
+                window_start - 1,
+            ),
+            // Exactly at the window boundary: released (<=).
+            (
+                "boundary-pending",
+                FANOUT_EPISODE_ID,
+                Some(FANOUT_FINGERPRINT),
+                None,
+                None,
+                window_start,
+            ),
+            // Fingerprint match under another id: released.
+            (
+                "stale-flipped",
+                "episode-flipped",
+                Some(FANOUT_FINGERPRINT),
+                None,
+                None,
+                window_start - 1,
+            ),
+            // Fresh claim that may still be in flight: kept.
+            (
+                "fresh-pending",
+                FANOUT_EPISODE_ID,
+                Some(FANOUT_FINGERPRINT),
+                None,
+                None,
+                window_start + 1,
+            ),
+            // Delivered: kept.
+            (
+                "delivered",
+                FANOUT_EPISODE_ID,
+                Some(FANOUT_FINGERPRINT),
+                Some(200),
+                None,
+                window_start - 1,
+            ),
+            // No status but an error recorded (a fetch failure outcome): kept.
+            (
+                "errored",
+                FANOUT_EPISODE_ID,
+                Some(FANOUT_FINGERPRINT),
+                None,
+                Some("fetch_failed"),
+                window_start - 1,
+            ),
+            // Another episode entirely: kept.
+            (
+                "other-episode",
+                "episode-other",
+                Some("fingerprint-other"),
+                None,
+                None,
+                window_start - 1,
+            ),
+        ];
+        for (index, (send_id, episode_id, fingerprint, status, error, created_at)) in
+            rows.iter().enumerate()
+        {
+            db.execute(
+                "INSERT INTO episode_notification_sends \
+                 (send_id, install_id, device_token_hash, feed_url, episode_id, episode_fingerprint, apns_environment, apns_status, apns_error, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'production', ?7, ?8, ?9, ?9)",
+                params![
+                    send_id,
+                    format!("install-{index}"),
+                    format!("token-{index}"),
+                    feed_url,
+                    episode_id,
+                    fingerprint,
+                    status,
+                    error,
+                    created_at
+                ],
+            )
+            .expect("insert send row");
+        }
+
+        let released = db
+            .execute(
+                RELEASE_STALE_EPISODE_SEND_CLAIMS_SQL,
+                params![
+                    feed_url,
+                    FANOUT_EPISODE_ID,
+                    Some(FANOUT_FINGERPRINT),
+                    window_start
+                ],
+            )
+            .expect("release stale claims");
+        assert_eq!(released, 3);
+
+        let mut statement = db
+            .prepare("SELECT send_id FROM episode_notification_sends ORDER BY send_id")
+            .expect("prepare remaining sends");
+        let remaining = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query remaining sends")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read remaining sends");
+        assert_eq!(
+            remaining,
+            vec!["delivered", "errored", "fresh-pending", "other-episode"]
+        );
+
+        // A NULL fingerprint binds to no row through the fingerprint arm.
+        let released_without_fingerprint = db
+            .execute(
+                RELEASE_STALE_EPISODE_SEND_CLAIMS_SQL,
+                params![
+                    feed_url,
+                    "episode-other",
+                    Option::<&str>::None,
+                    window_start
+                ],
+            )
+            .expect("release by id only");
+        assert_eq!(released_without_fingerprint, 1);
+    }
+
+    #[test]
+    fn fanout_and_stale_release_queries_use_the_feed_indexes() {
+        let db = setup_db();
+        let plan_for = |sql: &str, bind: &dyn Fn(&mut rusqlite::Statement<'_>) -> Vec<String>| {
+            let mut statement = db
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .expect("prepare query plan");
+            bind(&mut statement)
+        };
+        let fanout_plan = plan_for(EPISODE_FANOUT_DEVICES_SQL, &|statement| {
+            statement
+                .query_map(
+                    params![
+                        "https://example.com/f.xml",
+                        CURRENT_APNS_ENVIRONMENT,
+                        NOW,
+                        FANOUT_EPISODE_ID,
+                        Some(FANOUT_FINGERPRINT),
+                        100
+                    ],
+                    |row| row.get::<_, String>(3),
+                )
+                .expect("fanout plan")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("read fanout plan")
+        });
+        assert!(
+            fanout_plan
+                .iter()
+                .any(|detail| detail.contains("idx_feed_subscriptions_feed_enabled")),
+            "expected the feed subscription index: {fanout_plan:?}"
+        );
+        // Both arms of the exclusion (episode id, fingerprint) must probe an
+        // index keyed by the device tuple rather than scanning the ledger.
+        assert!(
+            fanout_plan.iter().any(|detail| detail
+                .contains("SEARCH sends USING INDEX sqlite_autoindex_episode_notification_sends_")
+                && detail.contains("episode_id=?")),
+            "expected the send-row unique index for the episode-id arm: {fanout_plan:?}"
+        );
+        assert!(
+            fanout_plan.iter().any(|detail| detail.contains(
+                "SEARCH sends USING INDEX idx_episode_notification_sends_feed_fingerprint"
+            )),
+            "expected the fingerprint index for the fingerprint arm: {fanout_plan:?}"
+        );
+        assert!(
+            !fanout_plan.iter().any(|detail| detail.starts_with("SCAN")),
+            "fanout query must not scan: {fanout_plan:?}"
+        );
+
+        let release_plan = plan_for(RELEASE_STALE_EPISODE_SEND_CLAIMS_SQL, &|statement| {
+            statement
+                .query_map(
+                    params![
+                        "https://example.com/f.xml",
+                        FANOUT_EPISODE_ID,
+                        Some(FANOUT_FINGERPRINT),
+                        NOW
+                    ],
+                    |row| row.get::<_, String>(3),
+                )
+                .expect("release plan")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("read release plan")
+        });
+        assert!(
+            release_plan
+                .iter()
+                .any(|detail| detail.contains("idx_episode_notification_sends")),
+            "expected an episode-send index: {release_plan:?}"
         );
     }
 

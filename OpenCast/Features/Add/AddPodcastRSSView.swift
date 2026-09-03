@@ -8,7 +8,9 @@ struct AddPodcastRSSView: View {
     let clipboardErrorMessage: String?
     let isSubscribing: Bool
     let canSubscribe: Bool
+    let usesSystemPasteButton: Bool
     let onPaste: () -> Void
+    let onPastedString: (String) -> Void
     let onSubmit: () -> Void
 
     var body: some View {
@@ -41,7 +43,9 @@ struct AddPodcastRSSView: View {
 
                 AddPodcastPasteCard(
                     isPasteEnabled: !isSubscribing,
-                    onPaste: onPaste
+                    usesSystemPasteButton: usesSystemPasteButton,
+                    onPaste: onPaste,
+                    onPastedString: onPastedString
                 )
 
                 if let clipboardErrorMessage {

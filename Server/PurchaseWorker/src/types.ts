@@ -117,6 +117,9 @@ export interface Env {
   APPLE_ROOT_CAS_OVERRIDE_BASE64: string;
   RECONCILE_BATCH_ACCOUNTS: string;
   RECONCILE_INTERVAL_SECONDS: string;
+  /** Lowers the per-run transaction budget below its hard ceiling (tests). */
+  RECONCILE_TRANSACTION_BUDGET?: string;
+  /** Accounts read per liability-sweep page (one page per cron; ceiling 250). */
   LIABILITY_SNAPSHOT_MAX_ACCOUNTS?: string;
   PURCHASE_DB: D1Database;
   PURCHASE_ACCOUNT: DurableObjectNamespace;

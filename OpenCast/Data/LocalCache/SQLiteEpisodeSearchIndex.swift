@@ -33,8 +33,8 @@ nonisolated struct SQLiteEpisodeSearchDocument: Sendable {
 }
 
 nonisolated enum SQLiteEpisodeSearchIndex {
-    static let schemaVersion = 5
-    static let contentVersion = 11
+    static let schemaVersion = 6
+    static let contentVersion = 12
     static let rebuildBatchSize = 50
 
     static let tableName = "episode_search_fts"
@@ -44,6 +44,7 @@ nonisolated enum SQLiteEpisodeSearchIndex {
     static let spellingDocumentTableName =
         "episode_search_spelling_document"
     static let evidenceTableName = "episode_search_evidence"
+    static let evidenceBodyTableName = "episode_search_evidence_body"
     static let metadataVocabularyColumnTableName =
         "episode_search_fts_vocabulary_column"
     static let metadataVocabularyInstanceTableName =
@@ -73,6 +74,7 @@ nonisolated enum SQLiteEpisodeSearchIndex {
                 DROP TABLE IF EXISTS episode_search_vocabulary_delete;
                 DROP TABLE IF EXISTS episode_search_spelling_document;
                 DROP TABLE IF EXISTS episode_search_evidence;
+                DROP TABLE IF EXISTS episode_search_evidence_body;
                 DROP TABLE IF EXISTS episode_transcript_search_segment;
                 DROP TABLE IF EXISTS episode_search_fts;
                 DROP TABLE IF EXISTS episode_transcript_search_fts;
@@ -123,11 +125,16 @@ nonisolated enum SQLiteEpisodeSearchIndex {
             operation: "episode search spelling schema",
             db: db
         )
+        // The canonical visible-title columns and the compressed body blob
+        // live in separate tables: the per-keystroke scans read only the two
+        // short canonicals for up to every evidence row, and a same-record
+        // body blob would inflate every page those scans touch (and push the
+        // canonicals into overflow chains). body_data is read only for the
+        // top hits via materializeBodyEvidence.
         try execute(
             """
             CREATE TABLE IF NOT EXISTS episode_search_evidence (
               search_rowid INTEGER PRIMARY KEY,
-              body_data BLOB,
               title_canonical TEXT NOT NULL DEFAULT '',
               podcast_title_canonical TEXT NOT NULL DEFAULT ''
             )
@@ -135,25 +142,19 @@ nonisolated enum SQLiteEpisodeSearchIndex {
             operation: "episode search evidence schema",
             db: db
         )
-        // Installed schema-5 caches predate these columns and CREATE TABLE IF
-        // NOT EXISTS leaves their shape untouched. The content-version bump
-        // then repopulates the added columns through a full rebuild.
-        try? execute(
+        try execute(
             """
-            ALTER TABLE episode_search_evidence
-            ADD COLUMN title_canonical TEXT NOT NULL DEFAULT ''
+            CREATE TABLE IF NOT EXISTS episode_search_evidence_body (
+              search_rowid INTEGER PRIMARY KEY,
+              body_data BLOB
+            )
             """,
-            operation: "episode search evidence schema migration",
+            operation: "episode search evidence schema",
             db: db
         )
-        try? execute(
-            """
-            ALTER TABLE episode_search_evidence
-            ADD COLUMN podcast_title_canonical TEXT NOT NULL DEFAULT ''
-            """,
-            operation: "episode search evidence schema migration",
-            db: db
-        )
+        // Installed builds created an (episode_id) index on the segment
+        // table; the UNIQUE (episode_id, segment_id) autoindex already leads
+        // with episode_id, so it only amplified every segment write.
         try execute(
             """
             CREATE TABLE IF NOT EXISTS episode_transcript_search_segment (
@@ -168,23 +169,13 @@ nonisolated enum SQLiteEpisodeSearchIndex {
               UNIQUE (episode_id, segment_id)
             );
 
-            CREATE INDEX IF NOT EXISTS
-              episode_transcript_search_segment_episode
-            ON episode_transcript_search_segment (episode_id);
+            DROP INDEX IF EXISTS episode_transcript_search_segment_episode;
 
             CREATE INDEX IF NOT EXISTS
               episode_transcript_search_segment_podcast
             ON episode_transcript_search_segment (podcast_id, episode_id);
             """,
             operation: "episode transcript search schema",
-            db: db
-        )
-        try? execute(
-            """
-            ALTER TABLE episode_transcript_search_segment
-            ADD COLUMN text TEXT NOT NULL DEFAULT ''
-            """,
-            operation: "episode transcript search schema migration",
             db: db
         )
         try execute(
@@ -227,6 +218,15 @@ nonisolated enum SQLiteEpisodeSearchIndex {
             operation: "episode search vocabulary schema",
             db: db
         )
+        // The index owns PRAGMA user_version: the stamp lands only once
+        // every table above exists, so a failed open retries the migration.
+        if try databaseSchemaVersion(in: db) < schemaVersion {
+            try execute(
+                "PRAGMA user_version = \(schemaVersion)",
+                operation: "episode search schema migration",
+                db: db
+            )
+        }
     }
 
     static func storedContentVersion(in db: OpaquePointer) throws -> Int? {
@@ -280,6 +280,11 @@ nonisolated enum SQLiteEpisodeSearchIndex {
             db: db
         )
         try execute(
+            "DELETE FROM \(evidenceBodyTableName)",
+            operation: "episode search evidence clear",
+            db: db
+        )
+        try execute(
             "DELETE FROM \(transcriptTableName)",
             operation: "episode transcript search clear",
             db: db
@@ -305,6 +310,11 @@ nonisolated enum SQLiteEpisodeSearchIndex {
         )
         let evidenceCount = try rowCount(
             table: evidenceTableName,
+            distinctEpisodeIDs: false,
+            db: db
+        )
+        let evidenceBodyCount = try rowCount(
+            table: evidenceBodyTableName,
             distinctEpisodeIDs: false,
             db: db
         )
@@ -337,6 +347,7 @@ nonisolated enum SQLiteEpisodeSearchIndex {
         return canonicalCount == indexedCount
             && indexedCount == joinedCount
             && indexedCount == evidenceCount
+            && evidenceCount == evidenceBodyCount
             && evidenceCount == joinedEvidenceCount
     }
 

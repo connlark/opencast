@@ -158,7 +158,8 @@ struct SyncTombstoneRepairTests {
 
         let result = try SyncDuplicateRepairer.repair(
             modelContext: context,
-            claimedFeedURLsByEpisodeID: ["shared-episode": Self.feedURL]
+            claimedFeedURLsByEpisodeID: ["shared-episode": Self.feedURL],
+            save: { try $0.save() }
         )
 
         #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).isEmpty)
@@ -194,7 +195,8 @@ struct SyncTombstoneRepairTests {
 
         let result = try SyncDuplicateRepairer.repair(
             modelContext: context,
-            claimedFeedURLsByEpisodeID: ["shared-episode": Self.feedURL]
+            claimedFeedURLsByEpisodeID: ["shared-episode": Self.feedURL],
+            save: { try $0.save() }
         )
 
         let records = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
@@ -228,7 +230,7 @@ struct SyncTombstoneRepairTests {
         )
         try context.save()
 
-        let result = try SyncDuplicateRepairer.repair(modelContext: context)
+        let result = try SyncDuplicateRepairer.repair(modelContext: context, save: { try $0.save() })
 
         #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).isEmpty)
         #expect(result.tombstonedProgressRecordsDeleted == 1)
@@ -263,7 +265,7 @@ struct SyncTombstoneRepairTests {
         )
         try context.save()
 
-        let result = try SyncDuplicateRepairer.repair(modelContext: context, now: now)
+        let result = try SyncDuplicateRepairer.repair(modelContext: context, now: now, save: { try $0.save() })
 
         let remaining = try context.fetch(FetchDescriptor<SyncTombstoneRecord>())
         #expect(remaining.count == 1)

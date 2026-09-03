@@ -15,6 +15,7 @@ struct AddPodcastView: View {
     @State private var subscribingFeedURLString: String?
     @State private var clipboardErrorMessage: String?
     @State private var hasRequestedClipboardOnOpen = false
+    @State private var clipboardHasProbableFeedURL = false
 
     init(
         initialFeedURL: String = OpenCastConstants.addPodcastInitialFeedURL,
@@ -43,7 +44,9 @@ struct AddPodcastView: View {
                         clipboardErrorMessage: clipboardErrorMessage,
                         isSubscribing: isSubscribing,
                         canSubscribe: canSubscribeToRawFeed,
+                        usesSystemPasteButton: clipboardHasProbableFeedURL,
                         onPaste: pasteFromClipboard,
+                        onPastedString: applyPastedString,
                         onSubmit: subscribeToRawFeed
                     )
                 case .search:
@@ -88,7 +91,7 @@ struct AddPodcastView: View {
             }
         }
         .task {
-            requestClipboardURLOnOpen()
+            await requestClipboardURLOnOpen()
         }
         .sheet(item: Bindable(subscriptionFlow).pendingChoice) { pending in
             DirectoryFeedChoiceView(
@@ -138,7 +141,7 @@ struct AddPodcastView: View {
         startSubscription(to: feedURLString)
     }
 
-    private func requestClipboardURLOnOpen() {
+    private func requestClipboardURLOnOpen() async {
         guard !hasRequestedClipboardOnOpen else {
             return
         }
@@ -147,25 +150,32 @@ struct AddPodcastView: View {
             return
         }
 
-        pasteFromClipboard(replacesExistingText: false, reportsInvalidURL: false)
-    }
-
-    private func pasteFromClipboard() {
-        pasteFromClipboard(replacesExistingText: true, reportsInvalidURL: true)
-    }
-
-    private func pasteFromClipboard(
-        replacesExistingText: Bool,
-        reportsInvalidURL: Bool
-    ) {
-        guard let copiedFeedURLString = AddPodcastClipboardReader.feedURLStringFromClipboard() else {
-            if reportsInvalidURL {
-                clipboardErrorMessage = "Clipboard does not contain an HTTP podcast feed URL."
-            }
+        // Only the UI-testing seam prefills without a gesture; a production
+        // pasteboard read here would pop the system paste-permission alert on
+        // every sheet open. Pattern detection is prompt-free and just decides
+        // whether to offer the system paste button.
+        if let seededFeedURLString = AddPodcastClipboardReader.seededTestFeedURLString() {
+            feedURLString = seededFeedURLString
+            clipboardErrorMessage = nil
             return
         }
 
-        guard replacesExistingText || !hasFeedURLText else {
+        clipboardHasProbableFeedURL = await AddPodcastClipboardReader.clipboardProbablyHasWebURL()
+    }
+
+    private func pasteFromClipboard() {
+        guard let copiedFeedURLString = AddPodcastClipboardReader.feedURLStringFromClipboard() else {
+            clipboardErrorMessage = "Clipboard does not contain an HTTP podcast feed URL."
+            return
+        }
+
+        feedURLString = copiedFeedURLString
+        clipboardErrorMessage = nil
+    }
+
+    private func applyPastedString(_ pastedString: String) {
+        guard let copiedFeedURLString = AddPodcastClipboardReader.feedURLString(from: pastedString) else {
+            clipboardErrorMessage = "Clipboard does not contain an HTTP podcast feed URL."
             return
         }
 

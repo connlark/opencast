@@ -69,10 +69,22 @@ enum RSSTextEntityDecoder {
                 ? UInt32(payload.dropFirst(), radix: 16)
                 : UInt32(payload, radix: 10)
 
-            if let codePoint, let scalar = UnicodeScalar(codePoint) {
+            if let codePoint, let scalar = UnicodeScalar(codePoint), isXMLValid(scalar) {
                 decoded.replaceSubrange(entityRange, with: String(scalar))
             }
         }
         return decoded
+    }
+
+    /// XML 1.0 Char production. A double-encoded control entity (`&amp;#0;`)
+    /// must not put a NUL/control scalar into a title — OPML export writes
+    /// titles literally, and no XML parser (including reimport) accepts them.
+    private static func isXMLValid(_ scalar: UnicodeScalar) -> Bool {
+        switch scalar.value {
+        case 0x9, 0xA, 0xD, 0x20...0xD7FF, 0xE000...0xFFFD, 0x10000...0x10FFFF:
+            true
+        default:
+            false
+        }
     }
 }

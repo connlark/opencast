@@ -138,11 +138,11 @@ impl TranscriptAnalysisJob {
             // alarm retry budget. An unbilled restart (billing since flipped
             // dark) resolves the action inline — once, loudly on failure —
             // so the overwrite below can never strand it silently.
-            if let Some((billing_id, action)) = pending_billing(record.as_ref()) {
+            if let Some((account_id, billing_id, action)) = pending_billing(record.as_ref()) {
                 if submit.billing.is_some() {
                     return json_error(503, ERROR_BILLING_UNAVAILABLE);
                 }
-                if !attempt_billing_action(&self.env, &billing_id, action).await {
+                if !attempt_billing_action(&self.env, &account_id, &billing_id, action).await {
                     console_error!(
                         "transcript-analysis billing {action:?} abandoned by unbilled restart: {billing_id}"
                     );
@@ -232,6 +232,7 @@ impl TranscriptAnalysisJob {
                 if let Some(billing) = running.billing() {
                     let released = attempt_billing_action(
                         &self.env,
+                        &billing.account_id,
                         &billing.billing_id,
                         PendingBillingAction::Release,
                     )
@@ -339,12 +340,12 @@ impl TranscriptAnalysisJob {
         let Some(record) = read_record(&self.state.storage()).await? else {
             return self.purge().await;
         };
-        if let Some((billing_id, action)) = pending_billing(Some(&record)) {
-            if !attempt_billing_action(&self.env, &billing_id, action).await {
+        if let Some((account_id, billing_id, action)) = pending_billing(Some(&record)) {
+            if !attempt_billing_action(&self.env, &account_id, &billing_id, action).await {
                 console_error!(
                     "transcript-analysis billing {action:?} abandoned at purge: {billing_id}"
                 );
-                release_abandoned_settle(&self.env, &billing_id, action).await;
+                release_abandoned_settle(&self.env, &account_id, &billing_id, action).await;
             }
             // The attempts above opened the input gate: an interleaved
             // submit may own a fresh run (record, reservation, heartbeat
@@ -368,10 +369,18 @@ impl TranscriptAnalysisJob {
         let Some(purge_at) = record.purge_at() else {
             return Ok(());
         };
-        let Some((billing_id, action)) = pending_billing(Some(&record)) else {
+        let Some((account_id, billing_id, action)) = pending_billing(Some(&record)) else {
             return set_alarm_at(&storage, purge_at).await;
         };
-        run_pending_billing_attempt(&self.env, &storage, &billing_id, action, purge_at).await
+        run_pending_billing_attempt(
+            &self.env,
+            &storage,
+            &account_id,
+            &billing_id,
+            action,
+            purge_at,
+        )
+        .await
     }
 }
 
@@ -395,9 +404,13 @@ impl Drop for ActiveWindow<'_> {
     }
 }
 
-fn pending_billing(record: Option<&JobRecord>) -> Option<(String, PendingBillingAction)> {
+fn pending_billing(record: Option<&JobRecord>) -> Option<(String, String, PendingBillingAction)> {
     let billing = record?.billing()?;
-    Some((billing.billing_id.clone(), billing.pending?))
+    Some((
+        billing.account_id.clone(),
+        billing.billing_id.clone(),
+        billing.pending?,
+    ))
 }
 
 enum RunOutcome {
@@ -554,12 +567,10 @@ async fn apply_terminal_billing(
         billing.pending = Some(action);
     }
     write_record(storage, &record).await?;
-    let billing_id = record
-        .billing()
-        .expect("action implies billing")
-        .billing_id
-        .clone();
-    run_pending_billing_attempt(env, storage, &billing_id, action, purge_at).await
+    let billing = record.billing().expect("action implies billing");
+    let account_id = billing.account_id.clone();
+    let billing_id = billing.billing_id.clone();
+    run_pending_billing_attempt(env, storage, &account_id, &billing_id, action, purge_at).await
 }
 
 /// One settle/release attempt plus its bookkeeping. The attempt's await
@@ -570,12 +581,20 @@ async fn apply_terminal_billing(
 async fn run_pending_billing_attempt(
     env: &Env,
     storage: &Storage,
+    account_id: &str,
     billing_id: &str,
     action: PendingBillingAction,
     fallback_purge_at: i64,
 ) -> Result<()> {
-    if !attempt_billing_action(env, billing_id, action).await {
-        return record_failed_billing_attempt(env, storage, billing_id, fallback_purge_at).await;
+    if !attempt_billing_action(env, account_id, billing_id, action).await {
+        return record_failed_billing_attempt(
+            env,
+            storage,
+            account_id,
+            billing_id,
+            fallback_purge_at,
+        )
+        .await;
     }
     let Some(mut current) = reread_matching_terminal(storage, billing_id).await? else {
         return Ok(());
@@ -594,6 +613,7 @@ async fn run_pending_billing_attempt(
 async fn record_failed_billing_attempt(
     env: &Env,
     storage: &Storage,
+    account_id: &str,
     billing_id: &str,
     fallback_purge_at: i64,
 ) -> Result<()> {
@@ -632,18 +652,23 @@ async fn record_failed_billing_attempt(
     console_error!(
         "transcript-analysis billing {action:?} abandoned after {attempts} attempts: {billing_id}"
     );
-    release_abandoned_settle(env, billing_id, action).await;
+    release_abandoned_settle(env, account_id, billing_id, action).await;
     Ok(())
 }
 
 /// Last resort for an abandoned settle: free the hold instead of stranding
 /// it. Safe on both backends — release after a settle that actually landed
 /// is a no-op that keeps the charge.
-async fn release_abandoned_settle(env: &Env, billing_id: &str, abandoned: PendingBillingAction) {
+async fn release_abandoned_settle(
+    env: &Env,
+    account_id: &str,
+    billing_id: &str,
+    abandoned: PendingBillingAction,
+) {
     if abandoned != PendingBillingAction::Settle {
         return;
     }
-    if attempt_billing_action(env, billing_id, PendingBillingAction::Release).await {
+    if attempt_billing_action(env, account_id, billing_id, PendingBillingAction::Release).await {
         worker::console_log!(
             "transcript-analysis abandoned settle released its hold: {billing_id}"
         );
@@ -679,8 +704,8 @@ async fn reserve_billing(
     env: &Env,
     context: &BillingContext,
 ) -> Result<std::result::Result<JobBillingState, Response>> {
-    let config = AppConfig::from_env(env)
-        .map_err(|error| worker::Error::RustError(format!("{error:?}")))?;
+    let config =
+        AppConfig::from_env(env).map_err(|error| worker::Error::RustError(format!("{error:?}")))?;
     let credit = config.credit_authority(env)?;
     let billing_id = mint_billing_id()?;
     match credit
@@ -695,6 +720,7 @@ async fn reserve_billing(
         Ok(_) => Ok(Ok(JobBillingState::reserved(
             billing_id,
             context.charge_seconds,
+            context.account_id.clone(),
         ))),
         Err(error) => {
             if matches!(error, CreditError::Internal(_)) {
@@ -703,7 +729,10 @@ async fn reserve_billing(
                 // hold before its index write threw). Best-effort release:
                 // a no-op for a hold that never existed, a repair for one
                 // that did — otherwise the client's retry double-holds.
-                credit.release(&billing_id, now_seconds()).await.ok();
+                credit
+                    .release(&context.account_id, &billing_id, now_seconds())
+                    .await
+                    .ok();
             }
             Ok(Err(reserve_failure_response(&credit, context, error).await?))
         }
@@ -716,6 +745,7 @@ async fn reserve_billing(
 /// cause: these arms are exactly where flip-day misconfiguration surfaces.
 async fn attempt_billing_action(
     env: &Env,
+    account_id: &str,
     billing_id: &str,
     action: PendingBillingAction,
 ) -> bool {
@@ -734,8 +764,10 @@ async fn attempt_billing_action(
         }
     };
     let result = match action {
-        PendingBillingAction::Settle => credit.settle(billing_id, now_seconds()).await,
-        PendingBillingAction::Release => credit.release(billing_id, now_seconds()).await,
+        PendingBillingAction::Settle => credit.settle(account_id, billing_id, now_seconds()).await,
+        PendingBillingAction::Release => {
+            credit.release(account_id, billing_id, now_seconds()).await
+        }
     };
     if let Err(error) = &result {
         console_error!(

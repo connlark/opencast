@@ -9,10 +9,10 @@ use worker::{
 
 use crate::analysis::run_windows_analysis;
 use crate::job::{
-    alarm_decision, poll_decision, submit_decision, transcript_content_hash, AlarmDecision,
-    JobDoPollRequest, JobRecord, JobSubmitRequest, PollDecision, SubmitDecision,
-    JOB_HEARTBEAT_SECONDS, JOB_POLL_AFTER_SECONDS, JOB_RESULT_TTL_SECONDS,
-    JOB_SUBMIT_POLL_AFTER_SECONDS,
+    alarm_decision, poll_decision, submit_decision, transcript_content_hash, ActiveWindow,
+    AlarmDecision, JobDoPollRequest, JobRecord, JobSubmitRequest, PollDecision, SubmitDecision,
+    ERROR_ADMISSION_BUSY, JOB_HEARTBEAT_SECONDS, JOB_POLL_AFTER_SECONDS, JOB_RESULT_TTL_SECONDS,
+    JOB_SUBMIT_POLL_AFTER_SECONDS, SUBMIT_ADMISSION_MAX_WAITS, SUBMIT_ADMISSION_WAIT_MILLIS,
 };
 use crate::route::JSON_CONTENT_TYPE;
 use crate::types::{resolve_gemini_model, ErrorResponse, GEMINI_MODEL_ENV_VAR};
@@ -87,6 +87,7 @@ impl AdAnalysisJob {
         let submitted_hash =
             transcript_content_hash(&submit.request.transcript, &submit.request.segments);
 
+        let mut admission_waits: u32 = 0;
         loop {
             let mut record = read_record(&self.state.storage()).await?;
             match submit_decision(
@@ -134,22 +135,27 @@ impl AdAnalysisJob {
 
             // Non-storage I/O opens the DO input gate. Serialize the admission
             // window in memory so concurrent identical submits cannot both
-            // consume quota before the Running record is persisted.
-            if self.admission_active.get() {
-                Delay::from(Duration::from_millis(10)).await;
+            // consume quota before the Running record is persisted. The
+            // window's Drop releases it on every exit path (error
+            // propagation and a dropped request future included), and the
+            // wait is bounded so a wedged window degrades to a 503.
+            let Some(_admission_window) = ActiveWindow::acquire(&self.admission_active) else {
+                if admission_waits >= SUBMIT_ADMISSION_MAX_WAITS {
+                    return json_error(503, ERROR_ADMISSION_BUSY);
+                }
+                admission_waits += 1;
+                Delay::from(Duration::from_millis(SUBMIT_ADMISSION_WAIT_MILLIS)).await;
                 continue;
-            }
-            self.admission_active.set(true);
-            let admission = admit_spend_caps(
+            };
+            if let Some(response) = admit_spend_caps(
                 &self.env,
                 &submit.usage_object_name,
                 submit.usage_profile,
                 day_index(),
                 submit.estimated_input_tokens,
             )
-            .await;
-            self.admission_active.set(false);
-            if let Some(response) = admission? {
+            .await?
+            {
                 return Ok(response);
             }
 

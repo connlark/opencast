@@ -8,6 +8,7 @@ struct SettingsDiagnosticsView: View {
     @State private var progressRecordCount: Int?
     @State private var syncDetailsErrorMessage: String?
     @State private var refreshLogs: [RefreshLogSnapshot]?
+    @State private var verifiedDownloadSummary = "—"
 
     var body: some View {
         Form {
@@ -217,23 +218,44 @@ struct SettingsDiagnosticsView: View {
         refreshLogs?.first { !($0.errorMessage ?? "").isEmpty }
     }
 
-    private var verifiedDownloadSummary: String {
-        let completedEpisodeIDs = appModel.downloads.records
+    // One synchronous file stat per completed download is body-hostile; the
+    // count is computed off the main actor in the refresh path and cached,
+    // like the sync row counts and refresh logs.
+    private func computeVerifiedDownloadSummary() async -> String {
+        let candidates: [(fileURL: URL?, expectedByteCount: Int64)] = appModel.downloads.records
             .filter { $0.state == .completed }
-            .map(\.episodeID)
-        guard !completedEpisodeIDs.isEmpty else {
+            .map { record in
+                (
+                    record.sourceFileSHA256.isEmpty ? nil : appModel.downloads.localFileURL(for: record),
+                    record.bytesReceived
+                )
+            }
+        guard !candidates.isEmpty else {
             return "None"
         }
-        let verifiedCount = completedEpisodeIDs.count { episodeID in
-            appModel.downloads.completedSourceIdentity(for: episodeID) != nil
+        let verifiedCount = await Self.verifiedDownloadCount(of: candidates)
+        return "\(verifiedCount) of \(candidates.count)"
+    }
+
+    @concurrent
+    private static func verifiedDownloadCount(
+        of candidates: [(fileURL: URL?, expectedByteCount: Int64)]
+    ) async -> Int {
+        candidates.count { candidate in
+            guard let fileURL = candidate.fileURL,
+                  let byteCount = (try? FileManager.default.attributesOfItem(atPath: fileURL.path))?[.size] as? NSNumber
+            else {
+                return false
+            }
+            return byteCount.int64Value == candidate.expectedByteCount
         }
-        return "\(verifiedCount) of \(completedEpisodeIDs.count)"
     }
 
     private func refreshSyncDetailsNow() async {
         await appModel.syncStatus.refreshAccountStatus(force: true)
         loadSyncRowCounts()
         refreshLogs = await appModel.library.loadAllRefreshLogs()
+        verifiedDownloadSummary = await computeVerifiedDownloadSummary()
     }
 
     private func loadSyncRowCounts() {

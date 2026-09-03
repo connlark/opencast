@@ -1278,6 +1278,52 @@ struct EpisodeTranscriptionStoreTests {
         #expect(finalDocument.segments.count == 6)
     }
 
+    @Test("Deleting a transcript mid-run abandons the pending-checkpoint flush")
+    func deleteMidRunAbandonsPendingCheckpointFlush() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let audioURL = try writeAudioPlaceholder(in: temporaryDirectory, contents: "delete flush audio")
+        let fileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        let transcriber = ManualEpisodeTranscriber()
+        let store = EpisodeTranscriptionStore(transcriber: transcriber, fileStore: fileStore)
+        let episode = EpisodeListItemSnapshot.fixture(
+            episodeID: "delete-mid-run-flush",
+            duration: 100,
+            audioURL: "https://example.com/delete-mid-run-flush.mp3",
+            guid: "delete-mid-run-flush"
+        )
+        let record = completedDownloadRecord(episode: episode)
+        context.insert(record)
+
+        store.startTranscription(
+            episode,
+            downloadRecord: record,
+            localFileURL: audioURL,
+            modelSummary: modelSummary(),
+            modelContext: context
+        )
+        #expect(await waitUntil { transcriber.isStreaming })
+        transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 1, audioDuration: 100)))
+        #expect(await waitUntil { store.record(for: episode.episodeID)?.completedDuration == 10 })
+        // Checkpoint 2 is throttled into pendingCheckpoint, so the dying
+        // run's terminal flush has a document rewrite to abandon.
+        transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 2, audioDuration: 100)))
+        try await Task.sleep(for: .milliseconds(300))
+
+        store.deleteTranscript(episodeID: episode.episodeID, modelContext: context)
+        #expect(await waitUntil { !store.hasActiveJob })
+
+        // The flush must not mutate the deleted record or rewrite the
+        // transcript document into the swept per-episode directory.
+        #expect(store.record(for: episode.episodeID) == nil)
+        #expect(try context.fetch(FetchDescriptor<EpisodeTranscriptRecord>()).isEmpty)
+        let episodeDirectory = temporaryDirectory
+            .appending(path: EpisodeTranscriptFileStore.directoryName, directoryHint: .isDirectory)
+            .appending(path: fileStore.safeStem(episode.episodeID), directoryHint: .isDirectory)
+        #expect(FileManager.default.fileExists(atPath: episodeDirectory.path) == false)
+    }
+
     @Test(
         "Kill at every checkpoint index leaves stamps and document consistent and resumes from the last written checkpoint",
         arguments: 1...7

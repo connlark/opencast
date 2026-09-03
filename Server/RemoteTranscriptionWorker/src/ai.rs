@@ -177,9 +177,13 @@ pub struct FakeAiHooks {
     pub concurrency_override: Option<u32>,
     pub latency_ms: Option<u64>,
     pub media_chunk_latency_ms: Option<u64>,
-    /// `sfail=1`: the first stitch pass fails just before settle, after the
-    /// result object is durable — drives the stitch re-entry invariant test.
-    pub settle_fail_once: bool,
+    /// `sfail=N`: the first N settle calls fail, after the result object is
+    /// durable — `sfail=1` drives the stitch re-entry invariant test, a
+    /// count past the budget drives the audit-§27 settle-exhaustion test.
+    pub settle_fail_count: Option<u32>,
+    /// `resfail=N`: the first N credit-reserve calls fail on the internal
+    /// shape — drives the audit-§27 reserve-exhaustion test.
+    pub reserve_fail_count: Option<u32>,
     /// `rfail=N`: the first N credit-release attempts fail — drives the
     /// RTW-5 terminal-path release backstop tests.
     pub release_fail_count: Option<u32>,
@@ -277,7 +281,8 @@ pub fn parse_fake_hooks(language_code: Option<&str>) -> FakeAiHooks {
                 "conc" => hooks.concurrency_override = value.parse().ok(),
                 "latency" => hooks.latency_ms = value.parse().ok(),
                 "mlat" => hooks.media_chunk_latency_ms = value.parse().ok(),
-                "sfail" => hooks.settle_fail_once = value == "1",
+                "sfail" => hooks.settle_fail_count = value.parse().ok().filter(|count| *count > 0),
+                "resfail" => hooks.reserve_fail_count = value.parse().ok(),
                 "rfail" => hooks.release_fail_count = value.parse().ok(),
                 "strand" => hooks.strand = FakeStrandRule::parse(value),
                 _ => {}
@@ -421,12 +426,25 @@ mod tests {
         assert_eq!(latency_only.failure, None);
 
         let settle_fail = parse_fake_hooks(Some("fake:sfail=1"));
-        assert!(settle_fail.settle_fail_once);
-        assert!(!parse_fake_hooks(Some("fake:sfail=0")).settle_fail_once);
-        assert!(!latency_only.settle_fail_once);
+        assert_eq!(settle_fail.settle_fail_count, Some(1));
+        assert_eq!(
+            parse_fake_hooks(Some("fake:sfail=99")).settle_fail_count,
+            Some(99)
+        );
+        assert_eq!(
+            parse_fake_hooks(Some("fake:sfail=0")).settle_fail_count,
+            None
+        );
+        assert_eq!(latency_only.settle_fail_count, None);
+
+        let reserve_fail = parse_fake_hooks(Some("fake:resfail=4"));
+        assert_eq!(reserve_fail.reserve_fail_count, Some(4));
+        assert_eq!(reserve_fail.release_fail_count, None);
+        assert_eq!(latency_only.reserve_fail_count, None);
 
         let release_fail = parse_fake_hooks(Some("fake:rfail=2"));
         assert_eq!(release_fail.release_fail_count, Some(2));
+        assert_eq!(release_fail.reserve_fail_count, None);
         assert_eq!(latency_only.release_fail_count, None);
 
         let strand_any = parse_fake_hooks(Some("fake:strand=1"))

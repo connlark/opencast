@@ -478,7 +478,7 @@ struct EpisodePipelineStateTests {
         )
     }
 
-    private func analysisRecord(state: EpisodeAdAnalysisState) -> EpisodeAdAnalysisRecord {
+    private func analysisRecord(state: EpisodeAnalysisRecordState) -> EpisodeAdAnalysisRecord {
         EpisodeAdAnalysisRecord(episodeID: episodeID, podcastID: "podcast", state: state)
     }
 }

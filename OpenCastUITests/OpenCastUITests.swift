@@ -150,7 +150,14 @@ final class OpenCastUITests: XCTestCase {
         openInbox(in: app)
         let inboxEpisode = seededEpisodeRow(in: app)
         assertExists(inboxEpisode, named: "seeded inbox episode")
-        openEpisodeDetailFromContextMenu(inboxEpisode, in: app, named: "seeded inbox episode")
+        // The shared context-menu helper expects an enabled Detect Ads action,
+        // which the seeded completed analysis replaces with the disabled
+        // "Ads Detected" state; open the detail directly.
+        inboxEpisode.press(forDuration: 1.2)
+        let detailsAction = app.buttons["View Episode Details"]
+        assertExists(detailsAction, named: "seeded inbox episode details context action")
+        detailsAction.tap()
+        assertExists(app.buttons["Play Episode"], named: "seeded episode detail")
 
         let actionsButton = app.buttons["Episode Actions"].firstMatch
         assertExists(actionsButton, named: "Episode Actions menu", timeout: 8)
@@ -168,7 +175,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.buttons["Refresh Diagnostics"].firstMatch, named: "refresh diagnostics action")
         assertExists(app.buttons["Copy Report"].firstMatch, named: "copy report action")
         assertExists(app.buttons["Share Report"].firstMatch, named: "share report action")
-        assertExists(app.buttons["Download & Share MP3"].firstMatch, named: "download and share MP3 action")
+        assertExists(app.buttons["Download & Share Audio"].firstMatch, named: "download and share audio action")
 
         // The seeded transcript/analysis data and the explicit missing-data
         // state for the unseeded download coexist in one report; deeper
@@ -220,8 +227,8 @@ final class OpenCastUITests: XCTestCase {
             timeout: 8
         )
 
-        let shareButton = app.buttons["Download & Share MP3"].firstMatch
-        assertExists(shareButton, named: "download and share MP3 action")
+        let shareButton = app.buttons["Download & Share Audio"].firstMatch
+        assertExists(shareButton, named: "download and share audio action")
         shareButton.tap()
 
         // The seeded completed download shares immediately; the activity

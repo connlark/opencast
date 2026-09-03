@@ -34,10 +34,9 @@ nonisolated extension SQLiteEpisodeSearchIndex {
         let evidenceUpsert = try prepare(
             """
             INSERT INTO episode_search_evidence (
-              search_rowid, body_data, title_canonical, podcast_title_canonical
-            ) VALUES (?, ?, ?, ?)
+              search_rowid, title_canonical, podcast_title_canonical
+            ) VALUES (?, ?, ?)
             ON CONFLICT (search_rowid) DO UPDATE SET
-              body_data = excluded.body_data,
               title_canonical = excluded.title_canonical,
               podcast_title_canonical = excluded.podcast_title_canonical
             """,
@@ -46,6 +45,20 @@ nonisolated extension SQLiteEpisodeSearchIndex {
         )
         defer {
             sqlite3_finalize(evidenceUpsert)
+        }
+        let evidenceBodyUpsert = try prepare(
+            """
+            INSERT INTO episode_search_evidence_body (
+              search_rowid, body_data
+            ) VALUES (?, ?)
+            ON CONFLICT (search_rowid) DO UPDATE SET
+              body_data = excluded.body_data
+            """,
+            operation: operation,
+            db: db
+        )
+        defer {
+            sqlite3_finalize(evidenceBodyUpsert)
         }
 
         let episodeIDs = documents.map(\.episodeID)
@@ -133,31 +146,41 @@ nonisolated extension SQLiteEpisodeSearchIndex {
                 operation: operation
             )
             try bind(
-                compressedSearchEvidence(
-                    summary: document.summary,
-                    showNotes: document.showNotes
-                ),
+                document.titleCanonical,
                 at: 2,
                 statement: evidenceUpsert,
                 db: db,
                 operation: operation
             )
             try bind(
-                document.titleCanonical,
-                at: 3,
-                statement: evidenceUpsert,
-                db: db,
-                operation: operation
-            )
-            try bind(
                 document.podcastTitleCanonical,
-                at: 4,
+                at: 3,
                 statement: evidenceUpsert,
                 db: db,
                 operation: operation
             )
             try step(evidenceUpsert, operation: operation, db: db)
             try reset(evidenceUpsert, operation: operation, db: db)
+
+            try bind(
+                rowID,
+                at: 1,
+                statement: evidenceBodyUpsert,
+                db: db,
+                operation: operation
+            )
+            try bind(
+                compressedSearchEvidence(
+                    summary: document.summary,
+                    showNotes: document.showNotes
+                ),
+                at: 2,
+                statement: evidenceBodyUpsert,
+                db: db,
+                operation: operation
+            )
+            try step(evidenceBodyUpsert, operation: operation, db: db)
+            try reset(evidenceBodyUpsert, operation: operation, db: db)
             try replaceStoredVocabularyTerms(
                 documentNewTerms,
                 episodeID: document.episodeID,
@@ -470,21 +493,23 @@ nonisolated extension SQLiteEpisodeSearchIndex {
             )
         }
         if !metadataRowIDs.isEmpty {
-            try run(
-                """
-                DELETE FROM episode_search_evidence
-                WHERE search_rowid IN (SELECT value FROM json_each(?))
-                """,
-                operation: "episode search evidence delete",
-                db: db
-            ) { statement in
-                try bind(
-                    jsonArray(metadataRowIDs),
-                    at: 1,
-                    statement: statement,
-                    db: db,
-                    operation: "episode search evidence delete"
-                )
+            for table in [evidenceTableName, evidenceBodyTableName] {
+                try run(
+                    """
+                    DELETE FROM \(table)
+                    WHERE search_rowid IN (SELECT value FROM json_each(?))
+                    """,
+                    operation: "episode search evidence delete",
+                    db: db
+                ) { statement in
+                    try bind(
+                        jsonArray(metadataRowIDs),
+                        at: 1,
+                        statement: statement,
+                        db: db,
+                        operation: "episode search evidence delete"
+                    )
+                }
             }
         }
         try deleteStoredVocabularyTerms(

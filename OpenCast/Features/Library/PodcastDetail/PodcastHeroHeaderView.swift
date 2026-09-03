@@ -3,6 +3,7 @@ import SwiftUI
 struct PodcastHeroHeaderView: View {
     let subscription: SubscriptionRecord
     let podcast: PodcastCacheSnapshot?
+    let artworkPreview: ArtworkPreview?
     let episodeCount: Int
     let unplayedCount: Int
     let lastRefreshedAt: Date?
@@ -22,7 +23,7 @@ struct PodcastHeroHeaderView: View {
                 title: subscription.title,
                 imageURL: podcast?.artworkURL ?? subscription.artworkURL,
                 size: artworkLength,
-                preview: podcast?.artworkPreview,
+                preview: artworkPreview,
                 onPreviewResolved: onPreviewResolved
             )
             .shadow(color: .black.opacity(0.16), radius: 18, y: 8)

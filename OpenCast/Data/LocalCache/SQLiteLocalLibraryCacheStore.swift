@@ -8,6 +8,11 @@ import SQLite3
 /// `show_notes_html`; episode detail fetches the full row lazily by ID.
 actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     private nonisolated static let legacyImportCompleteKey = "legacy_swiftdata_import_complete"
+    private nonisolated static let canonicalSchemaVersionKey = "canonical_schema_version"
+    /// Version of the canonical (non-derived) tables, counted in
+    /// local_cache_meta; bump alongside each new gated migration in
+    /// `database()`. PRAGMA user_version belongs to the derived search index.
+    nonisolated static let canonicalSchemaVersion = 1
 
     private let databaseURL: URL?
     private let episodeSearchRebuildBatchSize: Int
@@ -273,6 +278,13 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 await Task.yield()
             }
 
+            // An interleaved maintain write that failed during the batch
+            // loop's awaits demoted the state to .needsRebuild; the content
+            // just built may be missing that write, so it must not be
+            // blessed .ready on the count-only consistency check.
+            guard episodeSearchIndexState == .rebuilding else {
+                throw EpisodeSearchIndexError.notReady("needsRebuild")
+            }
             try inTransaction("episode search rebuild finish") { db in
                 guard try SQLiteEpisodeSearchIndex.isConsistent(in: db) else {
                     throw EpisodeSearchIndexError.invalidSchema
@@ -483,6 +495,40 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 sqlite3_finalize(episodePreviewClear)
             }
 
+            // The upsert's change-detection WHERE also compares non-searchable
+            // columns (audio/artwork URLs, dates, GUIDs), so sqlite3_changes
+            // alone over-reports; compare the stored searchable text so a
+            // dynamic-enclosure URL churn does not re-index the episode.
+            var storedSearchableTextByEpisodeID: [String: StoredSearchableEpisodeText] = [:]
+            try query(
+                """
+                SELECT episode_id, title, podcast_title, summary, show_notes_html
+                FROM episode_cache
+                WHERE episode_id IN (SELECT value FROM json_each(?))
+                """,
+                operation: operation,
+                db: db,
+                bindings: { statement in
+                    try bind(
+                        jsonArray(snapshot.episodes.map(\.id.rawValue)),
+                        at: 1,
+                        statement: statement,
+                        db: db,
+                        operation: operation
+                    )
+                }
+            ) { statement in
+                guard let episodeID = LocalCacheSQLite.columnText(statement, 0) else {
+                    return
+                }
+                storedSearchableTextByEpisodeID[episodeID] = StoredSearchableEpisodeText(
+                    title: LocalCacheSQLite.columnText(statement, 1),
+                    podcastTitle: LocalCacheSQLite.columnText(statement, 2),
+                    summary: LocalCacheSQLite.columnText(statement, 3),
+                    showNotesHTML: LocalCacheSQLite.columnText(statement, 4)
+                )
+            }
+
             var changedSearchDocuments: [SQLiteEpisodeSearchDocument] = []
             for episode in snapshot.episodes {
                 let artworkURL = episode.artworkURL?.absoluteString
@@ -500,7 +546,14 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 try bind(refreshedAt, at: 12, statement: episodeUpsert, db: db, operation: operation)
                 try bind(episode.chaptersURL?.absoluteString, at: 13, statement: episodeUpsert, db: db, operation: operation)
                 try step(episodeUpsert, operation: operation, db: db)
-                let didChangeSearchableContent = sqlite3_changes(db) > 0
+                let didChangeRow = sqlite3_changes(db) > 0
+                let didChangeSearchableContent = didChangeRow
+                    && storedSearchableTextByEpisodeID[episode.id.rawValue] != StoredSearchableEpisodeText(
+                        title: episode.title,
+                        podcastTitle: episode.podcastTitle,
+                        summary: episode.summary,
+                        showNotesHTML: episode.showNotesHTML
+                    )
                 try reset(episodeUpsert, operation: operation, db: db)
 
                 if didChangeSearchableContent {
@@ -797,9 +850,16 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         )
     }
 
-    /// Current PRAGMA user_version. Test hook for the versioned migrations.
+    /// Current PRAGMA user_version — owned by the derived search index
+    /// (`SQLiteEpisodeSearchIndex.schemaVersion`). Test hook.
     func currentSchemaVersion() throws -> Int {
         try schemaVersion(db: try database())
+    }
+
+    /// Current canonical schema version from local_cache_meta. Test hook for
+    /// the versioned canonical migrations.
+    func currentCanonicalSchemaVersion() throws -> Int {
+        try canonicalSchemaVersion(db: try database())
     }
 
     /// Current derived-search lifecycle state. Test hook for rebuild/fallback
@@ -822,6 +882,38 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             version = Int(sqlite3_column_int64(statement, 0))
         }
         return version
+    }
+
+    private func canonicalSchemaVersion(db: OpaquePointer) throws -> Int {
+        var version = 0
+        try query(
+            "SELECT value FROM local_cache_meta WHERE key = ?",
+            operation: "canonical schema version",
+            db: db,
+            bindings: { statement in
+                try bind(
+                    Self.canonicalSchemaVersionKey,
+                    at: 1,
+                    statement: statement,
+                    db: db,
+                    operation: "canonical schema version"
+                )
+            }
+        ) { statement in
+            version = LocalCacheSQLite.columnText(statement, 0).flatMap(Int.init) ?? 0
+        }
+        return version
+    }
+
+    private func setCanonicalSchemaVersion(_ version: Int, db: OpaquePointer) throws {
+        try run(
+            "INSERT OR REPLACE INTO local_cache_meta (key, value) VALUES (?, ?)",
+            operation: "canonical schema migration",
+            db: db
+        ) { statement in
+            try bind(Self.canonicalSchemaVersionKey, at: 1, statement: statement, db: db, operation: "canonical schema migration")
+            try bind(String(version), at: 2, statement: statement, db: db, operation: "canonical schema migration")
+        }
     }
 
     func hasCompletedLegacyImport() throws -> Bool {
@@ -1008,15 +1100,23 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             // Installed caches created the index before it was removed from
             // schemaSQL; no query shape ever chooses it.
             try? exec("DROP INDEX IF EXISTS episode_cache_published_idx", operation: "schema migration", db: handle)
-            // Versioned migrations start here (PRAGMA user_version; version 0
-            // predates versioning). The try?-ALTER pattern keeps version 1
-            // idempotent for fresh databases whose CREATE TABLE already has
-            // the columns.
-            if try schemaVersion(db: handle) < 1 {
+            // Versioned canonical migrations start here, counted in
+            // local_cache_meta (absent predates versioning). PRAGMA
+            // user_version belongs to the derived search index alone: one
+            // shared ladder let its stamp skip any later canonical step on
+            // already-stamped databases. The try?-ALTER pattern keeps version
+            // 1 idempotent for fresh databases whose CREATE TABLE already has
+            // the columns; the stamp is gated on the columns actually being
+            // present so a transiently failed ALTER (I/O error, disk full)
+            // retries on the next open instead of being versioned over.
+            if try canonicalSchemaVersion(db: handle) < 1 {
                 try? exec("ALTER TABLE podcast_cache ADD COLUMN etag TEXT", operation: "schema migration", db: handle)
                 try? exec("ALTER TABLE podcast_cache ADD COLUMN last_modified TEXT", operation: "schema migration", db: handle)
                 try? exec("ALTER TABLE podcast_cache ADD COLUMN body_hash TEXT", operation: "schema migration", db: handle)
-                try exec("PRAGMA user_version = 1", operation: "schema migration", db: handle)
+                if try columnNames(of: "podcast_cache", db: handle)
+                    .isSuperset(of: ["etag", "last_modified", "body_hash"]) {
+                    try setCanonicalSchemaVersion(1, db: handle)
+                }
             }
 
             // The search index is rebuildable derived data. An unavailable
@@ -1024,13 +1124,6 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             // search will use the legacy fallback and retry on next launch.
             do {
                 try SQLiteEpisodeSearchIndex.ensureSchema(in: handle)
-                if try schemaVersion(db: handle) < SQLiteEpisodeSearchIndex.schemaVersion {
-                    try exec(
-                        "PRAGMA user_version = \(SQLiteEpisodeSearchIndex.schemaVersion)",
-                        operation: "episode search schema migration",
-                        db: handle
-                    )
-                }
                 let storedVersion = try SQLiteEpisodeSearchIndex.storedContentVersion(
                     in: handle
                 )
@@ -1242,9 +1335,13 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         guard episodeSearchIndexState != .unavailable else {
             return false
         }
+        // `.ready` applies writes even before this session's validation:
+        // schema and contentVersion already match, and a dropped
+        // content-only write would survive the count-only validation as
+        // permanently stale search text. If the index is truly broken the
+        // write throws into the needsRebuild path below.
         guard allowWhenNotReady
-                || (episodeSearchIndexState == .ready
-                    && hasValidatedEpisodeSearchIndex)
+                || episodeSearchIndexState == .ready
                 || episodeSearchIndexState == .rebuilding
         else {
             return false
@@ -1285,6 +1382,24 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         row: (OpaquePointer) throws -> Void
     ) throws {
         try LocalCacheSQLite.query(sql, operation: operation, db: db, bindings: bindings, row: row)
+    }
+
+    /// The four columns the search index derives its documents from.
+    private struct StoredSearchableEpisodeText: Equatable {
+        let title: String?
+        let podcastTitle: String?
+        let summary: String?
+        let showNotesHTML: String?
+    }
+
+    private func columnNames(of table: String, db: OpaquePointer) throws -> Set<String> {
+        var names: Set<String> = []
+        try query("PRAGMA table_info(\(table))", operation: "schema inspection", db: db) { statement in
+            if let name = LocalCacheSQLite.columnText(statement, 1) {
+                names.insert(name)
+            }
+        }
+        return names
     }
 
     private func step(_ statement: OpaquePointer, operation: String, db: OpaquePointer) throws {

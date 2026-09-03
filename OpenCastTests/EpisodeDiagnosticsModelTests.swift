@@ -58,7 +58,7 @@ struct EpisodeDiagnosticsModelTests {
         #expect(rowValue(model.state(for: .episode), "Last Refresh") == "Never")
 
         let downloadState = model.state(for: .download)
-        #expect(downloadState.isSettled)
+        #expect({ if case .loaded = downloadState { true } else { false } }())
         let downloadFileURL = try #require(rowValue(downloadState, "File URL"))
         #expect(downloadFileURL.hasPrefix("file://"))
         #expect(downloadFileURL.contains(downloadRelativePath))
@@ -89,6 +89,27 @@ struct EpisodeDiagnosticsModelTests {
         #expect(report.contains("== Zone Matrix =="))
         #expect(report.contains(downloadFileURL))
         #expect(report.contains(Self.audioURL))
+    }
+
+    @Test("A download with no recorded hash skips the full-file hash pass")
+    func noRecordedHashSkipsComputedSHA() async throws {
+        let fixture = try makeFixture()
+        try seedCompletedDownload(in: fixture, sourceFileSHA256: "")
+        await loadStores(in: fixture)
+
+        let fileInspector = SpyFileInspector()
+        let dependencies = makeDependencies(
+            fileInspector: fileInspector,
+            prober: SpyNetworkProber(),
+            counters: fixture.counters
+        )
+        let model = EpisodeDiagnosticsModel(episodeID: Self.episodeID, dependencies: dependencies)
+
+        await model.load(appModel: fixture.appModel)
+
+        #expect(await fileInspector.sha256Calls == 0)
+        #expect(rowValue(model.state(for: .download), "Computed SHA-256") == nil)
+        #expect(rowValue(model.state(for: .download), "Local Media Duration") == "5200.000s")
     }
 
     @Test("A hashing failure and a corrupt analysis document stay local to their sections")
@@ -182,7 +203,7 @@ struct EpisodeDiagnosticsModelTests {
         #expect(rowValue(mismatchModel.state(for: .zoneMatrix), "Player vs Installed") == "MISMATCH")
     }
 
-    @Test("Report text renders loaded, partial, loading, and failed sections")
+    @Test("Report text renders loaded, partial, and loading sections")
     func reportTextRendersAllStates() {
         let section = EpisodeDiagnosticsSection(rows: [("Label", "Value")], footnote: "A footnote.")
         let text = EpisodeDiagnosticsReportText.make(
@@ -193,7 +214,6 @@ struct EpisodeDiagnosticsModelTests {
                 (.report, .loaded(section)),
                 (.episode, .partial(section)),
                 (.download, .loading),
-                (.transcript, .failed("boom")),
             ]
         )
 
@@ -205,7 +225,6 @@ struct EpisodeDiagnosticsModelTests {
         #expect(text.contains("Note: A footnote."))
         #expect(text.contains("(some values still loading)"))
         #expect(text.contains("(still loading)"))
-        #expect(text.contains("(failed: boom)"))
     }
 
     @Test("Share presents immediately when a valid completed download exists")
@@ -565,7 +584,10 @@ struct EpisodeDiagnosticsModelTests {
     }
 
     @discardableResult
-    private func seedCompletedDownload(in fixture: Fixture) throws -> String {
+    private func seedCompletedDownload(
+        in fixture: Fixture,
+        sourceFileSHA256: String = "recorded-sha"
+    ) throws -> String {
         let relativePath = fixture.downloadFileStore.relativePath(
             episodeID: Self.episodeID,
             sourceAudioURL: URL(string: Self.audioURL)!
@@ -574,7 +596,7 @@ struct EpisodeDiagnosticsModelTests {
         let data = Data("downloaded episode".utf8)
         try fixture.downloadFileStore.prepareDownloadsDirectory()
         try data.write(to: fileURL, options: .atomic)
-        fixture.context.insert(EpisodeDownloadRecord(
+        let record = EpisodeDownloadRecord(
             episodeID: Self.episodeID,
             podcastID: Self.feedURL,
             sourceAudioURL: Self.audioURL,
@@ -585,7 +607,9 @@ struct EpisodeDiagnosticsModelTests {
             episodeTitle: "Deterministic Episode",
             podcastTitle: "Example Show",
             duration: 30
-        ))
+        )
+        record.sourceFileSHA256 = sourceFileSHA256
+        fixture.context.insert(record)
         try fixture.context.save()
         return relativePath
     }

@@ -264,6 +264,103 @@ struct LibraryStoreStateMachineTests {
         #expect(store.refreshCompletedToken == 0)
     }
 
+    // MARK: - Refresh flow skip and publication guards
+
+    @Test("Single-feed refresh of a feed with no active subscription fetches and reloads nothing")
+    func singleFeedRefreshWithoutActiveSubscriptionSkips() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let unknownFeedURL = "https://example.com/skip-unknown.xml"
+        let archivedFeedURL = "https://example.com/skip-archived.xml"
+        let service = ScriptedFeedService(scripts: [:])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        context.insert(SubscriptionRecord(feedURL: archivedFeedURL, title: "Skip Archived", isArchived: true))
+        try context.save()
+        await store.load(modelContext: context)
+
+        await store.refresh(feedURL: unknownFeedURL, modelContext: context)
+        await store.refresh(feedURL: archivedFeedURL, modelContext: context)
+
+        #expect(await service.requestCount() == 0)
+        #expect(store.state == .idle)
+        #expect(store.lastErrorMessage == nil)
+        #expect(store.refreshLogs.isEmpty)
+        #expect(store.refreshingFeedURLs.isEmpty)
+    }
+
+    @Test("A skipped single-feed refresh leaves a running bulk refresh's state untouched")
+    func skippedSingleFeedRefreshDuringRefreshAllKeepsRefreshingState() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/skip-bulk.xml"
+        let unknownFeedURL = "https://example.com/skip-bulk-unknown.xml"
+        let gate = AsyncTestGate()
+        let service = ScriptedFeedService(scripts: [
+            feedURL: [.gatedSuccess(makeSnapshot(feedURL: feedURL, episodeID: "skip-bulk-episode"), gate)]
+        ])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Skip Bulk"))
+        try context.save()
+        await store.load(modelContext: context)
+
+        let refreshAllTask = Task {
+            await store.refreshAll(modelContext: context)
+        }
+        #expect(await service.waitForRequestCount(1))
+        #expect(store.state == .refreshing)
+
+        await store.refresh(feedURL: unknownFeedURL, modelContext: context)
+
+        #expect(store.state == .refreshing)
+        #expect(await service.requestCount() == 1)
+
+        await gate.release()
+        await refreshAllTask.value
+
+        #expect(store.state == .idle)
+        #expect(store.refreshCompletedToken == 1)
+    }
+
+    @Test("A logs-only reload overtaken by a full reload publishes nothing")
+    func logsOnlyReloadOvertakenByFullReloadIsAbandoned() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/logs-only-overtaken.xml"
+        let gates = LoadLibraryGates()
+        let cache = GatedLoadLibraryCacheStore(wrapping: SQLiteLocalLibraryCacheStore.inMemory(), gates: gates)
+        // A recorded fetch failure republishes only the refresh-log projection.
+        let service = ScriptedFeedService(scripts: [feedURL: [.failure("Logs only")]])
+        let store = LibraryStore(feedService: service, localCache: cache)
+
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Logs Only"))
+        try context.save()
+        await store.load(modelContext: context)
+        #expect(store.refreshLogs.isEmpty)
+
+        await gates.arm()
+        let refreshTask = Task {
+            await store.refresh(feedURL: feedURL, modelContext: context)
+        }
+        await gates.reachedLoad.wait()
+
+        // The full reload generation moves while the logs-only load is parked.
+        store.prepareForDataNuke()
+        store.resetAfterDataNuke()
+        #expect(store.refreshLogs.isEmpty)
+
+        await gates.loadRelease.release()
+        await refreshTask.value
+
+        // The log itself was written; only its stale publication is dropped.
+        #expect(try await cache.allRefreshLogs().count == 1)
+        #expect(store.refreshLogs.isEmpty)
+        #expect(store.latestRefreshLog(feedURL: feedURL) == nil)
+        #expect(store.state == .idle)
+        #expect(store.refreshingFeedURLs.isEmpty)
+    }
+
     // MARK: - Data nuke reset
 
     @Test("resetAfterDataNuke empties every facade-readable surface")
@@ -615,6 +712,123 @@ private actor ScriptedFeedService: FeedService {
         }
 
         return requestedURLs.count >= count
+    }
+
+    func requestCount() -> Int {
+        requestedURLs.count
+    }
+}
+
+/// One-shot hold on the next `loadLibrary` call so a test can park a
+/// publication at its await and move the store underneath it.
+private actor LoadLibraryGates {
+    let reachedLoad = AsyncTestGate()
+    let loadRelease = AsyncTestGate()
+    private var isArmed = false
+
+    func arm() {
+        isArmed = true
+    }
+
+    func takeArmed() -> Bool {
+        defer {
+            isArmed = false
+        }
+        return isArmed
+    }
+}
+
+private struct GatedLoadLibraryCacheStore: LocalLibraryCacheStore {
+    let wrapped: any LocalLibraryCacheStore
+    let gates: LoadLibraryGates
+
+    init(wrapping wrapped: any LocalLibraryCacheStore, gates: LoadLibraryGates) {
+        self.wrapped = wrapped
+        self.gates = gates
+    }
+
+    func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot {
+        if await gates.takeArmed() {
+            await gates.reachedLoad.release()
+            await gates.loadRelease.wait()
+        }
+        return try await wrapped.loadLibrary(activePodcastIDs: activePodcastIDs)
+    }
+
+    func allRefreshLogs() async throws -> [RefreshLogSnapshot] {
+        try await wrapped.allRefreshLogs()
+    }
+
+    func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot? {
+        try await wrapped.episodeDetail(episodeID: episodeID)
+    }
+
+    func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String] {
+        try await wrapped.showNotesHTMLByEpisodeID(activePodcastIDs: activePodcastIDs)
+    }
+
+    func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) async throws {
+        try await wrapped.upsertCache(from: snapshot, refreshedAt: refreshedAt)
+    }
+
+    func updateEpisodeArtworkPreview(_ preview: ArtworkPreview, episodeID: String, artworkURL: String?) async throws {
+        try await wrapped.updateEpisodeArtworkPreview(preview, episodeID: episodeID, artworkURL: artworkURL)
+    }
+
+    func updatePodcastArtworkPreview(_ preview: ArtworkPreview, feedURL: String, artworkURL: String?) async throws {
+        try await wrapped.updatePodcastArtworkPreview(preview, feedURL: feedURL, artworkURL: artworkURL)
+    }
+
+    func insertRefreshLog(_ log: RefreshLogSnapshot, prunedTo retentionLimit: Int) async throws {
+        try await wrapped.insertRefreshLog(log, prunedTo: retentionLimit)
+    }
+
+    func feedValidators(forPodcastID podcastID: String) async throws -> FeedValidators? {
+        try await wrapped.feedValidators(forPodcastID: podcastID)
+    }
+
+    func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) async throws {
+        try await wrapped.updateFeedValidators(validators, forPodcastID: podcastID)
+    }
+
+    func cachedEpisodes(forPodcastID podcastID: String) async throws -> [EpisodeListItemSnapshot] {
+        try await wrapped.cachedEpisodes(forPodcastID: podcastID)
+    }
+
+    func deleteEpisodes(episodeIDs: [String]) async throws {
+        try await wrapped.deleteEpisodes(episodeIDs: episodeIDs)
+    }
+
+    func deleteCache(forPodcastID podcastID: String) async throws {
+        try await wrapped.deleteCache(forPodcastID: podcastID)
+    }
+
+    func deleteAllLocalCache() async throws {
+        try await wrapped.deleteAllLocalCache()
+    }
+
+    func replaceNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) async throws {
+        try await wrapped.replaceNotificationFeedHealth(records)
+    }
+
+    func notificationFeedHealthByFeedURL() async throws -> [String: NotificationFeedHealth] {
+        try await wrapped.notificationFeedHealthByFeedURL()
+    }
+
+    func hasCompletedLegacyImport() async throws -> Bool {
+        try await wrapped.hasCompletedLegacyImport()
+    }
+
+    func importLegacyCache(
+        podcasts: [PodcastCacheSnapshot],
+        episodes: [EpisodeDetailSnapshot],
+        refreshLogs: [RefreshLogSnapshot]
+    ) async throws {
+        try await wrapped.importLegacyCache(
+            podcasts: podcasts,
+            episodes: episodes,
+            refreshLogs: refreshLogs
+        )
     }
 }
 

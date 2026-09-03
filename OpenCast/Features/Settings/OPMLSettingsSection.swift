@@ -58,9 +58,10 @@ struct OPMLSettingsSection: View {
             defaultFilename: OPMLExporter.defaultFilename,
             onCompletion: handleExportResult
         )
-        .onDisappear {
-            importFlow.cancelImportTask()
-        }
+        // No onDisappear cancel: scrolling this section out of the Form's
+        // realized window or switching tabs must not abort a running import
+        // mid-batch (the flow still cancels in deinit). Matches the
+        // deliberately unscoped sibling subscribe flows.
     }
 
     private func showImporter() {

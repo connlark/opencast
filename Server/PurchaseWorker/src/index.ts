@@ -19,7 +19,7 @@ import {
 } from './handlers';
 import { laneConfigFromEnv } from './apple';
 import { reconcileDueAccounts } from './handlers';
-import { captureLiabilitySnapshot } from './liability';
+import { advanceLiabilitySweep } from './liability';
 import type { Env } from './types';
 import { ERROR_INTERNAL } from './types';
 
@@ -54,7 +54,8 @@ export default {
         case '/internal/v1/snapshot':
           return await handleSnapshot(env, request);
         case '/internal/v1/liability-snapshot':
-          return json(200, await captureLiabilitySnapshot(env));
+          // Advances the paged sweep by one page, exactly like a cron tick.
+          return json(200, await advanceLiabilitySweep(env));
         default:
           return errorJson(404, 'not_found');
       }
@@ -71,18 +72,19 @@ export default {
       (async () => {
         try {
           const config = laneConfigFromEnv(env);
-          const results = await reconcileDueAccounts(env, config);
+          const run = await reconcileDueAccounts(env, config);
+          const results = run.accounts;
           console.log(
-            `purchase-reconcile-cron accounts=${results.length} credited=${results.reduce((sum, item) => sum + item.credited, 0)} errors=${results.filter((item) => item.error).length}`,
+            `purchase-reconcile-cron accounts=${results.length} credited=${results.reduce((sum, item) => sum + item.credited, 0)} transactions=${results.reduce((sum, item) => sum + item.transactions_seen, 0)} errors=${results.filter((item) => item.error).length} budget_exhausted=${run.budget_exhausted}`,
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : 'unknown';
           console.log(`purchase-reconcile-cron-error message=${message.slice(0, 200)}`);
         }
         try {
-          const snapshot = await captureLiabilitySnapshot(env);
+          const step = await advanceLiabilitySweep(env);
           console.log(
-            `purchase-liability-cron accounts=${snapshot.account_count} sampled=${snapshot.accounts_sampled} outstanding_seconds=${snapshot.outstanding_seconds} debt_seconds=${snapshot.debt_seconds} complete=${snapshot.complete}`,
+            `purchase-liability-cron accounts=${step.account_count} read=${step.accounts_read} sampled=${step.accounts_sampled} outstanding_seconds=${step.outstanding_seconds} debt_seconds=${step.debt_seconds} sweep_complete=${step.sweep_complete} complete=${step.complete}`,
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : 'unknown';

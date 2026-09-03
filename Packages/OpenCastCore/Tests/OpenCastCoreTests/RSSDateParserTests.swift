@@ -20,6 +20,19 @@ struct RSSDateParserTests {
         #expect(RSSDateParser.parse("Sun, 06 Nov 1994 08:49:37 UTC")?.timeIntervalSince1970 == 784_111_777)
     }
 
+    @Test(
+        "Parses lowercase and mixed-case time zone names",
+        arguments: [
+            ("Mon, 15 Jan 2024 10:00:00 gmt", 1_705_312_800),
+            ("Mon, 15 Jan 2024 10:00:00 Est", 1_705_330_800),
+            ("Tue, 30 Jun 2026 18:43:36 pdt", 1_782_870_216),
+            ("Sun, 06 Nov 1994 08:49:37 z", 784_111_777)
+        ] as [(String, Double)]
+    )
+    func parsesCaseInsensitiveTimeZoneNames(rawValue: String, expected: Double) {
+        #expect(RSSDateParser.parse(rawValue)?.timeIntervalSince1970 == expected)
+    }
+
     @Test("Parses numeric time zones")
     func parsesNumericTimeZoneDate() {
         #expect(RSSDateParser.parse("Sun, 5 Jun 2016 01:51:07 -0700")?.timeIntervalSince1970 == 1_465_116_667)

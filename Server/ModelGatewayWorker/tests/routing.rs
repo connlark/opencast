@@ -1,10 +1,20 @@
 use opencast_model_gateway_worker::route::{
-    content_range_header, if_none_match_matches, manifest_object_key,
+    content_range_header, edge_cacheable, if_none_match_matches, manifest_object_key,
     manifest_signature_object_key, parse_range_header, route_request,
     unsatisfied_content_range_header, ByteRange, Header, RangeError, RangeSelection, RouteAction,
-    BAD_PATH_JSON, GATEWAY_DISABLED_JSON, HEALTH_JSON, JSON_CONTENT_TYPE, METHOD_NOT_ALLOWED_JSON,
-    NOT_FOUND_JSON,
+    BAD_PATH_JSON, GATEWAY_DISABLED_JSON, HEALTH_JSON, JSON_CONTENT_TYPE,
+    MAX_EDGE_CACHED_OBJECT_BYTES, METHOD_NOT_ALLOWED_JSON, NOT_FOUND_JSON,
 };
+
+#[test]
+fn edge_cache_threshold_keeps_the_shipped_weights_and_drops_over_limit_objects() {
+    // The largest shipped asset (large-v3 AudioEncoder weight.bin, manifest
+    // byte_count 421,968,768) still tees into the cache; the Cache API's
+    // 512 MB ceiling is the bound.
+    assert!(edge_cacheable(421_968_768));
+    assert!(edge_cacheable(MAX_EDGE_CACHED_OBJECT_BYTES));
+    assert!(!edge_cacheable(MAX_EDGE_CACHED_OBJECT_BYTES + 1));
+}
 
 #[test]
 fn if_none_match_strong_compares_quoted_and_bare_forms() {

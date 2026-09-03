@@ -16,3 +16,4 @@
   - Replaced curl helper macros/functions with local ASCII, decimal parsing, and string-copy helpers.
   - Added the `OpenCastParseInternetDate` entry point.
   - Return failure for parse errors, pre-1970 results, and results outside `int64_t` range so RSS parsing never receives a fabricated epoch.
+  - `checktz` uppercases the zone token before the `bsearch` against the uppercase `tz[]` table. The pinned revision compares with plain `strcmp` and no case normalization, so lowercase/mixed-case RFC 5322 zone names (`gmt`, `Est`, `z`) fail the whole parse; earlier curl used `Curl_strntoupper`/`strncasecompare` here. Deviation kept until upstream restores case-insensitive zone matching.

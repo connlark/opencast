@@ -7,18 +7,34 @@ import Testing
 @MainActor
 @Suite("App model unsubscribe integrity")
 struct OpenCastAppModelUnsubscribeTests {
-    @Test("A failed subscription delete leaves sidecars intact and reports on the unsubscribe surface")
+    @Test("A failed subscription delete leaves sidecars and downloads intact")
     func failedSubscriptionDeleteLeavesSidecarsIntact() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let feedURL = "https://example.com/unsubscribe-fail.xml"
         let episodeID = "unsubscribe-fail-episode"
-        let appModel = makeAppModel(
-            localCache: FailingDeleteCacheStore(wrapping: SQLiteLocalLibraryCacheStore.inMemory())
+        let downloadsDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "unsubscribe-fail-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: downloadsDirectory)
+        let downloadStore = DownloadStore(fileStore: fileStore)
+        let appModel = OpenCastAppModel(
+            library: LibraryStore(
+                feedService: UnusedFeedService(),
+                localCache: FailingDeleteCacheStore(wrapping: SQLiteLocalLibraryCacheStore.inMemory())
+            ),
+            downloads: downloadStore,
+            allowsAutomaticFeedRefresh: false
         )
         try seedSubscribedFeed(feedURL: feedURL, episodeID: episodeID, in: context)
         try seedSidecarPreferences(feedURL: feedURL, episodeID: episodeID, in: context)
+        let downloadRelativePath = try seedCompletedDownload(
+            feedURL: feedURL,
+            episodeID: episodeID,
+            fileStore: fileStore,
+            in: context
+        )
         await appModel.library.load(modelContext: context)
+        await downloadStore.load(modelContext: context)
         #expect(appModel.library.isActivelySubscribed(to: feedURL))
 
         let outcome = await appModel.unsubscribe(feedURL: feedURL, modelContext: context)
@@ -34,6 +50,12 @@ struct OpenCastAppModelUnsubscribeTests {
         let preferenceKeys = try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).map(\.key)
         #expect(preferenceKeys.contains("playback.voiceBoost.episode.\(episodeID)"))
         #expect(preferenceKeys.contains("podcastDetail.sortOrder.\(feedURL)"))
+        // A still-subscribed feed keeps its audio: files cannot be rolled
+        // back, and a dynamic-enclosure re-download may not be
+        // byte-identical.
+        #expect(fileStore.fileExists(relativePath: downloadRelativePath))
+        #expect(downloadStore.record(for: episodeID) != nil)
+        #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).count == 1)
     }
 
     @Test("A successful unsubscribe sweeps voice-boost and episode-list preferences")
@@ -152,6 +174,36 @@ struct OpenCastAppModelUnsubscribeTests {
             )
         )
         try context.save()
+    }
+
+    private func seedCompletedDownload(
+        feedURL: String,
+        episodeID: String,
+        fileStore: EpisodeDownloadFileStore,
+        in context: ModelContext
+    ) throws -> String {
+        let relativePath = fileStore.relativePath(
+            episodeID: episodeID,
+            sourceAudioURL: URL(string: "https://example.com/\(episodeID).mp3")!
+        )
+        try fileStore.prepareDownloadsDirectory()
+        try Data("audio".utf8).write(
+            to: fileStore.fileURL(relativePath: relativePath),
+            options: .atomic
+        )
+        context.insert(
+            EpisodeDownloadRecord(
+                episodeID: episodeID,
+                podcastID: feedURL,
+                sourceAudioURL: "https://example.com/\(episodeID).mp3",
+                localRelativePath: relativePath,
+                state: .completed,
+                bytesReceived: 5,
+                bytesExpected: 5
+            )
+        )
+        try context.save()
+        return relativePath
     }
 
     private func seedSidecarPreferences(

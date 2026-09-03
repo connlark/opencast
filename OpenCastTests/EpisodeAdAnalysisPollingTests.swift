@@ -407,7 +407,7 @@ struct EpisodeAdAnalysisPollingTests {
         fingerprint: String,
         relativePath: String,
         jobAcceptedAt: Date?,
-        state: EpisodeAdAnalysisState = .running
+        state: EpisodeAnalysisRecordState = .running
     ) -> EpisodeAdAnalysisRecord {
         EpisodeAdAnalysisRecord(
             episodeID: episodeID,

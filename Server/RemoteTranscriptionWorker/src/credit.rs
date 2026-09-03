@@ -6,8 +6,15 @@
 //! - `bootstrap(account_id)` -> balance (creates the account/grant if new)
 //! - `balance(account_id)` -> balance
 //! - `reserve(account_id, job_id, seconds)` -> balance; idempotent by job_id
-//! - `settle(job_id)` -> (); idempotent; only a reserved reservation settles
-//! - `release(job_id)` -> (); idempotent; releasing after settle is a no-op
+//! - `settle(account_id, job_id)` -> (); idempotent; only a reserved
+//!   reservation settles
+//! - `release(account_id, job_id)` -> (); idempotent; releasing after settle
+//!   is a no-op
+//!
+//! `settle`/`release` route by `job_id`; the account id rides along so
+//! PurchaseWorker can repair a hold whose `reservation_index` row was never
+//! written (the DO admits before the index write). The dev authority routes
+//! purely by `job_id` and ignores it.
 //!
 //! Integer seconds everywhere; stable error codes below. Development uses only
 //! `DevCreditAuthority`, which exists exclusively in the development lane and
@@ -297,10 +304,18 @@ impl PurchaseAuthority {
         .await
     }
 
-    pub async fn settle(&self, job_id: &str) -> std::result::Result<(), CreditError> {
+    pub async fn settle(
+        &self,
+        account_id: &str,
+        job_id: &str,
+    ) -> std::result::Result<(), CreditError> {
         self.call_seam(
             "/internal/v1/settle",
-            serde_json::json!({ "schema_version": 1, "job_id": job_id }),
+            serde_json::json!({
+                "schema_version": 1,
+                "account_id": account_id,
+                "job_id": job_id,
+            }),
         )
         .await
         .map(|_| ())
@@ -308,11 +323,20 @@ impl PurchaseAuthority {
 
     /// Idempotent; an unknown job is a successful no-op (mirrors the dev
     /// authority), and the 200 body then carries no balance.
-    pub async fn release(&self, job_id: &str) -> std::result::Result<(), CreditError> {
+    pub async fn release(
+        &self,
+        account_id: &str,
+        job_id: &str,
+    ) -> std::result::Result<(), CreditError> {
         let mut response = self
             .call_raw(
                 "/internal/v1/release",
-                serde_json::json!({ "schema_version": 1, "job_id": job_id }).to_string(),
+                serde_json::json!({
+                    "schema_version": 1,
+                    "account_id": account_id,
+                    "job_id": job_id,
+                })
+                .to_string(),
             )
             .await
             .map_err(internal)?;
@@ -382,17 +406,27 @@ impl CreditAuthority {
         }
     }
 
-    pub async fn settle(&self, job_id: &str, now: i64) -> std::result::Result<(), CreditError> {
+    pub async fn settle(
+        &self,
+        account_id: &str,
+        job_id: &str,
+        now: i64,
+    ) -> std::result::Result<(), CreditError> {
         match self {
             Self::Dev(dev) => dev.settle(job_id, now).await,
-            Self::Purchase(purchase) => purchase.settle(job_id).await,
+            Self::Purchase(purchase) => purchase.settle(account_id, job_id).await,
         }
     }
 
-    pub async fn release(&self, job_id: &str, now: i64) -> std::result::Result<(), CreditError> {
+    pub async fn release(
+        &self,
+        account_id: &str,
+        job_id: &str,
+        now: i64,
+    ) -> std::result::Result<(), CreditError> {
         match self {
             Self::Dev(dev) => dev.release(job_id, now).await,
-            Self::Purchase(purchase) => purchase.release(job_id).await,
+            Self::Purchase(purchase) => purchase.release(account_id, job_id).await,
         }
     }
 }

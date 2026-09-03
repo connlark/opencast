@@ -7,9 +7,10 @@
 //
 // Fake-host contract: history for identity I returns exactly one consumable
 // purchase `txn-history-<I>`; identities ending in "-revoked" carry a
-// revocationDate.
+// revocationDate; identities ending in "-pages<N>" spread N purchases over N
+// one-transaction pages. The suite pins RECONCILE_TRANSACTION_BUDGET to 2.
 
-import { SELF } from 'cloudflare:test';
+import { SELF, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import jwt from 'jsonwebtoken';
 import fixtures from '../fixtures/generated/fixtures.json';
@@ -120,5 +121,78 @@ describe('history reconciliation', () => {
     // Reconciling again is idempotent: the refund does not re-apply.
     const again = await post('/internal/v1/reconcile', { account_id: account.account_id });
     expect((await again.json()).accounts[0].refunds_applied).toBe(0);
+  });
+
+  it('caps transactions per run, keeps cut-short accounts due, and resumes from the stored cursor', async () => {
+    const identity = `${uid('apptx')}-pages3`;
+    const account = await bootstrap(identity);
+    const fillers = [await bootstrap(uid('apptx')), await bootstrap(uid('apptx'))];
+
+    // Budget 2 against a three-page history: the run walks two pages, credits
+    // both, and stops with history remaining.
+    const first = await post('/internal/v1/reconcile', { account_id: account.account_id });
+    expect(first.status).toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody.accounts[0]).toMatchObject({
+      credited: 2,
+      transactions_seen: 2,
+      truncated: true,
+    });
+    expect(firstBody.accounts[0].error).toBeUndefined();
+
+    const state = await env.PURCHASE_DB
+      .prepare(
+        'SELECT revision_cursor, next_attempt_at FROM reconciliation_state WHERE account_id = ?1',
+      )
+      .bind(account.account_id)
+      .first();
+    expect(state.revision_cursor).toBe('rev-2');
+    expect(Number(state.next_attempt_at)).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+
+    // Order the due queue deterministically: the cut-short account first, then
+    // the two fillers (one transaction each) — more than one budget's worth.
+    for (const [index, row] of [account, ...fillers].entries()) {
+      await env.PURCHASE_DB
+        .prepare('UPDATE reconciliation_state SET next_attempt_at = ?1 WHERE account_id = ?2')
+        .bind(index, row.account_id)
+        .run();
+    }
+
+    const due = await post('/internal/v1/reconcile', {});
+    expect(due.status).toBe(200);
+    const dueBody = await due.json();
+    expect(dueBody.budget_exhausted).toBe(true);
+    expect(dueBody.accounts.map((item) => item.account_id)).toEqual([
+      account.account_id,
+      fillers[0].account_id,
+    ]);
+    // Resumed at the stored cursor: only the third page was walked.
+    expect(dueBody.accounts[0]).toMatchObject({
+      credited: 1,
+      transactions_seen: 1,
+      truncated: false,
+    });
+    expect(dueBody.accounts[1]).toMatchObject({ credited: 1, truncated: false });
+
+    const finished = await env.PURCHASE_DB
+      .prepare('SELECT next_attempt_at FROM reconciliation_state WHERE account_id = ?1')
+      .bind(account.account_id)
+      .first();
+    expect(Number(finished.next_attempt_at)).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    // The second filler never got a turn and is still due at its old slot.
+    const skipped = await env.PURCHASE_DB
+      .prepare('SELECT next_attempt_at FROM reconciliation_state WHERE account_id = ?1')
+      .bind(fillers[1].account_id)
+      .first();
+    expect(Number(skipped.next_attempt_at)).toBe(2);
+    const counter = await env.PURCHASE_DB
+      .prepare(
+        "SELECT value FROM purchase_ops_counters WHERE name = 'reconcile_transaction_budget_exhausted'",
+      )
+      .first();
+    expect(Number(counter.value)).toBeGreaterThanOrEqual(1);
+
+    const balance = await post('/internal/v1/balance', { account_id: account.account_id });
+    expect((await balance.json()).balance.available_seconds).toBe(3_600 + 3 * 72_000);
   });
 });

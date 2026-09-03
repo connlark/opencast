@@ -1,8 +1,12 @@
+use std::cell::Cell;
+use std::future::Future;
+
 use opencast_ad_analysis_worker::job::{
     alarm_decision, app_attest_subject, bearer_subject, job_object_name, poll_decision,
     submit_decision, transcript_content_hash, transcription_account_subject, valid_job_id,
-    AlarmDecision, JobRecord, PollDecision, SubmitDecision, JOB_RESULT_TTL_SECONDS,
-    JOB_RUNNING_DEADLINE_SECONDS,
+    ActiveWindow, AlarmDecision, JobRecord, PollDecision, SubmitDecision, ERROR_ADMISSION_BUSY,
+    JOB_RESULT_TTL_SECONDS, JOB_RUNNING_DEADLINE_SECONDS, SUBMIT_ADMISSION_MAX_WAITS,
+    SUBMIT_ADMISSION_WAIT_MILLIS,
 };
 use opencast_ad_analysis_worker::types::{TranscriptMetadata, TranscriptSegment};
 
@@ -327,4 +331,46 @@ fn job_ids_are_url_safe_and_namespaced() {
         job_object_name("fingerprint-123"),
         "ad-analysis:v1:job:fingerprint-123"
     );
+}
+
+/// Audit §28: the admission window is an RAII guard, so a submit future
+/// dropped mid-admission (client disconnect) releases the latch instead of
+/// wedging every later submit; the wait on a held window is bounded.
+#[test]
+fn admission_window_releases_on_every_exit_path() {
+    let flag = Cell::new(false);
+
+    let window = ActiveWindow::acquire(&flag).expect("free window acquires");
+    assert!(flag.get());
+    assert!(
+        ActiveWindow::acquire(&flag).is_none(),
+        "a held window refuses a second acquire"
+    );
+    drop(window);
+    assert!(!flag.get(), "drop releases the window");
+
+    // A dropped future drops its locals: the guard held inside a pending
+    // async block releases when the future is discarded before completion.
+    let pending = async {
+        let _window = ActiveWindow::acquire(&flag).expect("free window acquires");
+        std::future::pending::<()>().await;
+    };
+    let mut pending = Box::pin(pending);
+    let waker = std::task::Waker::noop();
+    let mut context = std::task::Context::from_waker(waker);
+    assert!(pending.as_mut().poll(&mut context).is_pending());
+    assert!(flag.get(), "the parked future holds the window");
+    drop(pending);
+    assert!(
+        !flag.get(),
+        "dropping the parked future releases the window"
+    );
+    assert!(ActiveWindow::acquire(&flag).is_some());
+
+    // Bounded wait: 500 × 10 ms = 5 s before the 503.
+    assert_eq!(
+        u64::from(SUBMIT_ADMISSION_MAX_WAITS) * SUBMIT_ADMISSION_WAIT_MILLIS,
+        5_000
+    );
+    assert_eq!(ERROR_ADMISSION_BUSY, "admission_busy");
 }

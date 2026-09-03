@@ -189,6 +189,12 @@ pub enum PendingBillingAction {
 pub struct JobBillingState {
     pub billing_id: String,
     pub charge_seconds: i64,
+    /// Server-resolved at reserve time (never from client payload); rides
+    /// along on settle/release so PurchaseWorker can repair a hold whose
+    /// `reservation_index` row was never written. Empty on records persisted
+    /// before this field existed — PurchaseWorker skips the fallback then.
+    #[serde(default)]
+    pub account_id: String,
     #[serde(default)]
     pub pending: Option<PendingBillingAction>,
     #[serde(default)]
@@ -196,10 +202,11 @@ pub struct JobBillingState {
 }
 
 impl JobBillingState {
-    pub fn reserved(billing_id: String, charge_seconds: i64) -> Self {
+    pub fn reserved(billing_id: String, charge_seconds: i64, account_id: String) -> Self {
         Self {
             billing_id,
             charge_seconds,
+            account_id,
             pending: None,
             attempts: 0,
         }
@@ -363,6 +370,7 @@ mod tests {
     fn job_billing_state_serde_defaults_cover_deploy_skew() {
         let decoded: JobBillingState =
             serde_json::from_str(r#"{"billing_id":"tan-x1","charge_seconds":42}"#).unwrap();
+        assert_eq!(decoded.account_id, "");
         assert_eq!(decoded.pending, None);
         assert_eq!(decoded.attempts, 0);
     }

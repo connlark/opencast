@@ -91,6 +91,23 @@ enum EpisodeSearch {
         )
     }
 
+    /// Builds the documents inside the @concurrent boundary so a per-keystroke
+    /// caller never materializes the corpus on the main actor.
+    @concurrent
+    static func matches(
+        in episodes: [EpisodeListItemSnapshot],
+        showNotesHTMLByEpisodeID: [String: String] = [:],
+        query: String,
+        mode: EpisodeSearchMode
+    ) async -> [EpisodeSearchMatch] {
+        matchesSynchronously(
+            in: documents(from: episodes, showNotesHTMLByEpisodeID: showNotesHTMLByEpisodeID),
+            query: query,
+            mode: mode,
+            shouldStop: { Task.isCancelled }
+        )
+    }
+
     static func results(
         from matches: [EpisodeSearchMatch],
         episodesByID: [String: EpisodeListItemSnapshot],

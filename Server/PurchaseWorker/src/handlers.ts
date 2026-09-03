@@ -51,6 +51,15 @@ import {
 const MAX_JWS_BYTES = 32 * 1024;
 const MAX_NOTIFICATION_BODY_BYTES = 256 * 1024;
 const MAX_RECONCILE_PAGES_PER_RUN = 10;
+/**
+ * Transactions one cron invocation may walk across all due accounts. Each
+ * transaction costs up to five subrequests (token/identity lookups, the claim,
+ * the credit, a refund), so with the ≤250-account liability page that shares
+ * the tick this keeps the invocation inside the 1000-subrequest limit. The
+ * budget is checked at page boundaries (a page is ≤20 transactions), so a run
+ * may overshoot by at most one page. Accounts cut short stay due.
+ */
+export const MAX_RECONCILE_TRANSACTIONS_PER_RUN = 100;
 const MAX_QUANTITY = 10;
 
 export function json(status: number, body: unknown): Response {
@@ -245,11 +254,14 @@ export async function handleReserve(env: Env, request: Request): Promise<Respons
 }
 
 export async function handleSettle(env: Env, request: Request): Promise<Response> {
-  const body = (await request.json().catch(() => null)) as { job_id?: string } | null;
+  const body = (await request.json().catch(() => null)) as {
+    job_id?: string;
+    account_id?: string;
+  } | null;
   if (!body || typeof body.job_id !== 'string' || body.job_id.length === 0) {
     return errorJson(400, ERROR_INVALID_REQUEST);
   }
-  const accountId = await d1.accountForReservation(env.PURCHASE_DB, body.job_id);
+  const accountId = await routeReservation(env, body.job_id, body.account_id);
   if (!accountId) {
     return errorJson(404, CREDIT_ERROR_RESERVATION_NOT_FOUND);
   }
@@ -258,17 +270,46 @@ export async function handleSettle(env: Env, request: Request): Promise<Response
 }
 
 export async function handleRelease(env: Env, request: Request): Promise<Response> {
-  const body = (await request.json().catch(() => null)) as { job_id?: string } | null;
+  const body = (await request.json().catch(() => null)) as {
+    job_id?: string;
+    account_id?: string;
+  } | null;
   if (!body || typeof body.job_id !== 'string' || body.job_id.length === 0) {
     return errorJson(400, ERROR_INVALID_REQUEST);
   }
-  const accountId = await d1.accountForReservation(env.PURCHASE_DB, body.job_id);
+  const accountId = await routeReservation(env, body.job_id, body.account_id);
   if (!accountId) {
     // Idempotent no-op, mirroring DevCreditAuthority::release.
     return json(200, { released: false });
   }
   const response = await doPost(accountStub(env, accountId), '/release', { job_id: body.job_id });
   return passthrough(response);
+}
+
+/**
+ * Resolve the owning account for a settle/release. The index row is
+ * authoritative when present; the caller-supplied `account_id` repairs the
+ * reserve window where the account DO admitted the hold but the
+ * `reservation_index` write never landed (D1 outage, worker eviction) —
+ * without it that hold would be stranded forever, because there is no
+ * reservation expiry. The fallback re-pins through
+ * `upsertReservationIndex`, whose DO-NOTHING insert keeps
+ * first-writer-wins arbitration: a mismatched caller claim loses to an
+ * existing row.
+ */
+async function routeReservation(
+  env: Env,
+  jobId: string,
+  callerAccountId: string | undefined,
+): Promise<string | null> {
+  const indexed = await d1.accountForReservation(env.PURCHASE_DB, jobId);
+  if (indexed) {
+    return indexed;
+  }
+  if (typeof callerAccountId !== 'string' || callerAccountId.length === 0) {
+    return null;
+  }
+  return d1.upsertReservationIndex(env.PURCHASE_DB, jobId, callerAccountId, nowSeconds());
 }
 
 /** Content-free account diagnostics for tests and audited operator reads. */
@@ -732,11 +773,15 @@ export async function handleReconcile(env: Env, request: Request): Promise<Respo
       if (!account) {
         return errorJson(404, ERROR_ACCOUNT_NOT_FOUND);
       }
-      const result = await reconcileAccount(env, config, account);
+      const result = await reconcileAccount(env, config, account, null, newReconcileBudget(env));
       return json(200, { schema_version: SCHEMA_VERSION, accounts: [result] });
     }
-    const results = await reconcileDueAccounts(env, config);
-    return json(200, { schema_version: SCHEMA_VERSION, accounts: results });
+    const run = await reconcileDueAccounts(env, config);
+    return json(200, {
+      schema_version: SCHEMA_VERSION,
+      accounts: run.accounts,
+      budget_exhausted: run.budget_exhausted,
+    });
   } catch (error) {
     const handled = mapHandledError(error);
     if (handled) {
@@ -751,28 +796,64 @@ export interface ReconcileResult {
   credited: number;
   refunds_applied: number;
   transactions_seen: number;
+  /** History had more pages when the run stopped; the account stays due. */
+  truncated?: boolean;
   error?: string;
 }
 
-export async function reconcileDueAccounts(env: Env, config: LaneConfig): Promise<ReconcileResult[]> {
+export interface ReconcileRun {
+  accounts: ReconcileResult[];
+  /** The transaction budget stopped the run with work still due. */
+  budget_exhausted: boolean;
+}
+
+/** Per-invocation transaction budget shared by every account in one run. */
+export interface ReconcileBudget {
+  remaining_transactions: number;
+}
+
+/** The budget is a hard ceiling; `RECONCILE_TRANSACTION_BUDGET` may only lower it. */
+export function newReconcileBudget(env: Env): ReconcileBudget {
+  const configured = Number(env.RECONCILE_TRANSACTION_BUDGET) || MAX_RECONCILE_TRANSACTIONS_PER_RUN;
+  return {
+    remaining_transactions: Math.min(MAX_RECONCILE_TRANSACTIONS_PER_RUN, Math.max(1, configured)),
+  };
+}
+
+export async function reconcileDueAccounts(env: Env, config: LaneConfig): Promise<ReconcileRun> {
   const limit = Math.max(1, Number(env.RECONCILE_BATCH_ACCOUNTS) || 20);
   const due = await d1.reconciliationDue(env.PURCHASE_DB, nowSeconds(), limit);
-  const results: ReconcileResult[] = [];
+  const budget = newReconcileBudget(env);
+  const accounts: ReconcileResult[] = [];
+  let budgetExhausted = false;
   for (const row of due) {
-    const account = await d1.accountById(env.PURCHASE_DB, row.account_id);
-    if (!account) {
-      continue;
+    if (budget.remaining_transactions <= 0) {
+      budgetExhausted = true;
+      break;
     }
-    results.push(await reconcileAccount(env, config, account, row.revision_cursor));
+    const result = await reconcileAccount(env, config, row.account, row.revision_cursor, budget);
+    accounts.push(result);
+    if (result.truncated) {
+      budgetExhausted = true;
+    }
   }
-  return results;
+  if (budgetExhausted) {
+    await d1.incrementOpsCounter(
+      env.PURCHASE_DB,
+      'reconcile_transaction_budget_exhausted',
+      1,
+      nowSeconds(),
+    );
+  }
+  return { accounts, budget_exhausted: budgetExhausted };
 }
 
 async function reconcileAccount(
   env: Env,
   config: LaneConfig,
   account: d1.PurchaseAccountRow,
-  startCursor?: string | null,
+  startCursor: string | null,
+  budget: ReconcileBudget,
 ): Promise<ReconcileResult> {
   const intervalSeconds = Math.max(300, Number(env.RECONCILE_INTERVAL_SECONDS) || 21_600);
   const result: ReconcileResult = {
@@ -793,7 +874,7 @@ async function reconcileAccount(
 
     let hasMore = true;
     let pages = 0;
-    while (hasMore && pages < MAX_RECONCILE_PAGES_PER_RUN) {
+    while (hasMore && pages < MAX_RECONCILE_PAGES_PER_RUN && budget.remaining_transactions > 0) {
       pages += 1;
       const history = await client.getTransactionHistory(
         appTransactionId,
@@ -807,6 +888,7 @@ async function reconcileAccount(
       for (const signedTransaction of history.signedTransactions ?? []) {
         const decoded = await verifyTransaction(config, signedTransaction);
         result.transactions_seen += 1;
+        budget.remaining_transactions -= 1;
         const digest = await sha256Hex(signedTransaction);
         const credit = await creditVerifiedTransaction(
           env,
@@ -839,10 +921,17 @@ async function reconcileAccount(
       cursor = history.revision ?? cursor;
       hasMore = history.hasMore === true;
     }
+    // Unfinished history (page cap or transaction budget) stays due: the
+    // stored cursor resumes it at the next cron, ordered behind older work.
+    result.truncated = hasMore;
     await d1.finishReconciliation(
       env.PURCHASE_DB,
       account.account_id,
-      { cursor, errorCode: null, nextAttemptAt: nowSeconds() + intervalSeconds },
+      {
+        cursor,
+        errorCode: null,
+        nextAttemptAt: hasMore ? nowSeconds() : nowSeconds() + intervalSeconds,
+      },
       nowSeconds(),
     );
   } catch (error) {

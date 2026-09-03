@@ -303,7 +303,10 @@ public final class AVFoundationPlaybackController {
         {
             let replayPosition = episodeBoundaries.replayPosition(duration: duration)
             currentVoiceBoostTap?.reset()
-            seekPlayer(to: replayPosition)
+            // A replay is a programmatic reposition, not a user scrub: the
+            // .restore landing intent keeps a pre-roll skip zone armed so it
+            // auto-skips instead of being disarmed by the seek.
+            seekPlayer(to: replayPosition, mode: .restoredPosition)
             snapshot.position = replayPosition
             hasFinishedCurrentEpisode = false
             markProgressBoundary()
@@ -1843,6 +1846,13 @@ public final class AVFoundationPlaybackController {
         didRetry: Bool
     ) {
         guard generation == audioSessionActivationGeneration else {
+            // The orphaned task just activated the system session for a
+            // generation invalidated mid-flight (unload during activation).
+            // With no newer activation owning it, release it — otherwise the
+            // system session stays active while isAudioSessionActive is false.
+            if audioSessionActivationTask == nil, !isAudioSessionActive {
+                scheduleAudioSessionDeactivation()
+            }
             return
         }
 
@@ -1894,6 +1904,10 @@ public final class AVFoundationPlaybackController {
         }
 
         isAudioSessionActive = false
+        scheduleAudioSessionDeactivation()
+    }
+
+    private func scheduleAudioSessionDeactivation() {
         let deactivation = audioSessionDeactivation
         audioSessionDeactivationTask = Task {
             do {

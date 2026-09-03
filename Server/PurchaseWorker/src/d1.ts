@@ -267,25 +267,35 @@ export async function finishNotification(
     .run();
 }
 
-export interface ReconciliationRow {
-  account_id: string;
-  environment: string;
+export interface ReconciliationDueRow {
+  account: PurchaseAccountRow;
   revision_cursor: string | null;
 }
 
+/**
+ * Due reconciliation rows joined to their account row, oldest-due first, so
+ * the cron does not re-read each account by id. State rows whose account is
+ * gone are skipped by the join.
+ */
 export async function reconciliationDue(
   db: D1Database,
   now: number,
   limit: number,
-): Promise<ReconciliationRow[]> {
+): Promise<ReconciliationDueRow[]> {
   const rows = await db
     .prepare(
-      `SELECT account_id, environment, revision_cursor FROM reconciliation_state
-       WHERE next_attempt_at <= ?1 ORDER BY next_attempt_at ASC LIMIT ?2`,
+      `SELECT a.app_tx_hmac, a.account_id, a.app_transaction_id_encrypted, a.environment, a.status,
+              r.revision_cursor
+       FROM reconciliation_state r
+       JOIN purchase_accounts a ON a.account_id = r.account_id
+       WHERE r.next_attempt_at <= ?1 ORDER BY r.next_attempt_at ASC LIMIT ?2`,
     )
     .bind(now, limit)
-    .all<ReconciliationRow>();
-  return rows.results ?? [];
+    .all<PurchaseAccountRow & { revision_cursor: string | null }>();
+  return (rows.results ?? []).map(({ revision_cursor, ...account }) => ({
+    account,
+    revision_cursor,
+  }));
 }
 
 export async function scheduleReconciliation(
@@ -329,12 +339,86 @@ export async function purchaseAccountCount(db: D1Database): Promise<number> {
   return Number(row?.value ?? 0);
 }
 
-export async function purchaseAccountIds(db: D1Database, limit: number): Promise<string[]> {
-  const rows = await db
-    .prepare(`SELECT account_id FROM purchase_accounts ORDER BY account_id ASC LIMIT ?1`)
-    .bind(limit)
-    .all<{ account_id: string }>();
+/**
+ * One page of account ids in `account_id` order, starting strictly after
+ * `cursor` (null starts from the beginning). The unique `account_id` index
+ * serves both the seek and the order.
+ */
+export async function purchaseAccountIdsAfter(
+  db: D1Database,
+  cursor: string | null,
+  limit: number,
+): Promise<string[]> {
+  const statement =
+    cursor === null
+      ? db
+          .prepare(`SELECT account_id FROM purchase_accounts ORDER BY account_id ASC LIMIT ?1`)
+          .bind(limit)
+      : db
+          .prepare(
+            `SELECT account_id FROM purchase_accounts WHERE account_id > ?1
+             ORDER BY account_id ASC LIMIT ?2`,
+          )
+          .bind(cursor, limit);
+  const rows = await statement.all<{ account_id: string }>();
   return (rows.results ?? []).map((row) => row.account_id);
+}
+
+export interface LiabilitySweepStateRow {
+  cursor: string | null;
+  started_at: number;
+  accounts_sampled: number;
+  outstanding_seconds: number;
+  debt_seconds: number;
+  error_accounts: number;
+}
+
+export async function liabilitySweepState(
+  db: D1Database,
+): Promise<LiabilitySweepStateRow | null> {
+  const row = await db
+    .prepare(
+      `SELECT cursor, started_at, accounts_sampled, outstanding_seconds, debt_seconds, error_accounts
+       FROM liability_sweep_state WHERE sweep_key = 1`,
+    )
+    .first<LiabilitySweepStateRow>();
+  return row ?? null;
+}
+
+export async function saveLiabilitySweepState(
+  db: D1Database,
+  state: LiabilitySweepStateRow,
+  now: number,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO liability_sweep_state
+       (sweep_key, cursor, started_at, accounts_sampled, outstanding_seconds, debt_seconds,
+        error_accounts, updated_at)
+       VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       ON CONFLICT (sweep_key) DO UPDATE SET
+         cursor = excluded.cursor,
+         started_at = excluded.started_at,
+         accounts_sampled = excluded.accounts_sampled,
+         outstanding_seconds = excluded.outstanding_seconds,
+         debt_seconds = excluded.debt_seconds,
+         error_accounts = excluded.error_accounts,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(
+      state.cursor,
+      state.started_at,
+      state.accounts_sampled,
+      state.outstanding_seconds,
+      state.debt_seconds,
+      state.error_accounts,
+      now,
+    )
+    .run();
+}
+
+export async function clearLiabilitySweepState(db: D1Database): Promise<void> {
+  await db.prepare(`DELETE FROM liability_sweep_state WHERE sweep_key = 1`).run();
 }
 
 export interface LiabilitySnapshotRow {

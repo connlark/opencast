@@ -234,6 +234,7 @@ struct EpisodeSendCounts {
     apns_200: usize,
     deduped: usize,
     retryable_failures: usize,
+    truncated_fanouts: usize,
 }
 
 struct ApnsSendResult {
@@ -825,6 +826,12 @@ async fn handle_sync_subscriptions(
         return json_error(400, error);
     }
 
+    // Every write this sync produces — pending feed rows, admission-attempt
+    // history, subscription upserts, and stale-subscription deletes — is
+    // collected here and flushed in one D1 batch. A 200-feed first sync is
+    // then a handful of IN-list reads plus one batched write instead of
+    // several D1 subrequests per feed.
+    let mut writes: Vec<worker::D1PreparedStatement> = Vec::new();
     let mut rejected = Vec::new();
     let mut admitted_by_url: BTreeMap<String, AdmittedSubscription> = BTreeMap::new();
     for subscription in payload.subscriptions {
@@ -843,7 +850,7 @@ async fn handle_sync_subscriptions(
                     });
             }
             Err(error) => {
-                record_feed_admission_attempt(
+                writes.push(feed_admission_attempt_statement(
                     db,
                     &authenticated.install_id,
                     &authenticated.key_id,
@@ -851,9 +858,7 @@ async fn handle_sync_subscriptions(
                     false,
                     Some(error.code()),
                     now,
-                )
-                .await
-                .ok();
+                )?);
                 rejected.push(RejectedSubscription {
                     feed_url: subscription.feed_url,
                     error: error.code(),
@@ -870,18 +875,34 @@ async fn handle_sync_subscriptions(
         storage::accepted_admission_count_since(db, &authenticated.install_id, day_start).await?;
     let mut accepted_new_feeds_globally =
         storage::global_accepted_admission_count_since(db, day_start).await?;
-    let mut accepted_new_feeds_by_host: BTreeMap<String, i64> = BTreeMap::new();
+
+    let admitted_urls = admitted_by_url
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut known_feeds = storage::feed_summaries(db, &admitted_urls).await?;
+
+    // Host budgets are only consulted for feeds we do not know yet, so read
+    // them for exactly that host set in one pass.
+    let unknown_hosts = admitted_by_url
+        .values()
+        .filter(|admitted| !known_feeds.contains_key(&admitted.canonical_url))
+        .map(|admitted| admitted.host.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut accepted_new_feeds_by_host =
+        storage::accepted_admission_counts_for_hosts_since(db, &unknown_hosts, day_start).await?;
 
     for admitted in admitted_by_url.into_values() {
-        if let Some(feed) = storage::feed_summary(db, &admitted.canonical_url).await? {
-            storage::upsert_feed_subscription(
+        if let Some(feed) = known_feeds.remove(&admitted.canonical_url) {
+            writes.push(storage::upsert_feed_subscription_statement(
                 db,
                 &authenticated.install_id,
                 &admitted.canonical_url,
                 admitted.notifications_enabled,
                 now,
-            )
-            .await?;
+            )?);
             accepted_urls.insert(admitted.canonical_url.clone());
             accepted.push(AcceptedSubscription {
                 feed_url: admitted.canonical_url,
@@ -896,16 +917,9 @@ async fn handle_sync_subscriptions(
             continue;
         }
 
-        let mut host_accepted_count =
-            if let Some(count) = accepted_new_feeds_by_host.get(&admitted.host) {
-                *count
-            } else {
-                let count =
-                    storage::accepted_admission_count_for_host_since(db, &admitted.host, day_start)
-                        .await?;
-                accepted_new_feeds_by_host.insert(admitted.host.clone(), count);
-                count
-            };
+        let host_accepted_count = accepted_new_feeds_by_host
+            .entry(admitted.host.clone())
+            .or_insert(0);
 
         // Unknown feeds admit lazily: the enqueue consumes admission budget
         // and writes the subscription plus a baseline-less feed row now, and
@@ -914,20 +928,18 @@ async fn handle_sync_subscriptions(
         // live RSS fetch per new feed against the client's timeout.
         match admit_pending_enqueue(
             &mut accepted_new_feeds,
-            &mut host_accepted_count,
+            host_accepted_count,
             &mut accepted_new_feeds_globally,
         ) {
             Ok(()) => {
-                accepted_new_feeds_by_host.insert(admitted.host.clone(), host_accepted_count);
-                storage::insert_pending_feed(
+                writes.push(storage::insert_pending_feed_statement(
                     db,
                     &admitted.canonical_url,
                     &admitted.source_url,
                     FEED_POLL_INTERVAL_SECONDS,
                     now,
-                )
-                .await?;
-                record_feed_admission_attempt(
+                )?);
+                writes.push(feed_admission_attempt_statement(
                     db,
                     &authenticated.install_id,
                     &authenticated.key_id,
@@ -935,24 +947,21 @@ async fn handle_sync_subscriptions(
                     true,
                     None,
                     now,
-                )
-                .await
-                .ok();
-                storage::upsert_feed_subscription(
+                )?);
+                writes.push(storage::upsert_feed_subscription_statement(
                     db,
                     &authenticated.install_id,
                     &admitted.canonical_url,
                     admitted.notifications_enabled,
                     now,
-                )
-                .await?;
+                )?);
                 accepted_urls.insert(admitted.canonical_url.clone());
                 pending.push(PendingSubscription {
                     feed_url: admitted.canonical_url,
                 });
             }
             Err(error) => {
-                record_feed_admission_attempt(
+                writes.push(feed_admission_attempt_statement(
                     db,
                     &authenticated.install_id,
                     &authenticated.key_id,
@@ -960,9 +969,7 @@ async fn handle_sync_subscriptions(
                     false,
                     Some(error),
                     now,
-                )
-                .await
-                .ok();
+                )?);
                 rejected.push(RejectedSubscription {
                     feed_url: admitted.source_url,
                     error,
@@ -979,8 +986,15 @@ async fn handle_sync_subscriptions(
             .map(|subscription| subscription.feed_url),
         &accepted_urls,
     ) {
-        storage::mark_subscription_deleted(db, &authenticated.install_id, &feed_url, now).await?;
+        writes.push(storage::mark_subscription_deleted_statement(
+            db,
+            &authenticated.install_id,
+            &feed_url,
+            now,
+        )?);
     }
+
+    storage::run_write_batch(db, writes).await?;
 
     storage::prune_feed_admission_attempts_before(
         db,
@@ -1271,6 +1285,7 @@ async fn poll_one_feed(
                 sends.apns_200 += episode_sends.apns_200;
                 sends.deduped += episode_sends.deduped;
                 sends.retryable_failures += episode_sends.retryable_failures;
+                sends.truncated_fanouts += episode_sends.truncated_fanouts;
             }
             let publish_cadence_seconds = feed_publish_cadence_seconds(&parsed);
             let poll_interval_seconds = poll_scheduling::poll_interval_seconds(
@@ -1292,6 +1307,7 @@ async fn poll_one_feed(
                     fetched_episode_published_at: latest.published_at,
                     computed_poll_interval_seconds: poll_interval_seconds,
                     retryable_failures: sends.retryable_failures,
+                    truncated_fanouts: sends.truncated_fanouts,
                     now,
                 },
             );
@@ -1502,16 +1518,56 @@ async fn send_episode_notifications(
     episode_fingerprint: Option<&str>,
     now: i64,
 ) -> Result<EpisodeSendCounts> {
-    let devices =
-        storage::enabled_devices_for_feed(db, feed_url, config.apns_environment.as_str()).await?;
+    // No publish date means no subscription can predate the episode (the
+    // back-catalog guard below rejects every device), so skip the reads.
+    let Some(episode_published_at) = episode.published_at else {
+        return Ok(EpisodeSendCounts::default());
+    };
+    let released = storage::release_stale_episode_send_claims(
+        db,
+        feed_url,
+        &episode.id,
+        episode_fingerprint,
+        now.saturating_sub(notification_retry::STALE_SEND_CLAIM_SECONDS),
+    )
+    .await?;
+    if released > 0 {
+        worker::console_warn!(
+            "released {released} stale send claims for {feed_url} episode {}",
+            episode.id
+        );
+    }
+    // One extra row tells us whether the page was cut short.
+    let page_limit = notification_retry::MAX_EPISODE_FANOUT_DEVICES_PER_POLL + 1;
+    let mut devices = storage::episode_fanout_devices(
+        db,
+        storage::EpisodeFanoutQuery {
+            feed_url,
+            apns_environment: config.apns_environment.as_str(),
+            episode_published_at,
+            episode_id: &episode.id,
+            episode_fingerprint,
+            limit: page_limit as i64,
+        },
+    )
+    .await?;
     if devices.is_empty() {
         return Ok(EpisodeSendCounts::default());
+    }
+    let mut counts = EpisodeSendCounts::default();
+    if devices.len() >= page_limit {
+        devices.truncate(notification_retry::MAX_EPISODE_FANOUT_DEVICES_PER_POLL);
+        counts.truncated_fanouts = 1;
+        worker::console_warn!(
+            "fanout for {feed_url} episode {} truncated at {} devices; continuing next poll",
+            episode.id,
+            notification_retry::MAX_EPISODE_FANOUT_DEVICES_PER_POLL
+        );
     }
     let Ok(fetcher) = env.service(APNS_CERT_BINDING) else {
         return Err(worker::Error::RustError("apns_binding_missing".to_string()));
     };
 
-    let mut counts = EpisodeSendCounts::default();
     for device in devices {
         if !episode_should_notify_subscription(episode, device.subscription_created_at) {
             continue;
@@ -1564,42 +1620,58 @@ async fn send_episode_notifications(
         if result.apns_status == Some(200) {
             counts.apns_200 += 1;
         }
-        record_push_send_attempt(
+
+        // Everything the outcome implies lands in one D1 batch: the audit
+        // row, the claim's outcome (or its release for a retryable failure,
+        // which is what lets the next poll claim the device again), and the
+        // device disable for a dead token.
+        let attempt_id = random::random_urlsafe_token(16)
+            .map_err(|error| worker::Error::RustError(error.to_string()))?;
+        let mut writes = vec![storage::insert_push_send_attempt_statement(
             db,
-            &device.install_id,
-            &device.device_token_hash,
-            config.apns_environment.as_str(),
-            result.apns_status,
-            result.apns_id.as_deref(),
-            result.apns_error.as_deref(),
-            now,
-        )
-        .await?;
-        storage::update_episode_notification_send(
-            db,
-            storage::EpisodeNotificationSendOutcome {
-                send_id: &send_id,
+            storage::PushSendAttemptInsert {
+                attempt_id: &attempt_id,
+                install_id: Some(&device.install_id),
+                device_token_hash: Some(&device.device_token_hash),
+                apns_environment: config.apns_environment.as_str(),
                 apns_status: result.apns_status.map(i32::from),
                 apns_id: result.apns_id.as_deref(),
                 apns_error: result.apns_error.as_deref(),
-                now,
+                created_at: now,
             },
-        )
-        .await?;
-
-        if notification_retry::should_disable_device(
-            result.apns_status,
-            result.apns_error.as_deref(),
-        ) {
-            storage::disable_device(db, &device.install_id, &device.device_token_hash, now).await?;
-        }
+        )?];
         if notification_retry::retryable_apns_failure(
             result.apns_status,
             result.apns_error.as_deref(),
         ) {
             counts.retryable_failures += 1;
-            storage::delete_episode_notification_send(db, &send_id).await?;
+            writes.push(storage::delete_episode_notification_send_statement(
+                db, &send_id,
+            )?);
+        } else {
+            writes.push(storage::update_episode_notification_send_statement(
+                db,
+                storage::EpisodeNotificationSendOutcome {
+                    send_id: &send_id,
+                    apns_status: result.apns_status.map(i32::from),
+                    apns_id: result.apns_id.as_deref(),
+                    apns_error: result.apns_error.as_deref(),
+                    now,
+                },
+            )?);
         }
+        if notification_retry::should_disable_device(
+            result.apns_status,
+            result.apns_error.as_deref(),
+        ) {
+            writes.push(storage::disable_device_statement(
+                db,
+                &device.install_id,
+                &device.device_token_hash,
+                now,
+            )?);
+        }
+        storage::run_write_batch(db, writes).await?;
     }
 
     Ok(counts)
@@ -1971,7 +2043,7 @@ async fn record_push_send_attempt(
     .await
 }
 
-async fn record_feed_admission_attempt(
+fn feed_admission_attempt_statement(
     db: &worker::D1Database,
     install_id: &str,
     key_id: &str,
@@ -1979,10 +2051,10 @@ async fn record_feed_admission_attempt(
     accepted: bool,
     error_code: Option<&str>,
     now: i64,
-) -> Result<()> {
+) -> Result<worker::D1PreparedStatement> {
     let attempt_id = random::random_urlsafe_token(16)
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
-    storage::insert_feed_admission_attempt(
+    storage::insert_feed_admission_attempt_statement(
         db,
         storage::FeedAdmissionAttemptInsert {
             attempt_id: &attempt_id,
@@ -1994,7 +2066,6 @@ async fn record_feed_admission_attempt(
             created_at: now,
         },
     )
-    .await
 }
 
 async fn record_secure_attempt(

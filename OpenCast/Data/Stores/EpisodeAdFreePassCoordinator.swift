@@ -27,6 +27,10 @@ final class EpisodeAdFreePassCoordinator {
 
     @ObservationIgnored let cancellationSource: AdFreePassCancellationSource
     @ObservationIgnored private var passTask: Task<Void, Never>?
+    /// Ownership token for the running drain: bumped by startDrain and
+    /// reset() so a cancelled drain resuming after an await cannot mutate a
+    /// successor drain's queue state.
+    @ObservationIgnored private var drainGeneration = 0
     // Observed (not ignored) so pending-queue mutations — enqueue, drain,
     // removePendingItem — invalidate views reading queueStatus/queueSnapshot.
     private var entries: [QueueEntry] = []
@@ -506,6 +510,7 @@ final class EpisodeAdFreePassCoordinator {
         cancellationSource.cancel()
         passTask?.cancel()
         passTask = nil
+        drainGeneration += 1
         cancellationSource.clearTask()
         for entry in entries {
             entry.launchPreparation?.cancel()
@@ -730,18 +735,20 @@ final class EpisodeAdFreePassCoordinator {
         }
 
         queueState = .running
+        drainGeneration += 1
+        let generation = drainGeneration
         let task = Task { [weak self] in
             guard let self else {
                 return
             }
 
-            await drainQueue()
+            await drainQueue(generation: generation)
         }
         passTask = task
         cancellationSource.start(task)
     }
 
-    private func drainQueue() async {
+    private func drainQueue(generation: Int) async {
         // Whisper-perf E1: retain the loaded runtime across items within
         // this drain only (items 2..n skip the ~4.4 s model load when the
         // model + compute profile match). Ended on every drain exit path;
@@ -757,6 +764,12 @@ final class EpisodeAdFreePassCoordinator {
         while !entries.isEmpty {
             let pendingEntry = entries[0]
             let launchPreparation = await pendingEntry.launchPreparation?.value ?? .ready
+            // A reset() (and possibly a successor drain) may have run during
+            // the await; a drain that lost ownership must not touch queue
+            // state on its way out.
+            guard generation == drainGeneration else {
+                return
+            }
             guard !Task.isCancelled else {
                 endDrain(
                     state: entries.isEmpty ? .idle : .pausedInterrupted,
@@ -798,6 +811,10 @@ final class EpisodeAdFreePassCoordinator {
             )
 
             let outcome = await runPass(entry)
+
+            guard generation == drainGeneration else {
+                return
+            }
 
             if isBackgroundProtected(),
                entry.deps.transcriptions.lastEnvironmentalComputeFallbackEpisodeID == entry.item.episodeID {

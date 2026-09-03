@@ -16,10 +16,13 @@ enum SyncDuplicateRepairer {
     /// enough without tracking per-device sync watermarks.
     static let tombstoneRetentionPeriod: TimeInterval = 180 * 24 * 60 * 60
 
+    /// `save` is the caller's synced-store save (the self-save ledger in
+    /// production); it runs only when the pass changed the store.
     static func repair(
         modelContext: ModelContext,
         claimedFeedURLsByEpisodeID: [String: String] = [:],
-        now: Date = .now
+        now: Date = .now,
+        save: (ModelContext) throws -> Void
     ) throws -> SyncRepairResult {
         var result = SyncRepairResult()
 
@@ -36,7 +39,7 @@ enum SyncDuplicateRepairer {
         collectSpentTombstones(tombstones, index: index, now: now, modelContext: modelContext, result: &result)
 
         if result.hasChanges {
-            try modelContext.save()
+            try save(modelContext)
         }
 
         return result

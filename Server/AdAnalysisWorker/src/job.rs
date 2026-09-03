@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use opencast_app_attest_core::app_attest::sha256_hex;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +12,39 @@ pub const JOB_RUNNING_DEADLINE_SECONDS: i64 = 600;
 pub const JOB_HEARTBEAT_SECONDS: u64 = 30;
 pub const JOB_SUBMIT_POLL_AFTER_SECONDS: u64 = 15;
 pub const JOB_POLL_AFTER_SECONDS: u64 = 10;
+/// How many `SUBMIT_ADMISSION_WAIT_MILLIS` waits a submit spends on another
+/// submit's admission window before answering `503 admission_busy` (5 s in
+/// all): the window only spans one usage-DO subrequest, so a wait this long
+/// means that subrequest is wedged, and a bounded 503 (retryable for the
+/// transcription worker's alarm loop) beats spinning until the platform
+/// kills the request (audit §28).
+pub const SUBMIT_ADMISSION_MAX_WAITS: u32 = 500;
+pub const SUBMIT_ADMISSION_WAIT_MILLIS: u64 = 10;
+pub const ERROR_ADMISSION_BUSY: &str = "admission_busy";
+
+/// In-memory serialization of a non-storage-I/O window (the DO input gate
+/// opens during such awaits). Drop releases the window on every exit path —
+/// error propagation and a dropped request future included, which the
+/// manual set/clear pair this replaced could not (audit §28: a client
+/// disconnect mid-admission left the flag stuck true for the isolate's
+/// life). Ported from TranscriptAnalysisWorker.
+pub struct ActiveWindow<'a>(&'a Cell<bool>);
+
+impl<'a> ActiveWindow<'a> {
+    pub fn acquire(flag: &'a Cell<bool>) -> Option<Self> {
+        if flag.get() {
+            return None;
+        }
+        flag.set(true);
+        Some(Self(flag))
+    }
+}
+
+impl Drop for ActiveWindow<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
 
 /// The job DO is keyed by the caller-supplied transcript fingerprint, so a
 /// record binds the subjects entitled to it plus a server-computed hash of

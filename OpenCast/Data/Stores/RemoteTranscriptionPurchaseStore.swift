@@ -136,21 +136,20 @@ final class RemoteTranscriptionPurchaseStore {
     }
 
     private func runPreparation(refreshAppTransaction: Bool) async {
+        // No caller's cancellation may cancel the shared preparation: the
+        // app root awaits the same task, and a transient surface (settings
+        // sheet, chapters card) disappearing mid-flight would otherwise
+        // strand availability at .unknown for the whole session. The work is
+        // bounded (bootstrap + products load under network timeouts), so a
+        // cancelled caller simply keeps waiting and the result is cached for
+        // everyone. retryPreparation and deinit still cancel explicitly.
         if let prepareTask {
-            _ = await withTaskCancellationHandler {
-                await prepareTask.value
-            } onCancel: {
-                prepareTask.cancel()
-            }
+            await prepareTask.value
             return
         }
         let task = Task { await resolve(refreshAppTransaction: refreshAppTransaction) }
         prepareTask = task
-        let shouldCache = await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            task.cancel()
-        }
+        let shouldCache = await task.value
         if !shouldCache {
             prepareTask = nil
         }
@@ -161,7 +160,9 @@ final class RemoteTranscriptionPurchaseStore {
         if usesUIFixture { return }
         #endif
         guard case .available = availability else { return }
-        guard purchasePhase != .purchasing(productID: product.id) else { return }
+        // Any in-flight purchase blocks a second one: two concurrent StoreKit
+        // flows would clobber each other's purchasePhase.
+        if case .purchasing = purchasePhase { return }
         guard let appAccountToken else {
             purchasePhase = .failed(message: String(localized: "Purchases aren’t ready yet. Try again in a moment."))
             return
@@ -525,10 +526,7 @@ final class RemoteTranscriptionPurchaseStore {
             for await transaction in stream {
                 guard let self else { return }
                 self.updateRefundCandidate(transaction)
-                if await self.redeemAndFinish(transaction) != nil,
-                   self.purchasePhase == .pendingApproval {
-                    self.purchasePhase = .idle
-                }
+                await self.redeemAndFinish(transaction)
             }
         }
     }
@@ -580,7 +578,13 @@ final class RemoteTranscriptionPurchaseStore {
     private func redeemAndFinish(
         _ transaction: RemoteTranscriptionStoreTransaction
     ) async -> OpenCastRemoteTranscriptionRedeemResponse? {
-        guard !redeemedTransactionIDs.contains(transaction.id) else { return nil }
+        guard !redeemedTransactionIDs.contains(transaction.id) else {
+            // A reconcile sweep may have redeemed the approved transaction
+            // before the updates listener saw it; the pending row must not
+            // outlive the credit.
+            clearPendingApprovalPhase()
+            return nil
+        }
         do {
             let response = try await api.redeem(transactionJWS: transaction.jwsRepresentation)
             guard response.outcome.isFinishable else { return nil }
@@ -593,9 +597,20 @@ final class RemoteTranscriptionPurchaseStore {
             if response.outcome == .credited {
                 onBalanceIncreased?()
             }
+            clearPendingApprovalPhase()
             return response
         } catch {
             return nil
+        }
+    }
+
+    /// pendingApproval clears on any acknowledged redeem, not only the
+    /// updates listener's own attempt — a failed first attempt (offline at
+    /// approval time) or a reconcile-sweep win would otherwise strand the
+    /// "awaiting approval" row for the rest of the session.
+    private func clearPendingApprovalPhase() {
+        if purchasePhase == .pendingApproval {
+            purchasePhase = .idle
         }
     }
 }

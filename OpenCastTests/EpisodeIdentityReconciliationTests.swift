@@ -295,28 +295,32 @@ struct EpisodeIdentityReconciliationTests {
     // MARK: - Sidecar migration
 
     @Test("Download records and files re-key onto the successor ID")
-    func downloadSidecarMigration() throws {
+    func downloadSidecarMigration() async throws {
         let temporaryDirectory = try makeTemporaryDirectory()
         let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
         let store = DownloadStore(fileStore: fileStore)
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
 
+        let audioData = Data("audio-bytes".utf8)
         let oldRelativePath = fileStore.relativePath(
             episodeID: "old-episode-id",
             sourceAudioURL: URL(string: "https://example.com/audio/file.mp3")!
         )
         try fileStore.prepareDownloadsDirectory()
-        try Data("audio-bytes".utf8).write(to: fileStore.fileURL(relativePath: oldRelativePath))
+        try audioData.write(to: fileStore.fileURL(relativePath: oldRelativePath))
         let record = EpisodeDownloadRecord(
             episodeID: "old-episode-id",
             podcastID: "https://example.com/old-feed.xml",
             sourceAudioURL: "https://example.com/audio/file.mp3",
             localRelativePath: oldRelativePath,
-            state: .completed
+            state: .completed,
+            bytesReceived: Int64(audioData.count),
+            bytesExpected: Int64(audioData.count)
         )
         context.insert(record)
         try context.save()
+        await store.load(modelContext: context)
 
         try store.migrateEpisodeSidecars(
             from: "old-episode-id",
@@ -332,6 +336,10 @@ struct EpisodeIdentityReconciliationTests {
         #expect(newRelativePath == "EpisodeDownloads/new-episode-id.mp3")
         #expect(FileManager.default.fileExists(atPath: fileStore.fileURL(relativePath: newRelativePath).path))
         #expect(!FileManager.default.fileExists(atPath: fileStore.fileURL(relativePath: oldRelativePath).path))
+        // The keyed lookup index must observe the successor identity without
+        // a relaunch.
+        #expect(store.record(for: "new-episode-id") === record)
+        #expect(store.record(for: "old-episode-id") == nil)
     }
 
     @Test("Transcript records and per-episode directories re-key onto the successor ID")
@@ -398,6 +406,7 @@ struct EpisodeIdentityReconciliationTests {
         )
         context.insert(record)
         try context.save()
+        store.load(modelContext: context)
 
         try store.migrateEpisodeSidecars(
             from: "old-episode-id",
@@ -413,6 +422,51 @@ struct EpisodeIdentityReconciliationTests {
         #expect(newRelativePath == fileStore.relativePath(episodeID: "new-episode-id", transcriptFingerprint: "fp-1"))
         #expect(FileManager.default.fileExists(atPath: fileStore.fileURL(relativePath: newRelativePath).path))
         #expect(!FileManager.default.fileExists(atPath: oldFileURL.path))
+        #expect(store.record(for: "new-episode-id") === record)
+        #expect(store.record(for: "old-episode-id") == nil)
+    }
+
+    @Test("Transcript-analysis records and per-episode directories re-key onto the successor ID")
+    func transcriptAnalysisSidecarMigration() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeTranscriptAnalysisFileStore(baseDirectory: temporaryDirectory)
+        let store = EpisodeTranscriptAnalysisStore(fileStore: fileStore)
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+
+        let oldRelativePath = fileStore.relativePath(episodeID: "old-episode-id", transcriptFingerprint: "fp-1")
+        let oldFileURL = fileStore.fileURL(relativePath: oldRelativePath)
+        try FileManager.default.createDirectory(
+            at: oldFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("{}".utf8).write(to: oldFileURL)
+        let record = EpisodeTranscriptAnalysisRecord(
+            episodeID: "old-episode-id",
+            podcastID: "https://example.com/old-feed.xml",
+            state: .completed,
+            analysisRelativePath: oldRelativePath
+        )
+        context.insert(record)
+        try context.save()
+        store.load(modelContext: context)
+
+        try store.migrateEpisodeSidecars(
+            from: "old-episode-id",
+            to: "new-episode-id",
+            canonicalPodcastID: Self.feedURL,
+            modelContext: context
+        )
+        try context.save()
+
+        #expect(record.episodeID == "new-episode-id")
+        #expect(record.podcastID == Self.feedURL)
+        let newRelativePath = try #require(record.analysisRelativePath)
+        #expect(newRelativePath == fileStore.relativePath(episodeID: "new-episode-id", transcriptFingerprint: "fp-1"))
+        #expect(FileManager.default.fileExists(atPath: fileStore.fileURL(relativePath: newRelativePath).path))
+        #expect(!FileManager.default.fileExists(atPath: oldFileURL.path))
+        #expect(store.record(for: "new-episode-id") === record)
+        #expect(store.record(for: "old-episode-id") == nil)
     }
 
     // MARK: - Helpers

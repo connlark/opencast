@@ -985,7 +985,7 @@ nonisolated extension SQLiteEpisodeSearchIndex {
         try query(
             """
             SELECT body_data
-            FROM episode_search_evidence
+            FROM episode_search_evidence_body
             WHERE search_rowid = (
               SELECT rowid FROM episode_cache WHERE episode_id = ?
             )

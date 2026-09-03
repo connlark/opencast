@@ -159,6 +159,21 @@ pub fn transition_refusal(state: &str) -> Option<TransitionRefusal> {
     }
 }
 
+/// Bounded budget for the credit seam's reserve and settle calls (the
+/// `CREDIT_RELEASE_MAX_ATTEMPTS` shape, prerelease audit §27): the first
+/// attempt plus three alarm retries. `probing` and `stitching` carry no
+/// state deadline, so a seam that fails persistently (binding
+/// misconfigured, PurchaseWorker down) used to re-arm the alarm forever —
+/// re-walking the whole native probe or the settle each turn.
+pub const CREDIT_CALL_MAX_ATTEMPTS: u32 = 4;
+
+/// True once `attempts` failed reserve/settle calls in the current state
+/// (the latest included) exhaust the budget: the job fails with the
+/// internal code so the app falls back on-device, instead of retrying.
+pub fn credit_call_exhausted(attempts: u32) -> bool {
+    attempts >= CREDIT_CALL_MAX_ATTEMPTS
+}
+
 /// What the stranded-job repair (2026-08-19) may do to a record that has no
 /// alarm armed. The invariant it enforces: every non-terminal, non-cancelling
 /// record has an alarm; a terminal record only when a credit release is still
@@ -463,6 +478,11 @@ pub struct JobRecord {
     pub credit_release_pending: bool,
     #[serde(default)]
     pub credit_release_attempts: u32,
+    /// Failed reserve/settle calls in the current state (audit §27); the
+    /// alarm retries until `credit_call_exhausted`, then fails the job.
+    /// Reset to 0 on every state transition. Additive `#[serde(default)]`.
+    #[serde(default)]
+    pub credit_call_attempts: u32,
     /// Stranded-job repairs applied in the current state (2026-08-19): a live
     /// active-work record found with no alarm is re-armed once; a second
     /// strand in the same state fails the job. Reset to 0 on every state
@@ -561,6 +581,7 @@ impl JobRecord {
             cleanup_complete: false,
             credit_release_pending: false,
             credit_release_attempts: 0,
+            credit_call_attempts: 0,
             stranded_repairs: 0,
             origin_unsafe: false,
             upload_id: None,
@@ -1286,6 +1307,37 @@ mod tests {
         assert_eq!(decoded.credit_release_attempts, 0);
         // Stranded-job repair counter is additive too.
         assert_eq!(decoded.stranded_repairs, 0);
+        // Audit §27 credit-call budget counter likewise.
+        assert_eq!(decoded.credit_call_attempts, 0);
+    }
+
+    /// The reserve/settle budget mirrors the release backstop: the first
+    /// attempt plus three retries, exhausted on the fourth failure.
+    #[test]
+    fn credit_call_budget_exhausts_on_the_fourth_failure() {
+        assert_eq!(CREDIT_CALL_MAX_ATTEMPTS, 4);
+        for attempts in 0..CREDIT_CALL_MAX_ATTEMPTS {
+            assert!(!credit_call_exhausted(attempts), "attempt {attempts}");
+        }
+        assert!(credit_call_exhausted(CREDIT_CALL_MAX_ATTEMPTS));
+        assert!(credit_call_exhausted(u32::MAX));
+
+        let mut record = JobRecord::created(
+            "job-credit".into(),
+            "acct-1".into(),
+            "ep-1".into(),
+            None,
+            None,
+            None,
+            None,
+            1,
+        );
+        record.state = STATE_STITCHING.to_string();
+        record.credit_call_attempts = 3;
+        let json = serde_json::to_string(&record).expect("serialize");
+        assert!(json.contains("\"credit_call_attempts\":3"));
+        let decoded: JobRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded.credit_call_attempts, 3);
     }
 
     #[test]

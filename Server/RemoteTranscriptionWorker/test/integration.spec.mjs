@@ -1721,6 +1721,64 @@ describe("remote transcription dev lane", () => {
     await expectJobStorageEmpty(job.job_id);
   });
 
+  // --- Credit-seam retries are bounded because `probing` and `stitching`
+  // carry no state deadline. A persistent seam failure ends in a clean
+  // internal_error with the reservation released and an abandonment counter.
+
+  it("fails a job whose settle keeps failing once the credit budget is spent", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const abandonedBefore = (await counterValues(["credit_settle_abandoned"]))
+      .credit_settle_abandoned ?? 0;
+    const job = await createJob({
+      clientRequestId: "e2e-settle-exhaust-1",
+      episodeId: "ep-settle-exhaust-1",
+      durationSeconds: 60,
+      languageCode: "fake:sfail=99",
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+
+    // Four settle failures (the published result survives each re-entry),
+    // then the budget fails the job instead of a fifth retry.
+    const failed = await waitForState(job.job_id, ["failed"], 25_000);
+    expect(failed.job.error.code).toBe("internal_error");
+    await expectJobStorageEmpty(job.job_id);
+    expect((await counterValues(["credit_settle_abandoned"])).credit_settle_abandoned).toBe(
+      abandonedBefore + 1,
+    );
+
+    // Never charged: the unsettled reservation was released, not stranded
+    // under a published result.
+    const after = (await bootstrapBalance()).balance;
+    expect(after.available_seconds).toBe(before.available_seconds);
+    expect(after.reserved_seconds).toBe(0);
+  });
+
+  it("fails a job whose reserve keeps failing instead of re-probing forever", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const abandonedBefore = (await counterValues(["credit_reserve_abandoned"]))
+      .credit_reserve_abandoned ?? 0;
+    const job = await createJob({
+      clientRequestId: "e2e-reserve-exhaust-1",
+      episodeId: "ep-reserve-exhaust-1",
+      durationSeconds: 60,
+      languageCode: "fake:resfail=99",
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+
+    // Each retry re-enters `probing` (the whole probe re-runs before the
+    // reserve); the fourth failure trips the budget.
+    const failed = await waitForState(job.job_id, ["failed"], 25_000);
+    expect(failed.job.error.code).toBe("internal_error");
+    await expectJobStorageEmpty(job.job_id);
+    expect((await counterValues(["credit_reserve_abandoned"])).credit_reserve_abandoned).toBe(
+      abandonedBefore + 1,
+    );
+
+    const after = (await bootstrapBalance()).balance;
+    expect(after.available_seconds).toBe(before.available_seconds);
+    expect(after.reserved_seconds).toBe(0);
+  });
+
   // --- The origin wall clock must bind the awaits
   // themselves, not just fire after a chunk arrives.
 

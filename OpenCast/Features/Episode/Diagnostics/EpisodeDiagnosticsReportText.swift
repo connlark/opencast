@@ -27,8 +27,6 @@ nonisolated enum EpisodeDiagnosticsReportText {
                 lines.append("(some values still loading)")
             case .loaded(let section):
                 lines.append(contentsOf: sectionLines(section))
-            case .failed(let message):
-                lines.append("(failed: \(message))")
             }
         }
         return lines.joined(separator: "\n")

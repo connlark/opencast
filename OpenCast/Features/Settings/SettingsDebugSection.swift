@@ -4,7 +4,9 @@ struct SettingsDebugSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
 
     var body: some View {
+        #if DEBUG
         @Bindable var appModel = appModel
+        #endif
 
         Section {
             NavigationLink {
@@ -13,24 +15,22 @@ struct SettingsDebugSection: View {
                 Label("Diagnostics", systemImage: "stethoscope")
             }
 
+            #if DEBUG
             Button(action: runOnboarding) {
                 Label("Run Onboarding", systemImage: "sparkles.rectangle.stack")
             }
 
-            #if DEBUG
             if AdFreePassBackgroundProbe.isUserInterfaceEnabled {
                 Button(action: runAdFreePassBackgroundProbe) {
                     Label("Ad-Free BG Probe", systemImage: "timer")
                 }
                 .accessibilityIdentifier("Settings Ad-Free Pass Background Probe")
             }
-            #endif
 
             Toggle(isOn: $appModel.replacesNowPlayingArtworkWithPlaybackDiagnostics) {
                 Label("Playback Debug Artwork", systemImage: "terminal")
             }
 
-            #if DEBUG
             Toggle(isOn: remoteTranscriptionDevBinding) {
                 Label("Remote Transcription (Dev)", systemImage: "cloud")
             }
@@ -45,15 +45,15 @@ struct SettingsDebugSection: View {
             }
             #endif
         } header: {
-            Text("Debug")
+            Text("Diagnostics")
         }
     }
 
+    #if DEBUG
     private func runOnboarding() {
         appModel.requestOnboardingPresentation()
     }
 
-    #if DEBUG
     @State private var remoteTranscriptionDevEnabled = RemoteTranscriptionDevFlag.isEnabled
 
     // The flag lives in UserDefaults behind a static gate, so the alert-style

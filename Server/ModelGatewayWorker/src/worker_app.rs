@@ -1,10 +1,11 @@
 use crate::route::{
-    content_range_header, if_none_match_matches, json_response as static_json_response,
-    parse_range_header, route_request, unsatisfied_content_range_header, Header as StaticHeader,
-    RangeError, RangeSelection, RouteAction, StaticResponse, JSON_CONTENT_TYPE,
-    OBJECT_NOT_FOUND_JSON, RANGE_NOT_SATISFIABLE_JSON,
+    content_range_header, edge_cacheable, if_none_match_matches,
+    json_response as static_json_response, parse_range_header, route_request,
+    unsatisfied_content_range_header, Header as StaticHeader, RangeError, RangeSelection,
+    RouteAction, StaticResponse, JSON_CONTENT_TYPE, OBJECT_NOT_FOUND_JSON,
+    RANGE_NOT_SATISFIABLE_JSON,
 };
-use worker::{console_error, Cache, Env, Headers, Method, Request, Response, Result};
+use worker::{console_error, Cache, Context, Env, Headers, Method, Request, Response, Result};
 
 const MODEL_BUCKET: &str = "MODEL_BUCKET";
 const MODEL_OBJECT_PREFIX: &str = "MODEL_OBJECT_PREFIX";
@@ -26,11 +27,15 @@ impl GatewayConfig {
     }
 }
 
-pub async fn handle_request(req: Request, env: Env) -> Result<Response> {
+pub async fn handle_request(req: Request, env: Env, ctx: Context) -> Result<Response> {
     let method = req.method();
     let path = req.path();
     let config = GatewayConfig::from_env(&env)?;
-    let conditional = RequestConditions::from_request(&req)?;
+    let gateway = Gateway {
+        env: &env,
+        ctx: &ctx,
+        conditional: RequestConditions::from_request(&req)?,
+    };
 
     match route_request(
         method.as_ref(),
@@ -41,13 +46,12 @@ pub async fn handle_request(req: Request, env: Env) -> Result<Response> {
         RouteAction::Static(response) => static_response(response),
         RouteAction::Manifest { object_key, head }
         | RouteAction::ManifestSignature { object_key, head } => {
-            serve_manifest(&env, &conditional, &object_key, head).await
+            serve_manifest(&gateway, &object_key, head).await
         }
         RouteAction::Asset { route, head } => {
             serve_asset(
-                &env,
+                &gateway,
                 &req,
-                &conditional,
                 method,
                 &route.object_key,
                 route.content_type,
@@ -56,6 +60,14 @@ pub async fn handle_request(req: Request, env: Env) -> Result<Response> {
             .await
         }
     }
+}
+
+/// Per-request serving state: the bindings, the invocation context (for
+/// background cache writes), and the conditional-request inputs.
+struct Gateway<'a> {
+    env: &'a Env,
+    ctx: &'a Context,
+    conditional: RequestConditions,
 }
 
 /// The request-derived state conditional serving needs: the `If-None-Match`
@@ -85,19 +97,14 @@ fn not_modified(headers: Headers) -> Result<Response> {
         .empty())
 }
 
-async fn serve_manifest(
-    env: &Env,
-    conditional: &RequestConditions,
-    object_key: &str,
-    head: bool,
-) -> Result<Response> {
+async fn serve_manifest(gateway: &Gateway<'_>, object_key: &str, head: bool) -> Result<Response> {
     if head {
-        let bucket = env.bucket(MODEL_BUCKET)?;
+        let bucket = gateway.env.bucket(MODEL_BUCKET)?;
         let Some(object) = bucket.head(object_key).await? else {
             return json_error(404, OBJECT_NOT_FOUND_JSON);
         };
         let headers = object_headers(&object, JSON_CONTENT_TYPE, object.size(), None)?;
-        if conditional.matches(&object.http_etag()) {
+        if gateway.conditional.matches(&object.http_etag()) {
             return not_modified(headers);
         }
         return Ok(Response::builder()
@@ -106,19 +113,18 @@ async fn serve_manifest(
             .empty());
     }
 
-    serve_cached_full_body(env, conditional, object_key, JSON_CONTENT_TYPE).await
+    serve_cached_full_body(gateway, object_key, JSON_CONTENT_TYPE).await
 }
 
 async fn serve_asset(
-    env: &Env,
+    gateway: &Gateway<'_>,
     req: &Request,
-    conditional: &RequestConditions,
     method: Method,
     object_key: &str,
     content_type: &'static str,
     head: bool,
 ) -> Result<Response> {
-    let bucket = env.bucket(MODEL_BUCKET)?;
+    let bucket = gateway.env.bucket(MODEL_BUCKET)?;
     let range_header = req.headers().get("range")?;
 
     if range_header.is_some() || head {
@@ -128,7 +134,7 @@ async fn serve_asset(
         let size = metadata.size();
         // If-None-Match is evaluated before Range: a matching validator
         // means the client's copy is current, whole or sliced.
-        if conditional.matches(&metadata.http_etag()) {
+        if gateway.conditional.matches(&metadata.http_etag()) {
             let headers = object_headers(&metadata, content_type, size, None)?;
             return not_modified(headers);
         }
@@ -148,7 +154,7 @@ async fn serve_asset(
                         .with_headers(headers)
                         .empty())
                 } else {
-                    serve_cached_full_body(env, conditional, object_key, content_type).await
+                    serve_cached_full_body(gateway, object_key, content_type).await
                 }
             }
             RangeSelection::Partial(range) => {
@@ -192,20 +198,25 @@ async fn serve_asset(
         return json_error(405, crate::route::METHOD_NOT_ALLOWED_JSON);
     }
 
-    serve_cached_full_body(env, conditional, object_key, content_type).await
+    serve_cached_full_body(gateway, object_key, content_type).await
 }
 
 /// GET path for the manifest and whole assets: fronted by the edge Cache API
 /// (keyed on the request URL; the stored response's max-age governs expiry),
-/// with `If-None-Match` evaluated on both hit and miss. The range path stays
+/// with `If-None-Match` evaluated on both hit and miss. On a miss the R2
+/// body is teed: the client branch streams immediately while the cache
+/// write runs under `wait_until`, so a several-hundred-MB weight file is
+/// never withheld until the edge copy lands, and a refused write is logged
+/// rather than turning a servable download into a 500. Objects above the
+/// Cache API size ceiling skip the tee entirely. The range path stays
 /// direct-R2 — caching sliced bodies is complexity without demonstrated
 /// need; revisit if telemetry shows hot ranges.
 async fn serve_cached_full_body(
-    env: &Env,
-    conditional: &RequestConditions,
+    gateway: &Gateway<'_>,
     object_key: &str,
     content_type: &'static str,
 ) -> Result<Response> {
+    let conditional = &gateway.conditional;
     let cache = Cache::default();
     if let Some(cached) = cache.get(conditional.cache_url.as_str(), false).await? {
         if let Some(etag) = cached.headers().get("etag")? {
@@ -216,12 +227,13 @@ async fn serve_cached_full_body(
         return Ok(cached);
     }
 
-    let bucket = env.bucket(MODEL_BUCKET)?;
+    let bucket = gateway.env.bucket(MODEL_BUCKET)?;
     let Some(object) = bucket.get(object_key).execute().await? else {
         return json_error(404, OBJECT_NOT_FOUND_JSON);
     };
     let etag = object.http_etag();
-    let headers = object_headers(&object, content_type, object.size(), None)?;
+    let size = object.size();
+    let headers = object_headers(&object, content_type, size, None)?;
     let Some(body) = object.body() else {
         return json_error(404, OBJECT_NOT_FOUND_JSON);
     };
@@ -229,9 +241,27 @@ async fn serve_cached_full_body(
         .with_status(200)
         .with_headers(headers)
         .body(body.response_body()?);
-    cache
-        .put(conditional.cache_url.as_str(), response.cloned()?)
-        .await?;
+    if edge_cacheable(size) {
+        match response.cloned() {
+            Ok(cached_copy) => {
+                let cache_url = conditional.cache_url.clone();
+                gateway.ctx.wait_until(async move {
+                    if let Err(error) = Cache::default().put(cache_url.as_str(), cached_copy).await
+                    {
+                        console_error!(
+                            "model gateway cache write failed for {cache_url}: {error:?}"
+                        );
+                    }
+                });
+            }
+            Err(error) => {
+                console_error!(
+                    "model gateway response tee failed for {}: {error:?}",
+                    conditional.cache_url
+                );
+            }
+        }
+    }
     if conditional.matches(&etag) {
         return not_modified(response.headers().clone());
     }

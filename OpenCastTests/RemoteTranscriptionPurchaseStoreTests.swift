@@ -457,6 +457,33 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(api.bootstrapCalls == 1)
     }
 
+    @Test("A cancelled waiter does not cancel the shared preparation")
+    func cancelledWaiterKeepsSharedPreparationAlive() async throws {
+        let api = FakePurchaseAPI()
+        api.bootstrapDelay = .milliseconds(150)
+        let store = Self.makeStore(api: api, storeKit: FakeStoreKitClient())
+
+        // The launch caller starts preparation and parks on the slow
+        // bootstrap; a transient surface then joins mid-flight and its .task
+        // is cancelled (sheet dismissed, card scrolled away).
+        let launchPrepare = Task { await store.prepare() }
+        for _ in 0..<200 where api.bootstrapCalls == 0 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(api.bootstrapCalls == 1)
+        let transientWaiter = Task { await store.prepare() }
+        try await Task.sleep(for: .milliseconds(10))
+        transientWaiter.cancel()
+        await transientWaiter.value
+        await launchPrepare.value
+
+        // The launch preparation must survive the waiter's cancellation and
+        // resolve availability; a cancelled shared task would strand it at
+        // .unknown and hide every purchase surface for the session.
+        #expect(store.availability == .available)
+        #expect(store.isSurfaceVisible)
+    }
+
     @Test("Cancelled AppTransaction lookup is evicted and immediately retryable")
     func cancelledAppTransactionLookupCanRetry() async throws {
         let source = FakeAppTransactionSnapshotSource(
@@ -664,6 +691,7 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
     var purchasesEnabled = true
     var redeemError: Error?
     var redeemOutcome: OpenCastRemoteTranscriptionRedeemOutcome = .credited
+    var bootstrapDelay: Duration?
 
     private var recordedBootstrapCalls = 0
     private var recordedRedeemCalls = 0
@@ -683,6 +711,9 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
 
     func bootstrap() async throws -> OpenCastRemoteTranscriptionBootstrapResponse {
         lock.withLock { recordedBootstrapCalls += 1 }
+        if let bootstrapDelay {
+            try await Task.sleep(for: bootstrapDelay)
+        }
         return OpenCastRemoteTranscriptionBootstrapResponse(
             schemaVersion: 1,
             accountID: "pacct-fake",

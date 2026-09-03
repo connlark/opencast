@@ -459,18 +459,18 @@ struct OpenCastModelTests {
         context.insert(record)
         try context.save()
 
-        #expect(!LibraryStore.mergePodcastPlaybackSkipSettings(
+        #expect(!FeedWriteCoordinator.mergePodcastPlaybackSkipSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 20),
             into: record
         ))
         #expect(!context.hasChanges)
-        #expect(!LibraryStore.mergePodcastPlaybackSkipSettings(
+        #expect(!FeedWriteCoordinator.mergePodcastPlaybackSkipSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: .infinity, skipOutroSeconds: -1),
             into: record
         ))
         #expect(!context.hasChanges)
 
-        #expect(LibraryStore.mergePodcastPlaybackSkipSettings(
+        #expect(FeedWriteCoordinator.mergePodcastPlaybackSkipSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 70, skipOutroSeconds: 10),
             into: record
         ))
@@ -1132,6 +1132,53 @@ struct OpenCastModelTests {
         #expect(appModel.playback.state == .paused)
         // 30 stored, minus the fresh-record tier-1 smart rewind (3 s).
         #expect(appModel.playback.position == 27)
+
+        appModel.playback.unload()
+    }
+
+    @Test("A restored-but-never-played episode never persists its rewound position")
+    func restoredUnplayedEpisodeDoesNotPersistRewind() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let appModel = OpenCastAppModel(localLibraryCacheStore: SQLiteLocalLibraryCacheStore.inMemory())
+        let feedURL = "https://example.com/restore-unplayed.xml"
+        let episodeID = "restore-unplayed-episode"
+
+        insertCachedFeed(feedURL: feedURL, title: "Restore Unplayed", episodeID: episodeID, in: context)
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: episodeID,
+                podcastID: feedURL,
+                position: 30,
+                duration: 120,
+                isPlayed: false
+            )
+        )
+        context.insert(LocalPreferenceRecord(key: "playback.lastEpisodeID", value: episodeID))
+        try context.save()
+
+        await appModel.library.load(modelContext: context)
+        appModel.restorePreviousPlaybackIfAvailable(modelContext: context)
+        #expect(appModel.playback.position == 27)
+
+        // A browse-only open/close cycle flushes on scene exit; the rewound
+        // restore position must not walk the synced resume point backward
+        // (3s per cycle would compound across launches).
+        let idleFlushDidSave = appModel.flushPlaybackProgress(modelContext: context)
+        let progress = try #require(
+            appModel.library.progressRecords.first { $0.episodeID == episodeID }
+        )
+        #expect(!idleFlushDidSave)
+        #expect(progress.position == 30)
+
+        // Engaging with the restored episode re-enables normal persistence.
+        appModel.playback.seek(to: 50)
+        let seekFlushDidSave = appModel.flushPlaybackProgress(modelContext: context)
+        #expect(seekFlushDidSave)
+        #expect(
+            appModel.library.progressRecords
+                .first { $0.episodeID == episodeID }?.position == 50
+        )
 
         appModel.playback.unload()
     }

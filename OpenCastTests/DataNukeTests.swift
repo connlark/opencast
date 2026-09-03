@@ -196,8 +196,17 @@ struct DataNukeTests {
         let context = ModelContext(container)
         let scheduler = DataNukeAdFreePassScheduler()
         let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
+        let temporaryDirectory = try makeTemporaryDirectory()
         let appModel = OpenCastAppModel(
+            cacheController: OpenCastCacheController(
+                rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+            ),
             library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(
+                fileStore: EpisodeDownloadFileStore(
+                    baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+                )
+            ),
             adFreePassBackgroundSession: session,
             syncStatus: SyncStatusStore(
                 accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
@@ -320,6 +329,44 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).isEmpty)
     }
 
+    @Test("The row wipe credits the arbiter once, and an empty wipe credits nothing")
+    func rowWipeCreditsTheArbiterOnceAndAnEmptyWipeCreditsNothing() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let cacheController = OpenCastCacheController(
+            rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+        )
+        let fileStore = EpisodeDownloadFileStore(
+            baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+        )
+        let appModel = OpenCastAppModel(
+            cacheController: cacheController,
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(fileStore: fileStore),
+            syncStatus: SyncStatusStore(
+                accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available, .available])
+            ),
+            allowsAutomaticFeedRefresh: false
+        )
+        _ = try seedAllData(fileStore: fileStore, context: context)
+        await appModel.library.load(modelContext: context)
+        await appModel.downloads.load(modelContext: context)
+        let creditsBeforeNuke = appModel.library.syncedStoreSelfSaveCount
+
+        try await appModel.nukeAllData(modelContext: context)
+
+        #expect(appModel.library.syncedStoreSelfSaveCount == creditsBeforeNuke + 1)
+        try expectAllTablesEmpty(context)
+
+        // Nothing synced is left to delete, so the second wipe touches only
+        // the local store and posts no synced notification to swallow.
+        try await appModel.nukeAllData(modelContext: context)
+
+        #expect(appModel.library.syncedStoreSelfSaveCount == creditsBeforeNuke + 1)
+        #expect(appModel.dataNukeCompletionID == 2)
+    }
+
     @Test("Refresh finishing after nuke cannot recreate cache rows")
     func refreshFinishingAfterNukeCannotRecreateCacheRows() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -327,8 +374,17 @@ struct DataNukeTests {
         let feedURL = "https://example.com/race.xml"
         let feedService = HangingFeedService()
         let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        let temporaryDirectory = try makeTemporaryDirectory()
         let appModel = OpenCastAppModel(
+            cacheController: OpenCastCacheController(
+                rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+            ),
             library: LibraryStore(feedService: feedService, localCache: localCache),
+            downloads: DownloadStore(
+                fileStore: EpisodeDownloadFileStore(
+                    baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+                )
+            ),
             syncStatus: SyncStatusStore(
                 accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
             ),

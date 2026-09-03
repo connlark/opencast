@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Renders one diagnostics section: its rows once available, a spinner while
-/// loading or refining, and a local error without touching other sections.
+/// Renders one diagnostics section: its rows once available and a spinner
+/// while loading or refining.
 struct EpisodeDiagnosticsSectionView: View {
     let id: EpisodeDiagnosticsSectionID
     let state: EpisodeDiagnosticsSectionState
@@ -18,10 +18,6 @@ struct EpisodeDiagnosticsSectionView: View {
                     .frame(maxWidth: .infinity)
             case .loaded(let section):
                 rows(section)
-            case .failed(let message):
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
             }
         }
     }

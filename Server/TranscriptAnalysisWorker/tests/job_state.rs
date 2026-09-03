@@ -1,8 +1,8 @@
 use opencast_transcript_analysis_worker::billing::{JobBillingState, PendingBillingAction};
 use opencast_transcript_analysis_worker::job::{
     alarm_decision, app_attest_subject, bearer_subject, completion_log_line, job_object_name,
-    poll_decision, submit_decision, terminal_billing_action, transcript_content_hash,
-    valid_job_id, AlarmDecision, JobRecord, PollDecision, SubmitDecision, JOB_RESULT_TTL_SECONDS,
+    poll_decision, submit_decision, terminal_billing_action, transcript_content_hash, valid_job_id,
+    AlarmDecision, JobRecord, PollDecision, SubmitDecision, JOB_RESULT_TTL_SECONDS,
     JOB_RUNNING_DEADLINE_SECONDS,
 };
 use opencast_transcript_analysis_worker::types::{
@@ -155,10 +155,7 @@ fn submit_failed_records_always_restart() {
         submit_decision(Some(&failed), STRANGER, OTHER_CONTENT),
         SubmitDecision::Start
     );
-    assert_eq!(
-        submit_decision(None, OWNER, CONTENT),
-        SubmitDecision::Start
-    );
+    assert_eq!(submit_decision(None, OWNER, CONTENT), SubmitDecision::Start);
 }
 
 /// A subject that computed a job's DO name but is not in the subject set
@@ -296,7 +293,11 @@ fn watchdog_transient_failure_carries_billing_and_derives_release() {
         started_at: 100,
         subjects: vec![OWNER.to_string()],
         content_hash: CONTENT.to_string(),
-        billing: Some(JobBillingState::reserved("tan-abc123def456ghij".to_string(), 27_115)),
+        billing: Some(JobBillingState::reserved(
+            "tan-abc123def456ghij".to_string(),
+            27_115,
+            "pacct-test".to_string(),
+        )),
     };
     let AlarmDecision::FailTransient { record } = alarm_decision(Some(&billed_running), false, 101)
     else {
@@ -319,7 +320,11 @@ fn watchdog_transient_failure_carries_billing_and_derives_release() {
 fn terminal_billing_action_settles_delivery_and_releases_failures() {
     let mut billed_completed = completed();
     if let JobRecord::Completed { billing, .. } = &mut billed_completed {
-        *billing = Some(JobBillingState::reserved("tan-abc123def456ghij".to_string(), 500));
+        *billing = Some(JobBillingState::reserved(
+            "tan-abc123def456ghij".to_string(),
+            500,
+            "pacct-test".to_string(),
+        ));
     }
     assert_eq!(
         terminal_billing_action(&billed_completed),
@@ -333,7 +338,11 @@ fn terminal_billing_action_settles_delivery_and_releases_failures() {
         purge_at: 2_000,
         subjects: vec![OWNER.to_string()],
         content_hash: CONTENT.to_string(),
-        billing: Some(JobBillingState::reserved("tan-abc123def456ghij".to_string(), 500)),
+        billing: Some(JobBillingState::reserved(
+            "tan-abc123def456ghij".to_string(),
+            500,
+            "pacct-test".to_string(),
+        )),
     };
     assert_eq!(
         terminal_billing_action(&billed_failed),
@@ -352,6 +361,7 @@ fn alarm_retries_pending_billing_before_purge() {
         *billing = Some(JobBillingState {
             billing_id: "tan-abc123def456ghij".to_string(),
             charge_seconds: 500,
+            account_id: "pacct-test".to_string(),
             pending: Some(PendingBillingAction::Settle),
             attempts: 1,
         });
@@ -390,6 +400,7 @@ fn job_record_billing_serde_covers_skew_and_round_trip() {
         *billing = Some(JobBillingState {
             billing_id: "tan-abc123def456ghij".to_string(),
             charge_seconds: 500,
+            account_id: "pacct-test".to_string(),
             pending: Some(PendingBillingAction::Release),
             attempts: 2,
         });

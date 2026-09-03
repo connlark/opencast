@@ -19,17 +19,29 @@ final class EpisodeDiagnosticsModel {
     private(set) var mp3ShareState: EpisodeDiagnosticsMP3ShareState = .idle
     var presentedShareFile: EpisodeDiagnosticsShareFile?
 
-    let dependencies: EpisodeDiagnosticsDependencies
+    /// Live dependencies are built on first use, not in init: the presenting
+    /// closure re-evaluates the sheet's initializer per body pass and @State
+    /// discards every model but the first, so an eager default would allocate
+    /// (and leak until deinit) a fresh probe URLSession per evaluation.
+    var dependencies: EpisodeDiagnosticsDependencies {
+        if let injectedOrBuiltDependencies {
+            return injectedOrBuiltDependencies
+        }
+        let live = EpisodeDiagnosticsDependencies.live()
+        injectedOrBuiltDependencies = live
+        return live
+    }
 
+    @ObservationIgnored private var injectedOrBuiltDependencies: EpisodeDiagnosticsDependencies?
     @ObservationIgnored private var reportRevision = 0
     @ObservationIgnored private var cachedReport: (revision: Int, text: String)?
     @ObservationIgnored private var shareTask: Task<Void, Never>?
     @ObservationIgnored private var activeShareFile: EpisodeDiagnosticsShareFile?
     @ObservationIgnored private var isDismissed = false
 
-    init(episodeID: String, dependencies: EpisodeDiagnosticsDependencies = .live()) {
+    init(episodeID: String, dependencies: EpisodeDiagnosticsDependencies? = nil) {
         self.episodeID = episodeID
-        self.dependencies = dependencies
+        injectedOrBuiltDependencies = dependencies
     }
 
     func state(for id: EpisodeDiagnosticsSectionID) -> EpisodeDiagnosticsSectionState {
@@ -110,10 +122,14 @@ final class EpisodeDiagnosticsModel {
 
         let hasTranscriptRecord = transcriptRecord != nil
         let hasAdRecord = adRecord != nil
+        let storedDownloadSHA256 = downloadRecord?.sourceFileSHA256
 
         await withTaskGroup(of: LoadStep.self) { group in
             group.addTask {
-                .download(await self.enrichDownload(fileURL: downloadFileURL))
+                .download(await self.enrichDownload(
+                    fileURL: downloadFileURL,
+                    storedSHA256: storedDownloadSHA256
+                ))
             }
             group.addTask {
                 .transcript(await self.loadTranscriptDocument(
@@ -153,17 +169,26 @@ final class EpisodeDiagnosticsModel {
             // and the zone matrix additionally needs the local media duration,
             // so those two wait for their inputs; everything else publishes
             // the moment its own step lands.
-            @MainActor func publishSettledAdSections() {
+            @MainActor func publishSettledAdSections() async {
                 guard let adRecord, let ad, let transcript else {
                     return
                 }
                 if !didPublishAdAnalysis {
                     didPublishAdAnalysis = true
+                    // The currency verdict normalizes and fingerprints the
+                    // whole transcript — off-caller, never on the MainActor
+                    // while the sheet is rendering.
                     let isCurrent: Bool? = if let adDocument = ad.document,
                         let transcriptDocument = transcript.document {
-                        appModel.adAnalyses.isCurrentAnalysisDocument(adDocument, for: transcriptDocument)
+                        await appModel.adAnalyses.isCurrentAnalysisDocumentOffCaller(
+                            adDocument,
+                            for: transcriptDocument
+                        )
                     } else {
                         nil
+                    }
+                    guard !Task.isCancelled else {
+                        return
                     }
                     setSection(
                         .adAnalysis,
@@ -209,7 +234,7 @@ final class EpisodeDiagnosticsModel {
                             ))
                         )
                     }
-                    publishSettledAdSections()
+                    await publishSettledAdSections()
                 case .transcript(let outcome):
                     transcript = outcome
                     if let transcriptRecord {
@@ -222,13 +247,13 @@ final class EpisodeDiagnosticsModel {
                             ))
                         )
                     }
-                    publishSettledAdSections()
+                    await publishSettledAdSections()
                 case .adAnalysis(let outcome):
                     ad = outcome
                     if adRecord != nil {
                         setSection(.adSpans, .loaded(adSpansSection(outcome: outcome)))
                     }
-                    publishSettledAdSections()
+                    await publishSettledAdSections()
                 case .feedProbe(let section):
                     setSection(.feedProbe, .loaded(section))
                 case .enclosureProbe(let section):
@@ -371,7 +396,7 @@ final class EpisodeDiagnosticsModel {
         var fileInfo: EpisodeDiagnosticsFileInfo?
     }
 
-    private func enrichDownload(fileURL: URL?) async -> DownloadEnrichment? {
+    private func enrichDownload(fileURL: URL?, storedSHA256: String?) async -> DownloadEnrichment? {
         guard let fileURL else {
             return nil
         }
@@ -387,6 +412,11 @@ final class EpisodeDiagnosticsModel {
             return enrichment
         } catch {
             enrichment.localDurationErrorDescription = error.localizedDescription
+        }
+        // Hashing streams the whole episode from disk; with no recorded hash
+        // there is nothing to compare against, so a plain sheet open skips it.
+        guard storedSHA256?.isEmpty == false else {
+            return enrichment
         }
         do {
             enrichment.computedSHA256 = try await dependencies.fileInspector.sha256(at: fileURL)

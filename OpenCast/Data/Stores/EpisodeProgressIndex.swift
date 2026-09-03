@@ -8,7 +8,7 @@ import SwiftData
 /// an inserted record must land exactly where the next refetch would put it.
 ///
 /// The index only projects; every save, self-save credit, and the
-/// observation revision stay with LibraryStore. Mutations return whether an
+/// observation revision stay with EpisodeProgressWriter. Mutations return whether an
 /// episode's indexed record changed identity — the revision-bump condition;
 /// rows observe their SwiftData model directly, so same-instance refreshes
 /// owe no bump.

@@ -14,6 +14,7 @@ final class DownloadStore {
     // every episode-row body.
     private(set) var records: [EpisodeDownloadRecord] = [] {
         didSet {
+            recordsRevision &+= 1
             // Keep-first mirrors the replaced `records.first` lookup while
             // startup duplicate repair can still hold transient twins.
             recordsByEpisodeID = Dictionary(
@@ -23,6 +24,11 @@ final class DownloadStore {
         }
     }
     @ObservationIgnored private var recordsByEpisodeID: [String: EpisodeDownloadRecord] = [:]
+    // Pairs the ignored index with a tracked revision so `record(for:)`
+    // registers a dependency even when it returns nil — a body that saw no
+    // record must still invalidate when one appears (house pattern:
+    // LibraryStore.progressIndexRevision).
+    private var recordsRevision = 0
     private(set) var lastErrorMessage: String?
     private(set) var autoDeletesPlayedDownloads = false
     /// Episode-ID groups that held more than one record and were collapsed to
@@ -126,7 +132,8 @@ final class DownloadStore {
     }
 
     func record(for episodeID: String) -> EpisodeDownloadRecord? {
-        recordsByEpisodeID[episodeID]
+        _ = recordsRevision
+        return recordsByEpisodeID[episodeID]
     }
 
     /// Byte progress for display: the transient live value while a download is
@@ -445,22 +452,10 @@ final class DownloadStore {
             return
         }
 
-        var firstFailure: (error: any Error, episodeID: String)?
-        for record in records {
-            do {
-                try deleteDownloadRecord(record, modelContext: modelContext)
-            } catch {
-                if firstFailure == nil {
-                    firstFailure = (error, record.episodeID)
-                }
-            }
-        }
-
-        if let firstFailure {
-            recordFailure(firstFailure.error, episodeID: firstFailure.episodeID)
-        } else {
-            lastErrorMessage = nil
-            lastErrorEpisodeID = nil
+        do {
+            try deleteDownloadsThrowing(records, modelContext: modelContext)
+        } catch {
+            recordFailure(error)
         }
     }
 
@@ -468,22 +463,24 @@ final class DownloadStore {
         _ record: EpisodeDownloadRecord,
         modelContext: ModelContext
     ) throws {
-        try deleteDownloadRecord(record, modelContext: modelContext)
+        try deleteDownloadsThrowing([record], modelContext: modelContext)
+    }
+
+    func deleteDownloadsThrowing(
+        _ records: [EpisodeDownloadRecord],
+        modelContext: ModelContext
+    ) throws {
+        try deleteDownloadRecords(records, modelContext: modelContext)
         lastErrorMessage = nil
         lastErrorEpisodeID = nil
     }
 
     func deleteAllDownloads(modelContext: ModelContext) {
         do {
-            let allRecords = try fetchRecords(modelContext: modelContext)
-            for record in allRecords {
-                try deleteDownloadRecord(record, savesImmediately: false, modelContext: modelContext)
-            }
-            try modelContext.save()
-            try reload(modelContext: modelContext)
-            lastErrorMessage = nil
-            lastErrorEpisodeID = nil
-            stateChanges.notify()
+            try deleteDownloadsThrowing(
+                fetchRecords(modelContext: modelContext),
+                modelContext: modelContext
+            )
         } catch {
             recordFailure(error)
         }
@@ -510,15 +507,10 @@ final class DownloadStore {
     }
 
     func deleteDownloads(forPodcastID podcastID: String, modelContext: ModelContext) throws {
-        let records = try fetchRecords(forPodcastID: podcastID, modelContext: modelContext)
-        for record in records {
-            try deleteDownloadRecord(record, savesImmediately: false, modelContext: modelContext)
-        }
-        if !records.isEmpty {
-            try modelContext.save()
-        }
-        try reload(modelContext: modelContext)
-        stateChanges.notify()
+        try deleteDownloadRecords(
+            fetchRecords(forPodcastID: podcastID, modelContext: modelContext),
+            modelContext: modelContext
+        )
     }
 
     func waitForDownload(episodeID: String) async throws {
@@ -578,6 +570,11 @@ final class DownloadStore {
                 record.localRelativePath = newRelativePath
             }
         }
+        // Records were re-keyed in place, but the keyed index only rebuilds
+        // on a `records` reassignment. Reload — like the transcription twin —
+        // so lookups observe the successor identity.
+        try reload(modelContext: modelContext)
+        stateChanges.notify()
     }
 
     /// A successor row that must survive a collision migration untouched: a
@@ -637,6 +634,16 @@ final class DownloadStore {
             guard let record = record(for: episode.episodeID) else {
                 startDownload(for: episode, modelContext: modelContext)
                 didStartDownload = true
+                guard record(for: episode.episodeID) != nil else {
+                    // `startDownload(for:)` swallowed a setup failure before
+                    // any record existed. With no record and no task,
+                    // `waitForDownload` returns without suspending, so
+                    // looping again would busy-spin the main actor forever.
+                    throw CompletedDownloadError.notCompleted(
+                        state: .failed,
+                        errorMessage: lastErrorMessage(for: episode.episodeID)
+                    )
+                }
                 try await waitForDownload(episodeID: episode.episodeID)
                 continue
             }
@@ -1228,26 +1235,72 @@ final class DownloadStore {
         record.publishedAt = episode.publishedAt
     }
 
-    private func deleteDownloadRecord(
-        _ record: EpisodeDownloadRecord,
-        savesImmediately: Bool = true,
+    /// Deletes the records and saves in one batch before touching any file:
+    /// a failed save rolls back with nothing unlinked yet, and a failed file
+    /// removal can no longer strand unsaved deletions in the shared context
+    /// for an unrelated later save to commit. Orphaned audio from a failed
+    /// removal is reclaimed by the next launch's unclaimed-file sweep, per
+    /// the migration code's record-first durability rule.
+    private func deleteDownloadRecords(
+        _ recordsToDelete: [EpisodeDownloadRecord],
         modelContext: ModelContext
     ) throws {
+        guard !recordsToDelete.isEmpty else {
+            return
+        }
+
+        let cleanups = recordsToDelete.map(detachDownloadBookkeeping(for:))
+        for record in recordsToDelete {
+            modelContext.delete(record)
+        }
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            try? reload(modelContext: modelContext)
+            stateChanges.notify()
+            throw error
+        }
+
+        var firstError: (any Error)?
+        do {
+            try reload(modelContext: modelContext)
+        } catch {
+            firstError = error
+        }
+        stateChanges.notify()
+
+        for cleanup in cleanups {
+            do {
+                try fileStore.removeTemporaryFiles(episodeID: cleanup.episodeID)
+                try fileStore.removePausedPartial(episodeID: cleanup.episodeID)
+                try fileStore.removeFile(relativePath: cleanup.localRelativePath)
+            } catch {
+                firstError = firstError ?? error
+            }
+        }
+        if let firstError {
+            throw firstError
+        }
+    }
+
+    private struct DownloadFileCleanup {
+        let episodeID: String
+        let localRelativePath: String?
+    }
+
+    private func detachDownloadBookkeeping(
+        for record: EpisodeDownloadRecord
+    ) -> DownloadFileCleanup {
         downloadTasks[record.episodeID]?.cancel()
         downloadTasks[record.episodeID] = nil
         downloadTaskTokens[record.episodeID] = nil
         clearTransientProgress(episodeID: record.episodeID)
         pauseRequestedEpisodeIDs.remove(record.episodeID)
-        stateChanges.notify()
-
-        try fileStore.removeTemporaryFiles(episodeID: record.episodeID)
-        try fileStore.removePausedPartial(episodeID: record.episodeID)
-        try fileStore.removeFile(relativePath: record.localRelativePath)
-        modelContext.delete(record)
-
-        if savesImmediately {
-            try commit(episodeID: record.episodeID, modelContext: modelContext)
-        }
+        return DownloadFileCleanup(
+            episodeID: record.episodeID,
+            localRelativePath: record.localRelativePath
+        )
     }
 
     // The per-record file probes and partial adoption run off the main actor
@@ -1259,9 +1312,13 @@ final class DownloadStore {
         var fetchedRecords = try fetchRecords(modelContext: modelContext)
         var changed = false
 
-        let repairedGroupCount = repairDuplicateRecordGroups(&fetchedRecords, modelContext: modelContext)
-        if repairedGroupCount > 0 {
-            duplicateRepairCount += repairedGroupCount
+        let repairOutcome = await repairDuplicateRecordGroups(
+            fetchedRecords,
+            modelContext: modelContext
+        )
+        fetchedRecords = repairOutcome.records
+        if repairOutcome.repairedGroupCount > 0 {
+            duplicateRepairCount += repairOutcome.repairedGroupCount
             changed = true
         }
 
@@ -1483,35 +1540,53 @@ final class DownloadStore {
     /// `.missing` so nothing claims a false identity. Record-only: loser
     /// files become unclaimed once the save is durable, and the sweep at the
     /// end of `reconcile` collects them.
+    ///
+    /// Hashing a duplicated 100-200MB download must not stall the launch
+    /// frame, so the file probes run off the main actor; verdicts apply only
+    /// to groups whose records still match the probed snapshot, and a
+    /// drifted group waits for the next launch's repair.
     private func repairDuplicateRecordGroups(
-        _ fetchedRecords: inout [EpisodeDownloadRecord],
+        _ fetchedRecords: [EpisodeDownloadRecord],
         modelContext: ModelContext
-    ) -> Int {
+    ) async -> (records: [EpisodeDownloadRecord], repairedGroupCount: Int) {
         var groupsByEpisodeID: [String: [EpisodeDownloadRecord]] = [:]
         for record in fetchedRecords {
             groupsByEpisodeID[record.episodeID, default: []].append(record)
         }
         let duplicateGroups = groupsByEpisodeID.values.filter { $0.count > 1 }
         guard !duplicateGroups.isEmpty else {
-            return 0
+            return (fetchedRecords, 0)
         }
+
+        var snapshots: [ObjectIdentifier: DownloadRepairRecordSnapshot] = [:]
+        var sizedRelativePaths: Set<String> = []
+        var hashedRelativePaths: Set<String> = []
+        for record in duplicateGroups.joined() {
+            snapshots[ObjectIdentifier(record)] = DownloadRepairRecordSnapshot(record)
+            guard record.state == .completed, let relativePath = record.localRelativePath else {
+                continue
+            }
+            sizedRelativePaths.insert(relativePath)
+            if !record.sourceFileSHA256.isEmpty {
+                hashedRelativePaths.insert(relativePath)
+            }
+        }
+        let probes = await Self.repairFileProbes(
+            sizedRelativePaths: sizedRelativePaths,
+            hashedRelativePaths: hashedRelativePaths,
+            fileStore: fileStore
+        )
 
         let subscribedFeedURLs = EpisodeSidecarRepair.subscribedFeedURLs(modelContext: modelContext)
-        var fileHashCache: [String: String?] = [:]
-        func provenFileHash(relativePath: String) -> String? {
-            if let cached = fileHashCache[relativePath] {
-                return cached
-            }
-            let hash = try? OpenCastSHA256.hashFile(at: fileStore.fileURL(relativePath: relativePath))
-            fileHashCache[relativePath] = hash
-            return hash
-        }
-
+        var repairedGroupCount = 0
         var removedIdentities = Set<ObjectIdentifier>()
         for group in duplicateGroups {
+            guard group.allSatisfy({ snapshots[ObjectIdentifier($0)]?.matches($0) == true }) else {
+                continue
+            }
             let ordered = group
                 .map { record in
-                    (record: record, verdict: assessForRepair(record, provenFileHash: provenFileHash))
+                    (record: record, verdict: assessForRepair(record, probes: probes))
                 }
                 .sorted { lhs, rhs in
                     if lhs.verdict.score != rhs.verdict.score {
@@ -1542,10 +1617,61 @@ final class DownloadStore {
                 modelContext.delete(loser.record)
                 removedIdentities.insert(ObjectIdentifier(loser.record))
             }
+            repairedGroupCount += 1
         }
 
-        fetchedRecords.removeAll { removedIdentities.contains(ObjectIdentifier($0)) }
-        return duplicateGroups.count
+        let survivingRecords = fetchedRecords.filter {
+            !removedIdentities.contains(ObjectIdentifier($0))
+        }
+        return (survivingRecords, repairedGroupCount)
+    }
+
+    private struct DownloadRepairRecordSnapshot {
+        let state: EpisodeDownloadState
+        let localRelativePath: String?
+        let sourceFileSHA256: String
+        let bytesReceived: Int64
+
+        init(_ record: EpisodeDownloadRecord) {
+            state = record.state
+            localRelativePath = record.localRelativePath
+            sourceFileSHA256 = record.sourceFileSHA256
+            bytesReceived = record.bytesReceived
+        }
+
+        func matches(_ record: EpisodeDownloadRecord) -> Bool {
+            state == record.state
+                && localRelativePath == record.localRelativePath
+                && sourceFileSHA256 == record.sourceFileSHA256
+                && bytesReceived == record.bytesReceived
+        }
+    }
+
+    private struct DownloadRepairFileProbe: Sendable {
+        let fileSize: Int64?
+        let sha256: String?
+    }
+
+    @concurrent
+    private static func repairFileProbes(
+        sizedRelativePaths: Set<String>,
+        hashedRelativePaths: Set<String>,
+        fileStore: EpisodeDownloadFileStore
+    ) async -> [String: DownloadRepairFileProbe] {
+        var probes: [String: DownloadRepairFileProbe] = [:]
+        for relativePath in sizedRelativePaths {
+            let sha256: String?
+            if hashedRelativePaths.contains(relativePath) {
+                sha256 = try? OpenCastSHA256.hashFile(at: fileStore.fileURL(relativePath: relativePath))
+            } else {
+                sha256 = nil
+            }
+            probes[relativePath] = DownloadRepairFileProbe(
+                fileSize: try? fileStore.fileSize(relativePath: relativePath),
+                sha256: sha256
+            )
+        }
+        return probes
     }
 
     private enum DownloadRepairVerdict {
@@ -1572,17 +1698,17 @@ final class DownloadStore {
 
     private func assessForRepair(
         _ record: EpisodeDownloadRecord,
-        provenFileHash: (String) -> String?
+        probes: [String: DownloadRepairFileProbe]
     ) -> DownloadRepairVerdict {
         switch record.state {
         case .completed:
             guard let relativePath = record.localRelativePath,
-                  let fileSize = try? fileStore.fileSize(relativePath: relativePath)
+                  let fileSize = probes[relativePath]?.fileSize
             else {
                 return .dead
             }
             if !record.sourceFileSHA256.isEmpty {
-                return provenFileHash(relativePath) == record.sourceFileSHA256
+                return probes[relativePath]?.sha256 == record.sourceFileSHA256
                     ? .provenByHash(fileSize: fileSize)
                     : .unproven
             }

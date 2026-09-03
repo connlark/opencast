@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenCastCore
 import OpenCastTranscription
 import SwiftData
@@ -64,6 +65,41 @@ struct DownloadStoreTests {
         #expect(store.record(for: episode.episodeID) == nil)
     }
 
+    @Test("record(for:) registers Observation dependencies even with no record")
+    func recordLookupRegistersObservationWithoutRecord() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
+        let downloader = ChunkedEpisodeAudioDownloader(chunks: [Data("abc".utf8)])
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "observation-nil-lookup")
+
+        // A body whose only store read is a nil record(for:) must still be
+        // invalidated when the record appears — the ignored index alone
+        // registers no dependency.
+        try await confirmation("nil lookup invalidates when the record appears") { invalidated in
+            withObservationTracking {
+                #expect(store.record(for: episode.episodeID) == nil)
+            } onChange: {
+                invalidated()
+            }
+            store.startDownload(for: episode, modelContext: context)
+            try await store.waitForDownload(episodeID: episode.episodeID)
+        }
+
+        let record = try #require(store.record(for: episode.episodeID))
+        await confirmation("lookup invalidates when the record is deleted") { invalidated in
+            withObservationTracking {
+                _ = store.record(for: episode.episodeID)
+            } onChange: {
+                invalidated()
+            }
+            store.deleteDownload(record, modelContext: context)
+        }
+        #expect(store.record(for: episode.episodeID) == nil)
+    }
+
     @Test("ensureCompletedDownload returns a completed record and self-heals a missing file")
     func ensureCompletedDownloadSelfHealsMissingFile() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -97,6 +133,33 @@ struct DownloadStoreTests {
             )
         }
         #expect(store.record(for: episode.episodeID)?.state == .missing)
+    }
+
+    @Test("ensureCompletedDownload throws instead of spinning when setup persistently fails")
+    func ensureCompletedDownloadThrowsOnPersistentSetupFailure() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        // A base directory nested under a regular file makes every
+        // prepareDownloadsDirectory call fail, so startDownload(for:) swallows
+        // the setup error without ever creating a record.
+        let blockerURL = temporaryDirectory.appending(path: "blocker")
+        try Data("not a directory".utf8).write(to: blockerURL, options: .atomic)
+        let fileStore = EpisodeDownloadFileStore(
+            baseDirectory: blockerURL.appending(path: "base", directoryHint: .isDirectory)
+        )
+        let store = DownloadStore(fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "ensure-setup-failure")
+
+        await #expect(throws: DownloadStore.CompletedDownloadError.self) {
+            _ = try await store.ensureCompletedDownload(
+                for: episode,
+                modelContext: context,
+                onWaitStarted: { try Task.checkCancellation() }
+            )
+        }
+        #expect(store.record(for: episode.episodeID) == nil)
+        #expect(store.lastErrorMessage(for: episode.episodeID) != nil)
     }
 
     @Test("Cancel removes the download record and partial file")
@@ -303,14 +366,18 @@ struct DownloadStoreTests {
         #expect(store.lastErrorMessage(for: unrelatedEpisode.episodeID) == nil)
     }
 
-    @Test("Unsubscribe removes only downloads for that feed")
+    @Test("Unsubscribe removes only downloads for that feed, after the delete is confirmed")
     func unsubscribeRemovesOnlyDownloadsForThatFeed() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
         let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
         let downloadStore = DownloadStore(fileStore: fileStore)
-        let libraryStore = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let appModel = OpenCastAppModel(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: downloadStore,
+            allowsAutomaticFeedRefresh: false
+        )
         let removedFeedURL = "https://example.com/removed.xml"
         let keptFeedURL = "https://example.com/kept.xml"
         let removedPath = try insertFeedAndDownload(
@@ -326,21 +393,19 @@ struct DownloadStoreTests {
             context: context
         )
         try context.save()
-        await libraryStore.load(modelContext: context)
+        await appModel.library.load(modelContext: context)
         await downloadStore.load(modelContext: context)
 
-        await libraryStore.unsubscribe(
-            feedURL: removedFeedURL,
-            modelContext: context,
-            downloadStore: downloadStore
-        )
+        let outcome = await appModel.unsubscribe(feedURL: removedFeedURL, modelContext: context)
 
+        #expect(outcome == .removed(warning: nil))
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).map(\.podcastID) == [keptFeedURL])
         #expect(fileStore.fileExists(relativePath: removedPath) == false)
         #expect(fileStore.fileExists(relativePath: keptPath))
-        #expect(libraryStore.subscriptions.map(\.feedURL) == [keptFeedURL])
-        #expect(libraryStore.episodes(forPodcastID: keptFeedURL).map(\.episodeID) == ["kept-episode"])
+        #expect(appModel.library.subscriptions.map(\.feedURL) == [keptFeedURL])
+        #expect(appModel.library.episodes(forPodcastID: keptFeedURL).map(\.episodeID) == ["kept-episode"])
     }
+
 
     @Test("Clear Automatic Caches leaves explicit downloads intact")
     func clearAutomaticCachesLeavesExplicitDownloadsIntact() async throws {
@@ -435,8 +500,8 @@ struct DownloadStoreTests {
         #expect(cacheController.artworkCacheSummary.byteCount > 0)
     }
 
-    @Test("Batch deletion preserves an earlier failure after a later success")
-    func batchDeletionPreservesEarlierFailure() async throws {
+    @Test("Batch deletion commits record deletions before any file removal")
+    func batchDeletionCommitsRecordsBeforeFileRemoval() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -488,14 +553,21 @@ struct DownloadStoreTests {
             )
         }
 
+        let failedEpisodeID = failedRecord.episodeID
+        let succeededEpisodeID = succeededRecord.episodeID
         store.deleteDownloads([failedRecord, succeededRecord], modelContext: context)
 
-        #expect(store.record(for: failedRecord.episodeID) != nil)
-        #expect(store.record(for: succeededRecord.episodeID) == nil)
+        // Record deletions commit in one save before any file is touched, so
+        // the locked file can no longer strand unsaved deletions in the
+        // shared context for an unrelated later save to pick up.
+        #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).isEmpty)
+        #expect(store.record(for: failedEpisodeID) == nil)
+        #expect(store.record(for: succeededEpisodeID) == nil)
+        // The undeletable file stays claimed-by-nothing until the next
+        // launch's unclaimed-file sweep; the failure still surfaces.
         #expect(FileManager.default.fileExists(atPath: failedFileURL.path))
         #expect(fileStore.fileExists(relativePath: succeededRelativePath) == false)
         #expect(store.lastErrorMessage != nil)
-        #expect(store.lastErrorMessage(for: failedRecord.episodeID) == store.lastErrorMessage)
     }
 
     @Test("Per-podcast storage cleanup removes completed downloads only")

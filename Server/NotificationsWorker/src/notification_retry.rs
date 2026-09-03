@@ -1,5 +1,18 @@
 const EPISODE_NOTIFICATION_RETRY_INTERVAL_SECONDS: i64 = 5 * 60;
 
+/// One episode's fanout pushes at most this many devices per poll. Each
+/// device costs a claim, an APNs subrequest, and one batched D1 write, so
+/// this keeps a single hot feed inside the invocation subrequest limit; a
+/// truncated fanout keeps the feed checkpoint (like a retryable failure) and
+/// the next poll continues with the devices that hold no send row yet.
+pub const MAX_EPISODE_FANOUT_DEVICES_PER_POLL: usize = 100;
+
+/// A send claim with no recorded outcome older than one poll lease belongs
+/// to an invocation that was killed mid-fanout (a scheduled invocation
+/// cannot outlive the lease), so the claim is released before the fanout
+/// instead of deduping that device out of the episode forever.
+pub const STALE_SEND_CLAIM_SECONDS: i64 = crate::poll_scheduling::HOT_INTERVAL_SECONDS;
+
 pub struct FeedPollCompletionInput<'a> {
     pub previous_etag: Option<&'a str>,
     pub previous_last_modified: Option<&'a str>,
@@ -13,6 +26,9 @@ pub struct FeedPollCompletionInput<'a> {
     pub fetched_episode_published_at: Option<i64>,
     pub computed_poll_interval_seconds: i64,
     pub retryable_failures: usize,
+    /// Fanouts cut short by `MAX_EPISODE_FANOUT_DEVICES_PER_POLL`; like a
+    /// retryable failure they keep the checkpoint so the next poll resumes.
+    pub truncated_fanouts: usize,
     pub now: i64,
 }
 
@@ -26,7 +42,7 @@ pub struct FeedPollCompletion<'a> {
 }
 
 pub fn feed_poll_completion(input: FeedPollCompletionInput<'_>) -> FeedPollCompletion<'_> {
-    if input.retryable_failures > 0 {
+    if input.retryable_failures > 0 || input.truncated_fanouts > 0 {
         // Keep the previous validators as well as the episode checkpoint. If the
         // new validators were stored, the retry poll could receive 304 and never
         // re-enter notification fanout for this episode.
@@ -89,6 +105,7 @@ mod tests {
             fetched_episode_published_at: Some(1_782_075_600),
             computed_poll_interval_seconds: 15 * 60,
             retryable_failures,
+            truncated_fanouts: 0,
             now: 1_782_100_000,
         }
     }
@@ -128,6 +145,32 @@ mod tests {
         assert_eq!(
             completion.next_poll_at,
             1_782_100_000 + EPISODE_NOTIFICATION_RETRY_INTERVAL_SECONDS
+        );
+    }
+
+    #[test]
+    fn truncated_fanout_preserves_feed_checkpoint_for_next_cron() {
+        let mut input = completion_input(0);
+        input.truncated_fanouts = 1;
+        let completion = feed_poll_completion(input);
+
+        assert_eq!(completion.etag, Some("old-etag"));
+        assert_eq!(completion.latest_episode_id, Some("known-episode"));
+        assert_eq!(
+            completion.next_poll_at,
+            1_782_100_000 + EPISODE_NOTIFICATION_RETRY_INTERVAL_SECONDS
+        );
+    }
+
+    #[test]
+    fn fanout_budget_and_stale_claim_window_pin_the_documented_policy() {
+        // 100 devices × (claim + APNs + one batched write) stays well inside
+        // the 1000-subrequest invocation limit even with a few hot feeds in
+        // the same tick; the stale window equals the due-feed poll lease.
+        assert_eq!(MAX_EPISODE_FANOUT_DEVICES_PER_POLL, 100);
+        assert_eq!(
+            STALE_SEND_CLAIM_SECONDS,
+            crate::poll_scheduling::HOT_INTERVAL_SECONDS
         );
     }
 

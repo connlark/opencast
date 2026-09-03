@@ -5,25 +5,12 @@ import SwiftData
 
 @Observable
 final class EpisodeTranscriptAnalysisStore {
-    // The index rebuilds on every mutation (didSet), so per-row lookups stay
-    // O(1) and can never go stale; keep-first mirrors the replaced
-    // `records.first` lookup (house precedent: LibraryStore.episodeIndexByID).
-    private(set) var records: [EpisodeTranscriptAnalysisRecord] = [] {
-        didSet {
-            recordsByEpisodeID = Dictionary(
-                records.map { ($0.episodeID, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-        }
-    }
-    @ObservationIgnored private var recordsByEpisodeID: [String: EpisodeTranscriptAnalysisRecord] = [:]
+    @ObservationIgnored private let recordSet = AnalysisRecordSet<EpisodeTranscriptAnalysisRecord>(descriptors: EpisodeTranscriptAnalysisStore.fetchDescriptors)
     /// The generate disclosure is this flow's only consent surface, so its
     /// acknowledgement lives in `LocalPreferenceRecord` with the rest of the
     /// wipeable local state: a data nuke deletes the row and the post-nuke
     /// reload resets this, making the next generate disclose again.
     private(set) var hasAcknowledgedGenerateDisclosure = false
-    private(set) var lastErrorMessage: String?
-    private var lastErrorEpisodeID: String?
     /// Episode-ID groups that held more than one record and were collapsed to
     /// a proven survivor, cumulative for this process (startup repair plus
     /// migration collisions). Diagnostics-only; never names episodes.
@@ -32,15 +19,14 @@ final class EpisodeTranscriptAnalysisStore {
     @ObservationIgnored private let client: any EpisodeTranscriptAnalysisClient
     @ObservationIgnored private let fileStore: EpisodeTranscriptAnalysisFileStore
     @ObservationIgnored private let analysisUnavailableMessage: String?
-    @ObservationIgnored private let pollingTimeout: Duration
+    @ObservationIgnored private let poller: AnalysisJobPoller<EpisodeTranscriptAnalysisAPIResponse>
     @ObservationIgnored private let resumeTTL: TimeInterval
     @ObservationIgnored private let resumeInitialPollAfter: TimeInterval
-    @ObservationIgnored private let pollingSleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private let preparationGate: @Sendable () async throws -> Void
     @ObservationIgnored private var activeTask: Task<Void, Never>?
     private var activeEpisodeID: String?
     @ObservationIgnored private var activeRunID: UUID?
-    @ObservationIgnored private let stateChanges = StoreChangeNotifier()
+    @ObservationIgnored private let failures = AnalysisFailureSurface()
     @ObservationIgnored var onEpisodeStateChanged: ((String) -> Void)?
 
     init(
@@ -69,12 +55,11 @@ final class EpisodeTranscriptAnalysisStore {
         analysisUnavailableMessage = TranscriptAnalysisBackendConfiguration.releaseAnalysisUnavailableMessage
         #endif
         self.fileStore = fileStore
-        pollingTimeout = .seconds(1_800)
-        resumeTTL = 3_600
-        resumeInitialPollAfter = 1
-        pollingSleep = { duration in
+        poller = Self.makePoller(timeout: .seconds(1_800)) { duration in
             try await Task.sleep(for: duration)
         }
+        resumeTTL = 3_600
+        resumeInitialPollAfter = 1
         self.preparationGate = preparationGate
     }
 
@@ -93,10 +78,9 @@ final class EpisodeTranscriptAnalysisStore {
         self.client = client
         self.fileStore = fileStore
         self.analysisUnavailableMessage = analysisUnavailableMessage
-        self.pollingTimeout = pollingTimeout
+        poller = Self.makePoller(timeout: pollingTimeout, sleep: pollingSleep)
         self.resumeTTL = resumeTTL
         self.resumeInitialPollAfter = resumeInitialPollAfter
-        self.pollingSleep = pollingSleep
         self.preparationGate = preparationGate
     }
 
@@ -120,12 +104,16 @@ final class EpisodeTranscriptAnalysisStore {
         activeEpisodeID == episodeID && activeTask != nil
     }
 
+    var lastErrorMessage: String? {
+        failures.lastErrorMessage
+    }
+
     var changeSequence: Int {
-        stateChanges.sequence
+        failures.changeSequence
     }
 
     func waitForChange(after sequence: Int) async throws {
-        try await stateChanges.wait(after: sequence)
+        try await failures.waitForChange(after: sequence)
     }
 
     func cancelActiveJob() {
@@ -140,19 +128,22 @@ final class EpisodeTranscriptAnalysisStore {
                 modelContext: modelContext
             )
             let resumeContext = try reconcile(modelContext: modelContext)
-            try reload(modelContext: modelContext)
-            lastErrorMessage = nil
-            lastErrorEpisodeID = nil
+            try recordSet.reload(modelContext: modelContext)
+            failures.reset()
             if let resumeContext {
                 startResumingAnalysis(resumeContext, modelContext: modelContext)
             }
         } catch {
-            recordFailure(error)
+            failures.record(error)
         }
     }
 
+    var records: [EpisodeTranscriptAnalysisRecord] {
+        recordSet.records
+    }
+
     func record(for episodeID: String) -> EpisodeTranscriptAnalysisRecord? {
-        recordsByEpisodeID[episodeID]
+        recordSet.record(for: episodeID)
     }
 
     /// Resolved by the store so the diagnostics sheet never duplicates the
@@ -188,10 +179,7 @@ final class EpisodeTranscriptAnalysisStore {
     }
 
     func lastErrorMessage(for episodeID: String) -> String? {
-        guard lastErrorEpisodeID == episodeID else {
-            return nil
-        }
-        return lastErrorMessage
+        failures.message(for: episodeID)
     }
 
     /// Records whose last run hit the worker's typed daily cap: deferred, not
@@ -322,7 +310,7 @@ final class EpisodeTranscriptAnalysisStore {
         for document: EpisodeTranscriptDocument?,
         transcriptState: EpisodeTranscriptState?,
         analysisDocument: EpisodeTranscriptAnalysisDocument?
-    ) -> (jobState: EpisodeTranscriptAnalysisJobState, hasCurrentCompletedAnalysis: Bool) {
+    ) async -> (jobState: EpisodeTranscriptAnalysisJobState, hasCurrentCompletedAnalysis: Bool) {
         guard let document else {
             return (.unavailable("Transcript unavailable."), false)
         }
@@ -333,12 +321,14 @@ final class EpisodeTranscriptAnalysisStore {
             )
         }
 
-        let segments = normalizedSegments(for: document)
+        // Normalize + fingerprint scale with episode length and the detail
+        // surface calls this per content load; run them off the main actor,
+        // hopping back only for the record lookups.
+        let (segments, fingerprint) = await normalizedFingerprintOffCaller(for: document)
         guard !segments.isEmpty else {
             return (.unavailable("Transcript has no segments."), false)
         }
 
-        let fingerprint = fileStore.transcriptFingerprint(for: document, segments: segments)
         let state = jobState(
             for: document,
             segments: segments,
@@ -356,6 +346,14 @@ final class EpisodeTranscriptAnalysisStore {
             )
         } ?? false
         return (state, hasCurrentCompletedAnalysis)
+    }
+
+    @concurrent
+    private func normalizedFingerprintOffCaller(
+        for document: EpisodeTranscriptDocument
+    ) async -> (segments: [OpenCastTranscriptSegment], fingerprint: String) {
+        let segments = OpenCastTranscriptSegmentNormalizer.normalized(document.segments)
+        return (segments, fileStore.transcriptFingerprint(for: document, segments: segments))
     }
 
     private func jobState(
@@ -417,19 +415,19 @@ final class EpisodeTranscriptAnalysisStore {
         modelContext: ModelContext
     ) {
         guard activeTask == nil else {
-            recordFailure(EpisodeTranscriptAnalysisError.anotherJobActive, episodeID: document.episodeID)
+            failures.record(EpisodeTranscriptAnalysisError.anotherJobActive, episodeID: document.episodeID)
             return
         }
         if let analysisUnavailableMessage {
-            recordFailureMessage(analysisUnavailableMessage, episodeID: document.episodeID)
+            failures.record(message: analysisUnavailableMessage, episodeID: document.episodeID)
             return
         }
         guard transcriptState == .completed else {
-            recordFailure(EpisodeTranscriptAnalysisError.transcriptNotCompleted, episodeID: document.episodeID)
+            failures.record(EpisodeTranscriptAnalysisError.transcriptNotCompleted, episodeID: document.episodeID)
             return
         }
 
-        clearFailure(episodeID: document.episodeID)
+        failures.clear(episodeID: document.episodeID)
         let runID = UUID()
         activeEpisodeID = document.episodeID
         activeRunID = runID
@@ -443,7 +441,7 @@ final class EpisodeTranscriptAnalysisStore {
                 modelContext: modelContext
             )
         }
-        stateChanges.notify()
+        failures.stateChanges.notify()
         notifyEpisodeStateChanged(document.episodeID)
     }
 
@@ -453,23 +451,23 @@ final class EpisodeTranscriptAnalysisStore {
         }
 
         do {
-            let matchingRecords = try fetchRecords(episodeID: episodeID, modelContext: modelContext)
+            let matchingRecords = try recordSet.fetchRecords(episodeID: episodeID, modelContext: modelContext)
             for record in matchingRecords {
                 try fileStore.delete(relativePath: record.analysisRelativePath)
                 modelContext.delete(record)
             }
             try fileStore.deleteAnalyses(forEpisodeID: episodeID)
             try modelContext.save()
-            try reload(modelContext: modelContext)
-            clearFailure(episodeID: episodeID)
+            try recordSet.reload(modelContext: modelContext)
+            failures.clear(episodeID: episodeID)
             notifyEpisodeStateChanged(episodeID)
         } catch {
-            recordFailure(error, episodeID: episodeID)
+            failures.record(error, episodeID: episodeID)
         }
     }
 
     func deleteAnalyses(forPodcastID podcastID: String, modelContext: ModelContext) throws {
-        let records = try fetchRecords(forPodcastID: podcastID, modelContext: modelContext)
+        let records = try recordSet.fetchRecords(forPodcastID: podcastID, modelContext: modelContext)
         for record in records {
             if activeEpisodeID == record.episodeID {
                 activeTask?.cancel()
@@ -481,8 +479,8 @@ final class EpisodeTranscriptAnalysisStore {
         if !records.isEmpty {
             try modelContext.save()
         }
-        try reload(modelContext: modelContext)
-        clearFailure()
+        try recordSet.reload(modelContext: modelContext)
+        failures.clear()
         for record in records {
             notifyEpisodeStateChanged(record.episodeID)
         }
@@ -494,12 +492,12 @@ final class EpisodeTranscriptAnalysisStore {
         canonicalPodcastID: String,
         modelContext: ModelContext
     ) throws {
-        let migratingRecords = try fetchRecords(episodeID: oldEpisodeID, modelContext: modelContext)
+        let migratingRecords = try recordSet.fetchRecords(episodeID: oldEpisodeID, modelContext: modelContext)
         guard !migratingRecords.isEmpty else {
             return
         }
 
-        let targetRecords = try fetchRecords(episodeID: newEpisodeID, modelContext: modelContext)
+        let targetRecords = try recordSet.fetchRecords(episodeID: newEpisodeID, modelContext: modelContext)
         try fileStore.migrateAnalyses(fromEpisodeID: oldEpisodeID, to: newEpisodeID)
         let newDirectory = "\(EpisodeTranscriptAnalysisFileStore.directoryName)/\(fileStore.safeStem(newEpisodeID))"
         for record in migratingRecords {
@@ -511,34 +509,32 @@ final class EpisodeTranscriptAnalysisStore {
             }
         }
 
-        guard !targetRecords.isEmpty else {
-            return
+        if !targetRecords.isEmpty {
+            duplicateRepairCount += 1
+            _ = reconciler.collapseDuplicateRecords(
+                migratingRecords + targetRecords,
+                subscribedFeedURLs: EpisodeSidecarRepair.subscribedFeedURLs(modelContext: modelContext),
+                modelContext: modelContext
+            )
         }
-        duplicateRepairCount += 1
-        let deletedRecords = collapseDuplicateRecords(
-            migratingRecords + targetRecords,
-            subscribedFeedURLs: EpisodeSidecarRepair.subscribedFeedURLs(modelContext: modelContext),
-            modelContext: modelContext
-        )
-        guard !deletedRecords.isEmpty else {
-            return
-        }
-        let deletedIdentities = Set(deletedRecords.map(ObjectIdentifier.init))
-        records.removeAll { deletedIdentities.contains(ObjectIdentifier($0)) }
+
+        // Records were re-keyed in place, but the keyed index only rebuilds
+        // on a `records` reassignment. Reload — like the transcription twin —
+        // so lookups observe the successor identity.
+        try recordSet.reload(modelContext: modelContext)
         notifyEpisodeStateChanged(newEpisodeID)
     }
 
     func nukeAllAnalyses(modelContext: ModelContext) async throws {
         await cancelActiveJobAndWait()
-        for record in try fetchRecords(modelContext: modelContext) {
+        for record in try recordSet.fetchRecords(modelContext: modelContext) {
             modelContext.delete(record)
         }
         try fileStore.deleteAllAnalyses()
         try modelContext.save()
-        records.removeAll()
-        lastErrorMessage = nil
-        lastErrorEpisodeID = nil
-        stateChanges.notify()
+        recordSet.removeAll()
+        failures.reset()
+        failures.stateChanges.notify()
     }
 
     private func cancelActiveJobAndWait() async {
@@ -562,7 +558,7 @@ final class EpisodeTranscriptAnalysisStore {
                 activeTask = nil
                 activeEpisodeID = nil
                 activeRunID = nil
-                stateChanges.notify()
+                failures.stateChanges.notify()
             }
         }
 
@@ -655,7 +651,7 @@ final class EpisodeTranscriptAnalysisStore {
                 response: response,
                 modelContext: modelContext
             )
-            clearFailure(episodeID: document.episodeID)
+            failures.clear(episodeID: document.episodeID)
         } catch is CancellationError {
             return
         } catch {
@@ -710,7 +706,7 @@ final class EpisodeTranscriptAnalysisStore {
     }
 
     private func startResumingAnalysis(
-        _ context: EpisodeTranscriptAnalysisResumeContext,
+        _ context: AnalysisResumeContext,
         modelContext: ModelContext
     ) {
         guard activeTask == nil else {
@@ -731,7 +727,7 @@ final class EpisodeTranscriptAnalysisStore {
 
     private func runResumedAnalysis(
         runID: UUID,
-        context: EpisodeTranscriptAnalysisResumeContext,
+        context: AnalysisResumeContext,
         modelContext: ModelContext
     ) async {
         defer {
@@ -739,7 +735,7 @@ final class EpisodeTranscriptAnalysisStore {
                 activeTask = nil
                 activeEpisodeID = nil
                 activeRunID = nil
-                stateChanges.notify()
+                failures.stateChanges.notify()
             }
         }
 
@@ -770,7 +766,7 @@ final class EpisodeTranscriptAnalysisStore {
                 response: response,
                 modelContext: modelContext
             )
-            clearFailure(episodeID: context.episodeID)
+            failures.clear(episodeID: context.episodeID)
         } catch is CancellationError {
             return
         } catch {
@@ -788,7 +784,7 @@ final class EpisodeTranscriptAnalysisStore {
         fingerprint: String,
         modelContext: ModelContext
     ) throws {
-        guard let record = try fetchStoredRecord(
+        guard let record = try recordSet.fetchStoredRecord(
             episodeID: episodeID,
             modelContext: modelContext
         ), record.state == .running,
@@ -807,63 +803,29 @@ final class EpisodeTranscriptAnalysisStore {
         initialPollAfter: TimeInterval,
         resubmit: (@Sendable () async throws -> EpisodeTranscriptAnalysisSubmitOutcome)?
     ) async throws -> EpisodeTranscriptAnalysisAPIResponse {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: pollingTimeout)
-        var activeJobID = jobID
-        var pollAfter = Self.clampedPollAfter(initialPollAfter)
-        var didResubmit = false
-        var consecutiveURLErrors = 0
+        try await poller.pollUntilCompleted(
+            jobID: jobID,
+            initialPollAfter: initialPollAfter,
+            poll: { [client] jobID in
+                try await client.pollJob(id: jobID)
+            },
+            resubmit: resubmit
+        )
+    }
 
-        while true {
-            try Task.checkCancellation()
-            let now = clock.now
-            guard now < deadline else {
-                throw EpisodeTranscriptAnalysisError.analysisTimedOut
-            }
-
-            let remaining = now.duration(to: deadline)
-            let delay = min(Duration.seconds(pollAfter), remaining)
-            if delay > .zero {
-                try await pollingSleep(delay)
-            }
-            try Task.checkCancellation()
-            guard clock.now < deadline else {
-                throw EpisodeTranscriptAnalysisError.analysisTimedOut
-            }
-
-            do {
-                switch try await client.pollJob(id: activeJobID) {
-                case .running(let nextPollAfter):
-                    consecutiveURLErrors = 0
-                    pollAfter = Self.clampedPollAfter(nextPollAfter)
-                case .completed(let response):
-                    return response
-                }
-            } catch let error as URLError {
-                consecutiveURLErrors += 1
-                guard consecutiveURLErrors <= 3 else {
-                    throw error
-                }
-            } catch let error as EpisodeTranscriptAnalysisHTTPError
-                where error.isTransientJobFailure && !didResubmit && resubmit != nil
-            {
-                didResubmit = true
-                consecutiveURLErrors = 0
-                guard let resubmit else {
-                    throw error
-                }
-                switch try await resubmit() {
-                case .completed(let response):
-                    return response
-                case .accepted(let resubmittedJobID, let nextPollAfter):
-                    guard resubmittedJobID == jobID else {
-                        throw Self.jobIDMismatchError()
-                    }
-                    activeJobID = resubmittedJobID
-                    pollAfter = Self.clampedPollAfter(nextPollAfter)
-                }
-            }
-        }
+    private static func makePoller(
+        timeout: Duration,
+        sleep: @escaping @Sendable (Duration) async throws -> Void
+    ) -> AnalysisJobPoller<EpisodeTranscriptAnalysisAPIResponse> {
+        AnalysisJobPoller(
+            timeout: timeout,
+            sleep: sleep,
+            isTransientJobFailure: {
+                ($0 as? EpisodeTranscriptAnalysisHTTPError)?.isTransientJobFailure == true
+            },
+            timedOutError: EpisodeTranscriptAnalysisError.analysisTimedOut,
+            jobIDMismatchError: jobIDMismatchError()
+        )
     }
 
     private func completeAnalysis(
@@ -874,7 +836,7 @@ final class EpisodeTranscriptAnalysisStore {
         response: EpisodeTranscriptAnalysisAPIResponse,
         modelContext: ModelContext
     ) throws {
-        guard let record = try fetchStoredRecord(
+        guard let record = try recordSet.fetchStoredRecord(
             episodeID: episodeID,
             modelContext: modelContext
         ), record.state == .running,
@@ -908,10 +870,6 @@ final class EpisodeTranscriptAnalysisStore {
         record.jobAcceptedAt = nil
         record.updatedAt = .now
         try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
-    }
-
-    private static func clampedPollAfter(_ value: TimeInterval) -> TimeInterval {
-        min(max(value, 0), 120)
     }
 
     private static func jobIDMismatchError() -> EpisodeTranscriptAnalysisHTTPError {
@@ -1074,7 +1032,7 @@ final class EpisodeTranscriptAnalysisStore {
         transcriptUpdatedAt: Date,
         transcriptSegmentCount: Int,
         transcriptState: EpisodeTranscriptState,
-        state: EpisodeTranscriptAnalysisState,
+        state: EpisodeAnalysisRecordState,
         analysisRelativePath: String?,
         model: String,
         policy: String,
@@ -1083,7 +1041,7 @@ final class EpisodeTranscriptAnalysisStore {
         errorMessage: String?,
         modelContext: ModelContext
     ) throws -> EpisodeTranscriptAnalysisRecord {
-        let matchingRecords = try fetchRecords(episodeID: episodeID, modelContext: modelContext)
+        let matchingRecords = try recordSet.fetchRecords(episodeID: episodeID, modelContext: modelContext)
         let record: EpisodeTranscriptAnalysisRecord
         if let existingRecord = matchingRecords.first {
             record = existingRecord
@@ -1125,8 +1083,8 @@ final class EpisodeTranscriptAnalysisStore {
         modelContext: ModelContext
     ) {
         do {
-            guard let record = try fetchStoredRecord(episodeID: episodeID, modelContext: modelContext) else {
-                recordFailure(error, episodeID: episodeID)
+            guard let record = try recordSet.fetchStoredRecord(episodeID: episodeID, modelContext: modelContext) else {
+                failures.record(error, episodeID: episodeID)
                 return
             }
             record.state = .failed
@@ -1136,13 +1094,13 @@ final class EpisodeTranscriptAnalysisStore {
             record.analysisRelativePath = relativePath ?? record.analysisRelativePath
             record.updatedAt = .now
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
-            recordFailure(error, episodeID: episodeID)
+            failures.record(error, episodeID: episodeID)
         } catch {
-            recordFailure(error, episodeID: episodeID)
+            failures.record(error, episodeID: episodeID)
         }
     }
 
-    private static func failureKind(for error: Error) -> EpisodeTranscriptAnalysisFailureKind {
+    private static func failureKind(for error: Error) -> EpisodeAnalysisFailureKind {
         guard let httpError = error as? EpisodeTranscriptAnalysisHTTPError else {
             return .generic
         }
@@ -1170,232 +1128,46 @@ final class EpisodeTranscriptAnalysisStore {
         }
     }
 
-    private func reconcile(modelContext: ModelContext) throws -> EpisodeTranscriptAnalysisResumeContext? {
-        var fetchedRecords = try fetchRecords(modelContext: modelContext)
-        let now = Date.now
-        var changed = false
-        var resumeContext: EpisodeTranscriptAnalysisResumeContext?
+    private static let reconcileMessages = AnalysisRecordReconcileMessages(
+        interrupted: "Chapters & Summary was interrupted.",
+        documentMissing: "Chapters & Summary document is missing.",
+        transcriptMismatch: "Chapters & Summary no longer matches the transcript."
+    )
 
-        let repairedGroupCount = repairDuplicateRecordGroups(&fetchedRecords, modelContext: modelContext)
-        if repairedGroupCount > 0 {
-            duplicateRepairCount += repairedGroupCount
-            changed = true
-        }
-
-        for record in fetchedRecords {
-            switch record.state {
-            case .running:
-                if resumeContext == nil,
-                   let jobAcceptedAt = record.jobAcceptedAt,
-                   now.timeIntervalSince(jobAcceptedAt) <= resumeTTL,
-                   let context = EpisodeTranscriptAnalysisResumeContext(record: record)
-                {
-                    resumeContext = context
-                    continue
+    private var reconciler: AnalysisRecordReconciler<EpisodeTranscriptAnalysisRecord> {
+        // Typed deferrals are consent-bearing: the retry sweeps re-upload
+        // their transcripts without a fresh tap. Every run starts behind the
+        // generate disclosure, so before it has ever been acknowledged no
+        // deferral can come from this install's own manual runs — it was
+        // inherited from the retired per-show auto-run model, whose opt-in
+        // (possibly since withdrawn) no longer authorizes an upload. Demote
+        // to a plain failure; the episode re-offers Generate and a fresh tap
+        // re-consents.
+        let hasAcknowledgedGenerateDisclosure = hasAcknowledgedGenerateDisclosure
+        return AnalysisRecordReconciler(
+            fileStore: fileStore,
+            messages: Self.reconcileMessages,
+            resumeTTL: resumeTTL,
+            repairFailedRecord: { record, now in
+                guard !hasAcknowledgedGenerateDisclosure,
+                      record.failureKind == .capExceeded || record.failureKind == .insufficientSeconds
+                else {
+                    return false
                 }
-                record.state = .failed
-                record.errorMessage = "Chapters & Summary was interrupted."
                 record.failureKind = .generic
-                record.jobAcceptedAt = nil
                 record.updatedAt = now
-                changed = true
-            case .queued:
-                record.state = .failed
-                record.errorMessage = "Chapters & Summary was interrupted."
-                record.failureKind = .generic
-                record.jobAcceptedAt = nil
-                record.updatedAt = now
-                changed = true
-            case .completed:
-                guard fileStore.documentExists(relativePath: record.analysisRelativePath) else {
-                    record.state = .failed
-                    record.errorMessage = "Chapters & Summary document is missing."
-                    record.failureKind = .generic
-                    record.jobAcceptedAt = nil
-                    record.updatedAt = now
-                    changed = true
-                    continue
-                }
-                if record.jobAcceptedAt != nil {
-                    record.jobAcceptedAt = nil
-                    changed = true
-                }
-            case .failed:
-                if record.jobAcceptedAt != nil {
-                    record.jobAcceptedAt = nil
-                    changed = true
-                }
-                // Typed deferrals are consent-bearing: the retry sweeps
-                // re-upload their transcripts without a fresh tap. Every run
-                // starts behind the generate disclosure, so before it has
-                // ever been acknowledged no deferral can come from this
-                // install's own manual runs — it was inherited from the
-                // retired per-show auto-run model, whose opt-in (possibly
-                // since withdrawn) no longer authorizes an upload. Demote to
-                // a plain failure; the episode re-offers Generate and a
-                // fresh tap re-consents.
-                if !hasAcknowledgedGenerateDisclosure,
-                   record.failureKind == .capExceeded || record.failureKind == .insufficientSeconds {
-                    record.failureKind = .generic
-                    record.updatedAt = now
-                    changed = true
-                }
+                return true
             }
-        }
-
-        if changed {
-            try modelContext.save()
-        }
-        return resumeContext
+        )
     }
 
-    private func repairDuplicateRecordGroups(
-        _ fetchedRecords: inout [EpisodeTranscriptAnalysisRecord],
-        modelContext: ModelContext
-    ) -> Int {
-        var groupsByEpisodeID: [String: [EpisodeTranscriptAnalysisRecord]] = [:]
-        for record in fetchedRecords {
-            groupsByEpisodeID[record.episodeID, default: []].append(record)
-        }
-        let duplicateGroups = groupsByEpisodeID.values.filter { $0.count > 1 }
-        guard !duplicateGroups.isEmpty else {
-            return 0
-        }
-
-        let subscribedFeedURLs = EpisodeSidecarRepair.subscribedFeedURLs(modelContext: modelContext)
-        var removedIdentities = Set<ObjectIdentifier>()
-        for group in duplicateGroups {
-            for deleted in collapseDuplicateRecords(
-                group,
-                subscribedFeedURLs: subscribedFeedURLs,
-                modelContext: modelContext
-            ) {
-                removedIdentities.insert(ObjectIdentifier(deleted))
-            }
-        }
-        fetchedRecords.removeAll { removedIdentities.contains(ObjectIdentifier($0)) }
-        return duplicateGroups.count
-    }
-
-    /// Collapses one episode's analysis records to a single survivor. The
-    /// ladder prefers a completed record whose document decodes and whose
-    /// fingerprint matches the episode's surviving transcript; a survivor
-    /// that contradicts that transcript is kept but failed so stale chapters
-    /// are never presented. Loser documents are removed immediately —
-    /// losing is deterministic, so an interrupted save re-runs the same
-    /// collapse.
-    private func collapseDuplicateRecords(
-        _ group: [EpisodeTranscriptAnalysisRecord],
-        subscribedFeedURLs: Set<String>,
-        modelContext: ModelContext
-    ) -> [EpisodeTranscriptAnalysisRecord] {
-        guard group.count > 1, let episodeID = group.first?.episodeID else {
-            return []
-        }
-
-        let transcriptFingerprint = survivingTranscriptFingerprint(
-            episodeID: episodeID,
+    private func reconcile(modelContext: ModelContext) throws -> AnalysisResumeContext? {
+        let outcome = try reconciler.reconcile(
+            recordSet.fetchRecords(modelContext: modelContext),
             modelContext: modelContext
         )
-        let ordered = group
-            .map { record in
-                (record: record, score: repairScore(record, transcriptFingerprint: transcriptFingerprint))
-            }
-            .sorted { lhs, rhs in
-                if lhs.score != rhs.score {
-                    return lhs.score > rhs.score
-                }
-                if lhs.record.updatedAt != rhs.record.updatedAt {
-                    return lhs.record.updatedAt > rhs.record.updatedAt
-                }
-                if lhs.record.createdAt != rhs.record.createdAt {
-                    return lhs.record.createdAt > rhs.record.createdAt
-                }
-                return EpisodeSidecarRepair.stableOrderingKey(lhs.record)
-                    < EpisodeSidecarRepair.stableOrderingKey(rhs.record)
-            }
-        guard let winner = ordered.first else {
-            return []
-        }
-
-        if winner.score == 2 {
-            winner.record.state = .failed
-            winner.record.errorMessage = "Chapters & Summary no longer matches the transcript."
-            winner.record.failureKind = .generic
-            winner.record.jobAcceptedAt = nil
-            winner.record.updatedAt = .now
-        }
-        if let podcastID = EpisodeSidecarRepair.preferredPodcastID(
-            orderedCandidates: ordered.map(\.record.podcastID),
-            subscribedFeedURLs: subscribedFeedURLs
-        ), winner.record.podcastID != podcastID {
-            winner.record.podcastID = podcastID
-            winner.record.updatedAt = .now
-        }
-
-        var deletedRecords: [EpisodeTranscriptAnalysisRecord] = []
-        let winnerPath = winner.record.analysisRelativePath
-        for loser in ordered.dropFirst() {
-            if let loserPath = loser.record.analysisRelativePath, loserPath != winnerPath {
-                try? fileStore.delete(relativePath: loserPath)
-            }
-            modelContext.delete(loser.record)
-            deletedRecords.append(loser.record)
-        }
-        return deletedRecords
-    }
-
-    /// 4: completed, document decodes, fingerprint matches the surviving
-    /// transcript. 3: completed with a valid document and no transcript to
-    /// contradict it. 2: completed but contradicting the surviving
-    /// transcript — survives only when nothing better exists, and is failed.
-    /// 0: everything else.
-    private func repairScore(
-        _ record: EpisodeTranscriptAnalysisRecord,
-        transcriptFingerprint: String?
-    ) -> Int {
-        guard record.state == .completed,
-              let relativePath = record.analysisRelativePath,
-              (try? fileStore.read(relativePath: relativePath)) != nil
-        else {
-            return 0
-        }
-        if let transcriptFingerprint {
-            return record.transcriptFingerprint == transcriptFingerprint ? 4 : 2
-        }
-        return 3
-    }
-
-    /// Fingerprint of the episode's one completed transcript document, or nil
-    /// when there is no unambiguous surviving transcript to compare against.
-    private func survivingTranscriptFingerprint(
-        episodeID: String,
-        modelContext: ModelContext
-    ) -> String? {
-        let targetEpisodeID = episodeID
-        let transcriptRecords = (try? modelContext.fetch(
-            FetchDescriptor<EpisodeTranscriptRecord>(
-                predicate: #Predicate { record in
-                    record.episodeID == targetEpisodeID
-                }
-            )
-        )) ?? []
-        let completedRecords = transcriptRecords.filter {
-            $0.state == .completed && $0.transcriptRelativePath != nil
-        }
-        guard completedRecords.count == 1,
-              let relativePath = completedRecords[0].transcriptRelativePath,
-              let document = try? transcriptFileStore.read(relativePath: relativePath)
-        else {
-            return nil
-        }
-        return fileStore.transcriptFingerprint(for: document)
-    }
-
-    /// Reads transcript documents for provenance checks; shares the analysis
-    /// store's base directory so tests exercise both against one root.
-    private var transcriptFileStore: EpisodeTranscriptFileStore {
-        EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory)
+        duplicateRepairCount += outcome.repairedGroupCount
+        return outcome.resumeContext
     }
 
     private func commit(
@@ -1403,111 +1175,36 @@ final class EpisodeTranscriptAnalysisStore {
         modelContext: ModelContext,
         resort: Bool = false
     ) throws {
-        try modelContext.save()
-        if let record = try fetchStoredRecord(episodeID: episodeID, modelContext: modelContext) {
-            updateLoadedRecord(record, resort: resort)
-        } else {
-            records.removeAll { $0.episodeID == episodeID }
-            notifyEpisodeStateChanged(episodeID)
-        }
+        try recordSet.commit(episodeID: episodeID, modelContext: modelContext, resort: resort)
+        notifyEpisodeStateChanged(episodeID)
     }
 
-    private func updateLoadedRecord(_ record: EpisodeTranscriptAnalysisRecord, resort: Bool = false) {
-        if let index = records.firstIndex(where: { $0.episodeID == record.episodeID }) {
-            records[index] = record
-        } else {
-            records.append(record)
-        }
-
-        if resort {
-            records.sort { $0.updatedAt > $1.updatedAt }
-        }
-        notifyEpisodeStateChanged(record.episodeID)
-    }
-
-    private func reload(modelContext: ModelContext) throws {
-        records = try fetchRecords(modelContext: modelContext)
-    }
-
-    private func fetchStoredRecord(
-        episodeID: String,
-        modelContext: ModelContext
-    ) throws -> EpisodeTranscriptAnalysisRecord? {
-        let targetEpisodeID = episodeID
-        var descriptor = FetchDescriptor<EpisodeTranscriptAnalysisRecord>(
-            predicate: #Predicate { record in
-                record.episodeID == targetEpisodeID
-            },
-            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
-        )
-        descriptor.fetchLimit = 1
-        return try modelContext.fetch(descriptor).first
-    }
-
-    private func fetchRecords(
-        episodeID: String,
-        modelContext: ModelContext
-    ) throws -> [EpisodeTranscriptAnalysisRecord] {
-        let targetEpisodeID = episodeID
-        return try modelContext.fetch(
+    private static let fetchDescriptors = AnalysisRecordFetchDescriptors<EpisodeTranscriptAnalysisRecord>(
+        all: {
+            FetchDescriptor<EpisodeTranscriptAnalysisRecord>(
+                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+            )
+        },
+        forEpisodeID: { targetEpisodeID in
             FetchDescriptor<EpisodeTranscriptAnalysisRecord>(
                 predicate: #Predicate { record in
                     record.episodeID == targetEpisodeID
                 },
                 sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
             )
-        )
-    }
-
-    private func fetchRecords(
-        forPodcastID podcastID: String,
-        modelContext: ModelContext
-    ) throws -> [EpisodeTranscriptAnalysisRecord] {
-        let targetPodcastID = podcastID
-        return try modelContext.fetch(
+        },
+        forPodcastID: { targetPodcastID in
             FetchDescriptor<EpisodeTranscriptAnalysisRecord>(
                 predicate: #Predicate { record in
                     record.podcastID == targetPodcastID
                 },
                 sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
             )
-        )
-    }
-
-    private func fetchRecords(modelContext: ModelContext) throws -> [EpisodeTranscriptAnalysisRecord] {
-        try modelContext.fetch(
-            FetchDescriptor<EpisodeTranscriptAnalysisRecord>(
-                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
-            )
-        )
-    }
-
-    private func recordFailure(_ error: Error, episodeID: String? = nil) {
-        lastErrorMessage = error.localizedDescription
-        lastErrorEpisodeID = episodeID
-        stateChanges.notify()
-    }
-
-    private func recordFailureMessage(_ message: String, episodeID: String? = nil) {
-        lastErrorMessage = message
-        lastErrorEpisodeID = episodeID
-        stateChanges.notify()
-    }
-
-    private func clearFailure(episodeID: String? = nil) {
-        guard episodeID == nil || lastErrorEpisodeID == nil || lastErrorEpisodeID == episodeID else {
-            return
         }
-        let hadFailure = lastErrorMessage != nil || lastErrorEpisodeID != nil
-        lastErrorMessage = nil
-        lastErrorEpisodeID = nil
-        if hadFailure {
-            stateChanges.notify()
-        }
-    }
+    )
 
     private func notifyEpisodeStateChanged(_ episodeID: String) {
-        stateChanges.notify()
+        failures.stateChanges.notify()
         onEpisodeStateChanged?(episodeID)
     }
 

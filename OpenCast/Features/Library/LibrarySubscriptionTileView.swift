@@ -42,7 +42,7 @@ struct LibrarySubscriptionTileView: View {
                         title: subscription.title,
                         imageURL: podcastCache?.artworkURL ?? subscription.artworkURL,
                         size: artworkSize,
-                        preview: podcastCache?.artworkPreview,
+                        preview: podcastCache.flatMap { appModel.library.artworkPreview(for: $0) },
                         onPreviewResolved: updateArtworkPreview
                     )
 

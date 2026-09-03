@@ -148,6 +148,12 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         episodes.reserveCapacity(items.count)
         var seenIDs = Set<EpisodeID>()
         var seenMaterialKeys = Set<String>()
+
+        // Material duplicates are filtered first so they never influence
+        // collision-winner selection.
+        var pendingItems: [(item: ItemAccumulator, title: String, naturalID: EpisodeID)] = []
+        pendingItems.reserveCapacity(items.count)
+        var indexesByNaturalID: [EpisodeID: [Int]] = [:]
         for item in items {
             let title = item.title.nilIfBlank ?? "Untitled Episode"
             let materialKey = [
@@ -159,12 +165,53 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             guard seenMaterialKeys.insert(materialKey).inserted else {
                 continue
             }
-            guard let id = uniqueEpisodeID(
-                for: item,
-                title: title,
+            let naturalID = EpisodeIdentity.makeID(
                 canonicalFeedURL: podcastID.rawValue,
-                seenIDs: seenIDs
-            ) else {
+                guid: item.guid.nilIfBlank,
+                audioURL: item.audioURL,
+                title: title,
+                publishedAt: item.publishedAt
+            )
+            indexesByNaturalID[naturalID, default: []].append(pendingItems.count)
+            pendingItems.append((item: item, title: title, naturalID: naturalID))
+        }
+
+        // A collision group's natural-tier ID goes to a content-determined
+        // winner, not to whichever collider the publisher listed first: a
+        // newest-first feed prepending a new item with a reused GUID must not
+        // re-key the existing episode and orphan its synced progress.
+        var naturalTierWinnerIndexes: [EpisodeID: Int] = [:]
+        for (naturalID, indexes) in indexesByNaturalID where indexes.count > 1 {
+            let winnerIndex = indexes.min { lhs, rhs in
+                Self.naturalTierPrecedes(pendingItems[lhs], pendingItems[rhs])
+            }
+            if let winnerIndex {
+                naturalTierWinnerIndexes[naturalID] = winnerIndex
+            }
+        }
+
+        for (index, pending) in pendingItems.enumerated() {
+            let item = pending.item
+            let id: EpisodeID?
+            if let winnerIndex = naturalTierWinnerIndexes[pending.naturalID],
+               winnerIndex != index {
+                id = fallbackEpisodeID(
+                    for: item,
+                    title: pending.title,
+                    canonicalFeedURL: podcastID.rawValue,
+                    seenIDs: seenIDs
+                )
+            } else if !seenIDs.contains(pending.naturalID) {
+                id = pending.naturalID
+            } else {
+                id = fallbackEpisodeID(
+                    for: item,
+                    title: pending.title,
+                    canonicalFeedURL: podcastID.rawValue,
+                    seenIDs: seenIDs
+                )
+            }
+            guard let id else {
                 continue
             }
             seenIDs.insert(id)
@@ -174,7 +221,7 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
                     id: id,
                     podcastID: podcastID,
                     podcastTitle: podcastTitle,
-                    title: title,
+                    title: pending.title,
                     summary: item.summary.nilIfBlank,
                     showNotesHTML: item.showNotesHTML.nilIfBlank ?? item.summary.nilIfBlank,
                     publishedAt: item.publishedAt,
@@ -195,30 +242,47 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         )
     }
 
+    /// Natural-tier collision-winner ordering: oldest publishedAt first
+    /// (stable under newest-first prepends — the existing episode keeps its
+    /// ID), then lexicographically smallest audio URL, then document order
+    /// (min-by keeps the earlier index on full ties).
+    private static func naturalTierPrecedes(
+        _ lhs: (item: ItemAccumulator, title: String, naturalID: EpisodeID),
+        _ rhs: (item: ItemAccumulator, title: String, naturalID: EpisodeID)
+    ) -> Bool {
+        switch (lhs.item.publishedAt, rhs.item.publishedAt) {
+        case let (lhsDate?, rhsDate?) where lhsDate != rhsDate:
+            return lhsDate < rhsDate
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        default:
+            break
+        }
+        switch (lhs.item.audioURL?.absoluteString, rhs.item.audioURL?.absoluteString) {
+        case let (lhsURL?, rhsURL?):
+            return lhsURL < rhsURL
+        case (.some, .none):
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Publishers occasionally reuse one GUID (or enclosure) across distinct
     /// episodes; without a fallback every collider collapses into one row.
-    /// The first occurrence keeps its natural-tier ID so existing libraries
-    /// don't re-key; later colliders fall back a tier at a time. Items whose
-    /// identity material is identical at every tier are true duplicates and
-    /// collapse to nil.
-    private func uniqueEpisodeID(
+    /// The content-determined winner keeps the natural-tier ID so existing
+    /// libraries don't re-key; the other colliders fall back a tier at a
+    /// time. Items whose identity material is identical at every tier are
+    /// true duplicates and collapse to nil.
+    private func fallbackEpisodeID(
         for item: ItemAccumulator,
         title: String,
         canonicalFeedURL: String,
         seenIDs: Set<EpisodeID>
     ) -> EpisodeID? {
         let guid = item.guid.nilIfBlank
-        let natural = EpisodeIdentity.makeID(
-            canonicalFeedURL: canonicalFeedURL,
-            guid: guid,
-            audioURL: item.audioURL,
-            title: title,
-            publishedAt: item.publishedAt
-        )
-        guard seenIDs.contains(natural) else {
-            return natural
-        }
-
         var fallbacks: [EpisodeID] = []
         if guid != nil, item.audioURL != nil {
             fallbacks.append(
@@ -385,13 +449,14 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
 
     private func applyChannelValue(name: String, value: String) {
         switch name {
-        case "title" where !isInsideChannelMetadataContainer:
+        case "title" where !isInsideMetadataContainer:
             channel.title = RSSTextEntityDecoder.decoded(value)
-        case "description", "itunes:summary":
+        case "description" where !isInsideMetadataContainer,
+             "itunes:summary" where !isInsideMetadataContainer:
             if channel.summary.nilIfBlank == nil {
                 channel.summary = value
             }
-        case "link" where !isInsideChannelMetadataContainer:
+        case "link" where !isInsideMetadataContainer:
             channel.websiteURL = URL(string: value)
         case "itunes:author", "author":
             channel.author = RSSTextEntityDecoder.decoded(value)
@@ -408,7 +473,11 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         }
     }
 
-    private var isInsideChannelMetadataContainer: Bool {
+    /// A channel-level `<image>`/`<textinput>` closes before any `<item>`
+    /// opens, so inside an item this only matches a (nonstandard) container
+    /// nested in the item itself — spec-valid `<image><title>`/`<description>`
+    /// must not steal channel or episode fields either way.
+    private var isInsideMetadataContainer: Bool {
         elementStack.contains("image") || elementStack.contains("textinput")
     }
 
@@ -470,11 +539,12 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
 
     private func applyItemValue(name: String, value: String) {
         switch name {
-        case "title":
+        case "title" where !isInsideMetadataContainer:
             currentItem?.title = RSSTextEntityDecoder.decoded(value)
         case "guid":
             currentItem?.guid = value
-        case "description", "itunes:summary":
+        case "description" where !isInsideMetadataContainer,
+             "itunes:summary" where !isInsideMetadataContainer:
             if currentItem?.summary.nilIfBlank == nil {
                 currentItem?.summary = value
             }

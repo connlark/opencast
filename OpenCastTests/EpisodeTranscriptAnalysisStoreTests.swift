@@ -270,7 +270,7 @@ struct EpisodeTranscriptAnalysisStoreTests {
         // Rendering neither card while also reporting "current" would hide
         // Generate permanently; the empty result must not count as current
         // for the detail surface or for the auto-run/explicit skip check.
-        let state = store.episodeDetailState(
+        let state = await store.episodeDetailState(
             for: transcript,
             transcriptState: .completed,
             analysisDocument: document
@@ -1094,7 +1094,7 @@ struct EpisodeTranscriptAnalysisStoreTests {
     }
 
     private func insertDeferredRecord(
-        kind: EpisodeTranscriptAnalysisFailureKind,
+        kind: EpisodeAnalysisFailureKind,
         episodeID: String,
         podcastID: String,
         updatedAt: Date,

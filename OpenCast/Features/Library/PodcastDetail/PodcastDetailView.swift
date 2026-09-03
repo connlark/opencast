@@ -33,6 +33,10 @@ struct PodcastDetailView: View {
         appModel.library.podcastCache(for: feedURL)
     }
 
+    private var podcastArtworkPreview: ArtworkPreview? {
+        podcastCache.flatMap { appModel.library.artworkPreview(for: $0) }
+    }
+
     private var hasSearchQuery: Bool {
         EpisodeSearch.isSearchActive(query: searchQuery)
     }
@@ -68,14 +72,7 @@ struct PodcastDetailView: View {
             library: appModel.library,
             downloadRecords: appModel.downloads.records
         )
-        let unplayedEpisodeCount = allEpisodes.count { episode in
-            !appModel.library.progressSummary(for: episode).isCompleted
-        }
         let downloadCount = appModel.downloads.records.count { $0.podcastID == feedURL }
-        let primaryAction = PodcastPrimaryAction.resolve(
-            episodes: allEpisodes,
-            library: appModel.library
-        )
         let searchTaskKey = EpisodeSearchRequestKey(
             episodes: allEpisodes,
             query: searchQuery,
@@ -93,8 +90,9 @@ struct PodcastDetailView: View {
                                 PodcastHeroHeaderView(
                                     subscription: subscription,
                                     podcast: podcastCache,
+                                    artworkPreview: podcastArtworkPreview,
                                     episodeCount: allEpisodes.count,
-                                    unplayedCount: unplayedEpisodeCount,
+                                    unplayedCount: model.unplayedEpisodeCount,
                                     lastRefreshedAt: appModel.library.lastRefreshedAt(for: subscription),
                                     isRefreshing: isRefreshing,
                                     refreshErrorMessage: refreshErrorMessage,
@@ -104,7 +102,7 @@ struct PodcastDetailView: View {
                                         contentChangedAt: podcastCache?.updatedAt
                                     ),
                                     notificationHealth: appModel.library.notificationFeedHealthByFeedURL[feedURL],
-                                    primaryAction: primaryAction,
+                                    primaryAction: model.primaryAction,
                                     onPlay: playPrimaryAction,
                                     onPreviewResolved: updatePodcastArtworkPreview
                                 )
@@ -182,7 +180,7 @@ struct PodcastDetailView: View {
                 .scrollDismissesKeyboard(.immediately)
                 .scrollContentBackground(.hidden)
                 .background(alignment: .top) {
-                    EpisodeArtworkGlowBackground(preview: podcastCache?.artworkPreview)
+                    EpisodeArtworkGlowBackground(preview: podcastArtworkPreview)
                 }
                 .contentMargins(.bottom, 72, for: .scrollContent)
                 .animation(listAnimation, value: model.animationKey)
@@ -253,7 +251,7 @@ struct PodcastDetailView: View {
                         subscription: subscription,
                         podcast: podcastCache,
                         isRefreshing: isRefreshing,
-                        unplayedEpisodeCount: unplayedEpisodeCount,
+                        unplayedEpisodeCount: model.unplayedEpisodeCount,
                         downloadCount: downloadCount,
                         onSearch: showSearch,
                         onPlaybackSettings: showPlaybackSettings,

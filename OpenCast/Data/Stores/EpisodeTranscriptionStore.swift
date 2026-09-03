@@ -14,6 +14,7 @@ final class EpisodeTranscriptionStore {
     // `records.first` lookup (house precedent: LibraryStore.episodeIndexByID).
     private(set) var records: [EpisodeTranscriptRecord] = [] {
         didSet {
+            recordsRevision &+= 1
             recordsByEpisodeID = Dictionary(
                 records.map { ($0.episodeID, $0) },
                 uniquingKeysWith: { first, _ in first }
@@ -21,6 +22,11 @@ final class EpisodeTranscriptionStore {
         }
     }
     @ObservationIgnored private var recordsByEpisodeID: [String: EpisodeTranscriptRecord] = [:]
+    // Pairs the ignored index with a tracked revision so `record(for:)`
+    // registers a dependency even when it returns nil — a body that saw no
+    // record must still invalidate when one appears (house pattern:
+    // LibraryStore.progressIndexRevision).
+    private var recordsRevision = 0
     private(set) var progressByEpisodeID: [String: EpisodeTranscriptionProgress] = [:]
     private(set) var lastErrorMessage: String?
     private(set) var activeEpisodeID: String?
@@ -157,7 +163,8 @@ final class EpisodeTranscriptionStore {
     }
 
     func record(for episodeID: String) -> EpisodeTranscriptRecord? {
-        recordsByEpisodeID[episodeID]
+        _ = recordsRevision
+        return recordsByEpisodeID[episodeID]
     }
 
     func lastErrorMessage(for episodeID: String) -> String? {
@@ -781,6 +788,7 @@ final class EpisodeTranscriptionStore {
                         try await persistCheckpoint(
                             checkpoint,
                             baseDocument: baseDocument,
+                            episodeID: episode.episodeID,
                             record: record,
                             relativePath: relativePath,
                             runID: runID,
@@ -795,6 +803,7 @@ final class EpisodeTranscriptionStore {
                     try await persistFinalResult(
                         result,
                         baseDocument: baseDocument,
+                        episodeID: episode.episodeID,
                         record: record,
                         relativePath: relativePath,
                         runID: runID,
@@ -806,6 +815,7 @@ final class EpisodeTranscriptionStore {
                 try await persistCheckpoint(
                     checkpoint,
                     baseDocument: baseDocument,
+                    episodeID: episode.episodeID,
                     record: record,
                     relativePath: relativePath,
                     runID: runID,
@@ -819,6 +829,7 @@ final class EpisodeTranscriptionStore {
                     try await persistCheckpoint(
                         checkpoint,
                         baseDocument: baseDocument,
+                        episodeID: episode.episodeID,
                         record: record,
                         relativePath: relativePath,
                         runID: runID,
@@ -958,15 +969,35 @@ final class EpisodeTranscriptionStore {
         }
     }
 
+    /// True while `record` is still the live, running row for this run. The
+    /// delete paths cancel the active task without awaiting it and leave the
+    /// active-run stamps in place, so `ownsActiveRun` alone cannot see that
+    /// the record was deleted (and its files swept) mid-run — persisting then
+    /// would read and mutate a deleted model and resurrect a swept transcript
+    /// file. `episodeID` is passed separately so a deleted `record` is never
+    /// read.
+    private func isPersistableRunRecord(
+        _ record: EpisodeTranscriptRecord,
+        episodeID: String,
+        modelContext: ModelContext
+    ) -> Bool {
+        let storedRecord = try? fetchStoredRecord(episodeID: episodeID, modelContext: modelContext)
+        return storedRecord === record && storedRecord?.state == .running
+    }
+
     private func persistCheckpoint(
         _ checkpoint: OpenCastLongFormTranscriptionCheckpoint,
         baseDocument: EpisodeTranscriptDocument?,
+        episodeID: String,
         record: EpisodeTranscriptRecord,
         relativePath: String,
         runID: UUID,
         modelContext: ModelContext,
         ignoresCancellation: Bool = false
     ) async throws {
+        guard isPersistableRunRecord(record, episodeID: episodeID, modelContext: modelContext) else {
+            throw CancellationError()
+        }
         let prefixSegments = baseSegments(from: baseDocument, resumeStart: record.completedDuration)
         let segments = OpenCastTranscriptSegmentNormalizer.normalized(
             prefixSegments + checkpoint.segments
@@ -996,7 +1027,9 @@ final class EpisodeTranscriptionStore {
             try await fileStore.writeOffCaller(document, relativePath: relativePath)
             try Task.checkCancellation()
         }
-        guard ownsActiveRun(episodeID: record.episodeID, runID: runID) else {
+        guard ownsActiveRun(episodeID: episodeID, runID: runID),
+              isPersistableRunRecord(record, episodeID: episodeID, modelContext: modelContext)
+        else {
             throw CancellationError()
         }
 
@@ -1011,11 +1044,15 @@ final class EpisodeTranscriptionStore {
     private func persistFinalResult(
         _ result: OpenCastTranscriptionResult,
         baseDocument: EpisodeTranscriptDocument?,
+        episodeID: String,
         record: EpisodeTranscriptRecord,
         relativePath: String,
         runID: UUID,
         modelContext: ModelContext
     ) async throws {
+        guard isPersistableRunRecord(record, episodeID: episodeID, modelContext: modelContext) else {
+            throw CancellationError()
+        }
         let prefixSegments = baseSegments(from: baseDocument, resumeStart: record.completedDuration)
         let segments = OpenCastTranscriptSegmentNormalizer.normalized(
             prefixSegments + result.segments
@@ -1031,7 +1068,9 @@ final class EpisodeTranscriptionStore {
         )
         try await fileStore.writeOffCaller(document, relativePath: relativePath)
         try Task.checkCancellation()
-        guard ownsActiveRun(episodeID: record.episodeID, runID: runID) else {
+        guard ownsActiveRun(episodeID: episodeID, runID: runID),
+              isPersistableRunRecord(record, episodeID: episodeID, modelContext: modelContext)
+        else {
             throw CancellationError()
         }
 

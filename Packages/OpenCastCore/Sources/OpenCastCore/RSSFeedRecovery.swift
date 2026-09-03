@@ -64,7 +64,7 @@ enum RSSFeedRecovery {
     }
 
     private static func recoverEntities(inFragment fragment: String) -> String {
-        var recovered = invalidAmpersandPattern.stringByReplacingMatches(
+        let recovered = invalidAmpersandPattern.stringByReplacingMatches(
             in: fragment,
             range: NSRange(fragment.startIndex..., in: fragment),
             withTemplate: "&amp;"
@@ -74,7 +74,17 @@ enum RSSFeedRecovery {
             in: recovered,
             range: NSRange(recovered.startIndex..., in: recovered)
         )
-        for match in matches.reversed() {
+        guard !matches.isEmpty else {
+            return recovered
+        }
+
+        // One forward pass appending untouched slices plus replacements:
+        // in-place replaceSubrange moves the tail per growing rewrite, which
+        // is quadratic over entity-heavy feeds (the ones that reach recovery).
+        var rewritten = ""
+        rewritten.reserveCapacity(recovered.count)
+        var cursor = recovered.startIndex
+        for match in matches {
             guard
                 let nameRange = Range(match.range(at: 1), in: recovered),
                 let entityRange = Range(match.range, in: recovered)
@@ -82,16 +92,20 @@ enum RSSFeedRecovery {
                 continue
             }
             let name = String(recovered[nameRange])
+            let replacement: String
             if let numericReference = commonHTMLEntities[name] {
-                recovered.replaceSubrange(entityRange, with: numericReference)
+                replacement = numericReference
             } else if !xmlNamedEntities.contains(name) {
-                recovered.replaceSubrange(entityRange, with: "&amp;\(name);")
+                replacement = "&amp;\(name);"
             } else {
                 continue
             }
+            rewritten += recovered[cursor..<entityRange.lowerBound]
+            rewritten += replacement
+            cursor = entityRange.upperBound
         }
-
-        return recovered
+        rewritten += recovered[cursor...]
+        return rewritten
     }
 
     private static func normalizeEncodingDeclaration(in xml: inout String) {

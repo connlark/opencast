@@ -338,6 +338,73 @@ struct OpenCastHTTPClientTests {
         #expect(first !== other)
     }
 
+    @Test("Capped fetch fails fast on an oversized declared Content-Length")
+    func cappedFetchFailsFastOnOversizedContentLength() async throws {
+        let url = URL(string: "https://example.com/declared-oversized.xml")!
+        let client = streamingStubClient(
+            plan: StreamingBodyPlan(chunks: [], contentLength: 1_000_000),
+            url: url
+        )
+
+        await #expect(throws: OpenCastHTTPBodyTooLargeError(byteLimit: 1_000)) {
+            _ = try await client.data(
+                for: URLRequest(url: url),
+                maximumBodyByteCount: 1_000
+            )
+        }
+    }
+
+    @Test("Capped fetch stops a chunked body that exceeds the cap mid-stream")
+    func cappedFetchStopsOversizedChunkedBodyMidStream() async throws {
+        // No Content-Length: expectedContentLength is -1, so only the running
+        // count can enforce the cap. Four 64 KiB chunks against a 100 KiB cap
+        // trip the check at the second chunk flush.
+        let url = URL(string: "https://example.com/chunked-oversized.xml")!
+        let chunk = Data(repeating: 0x41, count: 64 * 1_024)
+        let client = streamingStubClient(
+            plan: StreamingBodyPlan(chunks: Array(repeating: chunk, count: 4), contentLength: nil),
+            url: url
+        )
+
+        await #expect(throws: OpenCastHTTPBodyTooLargeError(byteLimit: 100 * 1_024)) {
+            _ = try await client.data(
+                for: URLRequest(url: url),
+                maximumBodyByteCount: 100 * 1_024
+            )
+        }
+    }
+
+    @Test("Capped fetch returns an under-cap chunked body intact")
+    func cappedFetchReturnsUnderCapChunkedBodyIntact() async throws {
+        let url = URL(string: "https://example.com/chunked-under-cap.xml")!
+        let chunks = [
+            Data(repeating: 0x41, count: 70 * 1_024),
+            Data(repeating: 0x42, count: 5),
+        ]
+        let client = streamingStubClient(
+            plan: StreamingBodyPlan(chunks: chunks, contentLength: nil),
+            url: url
+        )
+
+        let result = try await client.data(
+            for: URLRequest(url: url),
+            maximumBodyByteCount: 100 * 1_024
+        )
+
+        #expect(result.data == chunks[0] + chunks[1])
+        #expect(result.response.statusCode == 200)
+    }
+
+    private func streamingStubClient(
+        plan: StreamingBodyPlan,
+        url: URL
+    ) -> URLSessionOpenCastHTTPClient {
+        StreamingBodyURLProtocol.planStore.set(plan, for: url)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StreamingBodyURLProtocol.self]
+        return URLSessionOpenCastHTTPClient(configuration: configuration)
+    }
+
     @Test("URLSession HTTP client sends shared user agent")
     func urlSessionHTTPClientSendsSharedUserAgent() async throws {
         RecordingURLProtocol.requestStore.reset()
@@ -398,6 +465,64 @@ private final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data("ok".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {
+    }
+}
+
+private struct StreamingBodyPlan: Sendable {
+    let chunks: [Data]
+    let contentLength: Int?
+}
+
+/// Keyed by request URL so concurrently running tests never read each
+/// other's plan.
+private final class StreamingBodyPlanStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var plansByURL: [URL: StreamingBodyPlan] = [:]
+
+    func set(_ plan: StreamingBodyPlan, for url: URL) {
+        lock.withLock {
+            plansByURL[url] = plan
+        }
+    }
+
+    func plan(for url: URL?) -> StreamingBodyPlan {
+        lock.withLock {
+            url.flatMap { plansByURL[$0] } ?? StreamingBodyPlan(chunks: [], contentLength: nil)
+        }
+    }
+}
+
+private final class StreamingBodyURLProtocol: URLProtocol, @unchecked Sendable {
+    static let planStore = StreamingBodyPlanStore()
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let plan = Self.planStore.plan(for: request.url)
+        var headers = ["Content-Type": "application/rss+xml"]
+        if let contentLength = plan.contentLength {
+            headers["Content-Length"] = String(contentLength)
+        }
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: headers
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        for chunk in plan.chunks {
+            client?.urlProtocol(self, didLoad: chunk)
+        }
         client?.urlProtocolDidFinishLoading(self)
     }
 

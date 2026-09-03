@@ -16,7 +16,10 @@ export default defineConfig(async () => {
 
   // Fake Apple history host (reconcile.spec.mjs): deterministic per identity —
   // one consumable purchase `txn-history-<identity>`, revoked when the
-  // identity ends in "-revoked". Runs in Node; only unexpected hosts 502.
+  // identity ends in "-revoked". An identity ending in "-pages<N>" spreads N
+  // purchases `txn-history-<identity>-p<k>` over N one-transaction pages,
+  // honouring the `revision` cursor (`rev-<k>`) the client sends back. Runs in
+  // Node; only unexpected hosts 502.
   const outboundService = async (request) => {
     const url = new URL(request.url);
     if (
@@ -24,9 +27,16 @@ export default defineConfig(async () => {
       url.pathname.startsWith("/inApps/v2/history/")
     ) {
       const identity = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+      const pagedMatch = /-pages(\d+)$/.exec(identity);
+      const totalPages = pagedMatch ? Number(pagedMatch[1]) : 1;
+      const revision = url.searchParams.get("revision");
+      const page = revision ? Number(revision.replace(/^rev-/, "")) : 0;
+      const transactionId = pagedMatch
+        ? `txn-history-${identity}-p${page}`
+        : `txn-history-${identity}`;
       const payload = {
-        transactionId: `txn-history-${identity}`,
-        originalTransactionId: `txn-history-${identity}`,
+        transactionId,
+        originalTransactionId: transactionId,
         bundleId: "com.connor.opencast",
         productId: "com.connor.opencast.transcription.hours20.v1",
         purchaseDate: Date.now(),
@@ -49,10 +59,10 @@ export default defineConfig(async () => {
       });
       return new Response(
         JSON.stringify({
-          revision: "rev-1",
+          revision: `rev-${page + 1}`,
           bundleId: "com.connor.opencast",
           environment: "Sandbox",
-          hasMore: false,
+          hasMore: page + 1 < totalPages,
           signedTransactions: [signed],
         }),
         { headers: { "content-type": "application/json" } },
@@ -82,6 +92,11 @@ export default defineConfig(async () => {
             APPLE_IAP_KEY_ID: "TESTKEY123",
             APPLE_IAP_ISSUER_ID: "00000000-0000-0000-0000-000000000000",
             APPLE_IAP_PRIVATE_KEY: fixtures.apiKeyPem,
+            // Shrink the cron budgets so the suite exercises the transaction
+            // cap (reconcile.spec.mjs) and the paged liability sweep
+            // (integration.spec.mjs) with a handful of accounts.
+            RECONCILE_TRANSACTION_BUDGET: "2",
+            LIABILITY_SNAPSHOT_MAX_ACCOUNTS: "3",
           },
         },
       }),

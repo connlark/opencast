@@ -69,7 +69,15 @@ public struct DefaultFeedService: FeedService {
         }
         request.setValue(Self.acceptHeaderValue, forHTTPHeaderField: "Accept")
 
-        let result = try await httpClient.data(for: request)
+        let result: OpenCastHTTPResult
+        do {
+            result = try await httpClient.data(
+                for: request,
+                maximumBodyByteCount: Self.maximumFeedBodyByteCount
+            )
+        } catch is OpenCastHTTPBodyTooLargeError {
+            throw OpenCastCoreError.feedTooLarge(byteLimit: Self.maximumFeedBodyByteCount)
+        }
         guard let statusCode = result.response.statusCode else {
             throw OpenCastCoreError.invalidHTTPResponse
         }
@@ -89,11 +97,6 @@ public struct DefaultFeedService: FeedService {
         guard (200..<300).contains(statusCode) else {
             throw OpenCastCoreError.unexpectedStatusCode(statusCode)
         }
-        if result.response.expectedContentLength > Int64(Self.maximumFeedBodyByteCount)
-            || result.data.count > Self.maximumFeedBodyByteCount {
-            throw OpenCastCoreError.feedTooLarge(byteLimit: Self.maximumFeedBodyByteCount)
-        }
-
         let bodyHash = Self.sha256Hex(result.data)
         let responseValidators = refreshedValidators(from: result.response, bodyHash: bodyHash)
         if let knownBodyHash = validators?.bodyHash, knownBodyHash == bodyHash {

@@ -32,7 +32,7 @@ struct SubscriptionRowView: View {
                 title: subscription.title,
                 imageURL: podcastCache?.artworkURL ?? subscription.artworkURL,
                 size: 52,
-                preview: podcastCache?.artworkPreview,
+                preview: podcastCache.flatMap { appModel.library.artworkPreview(for: $0) },
                 onPreviewResolved: updateArtworkPreview
             )
 

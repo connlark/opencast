@@ -206,17 +206,6 @@ static int opencast_str_number(const char **linep, int64_t *nump, int64_t max)
   return PARSEDATE_OK;
 }
 
-static void opencast_strcopy(char *dest, size_t dsize, const char *src, size_t slen)
-{
-  if(slen < dsize) {
-    memcpy(dest, src, slen);
-    dest[slen] = 0;
-  }
-  else if(dsize) {
-    dest[0] = 0;
-  }
-}
-
 static int checkday(const char *check, size_t len)
 {
   int i;
@@ -267,7 +256,13 @@ static int checktz(const char *check, size_t len)
   if(len <= 4) {
     const struct tzinfo *what;
     struct tzinfo find;
-    opencast_strcopy(find.name, sizeof(find.name), check, len);
+    size_t i;
+    /* RFC 5322 zone names are case-insensitive and the table is uppercase;
+       uppercase the token before the case-sensitive bsearch (upstream's
+       Curl_strntoupper copy, which the pinned revision regressed away). */
+    for(i = 0; i < len; i++)
+      find.name[i] = opencast_ascii_toupper(check[i]);
+    find.name[len] = 0;
     what = bsearch(&find, tz, OPENCAST_ARRAYSIZE(tz), sizeof(tz[0]), tzcompare);
     if(what)
       return what->offset * 60;

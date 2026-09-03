@@ -1,7 +1,7 @@
 import Foundation
 import OpenCastTranscription
 
-struct EpisodeAdAnalysisFileStore: Sendable {
+struct EpisodeAdAnalysisFileStore: AnalysisDocumentFileStore {
     nonisolated static let directoryName = "EpisodeAdAnalyses"
 
     let baseDirectory: URL
@@ -142,6 +142,12 @@ struct EpisodeAdAnalysisFileStore: Sendable {
         } catch {
             throw error
         }
+    }
+}
+
+extension EpisodeAdAnalysisFileStore {
+    nonisolated func documentDecodes(relativePath: String) -> Bool {
+        (try? read(relativePath: relativePath)) != nil
     }
 }
 

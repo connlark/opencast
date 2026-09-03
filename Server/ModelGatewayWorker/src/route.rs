@@ -105,6 +105,18 @@ pub fn if_none_match_matches(header: Option<&str>, etag: &str) -> bool {
     })
 }
 
+/// The Cache API refuses objects above 512 MB, so a write for anything larger
+/// can only fail; such bodies stream straight from R2 without the tee.
+/// Decimal megabytes keep the bound under either reading of the limit.
+pub const MAX_EDGE_CACHED_OBJECT_BYTES: u64 = 512 * 1_000 * 1_000;
+const _: () = assert!(MAX_EDGE_CACHED_OBJECT_BYTES <= 512 * 1024 * 1024);
+
+/// Whether a whole-object response of `object_size` bytes is worth teeing
+/// into the edge cache.
+pub fn edge_cacheable(object_size: u64) -> bool {
+    object_size <= MAX_EDGE_CACHED_OBJECT_BYTES
+}
+
 pub fn parse_range_header(
     header: Option<&str>,
     object_size: u64,

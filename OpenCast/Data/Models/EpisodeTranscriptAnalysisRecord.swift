@@ -9,7 +9,7 @@ final class EpisodeTranscriptAnalysisRecord {
     var transcriptUpdatedAt: Date = Date.distantPast
     var transcriptSegmentCount: Int = 0
     var transcriptStateRawValue: String = EpisodeTranscriptState.completed.rawValue
-    var stateRawValue: String = EpisodeTranscriptAnalysisState.queued.rawValue
+    var stateRawValue: String = EpisodeAnalysisRecordState.queued.rawValue
     var analysisRelativePath: String?
     var model: String = ""
     var policy: String = ""
@@ -28,7 +28,7 @@ final class EpisodeTranscriptAnalysisRecord {
         transcriptUpdatedAt: Date = .distantPast,
         transcriptSegmentCount: Int = 0,
         transcriptState: EpisodeTranscriptState = .completed,
-        state: EpisodeTranscriptAnalysisState = .queued,
+        state: EpisodeAnalysisRecordState = .queued,
         analysisRelativePath: String? = nil,
         model: String = "",
         policy: String = "",
@@ -57,9 +57,9 @@ final class EpisodeTranscriptAnalysisRecord {
         self.updatedAt = updatedAt
     }
 
-    var state: EpisodeTranscriptAnalysisState {
+    var state: EpisodeAnalysisRecordState {
         get {
-            EpisodeTranscriptAnalysisState(rawValue: stateRawValue) ?? .failed
+            EpisodeAnalysisRecordState(rawValue: stateRawValue) ?? .failed
         }
         set {
             stateRawValue = newValue.rawValue
@@ -75,12 +75,14 @@ final class EpisodeTranscriptAnalysisRecord {
         }
     }
 
-    var failureKind: EpisodeTranscriptAnalysisFailureKind? {
+    var failureKind: EpisodeAnalysisFailureKind? {
         get {
-            failureKindRawValue.flatMap(EpisodeTranscriptAnalysisFailureKind.init(rawValue:))
+            failureKindRawValue.flatMap(EpisodeAnalysisFailureKind.init(rawValue:))
         }
         set {
             failureKindRawValue = newValue?.rawValue
         }
     }
 }
+
+extension EpisodeTranscriptAnalysisRecord: TranscriptDerivedAnalysisRecord {}

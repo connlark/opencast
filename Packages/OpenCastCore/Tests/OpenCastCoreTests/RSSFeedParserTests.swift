@@ -51,6 +51,46 @@ struct RSSFeedParserTests {
         #expect(snapshot.episodes[1].title == "Space Oddity & Beyond &future; — More…")
     }
 
+    @Test("Recovers every entity across an entity-heavy feed")
+    func recoversEntitiesAcrossEntityHeavyFeed() throws {
+        // Exercises the forward-pass rewrite: thousands of growing
+        // (&future; -> &amp;future;), same-length (&nbsp;), preserved
+        // (&amp;), and bare-& rewrites interleaved with CDATA passthrough.
+        let repeatedRun = String(
+            repeating: "A&nbsp;B &future; C &amp; D & E&hellip; ",
+            count: 2_000
+        )
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Entity Heavy</title>
+            <item>
+              <title>Long &future; Notes</title>
+              <description>\(repeatedRun)</description>
+              <guid><![CDATA[keep &nbsp; raw]]></guid>
+              <enclosure url="https://example.com/heavy.mp3" type="audio/mpeg" />
+            </item>
+          </channel>
+        </rss>
+        """
+        let snapshot = try RSSFeedParser().parse(
+            data: Data(xml.utf8),
+            feedURL: URL(string: "https://example.com/entity-heavy.xml")!
+        )
+
+        let episode = try #require(snapshot.episodes.first)
+        #expect(episode.title == "Long &future; Notes")
+        // guid stays byte-for-byte: CDATA blocks pass through recovery.
+        #expect(episode.guid == "keep &nbsp; raw")
+        let summary = try #require(episode.summary)
+        #expect(summary.contains("A\u{00A0}B &future; C & D & E… "))
+        let literalEntityCount = summary.ranges(of: "&future;").count
+        #expect(literalEntityCount == 2_000)
+        let nonBreakingSpaceCount = summary.ranges(of: "\u{00A0}").count
+        #expect(nonBreakingSpaceCount == 2_000)
+    }
+
     @Test("Recovers entities using the XML-prolog encoding")
     func recoversEntitiesUsingDeclaredEncoding() throws {
         let xml = """
@@ -612,6 +652,59 @@ struct RSSFeedParserTests {
                 audioURL: URL(string: "https://example.com/audio/collider-2.mp3"),
                 title: "Collider 2",
                 publishedAt: snapshot.episodes[1].publishedAt
+            )
+        )
+    }
+
+    @Test("A prepended collider does not steal the existing episode's natural-tier ID")
+    func prependedColliderKeepsNaturalTierWithOldestEpisode() throws {
+        let feedURL = try #require(URL(string: "https://example.com/prepended-guid.xml"))
+        // Newest-first document order: the publisher prepended a new item
+        // that reuses the existing episode's GUID. The natural-tier winner is
+        // content-determined (oldest publishedAt), so the existing episode
+        // keeps its ID and its synced progress.
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>Prepended GUID Feed</title>
+            <item>
+              <title>Collider New</title>
+              <guid>shared-guid</guid>
+              <pubDate>Wed, 03 Jun 2026 10:00:00 GMT</pubDate>
+              <enclosure url="https://example.com/audio/collider-new.mp3" type="audio/mpeg" />
+            </item>
+            <item>
+              <title>Collider Old</title>
+              <guid>shared-guid</guid>
+              <pubDate>Mon, 01 Jun 2026 10:00:00 GMT</pubDate>
+              <enclosure url="https://example.com/audio/collider-old.mp3" type="audio/mpeg" />
+            </item>
+          </channel>
+        </rss>
+        """
+
+        let snapshot = try RSSFeedParser().parse(data: Data(xml.utf8), feedURL: feedURL)
+
+        #expect(snapshot.episodes.count == 2)
+        let oldEpisode = try #require(snapshot.episodes.first { $0.title == "Collider Old" })
+        let newEpisode = try #require(snapshot.episodes.first { $0.title == "Collider New" })
+        #expect(
+            oldEpisode.id == EpisodeIdentity.makeID(
+                feedURL: feedURL,
+                guid: "shared-guid",
+                audioURL: oldEpisode.audioURL,
+                title: "Collider Old",
+                publishedAt: oldEpisode.publishedAt
+            )
+        )
+        #expect(
+            newEpisode.id == EpisodeIdentity.makeID(
+                feedURL: feedURL,
+                guid: nil,
+                audioURL: URL(string: "https://example.com/audio/collider-new.mp3"),
+                title: "Collider New",
+                publishedAt: newEpisode.publishedAt
             )
         )
     }

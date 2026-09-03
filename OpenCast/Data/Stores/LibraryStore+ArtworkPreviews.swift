@@ -6,15 +6,23 @@ import OpenCastCore
 /// pending write chain) live in the class body with the rest of the
 /// @Observable state.
 extension LibraryStore {
-    /// The row that resolved the preview shows it locally; the override map
+    /// The row that resolved the preview shows it locally; the override box
     /// carries it to other appearances of the episode and the cache write
     /// persists it for the next full reload.
     func artworkPreview(for episode: EpisodeListItemSnapshot) -> ArtworkPreview? {
-        if let override = artworkPreviewOverridesByEpisodeID[episode.episodeID],
+        if let override = episodeArtworkPreviewOverride(for: episode.episodeID).preview,
            override.matchesArtworkURLString(episode.artworkURL) {
             return override
         }
         return episode.artworkPreview
+    }
+
+    func artworkPreview(for podcast: PodcastCacheSnapshot) -> ArtworkPreview? {
+        if let override = podcastArtworkPreviewOverride(for: podcast.feedURL).preview,
+           override.matchesArtworkURLString(podcast.artworkURL) {
+            return override
+        }
+        return podcast.artworkPreview
     }
 
     @discardableResult
@@ -30,7 +38,7 @@ extension LibraryStore {
         }
 
         let episodeID = episode.episodeID
-        artworkPreviewOverridesByEpisodeID[episodeID] = preview
+        episodeArtworkPreviewOverride(for: episodeID).preview = preview
         let artworkURL = episode.artworkURL
         enqueueCacheWrite { localCache in
             try await localCache.updateEpisodeArtworkPreview(preview, episodeID: episodeID, artworkURL: artworkURL)
@@ -45,20 +53,39 @@ extension LibraryStore {
     ) -> Bool {
         guard activePodcastIDs.contains(podcast.feedURL),
               preview.matchesArtworkURLString(podcast.artworkURL),
-              var storedPodcast = podcastCacheByFeedURL[podcast.feedURL],
-              storedPodcast.artworkPreview?.storageSignature != preview.storageSignature
+              let storedPodcast = podcastCacheByFeedURL[podcast.feedURL],
+              artworkPreview(for: storedPodcast)?.storageSignature != preview.storageSignature
         else {
             return false
         }
 
-        storedPodcast.artworkPreview = preview
-        podcastCacheByFeedURL[podcast.feedURL] = storedPodcast
         let feedURL = podcast.feedURL
+        podcastArtworkPreviewOverride(for: feedURL).preview = preview
         let artworkURL = podcast.artworkURL
         enqueueCacheWrite { localCache in
             try await localCache.updatePodcastArtworkPreview(preview, feedURL: feedURL, artworkURL: artworkURL)
         }
         return true
+    }
+
+    private func episodeArtworkPreviewOverride(for episodeID: String) -> ArtworkPreviewOverride {
+        if let override = artworkPreviewOverridesByEpisodeID[episodeID] {
+            return override
+        }
+
+        let override = ArtworkPreviewOverride()
+        artworkPreviewOverridesByEpisodeID[episodeID] = override
+        return override
+    }
+
+    private func podcastArtworkPreviewOverride(for feedURL: String) -> ArtworkPreviewOverride {
+        if let override = artworkPreviewOverridesByFeedURL[feedURL] {
+            return override
+        }
+
+        let override = ArtworkPreviewOverride()
+        artworkPreviewOverridesByFeedURL[feedURL] = override
+        return override
     }
 
     /// Awaits queued asynchronous cache writes (artwork previews). Test hook.
@@ -71,12 +98,16 @@ extension LibraryStore {
     ) {
         let localCache = localCache
         let previousTask = pendingCacheWriteTask
-        pendingCacheWriteTask = Task { [weak self] in
+        pendingCacheWriteTask = Task {
             await previousTask?.value
             do {
                 try await write(localCache)
             } catch {
-                self?.lastErrorMessage = error.localizedDescription
+                // Previews are disposable derived state; a failed persistence
+                // write must not raise the modal Library Error alert.
+                LibraryStore.backgroundFailureLogger.error(
+                    "Artwork-preview cache write failed: \(error.localizedDescription, privacy: .public)"
+                )
             }
         }
     }
