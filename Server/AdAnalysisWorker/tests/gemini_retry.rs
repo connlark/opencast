@@ -1,8 +1,12 @@
 use opencast_ad_analysis_worker::gemini::{
     parse_error_envelope, parse_generate_content_response, GeminiErrorBody, GeminiParseError,
 };
+use opencast_ad_analysis_worker::job::JOB_RUNNING_DEADLINE_SECONDS;
 use opencast_ad_analysis_worker::retry::{
-    classify_http_status, parse_retry_after_seconds, RetryDecision,
+    backoff_seconds, classify_http_status, parse_retry_after_seconds, worst_case_ladder_seconds,
+    worst_case_window_seconds, RetryDecision, GEMINI_CALL_TIMEOUT_SECONDS,
+    LADDER_DEADLINE_HEADROOM_SECONDS, MAX_GEMINI_ATTEMPTS, MAX_GEMINI_REREQUEST_ATTEMPTS,
+    MAX_RETRY_DELAY_SECONDS,
 };
 
 #[test]
@@ -31,9 +35,98 @@ fn parses_gemini_text_json_and_usage() {
     assert_eq!(output.spans.len(), 1);
     assert_eq!(output.spans[0].label, "Sponsor");
     assert_eq!(output.malformed_span_count, 0);
-    assert_eq!(parsed.usage.unwrap().total_token_count, 120);
+    let usage = parsed.usage.unwrap();
+    assert_eq!(usage.total_token_count, 120);
+    // No thoughtsTokenCount in the body reads as zero thinking tokens.
+    assert_eq!(usage.thoughts_token_count, 0);
     assert!(parsed.warnings.is_empty());
     assert!(parsed.failure.is_none());
+}
+
+#[test]
+fn thought_parts_are_excluded_from_the_model_json() {
+    // Thinking models can return their reasoning as `thought: true` parts
+    // ahead of the answer. Concatenating them into the model text made the
+    // JSON unparseable and degraded the window to zero spans.
+    let body = r#"{
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              { "thought": true, "text": "Let me scan the segments for sponsor reads..." },
+              { "text": "{\"spans\":[{\"kind\":\"host_read_ad\",\"label\":\"Sponsor\",\"start_segment_id\":1,\"end_segment_id\":2,\"confidence\":0.9,\"evidence_quote\":\"use code\"}]}", "thoughtSignature": "opaque" }
+            ]
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 20,
+        "thoughtsTokenCount": 700,
+        "totalTokenCount": 820
+      }
+    }"#;
+
+    let parsed = parse_generate_content_response(body);
+
+    let output = parsed
+        .output
+        .expect("thought parts must not poison the model JSON");
+    assert_eq!(output.spans.len(), 1);
+    assert_eq!(output.spans[0].label, "Sponsor");
+    assert!(parsed.failure.is_none());
+    assert!(parsed.warnings.is_empty());
+    let usage = parsed.usage.unwrap();
+    assert_eq!(usage.thoughts_token_count, 700);
+    assert_eq!(usage.total_token_count, 820);
+}
+
+#[test]
+fn thought_signature_on_a_text_part_is_still_used() {
+    // Every archived 3.5/3.6/3.8 response carries `thoughtSignature` on the
+    // ordinary answer part; it is an unknown key, not a thought part.
+    let body = r#"{
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              { "text": "{\"spans\":[]}", "thoughtSignature": "Cq0BAXKq" }
+            ]
+          },
+          "finishReason": "STOP"
+        }
+      ]
+    }"#;
+
+    let parsed = parse_generate_content_response(body);
+
+    let output = parsed
+        .output
+        .expect("signature-bearing text part is the answer");
+    assert!(output.spans.is_empty());
+    assert!(parsed.failure.is_none());
+}
+
+#[test]
+fn only_thought_parts_yield_missing_candidate_text() {
+    let body = r#"{
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              { "thought": true, "text": "{\"spans\":[]}" }
+            ]
+          },
+          "finishReason": "STOP"
+        }
+      ]
+    }"#;
+
+    let parsed = parse_generate_content_response(body);
+
+    assert!(parsed.output.is_none());
+    assert_eq!(parsed.failure, Some(GeminiParseError::MissingCandidateText));
 }
 
 #[test]
@@ -57,7 +150,9 @@ fn usage_totals_cover_thinking_tokens_when_reported_separately() {
 
     let parsed = parse_generate_content_response(body);
 
-    assert_eq!(parsed.usage.unwrap().total_token_count, 1_820);
+    let usage = parsed.usage.unwrap();
+    assert_eq!(usage.total_token_count, 1_820);
+    assert_eq!(usage.thoughts_token_count, 1_700);
 }
 
 #[test]
@@ -288,4 +383,42 @@ fn quota_classification_requires_resource_exhausted_with_billing_language() {
             RetryDecision::HardQuota
         );
     }
+}
+
+/// The ladders are sized together: a window whose every attempt times out
+/// and whose every gap waits the longest allowed delay must still finish
+/// inside the job Durable Object's running deadline with headroom for the
+/// unbounded body read and DO bookkeeping. (3×60 + 2×30) + (2×60 + 1×30) =
+/// 390 s; 390 + 120 ≤ 600.
+#[test]
+fn gemini_ladder_worst_case_fits_the_job_deadline() {
+    assert_eq!(GEMINI_CALL_TIMEOUT_SECONDS, 60);
+    assert_eq!(MAX_GEMINI_ATTEMPTS, 3);
+    assert_eq!(MAX_GEMINI_REREQUEST_ATTEMPTS, 2);
+    assert_eq!(MAX_RETRY_DELAY_SECONDS, 30);
+    assert_eq!(worst_case_ladder_seconds(MAX_GEMINI_ATTEMPTS), 240);
+    assert_eq!(
+        worst_case_ladder_seconds(MAX_GEMINI_REREQUEST_ATTEMPTS),
+        150
+    );
+    assert_eq!(worst_case_window_seconds(), 390);
+    assert!(
+        worst_case_window_seconds() + LADDER_DEADLINE_HEADROOM_SECONDS
+            <= JOB_RUNNING_DEADLINE_SECONDS as u64,
+        "ladder worst case {} s + {} s headroom exceeds the {} s job deadline",
+        worst_case_window_seconds(),
+        LADDER_DEADLINE_HEADROOM_SECONDS,
+        JOB_RUNNING_DEADLINE_SECONDS
+    );
+    // Neither backoff nor an honoured Retry-After may exceed the delay the
+    // worst case assumes.
+    for attempt in 1..=MAX_GEMINI_ATTEMPTS {
+        assert!(backoff_seconds(attempt) <= MAX_RETRY_DELAY_SECONDS);
+    }
+    assert_eq!(backoff_seconds(1), 2);
+    assert_eq!(backoff_seconds(2), 4);
+    assert_eq!(
+        parse_retry_after_seconds("999"),
+        Some(MAX_RETRY_DELAY_SECONDS)
+    );
 }

@@ -29,6 +29,12 @@ pub struct GeminiContent {
 pub struct GeminiPart {
     #[serde(default)]
     pub text: String,
+    /// Thinking models may return their reasoning as `thought: true` parts
+    /// ahead of the answer; those are not model JSON. Ordinary text parts may
+    /// carry a `thoughtSignature` (seen on 3.5/3.6/3.8 responses) — that field
+    /// is deliberately not modelled and is ignored like any unknown key.
+    #[serde(default)]
+    pub thought: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -104,6 +110,7 @@ pub fn parse_generate_content_response(body: &str) -> ParsedModelResponse {
         usage_from_counts(
             usage.prompt_token_count,
             usage.candidates_token_count,
+            usage.thoughts_token_count,
             usage.total_token_count.max(
                 usage
                     .prompt_token_count
@@ -136,6 +143,7 @@ pub fn parse_generate_content_response(body: &str) -> ParsedModelResponse {
             content
                 .parts
                 .iter()
+                .filter(|part| !part.thought)
                 .map(|part| part.text.as_str())
                 .collect::<String>()
         })

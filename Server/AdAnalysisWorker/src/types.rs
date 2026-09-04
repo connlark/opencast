@@ -67,7 +67,15 @@ pub const MAX_LANGUAGE_CODE_CHARS: usize = 40;
 // above): fail the job with a stable code instead of hanging it on the
 // platform rejection.
 pub const MAX_RESULT_JSON_BYTES: usize = 100_000;
-// Spend caps scaled to approximately $15/day worst case.
+// Spend caps. The global backstop is the real bound: 8M estimated input
+// tokens/day plus the measured up-to-~0.22 output+thinking tokens per input
+// token (≈ 1.8M/day) is ≈ $28/day on gemini-3.5-flash ($1.50 in / $9.00 out
+// per million), ≈ $12.75/day on gemini-3.8-flash while its promotional price
+// lasts through 2026-12-31 ($0.75 / $3.75), and ≈ $25.50/day at that model's
+// $1.50 / $7.50 list price from 2027-01-01. The approximately $15/day
+// figure used to scale the per-caller ceilings is the happy-path
+// per-caller estimate, not the backstop. Revisit
+// GLOBAL_DAILY_ESTIMATED_INPUT_TOKEN_CAP when the promotional price ends.
 pub const BEARER_DAILY_REQUEST_CAP: u64 = 40;
 pub const BEARER_DAILY_ESTIMATED_INPUT_TOKEN_CAP: u64 = 2_000_000;
 pub const APP_ATTEST_KEY_DAILY_REQUEST_CAP: u64 = 12;
@@ -187,6 +195,11 @@ pub struct ValidatedAdSpan {
 pub struct GeminiUsage {
     pub prompt_token_count: u64,
     pub candidates_token_count: u64,
+    /// Thinking tokens, billed at the output price. Always serialized; the
+    /// app's `EpisodeAdAnalysisAPIUsage` decodes only the three keys it
+    /// names and ignores this one.
+    #[serde(default)]
+    pub thoughts_token_count: u64,
     pub total_token_count: u64,
 }
 

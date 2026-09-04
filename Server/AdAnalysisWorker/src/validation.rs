@@ -530,11 +530,19 @@ fn rescue_seconds_span(
 }
 
 /// Evidence anchoring: accept when the probe (first 6 normalized words of the
-/// quote) occurs inside the span; when it occurs at exactly one location
+/// quote) BEGINS inside the span; when it occurs at exactly one location
 /// elsewhere, shift the span (length-preserving) onto that anchor — this
 /// exactly repairs the measured uniform segment-ID drift (research §4c);
 /// otherwise drop. Quotes under 2 normalized words carry no anchor. The
 /// riskier re-anchor path additionally requires a 3-word quote.
+///
+/// "Begins inside" rather than "lies entirely inside": an ad's closing line
+/// may share a segment with the show resuming, so a valid probe can extend
+/// one segment past the span. Rejecting that receipt hands it to the
+/// length-preserving re-anchor, which assumes the quote is the span's first
+/// line and can shift the whole span into editorial content. Accepting the
+/// spill-over tail of a closing line avoids that failure; quotes beginning
+/// outside the span still take the more restrictive re-anchor path.
 fn anchor_evidence(
     transcript: &TranscriptIndex,
     evidence_quote: &str,
@@ -553,9 +561,8 @@ fn anchor_evidence(
         .collect();
     let occurrences = transcript.occurrences(&probe);
     for &occurrence in &occurrences {
-        if transcript.segment_of_word[occurrence] >= start_index
-            && transcript.segment_of_word[occurrence + probe.len() - 1] <= end_index
-        {
+        let first_word_segment = transcript.segment_of_word[occurrence];
+        if first_word_segment >= start_index && first_word_segment <= end_index {
             return AnchorResult::Accepted;
         }
     }
@@ -875,10 +882,11 @@ pub fn combine_warnings(
     validation_warnings
 }
 
-pub fn usage_from_counts(prompt: u64, candidates: u64, total: u64) -> GeminiUsage {
+pub fn usage_from_counts(prompt: u64, candidates: u64, thoughts: u64, total: u64) -> GeminiUsage {
     GeminiUsage {
         prompt_token_count: prompt,
         candidates_token_count: candidates,
+        thoughts_token_count: thoughts,
         total_token_count: total,
     }
 }

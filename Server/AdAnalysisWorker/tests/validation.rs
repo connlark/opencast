@@ -447,6 +447,62 @@ fn evidence_quote_anchors_within_the_span_or_the_span_is_dropped() {
     assert_eq!(spans.len(), 1);
 }
 
+/// A quote that begins on the span's last segment and spills into the next
+/// one is a receipt from inside the span, not a numbering slip. Measured
+/// 2026-09-03 (sn1085, gemini-3.8-flash): the model quoted the ad's closing
+/// line plus the first words of the editorial that followed; the old
+/// all-words-inside rule rejected it and the length-preserving re-anchor slid
+/// the 40-segment span 40 segments into show content (a 282 s false skip at
+/// 0.95). Here in miniature: Acme's read is 101-103 and the quote runs from
+/// 103 ("ask your doctor about sleeping") into 104 ("Now back to our...").
+/// Under the old rule this span re-anchored to 103-105.
+#[test]
+fn quote_that_starts_inside_the_span_and_spills_past_its_end_is_accepted_in_place() {
+    let request = output_request();
+
+    let (spans, warnings) = validate_model_output(
+        &request,
+        ModelOutput::from_spans(vec![span(
+            AdSpanKind::HostReadAd,
+            "Acme Mattress",
+            101,
+            103,
+            0.95,
+            "ask your doctor about sleeping. Now back to our regular discussion",
+        )]),
+    );
+
+    assert_eq!(spans.len(), 1, "{warnings:?}");
+    assert_eq!(spans[0].start_segment_id, 101);
+    assert_eq!(spans[0].end_segment_id, 103);
+    assert_eq!(spans[0].start_time, 10.0);
+    assert_eq!(spans[0].end_time, 40.0);
+    assert!(
+        !warnings
+            .iter()
+            .any(|warning| warning.starts_with("evidence_reanchored")
+                || warning.starts_with("evidence_out_of_span")),
+        "{warnings:?}"
+    );
+
+    // A quote that BEGINS outside the span is still the re-anchor / drop
+    // case: "Now back to our regular discussion" starts in 104 and appears
+    // at two locations (104 and 109), so it drops.
+    let (spans, warnings) = validate_model_output(
+        &request,
+        ModelOutput::from_spans(vec![span(
+            AdSpanKind::HostReadAd,
+            "Acme Mattress",
+            101,
+            103,
+            0.95,
+            "back to our regular discussion about the championship",
+        )]),
+    );
+    assert!(spans.is_empty());
+    assert!(warnings.contains(&"evidence_out_of_span:101-103".to_string()));
+}
+
 #[test]
 fn uniquely_anchored_out_of_span_quote_shifts_the_span() {
     let request = output_request();

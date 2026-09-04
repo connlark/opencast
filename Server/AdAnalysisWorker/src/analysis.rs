@@ -5,20 +5,16 @@ use worker::{console_error, Delay, Fetch, Headers, Method, Request, RequestInit,
 
 use crate::gemini::{parse_error_envelope, parse_generate_content_response};
 use crate::prompt::{gemini_generate_content_url, gemini_request_payload, GeminiGenerationOptions};
-use crate::retry::{classify_http_status, RetryDecision};
+use crate::retry::{
+    backoff_seconds, classify_http_status, RetryDecision, GEMINI_CALL_TIMEOUT_SECONDS,
+    MAX_GEMINI_ATTEMPTS, MAX_GEMINI_REREQUEST_ATTEMPTS,
+};
 use crate::route::JSON_CONTENT_TYPE;
 use crate::types::{
     AdAnalysisRequest, AdAnalysisResponse, ErrorResponse, GeminiUsage, POLICY_NAME, SCHEMA_VERSION,
 };
 use crate::validation::{combine_warnings, validate_model_output, ModelOutput};
 use crate::windowing::analysis_windows;
-
-const MAX_GEMINI_ATTEMPTS: usize = 5;
-/// Model calls are slower than feed fetches; 30 s bounds each attempt (and
-/// therefore also the malformed-parse re-prompt in `analyze_window`) without
-/// tripping on a healthy long generation. The retry ladder is unchanged —
-/// a timed-out attempt backs off and retries like any transport failure.
-const GEMINI_CALL_TIMEOUT_SECONDS: u64 = 30;
 
 pub(crate) struct UpstreamError {
     pub status: u16,
@@ -110,13 +106,23 @@ async fn analyze_window(
     window: AdAnalysisRequest,
 ) -> std::result::Result<WindowOutcome, UpstreamError> {
     let payload = gemini_request_payload(&window, GeminiGenerationOptions::default());
-    let response_body = call_gemini_with_retry(gemini_api_key, gemini_url, &payload).await?;
+    // The two ladders are sized together in `retry.rs` so a window's worst
+    // case (every attempt timing out) stays under the job deadline.
+    let response_body =
+        call_gemini_with_retry(gemini_api_key, gemini_url, &payload, MAX_GEMINI_ATTEMPTS).await?;
 
     let mut usage = None;
     let mut warnings = Vec::new();
     let mut parsed = parse_generate_content_response(&response_body);
     if parsed.output.is_none() {
-        if let Ok(retry_body) = call_gemini_with_retry(gemini_api_key, gemini_url, &payload).await {
+        if let Ok(retry_body) = call_gemini_with_retry(
+            gemini_api_key,
+            gemini_url,
+            &payload,
+            MAX_GEMINI_REREQUEST_ATTEMPTS,
+        )
+        .await
+        {
             let retried = parse_generate_content_response(&retry_body);
             usage = combine_usage(usage, parsed.usage.take());
             warnings.append(&mut parsed.warnings);
@@ -138,6 +144,7 @@ async fn call_gemini_with_retry(
     gemini_api_key: &str,
     gemini_url: &str,
     payload: &serde_json::Value,
+    max_attempts: usize,
 ) -> std::result::Result<String, UpstreamError> {
     let payload_string = serde_json::to_string(payload).map_err(|error| UpstreamError {
         status: 500,
@@ -148,13 +155,13 @@ async fn call_gemini_with_retry(
         body: ErrorResponse::new("gemini_unavailable"),
     };
 
-    for attempt in 1..=MAX_GEMINI_ATTEMPTS {
+    for attempt in 1..=max_attempts {
         let mut response = match call_gemini_once(gemini_api_key, gemini_url, &payload_string).await
         {
             Ok(response) => response,
             Err(error) => {
                 last_error = error;
-                if attempt < MAX_GEMINI_ATTEMPTS {
+                if attempt < max_attempts {
                     Delay::from(Duration::from_secs(backoff_seconds(attempt))).await;
                     continue;
                 }
@@ -173,7 +180,7 @@ async fn call_gemini_with_retry(
         match classify_http_status(status, retry_after.as_deref(), error_body.as_ref()) {
             RetryDecision::Retry {
                 retry_after_seconds,
-            } if attempt < MAX_GEMINI_ATTEMPTS => {
+            } if attempt < max_attempts => {
                 let seconds = retry_after_seconds.unwrap_or_else(|| backoff_seconds(attempt));
                 Delay::from(Duration::from_secs(seconds)).await;
                 last_error = UpstreamError {
@@ -243,10 +250,6 @@ fn worker_error(error: worker::Error) -> UpstreamError {
     }
 }
 
-fn backoff_seconds(attempt: usize) -> u64 {
-    (1u64 << attempt.min(4)).min(20)
-}
-
 fn upstream_status(status: u16) -> u16 {
     if status == 429 || (500..600).contains(&status) {
         503
@@ -264,6 +267,9 @@ fn combine_usage(lhs: Option<GeminiUsage>, rhs: Option<GeminiUsage>) -> Option<G
             candidates_token_count: lhs
                 .candidates_token_count
                 .saturating_add(rhs.candidates_token_count),
+            thoughts_token_count: lhs
+                .thoughts_token_count
+                .saturating_add(rhs.thoughts_token_count),
             total_token_count: lhs.total_token_count.saturating_add(rhs.total_token_count),
         }),
         (Some(lhs), None) => Some(lhs),

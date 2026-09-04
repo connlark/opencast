@@ -531,6 +531,7 @@ describe("async jobs", () => {
     expect(result.usage).toEqual({
       prompt_token_count: 240,
       candidates_token_count: 80,
+      thoughts_token_count: 0,
       total_token_count: 320,
     });
 
@@ -679,6 +680,46 @@ describe("model output resilience", () => {
     expect(body.spans).toHaveLength(0);
     expect(body.warnings).toContain("gemini_finish_reason:MAX_TOKENS");
     expect(body.warnings).toContain("malformed_model_json_skipped");
+  });
+
+  it("ignores thought parts ahead of the model JSON and reports thinking tokens", async () => {
+    // Thinking models may return their reasoning as `thought: true` parts
+    // before the answer part; concatenating them used to make the JSON
+    // unparseable and degrade the window to zero spans.
+    mockGeminiOnce({
+      candidates: [
+        {
+          content: {
+            parts: [
+              { thought: true, text: "Scanning the segments for sponsor reads." },
+              { text: GEMINI_MODEL_OUTPUT, thoughtSignature: "opaque" },
+            ],
+          },
+          finishReason: "STOP",
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 120,
+        candidatesTokenCount: 40,
+        thoughtsTokenCount: 700,
+        totalTokenCount: 860,
+      },
+    });
+
+    const response = await postAnalyze(fixture.payload, {
+      authorization: `Bearer ${BEARER}`,
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.spans).toHaveLength(1);
+    expect(body.warnings).not.toContain("malformed_model_json_skipped");
+    expect(body.usage).toEqual({
+      prompt_token_count: 120,
+      candidates_token_count: 40,
+      thoughts_token_count: 700,
+      total_token_count: 860,
+    });
   });
 });
 

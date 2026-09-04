@@ -719,7 +719,7 @@ async fn admit_usage(
         .json::<ErrorResponse>()
         .await
         .unwrap_or_else(|_| ErrorResponse::new("usage_limiter_error"));
-    Ok(Some(json_response(
+    Ok(Some(json_error(
         if status == 429 { 429 } else { 503 },
         error,
     )?))
@@ -945,10 +945,6 @@ fn json_error_code(status: u16, code: &'static str) -> Result<Response> {
 }
 
 fn json_error(status: u16, body: ErrorResponse) -> Result<Response> {
-    static_response(static_json_response(status, body))
-}
-
-fn json_response(status: u16, body: ErrorResponse) -> Result<Response> {
     static_response(static_json_response(status, body))
 }
 
