@@ -177,16 +177,15 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.buttons["Share Report"].firstMatch, named: "share report action")
         assertExists(app.buttons["Download & Share Audio"].firstMatch, named: "download and share audio action")
 
-        // The seeded transcript/analysis data and the explicit missing-data
-        // state for the unseeded download coexist in one report; deeper
+        // Completed analysis seeds the matching download too. Deeper
         // sections require scrolling the sheet list. LabeledContent rows
         // expose one combined "Label, Value" static text, so match by
         // containment.
-        let missingDownloadRow = app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "No download record.")
+        let completedDownloadRow = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Downloaded, 4.8 MB")
         ).firstMatch
-        scrollDiagnosticsSheet(to: missingDownloadRow, in: app)
-        assertExists(missingDownloadRow, named: "missing download state")
+        scrollDiagnosticsSheet(to: completedDownloadRow, in: app)
+        assertExists(completedDownloadRow, named: "completed download state")
         let zoneMatrixHeader = app.staticTexts["Zone Matrix"].firstMatch
         scrollDiagnosticsSheet(to: zoneMatrixHeader, in: app)
         assertExists(zoneMatrixHeader, named: "zone matrix section")
@@ -1908,11 +1907,26 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         RunLoop.current.run(until: Date.now.addingTimeInterval(1.5))
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "progress before backgrounding")
+        let initialProgress = try XCTUnwrap(progress.value as? String)
         XCUIDevice.shared.press(.home)
         RunLoop.current.run(until: Date.now.addingTimeInterval(2))
         app.activate()
 
         assertNowPlayingOverlay(in: app)
+        let catchesUp = NSPredicate { object, _ in
+            guard let element = object as? XCUIElement,
+                  let value = element.value as? String else {
+                return false
+            }
+            return value != initialProgress
+        }
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: catchesUp, object: progress)], timeout: 4),
+            .completed
+        )
+        attachSmokeScreenshot(named: "now_playing_progress_after_foreground")
         dragDismissNowPlayingOverlayFromArtwork(in: app)
         XCTAssertTrue(nowPlayingOverlay(in: app).waitForNonExistence(timeout: 5))
         assertExists(app.buttons["Open Now Playing"], named: "mini-player after foreground dismiss")

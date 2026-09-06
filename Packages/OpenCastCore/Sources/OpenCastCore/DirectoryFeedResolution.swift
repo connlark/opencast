@@ -4,7 +4,9 @@ import Foundation
 /// never provider hints — are what selection decisions and UI show.
 public struct ResolvedFeedCandidate: Hashable, Sendable {
     public let candidate: DirectoryFeedCandidate
-    public let snapshot: FeedSnapshot
+    public let podcast: Podcast
+    private let legacySnapshot: FeedSnapshot?
+    private let prepared: PreparedFeed?
     /// The post-redirect final URL when the fetch exposed one.
     public let finalURL: URL?
     /// Deduplicated parsed episode count.
@@ -16,11 +18,31 @@ public struct ResolvedFeedCandidate: Hashable, Sendable {
 
     public init(candidate: DirectoryFeedCandidate, snapshot: FeedSnapshot, finalURL: URL? = nil) {
         self.candidate = candidate
-        self.snapshot = snapshot
+        podcast = snapshot.podcast
+        legacySnapshot = snapshot
+        prepared = nil
         self.finalURL = finalURL
         episodeCount = snapshot.episodes.count
         newestEpisodeDate = snapshot.episodes.compactMap(\.publishedAt).max()
         isSalvaged = snapshot.isSalvaged
+    }
+
+    public init(candidate: DirectoryFeedCandidate, prepared: PreparedFeed, finalURL: URL? = nil) {
+        self.candidate = candidate
+        self.prepared = prepared
+        legacySnapshot = nil
+        podcast = prepared.podcast
+        self.finalURL = finalURL
+        episodeCount = prepared.episodeCount
+        newestEpisodeDate = prepared.episodes.newestPublishedAt
+        isSalvaged = prepared.isSalvaged
+    }
+
+    @concurrent
+    public func preparedFeed() async throws -> PreparedFeed {
+        if let prepared { return prepared }
+        guard let legacySnapshot else { throw OpenCastCoreError.invalidHTTPResponse }
+        return try PreparedFeed(snapshot: legacySnapshot)
     }
 
     public var canonicalResolvedURLString: String {

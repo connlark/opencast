@@ -8,6 +8,30 @@ import Testing
 @MainActor
 @Suite("Core store loading")
 struct OpenCastCoreStoresLoadingTests {
+    @Test("Superseded initial load waits for publication before restoring an old episode")
+    func supersededInitialLoadPreservesPlaybackRestore() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/large.xml"
+        let episode = Episode(id: EpisodeID(rawValue: "old-episode"), podcastID: PodcastID(rawValue: feedURL),
+                              podcastTitle: "Large Show", title: "Old episode", duration: 3600,
+                              audioURL: URL(string: "https://example.com/old.mp3"), guid: "old")
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Large Show"))
+        try LocalPreferenceRecord.upsert(key: PlaybackRestorePreferenceStore.episodeIDKey, value: episode.id.rawValue, modelContext: context)
+        try context.save()
+        let snapshot = LocalLibraryCacheSnapshot(podcastsByFeedURL: [:], episodes: [EpisodeListItemSnapshot(episode: episode)], refreshLogs: [])
+        let cache = CoreStoresLoadingProbeCacheStore(loadDelay: .milliseconds(100), snapshot: snapshot, subsequentLoadDelay: .milliseconds(600))
+        let appModel = OpenCastAppModel(localLibraryCacheStore: cache)
+        let initial = Task { await appModel.ensurePlaybackSurfaceHydrated(modelContext: context) }
+        while await cache.recordedLoadCount() == 0 { await Task.yield() }
+        let overlap = Task { try await appModel.library.reloadPersistedData(modelContext: context) }
+        await initial.value
+        #expect(appModel.library.episodes.count == 1)
+        #expect(appModel.playback.currentEpisode?.id == episode.id)
+        #expect(try LocalPreferenceRecord.preference(forKey: PlaybackRestorePreferenceStore.episodeIDKey, modelContext: context)?.value == episode.id.rawValue)
+        try await overlap.value
+    }
+
     @Test("Concurrent and repeated callers share one load")
     func concurrentAndRepeatedCallersShareOneLoad() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

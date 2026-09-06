@@ -4,6 +4,7 @@ final class NotificationSecurityUITests: XCTestCase {
     private static let notificationSyncFeedURLKey = "OPENCAST_NOTIFICATION_SYNC_FEED_URL"
     private static let notificationFixtureFeedBaseURLKey = "OPENCAST_NOTIFICATION_FIXTURE_FEED_BASE_URL"
     private static let adminPollURLKey = "OPENCAST_NOTIFICATION_ADMIN_POLL_URL"
+    private static let notificationLargeFeedURLKey = "OPENCAST_NOTIFICATION_LARGE_FEED_URL"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -357,8 +358,14 @@ final class NotificationSecurityUITests: XCTestCase {
         scrollUntilHittable(app.buttons["Sync Notification Subscriptions"], in: app).tap()
 
         XCTAssertTrue(waitForDiagnosticText(containing: "Sync, synced", in: app, timeout: 90))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Accepted, 1", in: app, timeout: 15))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Rejected, 0", in: app, timeout: 15))
+        assertSingleFeedEnqueuedOrAccepted(in: app)
+
+        // Admission enqueues new feeds. Establish the complete-scan baseline
+        // explicitly while staging crons are disabled, before fixture rollover.
+        let baselinePoll = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
+        XCTAssertEqual(baselinePoll.feedsPolled, 1)
+        XCTAssertEqual(baselinePoll.notificationsAttempted, 0)
+        XCTAssertNil(baselinePoll.firstError)
 
         XCUIDevice.shared.press(.home)
         waitForFixtureRollover(rolloverTime)
@@ -378,6 +385,42 @@ final class NotificationSecurityUITests: XCTestCase {
         XCTAssertEqual(secondPoll.notificationsAttempted, 0)
         XCTAssertEqual(secondPoll.apns200Count, 0)
         XCTAssertNil(secondPoll.firstError)
+    }
+
+    @MainActor
+    func testPhysicalDeviceProdStagingLargeFeedAdmission() async throws {
+        try skipIfRunningOnSimulator()
+        let adminToken = try Self.prodStagingAdminTokenOrSkip()
+        let feedURL = try Self.notificationLargeFeedURLOrSkip()
+        let permissionMonitor = addUIInterruptionMonitor(withDescription: "Notification Permission") { alert in
+            for title in ["Allow", "Allow Notifications"] where alert.buttons[title].exists {
+                alert.buttons[title].tap()
+                return true
+            }
+            return false
+        }
+        defer { removeUIInterruptionMonitor(permissionMonitor) }
+        let app = makePhysicalDiagnosticApp()
+        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = feedURL
+        app.launch()
+        openDiagnostics(in: app)
+        scrollUntilHittable(app.buttons["Register and Send Test Push"], in: app).tap()
+        app.tap()
+        XCTAssertTrue(staticText(containing: "Worker Registration, registered", in: app).waitForExistence(timeout: 90))
+        XCTAssertTrue(staticText(containing: "APNs Status, 200", in: app).waitForExistence(timeout: 90))
+        subscribeToFeed(in: app, title: "The Herd with Colin Cowherd", timeout: 360)
+        openDiagnostics(in: app)
+        scrollUntilHittable(app.buttons["Sync Notification Subscriptions"], in: app).tap()
+        XCTAssertTrue(waitForDiagnosticText(containing: "Sync, synced", in: app, timeout: 90))
+        assertSingleFeedEnqueuedOrAccepted(in: app)
+        let baseline = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
+        XCTAssertEqual(baseline.feedsPolled, 1)
+        XCTAssertEqual(baseline.notificationsAttempted, 0)
+        XCTAssertNil(baseline.firstError)
+        let repeated = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
+        XCTAssertEqual(repeated.feedsPolled, 1)
+        XCTAssertEqual(repeated.notificationsAttempted, 0)
+        XCTAssertNil(repeated.firstError)
     }
 
     @MainActor
@@ -492,17 +535,27 @@ final class NotificationSecurityUITests: XCTestCase {
     }
 
     @MainActor
-    private func subscribeToFeed(in app: XCUIApplication, title: String) {
+    private func subscribeToFeed(in app: XCUIApplication, title: String, timeout: TimeInterval = 45) {
         openLibrary(in: app)
         tapAddPodcastButton(in: app)
         scrollUntilHittable(app.buttons["Subscribe"], in: app).tap()
 
-        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 45))
+        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: timeout))
     }
 
     @MainActor
     private func openSettings(in app: XCUIApplication) {
         openSection("Settings", in: app)
+    }
+
+    @MainActor
+    private func assertSingleFeedEnqueuedOrAccepted(in app: XCUIApplication) {
+        XCTAssertTrue(waitForDiagnosticText(containing: "Rejected, 0", in: app, timeout: 15))
+        // Unknown feeds enqueue without fetching in the sync request. The
+        // explicit baseline poll below must finish successfully before sends.
+        let accepted = staticText(containing: "Accepted, 1", in: app).exists
+        let pending = staticText(containing: "Pending, 1", in: app).exists
+        XCTAssertNotEqual(accepted, pending, "Exactly one feed must be accepted or pending its first scan")
     }
 
     @MainActor
@@ -763,12 +816,23 @@ final class NotificationSecurityUITests: XCTestCase {
         return url.absoluteString
     }
 
+    private static func notificationLargeFeedURLOrSkip() throws -> String {
+        guard let feedURL = ProcessInfo.processInfo.environment[notificationLargeFeedURLKey],
+              !feedURL.isEmpty
+        else {
+            throw XCTSkip("Set \(notificationLargeFeedURLKey) to the expected public large-feed RSS URL before running this proof.")
+        }
+
+        return feedURL
+    }
+
     #if INTERNAL_NOTIFICATIONS_DIAGNOSTICS
     private static func triggerProdStagingAdminPoll(
         feedURL: String,
         adminToken: String
     ) async throws -> AdminPollResponse {
         var request = URLRequest(url: try prodStagingAdminPollURLOrSkip())
+        request.timeoutInterval = 130
         request.httpMethod = "POST"
         request.setValue("Bearer \(adminToken)", forHTTPHeaderField: "authorization")
         request.setValue("application/json", forHTTPHeaderField: "content-type")

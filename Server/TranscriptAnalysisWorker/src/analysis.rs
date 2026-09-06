@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use futures_util::future::{select, Either};
-use worker::{console_error, console_log, Date, Delay, Fetch, Headers, Method, Request, RequestInit, Response};
+use worker::{
+    console_error, console_log, Date, Delay, Fetch, Headers, Method, Request, RequestInit, Response,
+};
 
 use crate::coalescing::{prepare_analysis_request, CoalescingError};
 use crate::gemini::{parse_error_envelope, parse_generate_content_response, GeminiParseError};
@@ -10,8 +12,8 @@ use crate::retry::{classify_http_status, RetryDecision};
 use crate::route::JSON_CONTENT_TYPE;
 use crate::thinking::thinking_level_for_segment_count;
 use crate::types::{
-    ErrorResponse, GeminiUsage, TranscriptAnalysisRequest, TranscriptAnalysisResponse, POLICY_NAME,
-    SCHEMA_VERSION,
+    AnalysisRunStats, ErrorResponse, GeminiUsage, TranscriptAnalysisRequest,
+    TranscriptAnalysisResponse, POLICY_NAME, SCHEMA_VERSION,
 };
 use crate::validation::{combine_warnings, validate_and_remap_model_output};
 
@@ -45,10 +47,27 @@ pub(crate) struct UpstreamError {
 /// re-validated in original-id space. Parse, truncation, and hard-invalid
 /// failures retry up to the validated three-attempt limit; every retry uses
 /// high thinking.
+///
+/// The stats come back on BOTH arms: a failed run still made its attempts
+/// and consumed its tokens, and the caller records that spend either way.
 pub(crate) async fn run_analysis(
     gemini_api_key: &str,
     model: &str,
     request: TranscriptAnalysisRequest,
+) -> (
+    std::result::Result<TranscriptAnalysisResponse, UpstreamError>,
+    AnalysisRunStats,
+) {
+    let mut stats = AnalysisRunStats::default();
+    let result = run_analysis_recording(gemini_api_key, model, request, &mut stats).await;
+    (result, stats)
+}
+
+async fn run_analysis_recording(
+    gemini_api_key: &str,
+    model: &str,
+    request: TranscriptAnalysisRequest,
+    stats: &mut AnalysisRunStats,
 ) -> std::result::Result<TranscriptAnalysisResponse, UpstreamError> {
     let gemini_url = gemini_generate_content_url(model);
     let prepared = prepare_analysis_request(&request).map_err(|error| match error {
@@ -62,7 +81,6 @@ pub(crate) async fn run_analysis(
     let model_unit_count = prepared.model_request.segments.len();
     let started_at_ms = Date::now().as_millis();
 
-    let mut combined_usage: Option<GeminiUsage> = None;
     let mut gemini_warnings: Vec<String> = Vec::new();
     let mut last_failure: Option<GeminiParseError> = None;
 
@@ -81,9 +99,13 @@ pub(crate) async fn run_analysis(
         );
         let is_last = attempt + 1 == MAX_ANALYSIS_ATTEMPTS;
 
+        // Counted before the call: a transport-exhausted attempt may still
+        // have been billed upstream, and the ladder position is what the
+        // completion log line reports.
+        stats.attempts = stats.attempts.saturating_add(1);
         let response_body = call_gemini_with_retry(gemini_api_key, &gemini_url, &payload).await?;
         let mut parsed = parse_generate_content_response(&response_body);
-        combined_usage = combine_usage(combined_usage, parsed.usage.take());
+        stats.usage = combine_usage(stats.usage.take(), parsed.usage.take());
         gemini_warnings.append(&mut parsed.warnings);
 
         match parsed.output {
@@ -97,7 +119,7 @@ pub(crate) async fn run_analysis(
                         chapters: validated.chapters,
                         summary: Some(validated.summary),
                         warnings: combine_warnings(validated.warnings, gemini_warnings),
-                        usage: combined_usage,
+                        usage: stats.usage.clone(),
                     };
                     console_log!(
                         "{}",

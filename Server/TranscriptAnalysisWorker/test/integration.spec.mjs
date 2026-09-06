@@ -13,6 +13,7 @@ import {
   abortAllDurableObjects,
   env,
   runDurableObjectAlarm,
+  runInDurableObject,
 } from "cloudflare:test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -24,6 +25,7 @@ import {
   analysisFor,
   bytesToBase64,
   geminiResponse,
+  globalLimiterStub,
   installFetchStub,
   makeDenseRequest,
   makeRequest,
@@ -34,11 +36,14 @@ import {
   pendingGeminiResponses,
   postAnalyze,
   postEnvelope,
+  counterDiff,
   postPoll,
+  readCounters,
   restoreFetchStub,
   seedSyntheticKey,
   sha256Bytes,
   syntheticAssertion,
+  waitForCounterDelta,
   waitForTerminalPoll,
 } from "./support.mjs";
 
@@ -193,6 +198,7 @@ describe("billing dark (BILLING_REQUIRED unset)", () => {
 
 describe("bearer bridge", () => {
   it("analyzes inline, clamps the banned model env var, and reports usage", async () => {
+    const countersBefore = await readCounters();
     mockGeminiOnce(geminiResponse(analysisFor(12)));
     const response = await postAnalyze(JSON.stringify(makeRequest()), {
       authorization: `Bearer ${BEARER}`,
@@ -217,6 +223,16 @@ describe("bearer bridge", () => {
     expect(observedGeminiPayloads[0].generationConfig.maxOutputTokens).toBe(
       32768,
     );
+    // The inline lane records its spend in the same content-free counters
+    // as job runs, plus its own volume counter.
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      analysis_attempts: 1,
+      candidates_tokens: 40,
+      prompt_tokens: 120,
+      sync_analyses: 1,
+      thoughts_tokens: 300,
+      total_tokens: 460,
+    });
   });
 
   it("starts high when coalescing still leaves more than 1399 model units", async () => {
@@ -306,6 +322,7 @@ describe("bearer bridge", () => {
 
 describe("async jobs", () => {
   it("submits, attaches without new model calls, then serves the result idempotently", async () => {
+    const countersBefore = await readCounters();
     const request = makeRequest({
       fingerprint: "b".repeat(64),
       asyncSupported: true,
@@ -354,9 +371,22 @@ describe("async jobs", () => {
     });
     expect(repeated.status).toBe(200);
     expect(await repeated.json()).toEqual(result);
+
+    // One started run, one completion, one attempt's tokens: the attach and
+    // the idempotent re-poll bump nothing.
+    expect(await waitForCounterDelta(countersBefore, "jobs_completed", 1)).toEqual({
+      analysis_attempts: 1,
+      candidates_tokens: 40,
+      jobs_completed: 1,
+      jobs_started: 1,
+      prompt_tokens: 120,
+      thoughts_tokens: 300,
+      total_tokens: 460,
+    });
   });
 
   it("turns an evicted running job into a transient failure on its alarm", async () => {
+    const countersBefore = await readCounters();
     const request = makeRequest({
       fingerprint: "c".repeat(64),
       asyncSupported: true,
@@ -381,6 +411,12 @@ describe("async jobs", () => {
     expect(failed.status).toBe(503);
     expect((await failed.json()).error).toBe("job_failed_transient");
     deferred.release();
+    // The evicted run never returned from Gemini, so no spend is known for
+    // it: started and transient-failed, nothing else.
+    expect(await waitForCounterDelta(countersBefore, "jobs_failed_transient", 1)).toEqual({
+      jobs_failed_transient: 1,
+      jobs_started: 1,
+    });
   });
 
   it("authenticates the exact dynamic poll path before rejecting a payload mismatch", async () => {
@@ -443,6 +479,7 @@ describe("model output resilience", () => {
   });
 
   it("fails typed when truncation survives all three attempts", async () => {
+    const countersBefore = await readCounters();
     mockGeminiOnce(GEMINI_TRUNCATED_RESPONSE);
     mockGeminiOnce(GEMINI_TRUNCATED_RESPONSE);
     mockGeminiOnce(GEMINI_TRUNCATED_RESPONSE);
@@ -454,6 +491,16 @@ describe("model output resilience", () => {
 
     expect(response.status).toBe(502);
     expect((await response.json()).error).toBe("model_output_truncated");
+    // The failure arm still records what the three attempts consumed (the
+    // truncated fixture carries no thoughts, so that counter is never
+    // written rather than written as zero).
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      analysis_attempts: 3,
+      candidates_tokens: 3 * 32768,
+      prompt_tokens: 3 * 120,
+      sync_analyses: 1,
+      total_tokens: 3 * 32888,
+    });
   });
 
   it("fails typed when id-discipline violations survive all three attempts", async () => {
@@ -577,6 +624,42 @@ describe("model output resilience", () => {
     const failed = await waitForTerminalPoll(request.transcript.fingerprint);
     expect(failed.status).toBe(502);
     expect((await failed.json()).error).toBe("result_oversized");
+  });
+});
+
+describe("spend caps", () => {
+  it("counts a global cap denial by profile without a model call", async () => {
+    const countersBefore = await readCounters();
+    // Pre-fill today's global limiter to its declared 60-request cap. The
+    // bearer profile admits first (1 of 40), then the global profile refuses.
+    await runInDurableObject(globalLimiterStub(), (_instance, state) => {
+      state.storage.sql.exec(
+        "CREATE TABLE IF NOT EXISTS daily_usage (\n" +
+          "  id INTEGER PRIMARY KEY CHECK (id = 1),\n" +
+          "  request_count INTEGER NOT NULL,\n" +
+          "  estimated_input_tokens INTEGER NOT NULL\n" +
+          ");",
+      );
+      state.storage.sql.exec(
+        "INSERT INTO daily_usage (id, request_count, estimated_input_tokens) " +
+          "VALUES (1, 60, 0) ON CONFLICT(id) DO UPDATE SET request_count = 60;",
+      );
+    });
+
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "d".repeat(64), asyncSupported: true })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+    expect(response.status).toBe(429);
+    expect((await response.json()).error).toBe("global_capacity_exhausted");
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      cap_denials_global: 1,
+    });
+    // Storage is shared across the file: put the limiter back so later
+    // submits are not refused by this test's pre-fill.
+    await runInDurableObject(globalLimiterStub(), (_instance, state) => {
+      state.storage.sql.exec("DELETE FROM daily_usage;");
+    });
   });
 });
 

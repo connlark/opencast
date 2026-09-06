@@ -402,6 +402,54 @@ export async function waitForTerminalPollAs(identity, jobID) {
   throw new Error(`job ${jobID} did not reach a terminal poll response`);
 }
 
+/// Content-free lifetime counters (migration 0003) as name → value. Absent
+/// names were never bumped; a zero delta is never written.
+export async function readCounters() {
+  const rows = await env.TRANSCRIPT_ANALYSIS_DB.prepare(
+    "SELECT name, value FROM counters ORDER BY name",
+  ).all();
+  return Object.fromEntries(rows.results.map((row) => [row.name, row.value]));
+}
+
+/// The suites share one D1 across tests (RTW precedent), so counter
+/// assertions are deltas against a reading taken at the start of the test.
+/// Only counters that moved appear in the diff.
+export function counterDiff(before, after) {
+  const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  const diff = {};
+  for (const name of names) {
+    const delta = (after[name] ?? 0) - (before[name] ?? 0);
+    if (delta !== 0) {
+      diff[name] = delta;
+    }
+  }
+  return diff;
+}
+
+/// Bumps that follow a gate-opening await (terminal outcome after the record
+/// write, settle/release after the backend call) can land a few milliseconds
+/// after the state a test already observed.
+export async function waitForCounterDelta(before, name, delta) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const diff = counterDiff(before, await readCounters());
+    if (diff[name] === delta) {
+      return diff;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(
+    `counter ${name} did not move by ${delta}: ${JSON.stringify(counterDiff(before, await readCounters()))}`,
+  );
+}
+
+/// The day-keyed global usage limiter, for pre-filling a cap from a test.
+export function globalLimiterStub() {
+  const dayIndex = Math.floor(Date.now() / 86_400_000);
+  return env.TRANSCRIPT_ANALYSIS_USAGE_LIMITER.getByName(
+    `transcript-analysis:v1:usage:${dayIndex}:global`,
+  );
+}
+
 /// The job DO for a fingerprint, for driving its alarm from a test.
 export function jobStub(fingerprint) {
   return env.TRANSCRIPT_ANALYSIS_JOB.getByName(

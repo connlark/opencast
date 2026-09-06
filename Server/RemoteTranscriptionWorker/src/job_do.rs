@@ -46,6 +46,10 @@ const TEST_MISMATCH_FAIL_INJECTED_KEY: &str = "test_mismatch_fail_injected";
 /// Turns the dev-lane `fake:strand=N` test hook has already stranded (see
 /// the hook at the top of `advance`).
 const TEST_STRAND_INJECTED_KEY: &str = "test_strand_injected";
+/// Settle attempts the dev-lane `fake:sfail=N` / `fake:slost=N` hooks have
+/// intercepted, counted job-wide so the hooks span the stitch, the result
+/// states, and the terminal path (see `settle_reservation`).
+const TEST_SETTLE_HOOK_INJECTED_KEY: &str = "test_settle_hook_injected";
 /// The platform's hard wall limit for one alarm invocation. An in-flight
 /// marker older than this belongs to a handler that is no longer running.
 const ALARM_MARKER_STALE_SECONDS: i64 = 15 * 60;
@@ -62,7 +66,9 @@ const RESULT_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const BUSY_RETRY_SECONDS: u64 = 10;
 /// RTW-5 backstop budget: the terminal-path release attempt plus three
 /// bounded alarm retries before `credit_release_abandoned` is the operator
-/// signal (paced by `alarm_retry_seconds`, 60 s in production).
+/// signal (paced by `alarm_retry_seconds`, 60 s in production). A deferred
+/// settle carried into a terminal record (2026-09-04) shares the budget;
+/// `credit_settle_abandoned` then frees the hold instead of stranding it.
 const CREDIT_RELEASE_MAX_ATTEMPTS: u32 = 4;
 const TRANSCRIPTION_BUCKET: &str = "TRANSCRIPTION_AUDIO";
 const R2_PART_BYTES: usize = 8 * 1024 * 1024;
@@ -188,6 +194,17 @@ impl DurableObject for TranscriptionJob {
     }
 }
 
+/// What counting one failed reserve/settle call decided (audit §27).
+enum CreditCallBudget {
+    /// Budget holds: `alarm()` re-arms on this error at `alarm_retry_seconds`.
+    Retry(worker::Error),
+    /// This failure spent the budget; the caller decides what that means
+    /// (a reserve fails the job, a settle is deferred).
+    Exhausted(JobRecord),
+    /// The terminal path owns the record now; nothing left to do.
+    Parked,
+}
+
 impl TranscriptionJob {
     fn config(&self) -> std::result::Result<AppConfig, ErrorResponse> {
         AppConfig::from_env(&self.env)
@@ -237,7 +254,7 @@ impl TranscriptionJob {
                 .or_insert(now);
             // Progress earns a fresh stranded-job repair (see
             // `repair_if_stranded`) and a fresh credit-call budget (see
-            // `fail_credit_call`).
+            // `count_credit_call_failure`).
             record.stranded_repairs = 0;
             record.credit_call_attempts = 0;
         }
@@ -527,6 +544,16 @@ impl TranscriptionJob {
                 .await?
             {
                 self.sync_index(&updated).await;
+                // A deferred settle gets a fresh per-state budget with the
+                // transition; arm its first retry rather than waiting on
+                // the result TTL.
+                if updated.credit_settle_pending {
+                    let retry_seconds = self
+                        .config()
+                        .map(|config| config.alarm_retry_seconds)
+                        .unwrap_or(60);
+                    self.schedule(Duration::from_secs(retry_seconds)).await?;
+                }
             }
         }
         let headers = Headers::new();
@@ -579,17 +606,37 @@ impl TranscriptionJob {
         bucket.delete(&job::r2_result_key(&record.job_id)).await?;
         self.delete_job_prefixes(&record.job_id).await?;
 
+        // Deferred settle (2026-09-04): the ack is the success terminal, so
+        // settle now; while the seam stays down the acknowledged record
+        // keeps the flag and the alarm retries it (the RTW-5 loop).
+        let settle_still_pending =
+            record.credit_settle_pending && !self.attempt_credit_settle(&record).await;
+        if settle_still_pending {
+            self.bump("credit_settle_failed", 1).await;
+        }
         let updated = self
-            .update_record(|record| {
+            .update_record(move |record| {
                 record.state = job::STATE_ACKNOWLEDGED.to_string();
                 record.cleanup_complete = true;
                 record.state_deadline_at = None;
+                record.credit_settle_pending = settle_still_pending;
+                if settle_still_pending {
+                    record.credit_release_attempts = 1;
+                }
             })
             .await?
             .expect("record existed above");
         self.sync_index(&updated).await;
         self.bump("jobs_acknowledged", 1).await;
-        self.state.storage().delete_alarm().await?;
+        if settle_still_pending {
+            let retry_seconds = self
+                .config()
+                .map(|config| config.alarm_retry_seconds)
+                .unwrap_or(60);
+            self.schedule(Duration::from_secs(retry_seconds)).await?;
+        } else {
+            self.state.storage().delete_alarm().await?;
+        }
         self.status_response(&updated, None)
     }
 
@@ -922,10 +969,10 @@ impl TranscriptionJob {
             .map_err(|error| worker::Error::RustError(error.error))?;
 
         // RTW-5 backstop: the only alarm work a terminal record can carry
-        // is a pending credit release; everything else on a terminal record
-        // is a stale or redundant alarm turn.
+        // is a pending credit release or deferred settle; everything else
+        // on a terminal record is a stale or redundant alarm turn.
         if job::is_terminal(&record.state) {
-            return self.retry_pending_credit_release(record, &config).await;
+            return self.retry_pending_credit_op(record, &config).await;
         }
 
         // Test hook (development lane, FAKE_AI only): `fake:strand=N` or
@@ -936,7 +983,7 @@ impl TranscriptionJob {
         // turn), so the workerd suite can drive `repair_if_stranded`.
         if self.fake_ai_enabled(&config) {
             if let Some(rule) = ai::parse_fake_hooks(record.language_code.as_deref()).strand {
-                if job::strand_repair(&record.state, record.credit_release_pending)
+                if job::strand_repair(&record.state, record.credit_op_pending())
                     == Some(job::StrandRepair::RearmOnceThenFail)
                 {
                     let storage = self.state.storage();
@@ -983,7 +1030,13 @@ impl TranscriptionJob {
             }
         }
 
-        match record.state.as_str() {
+        // Deferred settle (2026-09-04): a live result-state record retries
+        // its settle on every alarm turn under the per-state budget, before
+        // the state's own work; the alarm is pulled forward to the retry
+        // below, after that work armed its own (TTL, ad poll).
+        let settle_retry_at = self.retry_deferred_settle(&record, &config).await?;
+
+        let outcome = match record.state.as_str() {
             job::STATE_CREATED => self.step_staging(record, &config).await,
             job::STATE_STAGING_ORIGIN => self.step_staging(record, &config).await,
             job::STATE_WAITING_FOR_DEVICE_SOURCE => {
@@ -1056,7 +1109,12 @@ impl TranscriptionJob {
                 Ok(())
             }
             _ => Ok(()),
+        };
+        outcome?;
+        if let Some(retry_at) = settle_retry_at {
+            self.arm_deferred_settle_retry(retry_at).await?;
         }
+        Ok(())
     }
 
     /// Stranded-job repair (2026-08-19). Invariant: every non-terminal,
@@ -1086,7 +1144,7 @@ impl TranscriptionJob {
     ///
     /// Returns the record the caller should report.
     async fn repair_if_stranded(&self, record: JobRecord, config: &AppConfig) -> Result<JobRecord> {
-        let Some(repair) = job::strand_repair(&record.state, record.credit_release_pending) else {
+        let Some(repair) = job::strand_repair(&record.state, record.credit_op_pending()) else {
             return Ok(record);
         };
         if self.state.storage().get_alarm().await?.is_some() {
@@ -1504,7 +1562,21 @@ impl TranscriptionJob {
                 "reserve step without probe".to_string(),
             ));
         };
-        let credit = self.credit(config)?;
+        let credit = match self.credit(config) {
+            Ok(credit) => credit,
+            // A seam that cannot even be constructed (binding missing) is a
+            // failed call, not an alarm error: it enters the same bounded
+            // budget (2026-09-04 review) — the `?` it replaced re-armed the
+            // alarm forever with no counter and no state deadline.
+            Err(error) => {
+                return self
+                    .fail_reserve_call(
+                        config,
+                        CreditError::Internal(format!("credit authority: {error}")),
+                    )
+                    .await;
+            }
+        };
         // Test hook (development lane, FAKE_AI only): `resfail=N` fails the
         // first N reserve calls on the internal shape so the workerd suite
         // can drive the audit-§27 budget through this arm.
@@ -1602,24 +1674,20 @@ impl TranscriptionJob {
             // reservation) retry under the bounded budget: from `probing`
             // every retry re-walks the native probe, so the budget is what
             // keeps a broken seam from re-probing forever (audit §27).
-            Err(error) => self.fail_credit_call(config, "reserve", error).await,
+            Err(error) => self.fail_reserve_call(config, error).await,
         }
     }
 
-    /// A reserve/settle call failed on a retryable shape. Counts the failure
-    /// on the record and lets the alarm retry (`Err` → `alarm()` re-arms at
-    /// `alarm_retry_seconds`) until the budget is spent, then fails the job
-    /// on the internal code so the app falls back on-device: for a reserve
-    /// nothing was charged; for a settle the reservation is released rather
-    /// than left held under a published result (`credit_<call>_abandoned`
-    /// is the operator signal, the `credit_release_abandoned` shape). The
-    /// release path has its own RTW-5 backstop when the seam stays down.
-    async fn fail_credit_call(
+    /// A reserve/settle call failed on a retryable shape: count it on the
+    /// record (audit §27). `Retry` lets the alarm retry (`Err` → `alarm()`
+    /// re-arms at `alarm_retry_seconds`); `Exhausted` means this failure
+    /// spent the budget and the caller decides — a reserve fails the job
+    /// (`fail_reserve_call`), a settle is deferred (`step_stitch`).
+    async fn count_credit_call_failure(
         &self,
-        config: &AppConfig,
         call: &'static str,
-        error: CreditError,
-    ) -> Result<()> {
+        error: &CreditError,
+    ) -> Result<CreditCallBudget> {
         let updated = match self
             .update_record_if_live(|record| {
                 record.credit_call_attempts += 1;
@@ -1631,26 +1699,43 @@ impl TranscriptionJob {
                 // The terminal path owns the record; sweep anything the
                 // parked step re-created.
                 self.delete_job_prefixes(&current.job_id).await.ok();
-                return Ok(());
+                return Ok(CreditCallBudget::Parked);
             }
-            LiveUpdate::RefusedCancelling(_) | LiveUpdate::Missing => return Ok(()),
+            LiveUpdate::RefusedCancelling(_) | LiveUpdate::Missing => {
+                return Ok(CreditCallBudget::Parked);
+            }
         };
         if !job::credit_call_exhausted(updated.credit_call_attempts) {
-            return Err(worker::Error::RustError(format!(
+            return Ok(CreditCallBudget::Retry(worker::Error::RustError(format!(
                 "credit {call} failed (attempt {}): {error:?}",
                 updated.credit_call_attempts
-            )));
+            ))));
         }
         // Content-free: job id, call, and the credit error shape only.
         worker::console_error!(
-            "job {} credit {call} failed {} times; failing: {error:?}",
+            "job {} credit {call} failed {} times; budget spent: {error:?}",
             updated.job_id,
             updated.credit_call_attempts
         );
-        self.bump(&format!("credit_{call}_abandoned"), 1).await;
-        self.release_and_fail(updated, config, types::ERROR_INTERNAL)
-            .await?;
-        Ok(())
+        Ok(CreditCallBudget::Exhausted(updated))
+    }
+
+    /// A reserve call failed (or its authority could not be constructed):
+    /// retry under the budget, then fail the job on the internal code so
+    /// the app falls back on-device — nothing was charged, and
+    /// `release_and_fail` frees a reservation that did land unseen.
+    /// `credit_reserve_abandoned` is the operator signal.
+    async fn fail_reserve_call(&self, config: &AppConfig, error: CreditError) -> Result<()> {
+        match self.count_credit_call_failure("reserve", &error).await? {
+            CreditCallBudget::Retry(error) => Err(error),
+            CreditCallBudget::Parked => Ok(()),
+            CreditCallBudget::Exhausted(updated) => {
+                self.bump("credit_reserve_abandoned", 1).await;
+                self.release_and_fail(updated, config, types::ERROR_INTERNAL)
+                    .await?;
+                Ok(())
+            }
+        }
     }
 
     async fn step_chunk(&self, config: &AppConfig) -> Result<()> {
@@ -2590,36 +2675,34 @@ impl TranscriptionJob {
             None => return Ok(()),
         }
 
-        // Test hook (development lane, FAKE_AI only): `sfail=N` fails the
-        // first N settle calls between the result put and the settle, so
-        // the workerd suite can drive the re-entry path (`sfail=1`) and the
-        // audit-§27 budget (`sfail=99`) deterministically.
-        let injected_failure = self.fake_ai_enabled(config)
-            && ai::parse_fake_hooks(record.language_code.as_deref())
-                .settle_fail_count
-                .is_some_and(|count| record.credit_call_attempts < count);
-        let settled = if injected_failure {
-            Err(CreditError::Internal(
-                "injected settle failure (sfail hook)".to_string(),
-            ))
-        } else {
-            let credit = self.credit(config)?;
-            credit
-                .settle(&record.account_id, &record.job_id, now_seconds())
-                .await
+        // Bounded retry (audit §27): the result stays published across
+        // retries (the RTW-3 re-entry above), and the job leaves `stitching`
+        // once the budget is spent instead of sitting there forever. What
+        // it leaves AS changed on 2026-09-04: the settle is deferred, never
+        // failed. The seam may have committed the settle and lost only the
+        // response, and releasing a settled reservation is a no-op that
+        // keeps the charge — so release_and_fail here deleted a transcript
+        // the customer had paid for. The result states retry the settle,
+        // and the terminal path settles instead of releasing while the flag
+        // is set (`credit_settle_pending`).
+        let settle_pending = match self.settle_reservation(&record, config).await {
+            Ok(()) => {
+                self.bump(
+                    "settled_seconds",
+                    record.reserved_seconds.unwrap_or_default(),
+                )
+                .await;
+                false
+            }
+            Err(error) => match self.count_credit_call_failure("settle", &error).await? {
+                CreditCallBudget::Retry(error) => return Err(error),
+                CreditCallBudget::Parked => return Ok(()),
+                CreditCallBudget::Exhausted(_) => {
+                    self.bump("credit_settle_deferred", 1).await;
+                    true
+                }
+            },
         };
-        if let Err(error) = settled {
-            // Bounded retry (audit §27): the result stays published across
-            // retries (the RTW-3 re-entry above), and once the budget is
-            // spent the job fails with the reservation released instead of
-            // sitting in `stitching` forever.
-            return self.fail_credit_call(config, "settle", error).await;
-        }
-        self.bump(
-            "settled_seconds",
-            record.reserved_seconds.unwrap_or_default(),
-        )
-        .await;
         self.bump("results_ready", 1).await;
 
         // Flag on → the ad phase runs before result_ready under its own
@@ -2636,6 +2719,9 @@ impl TranscriptionJob {
                 }
                 record.result_key = Some(job::r2_result_key(&record.job_id));
                 record.normalized_transcript_sha256 = normalized_sha256;
+                // The transition resets `credit_call_attempts`: a deferred
+                // settle gets a fresh per-state retry budget.
+                record.credit_settle_pending = settle_pending;
             })
             .await?
         {
@@ -2655,6 +2741,10 @@ impl TranscriptionJob {
         self.sync_index(&updated).await;
         if updated.state == job::STATE_DETECTING_ADS {
             self.schedule(Duration::from_secs(0)).await
+        } else if updated.credit_settle_pending {
+            // The first deferred-settle retry, not the result TTL.
+            self.schedule(Duration::from_secs(config.alarm_retry_seconds))
+                .await
         } else {
             self.schedule_at(updated.state_deadline_at.expect("just set"))
                 .await
@@ -3057,6 +3147,15 @@ impl TranscriptionJob {
         };
         self.sync_index(&updated).await;
         self.bump("ad_analysis_finalized", 1).await;
+        if updated.credit_settle_pending {
+            // Fresh per-state budget with the transition: arm the first
+            // deferred-settle retry rather than the result TTL.
+            let retry_seconds = self
+                .config()
+                .map(|config| config.alarm_retry_seconds)
+                .unwrap_or(60);
+            return self.schedule(Duration::from_secs(retry_seconds)).await;
+        }
         self.schedule_at(updated.state_deadline_at.expect("just set"))
             .await
     }
@@ -3180,12 +3279,16 @@ impl TranscriptionJob {
         code: &'static str,
     ) -> Result<JobRecord> {
         // Best-effort here: finish_terminal owns the authoritative release
-        // and its RTW-5 pending/retry backstop.
-        if let Ok(credit) = self.credit(config) {
-            credit
-                .release(&record.account_id, &record.job_id, now_seconds())
-                .await
-                .ok();
+        // and its RTW-5 pending/retry backstop. Under a deferred settle the
+        // terminal path settles instead (2026-09-04): a release could only
+        // refund a delivered result or no-op against a landed settle.
+        if !record.credit_settle_pending {
+            if let Ok(credit) = self.credit(config) {
+                credit
+                    .release(&record.account_id, &record.job_id, now_seconds())
+                    .await
+                    .ok();
+            }
         }
         if self.limiter_release(&record.job_id).await.is_err() {
             self.bump("limiter_release_failed", 1).await;
@@ -3221,21 +3324,178 @@ impl TranscriptionJob {
         }
     }
 
-    /// Alarm arm for a terminal record (RTW-5): retry a pending credit
-    /// release under the bounded budget. Invariant: a releasable
-    /// reservation is never abandoned without a counter increment.
-    async fn retry_pending_credit_release(
+    /// One settle call against the credit seam. A seam that cannot even be
+    /// constructed (binding missing) is a failed call, not an alarm error,
+    /// so it enters the same bounded budget (2026-09-04 review).
+    ///
+    /// Dev-lane hooks (FAKE_AI only), counted job-wide in DO storage so they
+    /// span the stitch, the result states, and the terminal path: `sfail=N`
+    /// fails the first N attempts before the call (nothing committed);
+    /// `slost=N` runs the real settle and then reports failure for the
+    /// first N attempts — the committed-but-response-lost shape that must
+    /// keep the paid result.
+    async fn settle_reservation(
         &self,
-        record: JobRecord,
+        record: &JobRecord,
         config: &AppConfig,
-    ) -> Result<()> {
-        if !record.credit_release_pending {
+    ) -> std::result::Result<(), CreditError> {
+        let storage_error =
+            |error: worker::Error| CreditError::Internal(format!("hook storage: {error}"));
+        let mut report_lost = false;
+        if self.fake_ai_enabled(config) {
+            let hooks = ai::parse_fake_hooks(record.language_code.as_deref());
+            if hooks.settle_fail_count.is_some() || hooks.settle_lost_count.is_some() {
+                let storage = self.state.storage();
+                let intercepted = storage
+                    .get::<u32>(TEST_SETTLE_HOOK_INJECTED_KEY)
+                    .await
+                    .map_err(storage_error)?
+                    .unwrap_or(0);
+                let fail = hooks
+                    .settle_fail_count
+                    .is_some_and(|count| intercepted < count);
+                let lost = !fail
+                    && hooks
+                        .settle_lost_count
+                        .is_some_and(|count| intercepted < count);
+                if fail || lost {
+                    storage
+                        .put(TEST_SETTLE_HOOK_INJECTED_KEY, intercepted + 1)
+                        .await
+                        .map_err(storage_error)?;
+                }
+                if fail {
+                    return Err(CreditError::Internal(
+                        "injected settle failure (sfail hook)".to_string(),
+                    ));
+                }
+                report_lost = lost;
+            }
+        }
+        let credit = self
+            .credit(config)
+            .map_err(|error| CreditError::Internal(format!("credit authority: {error}")))?;
+        credit
+            .settle(&record.account_id, &record.job_id, now_seconds())
+            .await?;
+        if report_lost {
+            return Err(CreditError::Internal(
+                "injected settle response loss (slost hook)".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// One deferred-settle attempt (result states, ack, terminal path);
+    /// config and construction errors count as failures like
+    /// `attempt_credit_release`. Counts the settled seconds on success.
+    async fn attempt_credit_settle(&self, record: &JobRecord) -> bool {
+        let Ok(config) = self.config() else {
+            return false;
+        };
+        match self.settle_reservation(record, &config).await {
+            Ok(()) => {
+                self.bump(
+                    "settled_seconds",
+                    record.reserved_seconds.unwrap_or_default(),
+                )
+                .await;
+                true
+            }
+            Err(error) => {
+                // Content-free: job id and the credit error shape only.
+                worker::console_error!(
+                    "job {} deferred settle failed: {error:?}",
+                    record.job_id
+                );
+                false
+            }
+        }
+    }
+
+    /// Alarm-turn retry of a deferred settle on a live record (the result
+    /// states and `detecting_ads`) under the per-state `credit_call_attempts`
+    /// budget. Returns when the next retry is due while the settle is still
+    /// pending and the budget holds; the caller arms the alarm no later than
+    /// that once the state's own work has armed its own. Past the budget the
+    /// flag stays set for the terminal path to settle.
+    async fn retry_deferred_settle(
+        &self,
+        record: &JobRecord,
+        config: &AppConfig,
+    ) -> Result<Option<i64>> {
+        if !record.credit_settle_pending
+            || job::credit_call_exhausted(record.credit_call_attempts)
+        {
+            return Ok(None);
+        }
+        if self.attempt_credit_settle(record).await {
+            if let LiveUpdate::Applied(_) = self
+                .update_record_if_live(|record| {
+                    record.credit_settle_pending = false;
+                })
+                .await?
+            {
+                self.bump("credit_settle_recovered", 1).await;
+            }
+            return Ok(None);
+        }
+        match self
+            .update_record_if_live(|record| {
+                record.credit_call_attempts += 1;
+            })
+            .await?
+        {
+            LiveUpdate::Applied(updated)
+                if !job::credit_call_exhausted(updated.credit_call_attempts) =>
+            {
+                Ok(Some(now_seconds() + config.alarm_retry_seconds as i64))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// After the state arm armed its own alarm (the result TTL, the ad
+    /// poll), pull it forward to the deferred-settle retry when that is
+    /// sooner. Only for a record still live with the settle pending: the arm
+    /// may have finished the job, and a terminal record's alarm belongs to
+    /// the RTW-5 loop.
+    async fn arm_deferred_settle_retry(&self, retry_at: i64) -> Result<()> {
+        let Some(current) = self.read_record().await? else {
+            return Ok(());
+        };
+        if !current.credit_settle_pending || job::transition_refusal(&current.state).is_some() {
             return Ok(());
         }
-        if self.attempt_credit_release(&record).await {
+        let armed_millis = self.state.storage().get_alarm().await?;
+        if armed_millis.is_none_or(|armed| armed > retry_at * 1000) {
+            self.schedule_at(retry_at).await?;
+        }
+        Ok(())
+    }
+
+    /// Alarm arm for a terminal record (RTW-5): retry the pending credit
+    /// operation — a release, or a deferred settle (2026-09-04) — under the
+    /// bounded budget. Invariant: a releasable reservation is never
+    /// abandoned without a counter increment. An abandoned settle frees its
+    /// hold (the TranscriptAnalysisWorker precedent): a release after a
+    /// settle that actually landed is a no-op that keeps the charge, and a
+    /// settle that never landed must not strand the customer's seconds.
+    async fn retry_pending_credit_op(&self, record: JobRecord, config: &AppConfig) -> Result<()> {
+        let settle = record.credit_settle_pending;
+        if !settle && !record.credit_release_pending {
+            return Ok(());
+        }
+        let succeeded = if settle {
+            self.attempt_credit_settle(&record).await
+        } else {
+            self.attempt_credit_release(&record).await
+        };
+        if succeeded {
             // Plain update_record on purpose: terminal records must accept
             // this bookkeeping write (the live-guard would refuse it).
             self.update_record(|record| {
+                record.credit_settle_pending = false;
                 record.credit_release_pending = false;
             })
             .await?;
@@ -3248,12 +3508,43 @@ impl TranscriptionJob {
             })
             .await?
             .expect("record exists");
-        if updated.credit_release_attempts >= CREDIT_RELEASE_MAX_ATTEMPTS {
+        if updated.credit_release_attempts < CREDIT_RELEASE_MAX_ATTEMPTS {
+            return self
+                .schedule(Duration::from_secs(config.alarm_retry_seconds))
+                .await;
+        }
+        if !settle {
             self.update_record(|record| {
                 record.credit_release_pending = false;
             })
             .await?;
             self.bump("credit_release_abandoned", 1).await;
+            self.state.storage().delete_alarm().await?;
+            return Ok(());
+        }
+        self.bump("credit_settle_abandoned", 1).await;
+        let hold_released = self.attempt_credit_release(&updated).await;
+        if hold_released {
+            worker::console_log!(
+                "job {} abandoned settle released its hold",
+                updated.job_id
+            );
+        } else {
+            worker::console_error!(
+                "job {} abandoned settle could not release its hold",
+                updated.job_id
+            );
+            self.bump("credit_release_failed", 1).await;
+        }
+        // A hold that would not release hands over to the release backstop
+        // with its own fresh budget; one operator counter per outcome.
+        self.update_record(|record| {
+            record.credit_settle_pending = false;
+            record.credit_release_pending = !hold_released;
+            record.credit_release_attempts = u32::from(!hold_released);
+        })
+        .await?;
+        if hold_released {
             self.state.storage().delete_alarm().await?;
             return Ok(());
         }
@@ -3298,9 +3589,26 @@ impl TranscriptionJob {
         // abandoned — the record carries a pending flag, the counter is the
         // telemetry signal, and the alarm below retries under a bounded
         // budget instead of being deleted with the reservation still held.
-        let released = self.attempt_credit_release(&record).await;
+        // A deferred settle (2026-09-04) settles here instead of releasing:
+        // the customer holds, or was offered, a published result exactly as
+        // when the stitch had settled — the deferral only moved when the
+        // ledger consumed — and a settle that already landed is a no-op.
+        let settle_pending = record.credit_settle_pending;
+        let released = if settle_pending {
+            self.attempt_credit_settle(&record).await
+        } else {
+            self.attempt_credit_release(&record).await
+        };
         if !released {
-            self.bump("credit_release_failed", 1).await;
+            self.bump(
+                if settle_pending {
+                    "credit_settle_failed"
+                } else {
+                    "credit_release_failed"
+                },
+                1,
+            )
+            .await;
         }
         if self.limiter_release(&record.job_id).await.is_err() {
             // The limiter DO's slot math self-corrects on the next terminal
@@ -3336,8 +3644,9 @@ impl TranscriptionJob {
                 record.state_deadline_at = None;
                 record.cleanup_complete = true;
                 record.enclosure_url_ciphertext = None;
+                record.credit_settle_pending = settle_pending && !released;
                 if !released {
-                    record.credit_release_pending = true;
+                    record.credit_release_pending = !settle_pending;
                     record.credit_release_attempts = 1;
                 }
             })

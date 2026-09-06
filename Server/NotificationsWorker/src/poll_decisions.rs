@@ -9,14 +9,8 @@ use futures_util::future::{select, Either};
 use std::future::Future;
 use std::pin::pin;
 
-/// Matches the runtime's six-concurrent-connection cap (documented at
-/// AdAnalysis `analysis.rs`); a chunk of six keeps the drain inside that
-/// budget while a hung host can only stall its own chunk.
-pub const FEED_POLL_CHUNK_SIZE: usize = 6;
-
-/// Generous for a healthy feed host (p99 well under a few seconds) while
-/// keeping one hung host from consuming the whole tick budget.
-pub const FEED_FETCH_TIMEOUT_SECONDS: u64 = 12;
+/// Covers transfer and the complete incremental scan, including stalled hosts.
+pub const FEED_FETCH_TIMEOUT_SECONDS: u64 = crate::feed_resource::SCAN_DEADLINE_SECONDS;
 const TRANSIENT_FAILURE_RETRY_CEILING_SECONDS: i64 = 6 * 60 * 60;
 pub const PERSISTENT_COMPATIBILITY_RETRY_SECONDS: i64 = 24 * 60 * 60;
 const PERSISTENT_COMPATIBILITY_RETRY_CEILING_SECONDS: i64 =
@@ -73,19 +67,7 @@ pub fn feed_failure_retry_seconds(
     jittered_backoff_seconds(base, TRANSIENT_FAILURE_RETRY_CEILING_SECONDS, random)
 }
 
-/// Splits the due batch into order-preserving chunks of
-/// [`FEED_POLL_CHUNK_SIZE`] for bounded-concurrency polling.
-pub fn feed_poll_chunks<T>(feeds: Vec<T>) -> Vec<Vec<T>> {
-    let mut chunks: Vec<Vec<T>> = Vec::new();
-    for feed in feeds {
-        match chunks.last_mut() {
-            Some(chunk) if chunk.len() < FEED_POLL_CHUNK_SIZE => chunk.push(feed),
-            _ => chunks.push(vec![feed]),
-        }
-    }
-    chunks
-}
-
+#[cfg(test)]
 pub fn latest_polled_episode(
     parsed: &rss::ParsedFeed,
 ) -> Result<&rss::ParsedEpisode, &'static str> {
@@ -145,6 +127,7 @@ pub const MAX_CATCH_UP_NOTIFICATIONS: usize = 3;
 /// that vanished from the page (GUID churn, rotation) falls back to
 /// newest-only — never blast a page because the anchor vanished. A feed with
 /// no stored episode id (the admission baseline pass) never notifies.
+#[cfg(test)]
 pub fn episodes_to_notify<'a>(
     feed: &storage::FeedPollRow,
     parsed: &'a rss::ParsedFeed,
@@ -188,10 +171,9 @@ mod tests {
 
     #[test]
     fn poll_bounds_pin_the_documented_policy() {
-        // Chunks of six match the runtime connection cap; 12 s per fetch
-        // keeps one hung host inside a bounded slice of the tick budget.
-        assert_eq!(FEED_POLL_CHUNK_SIZE, 6);
-        assert_eq!(FEED_FETCH_TIMEOUT_SECONDS, 12);
+        assert_eq!(crate::feed_resource::MAX_ACTIVE_SCANS, 2);
+        assert_eq!(FEED_FETCH_TIMEOUT_SECONDS, 120);
+        assert_eq!(crate::feed_resource::POLL_ADMISSION_SECONDS, 20);
     }
 
     #[test]
@@ -278,28 +260,6 @@ mod tests {
             feed_failure_retry_seconds(99, false, 1.0),
             TRANSIENT_FAILURE_RETRY_CEILING_SECONDS
         );
-    }
-
-    #[test]
-    fn feed_poll_chunks_preserve_order_in_chunks_of_six() {
-        let chunks = feed_poll_chunks((0..14).collect::<Vec<_>>());
-
-        assert_eq!(
-            chunks,
-            vec![
-                (0..6).collect::<Vec<_>>(),
-                (6..12).collect::<Vec<_>>(),
-                vec![12, 13],
-            ]
-        );
-    }
-
-    #[test]
-    fn feed_poll_chunks_handle_empty_and_exact_batches() {
-        assert!(feed_poll_chunks(Vec::<i32>::new()).is_empty());
-
-        let exact = feed_poll_chunks((0..6).collect::<Vec<_>>());
-        assert_eq!(exact, vec![(0..6).collect::<Vec<_>>()]);
     }
 
     #[test]

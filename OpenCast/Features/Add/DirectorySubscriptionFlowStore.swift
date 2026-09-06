@@ -88,7 +88,7 @@ final class DirectorySubscriptionFlowStore {
         subscribingResultID = pending.result.id
         subscriptionTask = Task {
             await subscribeDirectly(
-                feedURLString: candidate.candidate.feedURL.absoluteString,
+                candidate: candidate,
                 library: library,
                 modelContext: modelContext,
                 onSubscribed: onSubscribed
@@ -138,7 +138,7 @@ final class DirectorySubscriptionFlowStore {
             switch resolution {
             case .subscribe(let resolved):
                 await subscribeDirectly(
-                    feedURLString: resolved.candidate.feedURL.absoluteString,
+                    candidate: resolved,
                     library: library,
                     modelContext: modelContext,
                     onSubscribed: onSubscribed
@@ -146,7 +146,7 @@ final class DirectorySubscriptionFlowStore {
             case .choice(let choice):
                 if isPresenterDetached {
                     await subscribeDirectly(
-                        feedURLString: choice.primary.candidate.feedURL.absoluteString,
+                        candidate: choice.primary,
                         library: library,
                         modelContext: modelContext,
                         onSubscribed: onSubscribed
@@ -165,7 +165,7 @@ final class DirectorySubscriptionFlowStore {
     }
 
     private func subscribeDirectly(
-        feedURLString: String,
+        candidate: ResolvedFeedCandidate,
         library: LibraryStore,
         modelContext: ModelContext,
         onSubscribed: @escaping () -> Void
@@ -174,7 +174,7 @@ final class DirectorySubscriptionFlowStore {
             subscribingResultID = nil
         }
         do {
-            try await library.subscribe(to: feedURLString, modelContext: modelContext)
+            try await library.subscribe(prepared: candidate.preparedFeed(), modelContext: modelContext)
             onSubscribed()
         } catch is CancellationError {
         } catch {

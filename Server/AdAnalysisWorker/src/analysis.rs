@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use futures_util::future::{join_all, select, Either};
-use worker::{console_error, Delay, Fetch, Headers, Method, Request, RequestInit, Response};
+use worker::{console_error, Delay, Fetch, Headers, Method, Request, RequestInit};
 
 use crate::gemini::{parse_error_envelope, parse_generate_content_response};
 use crate::prompt::{gemini_generate_content_url, gemini_request_payload, GeminiGenerationOptions};
@@ -156,9 +156,12 @@ async fn call_gemini_with_retry(
     };
 
     for attempt in 1..=max_attempts {
-        let mut response = match call_gemini_once(gemini_api_key, gemini_url, &payload_string).await
-        {
-            Ok(response) => response,
+        let GeminiReply {
+            status,
+            retry_after,
+            text,
+        } = match call_gemini_once(gemini_api_key, gemini_url, &payload_string).await {
+            Ok(reply) => reply,
             Err(error) => {
                 last_error = error;
                 if attempt < max_attempts {
@@ -169,9 +172,6 @@ async fn call_gemini_with_retry(
             }
         };
 
-        let status = response.status_code();
-        let retry_after = response.headers().get("retry-after").ok().flatten();
-        let text = response.text().await.unwrap_or_default();
         if (200..300).contains(&status) {
             return Ok(text);
         }
@@ -209,11 +209,22 @@ async fn call_gemini_with_retry(
     Err(last_error)
 }
 
+/// One Gemini reply, fully read: status, `Retry-After`, and the body text.
+struct GeminiReply {
+    status: u16,
+    retry_after: Option<String>,
+    text: String,
+}
+
+/// One attempt under `GEMINI_CALL_TIMEOUT_SECONDS`. The deadline covers the
+/// whole exchange — the send AND the body read (2026-09-04 review): headers
+/// that arrived promptly followed by a stalled body used to escape the
+/// timeout, and with it the ladder arithmetic the job deadline relies on.
 async fn call_gemini_once(
     gemini_api_key: &str,
     gemini_url: &str,
     payload_string: &str,
-) -> std::result::Result<Response, UpstreamError> {
+) -> std::result::Result<GeminiReply, UpstreamError> {
     let headers = Headers::new();
     headers
         .set("content-type", JSON_CONTENT_TYPE)
@@ -228,13 +239,23 @@ async fn call_gemini_once(
         .with_body(Some(payload_string.into()));
 
     let request = Request::new_with_init(gemini_url, &init).map_err(worker_error)?;
-    let fetch = Fetch::Request(request);
-    let fetch = std::pin::pin!(fetch.send());
+    let exchange = std::pin::pin!(async move {
+        let fetch = Fetch::Request(request);
+        let mut response = fetch.send().await.map_err(worker_error)?;
+        let status = response.status_code();
+        let retry_after = response.headers().get("retry-after").ok().flatten();
+        let text = response.text().await.unwrap_or_default();
+        Ok(GeminiReply {
+            status,
+            retry_after,
+            text,
+        })
+    });
     let deadline = std::pin::pin!(Delay::from(Duration::from_secs(
         GEMINI_CALL_TIMEOUT_SECONDS
     )));
-    match select(fetch, deadline).await {
-        Either::Left((result, _)) => result.map_err(worker_error),
+    match select(exchange, deadline).await {
+        Either::Left((result, _)) => result,
         Either::Right(((), _)) => Err(UpstreamError {
             status: 503,
             body: ErrorResponse::new("gemini_timeout"),

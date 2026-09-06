@@ -83,13 +83,13 @@ public struct RSSFeedParser: Sendable {
 /// legitimate feed produces, including the text amplification the
 /// didEndElement bubble-up adds while it remains uncontained.
 private enum ParserWorkBudget {
-    static let maxElementDepth = 50
-    static let maxItems = 10_000
-    static let maxTextNodeBytes = 12 * 1_024 * 1_024
-    static let maxAggregateTextBytes = 48 * 1_024 * 1_024
+    static let maxElementDepth = FeedResourcePolicy.maximumDepth
+    static let maxItems = FeedResourcePolicy.maximumItems
+    static let maxTextNodeBytes = FeedResourcePolicy.maximumFieldBytes
+    static let maxAggregateTextBytes = FeedResourcePolicy.maximumProcessingBytes
 }
 
-private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
+final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     private let feedURL: URL
     private var channel = ChannelAccumulator()
     private var currentItem: ItemAccumulator?
@@ -98,6 +98,13 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     private var textBuffers: [String] = []
     private var textBufferBytes: [Int] = []
     private var aggregateTextBytes = 0
+    private var itemTextBytes = 0
+    private var rawItemCount = 0
+    private var completedItemCount = 0
+    private let itemSink: ((ItemAccumulator) throws -> Void)?
+    private(set) var sinkError: (any Error)?
+    private(set) var incompleteReason: FeedIncompleteReason?
+    private(set) var wasCancelled = false
     private let fallbackCDATAEncoding: String.Encoding?
     private(set) var rootElementName: String?
     private(set) var didExceedWorkBudget = false
@@ -120,19 +127,22 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
 
     /// - Parameter fallbackCDATAEncoding: the document's prolog-declared
     ///   encoding; CDATA blocks arrive as raw bytes in that encoding.
-    init(feedURL: URL, fallbackCDATAEncoding: String.Encoding?) {
+    init(feedURL: URL, fallbackCDATAEncoding: String.Encoding?, itemSink: ((ItemAccumulator) throws -> Void)? = nil) {
+        self.itemSink = itemSink
         self.feedURL = feedURL
         self.fallbackCDATAEncoding = fallbackCDATAEncoding
     }
 
     var itemCount: Int {
-        items.count
+        completedItemCount
     }
 
-    func snapshot(isSalvaged: Bool = false) -> FeedSnapshot {
+    var newFeedURL: URL? { channel.newFeedURL }
+
+    var podcastMetadata: Podcast {
         let podcastID = URLCanonicalizer.podcastID(for: feedURL)
         let podcastTitle = channel.title.nilIfBlank ?? feedURL.host ?? feedURL.absoluteString
-        let podcast = Podcast(
+        return Podcast(
             id: podcastID,
             feedURL: feedURL,
             title: podcastTitle,
@@ -143,6 +153,13 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             languageCode: RSSLanguageNormalizer.normalized(channel.language),
             podcastGUID: channel.podcastGUID.nilIfBlank
         )
+
+    }
+
+    func snapshot(isSalvaged: Bool = false) -> FeedSnapshot {
+        let podcast = podcastMetadata
+        let podcastID = podcast.id
+        let podcastTitle = podcast.title
 
         var episodes: [Episode] = []
         episodes.reserveCapacity(items.count)
@@ -324,12 +341,15 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         textBuffers.append("")
         textBufferBytes.append(0)
         if elementStack.count > ParserWorkBudget.maxElementDepth {
-            didExceedWorkBudget = true
+            exceed(.depthLimit)
         }
-
         pushNamespaceBindings(attributes: attributeDict)
         switch name {
         case "item":
+            rawItemCount += 1
+            if rawItemCount > ParserWorkBudget.maxItems { exceed(.itemLimit) }
+            if currentItem != nil { incompleteReason = .malformedXML("Nested RSS item."); parser.abortParsing(); return }
+            itemTextBytes = 0
             currentItem = ItemAccumulator()
         case "enclosure":
             captureEnclosure(attributes: attributeDict)
@@ -350,6 +370,11 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             }
         default:
             break
+        }
+
+        for value in attributeDict.values {
+            if value.utf8.count > ParserWorkBudget.maxTextNodeBytes { exceed(.fieldLimit) }
+            accountText(value.utf8.count, itemText: currentItem != nil)
         }
 
         abortIfOverBudget(parser)
@@ -396,11 +421,12 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         }
 
         if name == "item", let currentItem {
-            if items.count < ParserWorkBudget.maxItems {
-                items.append(currentItem)
+            if !didExceedWorkBudget {
+                do {
+                    if let itemSink { try itemSink(currentItem) } else { items.append(currentItem) }
+                    completedItemCount += 1
+                } catch { sinkError = error }
                 self.currentItem = nil
-            } else {
-                didExceedWorkBudget = true
             }
         }
 
@@ -415,7 +441,7 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         if !Self.containerElements.contains(name),
            let parentName = elementStack.last,
            !Self.containerElements.contains(parentName) {
-            appendText(rawValue, utf8Bytes: rawValueBytes)
+            appendText(rawValue, utf8Bytes: rawValueBytes, itemText: false)
         }
         abortIfOverBudget(parser)
     }
@@ -425,7 +451,8 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     ]
 
     private func abortIfOverBudget(_ parser: XMLParser) {
-        if didExceedWorkBudget {
+        if Task.isCancelled { wasCancelled = true }
+        if didExceedWorkBudget || sinkError != nil || wasCancelled {
             parser.abortParsing()
         }
     }
@@ -434,17 +461,25 @@ private final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         appendText(value, utf8Bytes: value.utf8.count)
     }
 
-    private func appendText(_ value: String, utf8Bytes: Int) {
-        guard let index = textBuffers.indices.last else {
-            return
-        }
+    private func appendText(_ value: String, utf8Bytes: Int, itemText: Bool = true) {
+        guard let index = textBuffers.indices.last else { return }
+        accountText(utf8Bytes, itemText: itemText && currentItem != nil)
+        if textBufferBytes[index] + utf8Bytes > ParserWorkBudget.maxTextNodeBytes { exceed(.fieldLimit) }
+        guard !didExceedWorkBudget else { return }
         textBuffers[index] += value
         textBufferBytes[index] += utf8Bytes
-        aggregateTextBytes += utf8Bytes
-        if textBufferBytes[index] > ParserWorkBudget.maxTextNodeBytes
-            || aggregateTextBytes > ParserWorkBudget.maxAggregateTextBytes {
-            didExceedWorkBudget = true
-        }
+    }
+
+    private func accountText(_ bytes: Int, itemText: Bool) {
+        aggregateTextBytes += bytes
+        if itemText { itemTextBytes += bytes }
+        if aggregateTextBytes > ParserWorkBudget.maxAggregateTextBytes { exceed(.processingLimit) }
+        if itemTextBytes > FeedResourcePolicy.maximumItemTextBytes { exceed(.itemTextLimit) }
+    }
+
+    private func exceed(_ reason: FeedIncompleteReason) {
+        didExceedWorkBudget = true
+        if incompleteReason == nil { incompleteReason = reason }
     }
 
     private func applyChannelValue(name: String, value: String) {
@@ -575,7 +610,7 @@ private struct ChannelAccumulator {
     var podcastGUID: String?
 }
 
-private struct ItemAccumulator {
+struct ItemAccumulator: Codable {
     var title: String?
     var guid: String?
     var summary: String?

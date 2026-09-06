@@ -8,8 +8,8 @@ use crate::challenge_limits::{
     MAX_GLOBAL_CHALLENGES_PER_HOUR,
 };
 use crate::poll_decisions::{
-    episode_should_notify_subscription, episodes_to_notify, feed_failure_retry_seconds,
-    feed_poll_chunks, fetch_with_deadline, latest_polled_episode, FEED_FETCH_TIMEOUT_SECONDS,
+    episode_should_notify_subscription, feed_failure_retry_seconds, fetch_with_deadline,
+    FEED_FETCH_TIMEOUT_SECONDS,
 };
 use crate::route::{
     content_length_exceeds, diagnostic_endpoint_path, parse_env_flag, public_write_endpoint,
@@ -20,11 +20,10 @@ use crate::route::{
 use crate::{
     apns, feed_admission,
     feed_fetch::{
-        append_limited_feed_body_chunk, feed_response_disposition,
-        identity_feed_content_length_exceeds, same_origin, FeedBodyAppendError, FeedFetchError,
-        FeedResponseDisposition, FEED_USER_AGENT, MAX_FEED_BODY_BYTES,
+        feed_response_disposition, same_origin, FeedFetchError, FeedResponseDisposition,
+        FEED_USER_AGENT,
     },
-    feed_identity, notification_retry, poll_scheduling, random, route, rss, storage,
+    notification_retry, poll_scheduling, random, route, rss, storage,
     subscription_admission::{
         admit_pending_enqueue, stale_subscription_urls, subscription_count_error,
         MAX_EXPECTED_PUBLIC_ROLLOUT_INSTALLS_PER_DAY, MAX_GLOBAL_NEW_FEED_ADMISSIONS_PER_DAY,
@@ -32,12 +31,19 @@ use crate::{
     },
     subscription_payloads::{AcceptedSubscription, AcceptedSubscriptionHealth},
 };
-use futures_util::future::join_all;
+use crate::{
+    feed_resource,
+    feed_scan_admission::FeedScanPermit,
+    feed_stream::{FeedFetchCancellation, FeedStream},
+};
+use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use opencast_app_attest_core::app_attest_envelope::{self, AuthFailure, AuthenticatedPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 use std::time::Duration;
 use worker::{
     Delay, Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response, Result,
@@ -218,14 +224,15 @@ struct AdmittedSubscription {
 
 struct FetchedFeed {
     status: u16,
-    body: String,
+    decoded_bytes: usize,
+    parsed: std::result::Result<rss::scan::ScannedFeed, rss::RSSParseError>,
     etag: Option<String>,
     last_modified: Option<String>,
 }
 
 enum FeedFetchOutcome {
     NotModified { status: u16 },
-    Fetched(FetchedFeed),
+    Fetched(Box<FetchedFeed>),
 }
 
 #[derive(Default)]
@@ -330,20 +337,9 @@ pub async fn handle_scheduled(env: Env) -> Result<()> {
     // Optimistic per-feed claims keep an overlapping invocation (a tick that
     // ran long) from double-fetching the same due rows. Manual/debug polls
     // deliberately bypass the claim: they poll regardless of dueness.
-    let mut claimed = Vec::with_capacity(feeds.len());
-    for feed in feeds {
-        if storage::claim_due_feed(
-            &db,
-            &feed.feed_url,
-            now,
-            now.saturating_add(FEED_POLL_INTERVAL_SECONDS),
-        )
-        .await?
-        {
-            claimed.push(feed);
-        }
-    }
-    let summary = poll_feeds(claimed, &env, &db, &config, now).await?;
+    // Claim only when a scan slot is admitted. Claiming this entire list
+    // would postpone unstarted feeds when the invocation reaches its budget.
+    let summary = poll_feeds(feeds, &env, &db, &config, now, true).await?;
     worker::console_log!(
         "scheduled poll: polled={} changed={} sends={}",
         summary.feeds_polled,
@@ -1057,7 +1053,7 @@ async fn handle_debug_poll_subscriptions(
         feeds
     };
 
-    let response = poll_feeds(feeds, env, db, config, now).await?;
+    let response = poll_feeds(feeds, env, db, config, now, false).await?;
     json_response(200, &response)
 }
 
@@ -1095,7 +1091,7 @@ async fn handle_admin_test_poll_feed(
         return json_error(403, "feed_not_subscribed");
     }
 
-    let response = poll_feeds(vec![feed], env, db, config, now).await?;
+    let response = poll_feeds(vec![feed], env, db, config, now, false).await?;
     json_response(200, &response)
 }
 
@@ -1105,34 +1101,66 @@ async fn poll_feeds(
     db: &worker::D1Database,
     config: &AppConfig,
     now: i64,
+    claim_due: bool,
 ) -> Result<PollSubscriptionsResponse> {
     let mut response = PollSubscriptionsResponse {
         message: "polled",
         ..PollSubscriptionsResponse::default()
     };
 
-    for chunk in feed_poll_chunks(feeds) {
-        let results = join_all(
-            chunk
-                .into_iter()
-                .map(|feed| poll_one_feed(feed, env, db, config, now)),
-        )
-        .await;
-        for result in results {
-            response.feeds_polled += 1;
-            match result {
-                Ok(counts) => {
-                    if counts.changed {
-                        response.feeds_changed += 1;
-                    }
-                    response.notifications_attempted += counts.sends.attempted;
-                    response.apns_200_count += counts.sends.apns_200;
-                    response.deduped_count += counts.sends.deduped;
+    let admission_started = now_seconds();
+    let invocation_bytes = Rc::new(Cell::new(0usize));
+    let mut feeds = feeds.into_iter();
+    let mut active = FuturesUnordered::new();
+    loop {
+        while active.len() < feed_resource::MAX_ACTIVE_SCANS
+            && now_seconds().saturating_sub(admission_started)
+                < feed_resource::POLL_ADMISSION_SECONDS
+            && invocation_bytes.get() < feed_resource::MAX_DECODED_BYTES
+        {
+            let Some(permit) = FeedScanPermit::try_acquire() else {
+                break;
+            };
+            let Some(feed) = feeds.next() else {
+                break;
+            };
+            if claim_due
+                && !storage::claim_due_feed(
+                    db,
+                    &feed.feed_url,
+                    now,
+                    now.saturating_add(FEED_POLL_INTERVAL_SECONDS),
+                )
+                .await?
+            {
+                continue;
+            }
+            active.push(poll_one_feed(
+                feed,
+                env,
+                db,
+                config,
+                now,
+                invocation_bytes.clone(),
+                permit,
+            ));
+        }
+        let Some(result) = active.next().await else {
+            break;
+        };
+        response.feeds_polled += 1;
+        match result {
+            Ok(counts) => {
+                if counts.changed {
+                    response.feeds_changed += 1;
                 }
-                Err(error) => {
-                    if response.first_error.is_none() {
-                        response.first_error = Some(error);
-                    }
+                response.notifications_attempted += counts.sends.attempted;
+                response.apns_200_count += counts.sends.apns_200;
+                response.deduped_count += counts.sends.deduped;
+            }
+            Err(error) => {
+                if response.first_error.is_none() {
+                    response.first_error = Some(error);
                 }
             }
         }
@@ -1159,6 +1187,8 @@ async fn poll_one_feed(
     db: &worker::D1Database,
     config: &AppConfig,
     now: i64,
+    invocation_bytes: Rc<Cell<usize>>,
+    _permit: FeedScanPermit,
 ) -> std::result::Result<PollOneFeedResult, String> {
     let started_at = now_seconds();
     match fetch_with_deadline(
@@ -1166,6 +1196,8 @@ async fn poll_one_feed(
             &feed.source_url,
             feed.etag.as_deref(),
             feed.last_modified.as_deref(),
+            &feed,
+            invocation_bytes,
         ),
         Delay::from(Duration::from_secs(FEED_FETCH_TIMEOUT_SECONDS)),
         FeedFetchError::FetchFailed,
@@ -1206,15 +1238,19 @@ async fn poll_one_feed(
         Ok(FeedFetchOutcome::Fetched(fetched)) => {
             let FetchedFeed {
                 status,
-                body,
+                decoded_bytes,
+                parsed: parsed_result,
                 etag,
                 last_modified,
-            } = fetched;
-            let parsed_result = rss::parse_rss(&body, &feed.feed_url);
-            drop(body);
+            } = *fetched;
             let parsed = match parsed_result {
                 Ok(parsed) => parsed,
                 Err(error) => {
+                    worker::console_warn!(
+                        "{}",
+                        json!({"event":"feed_scan_failed", "reason":error.code(),
+                        "decoded_bytes":decoded_bytes, "elapsed_seconds":now_seconds()-started_at})
+                    );
                     record_feed_poll_failure(
                         db,
                         &feed,
@@ -1229,23 +1265,13 @@ async fn poll_one_feed(
                     return Err(format!("{}: {}", feed.feed_url, error.code()));
                 }
             };
-            let latest = match latest_polled_episode(&parsed) {
-                Ok(latest) => latest,
-                Err(error_code) => {
-                    record_feed_poll_failure(
-                        db,
-                        &feed,
-                        Some(status),
-                        error_code,
-                        false,
-                        started_at,
-                        now,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
-                    return Err(format!("{}: {}", feed.feed_url, error_code));
-                }
-            };
+            let latest = &parsed.latest;
+            worker::console_log!(
+                "{}",
+                json!({"event":"feed_scan_complete", "items":parsed.item_count,
+                "decoded_bytes":decoded_bytes,
+                "checkpoint_found":parsed.checkpoint_found, "elapsed_seconds":now_seconds()-started_at})
+            );
             let changed = feed
                 .latest_episode_id
                 .as_deref()
@@ -1256,18 +1282,9 @@ async fn poll_one_feed(
             // claims and per-device gate, and J's per-episode collapse IDs
             // keep the burst individually visible.
             let mut sends = EpisodeSendCounts::default();
-            for episode in episodes_to_notify(&feed, &parsed) {
-                let episode_fingerprint = feed_identity::episode_notification_fingerprint(
-                    feed_identity::EpisodeNotificationFingerprintInput {
-                        title: &episode.title,
-                        guid: episode.guid.as_deref(),
-                        audio_url: episode.audio_url.as_deref(),
-                        duration_seconds: episode.duration_seconds,
-                        summary: episode.summary.as_deref(),
-                        show_notes_html: episode.show_notes_html.as_deref(),
-                        episode_id: &episode.id,
-                    },
-                );
+            for candidate in &parsed.notifications {
+                let episode = &candidate.episode;
+                let episode_fingerprint = &candidate.fingerprint;
                 let episode_sends = send_episode_notifications(
                     env,
                     db,
@@ -1287,7 +1304,7 @@ async fn poll_one_feed(
                 sends.retryable_failures += episode_sends.retryable_failures;
                 sends.truncated_fanouts += episode_sends.truncated_fanouts;
             }
-            let publish_cadence_seconds = feed_publish_cadence_seconds(&parsed);
+            let publish_cadence_seconds = parsed.publish_cadence_seconds;
             let poll_interval_seconds = poll_scheduling::poll_interval_seconds(
                 publish_cadence_seconds,
                 latest.published_at,
@@ -1377,6 +1394,8 @@ async fn fetch_feed(
     source_url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
+    feed: &storage::FeedPollRow,
+    invocation_bytes: Rc<Cell<usize>>,
 ) -> std::result::Result<FeedFetchOutcome, FeedFetchError> {
     let mut current_url = source_url.to_string();
     let original_url = url::Url::parse(source_url).map_err(|_| FeedFetchError::FetchFailed)?;
@@ -1409,14 +1428,30 @@ async fn fetch_feed(
             .with_redirect(RequestRedirect::Manual);
         let request =
             Request::new_with_init(&current_url, &init).map_err(|_| FeedFetchError::FetchFailed)?;
-        let mut response = Fetch::Request(request)
-            .send()
-            .await
-            .map_err(|_| FeedFetchError::FetchFailed)?;
+        let cancellation = FeedFetchCancellation::default();
+        let signal = cancellation.signal();
+        let response = fetch_with_deadline(
+            async {
+                Fetch::Request(request)
+                    .send_with_signal(&signal)
+                    .await
+                    .map_err(|_| FeedFetchError::FetchFailed)
+            },
+            Delay::from(Duration::from_secs(feed_resource::INACTIVITY_SECONDS)),
+            FeedFetchError::FetchFailed,
+        )
+        .await?;
         let status = response.status_code();
 
         match feed_response_disposition(status) {
             FeedResponseDisposition::NotModified => {
+                // A new or cross-origin request cannot validate a scan it
+                // never completed. Keep admission failures visible in health.
+                if !same_origin(&parsed_current_url, &original_url)
+                    || (etag.is_none() && last_modified.is_none())
+                {
+                    return Err(FeedFetchError::UnexpectedNotModified);
+                }
                 return Ok(FeedFetchOutcome::NotModified { status });
             }
             FeedResponseDisposition::Redirect => {
@@ -1438,7 +1473,7 @@ async fn fetch_feed(
             }
             FeedResponseDisposition::Other => {}
         }
-        if status != 200 {
+        if !(200..300).contains(&status) {
             return Err(FeedFetchError::HTTPStatus(status));
         }
 
@@ -1450,61 +1485,21 @@ async fn fetch_feed(
             .headers()
             .get("last-modified")
             .map_err(|_| FeedFetchError::FetchFailed)?;
-        let body = read_feed_body(&mut response).await?;
+        let decoded_bytes = Rc::new(Cell::new(0usize));
+        let stream = FeedStream::new(&response, invocation_bytes.clone(), decoded_bytes.clone())
+            .map_err(|_| FeedFetchError::FetchFailed)?;
+        let parsed = rss::scan::scan_rss(stream, feed).await;
 
-        return Ok(FeedFetchOutcome::Fetched(FetchedFeed {
+        return Ok(FeedFetchOutcome::Fetched(Box::new(FetchedFeed {
             status,
-            body,
+            decoded_bytes: decoded_bytes.get(),
+            parsed,
             etag,
             last_modified,
-        }));
+        })));
     }
 
     Err(FeedFetchError::TooManyRedirects)
-}
-
-fn feed_publish_cadence_seconds(parsed: &rss::ParsedFeed) -> Option<i64> {
-    let mut published_at: Vec<i64> = parsed
-        .episodes
-        .iter()
-        .filter_map(|episode| episode.published_at)
-        .collect();
-    poll_scheduling::publish_cadence_seconds(&mut published_at)
-}
-
-async fn read_feed_body(response: &mut Response) -> std::result::Result<String, FeedFetchError> {
-    let content_length = response
-        .headers()
-        .get("content-length")
-        .map_err(|_| FeedFetchError::FetchFailed)?;
-    let content_encoding = response
-        .headers()
-        .get("content-encoding")
-        .map_err(|_| FeedFetchError::FetchFailed)?;
-    if identity_feed_content_length_exceeds(
-        content_length.as_deref(),
-        content_encoding.as_deref(),
-        MAX_FEED_BODY_BYTES,
-    ) {
-        return Err(FeedFetchError::OversizedBody);
-    }
-
-    let mut stream = response.stream().map_err(|_| FeedFetchError::FetchFailed)?;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| FeedFetchError::FetchFailed)?;
-        match append_limited_feed_body_chunk(&mut bytes, &chunk, MAX_FEED_BODY_BYTES) {
-            Ok(()) => {}
-            Err(FeedBodyAppendError::Oversized) => {
-                return Err(FeedFetchError::OversizedBody);
-            }
-            Err(FeedBodyAppendError::AllocationFailed) => {
-                return Err(FeedFetchError::FetchFailed);
-            }
-        }
-    }
-
-    String::from_utf8(bytes).map_err(|_| FeedFetchError::InvalidBodyEncoding)
 }
 
 async fn send_episode_notifications(

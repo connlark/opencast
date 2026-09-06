@@ -196,6 +196,7 @@ struct OCVBProcessor {
     double currentLimiterReductionDB;
     double maximumLimiterReductionDB;
     double outputTruePeakAmplitude;
+    int32_t measuresOutputTruePeak;
     int64_t safetyClampCount;
 
     /* Lookahead limiter: the wet chain writes into a preallocated delay
@@ -712,6 +713,7 @@ OCVBProcessor *OCVBProcessorCreate(
     }
 
     processor->sampleRate = sampleRate;
+    processor->measuresOutputTruePeak = 1;
     processor->channelCount = channelCount;
     processor->configuration = ocvb_sanitized_configuration(configuration);
     ocvb_configure_compressor(processor);
@@ -1339,8 +1341,10 @@ static void ocvb_process_chunk(
                 processor->safetyClampCount += 1;
             }
 
-            ocvb_true_peak_store(&processor->outputMeterState[channel], output);
-            outputFramePeak = fmax(outputFramePeak, fabs(output));
+            if (processor->measuresOutputTruePeak) {
+                ocvb_true_peak_store(&processor->outputMeterState[channel], output);
+                outputFramePeak = fmax(outputFramePeak, fabs(output));
+            }
             buffer[index] = (float)output;
 
             double weighted = ocvb_biquad_process(&processor->outputPreFilter[channel], output);
@@ -1351,7 +1355,7 @@ static void ocvb_process_chunk(
         /* Output true-peak metering through the same FIR; evaluation is
            skipped while the whole window provably cannot exceed the running
            per-call maximum. */
-        if (outputFramePeak * OCVB_TP_FIR_MAX_L1 > *maximumTruePeak) {
+        if (processor->measuresOutputTruePeak && outputFramePeak * OCVB_TP_FIR_MAX_L1 > *maximumTruePeak) {
             processor->meterHotCountdown = OCVB_TP_FIR_TAPS;
         }
         *maximumTruePeak = fmax(*maximumTruePeak, outputFramePeak);
@@ -1964,11 +1968,17 @@ static void ocvb_process_tile_vectorized(
         vDSP_svesqD(processor->wsMeterOut, 1, &energy, n);
         processor->outputSubBlockEnergy += energy;
 
-        float channelMax = 0.0f;
-        vDSP_maxmgv(channels[channel], 1, &channelMax, n);
-        if (channelMax > outputRawMax) {
-            outputRawMax = channelMax;
+        if (processor->measuresOutputTruePeak) {
+            float channelMax = 0.0f;
+            vDSP_maxmgv(channels[channel], 1, &channelMax, n);
+            if (channelMax > outputRawMax) {
+                outputRawMax = channelMax;
+            }
         }
+    }
+
+    if (!processor->measuresOutputTruePeak) {
+        return;
     }
 
     double runningMaximum = *maximumTruePeak;
@@ -2110,6 +2120,23 @@ static void ocvb_store_call_metrics(
         maximumLimiterReduction
     );
     processor->outputTruePeakAmplitude = maximumTruePeak;
+}
+
+void OCVBProcessorSetOutputTruePeakMeteringEnabled(
+    OCVBProcessor *processor,
+    int32_t isEnabled
+) {
+    if (processor == NULL || processor->measuresOutputTruePeak == (isEnabled != 0)) {
+        return;
+    }
+    processor->measuresOutputTruePeak = isEnabled != 0;
+    processor->outputTruePeakAmplitude = 0.0;
+    processor->meterHotCountdown = 0;
+    processor->tpMeterHistoryMax = 0.0f;
+    memset(processor->tpMeterHistory, 0, sizeof(processor->tpMeterHistory));
+    for (int32_t channel = 0; channel < processor->channelCount; channel += 1) {
+        ocvb_true_peak_state_reset(&processor->outputMeterState[channel]);
+    }
 }
 
 void OCVBProcessorSetScalarReferenceProcessing(

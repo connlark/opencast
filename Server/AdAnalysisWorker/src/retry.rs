@@ -14,9 +14,10 @@ pub const MAX_GEMINI_REREQUEST_ATTEMPTS: usize = 2;
 /// Longest pause between attempts: a `Retry-After` header is honoured up to
 /// this many seconds and `backoff_seconds` never exceeds it.
 pub const MAX_RETRY_DELAY_SECONDS: u64 = 30;
-/// Slack the job deadline keeps beyond the worst-case ladders for the
-/// unbounded response-body read, Durable Object bookkeeping, and the fan-out
-/// over concurrent windows.
+/// Slack the job deadline keeps beyond the worst-case ladders for Durable
+/// Object bookkeeping and the fan-out over concurrent windows. Each
+/// attempt's timeout covers its body read as well as the send (2026-09-04),
+/// so the ladders bound the whole exchange and this is slack, not cover.
 pub const LADDER_DEADLINE_HEADROOM_SECONDS: u64 = 120;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

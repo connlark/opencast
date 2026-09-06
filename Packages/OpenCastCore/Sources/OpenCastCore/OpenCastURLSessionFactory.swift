@@ -8,6 +8,7 @@ public enum OpenCastURLSessionFactory {
     nonisolated(unsafe) public private(set) static var userAgent = "OpenCast/1.0 (+https://opencast.mobile)"
 
     public static func setMarketingVersion(_ version: String) {
+        FeedWorkspace.cleanAbandonedJobs()
         userAgent = "OpenCast/\(version) (+https://opencast.mobile)"
     }
     public static let memoryCacheCapacity = 32 * 1_024 * 1_024
@@ -48,6 +49,16 @@ public enum OpenCastURLSessionFactory {
             urlCachesByDirectory[key] = cache
             return cache
         }
+    }
+
+    public static func feedConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 300
+        configuration.httpAdditionalHeaders = ["User-Agent": userAgent]
+        configuration.urlCache = nil
+        return configuration
     }
 
     public static func downloadConfiguration() -> URLSessionConfiguration {

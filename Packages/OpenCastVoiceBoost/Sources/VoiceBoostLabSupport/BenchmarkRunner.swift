@@ -11,7 +11,8 @@ enum BenchmarkRunner {
         configuration: VoiceBoostConfiguration,
         quietAmplitude: Double = 0.025,
         loudAmplitude: Double = 0.35,
-        usesScalarReference: Bool = false
+        usesScalarReference: Bool = false,
+        measuresOutputTruePeak: Bool = true
     ) throws -> BenchmarkMetrics {
         guard durationSeconds.isFinite && durationSeconds > 0 else {
             throw LabError.invalidArguments("Benchmark duration must be positive.")
@@ -40,7 +41,8 @@ enum BenchmarkRunner {
         let processor = VoiceBoostProcessor(
             sampleRate: sampleRate,
             channelCount: channelCount,
-            configuration: configuration
+            configuration: configuration,
+            measuresOutputTruePeak: measuresOutputTruePeak
         )
         if usesScalarReference {
             processor.setScalarReferenceProcessing(true)

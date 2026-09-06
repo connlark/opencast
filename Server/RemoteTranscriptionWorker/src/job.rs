@@ -165,19 +165,28 @@ pub fn transition_refusal(state: &str) -> Option<TransitionRefusal> {
 /// state deadline, so a seam that fails persistently (binding
 /// misconfigured, PurchaseWorker down) used to re-arm the alarm forever —
 /// re-walking the whole native probe or the settle each turn.
+///
+/// What exhaustion does differs per call. A reserve that never lands has
+/// charged nothing, so the job fails with the internal code and the app
+/// falls back on-device. A settle is different (2026-09-04 review): the
+/// ledger may have committed it and lost only the response, and releasing
+/// a settled reservation is a no-op that keeps the charge — so failing the
+/// job there would delete a transcript the customer paid for. Settle
+/// exhaustion instead publishes the result with `credit_settle_pending`
+/// and the settle is retried from the result states and the terminal path.
 pub const CREDIT_CALL_MAX_ATTEMPTS: u32 = 4;
 
 /// True once `attempts` failed reserve/settle calls in the current state
-/// (the latest included) exhaust the budget: the job fails with the
-/// internal code so the app falls back on-device, instead of retrying.
+/// (the latest included) exhaust the budget: a reserve fails the job, a
+/// settle is deferred (see `CREDIT_CALL_MAX_ATTEMPTS`), instead of retrying.
 pub fn credit_call_exhausted(attempts: u32) -> bool {
     attempts >= CREDIT_CALL_MAX_ATTEMPTS
 }
 
 /// What the stranded-job repair (2026-08-19) may do to a record that has no
 /// alarm armed. The invariant it enforces: every non-terminal, non-cancelling
-/// record has an alarm; a terminal record only when a credit release is still
-/// pending (RTW-5). The Durable Object decides *whether* the record is
+/// record has an alarm; a terminal record only when a credit release or a
+/// deferred settle is still pending (RTW-5, `JobRecord::credit_op_pending`). The Durable Object decides *whether* the record is
 /// stranded (`get_alarm` plus its in-flight marker); this decides *what* the
 /// repair may do, per state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,10 +207,10 @@ pub enum StrandRepair {
 /// Classifies `state` for the stranded-job repair; `None` means the record is
 /// allowed to sit with no alarm (a settled terminal record, or a cancel whose
 /// inline `finish_terminal` — retried by the client — owns the record).
-pub fn strand_repair(state: &str, credit_release_pending: bool) -> Option<StrandRepair> {
+pub fn strand_repair(state: &str, credit_op_pending: bool) -> Option<StrandRepair> {
     match state {
         STATE_ACKNOWLEDGED | STATE_CANCELLED | STATE_FAILED => {
-            credit_release_pending.then_some(StrandRepair::Rearm)
+            credit_op_pending.then_some(StrandRepair::Rearm)
         }
         STATE_CANCELLING => None,
         STATE_WAITING_FOR_DEVICE_SOURCE
@@ -478,6 +487,15 @@ pub struct JobRecord {
     pub credit_release_pending: bool,
     #[serde(default)]
     pub credit_release_attempts: u32,
+    /// Deferred settle (2026-09-04): the stitch published the result but
+    /// its settle budget ran out, and a settle whose response was lost may
+    /// already have charged. The result states retry the settle under the
+    /// per-state `credit_call_attempts` budget; the terminal path settles
+    /// (never releases) while this is set, and its alarm retries under
+    /// `credit_release_attempts` before `credit_settle_abandoned` frees the
+    /// hold. Additive `#[serde(default)]`: old records decode with false.
+    #[serde(default)]
+    pub credit_settle_pending: bool,
     /// Failed reserve/settle calls in the current state (audit §27); the
     /// alarm retries until `credit_call_exhausted`, then fails the job.
     /// Reset to 0 on every state transition. Additive `#[serde(default)]`.
@@ -531,6 +549,12 @@ pub struct JobRecord {
 }
 
 impl JobRecord {
+    /// A terminal record may carry exactly one piece of alarm work: a
+    /// pending credit release (RTW-5) or a deferred settle (2026-09-04).
+    pub fn credit_op_pending(&self) -> bool {
+        self.credit_release_pending || self.credit_settle_pending
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn created(
         job_id: String,
@@ -581,6 +605,7 @@ impl JobRecord {
             cleanup_complete: false,
             credit_release_pending: false,
             credit_release_attempts: 0,
+            credit_settle_pending: false,
             credit_call_attempts: 0,
             stranded_repairs: 0,
             origin_unsafe: false,
@@ -1305,6 +1330,10 @@ mod tests {
         // backstop off.
         assert!(!decoded.credit_release_pending);
         assert_eq!(decoded.credit_release_attempts, 0);
+        // The deferred-settle flag (2026-09-04) is additive: old records
+        // decode with no settle pending and no terminal alarm work.
+        assert!(!decoded.credit_settle_pending);
+        assert!(!decoded.credit_op_pending());
         // Stranded-job repair counter is additive too.
         assert_eq!(decoded.stranded_repairs, 0);
         // Audit §27 credit-call budget counter likewise.

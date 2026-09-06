@@ -276,8 +276,12 @@ final class OpenCastAppModel {
         self.playback = playback ?? AVFoundationPlaybackController(
             nowPlayingArtworkLoader: SharedNowPlayingArtworkLoader()
         )
+        self.playback.setEventLogHandler { message in
+            Task { await PlaybackEventLog.shared.record(message) }
+        }
         skipZones = PlaybackSkipZoneCoordinator(
             playback: self.playback,
+            downloads: downloads,
             transcriptions: transcriptions,
             adAnalyses: adAnalyses
         )
@@ -321,6 +325,9 @@ final class OpenCastAppModel {
         )
         self.unsubscribeSidecarCleanupOverride = unsubscribeSidecarCleanupOverride
         self.transcriptions.onEpisodeStateChanged = { [weak self] episodeID in
+            self?.skipZones.refreshIfCurrentEpisode(episodeID: episodeID)
+        }
+        self.downloads.onEpisodeStateChanged = { [weak self] episodeID in
             self?.skipZones.refreshIfCurrentEpisode(episodeID: episodeID)
         }
         transcriptAnalysisQueue.resolveEpisode = { [weak self] episodeID in
@@ -1458,6 +1465,17 @@ final class OpenCastAppModel {
                 throw EpisodeDownloadError.missingDownloadedFile
             }
             episode.audioURL = localFileURL
+            // Wait for the local asset's duration unless its matching
+            // transcript already measured it. RSS can exclude inserted ads.
+            episode.duration = nil
+            if let transcript = transcriptions.record(for: snapshot.episodeID),
+               let duration = sanitizedDuration(transcript.audioDuration),
+               TranscriptSourceAlignment.downloadMatchesTranscript(
+                   trustedDownloadSHA256: downloads.completedSourceIdentity(for: snapshot.episodeID)?.sha256,
+                   documentSHA256: transcript.sourceFileSHA256
+               ) {
+                episode.duration = duration
+            }
         }
 
         return episode

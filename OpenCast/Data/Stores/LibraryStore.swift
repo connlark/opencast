@@ -50,6 +50,8 @@ final class LibraryStore {
     /// Per-feed refresh-log projection (latest log per feed, plus its latest
     /// success), newest first. Full history: `loadAllRefreshLogs()`.
     private(set) var refreshLogs: [RefreshLogSnapshot] = []
+    private(set) var incompleteFeeds: [String: FeedIncompleteReason] = [:]
+    private var processingRefreshPodcastIDs: Set<String> = []
     var refreshingFeedURLs: Set<String> {
         feedRefreshes.refreshingFeedURLs
     }
@@ -112,6 +114,7 @@ final class LibraryStore {
         writeGeneration: writeGeneration
     )
     @ObservationIgnored private var reloadGeneration = 0
+    @ObservationIgnored private let reloadCompletion = LibraryReloadCompletion()
     @ObservationIgnored private var refreshLogReloadGeneration = 0
     @ObservationIgnored private var episodeIndexByID: [String: Int] = [:]
     @ObservationIgnored private var episodeIndicesByPodcastID: [String: [Int]] = [:]
@@ -194,7 +197,7 @@ final class LibraryStore {
             let feedURL = subscription.feedURL
             let hasPodcastCache = podcastCacheByFeedURL[feedURL] != nil
             let hasEpisodeCache = !(episodeIndicesByPodcastID[feedURL]?.isEmpty ?? true)
-            return hasPodcastCache && hasEpisodeCache ? nil : feedURL
+            return hasPodcastCache && hasEpisodeCache && !processingRefreshPodcastIDs.contains(feedURL) ? nil : feedURL
         }
     }
 
@@ -327,10 +330,12 @@ final class LibraryStore {
         }
 
         do {
-            let snapshot = try await feedService.fetchFeed(at: feedURL)
+            guard let snapshot = try await feedService.prepareFeed(at: feedURL, validators: nil).feed else {
+                throw OpenCastCoreError.invalidHTTPResponse
+            }
             try writeGeneration.ensureCurrent(generation)
             _ = try await feedWrites.upsert(
-                snapshot: snapshot,
+                prepared: snapshot,
                 modelContext: modelContext,
                 subscribe: true,
                 generation: generation
@@ -349,6 +354,25 @@ final class LibraryStore {
             if reloadAfter {
                 state = .failed(error.localizedDescription)
             }
+            throw error
+        }
+    }
+
+    func subscribe(prepared: PreparedFeed, modelContext: ModelContext) async throws {
+        let generation = writeGeneration.capture()
+        state = .refreshing
+        lastErrorMessage = nil
+        do {
+            _ = try await feedWrites.upsert(prepared: prepared, modelContext: modelContext,
+                                           subscribe: true, generation: generation)
+            try await reloadFromStore(modelContext: modelContext)
+            state = .idle
+            subscriptionAddedToken += 1
+        } catch is CancellationError {
+            state = .idle
+            throw CancellationError()
+        } catch {
+            state = .failed(error.localizedDescription)
             throw error
         }
     }
@@ -567,6 +591,7 @@ final class LibraryStore {
     func prepareForDataNuke() {
         writeGeneration.invalidate()
         reloadGeneration += 1
+        reloadCompletion.invalidate(reloadGeneration)
         cancelEpisodeSearchIndexPreparation()
         feedRefreshes.clearAllRefreshMarkers()
     }
@@ -581,12 +606,15 @@ final class LibraryStore {
     func resetAfterDataNuke() {
         writeGeneration.invalidate()
         reloadGeneration += 1
+        reloadCompletion.invalidate(reloadGeneration)
         cancelEpisodeSearchIndexPreparation()
         state = .idle
         subscriptions.removeAll()
         episodes.removeAll()
         progressWriter.reset()
         refreshLogs.removeAll()
+        incompleteFeeds.removeAll()
+        processingRefreshPodcastIDs.removeAll()
         feedRefreshes.clearAllRefreshMarkers()
         activePodcastIDs.removeAll()
         visibleEpisodeIDs.removeAll()
@@ -960,7 +988,7 @@ final class LibraryStore {
             try self.writeGeneration.ensureCurrent(generation)
             switch fetchResult.outcome {
             case .success(let outcome):
-                guard let snapshot = outcome.snapshot else {
+                guard let snapshot = outcome.feed else {
                     result.failures.append(
                         BatchSubscribeFailure(
                             feedURLString: fetchResult.feedURLString,
@@ -971,7 +999,7 @@ final class LibraryStore {
                 }
                 do {
                     _ = try await self.feedWrites.upsert(
-                        snapshot: snapshot,
+                        prepared: snapshot,
                         modelContext: modelContext,
                         subscribe: true,
                         generation: generation
@@ -1036,12 +1064,24 @@ final class LibraryStore {
     func reloadFromStore(modelContext: ModelContext) async throws {
         reloadGeneration += 1
         let generation = reloadGeneration
+        reloadCompletion.begin(generation)
+        do {
+            try await loadAndPublishLibrary(modelContext: modelContext, generation: generation)
+            reloadCompletion.finish(generation, outcome: .success(()))
+        } catch {
+            reloadCompletion.finish(generation, outcome: .failure(error))
+            throw error
+        }
+    }
 
+    private func loadAndPublishLibrary(modelContext: ModelContext, generation: Int) async throws {
         let cacheSnapshot = try await localCache.loadLibrary(
             activePodcastIDs: activeSubscriptionFeedURLs(modelContext: modelContext)
         )
+        let indexes = try await LibraryEpisodeIndexes.prepare(cacheSnapshot.episodes)
 
         guard generation == reloadGeneration else {
+            try await reloadCompletion.waitForCurrent()
             return
         }
 
@@ -1055,10 +1095,14 @@ final class LibraryStore {
         activePodcastIDs = Set(activeSubscriptions.map(\.feedURL))
         try progressWriter.reload(modelContext: modelContext)
         episodes = cacheSnapshot.episodes
-        visibleEpisodeIDs = Set(cacheSnapshot.episodes.map(\.episodeID))
+        visibleEpisodeIDs = indexes.visibleIDs
         podcastCacheByFeedURL = cacheSnapshot.podcastsByFeedURL
         refreshLogs = cacheSnapshot.refreshLogs
-        rebuildEpisodeIndexes()
+        incompleteFeeds = cacheSnapshot.incompleteFeeds
+        processingRefreshPodcastIDs = cacheSnapshot.processingRefreshPodcastIDs
+        episodeIndexByID = indexes.byID
+        episodeIndicesByPodcastID = indexes.byPodcastID
+        episodeSearchCorpusRevision &+= 1
         rebuildLatestRefreshLogByFeedURL()
         prepareEpisodeSearchIndexIfNeeded()
     }
@@ -1066,7 +1110,7 @@ final class LibraryStore {
     /// Scoped republication for a single-feed refresh that changed no feed
     /// content: only the refresh-log projection is reloaded, skipping the
     /// full episode materialization, the progress refetch, and the index
-    /// rebuilds. A concurrent full reload owns the logs too, so this
+    /// lookup-table rebuilds. A concurrent full reload owns the logs too, so this
     /// publication is abandoned when either generation moves.
     func reloadRefreshLogsFromStore() async throws {
         refreshLogReloadGeneration += 1
@@ -1082,7 +1126,10 @@ final class LibraryStore {
         }
 
         refreshLogs = cacheSnapshot.refreshLogs
+        incompleteFeeds = cacheSnapshot.incompleteFeeds
+        processingRefreshPodcastIDs = cacheSnapshot.processingRefreshPodcastIDs
         rebuildLatestRefreshLogByFeedURL()
+        prepareEpisodeSearchIndexIfNeeded()
     }
 
     private func cancelEpisodeSearchIndexPreparation() {

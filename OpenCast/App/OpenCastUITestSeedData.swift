@@ -218,7 +218,24 @@ enum OpenCastUITestSeedData {
             ))
         }
 
-        if includesCompletedDownload {
+        let shouldSeedStaleAdAnalysis = ProcessInfo.processInfo.environment["OPENCAST_SEED_STALE_AD_ANALYSIS"] == "1"
+        let shouldSeedOutdatedPolicyAdAnalysis = ProcessInfo.processInfo.environment[
+            "OPENCAST_SEED_OUTDATED_POLICY_AD_ANALYSIS"
+        ] == "1"
+        let shouldSeedLowConfidenceAdAnalysis = ProcessInfo.processInfo.environment[
+            "OPENCAST_SEED_LOW_CONFIDENCE_AD_ANALYSIS"
+        ] == "1"
+        let shouldSeedAdAnalysisSpanAtStart = includesAdAnalysisSpanAtStart
+            || ProcessInfo.processInfo.environment["OPENCAST_SEED_AD_ANALYSIS_SPAN_AT_START"] == "1"
+        let shouldSeedCompletedAdAnalysis = includesCompletedAdAnalysis
+            || ProcessInfo.processInfo.environment["OPENCAST_SEED_COMPLETED_AD_ANALYSIS"] == "1"
+            || shouldSeedStaleAdAnalysis
+            || shouldSeedOutdatedPolicyAdAnalysis
+            || shouldSeedLowConfidenceAdAnalysis
+            || shouldSeedAdAnalysisSpanAtStart
+        let shouldSeedCompletedDownload = includesCompletedDownload || shouldSeedCompletedAdAnalysis
+
+        if shouldSeedCompletedDownload {
             let fileStore = EpisodeDownloadFileStore()
             let sourceURL = URL(string: audioURL)!
             let relativePath = fileStore.relativePath(episodeID: episodeID, sourceAudioURL: sourceURL)
@@ -229,22 +246,22 @@ enum OpenCastUITestSeedData {
             let data = try Data(contentsOf: completedAudioSourceURL)
             try fileStore.prepareDownloadsDirectory()
             try data.write(to: fileURL, options: .atomic)
-            context.insert(
-                EpisodeDownloadRecord(
-                    episodeID: episodeID,
-                    podcastID: feedURL,
-                    sourceAudioURL: audioURL,
-                    localRelativePath: relativePath,
-                    state: .completed,
-                    bytesReceived: Int64(data.count),
-                    bytesExpected: Int64(data.count),
-                    createdAt: refreshedAt,
-                    updatedAt: refreshedAt
-                )
+            let download = EpisodeDownloadRecord(
+                episodeID: episodeID,
+                podcastID: feedURL,
+                sourceAudioURL: audioURL,
+                localRelativePath: relativePath,
+                state: .completed,
+                bytesReceived: Int64(data.count),
+                bytesExpected: Int64(data.count),
+                createdAt: refreshedAt,
+                updatedAt: refreshedAt
             )
+            download.sourceFileSHA256 = OpenCastSHA256.hash(data)
+            context.insert(download)
         }
 
-        if includesFailedDownload, !includesCompletedDownload {
+        if includesFailedDownload, !shouldSeedCompletedDownload {
             // Seeding `.downloading` is useless here: `DownloadStore.reconcile`
             // flips in-flight records to `.failed` on load anyway.
             context.insert(
@@ -271,21 +288,6 @@ enum OpenCastUITestSeedData {
             createdAt: refreshedAt
         )
 
-        let shouldSeedStaleAdAnalysis = ProcessInfo.processInfo.environment["OPENCAST_SEED_STALE_AD_ANALYSIS"] == "1"
-        let shouldSeedOutdatedPolicyAdAnalysis = ProcessInfo.processInfo.environment[
-            "OPENCAST_SEED_OUTDATED_POLICY_AD_ANALYSIS"
-        ] == "1"
-        let shouldSeedLowConfidenceAdAnalysis = ProcessInfo.processInfo.environment[
-            "OPENCAST_SEED_LOW_CONFIDENCE_AD_ANALYSIS"
-        ] == "1"
-        let shouldSeedAdAnalysisSpanAtStart = includesAdAnalysisSpanAtStart
-            || ProcessInfo.processInfo.environment["OPENCAST_SEED_AD_ANALYSIS_SPAN_AT_START"] == "1"
-        let shouldSeedCompletedAdAnalysis = includesCompletedAdAnalysis
-            || ProcessInfo.processInfo.environment["OPENCAST_SEED_COMPLETED_AD_ANALYSIS"] == "1"
-            || shouldSeedStaleAdAnalysis
-            || shouldSeedOutdatedPolicyAdAnalysis
-            || shouldSeedLowConfidenceAdAnalysis
-            || shouldSeedAdAnalysisSpanAtStart
         if includesCompletedTranscript
             || shouldSeedCompletedAdAnalysis
             || ProcessInfo.processInfo.environment["OPENCAST_SEED_COMPLETED_TRANSCRIPT"] == "1" {
@@ -293,6 +295,7 @@ enum OpenCastUITestSeedData {
                 episodeID: episodeID,
                 podcastID: feedURL,
                 sourceAudioURL: audioURL,
+                audioDuration: Double(audioDuration),
                 context: context,
                 createdAt: refreshedAt
             )
@@ -316,6 +319,7 @@ enum OpenCastUITestSeedData {
         episodeID: String,
         podcastID: String,
         sourceAudioURL: String,
+        audioDuration: TimeInterval,
         context: ModelContext,
         createdAt: Date
     ) throws -> EpisodeTranscriptDocument {
@@ -326,7 +330,8 @@ enum OpenCastUITestSeedData {
             treeSHA256: "20a910bd8ea9f94a3e4438780f6e2f0aa3bbcd3fc1f8e99fccb2d64b68935603"
         )
         let fileStore = EpisodeTranscriptFileStore()
-        let sourceSHA = "ui-test-source-sha"
+        let sourceData = try Data(contentsOf: URL(string: sourceAudioURL)!)
+        let sourceSHA = OpenCastSHA256.hash(sourceData)
         let fingerprint = fileStore.fingerprint(
             sourceFileSHA256: sourceSHA,
             modelIdentifier: modelSummary.modelIdentifier,
@@ -364,13 +369,13 @@ enum OpenCastUITestSeedData {
             episodeID: episodeID,
             podcastID: podcastID,
             sourceAudioURL: sourceAudioURL,
-            sourceFileByteCount: 128,
+            sourceFileByteCount: Int64(sourceData.count),
             sourceFileSHA256: sourceSHA,
             modelIdentifier: modelSummary.modelIdentifier,
             modelVersion: modelSummary.version,
             modelTreeSHA256: modelSummary.treeSHA256,
             languageCode: "en",
-            audioDuration: 9,
+            audioDuration: audioDuration,
             checkpoints: [],
             segments: segments,
             text: segments.map(\.text).joined(separator: " "),
@@ -383,15 +388,15 @@ enum OpenCastUITestSeedData {
             episodeID: episodeID,
             podcastID: podcastID,
             sourceAudioURL: sourceAudioURL,
-            sourceFileByteCount: 128,
+            sourceFileByteCount: Int64(sourceData.count),
             sourceFileSHA256: sourceSHA,
             modelIdentifier: modelSummary.modelIdentifier,
             modelVersion: modelSummary.version,
             modelTreeSHA256: modelSummary.treeSHA256,
             languageCode: "en",
             state: .completed,
-            audioDuration: 9,
-            completedDuration: 9,
+            audioDuration: audioDuration,
+            completedDuration: audioDuration,
             checkpointCount: 0,
             transcriptRelativePath: relativePath,
             createdAt: createdAt,

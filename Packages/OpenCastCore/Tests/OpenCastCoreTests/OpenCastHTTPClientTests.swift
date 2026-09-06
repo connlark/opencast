@@ -5,6 +5,70 @@ import Testing
 
 @Suite("OpenCast HTTP client")
 struct OpenCastHTTPClientTests {
+    @Test("Real feed transfer enforces its 20-second inactivity deadline")
+    func localStreamingReplayInactivityDeadline() async throws {
+        guard let base = ProcessInfo.processInfo.environment["OPENCAST_FEED_REPLAY_BASE_URL"] else { return }
+        let client = URLSessionOpenCastHTTPClient(configuration: .ephemeral)
+        let url = try #require(URL(string: base + "/herd.xml?chunked=1&delay=30"))
+        let started = ContinuousClock.now
+        let transfer = Task { try await client.feedFile(for: URLRequest(url: url), maximumBodyByteCount: FeedResourcePolicy.maximumDecodedBytes) }
+        let watchdog = Task {
+            try await Task.sleep(for: .seconds(35))
+            transfer.cancel()
+        }
+        defer { watchdog.cancel(); transfer.cancel() }
+        let result = try await transfer.value
+        let elapsed = started.duration(to: .now)
+        #expect(elapsed >= .seconds(19) && elapsed < .seconds(27))
+        #expect(result.decodedByteCount == 65_536)
+        #expect(result.incompleteReason != nil)
+        #expect(result.bodyHash == nil)
+    }
+
+    @Test("Local replay verifies real gzip, chunked transfer, interruption and transport cancellation")
+    func localStreamingReplay() async throws {
+        guard let base = ProcessInfo.processInfo.environment["OPENCAST_FEED_REPLAY_BASE_URL"] else { return }
+        let client = URLSessionOpenCastHTTPClient(configuration: .ephemeral)
+        for query in ["", "?gzip=1", "?chunked=1"] {
+            let url = try #require(URL(string: base + "/herd.xml" + query))
+            let result = try await client.feedFile(for: URLRequest(url: url), maximumBodyByteCount: FeedResourcePolicy.maximumDecodedBytes)
+            #expect(result.decodedByteCount == 60_708_532)
+            #expect(result.bodyHash == "a4e08c4d4f02eb0a22aa8e367b3b473bed01240a789c9ed05838827c9598241b")
+            #expect(result.incompleteReason == nil)
+        }
+        let compressedURL = try #require(URL(string: base + "/herd.xml?gzip=1"))
+        let capped = try await client.feedFile(for: URLRequest(url: compressedURL), maximumBodyByteCount: 8 * 1_024 * 1_024)
+        #expect(capped.decodedByteCount == 8 * 1_024 * 1_024)
+        #expect(capped.incompleteReason == .decodedByteLimit)
+        #expect(capped.bodyHash == nil)
+        let interruptedURL = try #require(URL(string: base + "/herd.xml?truncate=500000"))
+        let partial = try await DefaultFeedService(httpClient: client).prepareFeed(at: interruptedURL)
+        #expect(partial.feed?.episodeCount ?? 0 > 0)
+        #expect(partial.feed?.isSalvaged == true)
+        #expect(partial.validators == nil)
+        let slowURL = try #require(URL(string: base + "/herd.xml?chunked=1&chunk=1024&delay=1"))
+        let task = Task { try await client.feedFile(for: URLRequest(url: slowURL), maximumBodyByteCount: FeedResourcePolicy.maximumDecodedBytes) }
+        try await Task.sleep(for: .milliseconds(100))
+        let cancelledAt = ContinuousClock.now
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(cancelledAt.duration(to: .now) < .seconds(2))
+    }
+
+    @Test("Unsolicited 304 cannot leave an invalidated catalog unrepaired")
+    func unsolicitedNotModifiedIsRejected() async throws {
+        let feedURL = URL(string: "https://example.com/feed.xml")!
+        let client = RecordingHTTPClient(results: [
+            OpenCastHTTPResult(data: Data(), response: OpenCastHTTPResponse(
+                url: feedURL, mimeType: nil, expectedContentLength: 0,
+                statusCode: 304, headers: [:]
+            ))
+        ])
+        await #expect(throws: OpenCastCoreError.unexpectedStatusCode(304)) {
+            try await DefaultFeedService(httpClient: client).prepareFeed(at: feedURL, validators: nil)
+        }
+    }
+
     @MainActor
     @Test("Default feed service does not inherit a MainActor caller")
     func defaultFeedServiceDoesNotInheritMainActorCaller() async throws {
@@ -56,7 +120,7 @@ struct OpenCastHTTPClientTests {
         #expect(await client.requestedURLs == [feedURL])
     }
 
-    @Test("Feed service revalidates RSS cache entries")
+    @Test("Feed service owns validators without full-body URLCache entries")
     func feedServiceRevalidatesRSSCacheEntries() async throws {
         let feedURL = URL(string: "https://example.com/feed.xml")!
         let fixtureURL = try #require(Bundle.module.url(forResource: "examplecurrentaffairs", withExtension: "xml"))
@@ -78,7 +142,7 @@ struct OpenCastHTTPClientTests {
         _ = try await service.fetchFeed(at: feedURL)
 
         let request = try #require(await client.requestedRequests.first)
-        #expect(request.cachePolicy == .reloadRevalidatingCacheData)
+        #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
     }
 
     @Test("Feed requests send the RSS Accept header")
@@ -108,7 +172,7 @@ struct OpenCastHTTPClientTests {
         )
     }
 
-    @Test("Oversized feed bodies are rejected before the parse")
+    @Test("Oversized feed bodies without usable RSS produce a clear size error")
     func oversizedFeedBodiesAreRejected() async throws {
         let feedURL = URL(string: "https://example.com/feed.xml")!
         let oversized = Data(count: DefaultFeedService.maximumFeedBodyByteCount + 1)
@@ -395,6 +459,55 @@ struct OpenCastHTTPClientTests {
         #expect(result.response.statusCode == 200)
     }
 
+    @Test("Feed file streaming preserves split UTF-8 and ignores misleading lengths")
+    func feedFilesPreserveDecodedChunks() async throws {
+        let xml = Data("<rss><channel><title>Café 🧪</title><item><guid>1</guid><description><![CDATA[Full & exact]]></description></item></channel></rss>".utf8)
+        for length in [nil, 1, 999_999] as [Int?] {
+            let url = URL(string: "https://example.com/file-\(UUID()).xml")!
+            let client = streamingStubClient(plan: StreamingBodyPlan(chunks: xml.map { Data([$0]) }, contentLength: length), url: url)
+            let result = try await client.feedFile(for: URLRequest(url: url), maximumBodyByteCount: xml.count)
+            defer { withExtendedLifetime(result) {} }
+            #expect(result.incompleteReason == nil)
+            #expect(result.decodedByteCount == xml.count)
+            #expect(try Data(contentsOf: result.fileURL) == xml)
+            let feed = try await RSSFeedParser().prepare(fileURL: result.fileURL, feedURL: url)
+            #expect(feed.episodeCount == 1)
+            #expect(feed.completeness == .complete)
+        }
+    }
+
+    @Test("One decoded byte over the limit keeps the bounded file for partial parsing")
+    func feedFileLimitIsExact() async throws {
+        let xml = Data("<rss><channel><item><guid>1</guid></item></channel></rss>".utf8)
+        let url = URL(string: "https://example.com/file-limit.xml")!
+        let client = streamingStubClient(plan: StreamingBodyPlan(chunks: [xml, Data([32])], contentLength: nil), url: url)
+        let result = try await client.feedFile(for: URLRequest(url: url), maximumBodyByteCount: xml.count)
+        defer { withExtendedLifetime(result) {} }
+        #expect(result.decodedByteCount == xml.count)
+        #expect(result.bodyHash == nil)
+        #expect(result.incompleteReason == .decodedByteLimit)
+        let prepared = try await RSSFeedParser().prepare(fileURL: result.fileURL, feedURL: url, transferIssue: result.incompleteReason)
+        #expect(prepared.episodeCount == 1)
+        #expect(prepared.completeness == .partial(.decodedByteLimit))
+    }
+
+    @Test("Feed HTTP error status wins over oversized error-page headers")
+    func feedStatusIsClassifiedBeforeSize() async throws {
+        let url = URL(string: "https://example.com/error-feed.xml")!
+        let client = streamingStubClient(plan: StreamingBodyPlan(chunks: [], contentLength: 999_999_999, status: 503), url: url)
+        await #expect(throws: OpenCastCoreError.unexpectedStatusCode(503)) {
+            _ = try await DefaultFeedService(httpClient: client).prepareFeed(at: url)
+        }
+    }
+
+    @Test("Feed sessions have dedicated inactivity and total deadlines without a body cache")
+    func feedSessionPolicy() {
+        let configuration = OpenCastURLSessionFactory.feedConfiguration()
+        #expect(configuration.timeoutIntervalForRequest == 20)
+        #expect(configuration.timeoutIntervalForResource == 300)
+        #expect(configuration.urlCache == nil)
+    }
+
     private func streamingStubClient(
         plan: StreamingBodyPlan,
         url: URL
@@ -475,6 +588,7 @@ private final class RecordingURLProtocol: URLProtocol, @unchecked Sendable {
 private struct StreamingBodyPlan: Sendable {
     let chunks: [Data]
     let contentLength: Int?
+    var status: Int = 200
 }
 
 /// Keyed by request URL so concurrently running tests never read each
@@ -515,7 +629,7 @@ private final class StreamingBodyURLProtocol: URLProtocol, @unchecked Sendable {
         }
         let response = HTTPURLResponse(
             url: request.url!,
-            statusCode: 200,
+            statusCode: plan.status,
             httpVersion: "HTTP/1.1",
             headerFields: headers
         )!

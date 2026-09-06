@@ -226,8 +226,12 @@ final class OpenCastPadUITests: XCTestCase {
         assertExists(shareButton, named: "download and share audio action")
         shareButton.tap()
 
-        let shareHeader = app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "UI Test Show - Deterministic UI Episode")
+        let shareHeader = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier == %@ AND label CONTAINS %@",
+                "LP.CaptionBar.TopCaption",
+                "UI Test Show - Deterministic UI Episode"
+            )
         ).firstMatch
         assertExists(shareHeader, named: "activity sheet with sanitized share filename")
         attachSmokeScreenshot(named: "ipad_episode_diagnostics_share")

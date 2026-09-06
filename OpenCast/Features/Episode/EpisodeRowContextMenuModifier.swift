@@ -45,6 +45,9 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
             detectAdsButton
         } preview: {
             EpisodeContextPreviewView(episode: episode)
+                // Context previews have a separate host; explicitly supply
+                // the model needed for their on-demand SQLite note lookup.
+                .environment(appModel)
         }
     }
 

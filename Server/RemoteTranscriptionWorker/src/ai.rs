@@ -177,10 +177,16 @@ pub struct FakeAiHooks {
     pub concurrency_override: Option<u32>,
     pub latency_ms: Option<u64>,
     pub media_chunk_latency_ms: Option<u64>,
-    /// `sfail=N`: the first N settle calls fail, after the result object is
-    /// durable — `sfail=1` drives the stitch re-entry invariant test, a
-    /// count past the budget drives the audit-§27 settle-exhaustion test.
+    /// `sfail=N`: the first N settle calls fail before the seam is called
+    /// (nothing committed), counted job-wide across states — `sfail=1`
+    /// drives the stitch re-entry invariant test, a count past the stitch
+    /// budget drives the deferred-settle tests (audit §27, 2026-09-04).
     pub settle_fail_count: Option<u32>,
+    /// `slost=N`: the first N settle calls run the real settle and then
+    /// report failure — the committed-but-response-lost shape (2026-09-04
+    /// review) that must keep the paid result. Counted job-wide like
+    /// `sfail`; when both are set `sfail` applies first.
+    pub settle_lost_count: Option<u32>,
     /// `resfail=N`: the first N credit-reserve calls fail on the internal
     /// shape — drives the audit-§27 reserve-exhaustion test.
     pub reserve_fail_count: Option<u32>,
@@ -282,6 +288,7 @@ pub fn parse_fake_hooks(language_code: Option<&str>) -> FakeAiHooks {
                 "latency" => hooks.latency_ms = value.parse().ok(),
                 "mlat" => hooks.media_chunk_latency_ms = value.parse().ok(),
                 "sfail" => hooks.settle_fail_count = value.parse().ok().filter(|count| *count > 0),
+                "slost" => hooks.settle_lost_count = value.parse().ok().filter(|count| *count > 0),
                 "resfail" => hooks.reserve_fail_count = value.parse().ok(),
                 "rfail" => hooks.release_fail_count = value.parse().ok(),
                 "strand" => hooks.strand = FakeStrandRule::parse(value),
@@ -436,6 +443,15 @@ mod tests {
             None
         );
         assert_eq!(latency_only.settle_fail_count, None);
+
+        let settle_lost = parse_fake_hooks(Some("fake:slost=99"));
+        assert_eq!(settle_lost.settle_lost_count, Some(99));
+        assert_eq!(settle_lost.settle_fail_count, None);
+        assert_eq!(
+            parse_fake_hooks(Some("fake:slost=0")).settle_lost_count,
+            None
+        );
+        assert_eq!(latency_only.settle_lost_count, None);
 
         let reserve_fail = parse_fake_hooks(Some("fake:resfail=4"));
         assert_eq!(reserve_fail.reserve_fail_count, Some(4));

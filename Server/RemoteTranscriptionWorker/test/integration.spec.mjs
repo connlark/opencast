@@ -23,8 +23,9 @@ const BEARER = "integration-test-bearer-token";
 // GRANT minus the settled spend accumulated up to that point. Sized so the
 // awaiting_credits test's 7000 s job stays unaffordable at its point in the
 // suite (GRANT - 1200 < 7000) while the late stranded-job and release tests
-// can still settle/reserve their 60 s jobs.
-const GRANT = 7200;
+// can still settle/reserve their 60 s jobs; the two deferred-settle charging
+// cases raise the accumulated spend by 120 s.
+const GRANT = 7400;
 const ORIGIN_HOST = "https://origin.example.com";
 const ORIGIN_URL = `${ORIGIN_HOST}/audio.mp3`;
 const ORIGIN_REDIRECT_URL = `${ORIGIN_HOST}/redirect/audio.mp3`;
@@ -222,6 +223,21 @@ async function bootstrapBalance() {
   });
   expect(response.status).toBe(200);
   return response.json();
+}
+
+// Poll variant for ledger moves that land from alarm turns (a deferred
+// settle recovering, an abandoned settle freeing its hold).
+async function waitForBalance(predicate, description, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  while (Date.now() < deadline) {
+    last = (await bootstrapBalance()).balance;
+    if (predicate(last)) {
+      return last;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`balance never ${description}; last=${JSON.stringify(last)}`);
 }
 
 async function createJob({
@@ -1722,13 +1738,127 @@ describe("remote transcription dev lane", () => {
   });
 
   // --- Credit-seam retries are bounded because `probing` and `stitching`
-  // carry no state deadline. A persistent seam failure ends in a clean
-  // internal_error with the reservation released and an abandonment counter.
+  // carry no state deadline. A credit seam that fails persistently used to re-arm the
+  // alarm forever (re-walking the native probe every minute). Both seam
+  // calls share one bounded budget (first attempt + three retries at the
+  // 1 s test pacing). A spent reserve budget ends in a clean internal_error
+  // failure with the reservation released and `credit_reserve_abandoned`.
+  // A spent settle budget defers the settle: the seam
+  // may have committed it and lost only the response, and releasing a
+  // settled reservation is a no-op that keeps the charge, so failing the
+  // job there deleted a transcript the customer had paid for. The result
+  // is published with the settle pending; the result states retry it under
+  // a fresh per-state budget, the ack and terminal paths settle instead of
+  // releasing, and only a settle abandoned at the terminal budget frees its
+  // hold (`credit_settle_abandoned`; a release after a landed settle is a
+  // no-op). Hooks: `sfail=N` fails before the call (never committed),
+  // `slost=N` commits and then reports failure; both count job-wide.
 
-  it("fails a job whose settle keeps failing once the credit budget is spent", async () => {
+  it("keeps a paid result when the settle committed but its response is lost for good", async () => {
     const before = (await bootstrapBalance()).balance;
-    const abandonedBefore = (await counterValues(["credit_settle_abandoned"]))
-      .credit_settle_abandoned ?? 0;
+    const countersBefore = await counterValues([
+      "credit_settle_deferred",
+      "credit_settle_abandoned",
+    ]);
+    const job = await createJob({
+      clientRequestId: "e2e-settle-lost-1",
+      episodeId: "ep-settle-lost-1",
+      durationSeconds: 60,
+      languageCode: "fake:slost=99",
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+
+    // The first settle lands in the ledger; every response is "lost". Four
+    // failures spend the stitch budget and the result is published anyway
+    // (pre-fix: release_and_fail deleted it, and the release was a no-op on
+    // the settled reservation — charged, nothing delivered).
+    await waitForState(job.job_id, ["result_ready"], 25_000);
+    expect(
+      (await counterValues(["credit_settle_deferred"])).credit_settle_deferred,
+    ).toBe((countersBefore.credit_settle_deferred ?? 0) + 1);
+
+    const resultResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/result`,
+      { schema_version: 1 },
+    );
+    expect(resultResponse.status).toBe(200);
+    const payload = await resultResponse.json();
+    expect(payload.result.segments.length).toBeGreaterThan(0);
+
+    // Charged exactly once, by the settle that landed on the first attempt.
+    const charged = (await bootstrapBalance()).balance;
+    expect(charged.available_seconds).toBe(before.available_seconds - 60);
+    expect(charged.reserved_seconds).toBe(0);
+
+    // The ack settles again (a no-op that still "fails" under the hook);
+    // the acknowledged record retries under the terminal budget, abandons,
+    // and the release that follows is a no-op on the settled reservation:
+    // the charge stands and nothing is refunded or double-charged.
+    await post(`/v1/remote-transcription/jobs/${job.job_id}/ack`, {
+      schema_version: 1,
+    });
+    await expectJobStorageEmpty(job.job_id);
+    await waitForCounter(
+      "credit_settle_abandoned",
+      (countersBefore.credit_settle_abandoned ?? 0) + 1,
+    );
+    const after = (await bootstrapBalance()).balance;
+    expect(after.available_seconds).toBe(before.available_seconds - 60);
+    expect(after.reserved_seconds).toBe(0);
+  });
+
+  it("recovers a deferred settle from the result state once the seam is back", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const countersBefore = await counterValues([
+      "credit_settle_deferred",
+      "credit_settle_recovered",
+      "credit_settle_abandoned",
+    ]);
+    const job = await createJob({
+      clientRequestId: "e2e-settle-recover-1",
+      episodeId: "ep-settle-recover-1",
+      durationSeconds: 60,
+      languageCode: "fake:sfail=5",
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+
+    // Four stitch failures defer the settle; the result is published with
+    // the reservation still held.
+    await waitForState(job.job_id, ["result_ready"], 25_000);
+    expect(
+      (await counterValues(["credit_settle_deferred"])).credit_settle_deferred,
+    ).toBe((countersBefore.credit_settle_deferred ?? 0) + 1);
+
+    // The fifth attempt (first result-state retry) fails, the sixth lands:
+    // the hold becomes the charge while the job is still result_ready.
+    const settled = await waitForBalance(
+      (balance) => balance.reserved_seconds === 0,
+      "settled from the result state",
+    );
+    expect(settled.available_seconds).toBe(before.available_seconds - 60);
+    expect((await pollJob(job.job_id)).job.state).toBe("result_ready");
+    expect(
+      (await counterValues(["credit_settle_recovered"])).credit_settle_recovered,
+    ).toBe((countersBefore.credit_settle_recovered ?? 0) + 1);
+
+    await post(`/v1/remote-transcription/jobs/${job.job_id}/ack`, {
+      schema_version: 1,
+    });
+    await expectJobStorageEmpty(job.job_id);
+    const after = (await bootstrapBalance()).balance;
+    expect(after.available_seconds).toBe(before.available_seconds - 60);
+    expect(after.reserved_seconds).toBe(0);
+    expect(
+      (await counterValues(["credit_settle_abandoned"])).credit_settle_abandoned ?? 0,
+    ).toBe(countersBefore.credit_settle_abandoned ?? 0);
+  });
+
+  it("frees the hold of a settle that never lands once every budget is spent", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const countersBefore = await counterValues([
+      "credit_settle_deferred",
+      "credit_settle_abandoned",
+    ]);
     const job = await createJob({
       clientRequestId: "e2e-settle-exhaust-1",
       episodeId: "ep-settle-exhaust-1",
@@ -1737,20 +1867,37 @@ describe("remote transcription dev lane", () => {
     });
     await reportSource(job.job_id, await deviceIdentity(60));
 
-    // Four settle failures (the published result survives each re-entry),
-    // then the budget fails the job instead of a fifth retry.
-    const failed = await waitForState(job.job_id, ["failed"], 25_000);
-    expect(failed.job.error.code).toBe("internal_error");
-    await expectJobStorageEmpty(job.job_id);
-    expect((await counterValues(["credit_settle_abandoned"])).credit_settle_abandoned).toBe(
-      abandonedBefore + 1,
+    // Deferred, not failed: the result is published and fetchable while the
+    // reservation stays held.
+    await waitForState(job.job_id, ["result_ready"], 25_000);
+    expect(
+      (await counterValues(["credit_settle_deferred"])).credit_settle_deferred,
+    ).toBe((countersBefore.credit_settle_deferred ?? 0) + 1);
+    const held = (await bootstrapBalance()).balance;
+    expect(held.available_seconds).toBe(before.available_seconds - 60);
+    expect(held.reserved_seconds).toBe(60);
+    const resultResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/result`,
+      { schema_version: 1 },
     );
+    expect(resultResponse.status).toBe(200);
 
-    // Never charged: the unsettled reservation was released, not stranded
-    // under a published result.
-    const after = (await bootstrapBalance()).balance;
+    // Ack, then the terminal budget: four more failures abandon the settle
+    // and free the hold (the TranscriptAnalysisWorker precedent) instead of
+    // stranding the customer's seconds — the seam never charged.
+    await post(`/v1/remote-transcription/jobs/${job.job_id}/ack`, {
+      schema_version: 1,
+    });
+    await expectJobStorageEmpty(job.job_id);
+    await waitForCounter(
+      "credit_settle_abandoned",
+      (countersBefore.credit_settle_abandoned ?? 0) + 1,
+    );
+    const after = await waitForBalance(
+      (balance) => balance.reserved_seconds === 0,
+      "released the abandoned hold",
+    );
     expect(after.available_seconds).toBe(before.available_seconds);
-    expect(after.reserved_seconds).toBe(0);
   });
 
   it("fails a job whose reserve keeps failing instead of re-probing forever", async () => {
@@ -1825,6 +1972,20 @@ describe("remote transcription dev lane", () => {
       .bind(...names)
       .all();
     return Object.fromEntries(rows.results.map(({ name, value }) => [name, Number(value)]));
+  }
+
+  // Counters bumped from alarm turns land asynchronously.
+  async function waitForCounter(name, expected, timeoutMs = 15_000) {
+    const deadline = Date.now() + timeoutMs;
+    let last;
+    while (Date.now() < deadline) {
+      last = (await counterValues([name]))[name] ?? 0;
+      if (last === expected) {
+        return last;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error(`counter ${name} never reached ${expected}; last=${last}`);
   }
 
   // --- Stranded-job repair (2026-08-19). A live job whose alarm turn died

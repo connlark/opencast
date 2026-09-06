@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct PodcastDetailView: View {
+    @State private var visibleEpisodeCount = EpisodeCatalogContinuation.pageSize
     /// Overscroll past a search-bar's worth of travel opens search; the list has no
     /// pull-to-refresh so the gesture is unambiguous.
     private static let pullToSearchDistance: Double = 72
@@ -106,6 +107,11 @@ struct PodcastDetailView: View {
                                     onPlay: playPrimaryAction,
                                     onPreviewResolved: updatePodcastArtworkPreview
                                 )
+                                if let reason = appModel.library.incompleteFeeds[feedURL] {
+                                    IncompleteFeedNotice(reason: reason, isRefreshing: isRefreshing) {
+                                        await appModel.library.refresh(feedURL: feedURL, modelContext: modelContext)
+                                    }
+                                }
                                 if let suggestedFeedURL = appModel.library.suggestedFeedMigrationURLsByFeedURL[feedURL] {
                                     FeedAddressUpdateView(
                                         suggestedFeedURL: suggestedFeedURL,
@@ -164,7 +170,7 @@ struct PodcastDetailView: View {
                                 Button("Show All Episodes", action: showAllEpisodes)
                             }
                         } else {
-                            ForEach(model.episodes) { episode in
+                            ForEach(model.episodes.prefix(visibleEpisodeCount)) { episode in
                                 EpisodeRowButton(
                                     episode: episode,
                                     showsLocalStatusBadges: true,
@@ -174,6 +180,7 @@ struct PodcastDetailView: View {
                                 )
                                 .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode))
                             }
+                            EpisodeCatalogContinuation(totalCount: model.episodes.count, visibleCount: $visibleEpisodeCount)
                         }
                     }
                 }
@@ -183,7 +190,7 @@ struct PodcastDetailView: View {
                     EpisodeArtworkGlowBackground(preview: podcastArtworkPreview)
                 }
                 .contentMargins(.bottom, 72, for: .scrollContent)
-                .animation(listAnimation, value: model.animationKey)
+                .animation(listAnimation, value: Array(model.animationKey.prefix(visibleEpisodeCount)))
                 .animation(listAnimation, value: appModel.library.state)
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     geometry.contentOffset.y + geometry.contentInsets.top < -Self.pullToSearchDistance

@@ -47,11 +47,29 @@ final class FeedWriteCoordinator {
     }
 
     func upsert(
-        snapshot: FeedSnapshot,
+        prepared: PreparedFeed,
         modelContext: ModelContext,
         subscribe: Bool,
         generation: Int
     ) async throws -> Bool {
+        let snapshot = prepared.isSalvaged
+            ? FeedSnapshot(podcast: prepared.podcast, episodes: [], fetchedAt: prepared.fetchedAt,
+                           isSalvaged: true, newFeedURL: prepared.newFeedURL)
+            : try await prepared.identitySnapshot()
+        try Task.checkCancellation()
+        try writeGeneration.ensureCurrent(generation)
+        return try await upsert(snapshot: snapshot, modelContext: modelContext, subscribe: subscribe,
+                                generation: generation, prepared: prepared)
+    }
+
+    func upsert(
+        snapshot: FeedSnapshot,
+        modelContext: ModelContext,
+        subscribe: Bool,
+        generation: Int,
+        prepared: PreparedFeed? = nil
+    ) async throws -> Bool {
+        try Task.checkCancellation()
         let canonicalFeedURL = snapshot.podcast.id.rawValue
         let now = Date.now
 
@@ -68,15 +86,25 @@ final class FeedWriteCoordinator {
             return false
         }
 
-        let preexistingEpisodes = try await localCache.cachedEpisodes(forPodcastID: canonicalFeedURL)
+        let preexistingEpisodes = snapshot.isSalvaged ? [] : try await localCache.cachedEpisodes(forPodcastID: canonicalFeedURL)
         try writeGeneration.ensureCurrent(generation)
-        try await localCache.upsertCache(from: snapshot, refreshedAt: now)
+        if let prepared { try await localCache.upsertCache(from: prepared, refreshedAt: now) }
+        else { try await localCache.upsertCache(from: snapshot, refreshedAt: now) }
         do {
             try writeGeneration.ensureCurrent(generation)
         } catch {
             // The nuke ran while the cache write was in flight; the rows it
-            // just wrote would outlive the wipe as orphans.
-            try await localCache.deleteCache(forPodcastID: canonicalFeedURL)
+            // just wrote would outlive the wipe as orphans. Ownership check
+            // before the sweep (2026-09-04 review): a subscription that
+            // exists now was added after the reset, and its own upsert owns
+            // this feed's cache — sweeping here would empty a live
+            // subscription until its next refresh. A failed fetch keeps the
+            // conservative sweep.
+            let ownedByNewSubscription =
+                (try? modelContext.fetch(subscriptionDescriptor))?.isEmpty == false
+            if !ownedByNewSubscription {
+                try await localCache.deleteCache(forPodcastID: canonicalFeedURL)
+            }
             throw error
         }
         try await reconcileEpisodeIdentities(
@@ -99,7 +127,7 @@ final class FeedWriteCoordinator {
         // kept every subscription record permanently churning.
         var hasSyncedChanges = false
         if let existingSubscription = try modelContext.fetch(subscriptionDescriptor).first {
-            hasSyncedChanges = update(existingSubscription, from: snapshot)
+            if !snapshot.isSalvaged { hasSyncedChanges = update(existingSubscription, from: snapshot) }
         } else if subscribe {
             modelContext.insert(
                 SubscriptionRecord(
@@ -151,7 +179,7 @@ final class FeedWriteCoordinator {
         generation: Int,
         modelContext: ModelContext
     ) async throws -> Int {
-        guard !preexisting.isEmpty else {
+        guard !snapshot.isSalvaged, !preexisting.isEmpty else {
             return 0
         }
         let canonicalFeedURL = snapshot.podcast.id.rawValue
@@ -172,7 +200,8 @@ final class FeedWriteCoordinator {
             return 0
         }
 
-        let matches = EpisodeIdentityReconciler.matches(departed: departed, successors: successors)
+        let matches = await EpisodeIdentityReconciler.matchesConcurrently(departed: departed, successors: successors)
+        try Task.checkCancellation()
         guard !matches.isEmpty else {
             return 0
         }
@@ -192,12 +221,13 @@ final class FeedWriteCoordinator {
     }
 
     func handleFeedRelocation(
-        _ outcome: FeedFetchOutcome,
+        _ outcome: PreparedFeedOutcome,
         feedURLString: String,
         generation: Int,
         modelContext: ModelContext
     ) async throws {
         try writeGeneration.ensureCurrent(generation)
+        guard outcome.feed?.isSalvaged != true else { return }
         let canonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: feedURLString)
 
         if let newFeedURL = outcome.newFeedURL,
@@ -293,11 +323,12 @@ final class FeedWriteCoordinator {
         modelContext: ModelContext
     ) async throws {
         let generation = generation ?? writeGeneration.capture()
-        let outcome = try await feedService.fetchFeedOutcome(at: newFeedURL)
+        let outcome = try await feedService.prepareFeed(at: newFeedURL, validators: nil)
         try writeGeneration.ensureCurrent(generation)
-        guard let snapshot = outcome.snapshot else {
-            throw OpenCastCoreError.invalidHTTPResponse
+        guard let prepared = outcome.feed, prepared.completeness.isComplete else {
+            throw OpenCastCoreError.malformedFeed(reason: "A complete feed is required to update its address.")
         }
+        let snapshot = try await prepared.identitySnapshot()
         let newCanonicalFeedURL = snapshot.podcast.id.rawValue
         let oldCanonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: oldFeedURLString)
         guard newCanonicalFeedURL != oldCanonicalFeedURL else {
@@ -315,12 +346,13 @@ final class FeedWriteCoordinator {
         let departed = try await localCache.cachedEpisodes(forPodcastID: oldCanonicalFeedURL)
             .map(EpisodeIdentityReconciler.Candidate.init(listItem:))
         let successors = snapshot.episodes.map(EpisodeIdentityReconciler.Candidate.init(episode:))
-        let matches = EpisodeIdentityReconciler.matches(departed: departed, successors: successors)
+        let matches = await EpisodeIdentityReconciler.matchesConcurrently(departed: departed, successors: successors)
+        try Task.checkCancellation()
         if requiresIdentityOverlap, !departed.isEmpty, matches.isEmpty {
             throw FeedMigrationError(message: "The feed at the new address does not match this show.")
         }
 
-        try await localCache.upsertCache(from: snapshot, refreshedAt: .now)
+        try await localCache.upsertCache(from: prepared, refreshedAt: .now)
         do {
             // Everything from here to the save is synchronous, so this one
             // check covers the save; on unwind the new URL's fresh cache
@@ -441,7 +473,11 @@ final class FeedWriteCoordinator {
                 continue
             }
             do {
-                let snapshot = try await feedService.fetchFeed(at: feedURL)
+                guard let prepared = try await feedService.prepareFeed(at: feedURL, validators: nil).feed,
+                      prepared.completeness.isComplete else {
+                    throw OpenCastCoreError.malformedFeed(reason: "A complete feed is required to repair episode identities.")
+                }
+                let snapshot = try await prepared.identitySnapshot()
                 try Task.checkCancellation()
                 let canonicalFeedURL = snapshot.podcast.id.rawValue
                 let preexisting = try await localCache.cachedEpisodes(forPodcastID: canonicalFeedURL)
@@ -453,7 +489,7 @@ final class FeedWriteCoordinator {
                     modelContext: modelContext
                 )
                 _ = try await upsert(
-                    snapshot: snapshot,
+                    prepared: prepared,
                     modelContext: modelContext,
                     subscribe: false,
                     generation: generation

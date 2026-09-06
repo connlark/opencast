@@ -1,6 +1,7 @@
 import Foundation
 
 public protocol OpenCastHTTPClient: Sendable {
+    func feedFile(for request: URLRequest, maximumBodyByteCount: Int) async throws -> OpenCastHTTPFileResult
     func data(for request: URLRequest) async throws -> OpenCastHTTPResult
     /// Fetches the body while enforcing `maximumBodyByteCount`, throwing
     /// `OpenCastHTTPBodyTooLargeError` for an oversized response. Streaming

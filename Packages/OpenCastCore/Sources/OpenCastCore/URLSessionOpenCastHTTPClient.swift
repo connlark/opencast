@@ -1,8 +1,9 @@
 import Foundation
 
-// @unchecked: the sole stored state is an immutable, thread-safe URLSession.
+// @unchecked: the stored URLSessions are immutable and thread-safe.
 public final class URLSessionOpenCastHTTPClient: OpenCastHTTPClient, @unchecked Sendable {
     private let session: URLSession
+    let feedSession: URLSession
 
     public convenience init(
         configuration: URLSessionConfiguration = OpenCastURLSessionFactory.sharedConfiguration()
@@ -12,6 +13,14 @@ public final class URLSessionOpenCastHTTPClient: OpenCastHTTPClient, @unchecked 
 
     public init(session: URLSession) {
         self.session = session
+        // Preserve injected transports/protocol classes and credentials while
+        // giving RSS its own cache-free transfer deadlines in every app path.
+        let configuration = session.configuration
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 300
+        feedSession = URLSession(configuration: configuration)
     }
 
     public func data(for request: URLRequest) async throws -> OpenCastHTTPResult {

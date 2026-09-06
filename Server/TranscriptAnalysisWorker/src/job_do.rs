@@ -12,6 +12,7 @@ use crate::billing::{
     billing_retry_delay_seconds, BillingContext, JobBillingState, PendingBillingAction,
     BILLING_MAX_ATTEMPTS, ERROR_BILLING_UNAVAILABLE,
 };
+use crate::counters;
 use crate::credit::CreditError;
 use crate::job::{
     alarm_decision, poll_decision, submit_decision, terminal_billing_action,
@@ -77,8 +78,14 @@ impl DurableObject for TranscriptAnalysisJob {
                 };
                 // The watchdogged run's reservation is released through the
                 // shared terminal-billing path (pending + bounded retries).
-                apply_terminal_billing(&self.env, &self.state.storage(), record.clone(), *purge_at)
-                    .await?;
+                apply_terminal_billing(
+                    &self.env,
+                    &self.state.storage(),
+                    record.clone(),
+                    *purge_at,
+                    counters::JOBS_FAILED_TRANSIENT,
+                )
+                .await?;
             }
             AlarmDecision::RetryBilling => self.retry_pending_billing().await?,
         }
@@ -140,12 +147,14 @@ impl TranscriptAnalysisJob {
             // so the overwrite below can never strand it silently.
             if let Some((account_id, billing_id, action)) = pending_billing(record.as_ref()) {
                 if submit.billing.is_some() {
+                    counters::bump(&self.env, &[(counters::BILLING_UNAVAILABLE, 1)]).await;
                     return json_error(503, ERROR_BILLING_UNAVAILABLE);
                 }
                 if !attempt_billing_action(&self.env, &account_id, &billing_id, action).await {
                     console_error!(
                         "transcript-analysis billing {action:?} abandoned by unbilled restart: {billing_id}"
                     );
+                    counters::bump(&self.env, &[(abandoned_counter(action), 1)]).await;
                 }
                 if let Some(mut current) =
                     reread_matching_terminal(&self.state.storage(), &billing_id).await?
@@ -188,7 +197,17 @@ impl TranscriptAnalysisJob {
             if let Some(context) = &submit.billing {
                 match reserve_billing(&self.env, context).await {
                     Ok(Ok(state)) => billing_state = Some(state),
-                    Ok(Err(response)) => return Ok(response),
+                    Ok(Err(response)) => {
+                        // Typed refusal (402 / 403 / 503 from
+                        // `reserve_failure_response`); the status is the
+                        // only content-free discriminator available here.
+                        counters::bump(
+                            &self.env,
+                            &[(reserve_refusal_counter(response.status_code()), 1)],
+                        )
+                        .await;
+                        return Ok(response);
+                    }
                     Err(error) => {
                         // Billing-required lanes fail CLOSED when the credit
                         // backend is unreachable — loudly:
@@ -197,6 +216,7 @@ impl TranscriptAnalysisJob {
                         console_error!(
                             "transcript-analysis billing unavailable at reserve: {error}"
                         );
+                        counters::bump(&self.env, &[(counters::BILLING_UNAVAILABLE, 1)]).await;
                         return json_error(503, ERROR_BILLING_UNAVAILABLE);
                     }
                 }
@@ -216,6 +236,10 @@ impl TranscriptAnalysisJob {
                 content_hash: submitted_hash.clone(),
                 billing: billing_state,
             };
+            // Counted here rather than in the run task: the storage writes
+            // below follow the D1 await before the task parks on the model
+            // call (the placement rule on `counters::bump`).
+            counters::bump(&self.env, &[(counters::JOBS_STARTED, 1)]).await;
             // A reservation is at stake past the reserve: a storage failure
             // here would leave the hold referenced by nothing — no record,
             // no retry path, and no expiry on PurchaseWorker's side. Best
@@ -345,6 +369,7 @@ impl TranscriptAnalysisJob {
                 console_error!(
                     "transcript-analysis billing {action:?} abandoned at purge: {billing_id}"
                 );
+                counters::bump(&self.env, &[(abandoned_counter(action), 1)]).await;
                 release_abandoned_settle(&self.env, &account_id, &billing_id, action).await;
             }
             // The attempts above opened the input gate: an interleaved
@@ -372,12 +397,14 @@ impl TranscriptAnalysisJob {
         let Some((account_id, billing_id, action)) = pending_billing(Some(&record)) else {
             return set_alarm_at(&storage, purge_at).await;
         };
+        let charge_seconds = record.billing().map_or(0, |billing| billing.charge_seconds);
         run_pending_billing_attempt(
             &self.env,
             &storage,
             &account_id,
             &billing_id,
             action,
+            charge_seconds,
             purge_at,
         )
         .await
@@ -413,6 +440,23 @@ fn pending_billing(record: Option<&JobRecord>) -> Option<(String, String, Pendin
     ))
 }
 
+fn abandoned_counter(action: PendingBillingAction) -> &'static str {
+    match action {
+        PendingBillingAction::Settle => counters::SETTLE_ABANDONED,
+        PendingBillingAction::Release => counters::RELEASE_ABANDONED,
+    }
+}
+
+/// Maps `reserve_failure_response`'s typed statuses onto the refusal
+/// counters; anything else is the fail-closed code.
+fn reserve_refusal_counter(status: u16) -> &'static str {
+    match status {
+        402 => counters::RESERVE_DENIED_INSUFFICIENT,
+        403 => counters::RESERVE_DENIED_BOOTSTRAP,
+        _ => counters::BILLING_UNAVAILABLE,
+    }
+}
+
 enum RunOutcome {
     Completed { result_json: String },
     FailedUpstream { status: u16, code: String },
@@ -425,7 +469,7 @@ async fn run_job(
     started_at: i64,
     request: crate::types::TranscriptAnalysisRequest,
 ) -> Result<()> {
-    let outcome = match env.secret(GEMINI_API_KEY) {
+    let (outcome, stats) = match env.secret(GEMINI_API_KEY) {
         Ok(secret) => {
             let gemini_api_key = secret.to_string();
             let model_value = env
@@ -433,7 +477,8 @@ async fn run_job(
                 .ok()
                 .map(|value| value.to_string());
             let model = resolve_gemini_model(model_value.as_deref());
-            match run_analysis(&gemini_api_key, model, request).await {
+            let (result, stats) = run_analysis(&gemini_api_key, model, request).await;
+            let outcome = match result {
                 Ok(response) => {
                     let result_json = serde_json::to_string(&response)?;
                     // A result over the named budget would only fail later at
@@ -461,13 +506,27 @@ async fn run_job(
                     status: error.status,
                     code: error.body.error,
                 },
-            }
+            };
+            (outcome, Some(stats))
         }
-        Err(_) => RunOutcome::FailedUpstream {
-            status: 503,
-            code: "worker_secret_missing".to_string(),
-        },
+        Err(_) => (
+            RunOutcome::FailedUpstream {
+                status: 503,
+                code: "worker_secret_missing".to_string(),
+            },
+            None,
+        ),
     };
+    // Spend is recorded BEFORE the terminal-write guard below: the model
+    // calls happened even if a resubmit replaced this record. Attempt and
+    // token counters can therefore slightly exceed terminal outcomes
+    // (`jobs_started >= jobs_completed + jobs_failed_*`); the dashboard
+    // documents that rather than reconciling it. This D1 await opens the
+    // input gate, which is why it sits before the guard re-read (a storage
+    // await) and never between that re-read and the terminal write.
+    if let Some(stats) = &stats {
+        counters::bump(&env, &counters::spend_deltas(stats)).await;
+    }
 
     // The guard re-read also supplies the authoritative subject set: a
     // content-proven subject may have joined while the model ran, and the
@@ -487,6 +546,10 @@ async fn run_job(
         return Ok(());
     }
 
+    let outcome_counter = match outcome {
+        RunOutcome::Completed { .. } => counters::JOBS_COMPLETED,
+        RunOutcome::FailedUpstream { .. } => counters::JOBS_FAILED_UPSTREAM,
+    };
     let purge_at = now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS);
     let record = match outcome {
         RunOutcome::Completed { result_json } => JobRecord::Completed {
@@ -507,7 +570,7 @@ async fn run_job(
             billing,
         },
     };
-    apply_terminal_billing(&env, &state.storage(), record, purge_at).await
+    apply_terminal_billing(&env, &state.storage(), record, purge_at, outcome_counter).await
 }
 
 /// Turn a still-Running record whose run task errored into a terminal
@@ -543,7 +606,14 @@ async fn terminalize_failed_run(
         content_hash,
         billing,
     };
-    apply_terminal_billing(env, &state.storage(), record, purge_at).await
+    apply_terminal_billing(
+        env,
+        &state.storage(),
+        record,
+        purge_at,
+        counters::JOBS_FAILED_UPSTREAM,
+    )
+    .await
 }
 
 /// Shared terminal-billing transition (deliver-then-bill):
@@ -553,24 +623,42 @@ async fn terminalize_failed_run(
 /// must leave a marker the alarm machinery retries, never a clean-looking
 /// record. The first attempt then runs through the shared attempt path
 /// (retry alarm on failure, purge alarm on success).
+///
+/// `outcome_counter` is bumped once the terminal record is durable — after
+/// the record write (so the D1 await cannot open the input gate between a
+/// guard re-read and the write) and before the alarm write or the
+/// gate-opening billing await that follows.
 async fn apply_terminal_billing(
     env: &Env,
     storage: &Storage,
     mut record: JobRecord,
     purge_at: i64,
+    outcome_counter: &'static str,
 ) -> Result<()> {
     let Some(action) = terminal_billing_action(&record) else {
         write_record(storage, &record).await?;
+        counters::bump(env, &[(outcome_counter, 1)]).await;
         return set_alarm_at(storage, purge_at).await;
     };
     if let Some(billing) = record.billing_mut() {
         billing.pending = Some(action);
     }
     write_record(storage, &record).await?;
+    counters::bump(env, &[(outcome_counter, 1)]).await;
     let billing = record.billing().expect("action implies billing");
     let account_id = billing.account_id.clone();
     let billing_id = billing.billing_id.clone();
-    run_pending_billing_attempt(env, storage, &account_id, &billing_id, action, purge_at).await
+    let charge_seconds = billing.charge_seconds;
+    run_pending_billing_attempt(
+        env,
+        storage,
+        &account_id,
+        &billing_id,
+        action,
+        charge_seconds,
+        purge_at,
+    )
+    .await
 }
 
 /// One settle/release attempt plus its bookkeeping. The attempt's await
@@ -584,6 +672,7 @@ async fn run_pending_billing_attempt(
     account_id: &str,
     billing_id: &str,
     action: PendingBillingAction,
+    charge_seconds: i64,
     fallback_purge_at: i64,
 ) -> Result<()> {
     if !attempt_billing_action(env, account_id, billing_id, action).await {
@@ -595,6 +684,23 @@ async fn run_pending_billing_attempt(
             fallback_purge_at,
         )
         .await;
+    }
+    // Recorded before the re-read: the money moved whether or not the
+    // record survived the gate-opening await.
+    match action {
+        PendingBillingAction::Settle => {
+            counters::bump(
+                env,
+                &[
+                    (counters::SETTLED_JOBS, 1),
+                    (counters::CHARGED_CREDIT_SECONDS, charge_seconds),
+                ],
+            )
+            .await;
+        }
+        PendingBillingAction::Release => {
+            counters::bump(env, &[(counters::RELEASED_CREDIT_SECONDS, charge_seconds)]).await;
+        }
     }
     let Some(mut current) = reread_matching_terminal(storage, billing_id).await? else {
         return Ok(());
@@ -617,6 +723,7 @@ async fn record_failed_billing_attempt(
     billing_id: &str,
     fallback_purge_at: i64,
 ) -> Result<()> {
+    counters::bump(env, &[(counters::BILLING_RETRIES, 1)]).await;
     let Some(mut record) = reread_matching_terminal(storage, billing_id).await? else {
         // A fresh run owns the record now and manages its own billing;
         // nothing is left to retry the old action. Loud, and rare by
@@ -652,6 +759,7 @@ async fn record_failed_billing_attempt(
     console_error!(
         "transcript-analysis billing {action:?} abandoned after {attempts} attempts: {billing_id}"
     );
+    counters::bump(env, &[(abandoned_counter(action), 1)]).await;
     release_abandoned_settle(env, account_id, billing_id, action).await;
     Ok(())
 }

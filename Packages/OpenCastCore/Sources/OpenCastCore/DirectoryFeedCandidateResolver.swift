@@ -88,8 +88,8 @@ public struct DirectoryFeedCandidateResolver: Sendable {
         _ first: ResolvedFeedCandidate,
         _ second: ResolvedFeedCandidate
     ) -> Bool {
-        guard let firstGUID = normalizedGUID(first.snapshot.podcast.podcastGUID),
-              let secondGUID = normalizedGUID(second.snapshot.podcast.podcastGUID)
+        guard let firstGUID = normalizedGUID(first.podcast.podcastGUID),
+              let secondGUID = normalizedGUID(second.podcast.podcastGUID)
         else {
             return false
         }
@@ -115,13 +115,13 @@ public struct DirectoryFeedCandidateResolver: Sendable {
             for (index, candidate) in candidates.enumerated() {
                 group.addTask {
                     do {
-                        let outcome = try await feedService.fetchFeedOutcome(at: candidate.feedURL)
-                        guard let snapshot = outcome.snapshot else {
+                        let outcome = try await feedService.prepareFeed(at: candidate.feedURL, validators: nil)
+                        guard let snapshot = outcome.feed else {
                             throw OpenCastCoreError.invalidHTTPResponse
                         }
                         let resolved = ResolvedFeedCandidate(
                             candidate: candidate,
-                            snapshot: snapshot,
+                            prepared: snapshot,
                             finalURL: outcome.finalURL
                         )
                         return (index, .success(resolved))

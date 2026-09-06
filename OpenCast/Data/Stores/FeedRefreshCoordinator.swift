@@ -92,7 +92,7 @@ final class FeedRefreshCoordinator {
             return
         }
 
-        let staleFeedURLStrings = staleFeedURLStrings(now: now)
+        let staleFeedURLStrings = Array(Set(staleFeedURLStrings(now: now) + host.feedURLStringsNeedingLocalCache))
         guard !staleFeedURLStrings.isEmpty else {
             return
         }
@@ -260,7 +260,7 @@ final class FeedRefreshCoordinator {
         switch result.outcome {
         case .success(let outcome):
             do {
-                guard let snapshot = outcome.snapshot else {
+                guard let snapshot = outcome.feed else {
                     // Not-modified short-circuit: still a successful refresh.
                     await persistValidators(
                         outcome.validators,
@@ -275,7 +275,7 @@ final class FeedRefreshCoordinator {
                     return false
                 }
                 guard try await feedWrites.upsert(
-                    snapshot: snapshot,
+                    prepared: snapshot,
                     modelContext: modelContext,
                     subscribe: false,
                     generation: generation
@@ -286,7 +286,7 @@ final class FeedRefreshCoordinator {
                 try await recordRefreshLog(
                     feedURL: result.feedURLString,
                     startedAt: startedAt,
-                    errorMessage: snapshot.isSalvaged ? RefreshLogSnapshot.partialFeedSalvageMessage : nil,
+                    errorMessage: snapshot.completeness.reason.map { RefreshLogSnapshot.partialFeedSalvageMessage + " " + $0.diagnostic },
                     generation: generation
                 )
                 try await feedWrites.handleFeedRelocation(

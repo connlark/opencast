@@ -44,7 +44,15 @@ are explicitly enabled.
 yarn test
 yarn typecheck
 yarn deploy:dry-run
+python3 ../../scripts/check-feed-resource-policy.py
+node tests/feed-runtime.mjs
 ```
+
+The runtime harness starts the packaged Worker in workerd with isolated D1 and
+mock feed/APNs services. It exercises baseline establishment, malformed-feed
+rollback, update delivery, deduplication, and the Worker memory ceiling without
+using remote credentials or services. Run `yarn deploy:dry-run` first so the
+packaged `build/` modules exist.
 
 Apply migrations to your own D1 database:
 
@@ -78,3 +86,18 @@ Keep these properties intact when adapting the Worker:
 The routing test is safe to run publicly. Captured physical-device App Attest
 fixtures are intentionally omitted from the OSS tree; generate your own private
 fixtures if you need device-level attestation proof coverage.
+
+## Feed Resource Policy
+
+The app and Worker share explicit ceilings for unusually large catalogs. The
+Worker accepts at most 128 MiB of decoded XML and 100,000 raw RSS items, streams
+the response through a bounded parser, and limits XML depth, individual text
+fields, per-item text, and cumulative text processing. Two scans may run per
+isolate; each polling invocation also has bounded elapsed-time and decoded-byte
+admission budgets.
+
+Only a complete successful scan may send notifications or advance a feed
+checkpoint. The scanner retains bounded channel metadata, notification
+candidates, and recent publication timestamps instead of materializing the
+complete catalog in memory. `scripts/check-feed-resource-policy.py` keeps the
+Swift and Rust limits aligned.

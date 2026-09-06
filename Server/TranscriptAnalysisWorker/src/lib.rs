@@ -4,6 +4,7 @@ pub use opencast_app_attest_core::auth;
 pub use opencast_app_attest_core::challenge_limits;
 pub mod billing;
 pub mod coalescing;
+pub mod counters;
 #[cfg(target_arch = "wasm32")]
 pub mod credit;
 pub mod gemini;

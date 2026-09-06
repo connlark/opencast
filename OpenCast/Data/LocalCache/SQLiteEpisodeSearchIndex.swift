@@ -24,7 +24,7 @@ nonisolated struct SQLiteEpisodeSearchDocument: Sendable {
         self.title = title
         self.podcastTitle = podcastTitle
         summary = summaryHTML.map(HTMLPlainText.collapsedText(from:)) ?? ""
-        showNotes = showNotesHTML.map(HTMLPlainText.collapsedText(from:)) ?? ""
+        showNotes = showNotesHTML == summaryHTML ? summary : showNotesHTML.map(HTMLPlainText.collapsedText(from:)) ?? ""
         titleCanonical = SearchTextNormalization.canonicalSearchText(title)
         podcastTitleCanonical = SearchTextNormalization.canonicalSearchText(
             podcastTitle

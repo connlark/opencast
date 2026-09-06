@@ -13,16 +13,17 @@ use crate::billing::{
     BillingContext, CreditBackend, ERROR_ASYNC_REQUIRED, ERROR_BILLING_UNAVAILABLE,
     ERROR_BOOTSTRAP_REQUIRED, ERROR_INSUFFICIENT_SECONDS,
 };
-use crate::credit::{
-    account_for_install, claim_install_account, link_install_account, CreditAuthority, CreditError,
-    DevCreditAuthority, PurchaseAuthority,
-};
 use crate::challenge_limits::{
     challenge_bucket_start, challenge_source_hash_key_for_environment, keyed_source_token,
     source_challenge_allows_after_increment, APP_ATTEST_KEY_LIMIT_WINDOW_SECONDS,
     CHALLENGE_LIMIT_WINDOW_SECONDS, CHALLENGE_RETENTION_SECONDS,
     CHALLENGE_SOURCE_BUCKET_RETENTION_SECONDS, CHALLENGE_TTL_SECONDS,
     MAX_APP_ATTEST_KEYS_PER_INSTALL_PER_DAY,
+};
+use crate::counters;
+use crate::credit::{
+    account_for_install, claim_install_account, link_install_account, CreditAuthority, CreditError,
+    DevCreditAuthority, PurchaseAuthority,
 };
 use crate::job::{
     app_attest_subject, bearer_subject, job_object_name, valid_job_id, JobDoPollRequest,
@@ -135,13 +136,19 @@ impl AppConfig {
         }
         let lane = validate_lane(&required_var(env, LANE)?)
             .map_err(|detail| ErrorResponse::with_detail("worker_env_invalid", detail))?;
-        let explicit_backend = env.var(CREDIT_BACKEND_VAR).ok().map(|value| value.to_string());
+        let explicit_backend = env
+            .var(CREDIT_BACKEND_VAR)
+            .ok()
+            .map(|value| value.to_string());
         let credit_backend = validate_credit_backend(&lane, explicit_backend.as_deref())
             .map_err(|detail| ErrorResponse::with_detail("worker_env_invalid", detail))?;
         // The money kill-switch parses as strictly as the lane/backend vars:
         // a mistyped flip ("True", "1") must fail the config loudly, never
         // silently serve free.
-        let explicit_billing = env.var(BILLING_REQUIRED).ok().map(|value| value.to_string());
+        let explicit_billing = env
+            .var(BILLING_REQUIRED)
+            .ok()
+            .map(|value| value.to_string());
         let billing_required = validate_billing_required(explicit_billing.as_deref())
             .map_err(|detail| ErrorResponse::with_detail("worker_env_invalid", detail))?;
         let dev_credit_grant_seconds = env
@@ -443,12 +450,11 @@ async fn analyze_transcript_with_envelope(req: &mut Request, env: &Env) -> Resul
         Ok(validated) => validated,
         Err(error) => return json_error(error.http_status(), ErrorResponse::new(error.code())),
     };
-    let billing = match resolve_billing(&db, &config, &authenticated.install_id, &validated.request)
-        .await?
-    {
-        Ok(billing) => billing,
-        Err(response) => return Ok(response),
-    };
+    let billing =
+        match resolve_billing(&db, &config, &authenticated.install_id, &validated.request).await? {
+            Ok(billing) => billing,
+            Err(response) => return Ok(response),
+        };
     let subject = app_attest_subject(&token_hash(&authenticated.key_id));
     analyze_validated_request(
         env,
@@ -516,7 +522,11 @@ async fn analyze_validated_request(
             .map(|value| value.to_string())
             .as_deref(),
     );
-    match run_analysis(&gemini_api_key, model, validated.request).await {
+    let (result, stats) = run_analysis(&gemini_api_key, model, validated.request).await;
+    let mut deltas = counters::spend_deltas(&stats);
+    deltas.push((counters::SYNC_ANALYSES, 1));
+    counters::bump(env, &deltas).await;
+    match result {
         Ok(response) => json_success(200, &response),
         Err(error) => json_error(error.status, error.body),
     }
@@ -545,7 +555,10 @@ async fn submit_async_job(
         billing,
         request: validated.request,
     })?;
-    let request = internal_post("https://transcript-analysis-job.opencast.internal/submit", body)?;
+    let request = internal_post(
+        "https://transcript-analysis-job.opencast.internal/submit",
+        body,
+    )?;
     stub.fetch_with_request(request).await
 }
 
@@ -796,8 +809,13 @@ async fn handle_account_bootstrap(req: &mut Request, env: &Env) -> Result<Respon
                     return json_error_code(503, ERROR_BILLING_UNAVAILABLE);
                 }
             };
-            link_install_account(&db, &authenticated.install_id, &parsed.account_id, now_seconds())
-                .await?;
+            link_install_account(
+                &db,
+                &authenticated.install_id,
+                &parsed.account_id,
+                now_seconds(),
+            )
+            .await?;
             json_success(
                 200,
                 &BootstrapResponse {
@@ -849,7 +867,10 @@ async fn resolve_billing(
     }
     let account_id = match account_for_install(db, install_id).await {
         Ok(Some(account_id)) => account_id,
-        Ok(None) => return Ok(Err(json_error_code(403, ERROR_BOOTSTRAP_REQUIRED)?)),
+        Ok(None) => {
+            counters::bump_db(db, &[(counters::BOOTSTRAP_REQUIRED_DENIALS, 1)]).await;
+            return Ok(Err(json_error_code(403, ERROR_BOOTSTRAP_REQUIRED)?));
+        }
         Err(error) => {
             // Fail closed with the shared typed code, not an untyped 500.
             worker::console_error!("transcript-analysis account link lookup failed: {error}");
@@ -918,7 +939,10 @@ async fn forward_job_poll(env: &Env, job_id: &str, subject: Option<String>) -> R
         job_id: job_id.to_string(),
         subject,
     })?;
-    let request = internal_post("https://transcript-analysis-job.opencast.internal/poll", body)?;
+    let request = internal_post(
+        "https://transcript-analysis-job.opencast.internal/poll",
+        body,
+    )?;
     stub.fetch_with_request(request).await
 }
 
@@ -991,10 +1015,23 @@ async fn admit_usage(
         .json::<ErrorResponse>()
         .await
         .unwrap_or_else(|_| ErrorResponse::new("usage_limiter_error"));
+    if status == 429 {
+        // A cap denial, keyed by the profile that refused; limiter errors
+        // (503) are not denials and are not counted.
+        counters::bump(env, &[(cap_denial_counter(profile), 1)]).await;
+    }
     Ok(Some(json_response(
         if status == 429 { 429 } else { 503 },
         error,
     )?))
+}
+
+fn cap_denial_counter(profile: UsageLimitProfile) -> &'static str {
+    match profile {
+        UsageLimitProfile::Bearer => counters::CAP_DENIALS_BEARER,
+        UsageLimitProfile::AppAttestKey => counters::CAP_DENIALS_APP_ATTEST,
+        UsageLimitProfile::Global => counters::CAP_DENIALS_GLOBAL,
+    }
 }
 
 /// Objects are minted per subject and day and never addressed again once

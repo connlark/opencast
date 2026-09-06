@@ -35,6 +35,7 @@ protocol LocalLibraryCacheStore: Sendable {
     func reconcileEpisodeTranscriptSearchDocuments(
         retaining episodeIDs: Set<String>
     ) async throws
+    func upsertCache(from prepared: PreparedFeed, refreshedAt: Date) async throws
     func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) async throws
     /// `artworkURL` is the URL string the preview was generated from; the write
     /// is skipped when the stored row's artwork URL no longer matches it.
@@ -69,6 +70,10 @@ protocol LocalLibraryCacheStore: Sendable {
 }
 
 extension LocalLibraryCacheStore {
+    func upsertCache(from prepared: PreparedFeed, refreshedAt: Date) async throws {
+        try await upsertCache(from: prepared.materialized(), refreshedAt: refreshedAt)
+    }
+
     func prepareEpisodeSearchIndex() async throws {}
 
     func setEpisodeSearchIndexRebuildHandler(

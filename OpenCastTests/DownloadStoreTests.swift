@@ -275,8 +275,8 @@ struct DownloadStoreTests {
         #expect(progressEvents.last?.1 == Int64(data.count))
     }
 
-    @Test("Primary playback source remains remote when a download exists")
-    func primaryPlaybackSourceRemainsRemoteWhenDownloadExists() async throws {
+    @Test("Primary playback prefers a completed download")
+    func primaryPlaybackPrefersCompletedDownload() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -308,6 +308,72 @@ struct DownloadStoreTests {
         #expect(downloadedEpisode.audioURL?.isFileURL == true)
         #expect(downloadedEpisode.title == episode.title)
         #expect(downloadedEpisode.artworkURL?.absoluteString == episode.artworkURL)
+
+        defer { appModel.playback.unload() }
+        // The fixture's RSS says 60 seconds. Local resume must survive past
+        // that estimate while AVFoundation establishes the actual duration.
+        try appModel.playback.load(downloadedEpisode, startPosition: 90)
+        #expect(appModel.playback.position == 90)
+        try appModel.playEpisode(episode, presentsNowPlaying: false, modelContext: context)
+        #expect(appModel.playback.currentItemSourceIdentity?.assetURL == downloadedEpisode.audioURL)
+    }
+
+    @Test("Download completion switches the current episode even while backgrounded", arguments: [true, false])
+    func downloadCompletionSwitchesCurrentEpisode(isSceneActive: Bool) async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = DownloadStore(
+            downloader: ChunkedEpisodeAudioDownloader(chunks: [Data("audio".utf8)]),
+            fileStore: EpisodeDownloadFileStore(baseDirectory: directory)
+        )
+        let appModel = OpenCastAppModel(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: store,
+            allowsAutomaticFeedRefresh: false
+        )
+        defer { appModel.playback.unload() }
+        appModel.isSceneActive = isSceneActive
+        let episode = makeEpisode(episodeID: "download-during-playback")
+        let stream = try appModel.resolvedPlaybackEpisode(for: episode, source: .stream, modelContext: context)
+        try appModel.playback.load(stream, startPosition: 27)
+        appModel.playback.setRate(1.5)
+        appModel.playback.setSleepTimer(mode: .endOfEpisode)
+
+        store.startDownload(for: episode, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        #expect(appModel.playback.currentItemSourceIdentity?.assetURL == store.localFileURL(for: record))
+        #expect(appModel.playback.position == 27)
+        #expect(appModel.playback.rate == 1.5)
+        #expect(appModel.playback.sleepTimerMode == .endOfEpisode)
+        #expect(!appModel.isNowPlayingPresented)
+    }
+
+    @Test("Another episode's completed download does not replace current playback")
+    func downloadCompletionDoesNotReplaceAnotherEpisode() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = DownloadStore(
+            downloader: ChunkedEpisodeAudioDownloader(chunks: [Data("audio".utf8)]),
+            fileStore: EpisodeDownloadFileStore(baseDirectory: directory)
+        )
+        let appModel = OpenCastAppModel(downloads: store, allowsAutomaticFeedRefresh: false)
+        defer { appModel.playback.unload() }
+        let current = try appModel.resolvedPlaybackEpisode(
+            for: makeEpisode(episodeID: "current"), source: .stream, modelContext: context
+        )
+        try appModel.playback.load(current, startPosition: 27)
+        let other = makeEpisode(episodeID: "other")
+        store.startDownload(for: other, modelContext: context)
+        try await store.waitForDownload(episodeID: other.episodeID)
+
+        #expect(appModel.playback.currentEpisode?.id == current.id)
+        #expect(appModel.playback.currentItemSourceIdentity?.assetURL == current.audioURL)
     }
 
     @Test("Downloaded playback marks missing files before throwing")

@@ -6,6 +6,7 @@ struct InboxView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
+    @State private var visibleEpisodeCount = EpisodeCatalogContinuation.pageSize
 
     let onAdd: () -> Void
     let onOpenEpisode: (String) -> Void
@@ -13,7 +14,8 @@ struct InboxView: View {
 
     var body: some View {
         let inboxEpisodes = appModel.library.inboxEpisodes
-        let episodeIDs = inboxEpisodes.map(\.episodeID)
+        let visibleEpisodes = inboxEpisodes.prefix(visibleEpisodeCount)
+        let episodeIDs = visibleEpisodes.map(\.episodeID)
 
         List {
             if appModel.library.state == .loading && inboxEpisodes.isEmpty {
@@ -27,13 +29,14 @@ struct InboxView: View {
                     onAdd: onAdd
                 )
             } else {
-                ForEach(inboxEpisodes) { episode in
+                ForEach(visibleEpisodes) { episode in
                     EpisodeRowButton(
                         episode: episode,
                         onOpenEpisode: onOpenEpisode
                     )
                     .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode))
                 }
+                EpisodeCatalogContinuation(totalCount: inboxEpisodes.count, visibleCount: $visibleEpisodeCount)
             }
         }
         .contentMargins(.horizontal, horizontalSizeClass == .regular ? 32 : nil, for: .scrollContent)

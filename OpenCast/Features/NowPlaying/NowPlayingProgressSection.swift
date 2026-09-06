@@ -5,6 +5,7 @@ import SwiftUI
 /// menu) stable while time advances.
 struct NowPlayingProgressSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var scrubPosition: TimeInterval = 0
     @State private var isScrubbing = false
@@ -24,8 +25,8 @@ struct NowPlayingProgressSection: View {
         .onAppear {
             scrubPosition = appModel.playback.position
         }
-        .onChange(of: appModel.playback.position) { _, newPosition in
-            guard !isScrubbing else {
+        .onChange(of: observedPosition) { _, newPosition in
+            guard let newPosition, !isScrubbing else {
                 return
             }
             scrubPosition = newPosition
@@ -41,7 +42,13 @@ struct NowPlayingProgressSection: View {
     }
 
     private var displayedPosition: TimeInterval {
-        isScrubbing ? scrubPosition : appModel.playback.position
+        isScrubbing ? scrubPosition : observedPosition ?? scrubPosition
+    }
+
+    private var observedPosition: TimeInterval? {
+        // Hidden position updates still trigger SwiftUI layout during background
+        // audio. Re-entering active observes the current position immediately.
+        scenePhase == .active ? appModel.playback.position : nil
     }
 
     private func updateScrubbing(_ editing: Bool) {

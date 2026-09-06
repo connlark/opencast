@@ -5,9 +5,13 @@ import OpenCastCore
 actor CoreStoresLoadingProbeCacheStore: LocalLibraryCacheStore {
     private let loadDelay: Duration
     private var loadCallCount = 0
+    private let snapshot: LocalLibraryCacheSnapshot
+    private let subsequentLoadDelay: Duration
 
-    init(loadDelay: Duration) {
+    init(loadDelay: Duration, snapshot: LocalLibraryCacheSnapshot = .empty, subsequentLoadDelay: Duration? = nil) {
         self.loadDelay = loadDelay
+        self.snapshot = snapshot
+        self.subsequentLoadDelay = subsequentLoadDelay ?? loadDelay
     }
 
     func recordedLoadCount() -> Int {
@@ -16,8 +20,8 @@ actor CoreStoresLoadingProbeCacheStore: LocalLibraryCacheStore {
 
     func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot {
         loadCallCount += 1
-        try await Task.sleep(for: loadDelay)
-        return .empty
+        try await Task.sleep(for: loadCallCount == 1 ? loadDelay : subsequentLoadDelay)
+        return snapshot
     }
 
     func allRefreshLogs() async throws -> [RefreshLogSnapshot] {

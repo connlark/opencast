@@ -72,7 +72,10 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         let processor = VoiceBoostProcessor(
             sampleRate: sampleRate,
             channelCount: channelCount,
-            configuration: configuration
+            configuration: configuration,
+            // Playback consumes loudness control state, never the diagnostic
+            // output peak. The true-peak limiter still processes every buffer.
+            measuresOutputTruePeak: false
         )
         if let pendingControlSnapshot {
             processor.apply(controlSnapshot: pendingControlSnapshot)

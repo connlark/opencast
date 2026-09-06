@@ -10,10 +10,13 @@ public final class VoiceBoostProcessor {
     private let handle: OpaquePointer
     private let channelCount: Int
 
+    /// Output true-peak reporting is optional; disabling it leaves the limiter,
+    /// loudness adaptation, and output samples unchanged.
     public init(
         sampleRate: Double,
         channelCount: Int,
-        configuration: VoiceBoostConfiguration = .default
+        configuration: VoiceBoostConfiguration = .default,
+        measuresOutputTruePeak: Bool = true
     ) {
         precondition(sampleRate.isFinite && sampleRate > 0, "VoiceBoostProcessor requires a positive sample rate.")
         precondition((1...2).contains(channelCount), "VoiceBoostProcessor v1 supports mono and stereo.")
@@ -28,6 +31,7 @@ public final class VoiceBoostProcessor {
 
         self.handle = handle
         self.channelCount = channelCount
+        OCVBProcessorSetOutputTruePeakMeteringEnabled(handle, measuresOutputTruePeak ? 1 : 0)
     }
 
     deinit {

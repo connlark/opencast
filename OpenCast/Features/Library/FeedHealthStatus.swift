@@ -33,7 +33,7 @@ nonisolated struct FeedHealthStatus: Equatable {
         let kind: Kind
         if latestLog.errorMessage?.isEmpty ?? true {
             kind = .healthy
-        } else if latestLog.errorMessage == RefreshLogSnapshot.partialFeedSalvageMessage {
+        } else if latestLog.errorMessage?.hasPrefix(RefreshLogSnapshot.partialFeedSalvageMessage) == true {
             kind = .partial
         } else if let latestSuccessAt {
             kind = .failingSince(latestSuccessAt)

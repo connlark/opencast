@@ -2,6 +2,12 @@ use crate::feed_identity;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod guarded_reader;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod scan;
+#[cfg(test)]
+mod scan_tests;
 mod xml_text;
 
 const MIN_RSS_YEAR: i32 = 1900;
@@ -10,7 +16,7 @@ const MAX_FEED_TITLE_CHARS: usize = 512;
 const MAX_EPISODE_TITLE_CHARS: usize = 512;
 const MAX_EPISODE_TEXT_BYTES: usize = 16 * 1024;
 // Bounds per-item metadata and episode-identity work independently of XML size.
-pub(crate) const MAX_RSS_ITEMS: usize = 4_096;
+pub(crate) const MAX_RSS_ITEMS: usize = crate::feed_resource::MAX_ITEMS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedFeed {
@@ -39,6 +45,9 @@ pub enum RSSParseError {
     UnsupportedFeedFormat,
     EmptyFeed,
     TooManyFeedItems,
+    ResourceLimit(&'static str),
+    TransferInterrupted,
+    InactivityTimeout,
 }
 
 impl RSSParseError {
@@ -48,11 +57,17 @@ impl RSSParseError {
             RSSParseError::UnsupportedFeedFormat => "unsupported_feed_format",
             RSSParseError::EmptyFeed => "empty_feed",
             RSSParseError::TooManyFeedItems => "too_many_feed_items",
+            RSSParseError::ResourceLimit(code) => code,
+            RSSParseError::TransferInterrupted => "feed_transfer_interrupted",
+            RSSParseError::InactivityTimeout => "feed_inactivity_timeout",
         }
     }
 
     pub fn is_persistent_compatibility(&self) -> bool {
-        matches!(self, RSSParseError::TooManyFeedItems)
+        matches!(
+            self,
+            RSSParseError::TooManyFeedItems | RSSParseError::ResourceLimit(_)
+        )
     }
 }
 
@@ -215,12 +230,12 @@ pub fn parse_rss_date(value: &str) -> Option<i64> {
     Some(i64::from(days) * 86_400 + i64::from(hour * 3_600 + minute * 60 + second) - offset)
 }
 
-fn apply_start_element(
+fn apply_start_element<R>(
     name: &str,
     element: &BytesStart<'_>,
     channel: &mut ChannelAccumulator,
     current_item: &mut Option<ItemAccumulator>,
-    reader: &Reader<&[u8]>,
+    reader: &Reader<R>,
 ) {
     match name {
         "enclosure" => {
@@ -346,7 +361,7 @@ fn finite_non_negative_seconds(seconds: f64) -> Option<i64> {
     }
 }
 
-fn attribute_value(element: &BytesStart<'_>, name: &str, reader: &Reader<&[u8]>) -> Option<String> {
+fn attribute_value<R>(element: &BytesStart<'_>, name: &str, reader: &Reader<R>) -> Option<String> {
     element
         .attributes()
         .with_checks(false)

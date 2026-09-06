@@ -34,6 +34,7 @@ jobs:
           ./scripts/check-yarn-workspace.sh
           ./scripts/check-media-ua-pins.sh
           ./scripts/check-wasm-only-test-gating.sh
+          python3 ./scripts/check-feed-resource-policy.py
 
   rust:
     name: Rust (${{ matrix.name }})
@@ -120,6 +121,7 @@ jobs:
             --test coalescing \
             --test gemini_retry \
             --test job_state \
+            --test counters_migration \
             --test prompt \
             --test routing \
             --test validation
@@ -139,6 +141,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: NotificationsWorker
+            directory: Server/NotificationsWorker
           - name: AdAnalysisWorker
             directory: Server/AdAnalysisWorker
           - name: TranscriptAnalysisWorker
@@ -199,6 +203,11 @@ jobs:
           mkdir -p tests/fixtures
           node --input-type=module --eval \
             "import { writeFileSync } from 'node:fs'; writeFileSync('tests/fixtures/ad_analysis_app_attest_development_fixture.json', '{}\n');"
+
+      - name: Prepare public Notifications integration harness
+        if: matrix.name == 'NotificationsWorker'
+        working-directory: ${{ matrix.directory }}
+        run: cp wrangler.example.toml wrangler.toml
 
       - name: Prepare public TranscriptAnalysis integration harness
         if: matrix.name == 'TranscriptAnalysisWorker'
@@ -270,6 +279,13 @@ jobs:
           yarn build:worker
           yarn exec vitest run -t \
             'routing|rejects an unauthenticated request|challenges|404s internal paths on the public host|rejects malformed internal envelopes and invalid payloads|404s an unknown internal job id'
+
+      - name: Run deterministic Notifications integration tests
+        if: matrix.name == 'NotificationsWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          yarn deploy:dry-run
+          node tests/feed-runtime.mjs
 
       - name: Run deterministic TranscriptAnalysis integration tests
         if: matrix.name == 'TranscriptAnalysisWorker'

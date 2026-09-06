@@ -27,6 +27,7 @@ struct OpenCastRootView: View {
     @State private var importedSubscriptionsNotificationDismissalTask: Task<Void, Never>?
     @State private var hasStartedTranscriptionBenchmark = false
     @State private var hasStartedSearchBenchmark = false
+    @State private var hasStartedFeedBenchmark = false
     @State private var hasStartedSearchPerformance = false
     @State private var hasStartedSearchEvaluation = false
     @State private var hasStartedSearchColdStartSeed = false
@@ -101,6 +102,13 @@ struct OpenCastRootView: View {
         }
         .task {
             await runSearchBenchmarkIfRequested()
+        }
+        .task {
+            guard !hasStartedFeedBenchmark else { return }
+            hasStartedFeedBenchmark = true
+            guard ProcessInfo.processInfo.arguments.contains(FeedBenchmarkRunner.requestArgument) else { return }
+            await initialSetupGate.wait()
+            await FeedBenchmarkRunner.runIfRequested(library: appModel.library, modelContext: modelContext)
         }
         .task {
             await runSearchPerformanceIfRequested()

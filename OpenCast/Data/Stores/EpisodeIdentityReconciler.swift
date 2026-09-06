@@ -55,6 +55,11 @@ nonisolated enum EpisodeIdentityReconciler {
         let successorEpisodeID: String
     }
 
+    @concurrent
+    static func matchesConcurrently(departed: [Candidate], successors: [Candidate]) async -> [Match] {
+        matches(departed: departed, successors: successors)
+    }
+
     static func matches(departed: [Candidate], successors: [Candidate]) -> [Match] {
         var departedPool = departed
         var successorPool = successors

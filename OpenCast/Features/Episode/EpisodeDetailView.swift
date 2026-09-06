@@ -496,7 +496,7 @@ struct EpisodeDetailView: View {
         }
 
         let resolved = await EpisodeShowNotesContent.resolving(
-            summaryHTML: episode.summary,
+            summaryHTML: detail?.listItem.summary ?? episode.summary,
             showNotesHTML: detail?.showNotesHTML
         )
         guard !Task.isCancelled else {

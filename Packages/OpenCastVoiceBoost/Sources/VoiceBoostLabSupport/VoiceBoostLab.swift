@@ -91,7 +91,8 @@ public enum VoiceBoostLab {
                 configuration: try configuration(from: arguments, base: preset.configuration),
                 quietAmplitude: try doubleOption("--fixture-quiet-amplitude", in: arguments) ?? 0.025,
                 loudAmplitude: try doubleOption("--fixture-loud-amplitude", in: arguments) ?? 0.35,
-                usesScalarReference: arguments.contains("--scalar-reference")
+                usesScalarReference: arguments.contains("--scalar-reference"),
+                measuresOutputTruePeak: !arguments.contains("--no-output-true-peak-metering")
             )
             try JSONFile.write(metrics, to: URL(fileURLWithPath: output))
         default:

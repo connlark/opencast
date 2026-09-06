@@ -735,6 +735,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "url",
  "worker",
  "worker-macros",
@@ -842,6 +843,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
 dependencies = [
  "memchr",
+ "tokio",
 ]
 
 [[package]]
@@ -1177,6 +1179,7 @@ version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
 dependencies = [
+ "bytes",
  "pin-project-lite",
 ]
 

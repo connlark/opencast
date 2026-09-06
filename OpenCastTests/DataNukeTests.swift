@@ -415,6 +415,78 @@ struct DataNukeTests {
         #expect(appModel.library.refreshLogs.isEmpty)
     }
 
+    /// The stale refresh here is parked INSIDE its cache write (the gate
+    /// below), not at the fetch: that is the one suspension after which the
+    /// unwinding flow sweeps the feed cache, and the sweep must not take a
+    /// subscription the user re-added after the reset (2026-09-04 review).
+    @Test("Stale refresh unwinding after nuke keeps a resubscribed feed's cache")
+    func staleRefreshUnwindingAfterNukeKeepsResubscribedFeedCache() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/race-resubscribe.xml"
+        let feedService = HangingFeedService()
+        let baseCache = SQLiteLocalLibraryCacheStore.inMemory()
+        let localCache = GatedLocalLibraryCacheStore(base: baseCache)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let appModel = OpenCastAppModel(
+            cacheController: OpenCastCacheController(
+                rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+            ),
+            library: LibraryStore(feedService: feedService, localCache: localCache),
+            downloads: DownloadStore(
+                fileStore: EpisodeDownloadFileStore(
+                    baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+                )
+            ),
+            syncStatus: SyncStatusStore(
+                accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
+            ),
+            allowsAutomaticFeedRefresh: false
+        )
+
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Race Show"))
+        try context.save()
+        await appModel.library.load(modelContext: context)
+
+        let refreshTask = Task { @MainActor in
+            await appModel.library.refresh(feedURL: feedURL, modelContext: context)
+        }
+        #expect(await feedService.waitForRequest())
+        await feedService.release(
+            makeSnapshot(
+                feedURL: feedURL,
+                podcastTitle: "Race Show Stale",
+                episodeID: "race-stale-episode"
+            )
+        )
+        #expect(await localCache.waitForGatedUpsert())
+
+        try await appModel.nukeAllData(modelContext: context)
+
+        // The user subscribes to the same feed again after the reset.
+        await feedService.serveImmediately(
+            makeSnapshot(
+                feedURL: feedURL,
+                podcastTitle: "Race Show Resubscribed",
+                episodeID: "race-resubscribed-episode"
+            )
+        )
+        try await appModel.library.subscribe(to: feedURL, modelContext: context)
+        let resubscribed = try await baseCache.loadLibrary(activePodcastIDs: [feedURL])
+        #expect(resubscribed.episodes.map(\.episodeID) == ["race-resubscribed-episode"])
+
+        // The stale refresh resumes, fails its generation check, and must
+        // not sweep the cache the new subscription now owns.
+        await localCache.releaseGatedUpsert()
+        await refreshTask.value
+
+        let survived = try await baseCache.loadLibrary(activePodcastIDs: [feedURL])
+        #expect(survived.podcastsByFeedURL[feedURL] != nil)
+        #expect(survived.episodes.contains { $0.episodeID == "race-resubscribed-episode" })
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.map(\.feedURL) == [feedURL])
+    }
+
     @Test("Cache clearing failure after row deletion keeps runtime state clear")
     func cacheClearingFailureAfterRowDeletionKeepsRuntimeStateClear() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -824,8 +896,12 @@ private actor SequencedCloudKitAccountStatusProvider: CloudKitAccountStatusProvi
 private actor HangingFeedService: FeedService {
     private var didRequest = false
     private var continuation: CheckedContinuation<FeedSnapshot, Never>?
+    private var immediateSnapshot: FeedSnapshot?
 
     func fetchFeed(at url: URL) async throws -> FeedSnapshot {
+        if let immediateSnapshot {
+            return immediateSnapshot
+        }
         didRequest = true
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
@@ -837,6 +913,11 @@ private actor HangingFeedService: FeedService {
         continuation = nil
     }
 
+    /// Every later fetch (a resubscribe after the reset) returns this at once.
+    func serveImmediately(_ snapshot: FeedSnapshot) {
+        immediateSnapshot = snapshot
+    }
+
     func waitForRequest() async -> Bool {
         for _ in 0..<6_000 {
             if didRequest {
@@ -846,6 +927,144 @@ private actor HangingFeedService: FeedService {
         }
 
         return didRequest
+    }
+}
+
+/// Parks the first cache upsert until released — the only way to leave a
+/// write flow suspended between its cache write and the generation check
+/// that follows it. Everything else forwards to the wrapped store.
+private actor GatedLocalLibraryCacheStore: LocalLibraryCacheStore {
+    private let base: any LocalLibraryCacheStore
+    private var gateArmed = true
+    private var didGate = false
+    private var gate: CheckedContinuation<Void, Never>?
+
+    init(base: any LocalLibraryCacheStore) {
+        self.base = base
+    }
+
+    func waitForGatedUpsert() async -> Bool {
+        for _ in 0..<6_000 {
+            if didGate {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return didGate
+    }
+
+    func releaseGatedUpsert() {
+        gate?.resume()
+        gate = nil
+    }
+
+    func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) async throws {
+        if gateArmed {
+            gateArmed = false
+            didGate = true
+            await withCheckedContinuation { continuation in
+                gate = continuation
+            }
+        }
+        try await base.upsertCache(from: snapshot, refreshedAt: refreshedAt)
+    }
+
+    func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot {
+        try await base.loadLibrary(activePodcastIDs: activePodcastIDs)
+    }
+
+    func allRefreshLogs() async throws -> [RefreshLogSnapshot] {
+        try await base.allRefreshLogs()
+    }
+
+    func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot? {
+        try await base.episodeDetail(episodeID: episodeID)
+    }
+
+    func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String] {
+        try await base.showNotesHTMLByEpisodeID(activePodcastIDs: activePodcastIDs)
+    }
+
+    func prepareEpisodeSearchIndex() async throws {
+        try await base.prepareEpisodeSearchIndex()
+    }
+
+    func setEpisodeSearchIndexRebuildHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) async {
+        await base.setEpisodeSearchIndexRebuildHandler(handler)
+    }
+
+    func searchEpisodes(_ request: EpisodeSearchIndexRequest) async throws -> [EpisodeSearchIndexHit] {
+        try await base.searchEpisodes(request)
+    }
+
+    func replaceEpisodeTranscriptSearchDocument(_ document: EpisodeSearchTranscriptDocument) async throws {
+        try await base.replaceEpisodeTranscriptSearchDocument(document)
+    }
+
+    func removeEpisodeTranscriptSearchDocument(episodeID: String) async throws {
+        try await base.removeEpisodeTranscriptSearchDocument(episodeID: episodeID)
+    }
+
+    func reconcileEpisodeTranscriptSearchDocuments(retaining episodeIDs: Set<String>) async throws {
+        try await base.reconcileEpisodeTranscriptSearchDocuments(retaining: episodeIDs)
+    }
+
+    func updateEpisodeArtworkPreview(_ preview: ArtworkPreview, episodeID: String, artworkURL: String?) async throws {
+        try await base.updateEpisodeArtworkPreview(preview, episodeID: episodeID, artworkURL: artworkURL)
+    }
+
+    func updatePodcastArtworkPreview(_ preview: ArtworkPreview, feedURL: String, artworkURL: String?) async throws {
+        try await base.updatePodcastArtworkPreview(preview, feedURL: feedURL, artworkURL: artworkURL)
+    }
+
+    func insertRefreshLog(_ log: RefreshLogSnapshot, prunedTo retentionLimit: Int) async throws {
+        try await base.insertRefreshLog(log, prunedTo: retentionLimit)
+    }
+
+    func feedValidators(forPodcastID podcastID: String) async throws -> FeedValidators? {
+        try await base.feedValidators(forPodcastID: podcastID)
+    }
+
+    func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) async throws {
+        try await base.updateFeedValidators(validators, forPodcastID: podcastID)
+    }
+
+    func cachedEpisodes(forPodcastID podcastID: String) async throws -> [EpisodeListItemSnapshot] {
+        try await base.cachedEpisodes(forPodcastID: podcastID)
+    }
+
+    func deleteEpisodes(episodeIDs: [String]) async throws {
+        try await base.deleteEpisodes(episodeIDs: episodeIDs)
+    }
+
+    func deleteCache(forPodcastID podcastID: String) async throws {
+        try await base.deleteCache(forPodcastID: podcastID)
+    }
+
+    func deleteAllLocalCache() async throws {
+        try await base.deleteAllLocalCache()
+    }
+
+    func replaceNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) async throws {
+        try await base.replaceNotificationFeedHealth(records)
+    }
+
+    func notificationFeedHealthByFeedURL() async throws -> [String: NotificationFeedHealth] {
+        try await base.notificationFeedHealthByFeedURL()
+    }
+
+    func hasCompletedLegacyImport() async throws -> Bool {
+        try await base.hasCompletedLegacyImport()
+    }
+
+    func importLegacyCache(
+        podcasts: [PodcastCacheSnapshot],
+        episodes: [EpisodeDetailSnapshot],
+        refreshLogs: [RefreshLogSnapshot]
+    ) async throws {
+        try await base.importLegacyCache(podcasts: podcasts, episodes: episodes, refreshLogs: refreshLogs)
     }
 }
 

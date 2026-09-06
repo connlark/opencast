@@ -168,6 +168,16 @@ pub struct GeminiUsage {
     pub total_token_count: u64,
 }
 
+/// What one `run_analysis` call cost regardless of how it ended: the
+/// outer attempts made and the summed Gemini usage across them. Populated on
+/// the failure arm too — a run that burns three full generations and then
+/// fails typed is spend the counters must see.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AnalysisRunStats {
+    pub attempts: u32,
+    pub usage: Option<GeminiUsage>,
+}
+
 /// Purchase-account balance snapshot (integer seconds), the shared currency
 /// shape across RTW/PurchaseWorker (`Balance` in PW types.ts / RTW types.rs).
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]

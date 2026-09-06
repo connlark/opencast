@@ -9,6 +9,7 @@ pub mod feed_admission;
 #[cfg(any(target_arch = "wasm32", test))]
 mod feed_fetch;
 pub mod feed_identity;
+pub mod feed_resource;
 #[cfg(any(target_arch = "wasm32", test))]
 mod notification_retry;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -18,6 +19,10 @@ mod poll_scheduling;
 pub mod route;
 pub mod rss;
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod feed_scan_admission;
+#[cfg(target_arch = "wasm32")]
+mod feed_stream;
 #[cfg(any(target_arch = "wasm32", test))]
 mod storage;
 #[cfg(any(target_arch = "wasm32", test))]

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct EpisodeContextPreviewView: View {
+    @Environment(OpenCastAppModel.self) private var appModel
     let episode: EpisodeListItemSnapshot
 
     @State private var summaryText: String?
@@ -50,9 +51,10 @@ struct EpisodeContextPreviewView: View {
         .frame(idealWidth: 360, maxWidth: 420, alignment: .leading)
         .accessibilityIdentifier("Episode Context Preview")
         .task {
+            let detail = await appModel.library.episodeDetail(for: episode.episodeID)
             let textContent = await EpisodeTextContent.resolving(
-                summaryHTML: episode.summary,
-                showNotesHTML: nil
+                summaryHTML: detail?.listItem.summary ?? episode.summary,
+                showNotesHTML: detail?.showNotesHTML
             )
             guard !Task.isCancelled else {
                 return

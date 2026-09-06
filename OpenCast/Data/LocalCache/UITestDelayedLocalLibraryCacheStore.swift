@@ -61,6 +61,10 @@ nonisolated struct UITestDelayedLocalLibraryCacheStore: LocalLibraryCacheStore {
         )
     }
 
+    func upsertCache(from prepared: PreparedFeed, refreshedAt: Date) async throws {
+        try await base.upsertCache(from: prepared, refreshedAt: refreshedAt)
+    }
+
     func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) async throws {
         try await base.upsertCache(from: snapshot, refreshedAt: refreshedAt)
     }

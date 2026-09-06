@@ -81,12 +81,18 @@ nonisolated extension SQLiteEpisodeSearchIndex {
                 )
             }
 
-            let contributions = EpisodeSearchSpelling.contributions([
+            // This table stores only term membership. A duplicated summary
+            // and note body contributes the same terms; FTS and evidence
+            // still retain both fields with their existing ranking behavior.
+            var spellingFields: [(String, EpisodeSearchVocabularyField)] = [
                 (document.title, .title),
                 (document.podcastTitle, .podcastTitle),
                 (document.summary, .body),
-                (document.showNotes, .body),
-            ])
+            ]
+            if document.showNotes != document.summary {
+                spellingFields.append((document.showNotes, .body))
+            }
+            let contributions = EpisodeSearchSpelling.contributions(spellingFields)
             let documentNewTerms = Set(contributions.map(\.term))
             newTerms.formUnion(documentNewTerms)
 

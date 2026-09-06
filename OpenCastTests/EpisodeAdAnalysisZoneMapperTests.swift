@@ -101,7 +101,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
 
     @Test
     func appModelPushesFreshZonesAndClearsStaleOrDeletedAnalysis() async throws {
-        let fixture = try makeAppModelFixture()
+        let fixture = try await makeAppModelFixture()
         let context = fixture.context
         let transcriptFileStore = fixture.transcriptFileStore
         let adAnalysisFileStore = fixture.adAnalysisFileStore
@@ -121,7 +121,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
         let transcriptRelativePath = seeded.transcriptRelativePath
 
         appModel.loadLocalTranscriptionState(modelContext: context)
-        try playback.load(makeEpisode(duration: 30), startPosition: 0)
+        try playback.load(makeEpisode(duration: 30, audioURL: fixture.audioURL), startPosition: 0)
         appModel.refreshPlaybackSkipZonesForCurrentEpisode()
         await appModel.waitForSkipZoneRefresh()
         // Only the >= 0.8 tier reaches the playback policy; the 0.5 span is
@@ -172,7 +172,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
 
     @Test
     func zonesInstallAsynchronouslyAfterPlaybackStarts() async throws {
-        let fixture = try makeAppModelFixture()
+        let fixture = try await makeAppModelFixture()
         let transcript = makeTranscriptDocument()
         try seedCompletedAnalysis(
             transcript: transcript,
@@ -182,7 +182,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
 
         fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
         await fixture.appModel.waitForSkipZoneRefresh()
-        try fixture.playback.load(makeEpisode(duration: 30), startPosition: 0)
+        try fixture.playback.load(makeEpisode(duration: 30, audioURL: fixture.audioURL), startPosition: 0)
         fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
 
         // The decode runs off-main: nothing is installed at the call boundary,
@@ -197,7 +197,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
 
     @Test
     func staleZoneResultForSwitchedAwayEpisodeDoesNotInstall() async throws {
-        let fixture = try makeAppModelFixture()
+        let fixture = try await makeAppModelFixture()
         let transcript = makeTranscriptDocument()
         try seedCompletedAnalysis(
             transcript: transcript,
@@ -207,7 +207,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
 
         fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
         await fixture.appModel.waitForSkipZoneRefresh()
-        try fixture.playback.load(makeEpisode(duration: 30), startPosition: 0)
+        try fixture.playback.load(makeEpisode(duration: 30, audioURL: fixture.audioURL), startPosition: 0)
         fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
 
         // Switch episodes while the analyzed episode's zone load is in flight;
@@ -220,8 +220,8 @@ struct EpisodeAdAnalysisZoneMapperTests {
 
     @Test
     func synchronousOutroCompletionPreservesAdvancedEpisodeZones() async throws {
-        let fixture = try makeAppModelFixture()
-        let transcript = makeTranscriptDocument()
+        let fixture = try await makeAppModelFixture()
+        let transcript = makeTranscriptDocument(audioDuration: 60)
         try seedCompletedAnalysis(
             transcript: transcript,
             spans: [
@@ -240,7 +240,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
             fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
         }
         try fixture.playback.load(
-            makeEpisode(duration: 60),
+            makeEpisode(duration: 60, audioURL: fixture.audioURL),
             startPosition: 45,
             boundaries: PlaybackEpisodeBoundaries(skipOutroSeconds: 10)
         )
@@ -254,20 +254,146 @@ struct EpisodeAdAnalysisZoneMapperTests {
         #expect(fixture.appModel.displayOnlySkipZones == [])
     }
 
+    @Test("Analysis completion while backgrounded switches a stream before enabling skips")
+    func backgroundAnalysisUsesMatchingDownload() async throws {
+        let fixture = try await makeAppModelFixture()
+        defer { fixture.playback.unload() }
+        fixture.appModel.isSceneActive = false
+        let stream = makeEpisode(duration: 30, audioURL: URL(string: "https://example.com/episode.mp3")!)
+        try fixture.playback.load(stream)
+        try seedCompletedAnalysis(
+            transcript: makeTranscriptDocument(),
+            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
+            in: fixture
+        )
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await fixture.appModel.waitForSkipZoneRefresh()
+
+        #expect(fixture.playback.currentItemSourceIdentity?.assetURL == fixture.audioURL)
+        #expect(fixture.playback.skipZones == [PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)])
+    }
+
+    @Test("A different downloaded assembly cannot use an old analysis")
+    func mismatchedDownloadDisablesSkipZones() async throws {
+        let fixture = try await makeAppModelFixture()
+        defer { fixture.playback.unload() }
+        try seedCompletedAnalysis(
+            transcript: makeTranscriptDocument(),
+            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
+            in: fixture
+        )
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        try fixture.playback.load(makeEpisode(duration: 30, audioURL: fixture.audioURL))
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await fixture.appModel.waitForSkipZoneRefresh()
+        #expect(fixture.playback.skipZones.count == 1)
+
+        let download = try #require(fixture.appModel.downloads.record(for: "episode"))
+        download.sourceFileSHA256 = "different-assembly"
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        #expect(fixture.playback.skipZones.isEmpty)
+        await fixture.appModel.waitForSkipZoneRefresh()
+        #expect(fixture.playback.skipZones.isEmpty)
+        #expect(fixture.appModel.displayOnlySkipZones.isEmpty)
+    }
+
+    @Test("A stream without the analyzed download never receives skip zones")
+    func streamWithoutDownloadDisablesSkipZones() async throws {
+        let fixture = try await makeAppModelFixture()
+        defer { fixture.playback.unload() }
+        try seedCompletedAnalysis(
+            transcript: makeTranscriptDocument(),
+            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
+            in: fixture
+        )
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        let download = try #require(fixture.appModel.downloads.record(for: "episode"))
+        fixture.appModel.downloads.deleteDownload(download, modelContext: fixture.context)
+        try fixture.playback.load(makeEpisode(duration: 30, audioURL: URL(string: "https://example.com/episode.mp3")!))
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await fixture.appModel.waitForSkipZoneRefresh()
+
+        #expect(fixture.playback.currentItemSourceIdentity?.kind == .networkStream)
+        #expect(fixture.playback.skipZones.isEmpty)
+    }
+
+    @Test("A same-episode source change during document loading invalidates skip installation")
+    func sourceChangeDuringZoneLoadDisablesSkipZones() async throws {
+        let fixture = try await makeAppModelFixture()
+        defer { fixture.playback.unload() }
+        try seedCompletedAnalysis(
+            transcript: makeTranscriptDocument(),
+            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
+            in: fixture
+        )
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        try fixture.playback.load(makeEpisode(duration: 30, audioURL: fixture.audioURL))
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        try fixture.playback.load(makeEpisode(duration: 30, audioURL: URL(string: "https://example.com/episode.mp3")!))
+        await fixture.appModel.waitForSkipZoneRefresh()
+
+        #expect(fixture.playback.currentItemSourceIdentity?.kind == .networkStream)
+        #expect(fixture.playback.skipZones.isEmpty)
+    }
+
+    @Test("RSS duration cannot truncate analyzed zones or rewind a matching local resume")
+    func shorterRSSDurationDoesNotTruncateAnalyzedAudio() async throws {
+        let fixture = try await makeAppModelFixture()
+        defer { fixture.playback.unload() }
+        try seedCompletedAnalysis(
+            transcript: makeTranscriptDocument(),
+            spans: [span(id: 1, kind: .hostReadAd, start: 26, end: 29)],
+            in: fixture
+        )
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        let snapshot = EpisodeListItemSnapshot.fixture(
+            episodeID: "episode", podcastID: "podcast", title: "Episode",
+            duration: 15, audioURL: "https://example.com/episode.mp3", guid: nil
+        )
+        let download = try #require(fixture.appModel.downloads.record(for: "episode"))
+        let resolved = try fixture.appModel.resolvedPlaybackEpisode(
+            for: snapshot, source: .downloaded(download), modelContext: fixture.context
+        )
+        #expect(resolved.duration == 30)
+        try fixture.playback.load(resolved, startPosition: 24)
+        #expect(fixture.playback.position == 24)
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await fixture.appModel.waitForSkipZoneRefresh()
+        #expect(fixture.playback.skipZones == [PlaybackSkipZone(id: 1, startTime: 26, endTime: 29)])
+    }
+
     private struct AppModelFixture {
         let context: ModelContext
         let transcriptFileStore: EpisodeTranscriptFileStore
         let adAnalysisFileStore: EpisodeAdAnalysisFileStore
         let playback: AVFoundationPlaybackController
         let appModel: OpenCastAppModel
+        let audioURL: URL
     }
 
-    private func makeAppModelFixture() throws -> AppModelFixture {
+    private func makeAppModelFixture() async throws -> AppModelFixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
         let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
         let adAnalysisFileStore = EpisodeAdAnalysisFileStore(baseDirectory: temporaryDirectory)
+        let downloadFileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory.appending(path: "audio"))
+        let downloads = DownloadStore(fileStore: downloadFileStore)
+        let relativePath = downloadFileStore.relativePath(
+            episodeID: "episode", sourceAudioURL: URL(string: "https://example.com/episode.mp3")!
+        )
+        try downloadFileStore.prepareDownloadsDirectory()
+        let audioURL = downloadFileStore.fileURL(relativePath: relativePath)
+        try Data(repeating: 0, count: 123).write(to: audioURL)
+        let download = EpisodeDownloadRecord(
+            episodeID: "episode", podcastID: "podcast", sourceAudioURL: "https://example.com/episode.mp3",
+            localRelativePath: relativePath, state: .completed, bytesReceived: 123
+        )
+        download.sourceFileSHA256 = "source"
+        context.insert(download)
+        try context.save()
+        await downloads.load(modelContext: context)
         let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
         let adAnalyses = EpisodeAdAnalysisStore(
             client: UnusedEpisodeAdAnalysisClient(),
@@ -275,6 +401,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
         )
         let playback = AVFoundationPlaybackController()
         let appModel = OpenCastAppModel(
+            downloads: downloads,
             transcriptions: transcriptions,
             adAnalyses: adAnalyses,
             playback: playback,
@@ -285,7 +412,8 @@ struct EpisodeAdAnalysisZoneMapperTests {
             transcriptFileStore: transcriptFileStore,
             adAnalysisFileStore: adAnalysisFileStore,
             playback: playback,
-            appModel: appModel
+            appModel: appModel,
+            audioURL: audioURL
         )
     }
 
@@ -397,6 +525,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
     }
 
     private func makeTranscriptDocument(
+        audioDuration: TimeInterval = 30,
         updatedAt: Date = Date(timeIntervalSince1970: 1_780_000_000)
     ) -> EpisodeTranscriptDocument {
         let segments = [
@@ -429,7 +558,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
             modelVersion: "v1",
             modelTreeSHA256: "tree",
             languageCode: "en",
-            audioDuration: 30,
+            audioDuration: audioDuration,
             checkpoints: [],
             segments: segments,
             text: segments.map(\.text).joined(separator: " "),
@@ -439,14 +568,14 @@ struct EpisodeAdAnalysisZoneMapperTests {
         )
     }
 
-    private func makeEpisode(duration: TimeInterval) -> Episode {
+    private func makeEpisode(duration: TimeInterval, audioURL: URL) -> Episode {
         Episode(
             id: EpisodeID(rawValue: "episode"),
             podcastID: PodcastID(rawValue: "podcast"),
             podcastTitle: "Podcast",
             title: "Episode",
             duration: duration,
-            audioURL: URL(filePath: "/tmp/opencast-zone-mapper-test.m4a")
+            audioURL: audioURL
         )
     }
 

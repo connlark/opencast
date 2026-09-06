@@ -18,7 +18,7 @@ enum FeedRefreshFetcher {
     }
 
     enum Outcome: Sendable {
-        case success(FeedFetchOutcome)
+        case success(PreparedFeedOutcome)
         case failure(String)
         case cancelled
     }
@@ -41,7 +41,7 @@ enum FeedRefreshFetcher {
         do {
             let canonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: feedURLString)
             let storedValidators = (try? await localCache.feedValidators(forPodcastID: canonicalFeedURL)) ?? nil
-            let outcome = try await feedService.fetchFeedOutcome(at: feedURL, validators: storedValidators)
+            let outcome = try await feedService.prepareFeed(at: feedURL, validators: storedValidators)
             try Task.checkCancellation()
             return Result(feedURLString: feedURLString, outcome: .success(outcome))
         } catch is CancellationError {

@@ -829,7 +829,7 @@ struct RSSFeedParserTests {
 
     @Test("Caps the number of parsed items")
     func capsTheNumberOfParsedItems() throws {
-        let items = (1...10_002).map { index in
+        let items = (1...(FeedResourcePolicy.maximumItems + 2)).map { index in
             "<item><title>E\(index)</title><guid>cap-\(index)</guid></item>"
         }.joined()
         let xml = """
@@ -848,7 +848,7 @@ struct RSSFeedParserTests {
         )
 
         #expect(snapshot.isSalvaged)
-        #expect(snapshot.episodes.count == 10_000)
+        #expect(snapshot.episodes.count == FeedResourcePolicy.maximumItems)
     }
 
     @Test("Reports malformed XML as a malformed feed")

@@ -483,12 +483,16 @@ struct EpisodeTranscriptionStoreTests {
             "DROP TABLE episode_search_spelling_document",
             databaseURL: databaseURL
         )
-        try await seedFeed(
-            cache: cache,
-            podcastID: podcastID,
-            episodeID: episodeID,
-            title: "Rebuild Episode Retitled"
-        )
+        await #expect(throws: (any Error).self) {
+            try await seedFeed(
+                cache: cache,
+                podcastID: podcastID,
+                episodeID: episodeID,
+                title: "Rebuild Episode Retitled"
+            )
+        }
+        let rolledBack = try await cache.loadLibrary(activePodcastIDs: [podcastID])
+        #expect(rolledBack.episodes.first?.title == "Rebuild Episode")
         #expect(
             try await cache.episodeSearchIndexStateDescription()
                 == "needsRebuild"
@@ -509,6 +513,10 @@ struct EpisodeTranscriptionStoreTests {
 
         // The rebuild restored metadata only; the rebuild handler must bring
         // the transcript documents back without a relaunch.
+        try await seedFeed(cache: cache, podcastID: podcastID, episodeID: episodeID,
+                           title: "Rebuild Episode Retitled")
+        let retried = try await cache.loadLibrary(activePodcastIDs: [podcastID])
+        #expect(retried.episodes.first?.title == "Rebuild Episode Retitled")
         var transcriptRecovered = false
         for _ in 0..<250 {
             if let hits = try? await cache.searchEpisodes(request),

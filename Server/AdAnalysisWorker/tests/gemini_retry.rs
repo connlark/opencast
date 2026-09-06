@@ -387,9 +387,10 @@ fn quota_classification_requires_resource_exhausted_with_billing_language() {
 
 /// The ladders are sized together: a window whose every attempt times out
 /// and whose every gap waits the longest allowed delay must still finish
-/// inside the job Durable Object's running deadline with headroom for the
-/// unbounded body read and DO bookkeeping. (3×60 + 2×30) + (2×60 + 1×30) =
-/// 390 s; 390 + 120 ≤ 600.
+/// inside the job Durable Object's running deadline with headroom for DO
+/// bookkeeping (each attempt's timeout covers its body read, so the ladder
+/// bounds the whole exchange). (3×60 + 2×30) + (2×60 + 1×30) = 390 s;
+/// 390 + 120 ≤ 600.
 #[test]
 fn gemini_ladder_worst_case_fits_the_job_deadline() {
     assert_eq!(GEMINI_CALL_TIMEOUT_SECONDS, 60);

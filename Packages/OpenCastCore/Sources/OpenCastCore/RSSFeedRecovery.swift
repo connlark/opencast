@@ -63,7 +63,7 @@ enum RSSFeedRecovery {
         return recovered
     }
 
-    private static func recoverEntities(inFragment fragment: String) -> String {
+    static func recoverEntities(inFragment fragment: String) -> String {
         let recovered = invalidAmpersandPattern.stringByReplacingMatches(
             in: fragment,
             range: NSRange(fragment.startIndex..., in: fragment),
@@ -108,7 +108,7 @@ enum RSSFeedRecovery {
         return rewritten
     }
 
-    private static func normalizeEncodingDeclaration(in xml: inout String) {
+    static func normalizeEncodingDeclaration(in xml: inout String) {
         let range = NSRange(xml.startIndex..., in: xml)
         guard
             let match = xmlEncodingPattern.firstMatch(in: xml, range: range),
@@ -136,6 +136,7 @@ enum RSSFeedRecovery {
     /// CDATA fallback decoding uses it: XMLParser hands CDATA blocks through
     /// as raw bytes in the document's original encoding.
     static func declaredEncoding(in data: Data) -> String.Encoding? {
+        if let encoding = unicodeEncoding(in: data) { return encoding }
         let prefix = String(decoding: data.prefix(1_024), as: Unicode.ASCII.self)
         let range = NSRange(prefix.startIndex..., in: prefix)
         guard
@@ -145,6 +146,18 @@ enum RSSFeedRecovery {
             return nil
         }
         return stringEncoding(named: String(prefix[nameRange]))
+    }
+
+    /// XML's BOM and initial '<' signature determine byte order before the
+    /// declaration can be decoded. Explicit endian encodings also avoid adding
+    /// a new BOM for every recovery chunk.
+    static func unicodeEncoding(in data: Data) -> String.Encoding? {
+        let bytes = Array(data.prefix(4))
+        if bytes.starts(with: [0, 0, 0xFE, 0xFF]) || bytes == [0, 0, 0, 0x3C] { return .utf32BigEndian }
+        if bytes.starts(with: [0xFF, 0xFE, 0, 0]) || bytes == [0x3C, 0, 0, 0] { return .utf32LittleEndian }
+        if bytes.starts(with: [0xFE, 0xFF]) || bytes.starts(with: [0, 0x3C]) { return .utf16BigEndian }
+        if bytes.starts(with: [0xFF, 0xFE]) || bytes.starts(with: [0x3C, 0]) { return .utf16LittleEndian }
+        return nil
     }
 
     private static func stringEncoding(named name: String) -> String.Encoding? {

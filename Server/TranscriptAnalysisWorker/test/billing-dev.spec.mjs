@@ -28,10 +28,13 @@ import {
   mockGeminiOnce,
   observedGeminiPayloads,
   pendingGeminiResponses,
+  counterDiff,
   postAnalyze,
   postEnvelope,
+  readCounters,
   restoreFetchStub,
   seedSyntheticKey,
+  waitForCounterDelta,
   waitForTerminalPollAs,
 } from "./support.mjs";
 
@@ -121,6 +124,7 @@ describe("bootstrap (dev fake)", () => {
 
 describe("charged lane fails closed before bootstrap", () => {
   it("refuses an async analyze with bootstrap_required", async () => {
+    const countersBefore = await readCounters();
     const identity = await makeSyntheticAppAttestIdentity();
     await seedSyntheticKey(identity);
 
@@ -131,6 +135,9 @@ describe("charged lane fails closed before bootstrap", () => {
     );
     expect(response.status).toBe(403);
     expect((await response.json()).error).toBe("bootstrap_required");
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      bootstrap_required_denials: 1,
+    });
   });
 });
 
@@ -159,6 +166,7 @@ describe("billed work requires the job lane", () => {
 
 describe("async lane lifecycle", () => {
   it("settles on completion and serves cache hits without a second charge", async () => {
+    const countersBefore = await readCounters();
     const { identity } = await bootstrappedIdentity();
     const request = makeRequest({
       fingerprint: "3a".repeat(32),
@@ -175,6 +183,21 @@ describe("async lane lifecycle", () => {
     expect(completed.status).toBe(200);
     await waitForReservationState(identity.accountID, "settled");
 
+    const settledCounters = {
+      analysis_attempts: 1,
+      candidates_tokens: 40,
+      charged_credit_seconds: CHARGE_12_SEGMENTS,
+      jobs_completed: 1,
+      jobs_started: 1,
+      prompt_tokens: 120,
+      settled_jobs: 1,
+      thoughts_tokens: 300,
+      total_tokens: 460,
+    };
+    expect(await waitForCounterDelta(countersBefore, "settled_jobs", 1)).toEqual(
+      settledCounters,
+    );
+
     // Idempotent resubmit inside the TTL: the completed result serves with
     // no new reservation because the first subject already paid.
     const resubmit = await postEnvelope(identity, ANALYZE_PATH, request);
@@ -185,9 +208,12 @@ describe("async lane lifecycle", () => {
       reserved_seconds: 0,
       consumed_seconds: CHARGE_12_SEGMENTS,
     });
+    // A cache hit starts no run and moves no money.
+    expect(counterDiff(countersBefore, await readCounters())).toEqual(settledCounters);
   });
 
   it("releases on failure and a restart under the same fingerprint mints a fresh tan- id", async () => {
+    const countersBefore = await readCounters();
     const { identity } = await bootstrappedIdentity();
     const request = makeRequest({
       fingerprint: "3b".repeat(32),
@@ -208,6 +234,17 @@ describe("async lane lifecycle", () => {
       identity.accountID,
       "released",
     );
+    // Three attempts' spend is recorded even though the run failed, and
+    // the release returns the full hold.
+    expect(
+      await waitForCounterDelta(countersBefore, "released_credit_seconds", CHARGE_12_SEGMENTS),
+    ).toMatchObject({
+      analysis_attempts: 3,
+      candidates_tokens: 3 * 32768,
+      jobs_failed_upstream: 1,
+      jobs_started: 1,
+      released_credit_seconds: CHARGE_12_SEGMENTS,
+    });
 
     // The same fingerprint restarts a fresh run, which must reserve under a
     // NEW billing id (the released one is permanently dead in
@@ -241,11 +278,23 @@ describe("async lane lifecycle", () => {
       reserved_seconds: 0,
       consumed_seconds: CHARGE_12_SEGMENTS,
     });
+    // The restart is a second started run (the transient 503s above, if
+    // any, count under billing_unavailable and are not asserted).
+    expect(await waitForCounterDelta(countersBefore, "settled_jobs", 1)).toMatchObject({
+      analysis_attempts: 4,
+      charged_credit_seconds: CHARGE_12_SEGMENTS,
+      jobs_completed: 1,
+      jobs_failed_upstream: 1,
+      jobs_started: 2,
+      released_credit_seconds: CHARGE_12_SEGMENTS,
+      settled_jobs: 1,
+    });
   });
 });
 
 describe("insufficient balance", () => {
   it("returns the typed 402 with charge and balance, consuming nothing", async () => {
+    const countersBefore = await readCounters();
     const { identity } = await bootstrappedIdentity();
     const request = makeRequest({
       fingerprint: "4a".repeat(32),
@@ -272,6 +321,10 @@ describe("insufficient balance", () => {
       reserved_seconds: 0,
       consumed_seconds: 0,
     });
+    // Admission was consumed but no run started: only the refusal counts.
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      reserve_denied_insufficient: 1,
+    });
   });
 
   it("prices by the server-authoritative duration, not the declared one", async () => {
@@ -295,6 +348,7 @@ describe("insufficient balance", () => {
 
 describe("terminal billing repair machinery", () => {
   it("releases a watchdogged billed run through the terminal-billing path", async () => {
+    const countersBefore = await readCounters();
     const { identity } = await bootstrappedIdentity();
     const request = makeRequest({
       fingerprint: "7a".repeat(32),
@@ -329,9 +383,17 @@ describe("terminal billing repair machinery", () => {
     expect(failed.status).toBe(503);
     expect((await failed.json()).error).toBe("job_failed_transient");
     deferred.release();
+    expect(
+      await waitForCounterDelta(countersBefore, "released_credit_seconds", CHARGE_12_SEGMENTS),
+    ).toEqual({
+      jobs_failed_transient: 1,
+      jobs_started: 1,
+      released_credit_seconds: CHARGE_12_SEGMENTS,
+    });
   });
 
   it("retries a failed settle on the alarm and lands it after repair", async () => {
+    const countersBefore = await readCounters();
     const { identity } = await bootstrappedIdentity();
     const request = makeRequest({
       fingerprint: "7b".repeat(32),
@@ -385,9 +447,18 @@ describe("terminal billing repair machinery", () => {
       reserved_seconds: 0,
       consumed_seconds: CHARGE_12_SEGMENTS,
     });
+    // Two failed attempts (terminal path + one alarm retry), then the
+    // landed settle.
+    expect(await waitForCounterDelta(countersBefore, "settled_jobs", 1)).toMatchObject({
+      billing_retries: 2,
+      charged_credit_seconds: CHARGE_12_SEGMENTS,
+      jobs_completed: 1,
+      settled_jobs: 1,
+    });
   });
 
   it("keeps a failed record while its release pends, blocks billed restarts, and frees them after abandonment", async () => {
+    const countersBefore = await readCounters();
     const { identity } = await bootstrappedIdentity();
     const request = makeRequest({
       fingerprint: "7c".repeat(32),
@@ -431,6 +502,10 @@ describe("terminal billing repair machinery", () => {
     const blocked = await postEnvelope(identity, ANALYZE_PATH, request);
     expect(blocked.status).toBe(503);
     expect((await blocked.json()).error).toBe("billing_unavailable");
+    expect(counterDiff(countersBefore, await readCounters())).toMatchObject({
+      billing_unavailable: 1,
+      jobs_failed_upstream: 1,
+    });
 
     // Drive the alarm retries to the abandonment budget (terminal attempt
     // plus three alarm retries = BILLING_MAX_ATTEMPTS).
@@ -438,6 +513,12 @@ describe("terminal billing repair machinery", () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       expect(await runDurableObjectAlarm(stub)).toBe(true);
     }
+    // Four failed attempts, then the release is abandoned (the operator
+    // signal the dashboard escalates on).
+    expect(await waitForCounterDelta(countersBefore, "release_abandoned", 1)).toMatchObject({
+      billing_retries: 4,
+      release_abandoned: 1,
+    });
 
     // Abandonment clears the pending action (loudly, server-side), so the
     // same fingerprint restarts under a fresh tan- id and settles clean.

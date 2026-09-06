@@ -65,6 +65,7 @@ cargo test --locked \
   --test coalescing \
   --test gemini_retry \
   --test job_state \
+  --test counters_migration \
   --test prompt \
   --test routing \
   --test validation

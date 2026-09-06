@@ -158,6 +158,15 @@ void OCVBProcessorSetScalarReferenceProcessing(
 
 OCVBMetrics OCVBProcessorCopyMetrics(const OCVBProcessor *processor);
 
+/// Controls diagnostic output true-peak reporting (enabled by default).
+/// Does not change the limiter, output audio, or loudness/control metering.
+/// Disabled meters report hasOutputTruePeakDBTP = 0. Changing this setting
+/// clears only the diagnostic FIR history; callers serialize access.
+void OCVBProcessorSetOutputTruePeakMeteringEnabled(
+    OCVBProcessor *processor,
+    int32_t isEnabled
+);
+
 /// Copies the adaptation control state (gains, integrated-loudness summary,
 /// chain-loss EMA, gate confidence). Not synchronized: callers serialize
 /// against process/update/reset externally, like every other entry point.

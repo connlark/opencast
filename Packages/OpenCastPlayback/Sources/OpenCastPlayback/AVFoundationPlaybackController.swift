@@ -84,6 +84,8 @@ public final class AVFoundationPlaybackController {
     @ObservationIgnored private var hasFinishedCurrentEpisode = false
     @ObservationIgnored private var isPlaybackDiagnosticsEnabled = false
     @ObservationIgnored private var playbackDiagnosticsEvents: [String] = []
+    @ObservationIgnored private var eventLogHandler: (@MainActor (String) -> Void)?
+    @ObservationIgnored private var currentItemLocalFileIdentity: PlaybackLocalFileIdentity?
     @ObservationIgnored var playbackStartBehaviorObserver: ((PlaybackStartBehavior) -> Void)?
 
     public convenience init(
@@ -225,6 +227,48 @@ public final class AVFoundationPlaybackController {
         }
     }
 
+    /// Replaces this episode's audio without starting a new listening session.
+    /// Download completion can arrive while paused, buffering, or interrupted.
+    @discardableResult
+    public func useDownloadedAudio(at fileURL: URL, for episodeID: EpisodeID) -> Bool {
+        guard fileURL.isFileURL,
+              var episode = snapshot.currentEpisode,
+              episode.id == episodeID
+        else {
+            return false
+        }
+        let fileIdentity = PlaybackLocalFileIdentity(at: fileURL)
+        guard currentItemSourceIdentity?.assetURL.standardizedFileURL != fileURL.standardizedFileURL
+            || currentItemLocalFileIdentity != fileIdentity
+        else {
+            return false
+        }
+
+        episode.audioURL = fileURL
+        snapshot.currentEpisode = episode
+        playbackFailureRecoveryPolicy.reset()
+        playbackAdSkipPolicy.setZones([])
+        snapshot.skipZones = []
+        lastAutoSkipEvent = nil
+        pendingAutoSkipTarget = nil
+        guard rebuildCurrentItem() else {
+            return false
+        }
+
+        if isPlaybackRequested {
+            if isAudioSessionActive {
+                requestPlaybackForCurrentItem()
+            } else {
+                beginAudioSessionActivation()
+            }
+        } else {
+            snapshot.state = .paused
+            publishPlaybackState()
+        }
+        recordDiagnosticsEvent("switched to downloaded audio at \(diagnosticsTime(snapshot.position))")
+        return true
+    }
+
     public func setVoiceBoostEnabled(_ isEnabled: Bool) {
         var configuration = voiceBoostConfiguration
         configuration.isEnabled = isEnabled
@@ -288,6 +332,10 @@ public final class AVFoundationPlaybackController {
         }
     }
 
+    public func setEventLogHandler(_ handler: (@MainActor (String) -> Void)?) {
+        eventLogHandler = handler
+    }
+
     public func play() {
         play(source: "api")
     }
@@ -318,7 +366,7 @@ public final class AVFoundationPlaybackController {
         recordDiagnosticsEvent("play requested source=\(source)")
         isPlaybackRequested = true
         if needsCurrentItemRebuildForPlaybackRetry,
-           !rebuildCurrentItemForPlaybackRetry()
+           !rebuildCurrentItem()
         {
             return
         }
@@ -359,6 +407,7 @@ public final class AVFoundationPlaybackController {
         player.pause()
         player.replaceCurrentItem(with: nil)
         currentVoiceBoostTap = nil
+        currentItemLocalFileIdentity = nil
         playbackPositionProtection.clear()
         playbackAdSkipPolicy.setZones([])
         autoSkipEventSequence = 0
@@ -891,6 +940,7 @@ public final class AVFoundationPlaybackController {
     }
 
     private func makeDirectPlayerItem(audioURL: URL) -> AVPlayerItem {
+        currentItemLocalFileIdentity = PlaybackLocalFileIdentity(at: audioURL)
         // Local files get a precise timeline: karaoke equates item media time
         // with transcript timestamps, and estimated MP3 timing (the default)
         // can report a duration and land seeks at bytes that do not
@@ -1260,7 +1310,7 @@ public final class AVFoundationPlaybackController {
         return currentItem.status == .failed
     }
 
-    private func rebuildCurrentItemForPlaybackRetry() -> Bool {
+    private func rebuildCurrentItem() -> Bool {
         guard let episode = snapshot.currentEpisode,
               let audioURL = episode.audioURL
         else {
@@ -1284,7 +1334,7 @@ public final class AVFoundationPlaybackController {
         }
 
         snapshot.state = .loading
-        recordDiagnosticsEvent("rebuilt player item for retry at \(diagnosticsTime(snapshot.position))")
+        recordDiagnosticsEvent("rebuilt player item at \(diagnosticsTime(snapshot.position))")
         publishPlaybackState()
         return true
     }
@@ -1323,7 +1373,7 @@ public final class AVFoundationPlaybackController {
             "automatic transient playback retry attempt=\(playbackFailureRecoveryPolicy.automaticTransientFailureRetryCount) at \(diagnosticsTime(snapshot.position))"
         )
 
-        guard rebuildCurrentItemForPlaybackRetry() else {
+        guard rebuildCurrentItem() else {
             return true
         }
 
@@ -1462,10 +1512,14 @@ public final class AVFoundationPlaybackController {
             pendingAutoSkipTarget = nil
         }
         let protectedSeekGeneration = playbackPositionProtection.startSeek(to: clamped)
+        let itemGeneration = currentItemObservationGeneration
         let time = CMTime(seconds: clamped, preferredTimescale: 600)
         let completion: @Sendable (Bool) -> Void = { [weak self] finished in
             Task { @MainActor [weak self] in
-                self?.completeProtectedSeek(
+                guard let self, currentItemObservationGeneration == itemGeneration else {
+                    return
+                }
+                completeProtectedSeek(
                     generation: protectedSeekGeneration,
                     finished: finished,
                     position: clamped,
@@ -1498,6 +1552,9 @@ public final class AVFoundationPlaybackController {
         }
 
         playbackPositionProtection.completeSeek(generation: generation, finished: finished)
+        recordDiagnosticsEvent(
+            "seek completed target=\(diagnosticsTime(position)) actual=\(diagnosticsTime(player.currentTime().seconds)) finished=\(finished) intent=\(intent)"
+        )
         if finished {
             evaluateAutoSkip(
                 previousPosition: nil,
@@ -1766,12 +1823,22 @@ public final class AVFoundationPlaybackController {
     }
 
     private func recordDiagnosticsEvent(_ event: @autoclosure () -> String) {
-        guard isPlaybackDiagnosticsEnabled else {
+        guard isPlaybackDiagnosticsEnabled || eventLogHandler != nil else {
             return
         }
 
+        let message = event()
+        if let eventLogHandler {
+            let source = currentItemSourceIdentity.map { $0.kind == .localFile ? "local" : "stream" } ?? "none"
+            eventLogHandler(
+                "\(Date.now.ISO8601Format()) episode=\(snapshot.currentEpisode?.id.rawValue ?? "none") source=\(source) position=\(diagnosticsTime(snapshot.position)) duration=\(diagnosticsTime(resolvedDuration() ?? 0)) \(message)"
+            )
+        }
+        guard isPlaybackDiagnosticsEnabled else {
+            return
+        }
         let timestamp = Date.now.formatted(.dateTime.hour().minute().second())
-        playbackDiagnosticsEvents.append("[\(timestamp)] \(event())")
+        playbackDiagnosticsEvents.append("[\(timestamp)] \(message)")
         if playbackDiagnosticsEvents.count > 80 {
             playbackDiagnosticsEvents.removeFirst(playbackDiagnosticsEvents.count - 80)
         }

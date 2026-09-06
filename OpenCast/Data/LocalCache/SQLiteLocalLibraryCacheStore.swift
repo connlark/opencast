@@ -154,10 +154,22 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             refreshLogs.append(refreshLogSnapshot(from: statement))
         }
 
+        var incompleteFeeds: [String: FeedIncompleteReason] = [:]
+        var processingRefreshPodcastIDs: Set<String> = []
+        try query("SELECT feed_url, incomplete_reason, requires_refresh FROM feed_load_state",
+                  operation: "feed completeness load", db: db) { statement in
+            guard let feedURL = columnText(statement, 0) else { return }
+            if let reason = columnText(statement, 1) {
+                incompleteFeeds[feedURL] = try JSONDecoder().decode(FeedIncompleteReason.self, from: Data(reason.utf8))
+            }
+            if sqlite3_column_int(statement, 2) != 0 { processingRefreshPodcastIDs.insert(feedURL) }
+        }
         return LocalLibraryCacheSnapshot(
             podcastsByFeedURL: podcastsByFeedURL,
             episodes: episodes,
-            refreshLogs: refreshLogs
+            refreshLogs: refreshLogs,
+            incompleteFeeds: incompleteFeeds,
+            processingRefreshPodcastIDs: processingRefreshPodcastIDs
         )
     }
 
@@ -184,7 +196,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         var detail: EpisodeDetailSnapshot?
         try query(
             """
-            SELECT \(Self.episodeListColumns), show_notes_html, chapters_url
+            SELECT \(Self.episodeDetailColumns), show_notes_html, chapters_url
             FROM episode_cache
             WHERE episode_id = ?
             LIMIT 1
@@ -384,9 +396,26 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     }
 
     func upsertCache(from snapshot: FeedSnapshot, refreshedAt: Date) throws {
+        try importPreparedFeed(PreparedFeed(snapshot: snapshot), refreshedAt: refreshedAt)
+    }
+
+    func upsertCache(from prepared: PreparedFeed, refreshedAt: Date) async throws {
+        try importPreparedFeed(prepared, refreshedAt: refreshedAt)
+    }
+
+    private func importPreparedFeed(_ prepared: PreparedFeed, refreshedAt: Date) throws {
+        try Task.checkCancellation()
+        var indexWriteFailed = false
+        defer {
+            // Persist repair state after the catalog transaction has rolled
+            // back, so the failure cannot leave a broken index marked ready.
+            if indexWriteFailed, let connection {
+                markEpisodeSearchIndexNeedsRebuild(in: connection)
+            }
+        }
         try inTransaction("feed upsert") { db in
             let operation = "feed upsert"
-            let podcast = snapshot.podcast
+            let podcast = prepared.podcast
             let feedURL = podcast.id.rawValue
             let podcastArtworkURL = podcast.artworkURL?.absoluteString
 
@@ -407,12 +436,12 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     artwork_url = excluded.artwork_url,
                     updated_at = excluded.updated_at,
                     language = excluded.language
-                WHERE title IS NOT excluded.title
+                WHERE \(prepared.isSalvaged ? "0" : "1") AND (title IS NOT excluded.title
                    OR author IS NOT excluded.author
                    OR summary IS NOT excluded.summary
                    OR website_url IS NOT excluded.website_url
                    OR artwork_url IS NOT excluded.artwork_url
-                   OR language IS NOT excluded.language
+                   OR language IS NOT excluded.language)
                 """,
                 operation: operation,
                 db: db
@@ -431,7 +460,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 """
                 UPDATE podcast_cache
                 SET \(Self.clearedArtworkPreviewAssignments)
-                WHERE feed_url = ?
+                WHERE \(prepared.isSalvaged ? "0" : "1") AND feed_url = ?
                   AND artwork_preview_canonical_url_key IS NOT NULL
                   AND artwork_preview_canonical_url_key <> IFNULL(?, '')
                 """,
@@ -461,7 +490,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     guid = excluded.guid,
                     cached_at = excluded.cached_at,
                     chapters_url = excluded.chapters_url
-                WHERE podcast_id IS NOT excluded.podcast_id
+                WHERE \(prepared.isSalvaged ? "0" : "1") AND (podcast_id IS NOT excluded.podcast_id
                    OR podcast_title IS NOT excluded.podcast_title
                    OR title IS NOT excluded.title
                    OR summary IS NOT excluded.summary
@@ -471,7 +500,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                    OR audio_url IS NOT excluded.audio_url
                    OR artwork_url IS NOT excluded.artwork_url
                    OR guid IS NOT excluded.guid
-                   OR chapters_url IS NOT excluded.chapters_url
+                   OR chapters_url IS NOT excluded.chapters_url)
                 """,
                 operation: operation,
                 db: db
@@ -495,92 +524,119 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 sqlite3_finalize(episodePreviewClear)
             }
 
-            // The upsert's change-detection WHERE also compares non-searchable
-            // columns (audio/artwork URLs, dates, GUIDs), so sqlite3_changes
-            // alone over-reports; compare the stored searchable text so a
-            // dynamic-enclosure URL churn does not re-index the episode.
-            var storedSearchableTextByEpisodeID: [String: StoredSearchableEpisodeText] = [:]
-            try query(
-                """
-                SELECT episode_id, title, podcast_title, summary, show_notes_html
-                FROM episode_cache
-                WHERE episode_id IN (SELECT value FROM json_each(?))
+            // Compare in SQLite, retaining only a Boolean per row. A short
+            // replacement must not load the previous catalog's huge notes.
+            let compareText = try prepare("""
+                SELECT 1 FROM episode_cache WHERE episode_id=? AND title IS ?
+                    AND podcast_title IS ? AND summary IS ? AND show_notes_html IS ?
+                """, operation: operation, db: db)
+            defer { sqlite3_finalize(compareText) }
+            try prepared.episodes.forEachBatch { batch in
+                try autoreleasepool {
+                    var changedSearchDocuments: [SQLiteEpisodeSearchDocument] = []
+                    for episode in batch {
+                        try Task.checkCancellation()
+                        if prepared.isSalvaged {
+                            guard episode.guid != nil || episode.audioURL != nil || episode.publishedAt != nil else { continue }
+                            var overlaps = false
+                            try query("""
+                                SELECT 1 FROM episode_cache WHERE podcast_id=? AND
+                                (episode_id=? OR (guid IS NOT NULL AND guid=?) OR (audio_url IS NOT NULL AND audio_url=?)
+                                 OR (published_at IS NOT NULL AND published_at=? AND title=?)) LIMIT 1
+                                """, operation: operation, db: db, bindings: { statement in
+                                try bind(feedURL, at: 1, statement: statement, db: db, operation: operation)
+                                try bind(episode.id.rawValue, at: 2, statement: statement, db: db, operation: operation)
+                                try bind(episode.guid, at: 3, statement: statement, db: db, operation: operation)
+                                try bind(episode.audioURL?.absoluteString, at: 4, statement: statement, db: db, operation: operation)
+                                try bind(episode.publishedAt, at: 5, statement: statement, db: db, operation: operation)
+                                try bind(episode.title, at: 6, statement: statement, db: db, operation: operation)
+                            }) { _ in overlaps = true }
+                            if overlaps { continue }
+                        }
+                        try bind(episode.id.rawValue, at: 1, statement: compareText, db: db, operation: operation)
+                        try bind(episode.title, at: 2, statement: compareText, db: db, operation: operation)
+                        try bind(episode.podcastTitle, at: 3, statement: compareText, db: db, operation: operation)
+                        try bind(episode.summary, at: 4, statement: compareText, db: db, operation: operation)
+                        try bind(episode.showNotesHTML, at: 5, statement: compareText, db: db, operation: operation)
+                        let comparisonStatus = sqlite3_step(compareText)
+                        guard comparisonStatus == SQLITE_ROW || comparisonStatus == SQLITE_DONE else {
+                            throw LocalLibraryCacheStoreError(operation: operation, message: String(cString: sqlite3_errmsg(db)))
+                        }
+                        let textWasUnchanged = comparisonStatus == SQLITE_ROW
+                        try reset(compareText, operation: operation, db: db)
+                        let artworkURL = episode.artworkURL?.absoluteString
+                        try bind(episode.id.rawValue, at: 1, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.podcastID.rawValue, at: 2, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.podcastTitle, at: 3, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.title, at: 4, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.summary, at: 5, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.showNotesHTML, at: 6, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.publishedAt, at: 7, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.duration, at: 8, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.audioURL?.absoluteString, at: 9, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(artworkURL, at: 10, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.guid, at: 11, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(refreshedAt, at: 12, statement: episodeUpsert, db: db, operation: operation)
+                        try bind(episode.chaptersURL?.absoluteString, at: 13, statement: episodeUpsert, db: db, operation: operation)
+                        try step(episodeUpsert, operation: operation, db: db)
+                        let didChangeRow = sqlite3_changes(db) > 0
+                        let didChangeSearchableContent = didChangeRow && !textWasUnchanged
+                        try reset(episodeUpsert, operation: operation, db: db)
+
+                        if didChangeSearchableContent {
+                            changedSearchDocuments.append(
+                                SQLiteEpisodeSearchDocument(
+                                    episodeID: episode.id.rawValue,
+                                    podcastID: episode.podcastID.rawValue,
+                                    title: episode.title,
+                                    podcastTitle: episode.podcastTitle,
+                                    summaryHTML: episode.summary,
+                                    showNotesHTML: episode.showNotesHTML
+                                )
+                            )
+                        }
+
+                        try bind(episode.id.rawValue, at: 1, statement: episodePreviewClear, db: db, operation: operation)
+                        try bind(ArtworkPreview.canonicalArtworkURLKey(for: artworkURL), at: 2, statement: episodePreviewClear, db: db, operation: operation)
+                        try step(episodePreviewClear, operation: operation, db: db)
+                        try reset(episodePreviewClear, operation: operation, db: db)
+                    }
+
+                    // A failed index write must roll back the catalog too. The
+                    // normal repair path remains available for an index that
+                    // was already unavailable before this import started.
+                    if episodeSearchIndexState == .ready || episodeSearchIndexState == .rebuilding {
+                        do {
+                            try SQLiteEpisodeSearchIndex.replace(changedSearchDocuments, in: db)
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            indexWriteFailed = true
+                            throw error
+                        }
+                    }
+                }
+            }
+            try Task.checkCancellation()
+            let reason = try prepared.completeness.reason.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
+            try run("""
+                INSERT INTO feed_load_state(feed_url, incomplete_reason) VALUES (?, ?)
+                ON CONFLICT(feed_url) DO UPDATE SET incomplete_reason=excluded.incomplete_reason,
+                    requires_refresh=CASE WHEN excluded.incomplete_reason IS NULL THEN 0 ELSE requires_refresh END
+                WHERE incomplete_reason IS NOT excluded.incomplete_reason
+                   OR (excluded.incomplete_reason IS NULL AND requires_refresh <> 0)
                 """,
-                operation: operation,
-                db: db,
-                bindings: { statement in
-                    try bind(
-                        jsonArray(snapshot.episodes.map(\.id.rawValue)),
-                        at: 1,
-                        statement: statement,
-                        db: db,
-                        operation: operation
-                    )
-                }
-            ) { statement in
-                guard let episodeID = LocalCacheSQLite.columnText(statement, 0) else {
-                    return
-                }
-                storedSearchableTextByEpisodeID[episodeID] = StoredSearchableEpisodeText(
-                    title: LocalCacheSQLite.columnText(statement, 1),
-                    podcastTitle: LocalCacheSQLite.columnText(statement, 2),
-                    summary: LocalCacheSQLite.columnText(statement, 3),
-                    showNotesHTML: LocalCacheSQLite.columnText(statement, 4)
-                )
+                    operation: operation, db: db) { statement in
+                try bind(feedURL, at: 1, statement: statement, db: db, operation: operation)
+                try bind(reason, at: 2, statement: statement, db: db, operation: operation)
             }
-
-            var changedSearchDocuments: [SQLiteEpisodeSearchDocument] = []
-            for episode in snapshot.episodes {
-                let artworkURL = episode.artworkURL?.absoluteString
-                try bind(episode.id.rawValue, at: 1, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.podcastID.rawValue, at: 2, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.podcastTitle, at: 3, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.title, at: 4, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.summary, at: 5, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.showNotesHTML, at: 6, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.publishedAt, at: 7, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.duration, at: 8, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.audioURL?.absoluteString, at: 9, statement: episodeUpsert, db: db, operation: operation)
-                try bind(artworkURL, at: 10, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.guid, at: 11, statement: episodeUpsert, db: db, operation: operation)
-                try bind(refreshedAt, at: 12, statement: episodeUpsert, db: db, operation: operation)
-                try bind(episode.chaptersURL?.absoluteString, at: 13, statement: episodeUpsert, db: db, operation: operation)
-                try step(episodeUpsert, operation: operation, db: db)
-                let didChangeRow = sqlite3_changes(db) > 0
-                let didChangeSearchableContent = didChangeRow
-                    && storedSearchableTextByEpisodeID[episode.id.rawValue] != StoredSearchableEpisodeText(
-                        title: episode.title,
-                        podcastTitle: episode.podcastTitle,
-                        summary: episode.summary,
-                        showNotesHTML: episode.showNotesHTML
-                    )
-                try reset(episodeUpsert, operation: operation, db: db)
-
-                if didChangeSearchableContent {
-                    changedSearchDocuments.append(
-                        SQLiteEpisodeSearchDocument(
-                            episodeID: episode.id.rawValue,
-                            podcastID: episode.podcastID.rawValue,
-                            title: episode.title,
-                            podcastTitle: episode.podcastTitle,
-                            summaryHTML: episode.summary,
-                            showNotesHTML: episode.showNotesHTML
-                        )
-                    )
+            if prepared.isSalvaged {
+                try run("UPDATE podcast_cache SET etag=NULL, last_modified=NULL, body_hash=NULL WHERE feed_url=?",
+                        operation: operation, db: db) { statement in
+                    try bind(feedURL, at: 1, statement: statement, db: db, operation: operation)
                 }
-
-                try bind(episode.id.rawValue, at: 1, statement: episodePreviewClear, db: db, operation: operation)
-                try bind(ArtworkPreview.canonicalArtworkURLKey(for: artworkURL), at: 2, statement: episodePreviewClear, db: db, operation: operation)
-                try step(episodePreviewClear, operation: operation, db: db)
-                try reset(episodePreviewClear, operation: operation, db: db)
             }
-
-            _ = maintainEpisodeSearchIndex(in: db) {
-                try SQLiteEpisodeSearchIndex.replace(
-                    changedSearchDocuments,
-                    in: db
-                )
-            }
+            try Task.checkCancellation()
         }
     }
 
@@ -810,6 +866,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             try run("DELETE FROM podcast_cache WHERE feed_url = ?", operation: operation, db: db) { statement in
                 try bind(podcastID, at: 1, statement: statement, db: db, operation: operation)
             }
+            try run("DELETE FROM feed_load_state WHERE feed_url = ?", operation: operation, db: db) { statement in
+                try bind(podcastID, at: 1, statement: statement, db: db, operation: operation)
+            }
             try run("DELETE FROM refresh_log WHERE feed_url = ?", operation: operation, db: db) { statement in
                 try bind(podcastID, at: 1, statement: statement, db: db, operation: operation)
             }
@@ -819,6 +878,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     func deleteAllLocalCache() throws {
         try inTransaction("local cache delete") { db in
             try exec("DELETE FROM episode_cache", operation: "local cache delete", db: db)
+            try exec("DELETE FROM feed_load_state", operation: "local cache delete", db: db)
             try exec("DELETE FROM podcast_cache", operation: "local cache delete", db: db)
             try exec("DELETE FROM refresh_log", operation: "local cache delete", db: db)
             let didClearSearchIndex = maintainEpisodeSearchIndex(
@@ -1119,6 +1179,34 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 }
             }
 
+            // Local processing epoch: one atomic invalidation, with durable
+            // foreground-refresh requests that survive an interrupted launch.
+            let processingVersion = String(FeedResourcePolicy.processingVersion)
+            var storedProcessingVersion: String?
+            try query("SELECT value FROM local_cache_meta WHERE key='feed_processing_version'",
+                      operation: "feed processing version", db: handle) { statement in
+                storedProcessingVersion = columnText(statement, 0)
+            }
+            if storedProcessingVersion != processingVersion {
+                try exec("BEGIN IMMEDIATE", operation: "feed processing upgrade", db: handle)
+                do {
+                    try exec("UPDATE podcast_cache SET etag=NULL, last_modified=NULL, body_hash=NULL", operation: "feed processing upgrade", db: handle)
+                    try exec("""
+                        INSERT INTO feed_load_state(feed_url, requires_refresh)
+                        SELECT feed_url, 1 FROM podcast_cache WHERE true
+                        ON CONFLICT(feed_url) DO UPDATE SET requires_refresh=1
+                        """, operation: "feed processing upgrade", db: handle)
+                    try run("INSERT OR REPLACE INTO local_cache_meta(key,value) VALUES ('feed_processing_version',?)",
+                            operation: "feed processing upgrade", db: handle) { statement in
+                        try bind(processingVersion, at: 1, statement: statement, db: handle, operation: "feed processing upgrade")
+                    }
+                    try exec("COMMIT", operation: "feed processing upgrade", db: handle)
+                } catch {
+                    try? exec("ROLLBACK", operation: "feed processing upgrade", db: handle)
+                    throw error
+                }
+            }
+
             // The search index is rebuildable derived data. An unavailable
             // FTS module must not prevent the canonical cache from opening;
             // search will use the legacy fallback and retry on next launch.
@@ -1144,6 +1232,11 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     }
 
     private nonisolated static let schemaSQL = """
+    CREATE TABLE IF NOT EXISTS feed_load_state (
+      feed_url TEXT PRIMARY KEY,
+      incomplete_reason TEXT,
+      requires_refresh INTEGER NOT NULL DEFAULT 0
+    );
     CREATE TABLE IF NOT EXISTS podcast_cache (
       feed_url TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -1214,7 +1307,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     ON refresh_log(feed_url, started_at DESC);
     """
 
-    private nonisolated static let episodeListColumns = """
+    private nonisolated static let episodeListColumns = episodeDetailColumns.replacingOccurrences(of: "title, summary,", with: "title, NULL AS summary,")
+
+    private nonisolated static let episodeDetailColumns = """
     episode_id, podcast_id, podcast_title, title, summary, published_at, duration, \
     audio_url, artwork_url, artwork_preview_version, artwork_preview_canonical_url_key, \
     artwork_preview_source_hash, artwork_preview_pixel_width, artwork_preview_pixel_height, \
@@ -1350,11 +1445,15 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             try update()
             return true
         } catch {
-            episodeSearchIndexState = .needsRebuild
-            hasValidatedEpisodeSearchIndex = false
-            try? SQLiteEpisodeSearchIndex.markNeedsRebuild(in: db)
+            markEpisodeSearchIndexNeedsRebuild(in: db)
             return false
         }
+    }
+
+    private func markEpisodeSearchIndexNeedsRebuild(in db: OpaquePointer) {
+        episodeSearchIndexState = .needsRebuild
+        hasValidatedEpisodeSearchIndex = false
+        try? SQLiteEpisodeSearchIndex.markNeedsRebuild(in: db)
     }
 
     private func exec(_ sql: String, operation: String, db: OpaquePointer) throws {
@@ -1385,12 +1484,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     }
 
     /// The four columns the search index derives its documents from.
-    private struct StoredSearchableEpisodeText: Equatable {
-        let title: String?
-        let podcastTitle: String?
-        let summary: String?
-        let showNotesHTML: String?
-    }
+
 
     private func columnNames(of table: String, db: OpaquePointer) throws -> Set<String> {
         var names: Set<String> = []

@@ -503,6 +503,62 @@ fn quote_that_starts_inside_the_span_and_spills_past_its_end_is_accepted_in_plac
     assert!(warnings.contains(&"evidence_out_of_span:101-103".to_string()));
 }
 
+/// Boundary of the "begins inside" rule (2026-09-04 review): a probe whose
+/// FIRST word is the span's last word and whose remaining five words cross
+/// several short editorial segments is still accepted in place. That is the
+/// documented trade-off — the span keeps its own boundaries, so the
+/// spill-over is never skipped; only a quote that begins outside re-anchors.
+#[test]
+fn probe_with_one_word_inside_the_span_and_the_rest_across_editorial_segments_is_accepted() {
+    let texts = [
+        "Welcome back to the show everyone, great to have you.",
+        "This episode is brought to you by Acme Mattress, the best sleep upgrade.",
+        "Use code podcast at checkout, and ask your doctor about sleeping.",
+        "Now back",
+        "to our",
+        "regular discussion",
+        "about the championship game and my wild weekend hiking.",
+    ];
+    let request = request_with_segments(
+        texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| TranscriptSegment {
+                id: 100 + index as i64,
+                start: index as f64 * 10.0,
+                end: (index as f64 + 1.0) * 10.0,
+                text: (*text).to_string(),
+            })
+            .collect(),
+        70.0,
+    );
+
+    let (spans, warnings) = validate_model_output(
+        &request,
+        ModelOutput::from_spans(vec![span(
+            AdSpanKind::HostReadAd,
+            "Acme Mattress",
+            101,
+            102,
+            0.95,
+            "sleeping. Now back to our regular discussion",
+        )]),
+    );
+
+    assert_eq!(spans.len(), 1, "{warnings:?}");
+    assert_eq!(spans[0].start_segment_id, 101);
+    assert_eq!(spans[0].end_segment_id, 102);
+    assert_eq!(spans[0].start_time, 10.0);
+    assert_eq!(spans[0].end_time, 30.0);
+    assert!(
+        !warnings
+            .iter()
+            .any(|warning| warning.starts_with("evidence_reanchored")
+                || warning.starts_with("evidence_out_of_span")),
+        "{warnings:?}"
+    );
+}
+
 #[test]
 fn uniquely_anchored_out_of_span_quote_shifts_the_span() {
     let request = output_request();

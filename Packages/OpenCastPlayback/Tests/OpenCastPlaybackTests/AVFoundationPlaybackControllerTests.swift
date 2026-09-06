@@ -7,6 +7,125 @@ import Testing
 @MainActor
 @Suite
 struct AVFoundationPlaybackControllerTests {
+    @Test("Source and skip events are logged without opening playback diagnostics")
+    func eventLogRecordsSourceAndSkip() throws {
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        var events: [String] = []
+        controller.setEventLogHandler { events.append($0) }
+        let current = episode(duration: 240)
+        try controller.load(current, startPosition: 30)
+        #expect(events.contains { $0.contains("source=stream") && $0.contains("loaded episode") })
+        #expect(controller.useDownloadedAudio(at: URL(filePath: "/tmp/logged-download.m4a"), for: current.id))
+        controller.setSkipZones([PlaybackSkipZone(id: 1, startTime: 30, endTime: 40)])
+        #expect(events.contains {
+            $0.contains("source=local") && $0.contains("auto-skip zone=1") && $0.contains("to=40")
+        })
+        #expect(controller.playbackDiagnosticsText.isEmpty)
+    }
+
+    @Test("Download handoff preserves pause, speed, position, and sleep timer", arguments: [
+        PlaybackSleepTimerMode.endOfEpisode, .duration(600)
+    ])
+    func downloadedAudioPreservesSession(timer: PlaybackSleepTimerMode) throws {
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        let current = episode(duration: 240)
+        try controller.load(current, startPosition: 30)
+        controller.setRate(1.5)
+        controller.setSleepTimer(mode: timer)
+        let timerEnd = controller.sleepTimerEndsAt
+        let localURL = URL(filePath: "/tmp/download-handoff.m4a")
+        controller.setSkipZones([PlaybackSkipZone(id: 1, startTime: 50, endTime: 70)])
+
+        #expect(controller.useDownloadedAudio(at: localURL, for: current.id))
+        #expect(controller.currentItemSourceIdentity?.assetURL == localURL)
+        #expect(controller.state == .paused)
+        #expect(controller.position == 30)
+        #expect(controller.rate == 1.5)
+        #expect(controller.sleepTimerMode == timer)
+        #expect(controller.sleepTimerEndsAt == timerEnd)
+        #expect(controller.skipZones.isEmpty)
+        #expect(!controller.useDownloadedAudio(at: localURL, for: current.id))
+        #expect(!controller.useDownloadedAudio(at: URL(filePath: "/tmp/other.m4a"), for: EpisodeID(rawValue: "other")))
+    }
+
+    @Test("Download handoff resumes a buffered play request on real local audio")
+    func downloadedAudioResumesBufferedPlayback() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer { AVFoundationPlaybackTestGate.release() }
+        let localURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a", settings: VoiceBoostAudioFixture.aacSettings(), duration: 8
+        )
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        let current = episode(duration: 8)
+        try controller.load(current, startPosition: 2)
+        controller.play()
+        controller.handleCurrentItemPlaybackStalled()
+        #expect(controller.state == .buffering)
+
+        #expect(controller.useDownloadedAudio(at: localURL, for: current.id))
+        let state = try await waitForPlaybackState(in: controller) { $0 == .playing }
+        #expect(state == .playing)
+        #expect(controller.position >= 2)
+        #expect(controller.currentItemSourceIdentity?.assetURL == localURL)
+    }
+
+    @Test("A replacement download at the same URL loads the new audio timeline")
+    func downloadedAudioReplacesFileAtSameURL() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer { AVFoundationPlaybackTestGate.release() }
+        let localURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a", settings: VoiceBoostAudioFixture.aacSettings(), duration: 8
+        )
+        let replacementURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a", settings: VoiceBoostAudioFixture.aacSettings(), duration: 12
+        )
+        defer {
+            try? FileManager.default.removeItem(at: localURL)
+            try? FileManager.default.removeItem(at: replacementURL)
+        }
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        var current = episode(duration: 8)
+        current.audioURL = localURL
+        try controller.load(current, startPosition: 2)
+        controller.play()
+        let initialState = try await waitForPlaybackState(in: controller) { $0 == .playing }
+        #expect(initialState == .playing)
+        controller.pause()
+        #expect(!controller.useDownloadedAudio(at: localURL, for: current.id))
+
+        try Data(contentsOf: replacementURL).write(to: localURL, options: .atomic)
+        #expect(controller.useDownloadedAudio(at: localURL, for: current.id))
+        #expect(controller.state == .paused)
+        #expect(controller.position >= 2)
+        controller.play()
+        let replacementState = try await waitForPlaybackState(in: controller) { $0 == .playing }
+        #expect(replacementState == .playing)
+        let itemDuration = try #require(controller.currentItemSourceIdentity?.itemDuration)
+        #expect(abs(itemDuration - 12) < 0.05)
+        #expect(!controller.useDownloadedAudio(at: localURL, for: current.id))
+    }
+
+    @Test("Download handoff during an interruption preserves the system resume decision", arguments: [true, false])
+    func downloadedAudioPreservesInterruption(shouldResume: Bool) throws {
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        let current = episode(duration: 240)
+        try controller.load(current, startPosition: 30)
+        controller.isAudioSessionActive = true
+        controller.play()
+        controller.handleAudioSessionInterruptionBegan()
+
+        #expect(controller.useDownloadedAudio(at: URL(filePath: "/tmp/interrupted-download.m4a"), for: current.id))
+        #expect(controller.state == .paused)
+        controller.handleAudioSessionInterruptionEnded(shouldResume: shouldResume)
+        #expect(shouldResume ? controller.state != .paused : controller.state == .paused)
+    }
+
     @Test
     func loadThrowsForMissingAudioURL() throws {
         let controller = AVFoundationPlaybackController()

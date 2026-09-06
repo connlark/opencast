@@ -49,6 +49,7 @@ final class DownloadStore {
     @ObservationIgnored private var progressCheckpoints: [String: DownloadProgressCheckpoint] = [:]
     @ObservationIgnored private var pauseRequestedEpisodeIDs: Set<String> = []
     @ObservationIgnored private let stateChanges = StoreChangeNotifier()
+    @ObservationIgnored var onEpisodeStateChanged: (@MainActor (String) -> Void)?
 
     private static let minimumProgressPublicationInterval: TimeInterval = 0.25
 
@@ -1846,15 +1847,21 @@ final class DownloadStore {
             records.sort { $0.updatedAt > $1.updatedAt }
         }
         stateChanges.notify()
+        onEpisodeStateChanged?(record.episodeID)
     }
 
     private func removeLoadedRecord(episodeID: String) {
         records.removeAll { $0.episodeID == episodeID }
         stateChanges.notify()
+        onEpisodeStateChanged?(episodeID)
     }
 
     private func reload(modelContext: ModelContext) throws {
+        let previousEpisodeIDs = Set(records.map(\.episodeID))
         records = try fetchRecords(modelContext: modelContext)
+        for episodeID in previousEpisodeIDs.union(records.map(\.episodeID)) {
+            onEpisodeStateChanged?(episodeID)
+        }
     }
 
     private func fetchRecord(

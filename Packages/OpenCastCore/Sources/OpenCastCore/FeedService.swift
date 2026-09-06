@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 
 public protocol FeedService: Sendable {
+    func prepareFeed(at url: URL, validators: FeedValidators?) async throws -> PreparedFeedOutcome
     func fetchFeed(at url: URL) async throws -> FeedSnapshot
     /// The full fetch outcome: snapshot plus relocation signals (post-redirect
     /// final URL, `itunes:new-feed-url`) and response validators. Callers that
@@ -13,6 +14,13 @@ public protocol FeedService: Sendable {
 }
 
 public extension FeedService {
+    func prepareFeed(at url: URL, validators: FeedValidators? = nil) async throws -> PreparedFeedOutcome {
+        let outcome = try await fetchFeedOutcome(at: url, validators: validators)
+        let feed = try outcome.snapshot.map(PreparedFeed.init)
+        return PreparedFeedOutcome(feed: feed, finalURL: outcome.finalURL,
+            validators: feed?.isSalvaged == true ? nil : outcome.validators)
+    }
+
     func fetchFeedOutcome(at url: URL, validators: FeedValidators?) async throws -> FeedFetchOutcome {
         FeedFetchOutcome(snapshot: try await fetchFeed(at: url))
     }
@@ -23,9 +31,7 @@ public extension FeedService {
 }
 
 public struct DefaultFeedService: FeedService {
-    /// Server parity: the deployed NotificationsWorker caps feed bodies at
-    /// the same size.
-    public static let maximumFeedBodyByteCount = 8 * 1_024 * 1_024
+    public static let maximumFeedBodyByteCount = FeedResourcePolicy.maximumDecodedBytes
     static let acceptHeaderValue = "application/rss+xml, application/xml;q=0.9, */*;q=0.8"
 
     private let parser: RSSFeedParser
@@ -33,7 +39,7 @@ public struct DefaultFeedService: FeedService {
 
     public init(
         parser: RSSFeedParser = RSSFeedParser(),
-        httpClient: any OpenCastHTTPClient = URLSessionOpenCastHTTPClient()
+        httpClient: any OpenCastHTTPClient = URLSessionOpenCastHTTPClient(configuration: OpenCastURLSessionFactory.feedConfiguration())
     ) {
         self.parser = parser
         self.httpClient = httpClient
@@ -49,12 +55,26 @@ public struct DefaultFeedService: FeedService {
 
     @concurrent
     public func fetchFeedOutcome(at url: URL, validators: FeedValidators?) async throws -> FeedFetchOutcome {
-        // Owned validators and URLCache revalidation are mutually exclusive on
-        // one request: URLSession transparently replays a cached 200 for a
-        // server 304 under URLCache, so conditional headers ride an
-        // ignore-local-cache request. Without validators, feed refresh still
-        // revalidates with the server instead of honoring a still-fresh local
-        // max-age response.
+        let outcome = try await prepareFeed(at: url, validators: validators)
+        return FeedFetchOutcome(snapshot: try outcome.feed?.materialized(), finalURL: outcome.finalURL,
+                                newFeedURL: outcome.newFeedURL, validators: outcome.validators)
+    }
+
+    @concurrent
+    public func prepareFeed(at url: URL, validators: FeedValidators? = nil) async throws -> PreparedFeedOutcome {
+        try await FeedPreparationGate.shared.acquire()
+        do {
+            let result = try await prepareAdmittedFeed(at: url, validators: validators)
+            await FeedPreparationGate.shared.release()
+            return result
+        } catch {
+            await FeedPreparationGate.shared.release()
+            throw error
+        }
+    }
+
+    private func prepareAdmittedFeed(at url: URL, validators: FeedValidators?) async throws -> PreparedFeedOutcome {
+        // Owned validators are the only feed cache; no full-body URLCache.
         var request: URLRequest
         if let validators, validators.hasConditionalHeaders {
             request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
@@ -65,27 +85,23 @@ public struct DefaultFeedService: FeedService {
                 request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since")
             }
         } else {
-            request = URLRequest(url: url, cachePolicy: .reloadRevalidatingCacheData)
+            request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
         }
         request.setValue(Self.acceptHeaderValue, forHTTPHeaderField: "Accept")
 
-        let result: OpenCastHTTPResult
-        do {
-            result = try await httpClient.data(
-                for: request,
-                maximumBodyByteCount: Self.maximumFeedBodyByteCount
-            )
-        } catch is OpenCastHTTPBodyTooLargeError {
-            throw OpenCastCoreError.feedTooLarge(byteLimit: Self.maximumFeedBodyByteCount)
-        }
+        let result = try await httpClient.feedFile(for: request, maximumBodyByteCount: Self.maximumFeedBodyByteCount)
+        defer { withExtendedLifetime(result) {} }
         guard let statusCode = result.response.statusCode else {
             throw OpenCastCoreError.invalidHTTPResponse
         }
         if statusCode == 304 {
+            guard validators?.hasConditionalHeaders == true else {
+                throw OpenCastCoreError.unexpectedStatusCode(statusCode)
+            }
             // A 304 need not repeat validator headers; absent ones keep their
             // stored values instead of erasing them.
-            return FeedFetchOutcome(
-                snapshot: nil,
+            return PreparedFeedOutcome(
+                feed: nil,
                 finalURL: result.response.url,
                 validators: FeedValidators(
                     entityTag: result.response.headerValue("ETag") ?? validators?.entityTag,
@@ -97,23 +113,19 @@ public struct DefaultFeedService: FeedService {
         guard (200..<300).contains(statusCode) else {
             throw OpenCastCoreError.unexpectedStatusCode(statusCode)
         }
-        let bodyHash = Self.sha256Hex(result.data)
+        let bodyHash = result.bodyHash
         let responseValidators = refreshedValidators(from: result.response, bodyHash: bodyHash)
-        if let knownBodyHash = validators?.bodyHash, knownBodyHash == bodyHash {
-            return FeedFetchOutcome(
-                snapshot: nil,
+        if result.incompleteReason == nil, let knownBodyHash = validators?.bodyHash, knownBodyHash == bodyHash {
+            return PreparedFeedOutcome(
+                feed: nil,
                 finalURL: result.response.url,
                 validators: responseValidators
             )
         }
 
-        let snapshot = try parser.parse(data: result.data, feedURL: url)
-        return FeedFetchOutcome(
-            snapshot: snapshot,
-            finalURL: result.response.url,
-            newFeedURL: snapshot.newFeedURL,
-            validators: responseValidators
-        )
+        let feed = try await parser.prepare(fileURL: result.fileURL, feedURL: url, transferIssue: result.incompleteReason)
+        return PreparedFeedOutcome(feed: feed, finalURL: result.response.url,
+                                   validators: feed.completeness.isComplete ? responseValidators : nil)
     }
 
     private func refreshedValidators(
@@ -127,10 +139,4 @@ public struct DefaultFeedService: FeedService {
         )
     }
 
-    private static func sha256Hex(_ data: Data) -> String {
-        SHA256.hash(data: data).map { byte in
-            let hex = String(byte, radix: 16)
-            return hex.count == 1 ? "0\(hex)" : hex
-        }.joined()
-    }
 }

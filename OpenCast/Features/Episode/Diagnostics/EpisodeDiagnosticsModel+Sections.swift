@@ -58,7 +58,7 @@ extension EpisodeDiagnosticsModel {
 
     private static func refreshResult(_ log: RefreshLogSnapshot) -> String {
         if let message = log.errorMessage, !message.isEmpty {
-            return message == RefreshLogSnapshot.partialFeedSalvageMessage ? "Partial: \(message)" : "Failed: \(message)"
+            return message.hasPrefix(RefreshLogSnapshot.partialFeedSalvageMessage) ? "Partial: \(message)" : "Failed: \(message)"
         }
         return log.finishedAt == nil ? "Interrupted or still running" : "Success"
     }

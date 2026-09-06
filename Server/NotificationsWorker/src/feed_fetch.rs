@@ -1,8 +1,10 @@
-pub(crate) const MAX_FEED_BODY_BYTES: usize = 12 * 1024 * 1024;
+#[cfg(test)]
+pub(crate) const MAX_FEED_BODY_BYTES: usize = crate::feed_resource::MAX_DECODED_BYTES;
 // CBC's Akamai edge resets connections for URL-bearing User-Agent values.
 // Keep the product identity URL-free for both admission and polling.
 pub(crate) const FEED_USER_AGENT: &str = "OpenCast-Notifications/1";
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FeedBodyAppendError {
     Oversized,
@@ -16,7 +18,10 @@ pub(crate) enum FeedFetchError {
     FetchFailed,
     MissingRedirectLocation,
     HTTPStatus(u16),
+    UnexpectedNotModified,
+    #[cfg(test)]
     OversizedBody,
+    #[cfg(test)]
     InvalidBodyEncoding,
 }
 
@@ -29,7 +34,10 @@ impl FeedFetchError {
             FeedFetchError::FetchFailed => "fetch_failed",
             FeedFetchError::MissingRedirectLocation => "missing_redirect_location",
             FeedFetchError::HTTPStatus(_) => "http_error",
+            FeedFetchError::UnexpectedNotModified => "unexpected_not_modified",
+            #[cfg(test)]
             FeedFetchError::OversizedBody => "oversized_body",
+            #[cfg(test)]
             FeedFetchError::InvalidBodyEncoding => "invalid_body_encoding",
         }
     }
@@ -43,7 +51,11 @@ impl FeedFetchError {
     }
 
     pub(crate) fn is_persistent_compatibility(&self) -> bool {
-        matches!(self, FeedFetchError::OversizedBody)
+        match self {
+            #[cfg(test)]
+            FeedFetchError::OversizedBody => true,
+            _ => false,
+        }
     }
 }
 
@@ -64,6 +76,7 @@ pub(crate) fn feed_response_disposition(status: u16) -> FeedResponseDisposition 
     }
 }
 
+#[cfg(test)]
 pub(crate) fn identity_feed_content_length_exceeds(
     content_length: Option<&str>,
     content_encoding: Option<&str>,
@@ -87,6 +100,7 @@ pub(crate) fn identity_feed_content_length_exceeds(
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 pub(crate) fn append_limited_feed_body_chunk(
     buffer: &mut Vec<u8>,
     chunk: &[u8],
@@ -310,6 +324,7 @@ mod tests {
             FeedFetchError::FetchFailed,
             FeedFetchError::MissingRedirectLocation,
             FeedFetchError::HTTPStatus(503),
+            FeedFetchError::UnexpectedNotModified,
             FeedFetchError::InvalidBodyEncoding,
         ] {
             assert!(!error.is_persistent_compatibility(), "{error:?}");
