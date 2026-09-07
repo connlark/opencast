@@ -3,6 +3,8 @@
 // staging lane first; restore staging and delete the fixture afterward.
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout } from 'node:timers/promises';
@@ -85,7 +87,7 @@ try {
   }
   const retained = events.map(x => x.wasmBytes);
   assert.ok(Math.max(...retained) - Math.min(...retained) < 2 * 1024 * 1024);
-  const report = process.env.OPENCAST_CANCELLATION_REMOTE_REPORT ?? '/private/tmp/opencast-feed-cancellation-remote.json';
+  const report = process.env.OPENCAST_CANCELLATION_REMOTE_REPORT ?? join(tmpdir(), 'opencast-feed-cancellation-remote.json');
   await writeFile(report, JSON.stringify({ passed: true, nativeDisconnects: events.length * 2, events, rows }, null, 2));
   console.log('Remote disconnect proof passed:', report);
 } finally {

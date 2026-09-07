@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout } from 'node:timers/promises';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
@@ -207,7 +209,7 @@ try {
   }
   const settled = cycles.filter(x => x.iteration >= 4).map(x => x.wasmBytes);
   assert.ok(Math.max(...settled) - Math.min(...settled) < 2 * 1024 * 1024, 'Repeated cancellation retained Wasm buffers');
-  const report = process.env.OPENCAST_FEED_CANCELLATION_REPORT ?? '/private/tmp/opencast-feed-cancellation-runtime.json';
+  const report = process.env.OPENCAST_FEED_CANCELLATION_REPORT ?? join(tmpdir(), 'opencast-feed-cancellation-runtime.json');
   await writeFile(report, JSON.stringify({ passed: true, signalCancellations: aborts, cycles, memory, sends: sends.length }, null, 2));
   console.log('Cancellation runtime passed:', report);
 } finally {

@@ -66,8 +66,8 @@ opt-in `tests/feed-cancellation-remote.mjs` separately checks real client
 disconnects against your own prod-staging deployment with admin test endpoints
 temporarily enabled; its header documents the operator-supplied origin,
 fixture, and token file, and the staging restoration and fixture cleanup it
-expects afterward. Reports from both harnesses stay under `/private/tmp` by
-default.
+expects afterward. Reports from both harnesses land in the system temporary
+directory by default.
 
 Apply migrations to your own D1 database:
 

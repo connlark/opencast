@@ -5,6 +5,8 @@
 import assert from 'node:assert/strict';
 import { createReadStream } from 'node:fs';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { setTimeout } from 'node:timers/promises';
@@ -13,7 +15,7 @@ import { sampleRuntimeMemory } from './runtime-memory.mjs';
 import { compatibilityDate, compatibilityFlags } from './runtime-compatibility.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const reportPath = process.env.OPENCAST_FEED_RUNTIME_REPORT ?? '/private/tmp/opencast-feed-worker-runtime.json';
+const reportPath = process.env.OPENCAST_FEED_RUNTIME_REPORT ?? join(tmpdir(), 'opencast-feed-worker-runtime.json');
 const captures = new Map([
   ['herd', '/private/tmp/opencast-feed-research-herd.xml'],
   ['boundless', '/private/tmp/opencast-feed-research-greenfield.xml'],
