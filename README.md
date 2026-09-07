@@ -2,26 +2,26 @@
 
 <img src="Server/Website/public/brand/icon-light-192.png" alt="opencast app icon" width="96">
 
-# a libre podcast client, built natively in swift
+# the open source podcast app that skips the ads
 
-**opencast** is a native, open source podcast app for iPhone and iPad. subscribe directly to any feed, keep your listening private, and skip the parts you don't want (_without_ an account or recommendation algorithm).
+**opencast** is a native iPhone and iPad podcast app. Your phone transcribes an episode, opencast finds the ad breaks in the transcript and skips them, and one tap undoes a skip. It is free, and it works with any RSS feed.
 
-no ads. no tracking. no analytics SDKs. **ever**.
+no account. no tracking. no ads of our own. **your listening is not a growth funnel.**
 
 <p>
   <a href="https://apps.apple.com/us/app/opencast/id6766770733"><img src="Server/Website/public/badges/app-store-badge-black.svg" alt="Download opencast on the App Store" height="40"></a>
 </p>
 
 [![Apple CI](https://img.shields.io/github/actions/workflow/status/connlark/opencast/apple-ci.yml?branch=main&label=Apple%20CI&logo=apple)](https://github.com/connlark/opencast/actions/workflows/apple-ci.yml) [![Server CI](https://img.shields.io/github/actions/workflow/status/connlark/opencast/server-ci.yml?branch=main&label=Server%20CI&logo=cloudflare)](https://github.com/connlark/opencast/actions/workflows/server-ci.yml)
-## Why opencast
+## why opencast
 
-| Your feeds, not *a feed* | Listen smarter |
+| skips the ads | yours |
 | :--- | :--- |
-| **Direct RSS, no lock-in.** Find a show in the podcast directory or paste its feed URL. There is no opencast account, recommendation feed, or engagement algorithm between you and your subscriptions. | **Searchable transcripts.** Transcribe with Apple Speech or Whisper on your device, search what was said, and tap a result to jump to that moment. Remote Transcription is available per episode. |
-| **Private sync.** Keep subscriptions and progress in your private iCloud database, browse and play from CarPlay, and ask Siri for a subscribed show. | **Automatic ad skipping.** Map promo and sponsor reads on the timeline, skip high-confidence breaks, and undo a bad skip with one tap. |
-| **Native by design.** SwiftUI and Apple system frameworks keep the app fast, familiar, and at home on iPhone and iPad. | **A complete player.** Up Next, smart resume, speed controls, sleep timer, AirPlay, Voice Boost, and downloads are all built in. |
+| **Transcribed on your phone.** Download an episode and opencast transcribes it on device with Apple Speech or Whisper, then marks every promo and sponsor read on the timeline and in the transcript. | **No account, no tracking.** No opencast login, no analytics SDK, no ads of our own. Subscriptions and progress sync through your private iCloud when you turn it on. |
+| **Skipped, with an undo.** High-confidence breaks skip automatically and a small red pill says "Skipped promo. Tap to undo." Borderline sponsor reads are marked, never skipped. | **Any RSS feed.** Find a show in the directory or paste its feed URL. Nothing between you and your subscriptions rearranges them. |
+| **Reads the episode.** Tap-to-seek transcripts with follow-along highlighting, full-text search across everything ever said in your library, generated chapters and summaries (optional, paid), and Voice Boost. | **Native and small.** SwiftUI on iOS 26, CarPlay and Siri, Up Next, sleep timer, per-show intro and outro skip, OPML, downloads. About 10 MB. MIT-licensed. |
 
-![Four opencast screens showing Now Playing, Sound Lab, a searchable transcript with a flagged sponsor read, and the Library](Screenshots/readme-showcase.png)
+![Four opencast screens: Now Playing with a skipped promo, the Sound Lab, a transcript with a flagged sponsor read, and the Library](Screenshots/readme-showcase.png)
 
 ## Privacy, plainly
 
