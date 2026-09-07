@@ -56,8 +56,15 @@ final class LargeFeedDeviceUITests: XCTestCase {
         let herd = app.staticTexts["The Herd with Colin Cowherd"].firstMatch
         XCTAssertTrue(herd.waitForExistence(timeout: 30))
         herd.tap()
-        let count = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "13,753 episodes", "13753 episodes")).firstMatch
-        XCTAssertTrue(count.waitForExistence(timeout: 15), "The pinned full catalog count must be visible")
+        let count = app.staticTexts.matching(
+            NSPredicate(format: "label MATCHES %@", "[0-9,]+ episodes.*")
+        ).firstMatch
+        XCTAssertTrue(count.waitForExistence(timeout: 15), "The full catalog count must be visible")
+        XCTAssertGreaterThanOrEqual(
+            try episodeCount(from: count),
+            13_753,
+            "The live catalog must retain at least the pinned capture's history"
+        )
         attach(app, "Herd-full-catalog")
 
         app.buttons["Podcast Actions"].tap()
@@ -141,6 +148,10 @@ final class LargeFeedDeviceUITests: XCTestCase {
         XCTAssertTrue(herd.waitForExistence(timeout: 30))
         herd.tap()
         let text = app.staticTexts["Some episodes couldn’t be loaded. Available episodes are ready to play."]
+        // Fixture publication can outlast navigation in a large existing
+        // library. Wait while the header is still rendered before scrolling
+        // past the location where the notice will appear.
+        XCTAssertTrue(text.waitForExistence(timeout: 60))
         revealPartialNotice(text, in: app)
         XCTAssertTrue(text.waitForExistence(timeout: 30))
         attach(app, "Herd-partial-notice")
@@ -154,23 +165,95 @@ final class LargeFeedDeviceUITests: XCTestCase {
         revealPartialNotice(text, in: app)
         XCTAssertTrue(text.waitForExistence(timeout: 20))
         app.buttons["Retry"].firstMatch.tap()
-        XCTAssertTrue(text.waitForNonExistence(timeout: 120), "A complete live retry must clear the persistent notice")
+        XCTAssertTrue(
+            app.activityIndicators["Loading feed"].waitForExistence(timeout: 10),
+            "The large live retry must be active before exercising row recycling"
+        )
+
+        // The regression trigger is specifically leaving the lazy header
+        // while its retry runs. Scroll the notice out, open an episode detail,
+        // and return; none of those view-lifetime changes may own cancellation.
+        let episodeRows = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "episode-row-")
+        )
+        for _ in 0..<12 {
+            if (!text.exists || !text.isHittable), episodeRows.allElementsBoundByIndex.contains(where: \.isHittable) {
+                break
+            }
+            dragPodcast(in: app, towardHeader: false)
+        }
+        XCTAssertFalse(text.exists && text.isHittable, "The notice must actually leave the rendered viewport")
+        attach(app, "Herd-retry-header-recycled")
+        let episodeRow = try XCTUnwrap(episodeRows.allElementsBoundByIndex.first(where: \.isHittable))
+        episodeRow.press(forDuration: 1.2)
+        let viewDetails = app.buttons["View Episode Details"].firstMatch
+        XCTAssertTrue(viewDetails.waitForExistence(timeout: 5))
+        viewDetails.tap()
+        XCTAssertTrue(app.buttons["Episode Actions"].waitForExistence(timeout: 15))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        // Bring the lazy header back into consideration before waiting. A
+        // nonexistence check while it remains recycled would pass even if the
+        // incomplete state were still persisted.
+        revealPodcastHeader(in: app)
+        XCTAssertTrue(text.waitForNonExistence(timeout: 180), "A complete live retry must clear the persistent notice")
         app.terminate()
         app.launch()
         openSection("Library", in: app)
         XCTAssertTrue(herd.waitForExistence(timeout: 30))
         herd.tap()
-        let count = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "13,753 episodes", "13753 episodes")).firstMatch
+        let count = app.staticTexts.matching(
+            NSPredicate(format: "label MATCHES %@", "[0-9,]+ episodes.*")
+        ).firstMatch
         XCTAssertTrue(count.waitForExistence(timeout: 10), "Partial import and retry must preserve the complete catalog")
+        XCTAssertGreaterThanOrEqual(try episodeCount(from: count), 13_753)
+        revealPodcastHeader(in: app)
+        XCTAssertFalse(text.exists, "The cleared incomplete state must stay cleared after relaunch")
         attach(app, "Herd-partial-retry-recovered")
     }
 
     @MainActor
     private func revealPartialNotice(_ text: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<6 where !text.isHittable {
+        revealPodcastHeader(in: app)
+        for _ in 0..<6 {
+            if text.exists && text.isHittable { break }
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
                 .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
         }
+    }
+
+    @MainActor
+    private func revealPodcastHeader(in app: XCUIApplication) {
+        // SwiftUI flattens the header's accessibility container when the
+        // notice disappears. Its episode-count text exists in both states.
+        let header = app.staticTexts.matching(
+            NSPredicate(format: "label MATCHES %@", "[0-9,]+ episodes.*")
+        ).firstMatch
+        for _ in 0..<12 {
+            if header.exists { break }
+            // Pulling through the top opens the native podcast search. Close
+            // it so absence of the header cannot masquerade as recovery.
+            if app.searchFields.firstMatch.exists {
+                app.navigationBars.buttons["Close"].tap()
+            } else {
+                dragPodcast(in: app, towardHeader: true)
+            }
+        }
+        XCTAssertTrue(header.waitForExistence(timeout: 10), "The header must be rendered before checking its notice")
+    }
+
+    @MainActor
+    private func dragPodcast(in app: XCUIApplication, towardHeader: Bool) {
+        // Whole-app swipes start over the SE's mini-player. Keep both ends
+        // inside the list viewport and hold the endpoint to stop momentum.
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+        (towardHeader ? upper : lower).press(
+            forDuration: 0.1,
+            thenDragTo: towardHeader ? lower : upper,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.2
+        )
     }
 
     private func elapsedSeconds(_ value: String) throws -> Double {
@@ -178,6 +261,13 @@ final class LargeFeedDeviceUITests: XCTestCase {
         let parts = clock.split(separator: ":").compactMap { Double($0) }
         XCTAssertTrue((2...3).contains(parts.count), "Unexpected progress format: \(value)")
         return parts.reduce(0) { $0 * 60 + $1 }
+    }
+
+    @MainActor
+    private func episodeCount(from element: XCUIElement) throws -> Int {
+        let value = element.label.components(separatedBy: " episodes")[0]
+            .replacingOccurrences(of: ",", with: "")
+        return try XCTUnwrap(Int(value), "Unexpected episode-count label: \(element.label)")
     }
 
     private static func largeFeedURLOrSkip() throws -> String {

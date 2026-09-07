@@ -52,6 +52,7 @@ final class LibraryStore {
     private(set) var refreshLogs: [RefreshLogSnapshot] = []
     private(set) var incompleteFeeds: [String: FeedIncompleteReason] = [:]
     private var processingRefreshPodcastIDs: Set<String> = []
+    private(set) var automaticRetryAfterByFeedURL: [String: Date] = [:]
     var refreshingFeedURLs: Set<String> {
         feedRefreshes.refreshingFeedURLs
     }
@@ -84,6 +85,7 @@ final class LibraryStore {
 
     @ObservationIgnored private let feedService: any FeedService
     @ObservationIgnored let localCache: any LocalLibraryCacheStore
+    @ObservationIgnored private let now: () -> Date
     /// Episode-keyed device-local stores that identity reconciliation
     /// carries across an ID change; wired by OpenCastAppModel at composition.
     var episodeSidecarMigrators: [any EpisodeIdentitySidecarMigrating] {
@@ -111,7 +113,8 @@ final class LibraryStore {
         feedService: feedService,
         localCache: localCache,
         feedWrites: feedWrites,
-        writeGeneration: writeGeneration
+        writeGeneration: writeGeneration,
+        now: now
     )
     @ObservationIgnored private var reloadGeneration = 0
     @ObservationIgnored private let reloadCompletion = LibraryReloadCompletion()
@@ -136,10 +139,12 @@ final class LibraryStore {
     init(
         feedService: any FeedService = DefaultFeedService(),
         localCache: any LocalLibraryCacheStore,
-        savePlaybackSkipSettingsModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
+        savePlaybackSkipSettingsModelContext: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        now: @escaping () -> Date = { .now }
     ) {
         self.feedService = feedService
         self.localCache = localCache
+        self.now = now
         let ledger = SyncedStoreSelfSaveLedger(performSave: savePlaybackSkipSettingsModelContext)
         let writeGeneration = LibraryWriteGeneration()
         let progressWriter = EpisodeProgressWriter(ledger: ledger)
@@ -147,7 +152,8 @@ final class LibraryStore {
             feedService: feedService,
             localCache: localCache,
             ledger: ledger,
-            writeGeneration: writeGeneration
+            writeGeneration: writeGeneration,
+            now: now
         )
         syncedStoreSelfSaveLedger = ledger
         self.writeGeneration = writeGeneration
@@ -330,7 +336,11 @@ final class LibraryStore {
         }
 
         do {
-            guard let snapshot = try await feedService.prepareFeed(at: feedURL, validators: nil).feed else {
+            guard let snapshot = try await feedService.prepareFeed(
+                at: feedURL,
+                validators: nil,
+                intent: .interactive
+            ).feed else {
                 throw OpenCastCoreError.invalidHTTPResponse
             }
             try writeGeneration.ensureCurrent(generation)
@@ -381,6 +391,22 @@ final class LibraryStore {
         await feedRefreshes.refresh(feedURL: feedURL, modelContext: modelContext)
     }
 
+    func requestManualRefresh(feedURL: String, modelContext: ModelContext) {
+        feedRefreshes.requestManualRefresh(feedURL: feedURL, modelContext: modelContext)
+    }
+
+    func cancelManualRefresh(feedURL: String) {
+        feedRefreshes.cancelManualRefresh(feedURL: feedURL)
+    }
+
+    var manualRefreshTaskCountForTesting: Int {
+        feedRefreshes.manualRefreshTaskCountForTesting
+    }
+
+    var reloadWaiterCountForTesting: Int {
+        reloadCompletion.waiterCount
+    }
+
     func refreshAll(modelContext: ModelContext) async {
         await feedRefreshes.refreshAll(modelContext: modelContext)
     }
@@ -390,8 +416,8 @@ final class LibraryStore {
     }
 
     @discardableResult
-    func refreshFeedsNeedingLocalCache(modelContext: ModelContext) async -> Bool {
-        await feedRefreshes.refreshFeedsNeedingLocalCache(modelContext: modelContext)
+    func refreshFeedsNeedingLocalCache(modelContext: ModelContext, now: Date = .now) async -> Bool {
+        await feedRefreshes.refreshFeedsNeedingLocalCache(modelContext: modelContext, now: now)
     }
 
     func unsubscribe(
@@ -615,6 +641,7 @@ final class LibraryStore {
         refreshLogs.removeAll()
         incompleteFeeds.removeAll()
         processingRefreshPodcastIDs.removeAll()
+        automaticRetryAfterByFeedURL.removeAll()
         feedRefreshes.clearAllRefreshMarkers()
         activePodcastIDs.removeAll()
         visibleEpisodeIDs.removeAll()
@@ -982,7 +1009,8 @@ final class LibraryStore {
         try await FeedRefreshFetcher.forEachResult(
             feedURLStrings: feedURLStrings,
             feedService: feedService,
-            localCache: localCache
+            localCache: localCache,
+            intent: .interactive
         ) { fetchResult in
             try Task.checkCancellation()
             try self.writeGeneration.ensureCurrent(generation)
@@ -1067,9 +1095,13 @@ final class LibraryStore {
         reloadCompletion.begin(generation)
         do {
             try await loadAndPublishLibrary(modelContext: modelContext, generation: generation)
-            reloadCompletion.finish(generation, outcome: .success(()))
+            reloadCompletion.finishPublished(generation)
         } catch {
-            reloadCompletion.finish(generation, outcome: .failure(error))
+            if error is CancellationError {
+                reloadCompletion.finishCancelled(generation)
+            } else {
+                reloadCompletion.finishFailed(generation, error: error)
+            }
             throw error
         }
     }
@@ -1081,7 +1113,7 @@ final class LibraryStore {
         let indexes = try await LibraryEpisodeIndexes.prepare(cacheSnapshot.episodes)
 
         guard generation == reloadGeneration else {
-            try await reloadCompletion.waitForCurrent()
+            try await awaitPublishedReload(modelContext: modelContext)
             return
         }
 
@@ -1100,11 +1132,29 @@ final class LibraryStore {
         refreshLogs = cacheSnapshot.refreshLogs
         incompleteFeeds = cacheSnapshot.incompleteFeeds
         processingRefreshPodcastIDs = cacheSnapshot.processingRefreshPodcastIDs
+        automaticRetryAfterByFeedURL = cacheSnapshot.automaticRetryAfterByFeedURL
         episodeIndexByID = indexes.byID
         episodeIndicesByPodcastID = indexes.byPodcastID
         episodeSearchCorpusRevision &+= 1
         rebuildLatestRefreshLogByFeedURL()
         prepareEpisodeSearchIndexIfNeeded()
+    }
+
+    private func awaitPublishedReload(modelContext: ModelContext) async throws {
+        while true {
+            switch try await reloadCompletion.waitForCurrent() {
+            case .published:
+                return
+            case .invalidated:
+                throw CancellationError()
+            case .replacementRequired(let cancelledGeneration):
+                try Task.checkCancellation()
+                if reloadCompletion.claimReplacement(for: cancelledGeneration) {
+                    try await reloadFromStore(modelContext: modelContext)
+                    return
+                }
+            }
+        }
     }
 
     /// Scoped republication for a single-feed refresh that changed no feed
@@ -1128,6 +1178,7 @@ final class LibraryStore {
         refreshLogs = cacheSnapshot.refreshLogs
         incompleteFeeds = cacheSnapshot.incompleteFeeds
         processingRefreshPodcastIDs = cacheSnapshot.processingRefreshPodcastIDs
+        automaticRetryAfterByFeedURL = cacheSnapshot.automaticRetryAfterByFeedURL
         rebuildLatestRefreshLogByFeedURL()
         prepareEpisodeSearchIndexIfNeeded()
     }
@@ -1272,17 +1323,9 @@ final class LibraryStore {
     }
 
     private func rebuildEpisodeIndexes() {
-        var indexByID: [String: Int] = [:]
-        indexByID.reserveCapacity(episodes.count)
-        var indicesByPodcastID: [String: [Int]] = [:]
-        for (index, episode) in episodes.enumerated() {
-            if indexByID[episode.episodeID] == nil {
-                indexByID[episode.episodeID] = index
-            }
-            indicesByPodcastID[episode.podcastID, default: []].append(index)
-        }
-        episodeIndexByID = indexByID
-        episodeIndicesByPodcastID = indicesByPodcastID
+        let indexes = LibraryEpisodeIndexes(episodes: episodes)
+        episodeIndexByID = indexes.byID
+        episodeIndicesByPodcastID = indexes.byPodcastID
         episodeSearchCorpusRevision &+= 1
     }
 

@@ -33,17 +33,20 @@ final class FeedWriteCoordinator {
     @ObservationIgnored private let localCache: any LocalLibraryCacheStore
     @ObservationIgnored private let ledger: SyncedStoreSelfSaveLedger
     @ObservationIgnored private let writeGeneration: LibraryWriteGeneration
+    @ObservationIgnored private let now: () -> Date
 
     init(
         feedService: any FeedService,
         localCache: any LocalLibraryCacheStore,
         ledger: SyncedStoreSelfSaveLedger,
-        writeGeneration: LibraryWriteGeneration
+        writeGeneration: LibraryWriteGeneration,
+        now: @escaping () -> Date
     ) {
         self.feedService = feedService
         self.localCache = localCache
         self.ledger = ledger
         self.writeGeneration = writeGeneration
+        self.now = now
     }
 
     func upsert(
@@ -71,7 +74,7 @@ final class FeedWriteCoordinator {
     ) async throws -> Bool {
         try Task.checkCancellation()
         let canonicalFeedURL = snapshot.podcast.id.rawValue
-        let now = Date.now
+        let now = now()
 
         var subscriptionDescriptor = FetchDescriptor<SubscriptionRecord>(
             predicate: #Predicate { record in
@@ -323,7 +326,11 @@ final class FeedWriteCoordinator {
         modelContext: ModelContext
     ) async throws {
         let generation = generation ?? writeGeneration.capture()
-        let outcome = try await feedService.prepareFeed(at: newFeedURL, validators: nil)
+        let outcome = try await feedService.prepareFeed(
+            at: newFeedURL,
+            validators: nil,
+            intent: .interactive
+        )
         try writeGeneration.ensureCurrent(generation)
         guard let prepared = outcome.feed, prepared.completeness.isComplete else {
             throw OpenCastCoreError.malformedFeed(reason: "A complete feed is required to update its address.")
@@ -352,7 +359,7 @@ final class FeedWriteCoordinator {
             throw FeedMigrationError(message: "The feed at the new address does not match this show.")
         }
 
-        try await localCache.upsertCache(from: prepared, refreshedAt: .now)
+        try await localCache.upsertCache(from: prepared, refreshedAt: now())
         do {
             // Everything from here to the save is synchronous, so this one
             // check covers the save; on unwind the new URL's fresh cache
@@ -369,7 +376,7 @@ final class FeedWriteCoordinator {
             modelContext: modelContext
         )
 
-        let deletedAt = Date.now
+        let deletedAt = now()
         modelContext.insert(
             SyncTombstoneRecord(scope: .subscription, feedURL: oldCanonicalFeedURL, deletedAt: deletedAt)
         )
@@ -395,7 +402,7 @@ final class FeedWriteCoordinator {
                     author: snapshot.podcast.author,
                     artworkURL: snapshot.podcast.artworkURL?.absoluteString,
                     subscribedAt: deletedAt.addingTimeInterval(1),
-                    lastRefreshAt: .now,
+                    lastRefreshAt: now(),
                     isArchived: template.isArchived,
                     isVoiceBoostEnabled: template.isVoiceBoostEnabled,
                     isAdAutoDetectEnabled: template.isAdAutoDetectEnabled,
@@ -473,7 +480,11 @@ final class FeedWriteCoordinator {
                 continue
             }
             do {
-                guard let prepared = try await feedService.prepareFeed(at: feedURL, validators: nil).feed,
+                guard let prepared = try await feedService.prepareFeed(
+                    at: feedURL,
+                    validators: nil,
+                    intent: .interactive
+                ).feed,
                       prepared.completeness.isComplete else {
                     throw OpenCastCoreError.malformedFeed(reason: "A complete feed is required to repair episode identities.")
                 }

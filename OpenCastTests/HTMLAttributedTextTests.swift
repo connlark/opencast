@@ -115,6 +115,66 @@ struct HTMLAttributedTextTests {
         #expect(HTMLAttributedText.attributedBlocks(from: "").isEmpty)
     }
 
+    @Test("Show-notes timestamps gain seek links covering exactly the digits")
+    func timestampsGainSeekLinks() {
+        let attributed = HTMLAttributedText.attributedString(
+            from: "<p>(00:02:16) Investing<br>8:39 \u{2013} Bloopers<br>1:02:33 Topic<br>[12:05] Q&amp;A</p>"
+        )
+
+        #expect(timestampSeconds(of: "00:02:16", in: attributed) == 136)
+        #expect(timestampSeconds(of: "8:39", in: attributed) == 519)
+        #expect(timestampSeconds(of: "1:02:33", in: attributed) == 3753)
+        #expect(timestampSeconds(of: "12:05", in: attributed) == 725)
+
+        let linkedTexts = attributed.runs.compactMap { run in
+            run.link.map { _ in String(attributed.characters[run.range]) }
+        }
+        #expect(linkedTexts == ["00:02:16", "8:39", "1:02:33", "12:05"])
+    }
+
+    @Test("Clock times, fractions, ISO dates, and out-of-range digits are not timestamps")
+    func timestampsRejectNonTimestamps() {
+        let attributed = HTMLAttributedText.attributedString(
+            from: "<p>10:75 60:30 123:45 12:34:56:78 2026-09-06T10:30:00Z 8:39 am 8:39pm 8:39 P.M. 16:9 3:16.5</p>"
+        )
+
+        let timestampLinks = attributed.runs.compactMap(\.link).compactMap(ShowNotesTimestampLink.seconds(from:))
+        #expect(timestampLinks.isEmpty)
+    }
+
+    @Test("A timestamp followed by a word that starts with am still links")
+    func timestampAfterClockWordStillLinks() {
+        let attributed = HTMLAttributedText.attributedString(from: "<p>8:39 amazing guest</p>")
+        #expect(timestampSeconds(of: "8:39", in: attributed) == 519)
+    }
+
+    @Test("Timestamp detection never overwrites an existing link")
+    func timestampsNeverOverwriteAnchorLinks() {
+        let attributed = HTMLAttributedText.attributedString(
+            from: #"<a href="https://example.com/?t=136">02:16</a>"#
+        )
+
+        #expect(attributed.runs.compactMap(\.link) == [URL(string: "https://example.com/?t=136")])
+    }
+
+    @Test("Timestamps and phone numbers link side by side")
+    func timestampsAndPhoneNumbersCoexist() {
+        let attributed = HTMLAttributedText.attributedString(from: "<p>Call (555) 123-4567 at 10:30</p>")
+
+        let links = attributed.runs.compactMap(\.link)
+        #expect(links.count == 2)
+        #expect(links.contains { $0.scheme == "tel" })
+        #expect(timestampSeconds(of: "10:30", in: attributed) == 630)
+    }
+
+    @Test("Timestamp links survive the paragraph split")
+    func attributedBlocksKeepTimestampLinks() {
+        let blocks = HTMLAttributedText.attributedBlocks(from: "<p>Intro</p><p>8:39 \u{2013} Bloopers</p>")
+
+        #expect(blocks.count == 2)
+        #expect(blocks.last.flatMap { timestampSeconds(of: "8:39", in: $0) } == 519)
+    }
+
     private func plainText(_ html: String) -> String {
         String(HTMLAttributedText.attributedString(from: html).characters)
     }
@@ -125,6 +185,10 @@ struct HTMLAttributedTextTests {
 
     private func link(of text: String, in attributed: AttributedString) -> URL? {
         run(of: text, in: attributed)?.link
+    }
+
+    private func timestampSeconds(of text: String, in attributed: AttributedString) -> TimeInterval? {
+        link(of: text, in: attributed).flatMap(ShowNotesTimestampLink.seconds(from:))
     }
 
     private func run(of text: String, in attributed: AttributedString) -> AttributedString.Runs.Run? {

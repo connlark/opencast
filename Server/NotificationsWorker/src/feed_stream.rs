@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, ReadBuf};
 use worker::js_sys::Uint8Array;
-use worker::wasm_bindgen::{self, prelude::*};
+use worker::wasm_bindgen::JsValue;
 use worker::wasm_bindgen_futures::JsFuture;
 use worker::{Delay, Response, ResponseBody};
 
@@ -41,26 +41,6 @@ impl Drop for FeedFetchCancellation {
     }
 }
 
-#[wasm_bindgen(inline_js = r#"
-export function openFeedReader(body) { return body.getReader({ mode: 'byob' }); }
-export async function readFeedChunk(reader, size) {
-  const result = await reader.read(new Uint8Array(size));
-  return result.value && result.value.byteLength ? result.value : null;
-}
-export function cancelFeedReader(reader) {
-  reader.cancel().catch(() => {});
-  try { reader.releaseLock(); } catch (_) {}
-}
-"#)]
-extern "C" {
-    #[wasm_bindgen(catch, js_name = openFeedReader)]
-    fn open_feed_reader(body: &JsValue) -> Result<JsValue, JsValue>;
-    #[wasm_bindgen(js_name = readFeedChunk)]
-    fn read_feed_chunk(reader: &JsValue, size: u32) -> worker::js_sys::Promise;
-    #[wasm_bindgen(js_name = cancelFeedReader)]
-    fn cancel_feed_reader(reader: &JsValue);
-}
-
 type PendingRead = Pin<Box<dyn Future<Output = io::Result<Option<Vec<u8>>>>>>;
 
 pub(crate) struct FeedStream {
@@ -82,7 +62,7 @@ impl FeedStream {
         let ResponseBody::Stream(body) = response.body() else {
             return Err(io::Error::other("missing_feed_stream"));
         };
-        let reader = open_feed_reader(body.as_ref())
+        let reader = crate::worker_glue::open_feed_reader(body.as_ref())
             .map_err(|_| io::Error::other("feed_stream_unavailable"))?;
         Ok(Self {
             reader,
@@ -98,7 +78,7 @@ impl FeedStream {
 
 impl Drop for FeedStream {
     fn drop(&mut self) {
-        cancel_feed_reader(&self.reader);
+        crate::worker_glue::cancel_feed_reader(&self.reader);
     }
 }
 
@@ -113,7 +93,10 @@ impl AsyncRead for FeedStream {
         }
         if self.offset == self.chunk.len() && !self.ended {
             if self.pending.is_none() {
-                let promise = read_feed_chunk(&self.reader, feed_resource::CHUNK_BYTES as u32);
+                let promise = crate::worker_glue::read_feed_chunk(
+                    &self.reader,
+                    feed_resource::CHUNK_BYTES as u32,
+                );
                 self.pending = Some(Box::pin(async move {
                     let result = fetch_with_deadline(
                         async {

@@ -32,6 +32,9 @@ extension URLSessionOpenCastHTTPClient {
                 catch {
                     try Task.checkCancellation()
                     if (error as? URLError)?.code == .cancelled { throw CancellationError() }
+                    if count == 0, chunk.isEmpty {
+                        throw error
+                    }
                     issue = .interruptedTransfer(error.localizedDescription)
                     break
                 }

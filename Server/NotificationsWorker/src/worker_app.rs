@@ -33,7 +33,7 @@ use crate::{
 };
 use crate::{
     feed_resource,
-    feed_scan_admission::FeedScanPermit,
+    feed_scan_admission::{FeedScanAdmissionDiagnostics, FeedScanPermit},
     feed_stream::{FeedFetchCancellation, FeedStream},
 };
 use futures_util::stream::FuturesUnordered;
@@ -207,7 +207,12 @@ struct PollSubscriptionsResponse {
     notifications_attempted: usize,
     apns_200_count: usize,
     deduped_count: usize,
+    admission_refused: usize,
     first_error: Option<String>,
+    scan_active: usize,
+    isolate_id: String,
+    wasm_instance_id: u32,
+    wasm_memory_bytes: u32,
 }
 
 #[derive(Deserialize)]
@@ -259,6 +264,7 @@ struct TestPushResponse {
 }
 
 pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
+    log_feed_scan_admission_diagnostics("request_start");
     let method = req.method();
     let path = req.path();
 
@@ -318,6 +324,7 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
 }
 
 pub async fn handle_scheduled(env: Env) -> Result<()> {
+    log_feed_scan_admission_diagnostics("scheduled_start");
     let config = AppConfig::from_env(&env)?;
     let db = env.d1(APP_ATTEST_DB)?;
     let now = now_seconds();
@@ -341,11 +348,20 @@ pub async fn handle_scheduled(env: Env) -> Result<()> {
     // would postpone unstarted feeds when the invocation reaches its budget.
     let summary = poll_feeds(feeds, &env, &db, &config, now, true).await?;
     worker::console_log!(
-        "scheduled poll: polled={} changed={} sends={}",
-        summary.feeds_polled,
-        summary.feeds_changed,
-        summary.notifications_attempted
+        "{}",
+        json!({
+            "event": "scheduled_poll_complete",
+            "feeds_polled": summary.feeds_polled,
+            "feeds_changed": summary.feeds_changed,
+            "notifications_attempted": summary.notifications_attempted,
+            "admission_refused": summary.admission_refused,
+            "scan_active": summary.scan_active,
+            "isolate_id": summary.isolate_id,
+            "wasm_instance_id": summary.wasm_instance_id,
+            "wasm_memory_bytes": summary.wasm_memory_bytes,
+        })
     );
+    log_feed_scan_admission_diagnostics("scheduled_after_poll");
     storage::prune_challenges_before(&db, now.saturating_sub(CHALLENGE_RETENTION_SECONDS))
         .await
         .ok();
@@ -1111,6 +1127,7 @@ async fn poll_feeds(
     let admission_started = now_seconds();
     let invocation_bytes = Rc::new(Cell::new(0usize));
     let mut feeds = feeds.into_iter();
+    let mut pending_feed = None;
     let mut active = FuturesUnordered::new();
     loop {
         while active.len() < feed_resource::MAX_ACTIVE_SCANS
@@ -1118,10 +1135,12 @@ async fn poll_feeds(
                 < feed_resource::POLL_ADMISSION_SECONDS
             && invocation_bytes.get() < feed_resource::MAX_DECODED_BYTES
         {
-            let Some(permit) = FeedScanPermit::try_acquire() else {
+            let Some(feed) = pending_feed.take().or_else(|| feeds.next()) else {
                 break;
             };
-            let Some(feed) = feeds.next() else {
+            let Some(permit) = FeedScanPermit::try_acquire() else {
+                pending_feed = Some(feed);
+                response.admission_refused += 1;
                 break;
             };
             if claim_due
@@ -1166,6 +1185,10 @@ async fn poll_feeds(
         }
     }
 
+    if response.feeds_polled == 0 && response.admission_refused > 0 && pending_feed.is_some() {
+        response.message = "scan_capacity_unavailable";
+    }
+
     storage::prune_feed_poll_attempts_before(
         db,
         now.saturating_sub(FEED_ATTEMPT_RETENTION_SECONDS),
@@ -1173,7 +1196,39 @@ async fn poll_feeds(
     .await
     .ok();
 
+    let runtime = crate::runtime_diagnostics::current();
+    response.scan_active = FeedScanPermit::active_count();
+    response.isolate_id = runtime.isolate_id;
+    response.wasm_instance_id = runtime.wasm_instance_id;
+    response.wasm_memory_bytes = runtime.wasm_memory_bytes;
+
     Ok(response)
+}
+
+fn log_feed_scan_admission_diagnostics(phase: &'static str) {
+    let FeedScanAdmissionDiagnostics {
+        refused,
+        abandoned_recovered,
+        stale_releases,
+    } = FeedScanPermit::take_diagnostics();
+    if refused == 0 && abandoned_recovered == 0 && stale_releases == 0 {
+        return;
+    }
+    let runtime = crate::runtime_diagnostics::current();
+    worker::console_warn!(
+        "{}",
+        json!({
+            "event": "feed_scan_admission",
+            "phase": phase,
+            "active": FeedScanPermit::active_count(),
+            "refused": refused,
+            "abandoned_recovered": abandoned_recovered,
+            "stale_releases": stale_releases,
+            "isolate_id": runtime.isolate_id,
+            "wasm_instance_id": runtime.wasm_instance_id,
+            "wasm_memory_bytes": runtime.wasm_memory_bytes,
+        })
+    );
 }
 
 struct PollOneFeedResult {

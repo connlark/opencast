@@ -1869,6 +1869,31 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededShowNotesTimestampTapStartsPlaybackAtThatTime() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        assertExists(app.tabBars.buttons["Library"], named: "Library tab")
+        app.tabBars.buttons["Inbox"].tap()
+        openEpisodeDetailFromContextMenu(seededEpisodeRow(in: app), in: app, named: "inbox episode")
+
+        let timestampLink = app.links["1:30"]
+        scrollUntilExists(timestampLink, in: app, maxSwipes: 8)
+        timestampLink.tap()
+
+        // A timestamp tap starts playback without presenting Now Playing, so
+        // the mini player is the way in to read the position.
+        let openNowPlaying = app.buttons["Open Now Playing"]
+        assertExists(openNowPlaying, named: "mini player after timestamp tap")
+        openNowPlaying.tap()
+        assertNowPlayingOverlay(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+        waitForPlaybackElapsed(progress, in: 90..<100, timeout: 8)
+        attachSmokeScreenshot(named: "show_notes_timestamp_seek")
+    }
+
+    @MainActor
     func testSeededNowPlayingCanDismissFromContentArea() throws {
         let app = makeSeededApp()
         app.launchArguments.append("--opencast-frame-probe")

@@ -26,7 +26,10 @@ cp wrangler.example.toml wrangler.toml
 Replace every `REPLACE_WITH_...` value in `wrangler.toml` with resources from
 your own Cloudflare and Apple developer accounts. Keep public notifications,
 debug endpoints, admin endpoints, and cron polling disabled until App Attest,
-APNs, D1 migrations, routes, and abuse controls are configured.
+APNs, D1 migrations, routes, and abuse controls are configured. Keep
+`compatibility_flags = ["enable_request_signal"]`: the fetch entrypoint uses
+the native request abort signal to release scan capacity when a client
+disconnects, and the runtime harnesses read the flag from `wrangler.toml`.
 
 Set required secrets with Wrangler commands, never by committing values:
 
@@ -46,6 +49,7 @@ yarn typecheck
 yarn deploy:dry-run
 python3 ../../scripts/check-feed-resource-policy.py
 node tests/feed-runtime.mjs
+node tests/feed-cancellation-runtime.mjs
 ```
 
 The runtime harness starts the packaged Worker in workerd with isolated D1 and
@@ -53,6 +57,17 @@ mock feed/APNs services. It exercises baseline establishment, malformed-feed
 rollback, update delivery, deduplication, and the Worker memory ceiling without
 using remote credentials or services. Run `yarn deploy:dry-run` first so the
 packaged `build/` modules exist.
+
+The cancellation harness starts the same packaged entrypoint with the
+compatibility flags from `wrangler.toml` and checks that an abandoned client
+request disposes the scan it owned: native request signals, transport
+disposal, permit reuse, late continuations, and repeat-poll deduplication. The
+opt-in `tests/feed-cancellation-remote.mjs` separately checks real client
+disconnects against your own prod-staging deployment with admin test endpoints
+temporarily enabled; its header documents the operator-supplied origin,
+fixture, and token file, and the staging restoration and fixture cleanup it
+expects afterward. Reports from both harnesses stay under `/private/tmp` by
+default.
 
 Apply migrations to your own D1 database:
 
@@ -94,7 +109,10 @@ Worker accepts at most 128 MiB of decoded XML and 100,000 raw RSS items, streams
 the response through a bounded parser, and limits XML depth, individual text
 fields, per-item text, and cumulative text processing. Two scans may run per
 isolate; each polling invocation also has bounded elapsed-time and decoded-byte
-admission budgets.
+admission budgets. The fetch entrypoint binds the native request abort signal
+to ownership of the Rust future, its admission permit, the fetch, and the BYOB
+reader, so an abandoned request disposes them together; owner IDs make a late
+release harmless to replacement work.
 
 Only a complete successful scan may send notifications or advance a feed
 checkpoint. The scanner retains bounded channel metadata, notification

@@ -500,6 +500,91 @@ struct OpenCastHTTPClientTests {
         }
     }
 
+    @Test("Feed transport preserves failures that arrive before the first body byte", arguments: [
+        URLError.Code.timedOut,
+        URLError.Code.networkConnectionLost,
+    ])
+    func emptyFeedTransportPreservesFailure(code: URLError.Code) async throws {
+        let url = URL(string: "https://example.com/empty-transport-\(code.rawValue).xml")!
+        let client = streamingStubClient(
+            plan: StreamingBodyPlan(chunks: [], contentLength: nil, terminalError: code),
+            url: url
+        )
+
+        do {
+            _ = try await client.feedFile(
+                for: URLRequest(url: url),
+                maximumBodyByteCount: FeedResourcePolicy.maximumDecodedBytes
+            )
+            Issue.record("Expected the original transport error")
+        } catch let error as URLError {
+            #expect(error.code == code)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test("Feed cancellation before the first body byte stays cancellation")
+    func emptyFeedTransportPreservesCancellation() async throws {
+        let url = URL(string: "https://example.com/empty-cancelled.xml")!
+        let client = streamingStubClient(
+            plan: StreamingBodyPlan(chunks: [], contentLength: nil, terminalError: .cancelled),
+            url: url
+        )
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await client.feedFile(
+                for: URLRequest(url: url),
+                maximumBodyByteCount: FeedResourcePolicy.maximumDecodedBytes
+            )
+        }
+    }
+
+    @Test("Interrupted feed classification requires a completed usable item", arguments: [
+        ("opening", "<rs", false),
+        ("root", "<rss><channel>", false),
+        ("item", "<rss><channel><item><guid>unfinished", false),
+        (
+            "usable",
+            "<rss><channel><title>Show</title><item><guid>one</guid><enclosure url=\"https://example.com/one.mp3\"/></item>",
+            true
+        ),
+    ])
+    func interruptedFeedClassification(name: String, xml: String, hasUsableItem: Bool) async throws {
+        let url = URL(string: "https://example.com/interrupted-\(name).xml")!
+        let client = streamingStubClient(
+            plan: StreamingBodyPlan(
+                chunks: [Data(xml.utf8)],
+                contentLength: nil,
+                terminalError: .networkConnectionLost
+            ),
+            url: url
+        )
+
+        if hasUsableItem {
+            let outcome = try await DefaultFeedService(httpClient: client).prepareFeed(at: url)
+            let feed = try #require(outcome.feed)
+            #expect(feed.episodeCount == 1)
+            guard case .partial(.interruptedTransfer) = feed.completeness else {
+                Issue.record("Expected an interrupted partial feed")
+                return
+            }
+        } else {
+            do {
+                _ = try await DefaultFeedService(httpClient: client).prepareFeed(at: url)
+                Issue.record("Expected interrupted input without usable items to fail")
+            } catch let error as OpenCastCoreError {
+                guard case let .incompleteFeed(.interruptedTransfer(reason)) = error else {
+                    Issue.record("Expected interrupted-feed transport diagnostics, got \(error)")
+                    return
+                }
+                #expect(reason == URLError(.networkConnectionLost).localizedDescription)
+                #expect(error.localizedDescription.contains("transfer was interrupted"))
+                #expect(!error.localizedDescription.contains("XML is invalid"))
+            }
+        }
+    }
+
     @Test("Feed sessions have dedicated inactivity and total deadlines without a body cache")
     func feedSessionPolicy() {
         let configuration = OpenCastURLSessionFactory.feedConfiguration()
@@ -589,6 +674,7 @@ private struct StreamingBodyPlan: Sendable {
     let chunks: [Data]
     let contentLength: Int?
     var status: Int = 200
+    var terminalError: URLError.Code?
 }
 
 /// Keyed by request URL so concurrently running tests never read each
@@ -634,10 +720,24 @@ private final class StreamingBodyURLProtocol: URLProtocol, @unchecked Sendable {
             headerFields: headers
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        if plan.terminalError != nil {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.01) { [weak self] in
+                self?.deliver(plan)
+            }
+        } else {
+            deliver(plan)
+        }
+    }
+
+    private func deliver(_ plan: StreamingBodyPlan) {
         for chunk in plan.chunks {
             client?.urlProtocol(self, didLoad: chunk)
         }
-        client?.urlProtocolDidFinishLoading(self)
+        if let terminalError = plan.terminalError {
+            client?.urlProtocol(self, didFailWithError: URLError(terminalError))
+        } else {
+            client?.urlProtocolDidFinishLoading(self)
+        }
     }
 
     override func stopLoading() {

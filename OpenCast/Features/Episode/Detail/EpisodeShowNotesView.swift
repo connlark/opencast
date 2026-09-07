@@ -4,6 +4,7 @@ import SwiftUI
 /// arbitrarily long notes never exceed what a single text view can paint.
 struct EpisodeShowNotesView: View {
     let blocks: [AttributedString]
+    let onSelectTimestamp: (TimeInterval) -> Void
 
     var body: some View {
         let identifiedBlocks = EpisodeShowNotesBlock.identify(blocks)
@@ -19,6 +20,15 @@ struct EpisodeShowNotesView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .environment(\.openURL, OpenURLAction(handler: openLink))
+    }
+
+    private func openLink(_ url: URL) -> OpenURLAction.Result {
+        guard let seconds = ShowNotesTimestampLink.seconds(from: url) else {
+            return .systemAction
+        }
+        onSelectTimestamp(seconds)
+        return .handled
     }
 }
 
@@ -30,9 +40,11 @@ struct EpisodeShowNotesView: View {
                 <p>This week we cover <b>speculative execution</b> with guest \
                 <a href="https://example.com">Dr. Cache</a>.</p>
                 <ul><li>Prefetchers gone wrong</li><li>The Tuesday bug</li></ul>
+                <p>(00:02:16) Prefetchers gone wrong<br>8:39 – The Tuesday bug</p>
                 <p>Call the show at (555) 123-4567.</p>
                 """
-            )
+            ),
+            onSelectTimestamp: { _ in }
         )
         .padding()
     }
@@ -44,7 +56,8 @@ struct EpisodeShowNotesView: View {
         EpisodeShowNotesView(
             blocks: HTMLAttributedText.attributedBlocks(
                 from: "<p>Short notes with <em>emphasis</em> only.</p>"
-            )
+            ),
+            onSelectTimestamp: { _ in }
         )
         .padding()
     }

@@ -227,12 +227,14 @@ struct EpisodeDetailView: View {
                 }
 
                 if !showNotes.isEmpty {
-                    EpisodeShowNotesView(blocks: showNotes.blocks)
-                        .frame(
-                            maxWidth: horizontalSizeClass == .regular ? 680 : .infinity,
-                            alignment: .leading
-                        )
-                        .frame(maxWidth: .infinity)
+                    EpisodeShowNotesView(blocks: showNotes.blocks) { seconds in
+                        seekToTimestamp(seconds, episode: episode)
+                    }
+                    .frame(
+                        maxWidth: horizontalSizeClass == .regular ? 680 : .infinity,
+                        alignment: .leading
+                    )
+                    .frame(maxWidth: .infinity)
                 }
 
                 // Generation stays below the show notes, out of the way — the
@@ -644,6 +646,24 @@ struct EpisodeDetailView: View {
                 presentsNowPlaying: false,
                 modelContext: modelContext
             )
+        }
+    }
+
+    /// Show-notes timestamps are publisher-authored against the published
+    /// enclosure, so unlike chapters there is no transcript hash to align
+    /// against: a plain seek, or a plain start at that time, is the best
+    /// available answer.
+    private func seekToTimestamp(_ seconds: TimeInterval, episode: EpisodeListItemSnapshot) {
+        if appModel.playback.currentEpisode?.id.rawValue == episode.episodeID {
+            appModel.playback.seek(to: seconds, intent: .scrub)
+            if appModel.playback.state != .playing {
+                appModel.playback.play()
+            }
+            return
+        }
+
+        runPlaybackAction {
+            try appModel.playEpisode(episode, at: seconds, presentsNowPlaying: false, modelContext: modelContext)
         }
     }
 

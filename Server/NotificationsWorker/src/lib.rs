@@ -18,11 +18,15 @@ mod poll_decisions;
 mod poll_scheduling;
 pub mod route;
 pub mod rss;
+#[cfg(target_arch = "wasm32")]
+mod runtime_diagnostics;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod feed_scan_admission;
 #[cfg(target_arch = "wasm32")]
 mod feed_stream;
+#[cfg(any(target_arch = "wasm32", test))]
+mod invocation_owner;
 #[cfg(any(target_arch = "wasm32", test))]
 mod storage;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -31,6 +35,8 @@ mod subscription_admission;
 mod subscription_payloads;
 #[cfg(target_arch = "wasm32")]
 mod worker_app;
+#[cfg(target_arch = "wasm32")]
+mod worker_glue;
 
 #[cfg(target_arch = "wasm32")]
 use worker::*;
@@ -38,7 +44,13 @@ use worker::*;
 #[cfg(target_arch = "wasm32")]
 #[event(fetch)]
 pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    worker_app::handle_request(req, env).await
+    let signal = req.inner().signal();
+    match invocation_owner::run_with_abort_signal(signal, worker_app::handle_request(req, env))
+        .await
+    {
+        Some(result) => result,
+        None => Err(Error::RustError("request_cancelled".into())),
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -15,7 +15,7 @@ public struct RSSFeedParser: Sendable {
         // work, and regex-reprocessing an oversized document would evade the
         // budgets it just enforced.
         var salvageCandidate = original.delegate
-        if !original.delegate.didExceedWorkBudget,
+        if original.delegate.isRecoveryEligible,
            let recoveredData = RSSFeedRecovery.recoveredData(from: data) {
             let recovered = parseXML(data: recoveredData, feedURL: feedURL)
             if recovered.error == nil {
@@ -108,6 +108,10 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     private let fallbackCDATAEncoding: String.Encoding?
     private(set) var rootElementName: String?
     private(set) var didExceedWorkBudget = false
+    /// False only for parser aborts whose structure cannot be changed by the
+    /// entity/encoding recovery pass. Resource-budget aborts are also
+    /// ineligible, but remain separately observable for error classification.
+    private(set) var isRecoveryEligible = true
     /// Per-prefix stacks of "is this the Podcast Index namespace?", seeded
     /// with the canonical prefix. `podcast:chapters` presence gates paid
     /// chapter generation, so a feed binding the namespace to a non-canonical
@@ -348,7 +352,12 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         case "item":
             rawItemCount += 1
             if rawItemCount > ParserWorkBudget.maxItems { exceed(.itemLimit) }
-            if currentItem != nil { incompleteReason = .malformedXML("Nested RSS item."); parser.abortParsing(); return }
+            if currentItem != nil {
+                incompleteReason = .malformedXML("Nested RSS item.")
+                isRecoveryEligible = false
+                parser.abortParsing()
+                return
+            }
             itemTextBytes = 0
             currentItem = ItemAccumulator()
         case "enclosure":
@@ -479,6 +488,7 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
 
     private func exceed(_ reason: FeedIncompleteReason) {
         didExceedWorkBudget = true
+        isRecoveryEligible = false
         if incompleteReason == nil { incompleteReason = reason }
     }
 

@@ -115,7 +115,11 @@ public struct DirectoryFeedCandidateResolver: Sendable {
             for (index, candidate) in candidates.enumerated() {
                 group.addTask {
                     do {
-                        let outcome = try await feedService.prepareFeed(at: candidate.feedURL, validators: nil)
+                        let outcome = try await feedService.prepareFeed(
+                            at: candidate.feedURL,
+                            validators: nil,
+                            intent: .interactive
+                        )
                         guard let snapshot = outcome.feed else {
                             throw OpenCastCoreError.invalidHTTPResponse
                         }

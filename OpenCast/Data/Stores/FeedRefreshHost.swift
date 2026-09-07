@@ -10,6 +10,7 @@ protocol FeedRefreshHost: AnyObject {
     var subscriptions: [SubscriptionRecord] { get }
     var latestRefreshLogByFeedURL: [String: RefreshLogSnapshot] { get }
     var feedURLStringsNeedingLocalCache: [String] { get }
+    var automaticRetryAfterByFeedURL: [String: Date] { get }
     func activeSubscription(feedURL: String, modelContext: ModelContext) throws -> SubscriptionRecord?
     func activeSubscriptionFeedURLStrings(modelContext: ModelContext) throws -> [String]
     func reloadFromStore(modelContext: ModelContext) async throws

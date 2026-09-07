@@ -7,6 +7,7 @@ nonisolated struct LocalLibraryCacheSnapshot: Sendable {
     let refreshLogs: [RefreshLogSnapshot]
     var incompleteFeeds: [String: FeedIncompleteReason] = [:]
     var processingRefreshPodcastIDs: Set<String> = []
+    var automaticRetryAfterByFeedURL: [String: Date] = [:]
 
     static let empty = LocalLibraryCacheSnapshot(
         podcastsByFeedURL: [:],

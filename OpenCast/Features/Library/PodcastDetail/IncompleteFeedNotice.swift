@@ -4,9 +4,8 @@ import SwiftUI
 struct IncompleteFeedNotice: View {
     let reason: FeedIncompleteReason
     let isRefreshing: Bool
-    let retry: () async -> Void
+    let retry: () -> Void
     @State private var isShowingDetails = false
-    @State private var retryTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -15,7 +14,7 @@ struct IncompleteFeedNotice: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("Retry", systemImage: "arrow.clockwise") {
-                    retryTask = Task { await retry() }
+                    retry()
                 }
                 .disabled(isRefreshing)
                 .frame(minHeight: 44)
@@ -31,7 +30,6 @@ struct IncompleteFeedNotice: View {
         .accessibilityIdentifier("Incomplete Feed Notice")
         .alert("Feed Loading Details", isPresented: $isShowingDetails) {
         } message: { Text(reason.diagnostic) }
-        .onDisappear { retryTask?.cancel() }
     }
 
     private func showDetails() {

@@ -35,56 +35,63 @@ extension RSSFeedRecovery {
 
         while true {
             try Task.checkCancellation()
-            let chunk = try input.read(upToCount: FeedResourcePolicy.chunkBytes) ?? Data()
-            let atEnd = chunk.isEmpty
-            pendingBytes.append(chunk)
-            var decoded: String?
-            var usedBytes = pendingBytes.count
-            for suffix in 0...min(8, pendingBytes.count) {
-                if atEnd, suffix > 0 { break }
-                usedBytes = pendingBytes.count - suffix
-                if let value = String(data: pendingBytes.prefix(usedBytes), encoding: encoding) {
-                    decoded = value
-                    break
-                }
-            }
-            guard var decoded else { return false }
-            if isFirstChunk {
-                if decoded.first == "\u{FEFF}" { decoded.removeFirst() }
-                normalizeEncodingDeclaration(in: &decoded)
-                isFirstChunk = false
-            }
-            pendingBytes.removeFirst(usedBytes)
-            pendingText += decoded
-            while !pendingText.isEmpty {
-                let delimiter = inCDATA ? "]]>" : "<![CDATA["
-                if let range = pendingText.range(of: delimiter) {
-                    try write(String(pendingText[..<range.lowerBound]), repair: !inCDATA)
-                    try write(delimiter, repair: false)
-                    pendingText = String(pendingText[range.upperBound...])
-                    inCDATA.toggle()
-                } else {
-                    var end = atEnd ? pendingText.endIndex : pendingText.index(pendingText.endIndex,
-                        offsetBy: -min(256, pendingText.count))
-                    if !inCDATA, !atEnd,
-                       let amp = pendingText[..<end].lastIndex(of: "&"),
-                       pendingText.distance(from: amp, to: end) < 256,
-                       !pendingText[amp..<end].contains(";") {
-                        end = amp
+            // Foundation decoding and entity repair create autoreleased
+            // objects even though the Swift buffers are bounded. Drain them
+            // per chunk instead of retaining an entire recovery pass's text.
+            let finished: Bool? = try autoreleasepool {
+                let chunk = try input.read(upToCount: FeedResourcePolicy.chunkBytes) ?? Data()
+                let atEnd = chunk.isEmpty
+                pendingBytes.append(chunk)
+                var decoded: String?
+                var usedBytes = pendingBytes.count
+                for suffix in 0...min(8, pendingBytes.count) {
+                    if atEnd, suffix > 0 { break }
+                    usedBytes = pendingBytes.count - suffix
+                    if let value = String(data: pendingBytes.prefix(usedBytes), encoding: encoding) {
+                        decoded = value
+                        break
                     }
-                    let fragment = String(pendingText[..<end])
-                    try write(fragment, repair: !inCDATA)
-                    // libxml has its own single-CDATA token ceiling below our
-                    // field budget. Adjacent CDATA sections preserve every
-                    // character while delivering bounded parser callbacks.
-                    if inCDATA, !atEnd, !fragment.isEmpty {
-                        try write("]]><![CDATA[", repair: false)
-                    }
-                    pendingText = String(pendingText[end...])
-                    break
                 }
+                guard var decoded else { return nil }
+                if isFirstChunk {
+                    if decoded.first == "\u{FEFF}" { decoded.removeFirst() }
+                    normalizeEncodingDeclaration(in: &decoded)
+                    isFirstChunk = false
+                }
+                pendingBytes.removeFirst(usedBytes)
+                pendingText += decoded
+                while !pendingText.isEmpty {
+                    let delimiter = inCDATA ? "]]>" : "<![CDATA["
+                    if let range = pendingText.range(of: delimiter) {
+                        try write(String(pendingText[..<range.lowerBound]), repair: !inCDATA)
+                        try write(delimiter, repair: false)
+                        pendingText = String(pendingText[range.upperBound...])
+                        inCDATA.toggle()
+                    } else {
+                        var end = atEnd ? pendingText.endIndex : pendingText.index(pendingText.endIndex,
+                            offsetBy: -min(256, pendingText.count))
+                        if !inCDATA, !atEnd,
+                           let amp = pendingText[..<end].lastIndex(of: "&"),
+                           pendingText.distance(from: amp, to: end) < 256,
+                           !pendingText[amp..<end].contains(";") {
+                            end = amp
+                        }
+                        let fragment = String(pendingText[..<end])
+                        try write(fragment, repair: !inCDATA)
+                        // libxml has its own single-CDATA token ceiling below our
+                        // field budget. Adjacent CDATA sections preserve every
+                        // character while delivering bounded parser callbacks.
+                        if inCDATA, !atEnd, !fragment.isEmpty {
+                            try write("]]><![CDATA[", repair: false)
+                        }
+                        pendingText = String(pendingText[end...])
+                        break
+                    }
+                }
+                return atEnd
             }
-            if atEnd { break }
+            guard let finished else { return false }
+            if finished { break }
         }
         return true
     }

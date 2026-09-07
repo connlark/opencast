@@ -28,24 +28,28 @@ final class FeedRefreshCoordinator {
     // invalidate every subscription row.
     @ObservationIgnored private var refreshingFeedURLCounts: [String: Int] = [:]
     @ObservationIgnored private var refreshActivityByFeedURL: [String: FeedRefreshActivity] = [:]
+    @ObservationIgnored private var manualRefreshTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private unowned let host: any FeedRefreshHost
     @ObservationIgnored private let feedService: any FeedService
     @ObservationIgnored private let localCache: any LocalLibraryCacheStore
     @ObservationIgnored private let feedWrites: FeedWriteCoordinator
     @ObservationIgnored private let writeGeneration: LibraryWriteGeneration
+    @ObservationIgnored private let now: () -> Date
 
     init(
         host: any FeedRefreshHost,
         feedService: any FeedService,
         localCache: any LocalLibraryCacheStore,
         feedWrites: FeedWriteCoordinator,
-        writeGeneration: LibraryWriteGeneration
+        writeGeneration: LibraryWriteGeneration,
+        now: @escaping () -> Date
     ) {
         self.host = host
         self.feedService = feedService
         self.localCache = localCache
         self.feedWrites = feedWrites
         self.writeGeneration = writeGeneration
+        self.now = now
     }
 
     func refresh(feedURL: String, modelContext: ModelContext) async {
@@ -69,6 +73,25 @@ final class FeedRefreshCoordinator {
         }
     }
 
+    /// Pins a user-requested retry to the library rather than the transient
+    /// list row that displayed it. The dictionary closes the small window
+    /// before the task publishes its busy marker, so repeated taps dedupe too.
+    func requestManualRefresh(feedURL: String, modelContext: ModelContext) {
+        guard manualRefreshTasks[feedURL] == nil, !isRefreshing(feedURL: feedURL) else {
+            return
+        }
+        manualRefreshTasks[feedURL] = Task { [weak self] in
+            await self?.refresh(feedURL: feedURL, modelContext: modelContext)
+            self?.manualRefreshTasks.removeValue(forKey: feedURL)
+        }
+    }
+
+    func cancelManualRefresh(feedURL: String) {
+        manualRefreshTasks[feedURL]?.cancel()
+    }
+
+    var manualRefreshTaskCountForTesting: Int { manualRefreshTasks.count }
+
     func refreshAll(modelContext: ModelContext) async {
         let didComplete = await performRefreshFlow(setsRefreshingState: true, modelContext: modelContext) { generation in
             // The refresh set only needs the active feed URLs; the trailing
@@ -77,6 +100,7 @@ final class FeedRefreshCoordinator {
             let feedURLStrings = try host.activeSubscriptionFeedURLStrings(modelContext: modelContext)
             try await refreshAll(
                 feedURLStrings: feedURLStrings,
+                intent: .interactive,
                 generation: generation,
                 modelContext: modelContext
             )
@@ -93,6 +117,7 @@ final class FeedRefreshCoordinator {
         }
 
         let staleFeedURLStrings = Array(Set(staleFeedURLStrings(now: now) + host.feedURLStringsNeedingLocalCache))
+            .filter { automaticRetryIsEligible(feedURL: $0, now: now) }
         guard !staleFeedURLStrings.isEmpty else {
             return
         }
@@ -100,6 +125,7 @@ final class FeedRefreshCoordinator {
         await performRefreshFlow(setsRefreshingState: true, modelContext: modelContext) { generation in
             try await refreshAll(
                 feedURLStrings: staleFeedURLStrings,
+                intent: .automatic,
                 generation: generation,
                 modelContext: modelContext
             )
@@ -108,12 +134,14 @@ final class FeedRefreshCoordinator {
     }
 
     @discardableResult
-    func refreshFeedsNeedingLocalCache(modelContext: ModelContext) async -> Bool {
+    func refreshFeedsNeedingLocalCache(modelContext: ModelContext, now: Date = .now) async -> Bool {
         guard host.state != .refreshing, refreshingFeedURLCounts.isEmpty else {
             return false
         }
 
-        let feedURLStrings = host.feedURLStringsNeedingLocalCache
+        let feedURLStrings = host.feedURLStringsNeedingLocalCache.filter {
+            automaticRetryIsEligible(feedURL: $0, now: now)
+        }
         guard !feedURLStrings.isEmpty else {
             return false
         }
@@ -121,6 +149,7 @@ final class FeedRefreshCoordinator {
         return await performRefreshFlow(setsRefreshingState: true, modelContext: modelContext) { generation in
             try await refreshAll(
                 feedURLStrings: feedURLStrings,
+                intent: .automatic,
                 generation: generation,
                 modelContext: modelContext
             )
@@ -197,11 +226,12 @@ final class FeedRefreshCoordinator {
         generation: Int,
         modelContext: ModelContext
     ) async throws -> Bool {
-        let startedAt = Date.now
+        let startedAt = now()
         let result = await FeedRefreshFetcher.fetchResult(
             feedURLString: subscription.feedURL,
             feedService: feedService,
-            localCache: localCache
+            localCache: localCache,
+            intent: .interactive
         )
         try Task.checkCancellation()
         try writeGeneration.ensureCurrent(generation)
@@ -215,6 +245,7 @@ final class FeedRefreshCoordinator {
 
     private func refreshAll(
         feedURLStrings: [String],
+        intent: FeedPreparationIntent,
         generation: Int,
         modelContext: ModelContext
     ) async throws {
@@ -223,7 +254,7 @@ final class FeedRefreshCoordinator {
             return
         }
 
-        let startedAt = Date.now
+        let startedAt = now()
         var pendingFeedURLStrings = Set(feedURLStrings)
         beginRefreshing(feedURLStrings)
         defer {
@@ -233,7 +264,8 @@ final class FeedRefreshCoordinator {
         try await FeedRefreshFetcher.forEachResult(
             feedURLStrings: feedURLStrings,
             feedService: feedService,
-            localCache: localCache
+            localCache: localCache,
+            intent: intent
         ) { result in
             try Task.checkCancellation()
             try self.writeGeneration.ensureCurrent(generation)
@@ -262,9 +294,11 @@ final class FeedRefreshCoordinator {
             do {
                 guard let snapshot = outcome.feed else {
                     // Not-modified short-circuit: still a successful refresh.
+                    let podcastID = URLCanonicalizer.canonicalString(forRawString: result.feedURLString)
+                    try await localCache.clearFeedRetryFailure(forPodcastID: podcastID)
                     await persistValidators(
                         outcome.validators,
-                        forPodcastID: URLCanonicalizer.canonicalString(forRawString: result.feedURLString)
+                        forPodcastID: podcastID
                     )
                     try await recordRefreshLog(
                         feedURL: result.feedURLString,
@@ -282,7 +316,12 @@ final class FeedRefreshCoordinator {
                 ) else {
                     return false
                 }
-                await persistValidators(outcome.validators, forPodcastID: snapshot.podcast.id.rawValue)
+                // A salvaged body cannot validate a future recovery fetch.
+                // `upsertCache` clears any older validators atomically; do
+                // not write the interrupted response's validators back.
+                if snapshot.completeness.isComplete {
+                    await persistValidators(outcome.validators, forPodcastID: snapshot.podcast.id.rawValue)
+                }
                 try await recordRefreshLog(
                     feedURL: result.feedURLString,
                     startedAt: startedAt,
@@ -299,6 +338,7 @@ final class FeedRefreshCoordinator {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                try await recordRetryFailure(feedURL: result.feedURLString, generation: generation)
                 try await recordRefreshLog(
                     feedURL: result.feedURLString,
                     startedAt: startedAt,
@@ -308,6 +348,7 @@ final class FeedRefreshCoordinator {
                 return false
             }
         case .failure(let message):
+            try await recordRetryFailure(feedURL: result.feedURLString, generation: generation)
             try await recordRefreshLog(
                 feedURL: result.feedURLString,
                 startedAt: startedAt,
@@ -342,7 +383,7 @@ final class FeedRefreshCoordinator {
             RefreshLogSnapshot(
                 feedURL: feedURL,
                 startedAt: startedAt,
-                finishedAt: .now,
+                finishedAt: now(),
                 errorMessage: errorMessage
             ),
             prunedTo: LibraryStore.refreshLogRetentionLimit
@@ -388,6 +429,10 @@ final class FeedRefreshCoordinator {
     }
 
     func clearAllRefreshMarkers() {
+        for task in manualRefreshTasks.values {
+            task.cancel()
+        }
+        manualRefreshTasks.removeAll()
         refreshingFeedURLCounts.removeAll()
         for activity in refreshActivityByFeedURL.values {
             activity.isRefreshing = false
@@ -404,6 +449,22 @@ final class FeedRefreshCoordinator {
                 ? subscription.feedURL
                 : nil
         }
+    }
+
+    private func automaticRetryIsEligible(feedURL: String, now: Date) -> Bool {
+        let canonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: feedURL)
+        guard let retryAfter = host.automaticRetryAfterByFeedURL[canonicalFeedURL] else {
+            return true
+        }
+        return retryAfter <= now
+    }
+
+    private func recordRetryFailure(feedURL: String, generation: Int) async throws {
+        try writeGeneration.ensureCurrent(generation)
+        try await localCache.recordFeedRetryFailure(
+            forPodcastID: URLCanonicalizer.canonicalString(forRawString: feedURL),
+            attemptedAt: now()
+        )
     }
 
     private func lastRefreshActivity(for subscription: SubscriptionRecord) -> Date? {

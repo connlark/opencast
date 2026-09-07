@@ -536,14 +536,18 @@ final class OpenCastAppModel {
         }
     }
 
+    /// An explicit start position bypasses smart resume and the skip-intro
+    /// floor.
     func playEpisode(
         _ episode: EpisodeListItemSnapshot,
+        at startPosition: TimeInterval? = nil,
         presentsNowPlaying: Bool = true,
         modelContext: ModelContext
     ) throws {
         try play(
             episode,
             source: preferredPlaybackSource(for: episode.episodeID),
+            startPosition: startPosition,
             presentsNowPlaying: presentsNowPlaying,
             modelContext: modelContext
         )

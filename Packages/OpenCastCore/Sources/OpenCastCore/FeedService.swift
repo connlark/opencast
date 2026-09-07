@@ -3,6 +3,11 @@ import Foundation
 
 public protocol FeedService: Sendable {
     func prepareFeed(at url: URL, validators: FeedValidators?) async throws -> PreparedFeedOutcome
+    func prepareFeed(
+        at url: URL,
+        validators: FeedValidators?,
+        intent: FeedPreparationIntent
+    ) async throws -> PreparedFeedOutcome
     func fetchFeed(at url: URL) async throws -> FeedSnapshot
     /// The full fetch outcome: snapshot plus relocation signals (post-redirect
     /// final URL, `itunes:new-feed-url`) and response validators. Callers that
@@ -16,9 +21,17 @@ public protocol FeedService: Sendable {
 public extension FeedService {
     func prepareFeed(at url: URL, validators: FeedValidators? = nil) async throws -> PreparedFeedOutcome {
         let outcome = try await fetchFeedOutcome(at: url, validators: validators)
-        let feed = try outcome.snapshot.map(PreparedFeed.init)
+        let feed = try await PreparedFeedCompatibilityStaging.prepare(outcome.snapshot)
         return PreparedFeedOutcome(feed: feed, finalURL: outcome.finalURL,
             validators: feed?.isSalvaged == true ? nil : outcome.validators)
+    }
+
+    func prepareFeed(
+        at url: URL,
+        validators: FeedValidators?,
+        intent: FeedPreparationIntent
+    ) async throws -> PreparedFeedOutcome {
+        try await prepareFeed(at: url, validators: validators)
     }
 
     func fetchFeedOutcome(at url: URL, validators: FeedValidators?) async throws -> FeedFetchOutcome {
@@ -62,7 +75,16 @@ public struct DefaultFeedService: FeedService {
 
     @concurrent
     public func prepareFeed(at url: URL, validators: FeedValidators? = nil) async throws -> PreparedFeedOutcome {
-        try await FeedPreparationGate.shared.acquire()
+        try await prepareFeed(at: url, validators: validators, intent: .interactive)
+    }
+
+    @concurrent
+    public func prepareFeed(
+        at url: URL,
+        validators: FeedValidators?,
+        intent: FeedPreparationIntent
+    ) async throws -> PreparedFeedOutcome {
+        try await FeedPreparationGate.shared.acquire(intent: intent)
         do {
             let result = try await prepareAdmittedFeed(at: url, validators: validators)
             await FeedPreparationGate.shared.release()
@@ -139,4 +161,19 @@ public struct DefaultFeedService: FeedService {
         )
     }
 
+}
+
+public enum FeedPreparationIntent: Equatable, Sendable {
+    case interactive
+    case automatic
+}
+
+private enum PreparedFeedCompatibilityStaging {
+    @concurrent
+    static func prepare(_ snapshot: FeedSnapshot?) async throws -> PreparedFeed? {
+        try Task.checkCancellation()
+        let prepared = try snapshot.map(PreparedFeed.init)
+        try Task.checkCancellation()
+        return prepared
+    }
 }

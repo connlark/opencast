@@ -25,7 +25,7 @@ impl AsyncRead for Chunks<'_> {
     }
 }
 
-fn row(checkpoint: Option<String>) -> FeedPollRow {
+pub(super) fn row(checkpoint: Option<String>) -> FeedPollRow {
     FeedPollRow {
         feed_url: "https://example.com/feed.xml".into(),
         source_url: "https://example.com/feed.xml".into(),

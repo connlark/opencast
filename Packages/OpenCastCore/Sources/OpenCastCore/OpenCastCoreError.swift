@@ -6,6 +6,7 @@ public enum OpenCastCoreError: Error, Equatable, LocalizedError, Sendable {
     case unexpectedStatusCode(Int)
     case notAFeed(rootElement: String?)
     case malformedFeed(reason: String?)
+    case incompleteFeed(reason: FeedIncompleteReason)
     case feedTooLarge(byteLimit: Int)
     case missingAudioURL
 
@@ -28,6 +29,8 @@ public enum OpenCastCoreError: Error, Equatable, LocalizedError, Sendable {
             }
         case .malformedFeed:
             "This feed could not be read because its XML is invalid."
+        case .incompleteFeed(let reason):
+            "This feed could not be loaded. \(reason.diagnostic)"
         case .feedTooLarge(let byteLimit):
             "This feed is larger than \(byteLimit / (1_024 * 1_024)) MB and can't be loaded."
         case .missingAudioURL:

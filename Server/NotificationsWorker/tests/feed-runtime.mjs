@@ -10,6 +10,7 @@ import { Readable } from 'node:stream';
 import { setTimeout } from 'node:timers/promises';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { sampleRuntimeMemory } from './runtime-memory.mjs';
+import { compatibilityDate, compatibilityFlags } from './runtime-compatibility.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const reportPath = process.env.OPENCAST_FEED_RUNTIME_REPORT ?? '/private/tmp/opencast-feed-worker-runtime.json';
@@ -31,13 +32,15 @@ const now = Math.floor(Date.now() / 1000);
 const item = (id, date) => `<item><guid>${id}</guid><title>Episode ${id}</title><pubDate>${new Date(date * 1000).toUTCString()}</pubDate><enclosure url="https://audio.example.com/${id}.mp3"/><description><![CDATA[Full notification notes 🎧]]></description></item>`;
 const localToken = 'local-fixture-only';
 const mf = new Miniflare(convertV4MiniflareOptions({
+  cf: false,
   inspectorPort: 0,
   workers: [{
   name: 'notifications-feed-runtime',
   modulesRoot: root + 'build',
   modules: [{ type: 'ESModule', path: root + 'build/index.js' },
             { type: 'CompiledWasm', path: root + 'build/index_bg.wasm' }],
-  compatibilityDate: '2026-08-14',
+  compatibilityDate,
+  compatibilityFlags,
   d1Databases: { APP_ATTEST_DB: 'isolated-feed-runtime' },
   bindings: { APPLE_TEAM_ID: 'EXAMPLETEAM', APPLE_BUNDLE_ID: 'com.example.opencast',
     APP_ATTEST_ENVIRONMENT: 'development', APNS_ENVIRONMENT: 'development',

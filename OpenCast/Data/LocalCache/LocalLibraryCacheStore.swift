@@ -48,6 +48,14 @@ protocol LocalLibraryCacheStore: Sendable {
     /// Persists validators without touching `updated_at` — an unchanged feed
     /// must not look content-changed.
     func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) async throws
+    /// Throttles a failed attempt for one hour without advancing the partial
+    /// import counter or shortening an existing partial-import deadline.
+    /// Manual refresh bypasses the deadline. Partial imports schedule their
+    /// exponential backoff atomically in `upsertCache` instead.
+    func recordFeedRetryFailure(forPodcastID podcastID: String, attemptedAt: Date) async throws
+    /// Clears failure-only retry state after a successful not-modified fetch.
+    /// Full imports reset it atomically with their catalog transaction.
+    func clearFeedRetryFailure(forPodcastID podcastID: String) async throws
     /// Every cached episode row for one feed, including rows that have
     /// departed the live feed; identity reconciliation diffs these against a
     /// fresh snapshot.
@@ -97,4 +105,8 @@ extension LocalLibraryCacheStore {
     func reconcileEpisodeTranscriptSearchDocuments(
         retaining episodeIDs: Set<String>
     ) async throws {}
+
+    func recordFeedRetryFailure(forPodcastID podcastID: String, attemptedAt: Date) async throws {}
+
+    func clearFeedRetryFailure(forPodcastID podcastID: String) async throws {}
 }

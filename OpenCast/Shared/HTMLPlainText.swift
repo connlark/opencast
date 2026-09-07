@@ -74,6 +74,8 @@ enum HTMLPlainText {
             "reg": "\u{00AE}"
         ]
         var decoded = value
+        // Large-show-note profiling covers this Foundation bulk-replacement
+        // path; keep it despite the house preference for String.replacing.
         for (entity, replacement) in namedEntities {
             decoded = decoded.replacingOccurrences(of: "&\(entity);", with: replacement)
         }
@@ -122,6 +124,7 @@ enum HTMLPlainText {
     }
 
     nonisolated private static func normalizeLayout(in value: String) -> String {
+        // This normalization is part of the same measured large-note path.
         value
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")

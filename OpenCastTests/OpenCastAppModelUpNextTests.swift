@@ -199,6 +199,18 @@ struct OpenCastAppModelUpNextTests {
         #expect(fixture.appModel.playback.position == 5)
     }
 
+    @Test("Show-notes timestamps start exactly, bypassing the intro floor")
+    func showNotesTimestampStartPosition() async throws {
+        let fixture = try await makeFixture(skipIntroSeconds: 15)
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+
+        try fixture.appModel.playEpisode(first, at: 5, presentsNowPlaying: false, modelContext: fixture.context)
+
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "first")
+        #expect(fixture.appModel.playback.position == 5)
+        #expect(fixture.appModel.nowPlayingPresentationRequest == 0)
+    }
+
     @Test("Outro completion persists played progress and advances Up Next")
     func outroCompletionAdvancesQueueAndPersistsPlayedProgress() async throws {
         let fixture = try await makeFixture(skipIntroSeconds: 5, skipOutroSeconds: 10)

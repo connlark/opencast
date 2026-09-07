@@ -70,7 +70,7 @@ enum OpenCastUITestSeedData {
         }
         let showNotesHTML = usesLongShowNotes
             ? longShowNotesHTML()
-            : "<p>Deterministic show notes for UI tests.</p>"
+            : "<p>Deterministic show notes for UI tests.</p><p>1:30 Deterministic chapter</p>"
 
         context.insert(
             SubscriptionRecord(

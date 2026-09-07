@@ -182,6 +182,54 @@ struct OpenCastModelTests {
         #expect(store.state == .failed("Local cache upsert failed"))
     }
 
+    @Test("Feed transport failures remain visible in add and refresh diagnostics")
+    func feedTransportFailuresRemainVisibleInAddAndRefreshDiagnostics() async throws {
+        let addContainer = try OpenCastModelContainerFactory.make(inMemory: true)
+        let addContext = ModelContext(addContainer)
+        let addFeedURL = "https://example.com/add-timeout.xml"
+        let timeout = URLError(.timedOut)
+        let addStore = LibraryStore(
+            feedService: StubFeedService(responses: [addFeedURL: .urlFailure(.timedOut)]),
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+
+        do {
+            try await addStore.subscribe(to: addFeedURL, modelContext: addContext)
+            Issue.record("Expected Add by URL to preserve the timeout")
+        } catch let error as URLError {
+            #expect(error.code == .timedOut)
+        }
+        #expect(addStore.state == .failed(timeout.localizedDescription))
+        #expect(try addContext.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
+
+        let refreshContainer = try OpenCastModelContainerFactory.make(inMemory: true)
+        let refreshContext = ModelContext(refreshContainer)
+        let refreshFeedURL = "https://example.com/refresh-reset.xml"
+        let reset = URLError(.networkConnectionLost)
+        let refreshStore = LibraryStore(
+            feedService: StubFeedService(
+                responses: [refreshFeedURL: .urlFailure(.networkConnectionLost)]
+            ),
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        insertCachedFeed(
+            feedURL: refreshFeedURL,
+            title: "Existing",
+            episodeID: "existing",
+            in: refreshContext
+        )
+        try refreshContext.save()
+        await refreshStore.load(modelContext: refreshContext)
+
+        await refreshStore.refresh(feedURL: refreshFeedURL, modelContext: refreshContext)
+
+        #expect(
+            refreshStore.latestRefreshLog(feedURL: refreshFeedURL)?.errorMessage
+                == reset.localizedDescription
+        )
+        #expect(refreshStore.episode(with: "existing") != nil)
+    }
+
     @Test("Subscribing to a feed with no episodes lands the subscription")
     func subscribeToEmptyFeedLandsSubscription() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -2220,6 +2268,290 @@ struct OpenCastModelTests {
         #expect(cancelledStore.state == .idle)
     }
 
+    @Test("Automatic missing-cache retry respects its durable deadline and then resets")
+    func automaticMissingCacheRetryRespectsDeadline() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/backoff.xml"
+        let attemptDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Waiting",
+                lastRefreshAt: attemptDate.addingTimeInterval(-10_000)
+            )
+        )
+        try context.save()
+        let service = StubFeedService(responsesByURL: [
+            feedURL: [
+                .failure("Temporary transfer failure"),
+                .success(
+                    makeSnapshot(
+                        feedURL: feedURL,
+                        podcastTitle: "Recovered",
+                        episodeID: "recovered",
+                        episodeTitle: "Recovered Episode"
+                    )
+                )
+            ]
+        ])
+        var currentDate = attemptDate
+        let store = LibraryStore(
+            feedService: service,
+            localCache: localCache,
+            now: { currentDate }
+        )
+        await store.load(modelContext: context)
+        #expect(
+            await store.refreshFeedsNeedingLocalCache(
+                modelContext: context,
+                now: currentDate
+            )
+        )
+        #expect(await service.requestedURLStrings() == [feedURL])
+        #expect(
+            store.automaticRetryAfterByFeedURL[feedURL]
+                == attemptDate.addingTimeInterval(60 * 60)
+        )
+
+        currentDate = attemptDate.addingTimeInterval(60 * 60 - 1)
+        // A new library instance proves the completed failure deadline, not
+        // transient in-memory activity, suppresses the next launch attempt.
+        let relaunched = LibraryStore(
+            feedService: service,
+            localCache: localCache,
+            now: { currentDate }
+        )
+        await relaunched.load(modelContext: context)
+        #expect(
+            await relaunched.refreshFeedsNeedingLocalCache(
+                modelContext: context,
+                now: currentDate
+            ) == false
+        )
+        #expect(await service.requestedURLStrings() == [feedURL])
+
+        currentDate = attemptDate.addingTimeInterval(60 * 60)
+        #expect(
+            await relaunched.refreshFeedsNeedingLocalCache(
+                modelContext: context,
+                now: currentDate
+            )
+        )
+        #expect(await service.requestedURLStrings() == [feedURL, feedURL])
+        #expect(relaunched.episode(with: "recovered") != nil)
+        #expect(relaunched.automaticRetryAfterByFeedURL[feedURL] == nil)
+    }
+
+    @Test("Library-owned manual retry survives its requesting row and deduplicates taps")
+    func libraryOwnedManualRetrySurvivesRequestingRow() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/manual-retry.xml"
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        var partial = try PreparedFeed(snapshot: makeSnapshot(
+            feedURL: feedURL,
+            podcastTitle: "Partial",
+            episodeID: "old",
+            episodeTitle: "Old Episode"
+        ))
+        partial.completeness = .partial(.interruptedTransfer("tail reset"))
+        try await localCache.upsertCache(from: partial, refreshedAt: .now)
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Partial"))
+        try context.save()
+        let service = ControlledFeedService(snapshot: makeSnapshot(
+            feedURL: feedURL,
+            podcastTitle: "Complete",
+            episodeID: "new",
+            episodeTitle: "New Episode"
+        ))
+        let store = LibraryStore(feedService: service, localCache: localCache)
+        await store.load(modelContext: context)
+
+        store.requestManualRefresh(feedURL: feedURL, modelContext: context)
+        store.requestManualRefresh(feedURL: feedURL, modelContext: context)
+        await service.waitUntilRequested()
+        #expect(await service.requestCount == 1)
+        #expect(store.manualRefreshTaskCountForTesting == 1)
+        #expect(store.isRefreshing(feedURL: feedURL))
+
+        // No view or row owns the task after requestManualRefresh returns.
+        await service.succeed()
+        #expect(await waitUntil { store.manualRefreshTaskCountForTesting == 0 })
+        #expect(store.episode(with: "new") != nil)
+        #expect(store.incompleteFeeds[feedURL] == nil)
+    }
+
+    @Test("Intentional cancellation of a library-owned retry imports nothing")
+    func cancellingLibraryOwnedManualRetryImportsNothing() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/cancel-manual-retry.xml"
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        try await localCache.upsertCache(
+            from: makeSnapshot(
+                feedURL: feedURL,
+                podcastTitle: "Original",
+                episodeID: "old",
+                episodeTitle: "Old Episode"
+            ),
+            refreshedAt: .now
+        )
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Original"))
+        try context.save()
+        let service = ControlledFeedService(snapshot: makeSnapshot(
+            feedURL: feedURL,
+            podcastTitle: "Must Not Import",
+            episodeID: "new",
+            episodeTitle: "Must Not Import"
+        ))
+        let store = LibraryStore(feedService: service, localCache: localCache)
+        await store.load(modelContext: context)
+
+        store.requestManualRefresh(feedURL: feedURL, modelContext: context)
+        await service.waitUntilRequested()
+        store.cancelManualRefresh(feedURL: feedURL)
+        await service.waitUntilCancelled()
+        #expect(await waitUntil { store.manualRefreshTaskCountForTesting == 0 })
+        #expect(store.episode(with: "old") != nil)
+        #expect(store.episode(with: "new") == nil)
+        #expect(store.refreshLogs.filter { $0.feedURL == feedURL }.isEmpty)
+    }
+
+    @Test("A surviving reload waiter replaces a canceled superseding generation")
+    func survivingReloadWaiterReplacesCancelledGeneration() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/reload-replacement.xml"
+        let service = StubFeedService(responses: [
+            feedURL: .success(
+                makeSnapshot(
+                    feedURL: feedURL,
+                    podcastTitle: "Published",
+                    episodeID: "published",
+                    episodeTitle: "Published Episode"
+                )
+            )
+        ])
+        let cache = InstrumentedCacheStore(wrapping: SQLiteLocalLibraryCacheStore.inMemory())
+        let store = LibraryStore(feedService: service, localCache: cache)
+        await cache.setLoadGatingEnabled(true)
+
+        let subscription = Task { @MainActor in
+            try await store.subscribe(to: feedURL, modelContext: context)
+        }
+        await cache.waitForGatedLoadCount(1)
+        let supersedingReload = Task { @MainActor in
+            try await store.reloadFromStore(modelContext: context)
+        }
+        await cache.waitForGatedLoadCount(2)
+        await cache.releaseGatedLoad(1)
+        #expect(await waitUntil { store.reloadWaiterCountForTesting == 1 })
+
+        supersedingReload.cancel()
+        await cache.waitForGatedLoadCount(3)
+        await cache.releaseGatedLoad(3)
+        await #expect(throws: CancellationError.self) {
+            try await supersedingReload.value
+        }
+        try await subscription.value
+
+        #expect(store.episode(with: "published") != nil)
+        #expect(store.subscriptions.map(\.feedURL) == [feedURL])
+        #expect(store.subscriptionAddedToken == 1)
+        #expect(store.reloadWaiterCountForTesting == 0)
+    }
+
+    @Test("Reload completion separates waiter cancellation failure and invalidation")
+    func reloadCompletionSeparatesTerminalOutcomes() async throws {
+        let completion = LibraryReloadCompletion()
+        completion.begin(1)
+        let cancelledWaiter = Task { @MainActor in
+            try await completion.waitForCurrent()
+        }
+        let survivingWaiter = Task { @MainActor in
+            try await completion.waitForCurrent()
+        }
+        #expect(await waitUntil { completion.waiterCount == 2 })
+        cancelledWaiter.cancel()
+        await #expect(throws: CancellationError.self) {
+            _ = try await cancelledWaiter.value
+        }
+        #expect(completion.waiterCount == 1)
+        completion.finishPublished(1)
+        guard case .published = try await survivingWaiter.value else {
+            Issue.record("The live waiter did not observe publication")
+            return
+        }
+
+        completion.begin(2)
+        let failedWaiter = Task { @MainActor in
+            try await completion.waitForCurrent()
+        }
+        #expect(await waitUntil { completion.waiterCount == 1 })
+        completion.finishFailed(2, error: StubFeedError(message: "reload failed"))
+        do {
+            _ = try await failedWaiter.value
+            Issue.record("Expected the reload failure")
+        } catch {
+            #expect(error.localizedDescription == "reload failed")
+        }
+
+        completion.begin(3)
+        let invalidatedWaiter = Task { @MainActor in
+            try await completion.waitForCurrent()
+        }
+        #expect(await waitUntil { completion.waiterCount == 1 })
+        completion.invalidate(4)
+        guard case .invalidated = try await invalidatedWaiter.value else {
+            Issue.record("The waiter did not observe explicit invalidation")
+            return
+        }
+
+        completion.begin(5)
+        let firstCancelledWaiter = Task { @MainActor in
+            try await completion.waitForCurrent()
+        }
+        let secondCancelledWaiter = Task { @MainActor in
+            try await completion.waitForCurrent()
+        }
+        #expect(await waitUntil { completion.waiterCount == 2 })
+        firstCancelledWaiter.cancel()
+        secondCancelledWaiter.cancel()
+        await #expect(throws: CancellationError.self) {
+            _ = try await firstCancelledWaiter.value
+        }
+        await #expect(throws: CancellationError.self) {
+            _ = try await secondCancelledWaiter.value
+        }
+        #expect(completion.waiterCount == 0)
+        completion.finishCancelled(5)
+        #expect(completion.claimReplacement(for: 5))
+        #expect(!completion.claimReplacement(for: 5))
+    }
+
+    @Test("Only one waiter can replace a canceled generation after multiple supersessions")
+    func onlyOneWaiterClaimsReplacementAfterMultipleSupersessions() async throws {
+        let completion = LibraryReloadCompletion()
+        completion.begin(1)
+        let first = Task { @MainActor in try await completion.waitForCurrent() }
+        let second = Task { @MainActor in try await completion.waitForCurrent() }
+        #expect(await waitUntil { completion.waiterCount == 2 })
+        completion.begin(2)
+        completion.begin(3)
+        completion.finishCancelled(3)
+
+        for result in [try await first.value, try await second.value] {
+            guard case .replacementRequired(cancelledGeneration: 3) = result else {
+                Issue.record("Expected replacement request for generation 3")
+                continue
+            }
+        }
+        #expect(completion.claimReplacement(for: 3))
+        #expect(!completion.claimReplacement(for: 3))
+    }
+
     @Test("Global refresh fan-out stays within the concurrency bound")
     func globalRefreshFanOutStaysWithinConcurrencyBound() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -2981,6 +3313,14 @@ struct OpenCastModelTests {
         context.insert(episode)
     }
 
+    private func waitUntil(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<10_000 {
+            if condition() { return true }
+            await Task.yield()
+        }
+        return condition()
+    }
+
     private func makeEpisodeListItem(
         episodeID: String,
         podcastID: String,
@@ -3108,6 +3448,7 @@ private actor StubFeedService: FeedService {
     enum Response: Sendable {
         case success(FeedSnapshot)
         case failure(String)
+        case urlFailure(URLError.Code)
         case delayedSuccess(FeedSnapshot, nanoseconds: UInt64)
     }
 
@@ -3147,6 +3488,8 @@ private actor StubFeedService: FeedService {
             return snapshot
         case .failure(let message):
             throw StubFeedError(message: message)
+        case .urlFailure(let code):
+            throw URLError(code)
         case .delayedSuccess(let snapshot, let nanoseconds):
             try await Task.sleep(for: .seconds(Double(nanoseconds) / 1_000_000_000))
             return snapshot
@@ -3174,10 +3517,70 @@ private actor StubFeedService: FeedService {
     }
 }
 
+private actor ControlledFeedService: FeedService {
+    private let snapshot: FeedSnapshot
+    private var pending: [UUID: CheckedContinuation<FeedSnapshot, any Error>] = [:]
+    private var requestWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var requestCount = 0
+    private var wasCancelled = false
+
+    init(snapshot: FeedSnapshot) {
+        self.snapshot = snapshot
+    }
+
+    func fetchFeed(at _: URL) async throws -> FeedSnapshot {
+        let id = UUID()
+        requestCount += 1
+        let requestWaiters = requestWaiters
+        self.requestWaiters.removeAll()
+        for waiter in requestWaiters { waiter.resume() }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    pending[id] = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.cancel(id) }
+        }
+    }
+
+    func waitUntilRequested() async {
+        if requestCount > 0 { return }
+        await withCheckedContinuation { requestWaiters.append($0) }
+    }
+
+    func waitUntilCancelled() async {
+        if wasCancelled { return }
+        await withCheckedContinuation { cancellationWaiters.append($0) }
+    }
+
+    func succeed() {
+        let pending = pending.values
+        self.pending.removeAll()
+        for continuation in pending { continuation.resume(returning: snapshot) }
+    }
+
+    private func cancel(_ id: UUID) {
+        pending.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        wasCancelled = true
+        let cancellationWaiters = cancellationWaiters
+        self.cancellationWaiters.removeAll()
+        for waiter in cancellationWaiters { waiter.resume() }
+    }
+}
+
 private actor InstrumentedCacheStore: LocalLibraryCacheStore {
     private let wrapped: any LocalLibraryCacheStore
     private let failsRefreshLogWrites: Bool
     private var loadLibraryCalls = 0
+    private var gatesLoads = false
+    private var gatedLoadCount = 0
+    private var gatedLoads: [Int: CheckedContinuation<Void, any Error>] = [:]
+    private var gatedLoadCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
     init(wrapping wrapped: any LocalLibraryCacheStore, failsRefreshLogWrites: Bool = false) {
         self.wrapped = wrapped
@@ -3188,9 +3591,47 @@ private actor InstrumentedCacheStore: LocalLibraryCacheStore {
         loadLibraryCalls
     }
 
+    func setLoadGatingEnabled(_ enabled: Bool) {
+        gatesLoads = enabled
+    }
+
+    func waitForGatedLoadCount(_ count: Int) async {
+        if gatedLoadCount >= count { return }
+        await withCheckedContinuation { continuation in
+            gatedLoadCountWaiters.append((count, continuation))
+        }
+    }
+
+    func releaseGatedLoad(_ index: Int) {
+        gatedLoads.removeValue(forKey: index)?.resume()
+    }
+
     func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot {
         loadLibraryCalls += 1
+        if gatesLoads {
+            gatedLoadCount += 1
+            let index = gatedLoadCount
+            let ready = gatedLoadCountWaiters.filter { gatedLoadCount >= $0.0 }
+            gatedLoadCountWaiters.removeAll { gatedLoadCount >= $0.0 }
+            for (_, waiter) in ready { waiter.resume() }
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                    if Task.isCancelled {
+                        continuation.resume(throwing: CancellationError())
+                    } else {
+                        gatedLoads[index] = continuation
+                    }
+                }
+            } onCancel: {
+                Task { await self.cancelGatedLoad(index) }
+            }
+            try Task.checkCancellation()
+        }
         return try await wrapped.loadLibrary(activePodcastIDs: activePodcastIDs)
+    }
+
+    private func cancelGatedLoad(_ index: Int) {
+        gatedLoads.removeValue(forKey: index)?.resume(throwing: CancellationError())
     }
 
     func allRefreshLogs() async throws -> [RefreshLogSnapshot] {
@@ -3230,6 +3671,14 @@ private actor InstrumentedCacheStore: LocalLibraryCacheStore {
 
     func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) async throws {
         try await wrapped.updateFeedValidators(validators, forPodcastID: podcastID)
+    }
+
+    func recordFeedRetryFailure(forPodcastID podcastID: String, attemptedAt: Date) async throws {
+        try await wrapped.recordFeedRetryFailure(forPodcastID: podcastID, attemptedAt: attemptedAt)
+    }
+
+    func clearFeedRetryFailure(forPodcastID podcastID: String) async throws {
+        try await wrapped.clearFeedRetryFailure(forPodcastID: podcastID)
     }
 
     func cachedEpisodes(forPodcastID podcastID: String) async throws -> [EpisodeListItemSnapshot] {

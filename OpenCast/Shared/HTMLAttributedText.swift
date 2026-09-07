@@ -7,11 +7,8 @@ import Foundation
 enum HTMLAttributedText {
     nonisolated static func attributedString(from html: String) -> AttributedString {
         let rendered = render(preprocess(html))
-        guard String(rendered.characters).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return detectingPhoneNumbers(in: rendered)
-        }
-
-        return AttributedString(HTMLPlainText.structuredText(from: html))
+        let isBlank = String(rendered.characters).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return detectingLinks(in: isBlank ? AttributedString(HTMLPlainText.structuredText(from: html)) : rendered)
     }
 
     /// The rendered text split at paragraph breaks. Views render each block
@@ -108,20 +105,68 @@ enum HTMLAttributedText {
 
     /// Above this size the input is a pathological fixture, not show notes;
     /// scanning it would stall content resolution for seconds.
-    nonisolated private static let phoneDetectionCharacterLimit = 200_000
+    nonisolated private static let linkDetectionCharacterLimit = 200_000
 
-    nonisolated private static func detectingPhoneNumbers(in attributed: AttributedString) -> AttributedString {
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue) else {
+    /// `M:SS` or `H:MM:SS` that is not glued to neighbouring digits or
+    /// colons, not a clock time (`8:39 pm`), not a fraction, and not the
+    /// time part of an ISO date.
+    nonisolated private static let timestampRegex = try! NSRegularExpression(
+        pattern: #"(?<![\d:T])(?:(\d{1,2}):)?([0-5]?\d):([0-5]\d)(?![\d:]|\.\d|\s*(?i:[ap]\.?m)\b)"#
+    )
+
+    /// Timestamps run before phone numbers: neither overwrites an existing
+    /// link, so the more precise detector claims its ranges first and
+    /// `<a href>` links always win over both.
+    nonisolated private static func detectingLinks(in attributed: AttributedString) -> AttributedString {
+        let plain = String(attributed.characters)
+        guard plain.count <= Self.linkDetectionCharacterLimit else {
             return attributed
         }
 
         var result = attributed
-        let plain = String(attributed.characters)
-        guard plain.count <= Self.phoneDetectionCharacterLimit else {
-            return attributed
-        }
         let fullRange = NSRange(plain.startIndex..<plain.endIndex, in: plain)
-        for match in detector.matches(in: plain, range: fullRange) {
+        linkTimestamps(in: &result, plain: plain, searchRange: fullRange)
+        linkPhoneNumbers(in: &result, plain: plain, searchRange: fullRange)
+        return result
+    }
+
+    nonisolated private static func linkTimestamps(
+        in result: inout AttributedString,
+        plain: String,
+        searchRange: NSRange
+    ) {
+        for match in timestampRegex.matches(in: plain, range: searchRange) {
+            guard let range = Range(match.range, in: result),
+                  result[range].runs[\.link].allSatisfy({ $0.0 == nil }),
+                  let seconds = timestampSeconds(match, in: plain),
+                  let url = ShowNotesTimestampLink.url(seconds: seconds)
+            else {
+                continue
+            }
+            result[range].link = url
+        }
+    }
+
+    nonisolated private static func timestampSeconds(_ match: NSTextCheckingResult, in plain: String) -> Int? {
+        func component(_ index: Int) -> Int? {
+            Range(match.range(at: index), in: plain).flatMap { Int(plain[$0]) }
+        }
+        guard let minutes = component(2), let seconds = component(3) else {
+            return nil
+        }
+        return (component(1) ?? 0) * 3600 + minutes * 60 + seconds
+    }
+
+    nonisolated private static func linkPhoneNumbers(
+        in result: inout AttributedString,
+        plain: String,
+        searchRange: NSRange
+    ) {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.phoneNumber.rawValue) else {
+            return
+        }
+
+        for match in detector.matches(in: plain, range: searchRange) {
             guard let phoneNumber = match.phoneNumber,
                   let range = Range(match.range, in: result),
                   result[range].runs[\.link].allSatisfy({ $0.0 == nil })
@@ -135,7 +180,6 @@ enum HTMLAttributedText {
             }
             result[range].link = url
         }
-        return result
     }
 
     private enum Separator: Int, Comparable {

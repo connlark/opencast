@@ -12,11 +12,18 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     /// Version of the canonical (non-derived) tables, counted in
     /// local_cache_meta; bump alongside each new gated migration in
     /// `database()`. PRAGMA user_version belongs to the derived search index.
-    nonisolated static let canonicalSchemaVersion = 1
+    nonisolated static let canonicalSchemaVersion = 2
+    private nonisolated static let maximumRetryAttemptCount = 6
+
+    private nonisolated static func retryDelay(forAttemptCount attempts: Int) -> TimeInterval {
+        let exponentialHours = 1 << min(max(attempts - 1, 0), 5)
+        return min(TimeInterval(exponentialHours) * 60 * 60, 24 * 60 * 60)
+    }
 
     private let databaseURL: URL?
     private let episodeSearchRebuildBatchSize: Int
     private let episodeSearchRebuildCheckpoint: (@Sendable () async -> Void)?
+    private let importBatchCheckpoint: (@Sendable (_ completedBatchCount: Int) -> Void)?
     private var connection: OpaquePointer?
     private var episodeSearchIndexState = EpisodeSearchIndexState.unknown
     private var hasValidatedEpisodeSearchIndex = false
@@ -35,7 +42,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         databaseURL: URL?,
         episodeSearchRebuildBatchSize: Int =
             SQLiteEpisodeSearchIndex.rebuildBatchSize,
-        episodeSearchRebuildCheckpoint: (@Sendable () async -> Void)? = nil
+        episodeSearchRebuildCheckpoint: (@Sendable () async -> Void)? = nil,
+        importBatchCheckpoint: (@Sendable (_ completedBatchCount: Int) -> Void)? = nil
     ) {
         self.databaseURL = databaseURL
         self.episodeSearchRebuildBatchSize = max(
@@ -43,6 +51,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             1
         )
         self.episodeSearchRebuildCheckpoint = episodeSearchRebuildCheckpoint
+        self.importBatchCheckpoint = importBatchCheckpoint
     }
 
     isolated deinit {
@@ -156,20 +165,25 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
 
         var incompleteFeeds: [String: FeedIncompleteReason] = [:]
         var processingRefreshPodcastIDs: Set<String> = []
-        try query("SELECT feed_url, incomplete_reason, requires_refresh FROM feed_load_state",
+        var automaticRetryAfterByFeedURL: [String: Date] = [:]
+        try query("SELECT feed_url, incomplete_reason, requires_refresh, automatic_retry_after FROM feed_load_state",
                   operation: "feed completeness load", db: db) { statement in
             guard let feedURL = columnText(statement, 0) else { return }
             if let reason = columnText(statement, 1) {
                 incompleteFeeds[feedURL] = try JSONDecoder().decode(FeedIncompleteReason.self, from: Data(reason.utf8))
             }
             if sqlite3_column_int(statement, 2) != 0 { processingRefreshPodcastIDs.insert(feedURL) }
+            if let retryAfter = columnDate(statement, 3) {
+                automaticRetryAfterByFeedURL[feedURL] = retryAfter
+            }
         }
         return LocalLibraryCacheSnapshot(
             podcastsByFeedURL: podcastsByFeedURL,
             episodes: episodes,
             refreshLogs: refreshLogs,
             incompleteFeeds: incompleteFeeds,
-            processingRefreshPodcastIDs: processingRefreshPodcastIDs
+            processingRefreshPodcastIDs: processingRefreshPodcastIDs,
+            automaticRetryAfterByFeedURL: automaticRetryAfterByFeedURL
         )
     }
 
@@ -405,6 +419,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
 
     private func importPreparedFeed(_ prepared: PreparedFeed, refreshedAt: Date) throws {
         try Task.checkCancellation()
+        guard !prepared.isSalvaged || prepared.episodeCount > 0 else {
+            throw OpenCastCoreError.malformedFeed(reason: "No usable episodes were recovered.")
+        }
         var indexWriteFailed = false
         defer {
             // Persist repair state after the catalog transaction has rolled
@@ -531,6 +548,47 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     AND podcast_title IS ? AND summary IS ? AND show_notes_html IS ?
                 """, operation: operation, db: db)
             defer { sqlite3_finalize(compareText) }
+            let overlapByID = try prepare(
+                "SELECT 1 FROM episode_cache WHERE episode_id=? AND podcast_id=? LIMIT 1",
+                operation: operation,
+                db: db
+            )
+            defer { sqlite3_finalize(overlapByID) }
+            let overlapByGUID = try prepare(
+                "SELECT 1 FROM episode_cache WHERE podcast_id=? AND guid=? LIMIT 1",
+                operation: operation,
+                db: db
+            )
+            defer { sqlite3_finalize(overlapByGUID) }
+            let overlapByAudioURL = try prepare(
+                "SELECT 1 FROM episode_cache WHERE podcast_id=? AND audio_url=? LIMIT 1",
+                operation: operation,
+                db: db
+            )
+            defer { sqlite3_finalize(overlapByAudioURL) }
+            let overlapByPublishedTitle = try prepare(
+                "SELECT 1 FROM episode_cache WHERE podcast_id=? AND published_at=? AND title=? LIMIT 1",
+                operation: operation,
+                db: db
+            )
+            defer { sqlite3_finalize(overlapByPublishedTitle) }
+            func hasOverlap(
+                _ statement: OpaquePointer,
+                bindings: () throws -> Void
+            ) throws -> Bool {
+                try bindings()
+                let status = sqlite3_step(statement)
+                guard status == SQLITE_ROW || status == SQLITE_DONE else {
+                    throw LocalLibraryCacheStoreError(
+                        operation: operation,
+                        message: String(cString: sqlite3_errmsg(db))
+                    )
+                }
+                let result = status == SQLITE_ROW
+                try reset(statement, operation: operation, db: db)
+                return result
+            }
+            var completedBatchCount = 0
             try prepared.episodes.forEachBatch { batch in
                 try autoreleasepool {
                     var changedSearchDocuments: [SQLiteEpisodeSearchDocument] = []
@@ -538,19 +596,29 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                         try Task.checkCancellation()
                         if prepared.isSalvaged {
                             guard episode.guid != nil || episode.audioURL != nil || episode.publishedAt != nil else { continue }
-                            var overlaps = false
-                            try query("""
-                                SELECT 1 FROM episode_cache WHERE podcast_id=? AND
-                                (episode_id=? OR (guid IS NOT NULL AND guid=?) OR (audio_url IS NOT NULL AND audio_url=?)
-                                 OR (published_at IS NOT NULL AND published_at=? AND title=?)) LIMIT 1
-                                """, operation: operation, db: db, bindings: { statement in
-                                try bind(feedURL, at: 1, statement: statement, db: db, operation: operation)
-                                try bind(episode.id.rawValue, at: 2, statement: statement, db: db, operation: operation)
-                                try bind(episode.guid, at: 3, statement: statement, db: db, operation: operation)
-                                try bind(episode.audioURL?.absoluteString, at: 4, statement: statement, db: db, operation: operation)
-                                try bind(episode.publishedAt, at: 5, statement: statement, db: db, operation: operation)
-                                try bind(episode.title, at: 6, statement: statement, db: db, operation: operation)
-                            }) { _ in overlaps = true }
+                            var overlaps = try hasOverlap(overlapByID) {
+                                try bind(episode.id.rawValue, at: 1, statement: overlapByID, db: db, operation: operation)
+                                try bind(feedURL, at: 2, statement: overlapByID, db: db, operation: operation)
+                            }
+                            if !overlaps, let guid = episode.guid {
+                                overlaps = try hasOverlap(overlapByGUID) {
+                                    try bind(feedURL, at: 1, statement: overlapByGUID, db: db, operation: operation)
+                                    try bind(guid, at: 2, statement: overlapByGUID, db: db, operation: operation)
+                                }
+                            }
+                            if !overlaps, let audioURL = episode.audioURL?.absoluteString {
+                                overlaps = try hasOverlap(overlapByAudioURL) {
+                                    try bind(feedURL, at: 1, statement: overlapByAudioURL, db: db, operation: operation)
+                                    try bind(audioURL, at: 2, statement: overlapByAudioURL, db: db, operation: operation)
+                                }
+                            }
+                            if !overlaps, let publishedAt = episode.publishedAt {
+                                overlaps = try hasOverlap(overlapByPublishedTitle) {
+                                    try bind(feedURL, at: 1, statement: overlapByPublishedTitle, db: db, operation: operation)
+                                    try bind(publishedAt, at: 2, statement: overlapByPublishedTitle, db: db, operation: operation)
+                                    try bind(episode.title, at: 3, statement: overlapByPublishedTitle, db: db, operation: operation)
+                                }
+                            }
                             if overlaps { continue }
                         }
                         try bind(episode.id.rawValue, at: 1, statement: compareText, db: db, operation: operation)
@@ -615,20 +683,50 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                             throw error
                         }
                     }
+                    completedBatchCount += 1
+                    importBatchCheckpoint?(completedBatchCount)
                 }
             }
             try Task.checkCancellation()
             let reason = try prepared.completeness.reason.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
+            var priorAttempts = 0
+            if prepared.isSalvaged {
+                try query(
+                    "SELECT consecutive_partial_attempts FROM feed_load_state WHERE feed_url=?",
+                    operation: operation,
+                    db: db,
+                    bindings: { statement in
+                        try bind(feedURL, at: 1, statement: statement, db: db, operation: operation)
+                    }
+                ) { statement in
+                    priorAttempts = Int(sqlite3_column_int(statement, 0))
+                }
+            }
+            let attempts = prepared.isSalvaged
+                ? min(priorAttempts + 1, Self.maximumRetryAttemptCount)
+                : 0
+            let retryAfter = prepared.isSalvaged
+                ? refreshedAt.addingTimeInterval(Self.retryDelay(forAttemptCount: attempts))
+                : nil
             try run("""
-                INSERT INTO feed_load_state(feed_url, incomplete_reason) VALUES (?, ?)
+                INSERT INTO feed_load_state(
+                    feed_url, incomplete_reason, requires_refresh,
+                    consecutive_partial_attempts, automatic_retry_after
+                ) VALUES (?, ?, 0, ?, ?)
                 ON CONFLICT(feed_url) DO UPDATE SET incomplete_reason=excluded.incomplete_reason,
-                    requires_refresh=CASE WHEN excluded.incomplete_reason IS NULL THEN 0 ELSE requires_refresh END
+                    requires_refresh=0,
+                    consecutive_partial_attempts=excluded.consecutive_partial_attempts,
+                    automatic_retry_after=excluded.automatic_retry_after
                 WHERE incomplete_reason IS NOT excluded.incomplete_reason
-                   OR (excluded.incomplete_reason IS NULL AND requires_refresh <> 0)
+                   OR requires_refresh <> 0
+                   OR consecutive_partial_attempts <> excluded.consecutive_partial_attempts
+                   OR automatic_retry_after IS NOT excluded.automatic_retry_after
                 """,
                     operation: operation, db: db) { statement in
                 try bind(feedURL, at: 1, statement: statement, db: db, operation: operation)
                 try bind(reason, at: 2, statement: statement, db: db, operation: operation)
+                try bind(attempts, at: 3, statement: statement, db: db, operation: operation)
+                try bind(retryAfter, at: 4, statement: statement, db: db, operation: operation)
             }
             if prepared.isSalvaged {
                 try run("UPDATE podcast_cache SET etag=NULL, last_modified=NULL, body_hash=NULL WHERE feed_url=?",
@@ -750,6 +848,47 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             try bind(validators.lastModified, at: 2, statement: statement, db: db, operation: operation)
             try bind(validators.bodyHash, at: 3, statement: statement, db: db, operation: operation)
             try bind(podcastID, at: 4, statement: statement, db: db, operation: operation)
+        }
+    }
+
+    func recordFeedRetryFailure(forPodcastID podcastID: String, attemptedAt: Date) async throws {
+        try Task.checkCancellation()
+        try inTransaction("feed retry schedule") { db in
+            let operation = "feed retry schedule"
+            let retryAfter = attemptedAt.addingTimeInterval(Self.retryDelay(forAttemptCount: 1))
+            try run(
+                """
+                INSERT INTO feed_load_state(feed_url, automatic_retry_after) VALUES (?, ?)
+                ON CONFLICT(feed_url) DO UPDATE SET
+                    automatic_retry_after=CASE WHEN incomplete_reason IS NOT NULL
+                        THEN MAX(COALESCE(automatic_retry_after, excluded.automatic_retry_after),
+                                 excluded.automatic_retry_after)
+                        ELSE excluded.automatic_retry_after END
+                """,
+                operation: operation,
+                db: db
+            ) { statement in
+                try bind(podcastID, at: 1, statement: statement, db: db, operation: operation)
+                try bind(retryAfter, at: 2, statement: statement, db: db, operation: operation)
+            }
+            try Task.checkCancellation()
+        }
+    }
+
+    func clearFeedRetryFailure(forPodcastID podcastID: String) async throws {
+        let operation = "feed retry clear"
+        let db = try database()
+        try run(
+            """
+            UPDATE feed_load_state
+            SET consecutive_partial_attempts=0, automatic_retry_after=NULL
+            WHERE feed_url=?
+              AND (consecutive_partial_attempts<>0 OR automatic_retry_after IS NOT NULL)
+            """,
+            operation: operation,
+            db: db
+        ) { statement in
+            try bind(podcastID, at: 1, statement: statement, db: db, operation: operation)
         }
     }
 
@@ -900,6 +1039,14 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     /// asserting the change-detecting upsert skips unchanged rows.
     func totalRowChangeCount() throws -> Int {
         Int(sqlite3_total_changes64(try database()))
+    }
+
+    /// Runs fault injection and resource inspection on the owning actor;
+    /// the connection must never escape the synchronous test closure.
+    func inspectConnectionForTesting<T: Sendable>(
+        _ inspect: @Sendable (OpaquePointer) throws -> T
+    ) throws -> T {
+        try inspect(database())
     }
 
     func checkpointForSearchBenchmark() throws {
@@ -1178,6 +1325,22 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     try setCanonicalSchemaVersion(1, db: handle)
                 }
             }
+            if try canonicalSchemaVersion(db: handle) < 2 {
+                try? exec(
+                    "ALTER TABLE feed_load_state ADD COLUMN consecutive_partial_attempts INTEGER NOT NULL DEFAULT 0",
+                    operation: "schema migration",
+                    db: handle
+                )
+                try? exec(
+                    "ALTER TABLE feed_load_state ADD COLUMN automatic_retry_after REAL",
+                    operation: "schema migration",
+                    db: handle
+                )
+                if try columnNames(of: "feed_load_state", db: handle)
+                    .isSuperset(of: ["consecutive_partial_attempts", "automatic_retry_after"]) {
+                    try setCanonicalSchemaVersion(2, db: handle)
+                }
+            }
 
             // Local processing epoch: one atomic invalidation, with durable
             // foreground-refresh requests that survive an interrupted launch.
@@ -1194,7 +1357,10 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     try exec("""
                         INSERT INTO feed_load_state(feed_url, requires_refresh)
                         SELECT feed_url, 1 FROM podcast_cache WHERE true
-                        ON CONFLICT(feed_url) DO UPDATE SET requires_refresh=1
+                        ON CONFLICT(feed_url) DO UPDATE SET
+                            requires_refresh=1,
+                            consecutive_partial_attempts=0,
+                            automatic_retry_after=NULL
                         """, operation: "feed processing upgrade", db: handle)
                     try run("INSERT OR REPLACE INTO local_cache_meta(key,value) VALUES ('feed_processing_version',?)",
                             operation: "feed processing upgrade", db: handle) { statement in
@@ -1203,6 +1369,33 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     try exec("COMMIT", operation: "feed processing upgrade", db: handle)
                 } catch {
                     try? exec("ROLLBACK", operation: "feed processing upgrade", db: handle)
+                    throw error
+                }
+            }
+
+            // Earlier builds counted transport/write failures as partial
+            // imports. Their persisted streak cannot be reconstructed, so
+            // reset scheduling once without clearing recovery or validators.
+            var storedRetryPolicyVersion: String?
+            try query("SELECT value FROM local_cache_meta WHERE key='feed_retry_policy_version'",
+                      operation: "feed retry policy", db: handle) { statement in
+                storedRetryPolicyVersion = columnText(statement, 0)
+            }
+            if storedRetryPolicyVersion != "1" {
+                try exec("BEGIN IMMEDIATE", operation: "feed retry policy", db: handle)
+                do {
+                    try exec("""
+                        UPDATE feed_load_state
+                        SET consecutive_partial_attempts=0, automatic_retry_after=NULL
+                        WHERE consecutive_partial_attempts<>0 OR automatic_retry_after IS NOT NULL
+                        """, operation: "feed retry policy", db: handle)
+                    try exec("""
+                        INSERT OR REPLACE INTO local_cache_meta(key,value)
+                        VALUES ('feed_retry_policy_version','1')
+                        """, operation: "feed retry policy", db: handle)
+                    try exec("COMMIT", operation: "feed retry policy", db: handle)
+                } catch {
+                    try? exec("ROLLBACK", operation: "feed retry policy", db: handle)
                     throw error
                 }
             }
@@ -1235,7 +1428,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     CREATE TABLE IF NOT EXISTS feed_load_state (
       feed_url TEXT PRIMARY KEY,
       incomplete_reason TEXT,
-      requires_refresh INTEGER NOT NULL DEFAULT 0
+      requires_refresh INTEGER NOT NULL DEFAULT 0,
+      consecutive_partial_attempts INTEGER NOT NULL DEFAULT 0,
+      automatic_retry_after REAL
     );
     CREATE TABLE IF NOT EXISTS podcast_cache (
       feed_url TEXT PRIMARY KEY,
@@ -1302,6 +1497,15 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
 
     CREATE INDEX IF NOT EXISTS episode_cache_podcast_published_idx
     ON episode_cache(podcast_id, published_at DESC);
+
+    CREATE INDEX IF NOT EXISTS episode_cache_podcast_guid_idx
+    ON episode_cache(podcast_id, guid) WHERE guid IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS episode_cache_podcast_audio_idx
+    ON episode_cache(podcast_id, audio_url) WHERE audio_url IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS episode_cache_podcast_published_title_idx
+    ON episode_cache(podcast_id, published_at, title) WHERE published_at IS NOT NULL;
 
     CREATE INDEX IF NOT EXISTS refresh_log_feed_started_idx
     ON refresh_log(feed_url, started_at DESC);

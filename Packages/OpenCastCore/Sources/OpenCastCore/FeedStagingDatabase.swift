@@ -19,7 +19,13 @@ final class FeedStagingDatabase {
         if !readOnly { try execute("PRAGMA journal_mode=DELETE; PRAGMA synchronous=OFF;") }
     }
 
-    deinit { sqlite3_close(connection) }
+    deinit { close() }
+
+    func close() {
+        guard let connection else { return }
+        sqlite3_close(connection)
+        self.connection = nil
+    }
 
     func execute(_ sql: String) throws {
         guard sqlite3_exec(connection, sql, nil, nil, nil) == SQLITE_OK else { throw failure() }
@@ -61,8 +67,12 @@ final class FeedStagingDatabase {
     }
 
     func data(_ statement: OpaquePointer, column: Int32) -> Data {
+        // SQLite requires callers to obtain the BLOB pointer before asking
+        // for its byte count; reversing the calls can invalidate a converted
+        // value. Both SQL NULL and an empty BLOB intentionally decode empty.
+        guard let bytes = sqlite3_column_blob(statement, column) else { return Data() }
         let count = Int(sqlite3_column_bytes(statement, column))
-        guard let bytes = sqlite3_column_blob(statement, column), count > 0 else { return Data() }
+        guard count > 0 else { return Data() }
         return Data(bytes: bytes, count: count)
     }
 

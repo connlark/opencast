@@ -59,7 +59,7 @@ export async function sampleRuntimeMemory(inspectorURL) {
     }
   })().catch(error => { failed = error; });
   let stopping;
-  return () => {
+  const stop = () => {
     stopping ??= (async () => {
       stopped = true;
       try {
@@ -74,16 +74,23 @@ export async function sampleRuntimeMemory(inspectorURL) {
     })();
     return stopping;
   };
+  stop.transportAudit = async () => {
+    const audit = await command('Runtime.evaluate', {
+      contextId: contexts[0].id, expression: 'globalThis.__feedTransportAudit', returnByValue: true,
+    });
+    return audit.result.value;
+  };
+  return stop;
 }
 
 function installTransportAudit() {
-  const audit = globalThis.__feedTransportAudit = { aborted: [], readersCancelled: [] };
+  const audit = globalThis.__feedTransportAudit = { aborted: [], readersCancelled: [], readerBytes: {} };
   const bodies = new WeakMap();
   const readers = new WeakMap();
   const nativeFetch = globalThis.fetch;
   globalThis.fetch = async function(input, init) {
     const name = new URL(typeof input === 'string' ? input : input.url).pathname;
-    const tracked = name.startsWith('/stalled-');
+    const tracked = name.startsWith('/stalled-') || name.startsWith('/cancel-');
     if (tracked) init?.signal?.addEventListener('abort', () => audit.aborted.push(name), { once: true });
     const response = await nativeFetch.call(this, input, init);
     if (tracked && response.body) bodies.set(response.body, name);
@@ -96,6 +103,13 @@ function installTransportAudit() {
     return reader;
   };
   const nativeCancel = ReadableStreamBYOBReader.prototype.cancel;
+  const nativeRead = ReadableStreamBYOBReader.prototype.read;
+  ReadableStreamBYOBReader.prototype.read = async function(...args) {
+    const result = await nativeRead.apply(this, args);
+    const name = readers.get(this);
+    if (name) audit.readerBytes[name] = (audit.readerBytes[name] ?? 0) + (result.value?.byteLength ?? 0);
+    return result;
+  };
   ReadableStreamBYOBReader.prototype.cancel = function(reason) {
     if (readers.has(this)) audit.readersCancelled.push(readers.get(this));
     return nativeCancel.call(this, reason);

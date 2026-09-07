@@ -26,7 +26,8 @@ enum FeedRefreshFetcher {
     nonisolated static func fetchResult(
         feedURLString: String,
         feedService: any FeedService,
-        localCache: any LocalLibraryCacheStore
+        localCache: any LocalLibraryCacheStore,
+        intent: FeedPreparationIntent = .interactive
     ) async -> Result {
         guard let feedURL = URL(string: feedURLString),
               feedURL.scheme != nil,
@@ -41,7 +42,11 @@ enum FeedRefreshFetcher {
         do {
             let canonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: feedURLString)
             let storedValidators = (try? await localCache.feedValidators(forPodcastID: canonicalFeedURL)) ?? nil
-            let outcome = try await feedService.prepareFeed(at: feedURL, validators: storedValidators)
+            let outcome = try await feedService.prepareFeed(
+                at: feedURL,
+                validators: storedValidators,
+                intent: intent
+            )
             try Task.checkCancellation()
             return Result(feedURLString: feedURLString, outcome: .success(outcome))
         } catch is CancellationError {
@@ -61,6 +66,7 @@ enum FeedRefreshFetcher {
         feedURLStrings: [String],
         feedService: any FeedService,
         localCache: any LocalLibraryCacheStore,
+        intent: FeedPreparationIntent = .interactive,
         apply: (Result) async throws -> Void
     ) async throws {
         try await withThrowingTaskGroup(of: Result.self) { group in
@@ -73,7 +79,8 @@ enum FeedRefreshFetcher {
                     await fetchResult(
                         feedURLString: feedURLString,
                         feedService: feedService,
-                        localCache: localCache
+                        localCache: localCache,
+                        intent: intent
                     )
                 }
             }

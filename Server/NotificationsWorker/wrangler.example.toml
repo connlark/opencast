@@ -1,6 +1,7 @@
 name = "your-notifications-worker"
 main = "build/index.js"
 compatibility_date = "2026-08-14"
+compatibility_flags = ["enable_request_signal"]
 
 [observability]
 enabled = true

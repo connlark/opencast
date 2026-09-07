@@ -109,7 +109,10 @@ struct PodcastDetailView: View {
                                 )
                                 if let reason = appModel.library.incompleteFeeds[feedURL] {
                                     IncompleteFeedNotice(reason: reason, isRefreshing: isRefreshing) {
-                                        await appModel.library.refresh(feedURL: feedURL, modelContext: modelContext)
+                                        appModel.library.requestManualRefresh(
+                                            feedURL: feedURL,
+                                            modelContext: modelContext
+                                        )
                                     }
                                 }
                                 if let suggestedFeedURL = appModel.library.suggestedFeedMigrationURLsByFeedURL[feedURL] {
