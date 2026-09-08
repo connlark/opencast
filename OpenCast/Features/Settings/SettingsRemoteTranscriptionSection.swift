@@ -56,31 +56,11 @@ struct SettingsRemoteTranscriptionSection: View {
                 ForEach(store.products) { product in
                     RemoteTranscriptionStorePackRow(product: product)
                 }
-                purchasePhaseRow
+                RemoteTranscriptionPurchaseStatusView(offersRecovery: false)
                 Button("Refresh Purchases", systemImage: "arrow.clockwise", action: refreshPurchases)
                     .disabled(store.isRefreshing)
                 RemoteTranscriptionRefundRequestRows(store: store)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var purchasePhaseRow: some View {
-        switch appModel.remoteTranscriptionPurchases.purchasePhase {
-        case .idle, .purchasing:
-            EmptyView()
-        case .pendingApproval:
-            Label("Purchase awaiting approval", systemImage: "hourglass")
-                .foregroundStyle(.secondary)
-        case .completed(let creditedSeconds):
-            Label(
-                "Added \(RemoteTranscriptionBalanceFormatting.hours(creditedSeconds))",
-                systemImage: "checkmark.circle"
-            )
-            .foregroundStyle(.secondary)
-        case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.secondary)
         }
     }
 

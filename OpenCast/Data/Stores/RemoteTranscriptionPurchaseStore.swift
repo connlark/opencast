@@ -5,8 +5,8 @@ import OSLog
 /// Purchase + balance state for remote transcription.
 /// Money invariants live here: the catalog cross-check fails closed, a
 /// transaction is finished ONLY after the server acknowledges the credit
-/// (credited / already credited / refunded), and reconciliation retries
-/// unfinished transactions at launch and behind an explicit user refresh.
+/// (credited / already credited / refunded), and reconciliation retries a
+/// failed credit in-session as well as at launch or explicit user refresh.
 @Observable
 final class RemoteTranscriptionPurchaseStore {
     private static let appTransactionLogger = Logger(
@@ -64,12 +64,15 @@ final class RemoteTranscriptionPurchaseStore {
     @ObservationIgnored private var requestedRefundTransactionIDs: Set<UInt64> = []
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     @ObservationIgnored private var prepareTask: Task<Bool, Never>?
+    @ObservationIgnored private var redemptionRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingRedemptionRetries: [UInt64: RemoteTranscriptionStoreTransaction] = [:]
     #if DEBUG
     @ObservationIgnored private var usesUIFixture = false
     #endif
 
     private let api: any RemoteTranscriptionAPI
     private let storeKit: any RemoteTranscriptionStoreKitClient
+    private let redemptionRetryDelays: [Duration]
     /// Tests and DEBUG fixtures pin a lane without StoreKit work. Release app
     /// wiring resolves from the shared AppTransaction snapshot.
     private let configurationResolver: (Bool) async -> RemoteTranscriptionBackendConfiguration
@@ -78,10 +81,12 @@ final class RemoteTranscriptionPurchaseStore {
         api: any RemoteTranscriptionAPI,
         storeKit: any RemoteTranscriptionStoreKitClient,
         configuration: RemoteTranscriptionBackendConfiguration? = nil,
-        configurationResolver: ((Bool) async -> RemoteTranscriptionBackendConfiguration)? = nil
+        configurationResolver: ((Bool) async -> RemoteTranscriptionBackendConfiguration)? = nil,
+        redemptionRetryDelays: [Duration] = [.seconds(2), .seconds(10), .seconds(30)]
     ) {
         self.api = api
         self.storeKit = storeKit
+        self.redemptionRetryDelays = redemptionRetryDelays
         if let configurationResolver {
             self.configurationResolver = configurationResolver
         } else if let configuration {
@@ -104,6 +109,7 @@ final class RemoteTranscriptionPurchaseStore {
     deinit {
         updatesTask?.cancel()
         prepareTask?.cancel()
+        redemptionRetryTask?.cancel()
     }
 
     /// Idempotent: resolves the gate, bootstraps, cross-checks the catalog,
@@ -144,7 +150,7 @@ final class RemoteTranscriptionPurchaseStore {
         // cancelled caller simply keeps waiting and the result is cached for
         // everyone. retryPreparation and deinit still cancel explicitly.
         if let prepareTask {
-            await prepareTask.value
+            _ = await prepareTask.value
             return
         }
         let task = Task { await resolve(refreshAppTransaction: refreshAppTransaction) }
@@ -162,7 +168,7 @@ final class RemoteTranscriptionPurchaseStore {
         guard case .available = availability else { return }
         // Any in-flight purchase blocks a second one: two concurrent StoreKit
         // flows would clobber each other's purchasePhase.
-        if case .purchasing = purchasePhase { return }
+        guard !isPurchaseInFlight else { return }
         guard let appAccountToken else {
             purchasePhase = .failed(message: String(localized: "Purchases aren’t ready yet. Try again in a moment."))
             return
@@ -178,8 +184,18 @@ final class RemoteTranscriptionPurchaseStore {
                 updateRefundCandidate(transaction)
                 if let response = await redeemAndFinish(transaction) {
                     purchasePhase = .completed(creditedSeconds: response.creditedSeconds)
+                } else if redeemedTransactionIDs.contains(transaction.id) {
+                    // The updates listener can win the race for the same
+                    // StoreKit transaction while `purchase()` is suspended.
+                    // Its acknowledged credit is success, not a redeem
+                    // failure that should strand the surface.
+                    let creditedSeconds = RemoteTranscriptionEmbeddedCatalog
+                        .grantSecondsByProductID[transaction.productID]
+                        ?? product.grantSeconds
+                    purchasePhase = .completed(creditedSeconds: creditedSeconds)
                 } else {
                     purchasePhase = .failed(message: String(localized: "The purchase completed but couldn’t be credited yet. It will retry automatically."))
+                    scheduleRedemptionRetry(transaction)
                 }
             case .pending:
                 purchasePhase = .pendingApproval
@@ -192,6 +208,15 @@ final class RemoteTranscriptionPurchaseStore {
             purchasePhase = .idle
         } catch {
             purchasePhase = .failed(message: error.localizedDescription)
+        }
+    }
+
+    var isPurchaseInFlight: Bool {
+        switch purchasePhase {
+        case .purchasing, .pendingApproval:
+            true
+        case .idle, .completed, .failed:
+            false
         }
     }
 
@@ -526,7 +551,14 @@ final class RemoteTranscriptionPurchaseStore {
             for await transaction in stream {
                 guard let self else { return }
                 self.updateRefundCandidate(transaction)
-                await self.redeemAndFinish(transaction)
+                let wasPendingApproval = self.purchasePhase == .pendingApproval
+                if let response = await self.redeemAndFinish(transaction) {
+                    if wasPendingApproval {
+                        self.purchasePhase = .completed(creditedSeconds: response.creditedSeconds)
+                    }
+                } else if !self.redeemedTransactionIDs.contains(transaction.id) {
+                    self.scheduleRedemptionRetry(transaction)
+                }
             }
         }
     }
@@ -535,7 +567,49 @@ final class RemoteTranscriptionPurchaseStore {
 
     private func reconcile(_ transactions: [RemoteTranscriptionStoreTransaction]) async {
         for transaction in transactions {
-            await redeemAndFinish(transaction)
+            if await redeemAndFinish(transaction) == nil,
+               !redeemedTransactionIDs.contains(transaction.id) {
+                scheduleRedemptionRetry(transaction)
+            }
+        }
+    }
+
+    private func scheduleRedemptionRetry(_ transaction: RemoteTranscriptionStoreTransaction) {
+        pendingRedemptionRetries[transaction.id] = transaction
+        guard redemptionRetryTask == nil, !redemptionRetryDelays.isEmpty else {
+            return
+        }
+
+        let delays = redemptionRetryDelays
+        redemptionRetryTask = Task { [weak self] in
+            for delay in delays {
+                do {
+                    try await Task.sleep(for: delay)
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                await self.retryPendingRedemptions()
+                if self.pendingRedemptionRetries.isEmpty {
+                    break
+                }
+            }
+            self?.redemptionRetryTask = nil
+        }
+    }
+
+    private func retryPendingRedemptions() async {
+        for transaction in Array(pendingRedemptionRetries.values) {
+            let shouldPresentCompletion: Bool = switch purchasePhase {
+            case .failed, .pendingApproval: true
+            case .idle, .purchasing, .completed: false
+            }
+            guard let response = await redeemAndFinish(transaction) else {
+                continue
+            }
+            if shouldPresentCompletion {
+                purchasePhase = .completed(creditedSeconds: response.creditedSeconds)
+            }
         }
     }
 
@@ -590,11 +664,18 @@ final class RemoteTranscriptionPurchaseStore {
             guard response.outcome.isFinishable else { return nil }
             redeemedTransactionIDs.insert(transaction.id)
             await storeKit.finish(transactionID: transaction.id)
+            let previousBalance = balance
             balance = response.balance
-            // The server echoes the original positive creditedSeconds for
-            // already_credited and refunded acknowledgements; only a fresh
-            // credit means the balance actually went up.
-            if response.outcome == .credited {
+            pendingRedemptionRetries.removeValue(forKey: transaction.id)
+            // A lost first response can make the retry say `alreadyCredited`
+            // even though this process still observes the added headroom for
+            // the first time. Wake deferred work for either a fresh credit or
+            // an authoritative increase; a refund can only move headroom the
+            // other direction.
+            let observedHeadroomIncrease = previousBalance.map {
+                purchaseHeadroom(response.balance) > purchaseHeadroom($0)
+            } ?? false
+            if response.outcome == .credited || observedHeadroomIncrease {
                 onBalanceIncreased?()
             }
             clearPendingApprovalPhase()
@@ -612,5 +693,12 @@ final class RemoteTranscriptionPurchaseStore {
         if purchasePhase == .pendingApproval {
             purchasePhase = .idle
         }
+    }
+
+    private func purchaseHeadroom(_ balance: OpenCastRemoteTranscriptionBalance) -> Int64 {
+        balance.availableSeconds
+            + RemoteTranscriptionEmbeddedCatalog.debtCapSeconds
+            - min(balance.debtSeconds, RemoteTranscriptionEmbeddedCatalog.debtCapSeconds)
+            - balance.reservedSeconds
     }
 }

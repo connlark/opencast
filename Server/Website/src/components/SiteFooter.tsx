@@ -9,7 +9,9 @@ export function SiteFooter({ variant }: { variant: "marketing" | "support" }) {
     <footer className="mt-auto bg-background">
       <Separator variant="tertiary" />
       <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-9 sm:px-6">
-        <p className="text-sm text-muted">opencast for iPhone and iPad.</p>
+        <p className="text-sm text-muted">
+          opencast for iPhone and iPad. Your listening is not a growth funnel.
+        </p>
         <div className="flex flex-wrap gap-5 text-sm">
           {variant === "marketing" ? (
             <>

@@ -45,6 +45,10 @@ final class EpisodeAdFreePassCoordinator {
     @ObservationIgnored var onStageChange: (@MainActor (EpisodeAdFreePassStage, AdFreePassQueueContext) -> Void)?
     @ObservationIgnored var onQueueTerminal: (@MainActor (AdFreePassQueueTerminalOutcome) -> Void)?
     @ObservationIgnored var isBackgroundProtected: @MainActor () -> Bool = { false }
+    /// UI-testing stand-in for the live queue (App Store pipeline shot): the
+    /// snapshot and per-episode status come from the override, nothing runs.
+    @ObservationIgnored var uiTestQueueOverride: AdFreePassQueueUITestOverride?
+    @ObservationIgnored var uiTestEpisodeSnapshotResolver: (@MainActor (String) -> EpisodeListItemSnapshot?)?
 
     init(
         cancellationSource: AdFreePassCancellationSource = AdFreePassCancellationSource(),
@@ -67,7 +71,11 @@ final class EpisodeAdFreePassCoordinator {
     }
 
     var queueSnapshot: AdFreePassQueueSnapshot {
-        AdFreePassQueueSnapshot(
+        if let uiTestQueueOverride {
+            return overriddenQueueSnapshot(uiTestQueueOverride)
+        }
+
+        return AdFreePassQueueSnapshot(
             state: queueState,
             activeEpisodeID: activeItem?.episodeID,
             activeEpisodeTitle: activeItem?.episode.title,
@@ -86,6 +94,16 @@ final class EpisodeAdFreePassCoordinator {
     }
 
     func queueStatus(for episodeID: String) -> AdFreePassQueueEpisodeStatus {
+        if let uiTestQueueOverride {
+            if uiTestQueueOverride.activeEpisodeID == episodeID {
+                return .running
+            }
+            if let index = uiTestQueueOverride.pendingEpisodeIDs.firstIndex(of: episodeID) {
+                return .queued(ahead: index + 1)
+            }
+            return .notQueued
+        }
+
         if activeItem?.episodeID == episodeID {
             return .running
         }
@@ -110,6 +128,43 @@ final class EpisodeAdFreePassCoordinator {
         }
 
         return .notQueued
+    }
+
+    private func overriddenQueueSnapshot(_ override: AdFreePassQueueUITestOverride) -> AdFreePassQueueSnapshot {
+        let activeEpisode = uiTestEpisodeSnapshotResolver?(override.activeEpisodeID)
+        let pendingItems = override.pendingEpisodeIDs.enumerated().compactMap { index, episodeID in
+            uiTestEpisodeSnapshotResolver?(episodeID).map { episode in
+                AdFreePassQueueItem(episode: episode, origin: .manual, enqueuedAt: .now, sequence: index + 1)
+            }
+        }
+        let itemCount = 1 + pendingItems.count
+        let activeFraction: Double = switch override.stage {
+        case .downloadingEpisode:
+            0.1
+        case .transcribing(let progress):
+            0.2 + 0.6 * (progress.fractionCompleted ?? 0)
+        case .analyzing:
+            0.9
+        default:
+            0.5
+        }
+
+        return AdFreePassQueueSnapshot(
+            state: .running,
+            activeEpisodeID: override.activeEpisodeID,
+            activeEpisodeTitle: activeEpisode?.title,
+            activeArtworkURL: activeEpisode?.artworkURL,
+            activeItemMode: .onDevice,
+            currentStage: override.stage,
+            finishedItemCount: 0,
+            totalItemCount: itemCount,
+            completedCount: 0,
+            failedCount: 0,
+            fractionCompleted: activeFraction / Double(itemCount),
+            outcomes: [],
+            pendingItems: pendingItems,
+            pendingModelConsentByteCount: nil
+        )
     }
 
     func presentation(

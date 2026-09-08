@@ -30,6 +30,25 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(store.balance?.availableSeconds == 75_600)
     }
 
+    @Test("A transaction-updates win cannot turn the purchase result into a false failure")
+    func updatesListenerWinStillCompletesPurchase() async {
+        let api = FakePurchaseAPI()
+        let transaction = Self.transaction(id: 8)
+        let storeKit = FakeStoreKitClient()
+        storeKit.updates = [transaction]
+        storeKit.purchaseResult = .success(transaction)
+        let store = Self.makeStore(api: api, storeKit: storeKit)
+
+        await store.prepare()
+        #expect(await waitUntil { storeKit.finishedIDs == [8] })
+
+        await store.purchase(store.products[0])
+
+        #expect(api.redeemedJWS == ["jws-8"])
+        #expect(storeKit.finishedIDs == [8])
+        #expect(store.purchasePhase == .completed(creditedSeconds: 72_000))
+    }
+
     @Test("Failed redeem leaves the transaction unfinished for later retry")
     func failedRedeemNeverFinishes() async {
         let api = FakePurchaseAPI()
@@ -44,6 +63,33 @@ struct RemoteTranscriptionPurchaseStoreTests {
         if case .failed = store.purchasePhase {} else {
             Issue.record("expected failed phase, got \(store.purchasePhase)")
         }
+    }
+
+    @Test("Failed redeem retries in-session and completes without a relaunch")
+    func failedRedeemRetriesInSession() async {
+        let api = FakePurchaseAPI()
+        api.redeemError = RemoteTranscriptionHTTPError(statusCode: 503, code: "internal_error", detail: nil)
+        let storeKit = FakeStoreKitClient()
+        storeKit.purchaseResult = .success(Self.transaction(id: 10))
+        let store = Self.makeStore(
+            api: api,
+            storeKit: storeKit,
+            redemptionRetryDelays: [.milliseconds(10)]
+        )
+
+        await store.prepare()
+        await store.purchase(store.products[0])
+        if case .failed = store.purchasePhase {} else {
+            Issue.record("expected failed phase, got \(store.purchasePhase)")
+        }
+
+        api.redeemError = nil
+
+        #expect(await waitUntil {
+            storeKit.finishedIDs == [10]
+                && store.purchasePhase == .completed(creditedSeconds: 72_000)
+        })
+        #expect(store.balance?.availableSeconds == 75_600)
     }
 
     @Test("Unknown redeem outcome fails closed: no finish")
@@ -83,6 +129,22 @@ struct RemoteTranscriptionPurchaseStoreTests {
                 Issue.record("unexpected phase \(store.purchasePhase) for \(result); failureExpected=\(expectFailure)")
             }
         }
+    }
+
+    @Test("Pending approval blocks another StoreKit flow")
+    func pendingApprovalBlocksAnotherPurchase() async {
+        let api = FakePurchaseAPI()
+        let storeKit = FakeStoreKitClient()
+        storeKit.purchaseResult = .pending
+        let store = Self.makeStore(api: api, storeKit: storeKit)
+
+        await store.prepare()
+        await store.purchase(store.products[0])
+        await store.purchase(store.products[1])
+
+        #expect(storeKit.purchaseCalls == 1)
+        #expect(store.purchasePhase == .pendingApproval)
+        #expect(store.isPurchaseInFlight)
     }
 
     @Test("Launch reconciliation redeems unfinished transactions exactly once")
@@ -304,24 +366,28 @@ struct RemoteTranscriptionPurchaseStoreTests {
 
     @Test("dismissPurchasePhase clears terminal rows but leaves pending approval")
     func dismissPurchasePhaseClearsTerminalOnly() async {
-        let api = FakePurchaseAPI()
-        let storeKit = FakeStoreKitClient()
-        storeKit.purchaseResult = .pending
-        let store = Self.makeStore(api: api, storeKit: storeKit)
+        let pendingAPI = FakePurchaseAPI()
+        let pendingStoreKit = FakeStoreKitClient()
+        pendingStoreKit.purchaseResult = .pending
+        let pendingStore = Self.makeStore(api: pendingAPI, storeKit: pendingStoreKit)
 
-        await store.prepare()
-        await store.purchase(store.products[0])
-        #expect(store.purchasePhase == .pendingApproval)
+        await pendingStore.prepare()
+        await pendingStore.purchase(pendingStore.products[0])
+        #expect(pendingStore.purchasePhase == .pendingApproval)
 
-        store.dismissPurchasePhase()
-        #expect(store.purchasePhase == .pendingApproval)
+        pendingStore.dismissPurchasePhase()
+        #expect(pendingStore.purchasePhase == .pendingApproval)
 
-        storeKit.purchaseResult = .success(Self.transaction(id: 41))
-        await store.purchase(store.products[0])
-        #expect(store.purchasePhase == .completed(creditedSeconds: 72_000))
+        let completedAPI = FakePurchaseAPI()
+        let completedStoreKit = FakeStoreKitClient()
+        completedStoreKit.purchaseResult = .success(Self.transaction(id: 41))
+        let completedStore = Self.makeStore(api: completedAPI, storeKit: completedStoreKit)
+        await completedStore.prepare()
+        await completedStore.purchase(completedStore.products[0])
+        #expect(completedStore.purchasePhase == .completed(creditedSeconds: 72_000))
 
-        store.dismissPurchasePhase()
-        #expect(store.purchasePhase == .idle)
+        completedStore.dismissPurchasePhase()
+        #expect(completedStore.purchasePhase == .idle)
     }
 
     @Test("App Review fixture derives ordered identity and grants from the embedded catalog")
@@ -621,8 +687,8 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(store.analysisEstimate(durationSeconds: -30) == nil)
     }
 
-    @Test("Balance-increase callback fires only when a redeem actually credits")
-    func balanceIncreaseCallbackFiresOnlyOnCredit() async {
+    @Test("Balance-increase callback also recovers a lost credited response")
+    func balanceIncreaseCallbackTracksObservedHeadroom() async {
         let api = FakePurchaseAPI()
         let storeKit = FakeStoreKitClient()
         storeKit.purchaseResult = .success(Self.transaction(id: 21))
@@ -634,32 +700,66 @@ struct RemoteTranscriptionPurchaseStoreTests {
         await store.purchase(store.products[0])
         #expect(balanceIncreaseCount == 1)
 
-        // An already-credited replay moves no money and must not re-probe
-        // balance-deferred work, even though the server echoes the original
-        // positive creditedSeconds.
+        // An unchanged already-credited replay must not re-probe deferred
+        // work just because the server echoes the original positive grant.
         api.redeemOutcome = .alreadyCredited
         storeKit.purchaseResult = .success(Self.transaction(id: 22))
         await store.purchase(store.products[0])
         #expect(balanceIncreaseCount == 1)
 
+        // If the first credited response was lost, the retry is
+        // `alreadyCredited`, but its authoritative balance is new to this
+        // process. That observed headroom increase must wake the deferred run
+        // instead of requiring a force quit and launch reconciliation.
+        api.balance = OpenCastRemoteTranscriptionBalance(
+            availableSeconds: 147_600,
+            reservedSeconds: 0,
+            debtSeconds: 0
+        )
+        storeKit.purchaseResult = .success(Self.transaction(id: 23))
+        await store.purchase(store.products[0])
+        #expect(balanceIncreaseCount == 2)
+
         // A refund acknowledgement also echoes the original grant while the
         // balance went DOWN — it must not fire either.
         api.redeemOutcome = .refunded
-        storeKit.purchaseResult = .success(Self.transaction(id: 23))
+        api.balance = OpenCastRemoteTranscriptionBalance(
+            availableSeconds: 75_600,
+            reservedSeconds: 0,
+            debtSeconds: 0
+        )
+        storeKit.purchaseResult = .success(Self.transaction(id: 24))
         await store.purchase(store.products[0])
-        #expect(balanceIncreaseCount == 1)
+        #expect(balanceIncreaseCount == 2)
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if condition() {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
     }
 
     // MARK: - Fixtures
 
     private static func makeStore(
         api: FakePurchaseAPI,
-        storeKit: FakeStoreKitClient
+        storeKit: FakeStoreKitClient,
+        redemptionRetryDelays: [Duration] = [.seconds(2), .seconds(10), .seconds(30)]
     ) -> RemoteTranscriptionPurchaseStore {
         RemoteTranscriptionPurchaseStore(
             api: api,
             storeKit: storeKit,
-            configuration: RemoteTranscriptionBackendConfiguration.prodStaging
+            configuration: RemoteTranscriptionBackendConfiguration.prodStaging,
+            redemptionRetryDelays: redemptionRetryDelays
         )
     }
 
@@ -885,6 +985,7 @@ private final class FakeStoreKitClient: RemoteTranscriptionStoreKitClient, @unch
     var purchaseResult: RemoteTranscriptionStorePurchaseResult = .cancelled
     var unfinished: [RemoteTranscriptionStoreTransaction] = []
     var all: [RemoteTranscriptionStoreTransaction] = []
+    var updates: [RemoteTranscriptionStoreTransaction] = []
 
     private var recordedEnvironmentCalls = 0
     private var recordedRefreshEnvironmentCalls = 0
@@ -1001,7 +1102,13 @@ private final class FakeStoreKitClient: RemoteTranscriptionStoreKitClient, @unch
 
     func transactionUpdates() -> AsyncStream<RemoteTranscriptionStoreTransaction> {
         lock.withLock { recordedTransactionUpdatesCalls += 1 }
-        return AsyncStream { continuation in continuation.finish() }
+        let transactionUpdates = lock.withLock { updates }
+        return AsyncStream { continuation in
+            for transaction in transactionUpdates {
+                continuation.yield(transaction)
+            }
+            continuation.finish()
+        }
     }
 
     func finish(transactionID: UInt64) async {

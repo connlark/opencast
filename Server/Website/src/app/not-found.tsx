@@ -18,7 +18,7 @@ export default function NotFound() {
             align="center"
             className="mt-4 text-3xl font-semibold tracking-tight sm:text-4xl"
           >
-            This page drifted out of the feed.
+            this page drifted out of the feed.
           </Typography.Heading>
           <Typography.Paragraph
             color="muted"

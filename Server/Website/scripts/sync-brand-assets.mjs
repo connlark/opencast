@@ -51,13 +51,14 @@ const BRAND_NAVY_BOTTOM = "#0d111c";
 const BRAND_ORANGE = "#f9730e";
 const BRAND_GOLD = "#fec44c";
 
-const SOCIAL_TAGLINE = "Native podcasting. RSS-first.";
-const SOCIAL_SCREENSHOT_ID = "app_store_01_now_playing_framed";
+const SOCIAL_TAGLINE = "skips the ads. never watches you.";
+const SOCIAL_SCREENSHOT_ID = "app_store_01_skip_framed";
 
-// Bounding box of the device inside a 464x1008 framed screenshot, measured from
-// the committed render. The fastlane frame template is fixed, so these hold as
-// long as the screenshot pipeline keeps producing 464px-wide framed shots.
-const DEVICE_CROP = { left: 26, top: 247, width: 414, height: 761 };
+// Bounding box of the device inside a 464x1008 framed screenshot, derived from
+// the compositor spec for shot 01 (scale 0.9, 5% bottom bleed of a 2424px
+// unit on the 2868px canvas → top 565px, both scaled by 464/1320). Re-derive
+// if `fastlane/screenshot-compositor/lib/spec.mjs` changes that layout.
+const DEVICE_CROP = { left: 23, top: 199, width: 418, height: 809 };
 
 // 32px drives the browser tab, 192px is both the site header mark (42 CSS px at
 // up to 4x) and the multiple-of-48 size search engines and Android ask for.

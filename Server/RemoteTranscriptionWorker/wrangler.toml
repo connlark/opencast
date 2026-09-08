@@ -103,6 +103,10 @@ class_name = "TranscriptionUsageLimiter"
 binding = "TRANSCRIPTION_MEDIA_WORKER"
 service = "your-transcription-media-worker"
 
+[[services]]
+binding = "AD_ANALYSIS_WORKER"
+service = "your-ad-analysis-worker"
+
 # Declarative class exports (replaces the legacy migrations array). This map is
 # the source of truth: a class missing here is deprovisioned, not ignored.
 [exports.TranscriptionJob]
@@ -197,6 +201,10 @@ service = "your-transcription-media-worker-prod-staging"
 binding = "PURCHASE_WORKER"
 service = "your-purchase-worker-prod-staging"
 
+[[env.prod-staging.services]]
+binding = "AD_ANALYSIS_WORKER"
+service = "your-ad-analysis-worker-prod-staging"
+
 [env.prod-staging.exports.TranscriptionJob]
 type = "durable-object"
 storage = "sqlite"
@@ -248,7 +256,7 @@ GLOBAL_INFERENCE_CONCURRENCY = "2"
 QUEUE_DEFAULT_REMAINING_SECONDS = "64"
 CHUNK_AI_CONCURRENCY = "4"
 MAX_CHUNK_ATTEMPTS = "3"
-DAILY_SPEND_CAP_USD_MICRO = "1000000"
+DAILY_SPEND_CAP_USD_MICRO = "10000000"
 WAITING_FOR_DEVICE_SOURCE_DEADLINE_SECONDS = "43200"
 AWAITING_CREDITS_DEADLINE_SECONDS = "21600"
 EXACT_UPLOAD_REQUIRED_DEADLINE_SECONDS = "43200"
@@ -296,6 +304,10 @@ service = "your-transcription-media-worker-production"
 [[env.production.services]]
 binding = "PURCHASE_WORKER"
 service = "your-purchase-worker-production"
+
+[[env.production.services]]
+binding = "AD_ANALYSIS_WORKER"
+service = "your-ad-analysis-worker-production"
 
 [env.production.exports.TranscriptionJob]
 type = "durable-object"

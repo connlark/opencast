@@ -7,6 +7,7 @@ import SwiftUI
 struct RemoteTranscriptionConsumptionPreviewSheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
+    @State private var isWaitingForPurchasedHours = false
 
     let request: RemoteTranscriptionStartPreviewRequest
     let onStart: () -> Void
@@ -18,6 +19,7 @@ struct RemoteTranscriptionConsumptionPreviewSheet: View {
                 if showsTopUp {
                     topUpSection
                 }
+                RemoteTranscriptionPurchaseStatusView(offersRecovery: true)
             }
             .navigationTitle("Remote Transcription")
             .navigationBarTitleDisplayMode(.inline)
@@ -32,6 +34,18 @@ struct RemoteTranscriptionConsumptionPreviewSheet: View {
             }
         }
         .task { await appModel.remoteTranscriptionPurchases.refreshBalance() }
+        .onChange(of: appModel.remoteTranscriptionPurchases.purchasePhase) { _, phase in
+            if case .purchasing = phase, !estimate.fitsWithinHeadroom {
+                isWaitingForPurchasedHours = true
+            }
+        }
+        .onChange(of: estimate.fitsWithinHeadroom) { _, fitsWithinHeadroom in
+            guard isWaitingForPurchasedHours, fitsWithinHeadroom else {
+                return
+            }
+            isWaitingForPurchasedHours = false
+            start()
+        }
         .presentationDetents([.medium, .large])
     }
 

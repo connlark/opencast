@@ -38,6 +38,7 @@ struct EpisodePipelineCard: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: .rect(cornerRadius: 26))
+        .accessibilityIdentifier("Episode Pipeline Card")
     }
 }
 

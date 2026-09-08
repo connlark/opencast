@@ -26,6 +26,8 @@
  * the deep navy bands, where they measure 6.72:1 and 11.86:1.
  */
 :root {
+  --skip-pill: #e0393e;
+  --skip-zone: #e0393e;
   color-scheme: light dark;
 
   /* Brand primitives — identical in both appearances. */
@@ -991,7 +993,7 @@ section {
   line-height: 1.58;
 }
 
-.feature-panel--library {
+.feature-panel--skip {
   display: grid;
   align-content: space-between;
   gap: 2rem;
@@ -1092,6 +1094,100 @@ section {
     radial-gradient(circle at 30% 35%, var(--mock-art-dot-warm) 0 8%, transparent 9%),
     radial-gradient(circle at 68% 65%, var(--mock-art-dot-gold) 0 12%, transparent 13%),
     var(--mock-art-plain);
+}
+
+.skip-preview {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 0.95rem;
+  padding: 1rem;
+  border: 1px solid var(--mock-line);
+  border-radius: 1.45rem;
+  background: var(--mock-bg);
+  box-shadow: 0 24px 52px var(--mock-shadow);
+  color: var(--mock-ink);
+}
+
+.skip-preview__row {
+  display: grid;
+  grid-template-columns: 3.1rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.72rem;
+}
+
+.skip-preview__row > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 0.22rem;
+}
+
+.skip-preview__row strong,
+.skip-preview__row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skip-preview__row strong {
+  font-size: 0.78rem;
+}
+
+.skip-preview__row small {
+  color: var(--mock-ink-soft);
+  font-size: 0.65rem;
+}
+
+.skip-preview__track {
+  position: relative;
+  height: 4px;
+  margin-bottom: 0.45rem;
+  border-radius: 999px;
+  background: var(--mock-track);
+}
+
+.skip-preview__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 79%;
+  border-radius: inherit;
+  background: var(--mock-track-fill);
+}
+
+.skip-preview__zone {
+  position: absolute;
+  top: 8px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--skip-zone);
+}
+
+.skip-preview__zone--dim {
+  opacity: 0.38;
+}
+
+.skip-preview__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  justify-self: center;
+  padding: 0.36rem 0.78rem;
+  border-radius: 999px;
+  background: var(--skip-pill);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.skip-preview__pill svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.skip-preview__pill small {
+  font-size: 0.66rem;
+  font-weight: 500;
+  opacity: 0.82;
 }
 
 .feature-panel--playback {
@@ -1578,7 +1674,7 @@ section {
     justify-content: center;
   }
 
-  .feature-panel--library {
+  .feature-panel--skip {
     grid-template-columns: minmax(0, 0.92fr) minmax(17rem, 1.08fr);
     align-items: end;
   }
@@ -1616,7 +1712,7 @@ section {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .feature-panel--library,
+  .feature-panel--skip,
   .feature-panel--privacy {
     grid-column: span 2;
   }
@@ -1632,7 +1728,7 @@ section {
     grid-template-columns: repeat(12, minmax(0, 1fr));
   }
 
-  .feature-panel--library {
+  .feature-panel--skip {
     grid-column: span 7;
   }
 

@@ -13,35 +13,43 @@ function screenshot<ID extends keyof typeof screenshotAssets>(id: ID, alt: strin
 
 export const screenshots = [
   screenshot(
-    "app_store_01_now_playing_framed",
-    "opencast Now Playing screen with detected ad breaks marked on the timeline"
+    "app_store_01_skip_framed",
+    "opencast Now Playing with a Skipped promo pill and ad breaks marked on the timeline"
   ),
   screenshot(
     "app_store_02_transcript_framed",
-    "opencast transcript screen with a sponsor read flagged in orange"
+    "opencast transcript with a sponsor read flagged in orange and the current line highlighted"
   ),
   screenshot(
-    "app_store_03_notification_framed",
-    "opencast notification announcing ad breaks found in two episodes"
+    "app_store_03_sound_lab_framed",
+    "opencast Sound Lab with Voice Boost, Skip Promos & Ads, and Show Transcript"
   ),
   screenshot(
-    "app_store_04_library_framed",
-    "opencast Library screen on iPhone"
+    "app_store_04_search_framed",
+    "opencast library search matching episode titles and a transcript passage"
   ),
   screenshot(
-    "app_store_05_podcast_detail_framed",
-    "opencast podcast detail screen with episode list"
+    "app_store_05_chapters_framed",
+    "opencast episode page with generated chapters and a generated summary"
   ),
   screenshot(
-    "app_store_06_sound_lab_framed",
-    "opencast Sound Lab with Voice Boost and ad skipping controls"
+    "app_store_06_pipeline_framed",
+    "opencast episode page showing the download, transcribe, and detect ads progress card"
   ),
   screenshot(
-    "app_store_07_inbox_framed",
-    "opencast Inbox screen with fresh episodes"
+    "app_store_07_notification_framed",
+    "opencast new-episode notification with artwork and episode length"
   ),
   screenshot(
-    "app_store_08_episode_detail_framed",
-    "opencast episode detail screen with show notes and transcript"
+    "app_store_08_library_framed",
+    "opencast Library with the docked mini player and tab bar"
+  ),
+  screenshot(
+    "app_store_09_welcome_framed",
+    "opencast welcome screen: no third-party analytics, view source on GitHub, tiny install"
+  ),
+  screenshot(
+    "app_store_10_up_next_framed",
+    "opencast Up Next queue over Now Playing"
   ),
 ] as const;

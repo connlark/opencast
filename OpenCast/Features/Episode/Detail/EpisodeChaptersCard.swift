@@ -46,6 +46,7 @@ struct EpisodeChaptersCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
         .glassEffect(.regular, in: .rect(cornerRadius: 26))
+        .accessibilityIdentifier("Episode Chapters Card")
     }
 
     static func startTimeText(_ startTime: TimeInterval) -> String {

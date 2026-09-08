@@ -29,6 +29,7 @@ struct SearchIndexUpdatingIndicator: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .listRowSeparator(.hidden)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("Search Index Updating")
     }
 }
 

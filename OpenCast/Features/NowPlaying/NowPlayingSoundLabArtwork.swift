@@ -4,6 +4,7 @@ struct NowPlayingSoundLabArtwork: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.appStoreSoundLabRevealProgress) private var pinnedRevealProgress
 
     let title: String
     let imageURL: String?
@@ -80,9 +81,19 @@ struct NowPlayingSoundLabArtwork: View {
                 .simultaneousGesture(soundLabGesture)
         }
         .sensoryFeedback(.selection, trigger: feedbackTrigger)
+        .onAppear(perform: applyPinnedReveal)
         .task(id: request) {
             _ = await imageState.loadArtwork(for: request, cacheKind: .episode)
         }
+    }
+
+    private func applyPinnedReveal() {
+        guard let pinnedRevealProgress else {
+            return
+        }
+
+        revealProgress = CGFloat(pinnedRevealProgress).clamped01
+        interactionState = .open
     }
 
     private var isOpen: Bool {

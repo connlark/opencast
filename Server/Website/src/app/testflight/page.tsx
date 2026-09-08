@@ -41,7 +41,7 @@ export default function TestFlightPage() {
             level={1}
             className="mt-6 max-w-[12ch] text-5xl font-semibold leading-[0.95] tracking-tight sm:text-7xl"
           >
-            Help shape the next <span className="text-accent">opencast</span>
+            help shape the next <span className="text-accent">opencast</span>
           </Typography.Heading>
           <Typography.Paragraph
             color="muted"

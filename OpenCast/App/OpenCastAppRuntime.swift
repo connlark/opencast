@@ -65,6 +65,9 @@ final class OpenCastAppRuntime {
             if launchConfiguration.schedulesAppStoreAdFreePassNotification {
                 AppStoreScreenshotNotificationFixture.schedule()
             }
+            if launchConfiguration.schedulesAppStoreEpisodeNotification {
+                AppStoreScreenshotEpisodeNotificationFixture.schedule()
+            }
             #endif
             let voiceBoostDiagnostics = launchConfiguration.capturesVoiceBoostDiagnostics
                 ? VoiceBoostAudioTapDiagnostics()
@@ -113,7 +116,8 @@ final class OpenCastAppRuntime {
                 runsVoiceBoostDeviceProbe: launchConfiguration.runsVoiceBoostDeviceProbe,
                 syncStatus: syncStatus,
                 allowsAutomaticFeedRefresh: !launchConfiguration.usesInMemoryStore,
-                adFreePassPresentationOverride: launchConfiguration.adFreePassPresentationOverride
+                adFreePassPresentationOverride: launchConfiguration.adFreePassPresentationOverride,
+                adFreePassQueueOverride: launchConfiguration.adFreePassQueueOverride
             )
         } catch {
             fatalError("Unable to create OpenCast model container: \(error)")

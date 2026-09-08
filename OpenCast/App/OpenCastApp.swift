@@ -14,6 +14,14 @@ struct OpenCastApp: App {
                     \.isAppStoreScreenshotCapture,
                     runtime.launchConfiguration.seedsAppStoreScreenshotData
                 )
+                .environment(
+                    \.pinsAppStoreAutoSkipPill,
+                    runtime.launchConfiguration.pinsAppStoreAutoSkipPill
+                )
+                .environment(
+                    \.appStoreSoundLabRevealProgress,
+                    runtime.launchConfiguration.appStoreSoundLabRevealProgress
+                )
                 .modelContainer(runtime.modelContainer)
                 .preferredColorScheme(preferredColorScheme)
         }

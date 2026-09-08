@@ -8,6 +8,7 @@ struct NowPlayingView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.pinsAppStoreAutoSkipPill) private var pinsAutoSkipPill
     @State private var playPauseFeedback = 0
     @State private var skipFeedback = 0
     @State private var autoSkipFeedback = 0
@@ -97,7 +98,7 @@ struct NowPlayingView: View {
                             NowPlayingProgressSection()
                                 .padding(.top, accessibilityReduceMotion ? 30 : 0)
 
-                            if showsAutoSkipPill {
+                            if showsAutoSkipPill || pinsAutoSkipPill {
                                 NowPlayingAutoSkipPill(onUndo: undoLastAutoSkip)
                                     .transition(.opacity)
                                     .offset(y: accessibilityReduceMotion ? 0 : -28)

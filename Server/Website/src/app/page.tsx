@@ -8,9 +8,9 @@ import {
   LockKeyhole,
   Mail,
   Play,
-  Radio,
   Rss,
   ShieldCheck,
+  SkipForward,
   Sparkles,
 } from "lucide-react";
 import { AppStoreBadge } from "@/components/AppStoreBadge";
@@ -48,32 +48,33 @@ export default function HomePage() {
             <div className="home-hero__copy">
               <p className="hero-kicker">
                 <span aria-hidden="true" />
-                Independent. Native. Made for listeners.
+                ad-free. open source. no account.
               </p>
               <h1>
-                Podcasts,
-                <span>minus the noise.</span>
+                podcasts,
+                <span>minus the ads.</span>
               </h1>
               <p className="hero-deck">
-                opencast brings your RSS feeds, playback, transcripts, and
-                listening progress together in one focused iPhone and iPad app.
+                opencast finds the ad breaks in your podcasts and skips them,
+                free. Your phone does the transcribing. No account, no
+                tracking, and the source is open.
               </p>
               <div className="hero-actions">
                 <AppStoreBadge />
                 <a href="#screens" className="hero-secondary-action">
-                  See it in action
+                  See it skip
                   <ArrowRight aria-hidden="true" />
                 </a>
               </div>
               <ul className="hero-proof" aria-label="opencast highlights">
                 <li>
+                  <Check aria-hidden="true" /> Ad-free
+                </li>
+                <li>
                   <Check aria-hidden="true" /> No account
                 </li>
                 <li>
-                  <Check aria-hidden="true" /> Private sync
-                </li>
-                <li>
-                  <Check aria-hidden="true" /> RSS first
+                  <Check aria-hidden="true" /> Open source
                 </li>
               </ul>
             </div>
@@ -88,16 +89,16 @@ export default function HomePage() {
               </div>
               <div className="hero-float hero-float--top" aria-hidden="true">
                 <span className="hero-float__icon">
-                  <AudioLines />
+                  <SkipForward />
                 </span>
                 <span>
-                  <strong>Ad break found</strong>
-                  <small>Marked on your timeline</small>
+                  <strong>Skipped promo</strong>
+                  <small>Tap to undo</small>
                 </span>
               </div>
               <div className="hero-float hero-float--bottom" aria-hidden="true">
-                <Radio />
-                RSS in. Clutter out.
+                <LockKeyhole />
+                No account. No tracking.
               </div>
             </div>
           </div>
@@ -106,16 +107,16 @@ export default function HomePage() {
         <div className="signal-strip" aria-label="Core app qualities">
           <div className="site-shell signal-strip__inner">
             <p>
-              <Sparkles aria-hidden="true" /> Native SwiftUI
+              <SkipForward aria-hidden="true" /> Ad skipping, free
             </p>
             <p>
               <Cloud aria-hidden="true" /> Private iCloud sync
             </p>
             <p>
-              <Headphones aria-hidden="true" /> Stream by default
+              <Rss aria-hidden="true" /> Any RSS feed
             </p>
             <p>
-              <Rss aria-hidden="true" /> Bring any RSS feed
+              <Sparkles aria-hidden="true" /> MIT open source
             </p>
           </div>
         </div>
@@ -123,75 +124,48 @@ export default function HomePage() {
         <section id="features" className="feature-showcase">
           <div className="site-shell">
             <header className="section-heading section-heading--ink">
-              <p className="section-eyebrow">Designed around the episode</p>
-              <h2>The app gets out of your way.</h2>
+              <p className="section-eyebrow">Three things it does</p>
+              <h2>skips the ads. keeps your data. reads the episode.</h2>
               <p>
-                Everything you need for the daily listening loop, with none of
-                the engagement machinery you do not.
+                Ad breaks found in the transcript, a library that stays yours,
+                and transcripts, search, and chapters when you want them.
               </p>
             </header>
 
             <div className="feature-grid">
-              <article className="feature-panel feature-panel--library">
+              <article className="feature-panel feature-panel--skip">
                 <div className="feature-panel__copy">
                   <span className="feature-icon feature-icon--library">
-                    <Rss aria-hidden="true" />
+                    <SkipForward aria-hidden="true" />
                   </span>
-                  <p className="feature-label">Library + Inbox</p>
-                  <h3>Any RSS feed. One calm inbox.</h3>
+                  <p className="feature-label">Ad-free, free</p>
+                  <h3>the ads, skipped for you.</h3>
                   <p>
-                    Add a feed by URL, keep every subscription together, and
-                    scan fresh episodes without an algorithm rearranging them.
+                    Download an episode and your phone transcribes it. opencast
+                    finds the promo reads and skips the confident ones.
+                    Borderline reads stay marked. One tap undoes a skip.
                   </p>
                 </div>
-                <div className="library-preview" aria-hidden="true">
-                  <div className="library-preview__bar">
-                    <span>Today</span>
-                    <strong>12 new</strong>
-                  </div>
-                  <div className="library-row">
+                <div className="skip-preview" aria-hidden="true">
+                  <div className="skip-preview__row">
                     <span className="library-art library-art--one" />
                     <span>
-                      <strong>Signal Path</strong>
-                      <small>Tracing the bug that only appeared at night</small>
+                      <strong>What the New Telescope Saw First</strong>
+                      <small>Orbit Report · 49 min</small>
                     </span>
-                    <Play />
                   </div>
-                  <div className="library-row">
-                    <span className="library-art library-art--two" />
-                    <span>
-                      <strong>Independent Frequency</strong>
-                      <small>New episode · 42 min</small>
-                    </span>
-                    <Play />
+                  <div className="skip-preview__track">
+                    <span className="skip-preview__fill" />
+                    <i className="skip-preview__zone" style={{ left: "9%", width: "10%" }} />
+                    <i className="skip-preview__zone skip-preview__zone--dim" style={{ left: "44%", width: "9%" }} />
+                    <i className="skip-preview__zone" style={{ left: "68%", width: "9%" }} />
+                    <i className="skip-preview__zone" style={{ left: "91%", width: "8%" }} />
                   </div>
-                </div>
-              </article>
-
-              <article className="feature-panel feature-panel--playback">
-                <div className="feature-panel__copy">
-                  <span className="feature-icon feature-icon--playback">
-                    <Headphones aria-hidden="true" />
-                  </span>
-                  <p className="feature-label">Streaming playback</p>
-                  <h3>Press play. Pick up later.</h3>
-                  <p>
-                    Stream from the feed, seek with native controls, and resume
-                    from listening progress that actually remembers.
-                  </p>
-                </div>
-                <div className="playback-preview" aria-hidden="true">
-                  <div className="playback-preview__art" />
-                  <div className="playback-preview__meta">
-                    <strong>Signal Path</strong>
-                    <span>32 minutes remaining</span>
+                  <div className="skip-preview__pill">
+                    <SkipForward />
+                    Skipped promo
+                    <small>Tap to undo</small>
                   </div>
-                  <div className="playback-preview__track">
-                    <span />
-                  </div>
-                  <span className="playback-preview__button">
-                    <Play />
-                  </span>
                 </div>
               </article>
 
@@ -200,18 +174,20 @@ export default function HomePage() {
                   <span className="feature-icon feature-icon--transcript">
                     <AudioLines aria-hidden="true" />
                   </span>
-                  <p className="feature-label">Flexible transcripts</p>
-                  <h3>Read along—or find the part you missed.</h3>
+                  <p className="feature-label">Reads the episode</p>
+                  <h3>every word, searchable.</h3>
                   <p>
-                    Transcribe on your device, or explicitly choose optional
-                    remote transcription for an episode.
+                    Transcripts on your device, with tap-to-seek and
+                    follow-along highlighting. Search everything ever said in
+                    your library. Chapters and summaries on request (optional,
+                    paid).
                   </p>
                 </div>
                 <div className="transcript-preview" aria-hidden="true">
-                  <span className="transcript-preview__time">24:18</span>
+                  <span className="transcript-preview__time">1:03</span>
                   <p>
-                    The useful thing about a quiet interface is that
-                    <mark> the story stays in front.</mark>
+                    First <mark>light</mark> is what astronomers call the first
+                    real image a new telescope takes.
                   </p>
                   <span className="transcript-preview__line" />
                   <span className="transcript-preview__line transcript-preview__line--short" />
@@ -224,17 +200,46 @@ export default function HomePage() {
                   <span />
                 </div>
                 <div className="feature-panel__copy">
-                  <p className="feature-label">Privacy-aware by design</p>
-                  <h3>Your listening history is yours.</h3>
+                  <p className="feature-label">Yours, not ours</p>
+                  <h3>no account. no tracking.</h3>
                   <p>
-                    Subscriptions and progress can sync privately through
-                    iCloud. Caches and downloads stay local to your device.
+                    No opencast login, no analytics SDK. Subscriptions and
+                    progress sync through your private iCloud. MIT-licensed
+                    code, and the whole app is about 10 MB.
                   </p>
                 </div>
                 <div className="privacy-tags" aria-hidden="true">
                   <span>Private iCloud</span>
-                  <span>Local downloads</span>
-                  <span>No opencast login</span>
+                  <span>No login</span>
+                  <span>MIT license</span>
+                </div>
+              </article>
+
+              <article className="feature-panel feature-panel--playback">
+                <div className="feature-panel__copy">
+                  <span className="feature-icon feature-icon--playback">
+                    <Headphones aria-hidden="true" />
+                  </span>
+                  <p className="feature-label">A complete player</p>
+                  <h3>voice boost. carplay. up next.</h3>
+                  <p>
+                    Voice Boost levels quiet hosts like a broadcast chain. Up
+                    Next, speed, sleep timer, AirPlay, per-show intro and outro
+                    skip, plus Siri and CarPlay.
+                  </p>
+                </div>
+                <div className="playback-preview" aria-hidden="true">
+                  <div className="playback-preview__art" />
+                  <div className="playback-preview__meta">
+                    <strong>Orbit Report</strong>
+                    <span>32 minutes remaining</span>
+                  </div>
+                  <div className="playback-preview__track">
+                    <span />
+                  </div>
+                  <span className="playback-preview__button">
+                    <Play />
+                  </span>
                 </div>
               </article>
             </div>
@@ -245,11 +250,8 @@ export default function HomePage() {
           <div className="site-shell screens-section__heading">
             <header className="section-heading">
               <p className="section-eyebrow">Inside opencast</p>
-              <h2>Made to feel at home on your phone.</h2>
-              <p>
-                Familiar controls, clear information, and every listening tool
-                close enough to reach.
-              </p>
+              <h2>what it looks like.</h2>
+              <p>The real app, screen by screen. Swipe through the whole set.</p>
             </header>
             <p className="screens-section__hint">
               Swipe to explore <ArrowRight aria-hidden="true" />
@@ -262,25 +264,27 @@ export default function HomePage() {
           <div className="site-shell promise-section__grid">
             <div>
               <p className="section-eyebrow">Yours by default</p>
-              <h2>No opencast account. No feed lock-in.</h2>
+              <h2>not a growth funnel.</h2>
             </div>
             <div className="promise-section__body">
               <p>
-                opencast is built around open RSS feeds and the system services
-                already on your Apple devices—not another profile to maintain.
+                opencast has no account to create, no analytics to phone home,
+                and no ads of its own. It is built on open RSS feeds and the
+                system services already on your iPhone, and the source is on
+                GitHub under the MIT license.
               </p>
               <ul>
                 <li>
                   <ShieldCheck aria-hidden="true" />
-                  Private sync when you choose it
-                </li>
-                <li>
-                  <BookOpen aria-hidden="true" />
-                  Stable feed and episode identities
+                  No opencast account, ever
                 </li>
                 <li>
                   <Cloud aria-hidden="true" />
-                  Local caches and explicit downloads
+                  Private iCloud sync when you choose it
+                </li>
+                <li>
+                  <BookOpen aria-hidden="true" />
+                  MIT-licensed, built in the open
                 </li>
               </ul>
             </div>
@@ -294,7 +298,7 @@ export default function HomePage() {
                 <Mail aria-hidden="true" />
               </span>
               <p className="feature-label">Human support</p>
-              <h2>Something not sounding right?</h2>
+              <h2>something not sounding right?</h2>
               <p>
                 Tell us what happened and include the feed URL when a podcast is
                 involved. We will help you sort it out.
@@ -309,7 +313,7 @@ export default function HomePage() {
                 <ShieldCheck aria-hidden="true" />
               </span>
               <p className="feature-label">Plain-language privacy</p>
-              <h2>Know where your data goes.</h2>
+              <h2>know where your data goes.</h2>
               <p>
                 Read the full policy for sync, notifications, downloads, and
                 optional remote transcription.

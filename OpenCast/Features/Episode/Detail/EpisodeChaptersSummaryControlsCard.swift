@@ -81,6 +81,7 @@ struct EpisodeChaptersSummaryControlsCard: View {
                 ForEach(products) { product in
                     RemoteTranscriptionStorePackRow(product: product)
                 }
+                RemoteTranscriptionPurchaseStatusView(offersRecovery: true)
             }
         }
     }

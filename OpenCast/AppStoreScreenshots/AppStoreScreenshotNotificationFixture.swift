@@ -17,14 +17,14 @@ enum AppStoreScreenshotNotificationFixture {
                 terminal: .drained(completedCount: 2, failedCount: 0),
                 outcomes: [
                     AdFreePassQueueItemOutcome(
-                        episodeID: "app-store-signal-path-episode-1",
-                        episodeTitle: "Tracing the Bug That Only Appeared at Night",
+                        episodeID: AppStoreScreenshotSeedCatalog.primaryEpisodeID,
+                        episodeTitle: AppStoreScreenshotSeedCatalog.primaryEpisodeTitle,
                         artworkURL: nil,
                         kind: .completed(zoneCount: 3)
                     ),
                     AdFreePassQueueItemOutcome(
-                        episodeID: "app-store-signal-path-episode-2",
-                        episodeTitle: "Designing Alerts People Actually Read",
+                        episodeID: "app-store-orbit-report-episode-2",
+                        episodeTitle: "Why Every Comet Is a Surprise",
                         artworkURL: nil,
                         kind: .completed(zoneCount: 4)
                     ),

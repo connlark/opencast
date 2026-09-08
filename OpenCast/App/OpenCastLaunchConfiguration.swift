@@ -23,8 +23,14 @@ struct OpenCastLaunchConfiguration {
     var schedulesNotificationLookFixture: Bool
     var schedulesAdFreePassNotificationLookFixture: Bool
     var schedulesAppStoreAdFreePassNotification: Bool
+    var schedulesAppStoreEpisodeNotification: Bool
     var resetsAdAnalysisAppAttestCredential: Bool
     var adFreePassPresentationOverride: EpisodeAdFreePassPresentation?
+    var adFreePassQueueOverride: AdFreePassQueueUITestOverride?
+    /// App Store screenshot pins: keep the "Skipped promo" pill on screen, and
+    /// seed the Sound Lab reveal at a fixed progress for a mid-slide still.
+    var pinsAppStoreAutoSkipPill: Bool
+    var appStoreSoundLabRevealProgress: Double?
     var uiTestLibraryLoadDelayMilliseconds: Int?
     var uiTestCloudKitAccountStatus: SyncAccountStatus?
     var usesUITestSeedFeedRefreshService: Bool
@@ -93,9 +99,20 @@ struct OpenCastLaunchConfiguration {
         let shouldScheduleAppStoreAdFreePassNotification =
             arguments.contains("--opencast-schedule-app-store-adfreepass-notification")
             || environment["OPENCAST_SCHEDULE_APP_STORE_ADFREEPASS_NOTIFICATION"] == "1"
+        let shouldScheduleAppStoreEpisodeNotification =
+            arguments.contains("--opencast-schedule-app-store-episode-notification")
+            || environment["OPENCAST_SCHEDULE_APP_STORE_EPISODE_NOTIFICATION"] == "1"
+        let shouldPinAppStoreAutoSkipPill = arguments.contains("--opencast-pin-app-store-autoskip-pill")
+            || environment["OPENCAST_PIN_APP_STORE_AUTOSKIP_PILL"] == "1"
+        let appStoreSoundLabRevealProgress = isUITesting
+            ? environment["OPENCAST_PIN_APP_STORE_SOUND_LAB_REVEAL"].flatMap(Double.init)
+            : nil
         let shouldResetAdAnalysisAppAttestCredential = environment["OPENCAST_RESET_AD_ANALYSIS_APP_ATTEST_CREDENTIAL"] == "1"
         let adFreePassPresentationOverride = isUITesting
             ? OpenCastUITestAdFreePassPresentationOverride.resolve(environment: environment)
+            : nil
+        let adFreePassQueueOverride = isUITesting
+            ? AdFreePassQueueUITestOverride.resolve(environment: environment)
             : nil
         let uiTestLibraryLoadDelayMilliseconds = isUITesting
             ? Self.uiTestLibraryLoadDelayMilliseconds(environment: environment)
@@ -144,8 +161,13 @@ struct OpenCastLaunchConfiguration {
                 && shouldScheduleAdFreePassNotificationLookFixture,
             schedulesAppStoreAdFreePassNotification: isUITesting
                 && shouldScheduleAppStoreAdFreePassNotification,
+            schedulesAppStoreEpisodeNotification: isUITesting
+                && shouldScheduleAppStoreEpisodeNotification,
             resetsAdAnalysisAppAttestCredential: isUITesting && shouldResetAdAnalysisAppAttestCredential,
             adFreePassPresentationOverride: adFreePassPresentationOverride,
+            adFreePassQueueOverride: adFreePassQueueOverride,
+            pinsAppStoreAutoSkipPill: isUITesting && shouldPinAppStoreAutoSkipPill,
+            appStoreSoundLabRevealProgress: appStoreSoundLabRevealProgress,
             uiTestLibraryLoadDelayMilliseconds: uiTestLibraryLoadDelayMilliseconds,
             uiTestCloudKitAccountStatus: uiTestCloudKitAccountStatus,
             usesUITestSeedFeedRefreshService: usesUITestSeedFeedRefreshService,

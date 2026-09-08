@@ -17,7 +17,7 @@ struct RemoteTranscriptionStorePackRow: View {
                 }
             }
             .buttonStyle(.bordered)
-            .disabled(isPurchasing)
+            .disabled(appModel.remoteTranscriptionPurchases.isPurchaseInFlight)
             .accessibilityLabel("Buy \(product.displayName) for \(product.displayPrice)")
         } label: {
             Text(product.displayName)

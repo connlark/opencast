@@ -3,7 +3,7 @@ import Foundation
 import OpenCastTranscription
 import SwiftData
 
-/// Seeds a completed transcript and ad analysis for the primary Signal Path
+/// Seeds a completed transcript and ad analysis for the primary Orbit Report
 /// episode so the App Store set can show the ad-marked timeline, the badged
 /// transcript, and the completed Sound Lab state from records alone.
 enum AppStoreScreenshotSeedTranscript {
@@ -11,7 +11,14 @@ enum AppStoreScreenshotSeedTranscript {
     /// tracks the real AVPlayer item duration, not the episode metadata.
     private static let audioDuration: TimeInterval = 300
 
-    static func seed(in context: ModelContext, audioURL: String, createdAt: Date) throws {
+    @discardableResult
+    static func seed(
+        in context: ModelContext,
+        audioURL: String,
+        sourceFileSHA256 sourceSHA: String,
+        sourceFileByteCount: Int64,
+        createdAt: Date
+    ) throws -> EpisodeTranscriptDocument {
         let episodeID = AppStoreScreenshotSeedCatalog.primaryEpisodeID
         let podcastID = AppStoreScreenshotSeedCatalog.primaryFeedURL
         let modelSummary = OpenCastWhisperModelInstalledSummary(
@@ -22,7 +29,6 @@ enum AppStoreScreenshotSeedTranscript {
         )
 
         let transcriptFileStore = EpisodeTranscriptFileStore()
-        let sourceSHA = "app-store-screenshot-source-sha"
         let fingerprint = transcriptFileStore.fingerprint(
             sourceFileSHA256: sourceSHA,
             modelIdentifier: modelSummary.modelIdentifier,
@@ -39,7 +45,7 @@ enum AppStoreScreenshotSeedTranscript {
             episodeID: episodeID,
             podcastID: podcastID,
             sourceAudioURL: audioURL,
-            sourceFileByteCount: 4_800_044,
+            sourceFileByteCount: sourceFileByteCount,
             sourceFileSHA256: sourceSHA,
             modelIdentifier: modelSummary.modelIdentifier,
             modelVersion: modelSummary.version,
@@ -58,7 +64,7 @@ enum AppStoreScreenshotSeedTranscript {
             episodeID: episodeID,
             podcastID: podcastID,
             sourceAudioURL: audioURL,
-            sourceFileByteCount: 4_800_044,
+            sourceFileByteCount: sourceFileByteCount,
             sourceFileSHA256: sourceSHA,
             modelIdentifier: modelSummary.modelIdentifier,
             modelVersion: modelSummary.version,
@@ -114,6 +120,8 @@ enum AppStoreScreenshotSeedTranscript {
             createdAt: createdAt,
             updatedAt: createdAt
         ))
+
+        return transcriptDocument
     }
 
     /// Three ≥0.8-confidence spans map to solid auto-skip zones ("3 zones
@@ -143,7 +151,7 @@ enum AppStoreScreenshotSeedTranscript {
                 startTime: 132,
                 endTime: 158,
                 confidence: 0.62,
-                evidenceQuote: "our friends over at Release Window"
+                evidenceQuote: "our friends over at Urban Frequency"
             ),
             EpisodeAdAnalysisSpan(
                 id: 2,
@@ -170,48 +178,51 @@ enum AppStoreScreenshotSeedTranscript {
         ]
     }
 
+    // The word "light" appears only here (segments 9 and 18), never in the
+    // episode's title, summary, or show notes, so the search shot's hit for
+    // this episode comes with a transcript snippet.
     private static func transcriptSegments() -> [OpenCastTranscriptSegment] {
         let lines: [(start: TimeInterval, end: TimeInterval, text: String)] = [
-            (0, 7, "It's two in the morning, my pager is screaming, and the dashboard says everything is fine. Everything is not fine."),
-            (7, 14, "This week: the bug that only appeared at night. Not late in the sprint — literally at night. After midnight, every single time."),
-            (14, 21, "By sunrise it was gone. No stack trace, no bad deploy, nothing to bisect. Just a graph that went sideways while we slept."),
-            (21, 28, "I'm Marin Vale, this is Signal Path, and I spent eleven nights chasing this thing. Here's how it finally cracked."),
-            (28, 34, "This episode is brought to you by Bottomless Mug Coffee Co. — the coffee subscription that notices when you're compiling at 3 a.m. and ships accordingly."),
+            (0, 7, "It's four in the morning on a mountain in the desert, the dome is open, and a mirror the size of a swimming pool is about to open its eye for the first time."),
+            (7, 14, "This week: first light. What a brand-new telescope actually sees on night one, and why nobody in the control room was looking at the pretty picture."),
+            (14, 21, "Because the first image is never the point. The first image is a test. The point is the smudge in the corner that shouldn't have been there."),
+            (21, 28, "I'm Dana Whitlock, this is Orbit Report, and I stayed up for eleven of those nights. Here's what the new telescope saw first."),
+            (28, 34, "This episode is brought to you by Bottomless Mug Coffee Co. — the coffee subscription that notices when you're awake at 3 a.m. and ships accordingly."),
             (34, 40, "Their roasters watch your actual consumption, so the next bag lands the same morning the last one runs out."),
-            (40, 46, "I've been on their Night Shift blend for two months. It tastes like a code review that ends with 'looks good to me.'"),
+            (40, 46, "I've been on their Night Shift blend all observing season. It tastes like a clear forecast."),
             (46, 52, "Every bag comes with a no-questions refund, even if your only question is how it got to your door that fast."),
-            (52, 58, "Go to bottomlessmug dot coffee and use code SIGNAL for a free first bag. That's code SIGNAL. Now — back to the pager."),
-            (58, 66, "So. First rule of a bug you can't reproduce: write down what you actually saw, not what you think you saw."),
-            (66, 74, "What we actually saw was queue delay. Every job that touched the export service crawled between midnight and four."),
-            (74, 82, "Naturally, I blamed the batch jobs. There's always a batch job. We moved them an hour earlier — the bug didn't move with them."),
-            (82, 90, "Then I blamed the backup window. Storage swore the snapshots finished by eleven, and the graphs backed them up. Strike two."),
-            (90, 98, "Here's where I lost a full night to the wrong dashboard. Our latency panel averaged across regions, and averages are liars."),
-            (98, 106, "Split by region, the picture changed completely. One zone hummed along all night. The other fell off a cliff at 12:04."),
-            (106, 114, "12:04 is a suspiciously specific time. Nothing human happens at 12:04. Machines happen at 12:04."),
-            (114, 123, "So we listed everything in that zone with a clock: cron, cert rotation, log shipping, and a license check nobody remembered owning."),
-            (123, 132, "I want to pause on that list, because the thing that eventually saved us wasn't a profiler. It was an inventory."),
-            (132, 141, "Speaking of inventories — our friends over at Release Window just did a whole episode on rollout checklists, and it pairs weirdly well with this one."),
-            (141, 150, "If you like the postmortem half of this show, their back catalog is basically that, minus my pager anxiety."),
-            (150, 158, "Alright. Where were we. Right — 12:04, and a list of suspects who all had alibis."),
-            (158, 168, "We put a stopwatch on every suspect. Cron was innocent. Cert rotation was innocent. Log shipping was — mostly innocent."),
-            (168, 177, "The license check, though. The license check ran at midnight local time. And here's the thing: local time isn't one time."),
-            (177, 186, "Our zones roll past midnight one after another, so the check marched across the fleet like a slow wave, region by region."),
-            (186, 196, "Every instance phoned the same tiny vendor endpoint. At 12:04 our biggest zone crossed midnight, and that endpoint started queueing us."),
-            (196, 205, "A four-minute retry backoff, one shared connection pool, and suddenly export jobs are waiting behind a license ping. That's the whole bug."),
-            (205, 212, "We'll get to the fix in a second — first, a quick break."),
-            (212, 219, "This show is supported by Fieldnote, the incident review tool built for teams smaller than their incident channel."),
-            (219, 226, "Fieldnote turns a messy timeline of pastes and screenshots into a postmortem people actually read."),
-            (226, 232, "Start a free thirty-day trial at fieldnote dot app slash signal."),
-            (232, 239, "Okay. The fix. Short version: we stopped letting a license check share a connection pool with production work."),
-            (239, 246, "Long version: the check moved to its own client, picked up an hour of jitter, and lost the retry storm entirely."),
-            (246, 253, "The vendor, to their credit, confirmed the midnight pile-up from their side within a day of us asking."),
-            (253, 260, "The export queue flattened out that same night. 12:04 came and went, and the graph just... stayed boring."),
-            (260, 266, "We left tripwires behind, too: a per-dependency latency panel, split by region, with averages banned."),
-            (266, 272, "Because the real lesson isn't 'timezones are hard.' It's that invisible dependencies deserve dashboards too."),
-            (272, 280, "If this episode saves you a night of sleep, the best thank-you is a review — it genuinely helps other engineers find the show."),
-            (280, 288, "Members get ad-free episodes and the annotated incident timeline from tonight's story at signalpath dot fm slash support."),
-            (288, 296, "Members also get the extended cut of next week's episode early: the deploy that worked everywhere except on Tuesdays."),
-            (296, 300, "I'm Marin Vale. This was Signal Path. Get some sleep.")
+            (52, 58, "Go to bottomlessmug dot coffee and use code ORBIT for a free first bag. That's code ORBIT. Now — back to the dome."),
+            (58, 66, "So. First light is what astronomers call the first real image a new telescope takes. It's a milestone, and it's also a little bit of theater."),
+            (66, 74, "The mirror had been polished for six years. The camera had been tested in a vacuum chamber. Everyone knew it would work. Everyone was still terrified."),
+            (74, 82, "They pointed it at a boring patch of sky on purpose. No famous galaxy, no nebula. Just a field of ordinary stars they could compare to old surveys."),
+            (82, 90, "The first exposure came back at 3:12 in the morning. Sharp stars, clean corners, no obvious mess. Somebody clapped. Somebody else said \"wait.\""),
+            (90, 98, "Here's where the night got interesting. In the lower left of the frame there was a faint streak — not a star, not a satellite, not a cosmic ray."),
+            (98, 106, "A streak means something moved during the exposure. Satellites move fast and leave long, bright lines. This one was short and dim."),
+            (106, 114, "Short and dim means far away and slow. That narrows it down to a rock — an asteroid or a comet — that nobody had catalogued yet."),
+            (114, 123, "So on the very first night, before the press release, before the pretty picture, the new telescope had already found something nobody had seen."),
+            (123, 132, "I want to pause on that, because what makes a big mirror useful isn't the size. It's how much sky it can check, over and over, for things that change."),
+            (132, 141, "Speaking of things that change — our friends over at Urban Frequency just did a whole episode on light pollution maps, and it pairs weirdly well with this one."),
+            (141, 150, "If you like the parts of this show where I complain about sodium streetlights, their back catalog is basically that, with better maps."),
+            (150, 158, "Alright. Where were we. Right — a short, dim streak, and a control room full of people who suddenly weren't tired anymore."),
+            (158, 168, "They took a second exposure. Then a third. The streak moved between frames exactly the way a slow rock would, and it sat on the ecliptic — the plane where most of them live."),
+            (168, 177, "By sunrise they had three positions and a rough orbit. Not a great orbit — three points is barely a curve — but enough to know it wasn't going to hit anything."),
+            (177, 186, "And here's the part I love: the observatory's follow-up plan for a night-one discovery didn't exist. Nobody had written it. They improvised it over bad coffee."),
+            (186, 196, "Two days later a smaller telescope on another continent recovered the object, the orbit tightened up, and it got a provisional designation — letters and numbers, no name."),
+            (196, 205, "So the first thing the new telescope saw was a rock about the size of a stadium, roughly the distance of Mars, minding its own business. That's the whole story."),
+            (205, 212, "We'll get to what happened to the pretty picture in a second — first, a quick break."),
+            (212, 219, "This show is supported by Northlight Optics, the small binocular company that thinks \"good enough for the moon\" is a low bar."),
+            (219, 226, "Their eight-by-forty-twos are the pair I keep on the windowsill, and the pair I hand to anyone who says you can't see anything from a city."),
+            (226, 232, "Start with the moon at northlight dot optics slash orbit, and use code ORBIT for free shipping."),
+            (232, 239, "Okay. The pretty picture. It went out a week later, and it was a famous galaxy after all, because press releases want a galaxy."),
+            (239, 246, "But the astronomers I talked to kept bringing up the streak, not the galaxy. The galaxy proved the mirror worked. The streak proved the survey would."),
+            (246, 253, "Over the next ten years this telescope will image the whole southern sky every few nights and flag everything that moves or blinks."),
+            (253, 260, "Millions of alerts a night, most of them boring, some of them rocks, and every so often something that makes a control room go quiet."),
+            (260, 266, "The real lesson isn't \"big mirrors are good.\" It's that the sky is full of things that only show up if you keep looking at the same place."),
+            (266, 272, "So that's first light: a boring field, a faint streak, and a rock with a serial number for a name. Not a bad opening night."),
+            (272, 280, "If this episode kept you up past bedtime, the best thank-you is a review — it genuinely helps other night owls find the show."),
+            (280, 288, "Members get ad-free episodes and the annotated first-light frames from tonight's story at orbitreport dot fm slash support."),
+            (288, 296, "Members also get the extended cut of next week's episode early: why every comet is a surprise."),
+            (296, 300, "I'm Dana Whitlock. This was Orbit Report. Get some sleep.")
         ]
 
         return lines.enumerated().map { index, line in

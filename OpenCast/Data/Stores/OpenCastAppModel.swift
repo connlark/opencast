@@ -163,6 +163,7 @@ final class OpenCastAppModel {
         syncStatus: SyncStatusStore = SyncStatusStore(),
         allowsAutomaticFeedRefresh: Bool = true,
         adFreePassPresentationOverride: EpisodeAdFreePassPresentation? = nil,
+        adFreePassQueueOverride: AdFreePassQueueUITestOverride? = nil,
         adFreePassNotificationCenter: (any AdFreePassNotificationCenter)? = nil,
         siriMediaDiscovery: SiriMediaDiscovery = SiriMediaDiscovery(),
         unsubscribeSidecarCleanupOverride: ((String, [String], ModelContext) throws -> Void)? = nil
@@ -331,6 +332,10 @@ final class OpenCastAppModel {
             self?.skipZones.refreshIfCurrentEpisode(episodeID: episodeID)
         }
         transcriptAnalysisQueue.resolveEpisode = { [weak self] episodeID in
+            self?.episodeSnapshot(for: episodeID)
+        }
+        adFreePass.uiTestQueueOverride = adFreePassQueueOverride
+        adFreePass.uiTestEpisodeSnapshotResolver = { [weak self] episodeID in
             self?.episodeSnapshot(for: episodeID)
         }
         dataNuke.prepareRuntime = { [weak self] in

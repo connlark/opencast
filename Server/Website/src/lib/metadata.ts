@@ -5,7 +5,7 @@ const socialImage = {
   url: `${marketingURL}/opengraph-image.jpg`,
   width: 1200,
   height: 630,
-  alt: "opencast native podcast client for iPhone and iPad",
+  alt: "opencast, the open source podcast app that skips the ads",
 };
 
 type PageMetadata = {
