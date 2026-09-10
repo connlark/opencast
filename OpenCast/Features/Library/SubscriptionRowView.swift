@@ -22,7 +22,7 @@ struct SubscriptionRowView: View {
         FeedHealthStatus.derive(
             latestLog: latestRefreshLog,
             latestSuccessAt: appModel.library.latestSuccessfulRefreshByFeedURL[subscription.feedURL],
-            contentChangedAt: podcastCache?.updatedAt
+            contentChangedAt: appModel.library.lastContentChangedAt(for: subscription.feedURL)
         )
     }
 

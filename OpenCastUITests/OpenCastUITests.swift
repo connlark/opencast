@@ -233,7 +233,9 @@ final class OpenCastUITests: XCTestCase {
         // The seeded completed download shares immediately; the activity
         // sheet's header carries the sanitized hard-link filename, proving
         // the share file preparation end to end.
-        let shareHeader = app.staticTexts.matching(
+        // Link Presentation exposes this caption as Other on some iOS versions.
+        // Keep the filename assertion scoped to the native activity header.
+        let shareHeader = app.navigationBars["UIActivityContentView"].descendants(matching: .any).matching(
             NSPredicate(format: "label CONTAINS %@", "UI Test Show - Deterministic UI Episode")
         ).firstMatch
         assertExists(shareHeader, named: "activity sheet with sanitized share filename", timeout: 10)

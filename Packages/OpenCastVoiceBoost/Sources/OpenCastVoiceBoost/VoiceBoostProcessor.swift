@@ -108,6 +108,18 @@ public final class VoiceBoostProcessor {
         OCVBProcessorApplyControlSnapshot(handle, controlSnapshot.cSnapshot)
     }
 
+    public var continuationState: VoiceBoostContinuationState {
+        var state = OCVBContinuationState()
+        OCVBProcessorCopyContinuationState(handle, &state)
+        return VoiceBoostContinuationState(cState: state)
+    }
+
+    public func apply(continuationState: VoiceBoostContinuationState) {
+        withUnsafePointer(to: continuationState.cState) {
+            OCVBProcessorApplyContinuationState(handle, $0)
+        }
+    }
+
     /// Wet/dry crossfade position: 1 fully wet, 0 fully dry. Reaches the
     /// exact endpoints, so equality against 0 detects a completed drain.
     public var currentWetMix: Double {

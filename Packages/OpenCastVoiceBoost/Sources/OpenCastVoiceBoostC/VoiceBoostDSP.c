@@ -15,8 +15,8 @@
    the top of the spec's 20-60 s range so full-length EBU Tech 3341 cases
    read inside tolerance). */
 #define OCVB_MOMENTARY_SUB_BLOCKS 4
-#define OCVB_SHORT_TERM_SUB_BLOCKS 30
-#define OCVB_INTEGRATED_CAPACITY 600
+#define OCVB_SHORT_TERM_SUB_BLOCKS OCVBContinuationSubBlockCapacity
+#define OCVB_INTEGRATED_CAPACITY OCVBContinuationIntegratedCapacity
 
 #define OCVB_ABSOLUTE_GATE_LUFS (-70.0)
 
@@ -2358,6 +2358,62 @@ void OCVBProcessorApplyControlSnapshot(
     if (snapshot.gatedBlockCount > 0) {
         processor->gatedBlockCount = snapshot.gatedBlockCount;
     }
+}
+
+void OCVBProcessorCopyContinuationState(const OCVBProcessor *processor, OCVBContinuationState *state) {
+    if (state == NULL) {
+        return;
+    }
+    memset(state, 0, sizeof(*state));
+    if (processor == NULL) {
+        return;
+    }
+    state->control = OCVBProcessorCopyControlSnapshot(processor);
+    memcpy(state->inputSubBlocks, processor->inputSubBlocks, sizeof(state->inputSubBlocks));
+    memcpy(state->outputSubBlocks, processor->outputSubBlocks, sizeof(state->outputSubBlocks));
+    state->subBlockHead = processor->subBlockHead;
+    state->subBlockCount = processor->subBlockCount;
+    memcpy(state->integratedInputEnergies, processor->integratedInputEnergies, sizeof(state->integratedInputEnergies));
+    memcpy(state->integratedOutputEnergies, processor->integratedOutputEnergies, sizeof(state->integratedOutputEnergies));
+    memcpy(state->integratedGainEnergies, processor->integratedGainEnergies, sizeof(state->integratedGainEnergies));
+    state->integratedHead = processor->integratedHead;
+    state->integratedCount = processor->integratedCount;
+}
+
+void OCVBProcessorApplyContinuationState(OCVBProcessor *processor, const OCVBContinuationState *state) {
+    if (processor == NULL || state == NULL) {
+        return;
+    }
+    ocvb_reset_loudness_state(processor);
+    OCVBProcessorApplyControlSnapshot(processor, state->control);
+    if (state->subBlockHead < 0 || state->subBlockHead >= OCVB_SHORT_TERM_SUB_BLOCKS
+        || state->subBlockCount < 0 || state->integratedHead < 0
+        || state->integratedHead >= OCVB_INTEGRATED_CAPACITY
+        || state->integratedCount < 0 || state->integratedCount > OCVB_INTEGRATED_CAPACITY) {
+        return;
+    }
+    for (int32_t index = 0; index < OCVB_SHORT_TERM_SUB_BLOCKS; index += 1) {
+        if (!isfinite(state->inputSubBlocks[index]) || state->inputSubBlocks[index] < 0
+            || !isfinite(state->outputSubBlocks[index]) || state->outputSubBlocks[index] < 0) {
+            return;
+        }
+    }
+    for (int32_t index = 0; index < OCVB_INTEGRATED_CAPACITY; index += 1) {
+        if (!isfinite(state->integratedInputEnergies[index]) || state->integratedInputEnergies[index] < 0
+            || !isfinite(state->integratedOutputEnergies[index]) || state->integratedOutputEnergies[index] < 0
+            || !isfinite(state->integratedGainEnergies[index]) || state->integratedGainEnergies[index] < 0) {
+            return;
+        }
+    }
+    memcpy(processor->inputSubBlocks, state->inputSubBlocks, sizeof(state->inputSubBlocks));
+    memcpy(processor->outputSubBlocks, state->outputSubBlocks, sizeof(state->outputSubBlocks));
+    processor->subBlockHead = state->subBlockHead;
+    processor->subBlockCount = state->subBlockCount;
+    memcpy(processor->integratedInputEnergies, state->integratedInputEnergies, sizeof(state->integratedInputEnergies));
+    memcpy(processor->integratedOutputEnergies, state->integratedOutputEnergies, sizeof(state->integratedOutputEnergies));
+    memcpy(processor->integratedGainEnergies, state->integratedGainEnergies, sizeof(state->integratedGainEnergies));
+    processor->integratedHead = state->integratedHead;
+    processor->integratedCount = state->integratedCount;
 }
 
 double OCVBProcessorCurrentWetMix(const OCVBProcessor *processor) {

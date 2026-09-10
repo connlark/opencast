@@ -14,7 +14,7 @@ nonisolated struct FeedHealthStatus: Equatable {
     var kind: Kind
     /// The latest refresh attempt, success or not.
     var lastCheckedAt: Date?
-    /// When the feed's content last actually changed (`podcast_cache.updated_at`).
+    /// When the cached show details or any of its episodes last changed.
     var lastContentChangeAt: Date?
 
     static func derive(
@@ -80,8 +80,7 @@ nonisolated struct FeedHealthStatus: Equatable {
         }
     }
 
-    /// "Checked X ago · Updated Y ago": polling recency versus content
-    /// recency, which post-Phase-6-C are genuinely different timestamps.
+    /// Polling recency versus the most recent show or episode content change.
     var checkedUpdatedLine: String? {
         guard let lastCheckedAt else {
             return nil

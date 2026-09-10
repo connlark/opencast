@@ -226,7 +226,9 @@ final class OpenCastPadUITests: XCTestCase {
         assertExists(shareButton, named: "download and share audio action")
         shareButton.tap()
 
-        let shareHeader = app.descendants(matching: .any).matching(
+        // Scope the query to the remote share sheet's native header; a global
+        // first-match query can miss its Link Presentation caption.
+        let shareHeader = app.navigationBars["UIActivityContentView"].descendants(matching: .any).matching(
             NSPredicate(
                 format: "identifier == %@ AND label CONTAINS %@",
                 "LP.CaptionBar.TopCaption",

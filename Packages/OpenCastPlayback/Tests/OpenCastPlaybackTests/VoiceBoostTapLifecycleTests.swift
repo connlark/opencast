@@ -87,13 +87,15 @@ struct VoiceBoostTapLifecycleTests {
         #expect(abs(continuedGain - convergedGain) < 1.5)
     }
 
-    @Test("Seek resets measurement but re-seeds control state")
+    @Test("Seek resets signal state and preserves completed loudness history")
     func seekReseedsControlState() {
         var state = preparedState()
         let convergedGain = convergeGain(&state, seconds: 8, sampleRate: 48_000)
         #expect(convergedGain > 4)
 
+        let historyBeforeSeek = state.captureContinuationState()?.integratedBlockCount
         state.reset()
+        #expect(state.captureContinuationState()?.integratedBlockCount == historyBeforeSeek)
         let gainAfterSeek = state.processor?.metrics.currentAutoGainDB ?? 0
         #expect(abs(gainAfterSeek - convergedGain) < 1e-9)
 

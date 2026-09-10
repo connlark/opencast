@@ -321,7 +321,12 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
             episode: harness.episode,
             modelContext: harness.context
         )
-        #expect(await waitUntil { harness.transcriptions.hasActiveJob })
+        // An active task also covers source-identity loading, before a run
+        // record exists. Exercise interruption after decoding has begun.
+        #expect(await waitUntil {
+            harness.transcriptions.progressByEpisodeID[harness.episode.episodeID]?.completedDuration == 1
+        })
+        #expect(harness.transcriptions.record(for: harness.episode.episodeID)?.checkpointCount == 0)
         harness.coordinator.prepareForLifecycleExit(modelContext: harness.context)
 
         #expect(await waitUntil { harness.coordinator.request?.phase == .interrupted })

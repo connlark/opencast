@@ -110,6 +110,32 @@ typedef struct {
     int64_t gatedBlockCount;
 } OCVBControlSnapshot;
 
+enum {
+    OCVBContinuationSubBlockCapacity = 30,
+    OCVBContinuationIntegratedCapacity = 600
+};
+
+/// Completed 100 ms measurement history for a continuing listening session.
+/// No PCM, filter/delay state, or partial sample accumulations are carried.
+/// Mean-square energies remain meaningful across sample-rate changes.
+typedef struct {
+    OCVBControlSnapshot control;
+    double inputSubBlocks[OCVBContinuationSubBlockCapacity];
+    double outputSubBlocks[OCVBContinuationSubBlockCapacity];
+    int32_t subBlockHead;
+    int64_t subBlockCount;
+    double integratedInputEnergies[OCVBContinuationIntegratedCapacity];
+    double integratedOutputEnergies[OCVBContinuationIntegratedCapacity];
+    double integratedGainEnergies[OCVBContinuationIntegratedCapacity];
+    int32_t integratedHead;
+    int32_t integratedCount;
+} OCVBContinuationState;
+
+/// Bounded, allocation-free copies. Callers serialize access to the processor.
+void OCVBProcessorCopyContinuationState(const OCVBProcessor *processor, OCVBContinuationState *state);
+/// Apply only after creation/reset; signal state is never restored.
+void OCVBProcessorApplyContinuationState(OCVBProcessor *processor, const OCVBContinuationState *state);
+
 OCVBProcessor *OCVBProcessorCreate(
     double sampleRate,
     int32_t channelCount,

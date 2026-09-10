@@ -100,7 +100,7 @@ struct PodcastDetailView: View {
                                     health: FeedHealthStatus.derive(
                                         latestLog: appModel.library.latestRefreshLog(feedURL: feedURL),
                                         latestSuccessAt: appModel.library.latestSuccessfulRefreshByFeedURL[feedURL],
-                                        contentChangedAt: podcastCache?.updatedAt
+                                        contentChangedAt: appModel.library.lastContentChangedAt(for: feedURL)
                                     ),
                                     notificationHealth: appModel.library.notificationFeedHealthByFeedURL[feedURL],
                                     primaryAction: model.primaryAction,

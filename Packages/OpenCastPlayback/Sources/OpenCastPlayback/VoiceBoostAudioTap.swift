@@ -47,12 +47,12 @@ nonisolated final class VoiceBoostAudioTap {
 
     /// Adaptation control state for handing across tap replacement (the
     /// track-bound reinstall creates a new tap on the same item).
-    func captureControlSnapshot() -> VoiceBoostControlSnapshot? {
-        context.captureControlSnapshot()
+    func captureContinuationState() -> VoiceBoostContinuationState? {
+        context.captureContinuationState()
     }
 
-    func seedControlSnapshot(_ snapshot: VoiceBoostControlSnapshot) {
-        context.seedControlSnapshot(snapshot)
+    func seedContinuationState(_ snapshot: VoiceBoostContinuationState) {
+        context.seedContinuationState(snapshot)
     }
 }
 
@@ -350,15 +350,15 @@ nonisolated private final class VoiceBoostAudioTapContext {
         }
     }
 
-    func captureControlSnapshot() -> VoiceBoostControlSnapshot? {
+    func captureContinuationState() -> VoiceBoostContinuationState? {
         stateLock.withLock {
-            state.captureControlSnapshot()
+            state.captureContinuationState()
         }
     }
 
-    func seedControlSnapshot(_ snapshot: VoiceBoostControlSnapshot) {
+    func seedContinuationState(_ snapshot: VoiceBoostContinuationState) {
         stateLock.withLock {
-            state.seedControlSnapshot(snapshot)
+            state.seedContinuationState(snapshot)
         }
     }
 

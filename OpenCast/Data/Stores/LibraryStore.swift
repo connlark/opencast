@@ -63,6 +63,7 @@ final class LibraryStore {
     var podcastCacheByFeedURL: [String: PodcastCacheSnapshot] = [:]
     private(set) var latestRefreshLogByFeedURL: [String: RefreshLogSnapshot] = [:]
     private(set) var latestSuccessfulRefreshByFeedURL: [String: Date] = [:]
+    private var latestEpisodeContentChangeByFeedURL: [String: Date] = [:]
     var lastErrorMessage: String?
     private(set) var subscriptionAddedToken = 0
     var refreshCompletedToken: Int {
@@ -753,6 +754,13 @@ final class LibraryStore {
         latestRefreshLogByFeedURL[feedURL]
     }
 
+    /// Cache timestamps track content changes, including edits to older episodes.
+    func lastContentChangedAt(for feedURL: String) -> Date? {
+        [podcastCacheByFeedURL[feedURL]?.updatedAt, latestEpisodeContentChangeByFeedURL[feedURL]]
+            .compactMap(\.self)
+            .max()
+    }
+
     /// Refresh recency for display: the newest local successful refresh,
     /// falling back to the synced `lastRefreshAt` snapshot (frozen after the
     /// initial subscribe) for feeds this device hasn't refreshed yet.
@@ -1135,6 +1143,7 @@ final class LibraryStore {
         automaticRetryAfterByFeedURL = cacheSnapshot.automaticRetryAfterByFeedURL
         episodeIndexByID = indexes.byID
         episodeIndicesByPodcastID = indexes.byPodcastID
+        latestEpisodeContentChangeByFeedURL = indexes.latestContentChangeByPodcastID
         episodeSearchCorpusRevision &+= 1
         rebuildLatestRefreshLogByFeedURL()
         prepareEpisodeSearchIndexIfNeeded()
@@ -1326,6 +1335,7 @@ final class LibraryStore {
         let indexes = LibraryEpisodeIndexes(episodes: episodes)
         episodeIndexByID = indexes.byID
         episodeIndicesByPodcastID = indexes.byPodcastID
+        latestEpisodeContentChangeByFeedURL = indexes.latestContentChangeByPodcastID
         episodeSearchCorpusRevision &+= 1
     }
 

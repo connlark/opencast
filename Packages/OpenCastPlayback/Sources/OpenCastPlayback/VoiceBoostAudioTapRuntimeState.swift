@@ -40,10 +40,10 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
     private(set) var liveMixWeight: Double = 1
     private var latencyFrames = 0
     private var spliceStep = 1.0
-    /// Adaptation control state carried across processor recreation (I3).
+    /// Gain and completed loudness history carried across processor recreation.
     /// Captured on unprepare and at disable time (pre-drain), applied on
     /// prepare; the controller hands it across track-bound tap reinstalls.
-    private(set) var pendingControlSnapshot: VoiceBoostControlSnapshot?
+    private(set) var pendingContinuationState: VoiceBoostContinuationState?
 
     init(configuration: VoiceBoostConfiguration) {
         self.configuration = configuration
@@ -57,6 +57,9 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         isNonInterleaved: Bool,
         isSupported: Bool
     ) {
+        if processor != nil {
+            pendingContinuationState = captureContinuationState()
+        }
         self.channelCount = channelCount
         self.isFloat32 = isFloat32
         self.isNonInterleaved = isNonInterleaved
@@ -77,8 +80,8 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
             // output peak. The true-peak limiter still processes every buffer.
             measuresOutputTruePeak: false
         )
-        if let pendingControlSnapshot {
-            processor.apply(controlSnapshot: pendingControlSnapshot)
+        if let pendingContinuationState {
+            processor.apply(continuationState: pendingContinuationState)
         }
         self.processor = processor
         latencyFrames = processor.metrics.latencyFrames
@@ -96,7 +99,7 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         if let processor {
             switch phase {
             case .engaged, .engaging:
-                pendingControlSnapshot = processor.controlSnapshot
+                pendingContinuationState = processor.continuationState
             case .bypassed, .disengaging:
                 // Keep the pre-drain snapshot captured at disable time; the
                 // live state is either idle or mid-drain with the desired
@@ -133,10 +136,10 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
                 // processor is still configured dry, so the wet mix
                 // restarts at zero), then re-seed the adaptation state so
                 // gain does not re-bootstrap through the low-confidence cap.
-                let controlSnapshot = pendingControlSnapshot ?? processor.controlSnapshot
+                let continuationState = pendingContinuationState ?? processor.continuationState
                 processor.reset()
                 processor.update(configuration: newConfiguration)
-                processor.apply(controlSnapshot: controlSnapshot)
+                processor.apply(continuationState: continuationState)
                 phase = .engaging(warmupFramesRemaining: latencyFrames)
                 liveMixWeight = 1
             case .disengaging:
@@ -150,11 +153,11 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         } else {
             switch phase {
             case .engaged:
-                pendingControlSnapshot = processor.controlSnapshot
+                pendingContinuationState = processor.continuationState
                 processor.update(configuration: newConfiguration)
                 phase = .disengaging
             case .engaging:
-                pendingControlSnapshot = processor.controlSnapshot
+                pendingContinuationState = processor.continuationState
                 processor.update(configuration: newConfiguration)
                 // Still inside the warmup window means the output has been
                 // pure live throughout; parking in bypass is seamless.
@@ -168,31 +171,35 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
     /// Seek policy: signal and measurement state reset, adaptation
     /// control state re-seeded — a skip inside the same programme must not
     /// step gain or re-engage the low-confidence cap.
-    func reset() {
+    mutating func reset() {
         guard let processor else {
             return
         }
-        let controlSnapshot = processor.controlSnapshot
+        let continuationState = captureContinuationState()
         processor.reset()
-        processor.apply(controlSnapshot: controlSnapshot)
+        if let continuationState {
+            processor.apply(continuationState: continuationState)
+        }
+        phase = configuration.isEnabled ? .engaging(warmupFramesRemaining: latencyFrames) : .bypassed
+        liveMixWeight = 1
     }
 
-    func captureControlSnapshot() -> VoiceBoostControlSnapshot? {
+    func captureContinuationState() -> VoiceBoostContinuationState? {
         guard let processor else {
-            return pendingControlSnapshot
+            return pendingContinuationState
         }
         switch phase {
         case .engaged, .engaging:
-            return processor.controlSnapshot
+            return processor.continuationState
         case .bypassed, .disengaging:
-            return pendingControlSnapshot ?? processor.controlSnapshot
+            return pendingContinuationState ?? processor.continuationState
         }
     }
 
-    mutating func seedControlSnapshot(_ snapshot: VoiceBoostControlSnapshot) {
+    mutating func seedContinuationState(_ snapshot: VoiceBoostContinuationState) {
         // Applied at the next prepare; never touches a live processor, so
         // seeding cannot step gain mid-buffer.
-        pendingControlSnapshot = snapshot
+        pendingContinuationState = snapshot
     }
 
     @discardableResult

@@ -58,6 +58,7 @@ public final class AVFoundationPlaybackController {
     @ObservationIgnored private var audioSessionRouteChangeObserver: NSObjectProtocol?
     @ObservationIgnored private var audioSessionMediaServicesResetObserver: NSObjectProtocol?
     @ObservationIgnored private var currentVoiceBoostTap: VoiceBoostAudioTap?
+    @ObservationIgnored private var pendingVoiceBoostContinuationState: VoiceBoostContinuationState?
     @ObservationIgnored private var voiceBoostTrackLoadTask: Task<Void, Never>?
     @ObservationIgnored private let voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics?
     @ObservationIgnored private let voiceBoostAudioTapFactory: VoiceBoostAudioTapFactory
@@ -212,6 +213,7 @@ public final class AVFoundationPlaybackController {
     }
 
     public func updateVoiceBoostConfiguration(_ configuration: VoiceBoostConfiguration) {
+        let wasEnabled = voiceBoostConfiguration.isEnabled
         voiceBoostConfiguration = configuration
         if !configuration.isEnabled {
             voiceBoostTrackLoadTask?.cancel()
@@ -219,8 +221,14 @@ public final class AVFoundationPlaybackController {
         }
         if let currentVoiceBoostTap {
             currentVoiceBoostTap.update(configuration: configuration)
+            if configuration.isEnabled, !wasEnabled,
+               let currentItem = player.currentItem,
+               currentItem.audioMix?.inputParameters.first?.trackID == kCMPersistentTrackID_Invalid,
+               let asset = currentItem.asset as? AVURLAsset {
+                scheduleTrackBoundVoiceBoostTapInstall(for: currentItem, asset: asset)
+            }
         } else if configuration.isEnabled, let currentItem = player.currentItem {
-            installVoiceBoostTap(on: currentItem)
+            installVoiceBoostTap(on: currentItem, continuationState: pendingVoiceBoostContinuationState)
             if let asset = currentItem.asset as? AVURLAsset {
                 scheduleTrackBoundVoiceBoostTapInstall(for: currentItem, asset: asset)
             }
@@ -407,6 +415,7 @@ public final class AVFoundationPlaybackController {
         player.pause()
         player.replaceCurrentItem(with: nil)
         currentVoiceBoostTap = nil
+        pendingVoiceBoostContinuationState = nil
         currentItemLocalFileIdentity = nil
         playbackPositionProtection.clear()
         playbackAdSkipPolicy.setZones([])
@@ -939,7 +948,10 @@ public final class AVFoundationPlaybackController {
         pause(reason: "old audio route unavailable")
     }
 
-    private func makeDirectPlayerItem(audioURL: URL) -> AVPlayerItem {
+    private func makeDirectPlayerItem(
+        audioURL: URL,
+        continuationState: VoiceBoostContinuationState? = nil
+    ) -> AVPlayerItem {
         currentItemLocalFileIdentity = PlaybackLocalFileIdentity(at: audioURL)
         // Local files get a precise timeline: karaoke equates item media time
         // with transcript timestamps, and estimated MP3 timing (the default)
@@ -949,12 +961,8 @@ public final class AVFoundationPlaybackController {
             ? [AVURLAssetPreferPreciseDurationAndTimingKey: true]
             : nil
         let asset = AVURLAsset(url: audioURL, options: options)
-        return configuredPlayerItem(asset: asset)
-    }
-
-    private func configuredPlayerItem(asset: AVURLAsset) -> AVPlayerItem {
         let playerItem = AVPlayerItem(asset: asset)
-        installVoiceBoostTap(on: playerItem)
+        installVoiceBoostTap(on: playerItem, continuationState: continuationState)
         scheduleTrackBoundVoiceBoostTapInstall(for: playerItem, asset: asset)
         return playerItem
     }
@@ -992,16 +1000,21 @@ public final class AVFoundationPlaybackController {
         }
     }
 
-    private func installVoiceBoostTap(on playerItem: AVPlayerItem, audioTrack: AVAssetTrack? = nil) {
-        // The track-bound reinstall replaces a live tap on the same item;
-        // carry the adaptation control state so gain does not re-bootstrap
-        // through the low-confidence cap (I3). Item changes pass no track
-        // here, so a new episode always starts fresh.
-        let carriedControlSnapshot = audioTrack != nil
-            ? currentVoiceBoostTap?.captureControlSnapshot()
-            : nil
+    private func installVoiceBoostTap(
+        on playerItem: AVPlayerItem,
+        audioTrack: AVAssetTrack? = nil,
+        continuationState: VoiceBoostContinuationState? = nil
+    ) {
+        // A fresh load passes neither state nor track. A same-session rebuild
+        // and its later track binding must both retain the measurement history.
+        let carriedState = continuationState ?? (audioTrack != nil
+            ? currentVoiceBoostTap?.captureContinuationState() : nil)
         currentVoiceBoostTap = nil
+        pendingVoiceBoostContinuationState = nil
         guard voiceBoostConfiguration.isEnabled else {
+            // Retain adaptation without installing a disabled tap: a local
+            // handoff must not introduce audio callbacks while Voice Boost is off.
+            pendingVoiceBoostContinuationState = carriedState
             playerItem.audioMix = nil
             return
         }
@@ -1010,8 +1023,8 @@ public final class AVFoundationPlaybackController {
             voiceBoostTapDiagnostics?.recordTapInstallAttempt()
             let tap = try voiceBoostAudioTapFactory(voiceBoostConfiguration, voiceBoostTapDiagnostics)
             voiceBoostTapDiagnostics?.recordTapInstallSuccess()
-            if let carriedControlSnapshot {
-                tap.seedControlSnapshot(carriedControlSnapshot)
+            if let carriedState {
+                tap.seedContinuationState(carriedState)
             }
             let inputParameters = if let audioTrack {
                 AVMutableAudioMixInputParameters(track: audioTrack)
@@ -1024,6 +1037,9 @@ public final class AVFoundationPlaybackController {
             audioMix.inputParameters = [inputParameters]
             playerItem.audioMix = audioMix
             currentVoiceBoostTap = tap
+            recordDiagnosticsEvent(
+                "voice boost installed history=\(carriedState?.integratedBlockCount ?? 0) gain=\(carriedState?.controlSnapshot.currentAutoGainDB ?? 0) trackBound=\(audioTrack != nil) enabled=\(voiceBoostConfiguration.isEnabled)"
+            )
         } catch {
             if case VoiceBoostAudioTapError.creationFailed(let status) = error {
                 voiceBoostTapDiagnostics?.recordTapCreationFailure(status: status)
@@ -1322,10 +1338,12 @@ public final class AVFoundationPlaybackController {
         playbackPositionProtection.clear()
         voiceBoostTrackLoadTask?.cancel()
         voiceBoostTrackLoadTask = nil
-        currentVoiceBoostTap = nil
         player.pause()
+        let continuationState = currentVoiceBoostTap?.captureContinuationState()
+            ?? pendingVoiceBoostContinuationState
+        currentVoiceBoostTap = nil
 
-        let retryItem = makeDirectPlayerItem(audioURL: audioURL)
+        let retryItem = makeDirectPlayerItem(audioURL: audioURL, continuationState: continuationState)
         player.replaceCurrentItem(with: retryItem)
         observeCurrentItem(retryItem)
 
