@@ -91,7 +91,8 @@ nonisolated struct AppAttestAPIClient: Sendable {
             throw AppAttestHTTPError(
                 statusCode: httpResponse.statusCode,
                 code: errorResponse?.error ?? "http_\(httpResponse.statusCode)",
-                detail: errorResponse?.detail
+                detail: errorResponse?.detail,
+                failure: errorResponse?.failure
             )
         }
 

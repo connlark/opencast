@@ -1,0 +1,16 @@
+{
+  "fixtures": [
+    {
+      "name": "synthetic-promo-carousel",
+      "request": "promo-carousel.json",
+      "ground_truth": {"pods": [[20, 50], [80, 100], [120, 120]], "optional": [], "negatives": [[10, 10], [60, 70], [110, 110]]},
+      "provenance": "Original synthetic dialogue: trailers with story/interview interiors, repeated occurrence, sponsor-like editorial negatives, 6.8-second promo. Not a new real-world episode."
+    },
+    {
+      "name": "synthetic-paid-feed-and-ad-session",
+      "request": "paid-feed-and-ad-session.json",
+      "ground_truth": {"pods": [[10, 60], [110, 180]], "optional": [[100, 100], [190, 190]], "negatives": [[0, 0], [70, 90]]},
+      "provenance": "Original synthetic dialogue based on the human-calibrated product policy: ad-session procedural banter, sponsor setup, paid-feed/outro solicitation, and a same-series preview. The reporting request is editorial. Not an independent real episode or holdout."
+    }
+  ]
+}

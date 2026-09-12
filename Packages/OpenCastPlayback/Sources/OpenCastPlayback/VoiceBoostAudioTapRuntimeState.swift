@@ -168,9 +168,7 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         }
     }
 
-    /// Seek policy: signal and measurement state reset, adaptation
-    /// control state re-seeded — a skip inside the same programme must not
-    /// step gain or re-engage the low-confidence cap.
+    /// A seek changes the signal timeline, not the listening session's loudness.
     mutating func reset() {
         guard let processor else {
             return

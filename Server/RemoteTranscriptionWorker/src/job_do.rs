@@ -200,7 +200,7 @@ enum CreditCallBudget {
     Retry(worker::Error),
     /// This failure spent the budget; the caller decides what that means
     /// (a reserve fails the job, a settle is deferred).
-    Exhausted(JobRecord),
+    Exhausted(Box<JobRecord>),
     /// The terminal path owns the record now; nothing left to do.
     Parked,
 }
@@ -770,7 +770,7 @@ impl TranscriptionJob {
                 }
                 let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
                 let upload = bucket
-                    .create_multipart_upload(&job::r2_upload_key(&record.job_id))
+                    .create_multipart_upload(job::r2_upload_key(&record.job_id))
                     .execute()
                     .await?;
                 let upload_id = upload.upload_id().await;
@@ -791,10 +791,9 @@ impl TranscriptionJob {
                     // terminal record or re-arm its deleted alarm — abort
                     // the upload we just opened and refuse.
                     _ => {
-                        if let Ok(open) = bucket.resume_multipart_upload(
-                            &job::r2_upload_key(&record.job_id),
-                            &upload_id,
-                        ) {
+                        if let Ok(open) = bucket
+                            .resume_multipart_upload(job::r2_upload_key(&record.job_id), &upload_id)
+                        {
                             open.abort().await.ok();
                         }
                         return json_error(409, types::ERROR_INVALID_REQUEST);
@@ -1717,7 +1716,7 @@ impl TranscriptionJob {
             updated.job_id,
             updated.credit_call_attempts
         );
-        Ok(CreditCallBudget::Exhausted(updated))
+        Ok(CreditCallBudget::Exhausted(Box::new(updated)))
     }
 
     /// A reserve call failed (or its authority could not be constructed):
@@ -1731,7 +1730,7 @@ impl TranscriptionJob {
             CreditCallBudget::Parked => Ok(()),
             CreditCallBudget::Exhausted(updated) => {
                 self.bump("credit_reserve_abandoned", 1).await;
-                self.release_and_fail(updated, config, types::ERROR_INTERNAL)
+                self.release_and_fail(*updated, config, types::ERROR_INTERNAL)
                     .await?;
                 Ok(())
             }
@@ -2493,7 +2492,7 @@ impl TranscriptionJob {
                     let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
                     bucket
                         .put(
-                            &job::r2_response_key(&record.job_id, chunk.index),
+                            job::r2_response_key(&record.job_id, chunk.index),
                             response_json,
                         )
                         .execute()
@@ -2891,6 +2890,7 @@ impl TranscriptionJob {
                     "start": segment.start,
                     "end": segment.end,
                     "text": segment.text,
+                    "word_timings_adjusted": segment.word_timings_adjusted,
                     "words": segment.words.iter().map(|word| serde_json::json!({
                         "start": word.start,
                         "end": word.end,
@@ -2921,7 +2921,7 @@ impl TranscriptionJob {
         });
         bucket
             .put(
-                &job::r2_result_key(&record.job_id),
+                job::r2_result_key(&record.job_id),
                 serde_json::to_vec(&result)?,
             )
             .execute()
@@ -3058,11 +3058,18 @@ impl TranscriptionJob {
                 };
                 self.finalize_ad_phase(block).await
             }
-            ad_analysis::AnalyzeOutcome::Running => {
-                if record.ad_analysis_job_id.is_none() {
+            ad_analysis::AnalyzeOutcome::Running { job_id } => {
+                if !ad_analysis::handle_matches_fingerprint(
+                    &job_id,
+                    &ad_analysis::ad_job_fingerprint(&record.job_id),
+                ) {
+                    return self
+                        .finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_FAILED))
+                        .await;
+                }
+                if record.ad_analysis_job_id.as_ref() != Some(&job_id) {
                     self.update_record(|record| {
-                        record.ad_analysis_job_id =
-                            Some(ad_analysis::ad_job_fingerprint(&record.job_id));
+                        record.ad_analysis_job_id = Some(job_id);
                     })
                     .await?;
                 }
@@ -3072,6 +3079,23 @@ impl TranscriptionJob {
             ad_analysis::AnalyzeOutcome::Capacity => {
                 self.finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_CAPACITY))
                     .await
+            }
+            ad_analysis::AnalyzeOutcome::Failed { code, failure } => {
+                if failure.category == "interrupted_job"
+                    && record.ad_analysis_attempts < config.ad_analysis_max_submit_attempts
+                {
+                    self.update_record(|record| {
+                        record.ad_analysis_job_id = None;
+                    })
+                    .await?;
+                    return self
+                        .schedule(Duration::from_secs(config.ad_analysis_poll_seconds))
+                        .await;
+                }
+                self.finalize_ad_phase(
+                    serde_json::json!({"state":"failed", "error_code":code, "failure":failure}),
+                )
+                .await
             }
             ad_analysis::AnalyzeOutcome::Rejected => {
                 self.finalize_ad_phase(ad_analysis::failure_block(ad_analysis::MARKER_FAILED))
@@ -3110,7 +3134,7 @@ impl TranscriptionJob {
                 Ok(Some(updated)) => {
                     let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
                     bucket
-                        .put(&job::r2_result_key(&record.job_id), updated)
+                        .put(job::r2_result_key(&record.job_id), updated)
                         .execute()
                         .await?;
                 }
@@ -3404,10 +3428,7 @@ impl TranscriptionJob {
             }
             Err(error) => {
                 // Content-free: job id and the credit error shape only.
-                worker::console_error!(
-                    "job {} deferred settle failed: {error:?}",
-                    record.job_id
-                );
+                worker::console_error!("job {} deferred settle failed: {error:?}", record.job_id);
                 false
             }
         }
@@ -3424,8 +3445,7 @@ impl TranscriptionJob {
         record: &JobRecord,
         config: &AppConfig,
     ) -> Result<Option<i64>> {
-        if !record.credit_settle_pending
-            || job::credit_call_exhausted(record.credit_call_attempts)
+        if !record.credit_settle_pending || job::credit_call_exhausted(record.credit_call_attempts)
         {
             return Ok(None);
         }
@@ -3525,10 +3545,7 @@ impl TranscriptionJob {
         self.bump("credit_settle_abandoned", 1).await;
         let hold_released = self.attempt_credit_release(&updated).await;
         if hold_released {
-            worker::console_log!(
-                "job {} abandoned settle released its hold",
-                updated.job_id
-            );
+            worker::console_log!("job {} abandoned settle released its hold", updated.job_id);
         } else {
             worker::console_error!(
                 "job {} abandoned settle could not release its hold",
@@ -3622,7 +3639,7 @@ impl TranscriptionJob {
         // primary). Idempotent: aborting a consumed upload is a no-op error.
         if let (Some(upload_id), false) = (record.upload_id.as_deref(), record.upload_completed) {
             if let Ok(upload) =
-                bucket.resume_multipart_upload(&job::r2_upload_key(&record.job_id), upload_id)
+                bucket.resume_multipart_upload(job::r2_upload_key(&record.job_id), upload_id)
             {
                 upload.abort().await.ok();
             }
@@ -3940,7 +3957,7 @@ impl TranscriptionJob {
                 .bucket(TRANSCRIPTION_BUCKET)
                 .map_err(|_| media::MediaCallFailure::Retryable)?;
             let object = bucket
-                .get(&record.source_object_key())
+                .get(record.source_object_key())
                 .execute()
                 .await
                 .map_err(|_| media::MediaCallFailure::Retryable)?
@@ -4037,7 +4054,7 @@ impl TranscriptionJob {
             .bucket(TRANSCRIPTION_BUCKET)
             .map_err(|_| types::ERROR_INTERNAL)?;
         let raw = bucket
-            .get(&record.source_object_key())
+            .get(record.source_object_key())
             .execute()
             .await
             .map_err(|_| types::ERROR_INTERNAL)?
@@ -4075,9 +4092,7 @@ impl TranscriptionJob {
             let sha256 = hex::encode(Sha256::digest(slice));
             manifest_hasher.update(sha256.as_bytes());
             let requested_start = index as f64 * job::STEP_SECONDS;
-            let actual = (duration - requested_start)
-                .min(job::CHUNK_SECONDS)
-                .max(1.0);
+            let actual = (duration - requested_start).clamp(1.0, job::CHUNK_SECONDS);
             chunks.push(media::MediaChunkEntry {
                 index: index as u32,
                 key,
@@ -4504,9 +4519,7 @@ where
     F: std::future::Future<Output = T>,
 {
     let elapsed = now_seconds().saturating_sub(started).max(0) as u64;
-    let Some(remaining) = wall_seconds.checked_sub(elapsed) else {
-        return None;
-    };
+    let remaining = wall_seconds.checked_sub(elapsed)?;
     let deadline = worker::Delay::from(Duration::from_secs(remaining.max(1)));
     futures_util::pin_mut!(future, deadline);
     match futures_util::future::select(future, deadline).await {

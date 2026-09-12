@@ -199,7 +199,7 @@ struct EpisodeDetailView: View {
 
                 if case .completed(_, let isStale) = analysis {
                     EpisodeAdSpanTimelineView(
-                        duration: timelineDuration(episode: episode, zoneTiers: zoneTiers),
+                        duration: adSection.timelineDuration(forKey: adAnalysisKey, episode: episode),
                         zoneTiers: zoneTiers,
                         isStale: isStale
                     )
@@ -458,17 +458,6 @@ struct EpisodeDetailView: View {
         }
 
         appModel.deleteDownload(downloadRecord, modelContext: modelContext)
-    }
-
-    private func timelineDuration(
-        episode: EpisodeListItemSnapshot,
-        zoneTiers: EpisodeAdAnalysisZoneTiers
-    ) -> TimeInterval {
-        if let duration = episode.duration, duration > 0 {
-            return duration
-        }
-
-        return (zoneTiers.autoSkip + zoneTiers.displayOnly).map(\.endTime).max() ?? 0
     }
 
     private func updateTextContent(for episode: EpisodeListItemSnapshot?) async {

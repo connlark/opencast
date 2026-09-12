@@ -77,6 +77,8 @@ pub enum JobRecord {
         job_id: String,
         status: u16,
         code: String,
+        #[serde(default)]
+        error_json: Option<String>,
         purge_at: i64,
         #[serde(default)]
         subjects: Vec<String>,
@@ -225,6 +227,11 @@ pub enum SubmitDecision {
     /// Public submit whose content does not match the stored job under the
     /// same fingerprint: blind attach / poisoning attempt.
     DenyContentMismatch,
+    ServeFailed {
+        status: u16,
+        code: String,
+        join: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,6 +252,10 @@ pub enum AlarmDecision {
 }
 
 pub fn valid_job_id(value: &str) -> bool {
+    crate::policy::poll_object_names(value).is_some()
+}
+
+pub fn valid_fingerprint(value: &str) -> bool {
     (8..=128).contains(&value.len())
         && value
             .bytes()
@@ -294,6 +305,21 @@ pub fn submit_decision(
                 SubmitDecision::ServeCompleted {
                     job_id: job_id.clone(),
                     result_json: result_json.clone(),
+                    join,
+                }
+            } else if internal {
+                SubmitDecision::Replace
+            } else {
+                SubmitDecision::DenyContentMismatch
+            }
+        }
+        JobRecord::FailedUpstream { status, code, .. }
+            if code == "ad_analysis_incomplete" || code == "repair_feedback_exceeded" =>
+        {
+            if authorized || content_matches {
+                SubmitDecision::ServeFailed {
+                    status: *status,
+                    code: code.clone(),
                     join,
                 }
             } else if internal {

@@ -11,6 +11,7 @@ nonisolated struct EpisodeAdAnalysisDocument: Codable, Sendable, Equatable {
     var transcriptState: EpisodeTranscriptState
     var model: String
     var policy: String
+    var policyRevision: String?
     var spans: [EpisodeAdAnalysisSpan]
     var warnings: [String]
     var usage: EpisodeAdAnalysisUsage?
@@ -28,6 +29,7 @@ nonisolated struct EpisodeAdAnalysisDocument: Codable, Sendable, Equatable {
         case transcriptState
         case model
         case policy
+        case policyRevision
         case spans
         case warnings
         case usage
@@ -50,7 +52,8 @@ nonisolated struct EpisodeAdAnalysisDocument: Codable, Sendable, Equatable {
         warnings: [String],
         usage: EpisodeAdAnalysisUsage?,
         createdAt: Date,
-        updatedAt: Date
+        updatedAt: Date,
+        policyRevision: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.episodeID = episodeID
@@ -62,6 +65,7 @@ nonisolated struct EpisodeAdAnalysisDocument: Codable, Sendable, Equatable {
         self.transcriptState = transcriptState
         self.model = model
         self.policy = policy
+        self.policyRevision = policyRevision
         self.spans = spans
         self.warnings = warnings
         self.usage = usage
@@ -84,6 +88,7 @@ nonisolated struct EpisodeAdAnalysisDocument: Codable, Sendable, Equatable {
         ) ?? .completed
         model = try container.decode(String.self, forKey: .model)
         policy = try container.decode(String.self, forKey: .policy)
+        policyRevision = try container.decodeIfPresent(String.self, forKey: .policyRevision)
         spans = try container.decode([EpisodeAdAnalysisSpan].self, forKey: .spans)
         warnings = try container.decode([String].self, forKey: .warnings)
         usage = try container.decodeIfPresent(EpisodeAdAnalysisUsage.self, forKey: .usage)

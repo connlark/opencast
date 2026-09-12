@@ -1,7 +1,10 @@
 use std::time::Duration;
 
-use futures_util::future::{join_all, select, Either};
-use worker::{console_error, Delay, Fetch, Headers, Method, Request, RequestInit};
+use futures_util::{
+    future::{join_all, select, Either},
+    StreamExt,
+};
+use worker::{AbortController, Delay, Fetch, Headers, Method, Request, RequestInit};
 
 use crate::gemini::{parse_error_envelope, parse_generate_content_response};
 use crate::prompt::{gemini_generate_content_url, gemini_request_payload, GeminiGenerationOptions};
@@ -32,7 +35,12 @@ pub(crate) async fn run_windows_analysis(
     gemini_api_key: &str,
     model: &str,
     request: AdAnalysisRequest,
+    policy: crate::policy::AnalysisPolicy,
+    execution: std::rc::Rc<crate::execution::Execution>,
 ) -> std::result::Result<AdAnalysisResponse, UpstreamError> {
+    if policy == crate::policy::AnalysisPolicy::V3 {
+        return crate::v3_analysis::run(request, gemini_api_key, execution).await;
+    }
     let gemini_url = gemini_generate_content_url(model);
     let mut combined_model_output = ModelOutput::from_spans(Vec::new());
     let mut combined_usage = None;
@@ -92,6 +100,8 @@ pub(crate) async fn run_windows_analysis(
         request_id: request.request_id,
         model: model.to_string(),
         policy: POLICY_NAME.to_string(),
+        policy_revision: None,
+        accounting: None,
         spans,
         warnings: combine_warnings(validation_warnings, gemini_warnings),
         usage: combined_usage,
@@ -140,7 +150,7 @@ async fn analyze_window(
     })
 }
 
-async fn call_gemini_with_retry(
+pub(crate) async fn call_gemini_with_retry(
     gemini_api_key: &str,
     gemini_url: &str,
     payload: &serde_json::Value,
@@ -160,7 +170,14 @@ async fn call_gemini_with_retry(
             status,
             retry_after,
             text,
-        } = match call_gemini_once(gemini_api_key, gemini_url, &payload_string).await {
+        } = match call_gemini_once(
+            gemini_api_key,
+            gemini_url,
+            &payload_string,
+            Duration::from_secs(GEMINI_CALL_TIMEOUT_SECONDS),
+        )
+        .await
+        {
             Ok(reply) => reply,
             Err(error) => {
                 last_error = error;
@@ -210,20 +227,30 @@ async fn call_gemini_with_retry(
 }
 
 /// One Gemini reply, fully read: status, `Retry-After`, and the body text.
-struct GeminiReply {
-    status: u16,
-    retry_after: Option<String>,
-    text: String,
+pub(crate) struct GeminiReply {
+    pub status: u16,
+    pub retry_after: Option<String>,
+    pub text: String,
+}
+
+struct AbortOnDrop(Option<AbortController>);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(controller) = self.0.take() {
+            controller.abort();
+        }
+    }
 }
 
 /// One attempt under `GEMINI_CALL_TIMEOUT_SECONDS`. The deadline covers the
 /// whole exchange — the send AND the body read (2026-09-04 review): headers
 /// that arrived promptly followed by a stalled body used to escape the
 /// timeout, and with it the ladder arithmetic the job deadline relies on.
-async fn call_gemini_once(
+pub(crate) async fn call_gemini_once(
     gemini_api_key: &str,
     gemini_url: &str,
     payload_string: &str,
+    timeout: Duration,
 ) -> std::result::Result<GeminiReply, UpstreamError> {
     let headers = Headers::new();
     headers
@@ -239,23 +266,42 @@ async fn call_gemini_once(
         .with_body(Some(payload_string.into()));
 
     let request = Request::new_with_init(gemini_url, &init).map_err(worker_error)?;
+    let controller = AbortController::default();
+    let signal = controller.signal();
+    let mut abort = AbortOnDrop(Some(controller));
     let exchange = std::pin::pin!(async move {
         let fetch = Fetch::Request(request);
-        let mut response = fetch.send().await.map_err(worker_error)?;
+        let mut response = fetch
+            .send_with_signal(&signal)
+            .await
+            .map_err(worker_error)?;
         let status = response.status_code();
         let retry_after = response.headers().get("retry-after").ok().flatten();
-        let text = response.text().await.unwrap_or_default();
+        let mut stream = response.stream().map_err(worker_error)?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(worker_error)?;
+            if bytes.len().saturating_add(chunk.len()) > 512 * 1024 {
+                return Err(crate::execution::failure("gemini_response_oversized"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let text = String::from_utf8(bytes)
+            .map_err(|_| crate::execution::failure("gemini_response_encoding"))?;
         Ok(GeminiReply {
             status,
             retry_after,
             text,
         })
     });
-    let deadline = std::pin::pin!(Delay::from(Duration::from_secs(
-        GEMINI_CALL_TIMEOUT_SECONDS
-    )));
+    let deadline = std::pin::pin!(Delay::from(timeout));
     match select(exchange, deadline).await {
-        Either::Left((result, _)) => result,
+        Either::Left((result, _)) => {
+            // The exchange has already ended. Aborting its completed stream
+            // here can re-enter the runtime's stream completion callback.
+            abort.0 = None;
+            result
+        }
         Either::Right(((), _)) => Err(UpstreamError {
             status: 503,
             body: ErrorResponse::new("gemini_timeout"),
@@ -263,8 +309,7 @@ async fn call_gemini_once(
     }
 }
 
-fn worker_error(error: worker::Error) -> UpstreamError {
-    console_error!("Worker error: {error:?}");
+fn worker_error(_error: worker::Error) -> UpstreamError {
     UpstreamError {
         status: 502,
         body: ErrorResponse::new("worker_fetch_error"),
@@ -279,7 +324,10 @@ fn upstream_status(status: u16) -> u16 {
     }
 }
 
-fn combine_usage(lhs: Option<GeminiUsage>, rhs: Option<GeminiUsage>) -> Option<GeminiUsage> {
+pub(crate) fn combine_usage(
+    lhs: Option<GeminiUsage>,
+    rhs: Option<GeminiUsage>,
+) -> Option<GeminiUsage> {
     match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => Some(GeminiUsage {
             prompt_token_count: lhs

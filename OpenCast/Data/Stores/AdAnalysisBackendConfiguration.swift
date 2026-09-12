@@ -69,6 +69,14 @@ struct AdAnalysisBackendConfiguration: Sendable {
         isEnabled: true
     )
 
+    nonisolated static func release(for environment: RemoteTranscriptionStoreEnvironment) -> Self? {
+        switch environment {
+        case .production: production
+        case .sandbox, .xcode: prodStaging
+        case .unknown: nil
+        }
+    }
+
     nonisolated private static let defaultDebugWorkerBaseURL = URL(string: "https://ad-analysis.example.com/development")!
 
     nonisolated private static func absoluteHTTPURL(_ value: String) -> URL? {

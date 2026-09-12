@@ -12,6 +12,9 @@ public struct OpenCastTranscriptSegment: Codable, Sendable, Identifiable, Equata
     /// joining the word texts under Apple's join rules (space-joined except
     /// attached punctuation `.,;:!?)]}%`) reconstructs `text`.
     public var words: [OpenCastTranscriptWord]?
+    /// Sticky provenance: repaired word times remain usable for display, not
+    /// precise ad cuts. Nil preserves compatibility with older transcripts.
+    public var wordTimingsAdjusted: Bool?
 
     public init(
         id: Int,
@@ -20,7 +23,8 @@ public struct OpenCastTranscriptSegment: Codable, Sendable, Identifiable, Equata
         text: String,
         avgLogProbability: Double,
         noSpeechProbability: Double,
-        words: [OpenCastTranscriptWord]? = nil
+        words: [OpenCastTranscriptWord]? = nil,
+        wordTimingsAdjusted: Bool? = nil
     ) {
         self.id = id
         self.start = start
@@ -29,5 +33,6 @@ public struct OpenCastTranscriptSegment: Codable, Sendable, Identifiable, Equata
         self.avgLogProbability = avgLogProbability
         self.noSpeechProbability = noSpeechProbability
         self.words = words
+        self.wordTimingsAdjusted = wordTimingsAdjusted
     }
 }

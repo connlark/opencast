@@ -7,8 +7,10 @@ struct AdAutoDetectPlayPolicy {
     let hasCurrentCompletedAnalysis: Bool
     let queueStatus: AdFreePassQueueEpisodeStatus
 
+    var isReplaySuppressed = false
+
     var shouldEnqueue: Bool {
-        guard isAutoDetectEnabled, !hasCurrentCompletedAnalysis else {
+        guard isAutoDetectEnabled, !hasCurrentCompletedAnalysis, !isReplaySuppressed else {
             return false
         }
 

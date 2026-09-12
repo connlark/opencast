@@ -10,8 +10,9 @@ struct EpisodeTranscriptView: View {
     let episodeID: String
 
     @State private var document: EpisodeTranscriptDocument?
+    @State private var transcriptLoadRevision = 0
     @State private var adAnalysisDocument: EpisodeAdAnalysisDocument?
-    @State private var adSpanBySegmentID: [Int: EpisodeAdAnalysisSpan] = [:]
+    @State private var adSpanBySegmentID: [Int: TranscriptAdHighlight] = [:]
     @State private var adAnalysisJobState: EpisodeAdAnalysisJobState = .unavailable("Transcript unavailable.")
     @State private var plainTextExport = ""
     @State private var timestampedTextExport = ""
@@ -82,7 +83,10 @@ struct EpisodeTranscriptView: View {
 
     private var adAnalysisDocumentLoadIdentifier: String {
         let updatedAt = appModel.adAnalyses.record(for: episodeID)?.updatedAt.timeIntervalSince1970 ?? -1
-        return "\(episodeID)|\(updatedAt)"
+        // The two document tasks start independently. Wait for the actual
+        // transcript and re-resolve when a replacement finishes loading, even
+        // if the saved analysis record itself has not changed.
+        return "\(episodeID)|\(updatedAt)|\(transcriptLoadRevision)"
     }
 
     /// The cached job state feeds both the content view and the menu; it
@@ -144,7 +148,10 @@ struct EpisodeTranscriptView: View {
             let segments = loaded.segments
             let index = try await TranscriptSearchIndex.build(segments: segments)
             let exports = await Self.buildExports(segments: segments)
+            try Task.checkCancellation()
             document = loaded
+            transcriptLoadRevision += 1
+            adAnalysisDocument = nil
             timeline = TranscriptTimeline(segments: segments)
             searchIndex = index
             plainTextExport = exports.plain
@@ -153,6 +160,7 @@ struct EpisodeTranscriptView: View {
             refreshAdAnalysisDerivedState()
         } catch is CancellationError {
         } catch {
+            guard !Task.isCancelled else { return }
             // A running improve points the record at its in-progress
             // replacement document; keep the current transcript on screen
             // until a completed one lands.
@@ -161,6 +169,7 @@ struct EpisodeTranscriptView: View {
                 return
             }
             document = nil
+            transcriptLoadRevision += 1
             adAnalysisDocument = nil
             adSpanBySegmentID = [:]
             plainTextExport = ""
@@ -174,17 +183,26 @@ struct EpisodeTranscriptView: View {
     }
 
     private func loadAdAnalysisDocumentIfAvailable() async {
-        guard appModel.adAnalyses.record(for: episodeID)?.state == .completed else {
+        guard let document,
+              appModel.adAnalyses.record(for: episodeID)?.state == .completed
+        else {
             adAnalysisDocument = nil
             adSpanBySegmentID = [:]
             return
         }
 
+        let loadIdentifier = adAnalysisDocumentLoadIdentifier
         do {
-            adAnalysisDocument = try await appModel.adAnalyses.loadDocument(for: episodeID)
+            let loaded = try await appModel.adAnalyses.loadDocument(for: episodeID, transcript: document)
+            // File I/O/refinement can finish after this task was replaced.
+            // Never let an obsolete transcript's cuts overwrite the new ones.
+            try Task.checkCancellation()
+            guard loadIdentifier == adAnalysisDocumentLoadIdentifier else { return }
+            adAnalysisDocument = loaded
         } catch is CancellationError {
             return
         } catch {
+            guard !Task.isCancelled, loadIdentifier == adAnalysisDocumentLoadIdentifier else { return }
             adAnalysisDocument = nil
         }
         refreshAdAnalysisDerivedState()
@@ -237,21 +255,14 @@ struct EpisodeTranscriptView: View {
     private func adSpanLookup(
         for transcriptDocument: EpisodeTranscriptDocument,
         currentAdAnalysisDocument: EpisodeAdAnalysisDocument?
-    ) -> [Int: EpisodeAdAnalysisSpan] {
+    ) -> [Int: TranscriptAdHighlight] {
         guard let currentAdAnalysisDocument else {
             return [:]
         }
 
-        let segmentIDs = Set(transcriptDocument.segments.map(\.id))
-        var lookup: [Int: EpisodeAdAnalysisSpan] = [:]
-        for span in currentAdAnalysisDocument.spans {
-            guard span.startSegmentID <= span.endSegmentID else {
-                continue
-            }
-            for segmentID in span.startSegmentID...span.endSegmentID
-            where segmentIDs.contains(segmentID) && lookup[segmentID] == nil {
-                lookup[segmentID] = span
-            }
+        var lookup: [Int: TranscriptAdHighlight] = [:]
+        for segment in transcriptDocument.segments {
+            lookup[segment.id] = TranscriptAdHighlight(spans: currentAdAnalysisDocument.spans, segment: segment)
         }
         return lookup
     }

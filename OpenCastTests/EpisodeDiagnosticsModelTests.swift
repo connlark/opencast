@@ -203,6 +203,59 @@ struct EpisodeDiagnosticsModelTests {
         #expect(rowValue(mismatchModel.state(for: .zoneMatrix), "Player vs Installed") == "MISMATCH")
     }
 
+    @Test("Diagnostics, episode detail and playback recompute the same persisted boundary")
+    func diagnosticsUsesEffectiveWordCuts() async throws {
+        let fixture = try makeFixture()
+        let seeded = try seedCompletedTranscriptAndAnalysis(in: fixture)
+        var source = seeded.transcript
+        let pieces = source.segments[1].text.split(separator: " ").map(String.init)
+        source.segments[1].words = pieces.enumerated().map { index, text in
+            .init(start: 4 + Double(index) * 0.5, end: 4.5 + Double(index) * 0.5, text: text)
+        }
+        var analysis = try fixture.adAnalysisFileStore.read(relativePath: seeded.analysisRelativePath)
+        analysis.policy = "promo_ad_breaks_v3"
+        analysis.spans[0].startBoundary = .init(segmentID: 1, quote: "This episode")
+        analysis.spans[0].endBoundary = .init(segmentID: 1, quote: "by Example.")
+        let persisted = EpisodeAdBoundaryRefiner.refine(analysis, transcript: source)
+        try fixture.adAnalysisFileStore.write(persisted, relativePath: seeded.analysisRelativePath)
+        // Word timings deliberately don't participate in the old text identity.
+        try #require(source.segments[1].words?.count == 8)
+        source.segments[1].words?[7].end = 8.8
+        let transcriptPath = fixture.transcriptFileStore.relativePath(episodeID: source.episodeID, fingerprint: "transcript")
+        try fixture.transcriptFileStore.write(source, relativePath: transcriptPath)
+        await loadStores(in: fixture)
+        let effective = try await fixture.appModel.adAnalyses.loadDocument(for: Self.episodeID, transcript: source)
+        #expect(persisted.spans[0].endTime == 8)
+        #expect(effective.spans[0].endTime == 8.8)
+
+        var snapshot = EpisodeDiagnosticsPlaybackSnapshot.disconnected
+        snapshot.loadedEpisodeID = Self.episodeID
+        snapshot.duration = 30
+        snapshot.installedAutoSkipZones = EpisodeAdAnalysisZoneMapper.zones(for: effective, duration: 30)
+        let model = EpisodeDiagnosticsModel(episodeID: Self.episodeID, dependencies: makeDependencies(
+            fileInspector: SpyFileInspector(), prober: SpyNetworkProber(), counters: fixture.counters, snapshot: snapshot
+        ))
+        await model.load(appModel: fixture.appModel)
+        #expect(rowValue(model.state(for: .zoneMatrix), "Player vs Installed") == "Match")
+        #expect(rowValue(model.state(for: .adSpans), "Span #1 End Boundary") == "8.800s • word-timed")
+        #expect(rowValue(model.state(for: .adSpans), "Span #1 Original Cut") == "4.000s–9.000s")
+
+        // The detail timeline must use the same current word cuts and audio
+        // duration, not the old persisted refinement or a shorter RSS duration.
+        let episode = EpisodeListItemSnapshot(
+            episodeID: Self.episodeID, podcastID: Self.feedURL, podcastTitle: "Example Show",
+            title: "Example", summary: nil, publishedAt: nil, duration: 6,
+            audioURL: Self.audioURL, artworkURL: nil, artworkPreview: nil, guid: nil, cachedAt: .now
+        )
+        let detail = EpisodeAdAnalysisSectionModel()
+        let key = detail.loadKey(appModel: fixture.appModel, episodeID: Self.episodeID)
+        await detail.load(appModel: fixture.appModel, episode: episode, key: key)
+        #expect(detail.analysisDocument?.spans == effective.spans)
+        #expect(detail.zoneTiers(forKey: key, episodeID: Self.episodeID).autoSkip == snapshot.installedAutoSkipZones)
+        #expect(detail.timelineDuration(forKey: key, episode: episode) == source.audioDuration)
+        #expect(detail.timelineDuration(forKey: "obsolete", episode: episode) == episode.duration)
+    }
+
     @Test("Report text renders loaded, partial, and loading sections")
     func reportTextRendersAllStates() {
         let section = EpisodeDiagnosticsSection(rows: [("Label", "Value")], footnote: "A footnote.")

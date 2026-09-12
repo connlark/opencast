@@ -115,6 +115,7 @@ mod tests {
         let text = "hello world".to_string();
         StitchedTranscript {
             segments: vec![StitchedSegment {
+                word_timings_adjusted: false,
                 id: 0,
                 start: 0.0,
                 end: 1.0,

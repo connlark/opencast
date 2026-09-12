@@ -4,7 +4,7 @@
 /// analysis (device fallback) — never as skippable audio.
 public enum OpenCastRemoteTranscriptionAdAnalysisOutcome: Sendable, Equatable {
     case completed(OpenCastRemoteTranscriptionAdAnalysisSuccess)
-    case failed(errorCode: String?)
+    case failed(errorCode: String?, failure: OpenCastAdAnalysisFailure? = nil)
     case unknown(state: String)
 }
 
@@ -12,6 +12,7 @@ extension OpenCastRemoteTranscriptionAdAnalysisOutcome: Codable {
     enum CodingKeys: String, CodingKey {
         case state
         case errorCode = "error_code"
+        case failure
     }
 
     public init(from decoder: Decoder) throws {
@@ -22,7 +23,8 @@ extension OpenCastRemoteTranscriptionAdAnalysisOutcome: Codable {
             self = .completed(try OpenCastRemoteTranscriptionAdAnalysisSuccess(from: decoder))
         case "failed":
             self = .failed(
-                errorCode: try container.decodeIfPresent(String.self, forKey: .errorCode)
+                errorCode: try container.decodeIfPresent(String.self, forKey: .errorCode),
+                failure: try? container.decodeIfPresent(OpenCastAdAnalysisFailure.self, forKey: .failure)
             )
         default:
             self = .unknown(state: state)
@@ -35,9 +37,10 @@ extension OpenCastRemoteTranscriptionAdAnalysisOutcome: Codable {
         case let .completed(success):
             try container.encode("completed", forKey: .state)
             try success.encode(to: encoder)
-        case let .failed(errorCode):
+        case let .failed(errorCode, failure):
             try container.encode("failed", forKey: .state)
             try container.encodeIfPresent(errorCode, forKey: .errorCode)
+            try container.encodeIfPresent(failure, forKey: .failure)
         case let .unknown(state):
             try container.encode(state, forKey: .state)
         }

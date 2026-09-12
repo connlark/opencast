@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastTranscription
 
 nonisolated struct EpisodeAdAnalysisAPIAdSpan: Codable, Sendable, Equatable {
     var kind: EpisodeAdAnalysisSpanKind
@@ -9,6 +10,8 @@ nonisolated struct EpisodeAdAnalysisAPIAdSpan: Codable, Sendable, Equatable {
     var endTime: TimeInterval
     var confidence: Double
     var evidenceQuote: String
+    var startBoundary: OpenCastAdBoundary? = nil
+    var endBoundary: OpenCastAdBoundary? = nil
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -19,5 +22,7 @@ nonisolated struct EpisodeAdAnalysisAPIAdSpan: Codable, Sendable, Equatable {
         case endTime = "end_time"
         case confidence
         case evidenceQuote = "evidence_quote"
+        case startBoundary = "start_boundary"
+        case endBoundary = "end_boundary"
     }
 }

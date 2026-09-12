@@ -2979,6 +2979,87 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededWordBoundaryTranscriptHighlightsOnlySponsorWords() throws {
+        let app = makeSeededApp(seedsCompletedAdAnalysis: true)
+        app.launchEnvironment["OPENCAST_SEED_WORD_BOUNDARY_AD_ANALYSIS"] = "1"
+        app.launch()
+
+        openInbox(in: app)
+        let episode = seededEpisodeRow(in: app)
+        assertExists(episode, named: "seeded word-boundary episode")
+        episode.press(forDuration: 1.2)
+        assertExists(app.buttons["Ads Detected"], named: "accepted saved v3 analysis")
+        app.buttons["View Episode Details"].tap()
+        let readTranscript = app.buttons["Read Transcript"]
+        scrollUntilHittable(readTranscript, in: app)
+        readTranscript.tap()
+
+        let mixedRow = app.buttons["This row is brought to you by Seed Sponsor. The show resumes."]
+        assertExists(mixedRow, named: "offline mixed sponsor/show row")
+        let partialHighlight = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "Partially skipped advertisement"),
+            object: mixedRow
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [partialHighlight], timeout: 5), .completed)
+        XCTAssertFalse((mixedRow.value as? String ?? "").contains("Sponsor segment"))
+        attachSmokeScreenshot(named: "word_boundary_seeded_mixed_row")
+    }
+
+    @MainActor
+    func testOptInLiveWorkerWordBoundaryTranscriptScreenshot() throws {
+        let transcriptPath = try requireArtifactPath(
+            environmentKey: Self.liveAdAnalysisTranscriptPathEnvironmentKey
+        )
+        let responsePath = try requireArtifactPath(
+            environmentKey: Self.liveAdAnalysisResponsePathEnvironmentKey
+        )
+        let app = makeSeededApp(seedsTranscriptionModel: true)
+        app.launchEnvironment[Self.liveAdAnalysisTranscriptPathEnvironmentKey] = transcriptPath
+        app.launchEnvironment[Self.liveAdAnalysisResponsePathEnvironmentKey] = responsePath
+        app.launch()
+
+        openInbox(in: app)
+        // The artifact seed has a fixed display title but retains the supplied
+        // transcript's real episode ID. Do not assume the old fixture's ID.
+        let episode = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+            "episode-row-",
+            "The Audio Illusion That Proves We Don't Experience Reality"
+        )).firstMatch
+        scrollUntilExists(episode, in: app, maxSwipes: 3)
+        assertExists(episode, named: "saved word-boundary episode")
+        episode.press(forDuration: 1.2)
+        // A current saved analysis correctly replaces the generic helper's
+        // "Detect Ads" action with the disabled "Ads Detected" status.
+        assertExists(app.buttons["Ads Detected"], named: "accepted saved v3 analysis")
+        let details = app.buttons["View Episode Details"]
+        assertExists(details, named: "saved word-boundary episode details action")
+        details.tap()
+
+        let readTranscript = app.buttons["Read Transcript"]
+        scrollUntilHittable(readTranscript, in: app)
+        readTranscript.tap()
+        assertExists(app.staticTexts["Transcript"], named: "Transcript route title")
+
+        let mixedRow = app.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@",
+            "President Trump spoke"
+        )).firstMatch
+        scrollUntilVisible(mixedRow, in: app, maxSwipes: 12)
+        assertExists(mixedRow, named: "mixed sponsor/news row")
+        let partialHighlight = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "Partially skipped advertisement"),
+            object: mixedRow
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [partialHighlight], timeout: 5), .completed,
+            "The saved analysis must resolve against the loaded transcript before highlighting this mixed row"
+        )
+        XCTAssertFalse((mixedRow.value as? String ?? "").contains("Sponsor segment"))
+        attachSmokeScreenshot(named: "word_boundary_upfirst_mixed_row")
+    }
+
+    @MainActor
     func testOptInDebugBearerAdAnalysisRoundTripsAgainstDevWorker() throws {
         let clientToken = try requireEnvironmentValue(
             Self.adAnalysisClientTokenEnvironmentKey,

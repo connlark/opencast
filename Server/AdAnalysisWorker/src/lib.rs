@@ -2,8 +2,12 @@
 mod analysis;
 pub use opencast_app_attest_core::auth;
 pub use opencast_app_attest_core::challenge_limits;
+pub mod accounting;
+pub mod failure;
 pub mod gemini;
 pub mod job;
+pub mod policy;
+pub mod promo_v3;
 pub mod prompt;
 pub mod retry;
 pub mod route;
@@ -11,6 +15,7 @@ pub mod route;
 pub use opencast_app_attest_core::app_attest_storage as storage;
 pub mod types;
 pub mod usage;
+pub mod v3_windowing;
 pub mod validation;
 pub mod windowing;
 
@@ -19,6 +24,15 @@ mod job_do;
 
 #[cfg(target_arch = "wasm32")]
 mod worker_app;
+
+#[cfg(target_arch = "wasm32")]
+mod v3_analysis;
+
+#[cfg(target_arch = "wasm32")]
+mod execution;
+
+#[cfg(target_arch = "wasm32")]
+mod accounting_do;
 
 #[cfg(target_arch = "wasm32")]
 use worker::*;

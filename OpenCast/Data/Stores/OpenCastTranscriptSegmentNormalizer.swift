@@ -26,6 +26,8 @@ enum OpenCastTranscriptSegmentNormalizer {
             let rawEnd = max(segment.element.end, rawStart)
             let start = max(rawStart, output.last?.end ?? rawStart)
             let end = max(rawEnd, start)
+            let words = normalizedWords(segment.element.words, within: start, end)
+            let adjusted = segment.element.wordTimingsAdjusted == true || words != segment.element.words
             output.append(OpenCastTranscriptSegment(
                 id: output.count,
                 start: start,
@@ -33,7 +35,8 @@ enum OpenCastTranscriptSegmentNormalizer {
                 text: text,
                 avgLogProbability: segment.element.avgLogProbability,
                 noSpeechProbability: segment.element.noSpeechProbability,
-                words: normalizedWords(segment.element.words, within: start, end)
+                words: words,
+                wordTimingsAdjusted: adjusted ? true : segment.element.wordTimingsAdjusted
             ))
         }
 

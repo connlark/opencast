@@ -64,6 +64,21 @@ struct EpisodeAdAnalysisZoneMapperTests {
         ])
     }
 
+    @Test func overlappingConfidenceTiersRetainOnlyUncertainTailsInEitherOrder() {
+        let high = [span(id: 1, kind: .hostReadAd, start: 10, end: 20), span(id: 2, kind: .hostReadAd, start: 30, end: 40)]
+        let low = [span(id: 3, kind: .hostReadAd, start: 10, end: 20, confidence: 0.5),
+                   span(id: 4, kind: .hostReadAd, start: 12, end: 18, confidence: 0.5),
+                   span(id: 5, kind: .hostReadAd, start: 5, end: 45, confidence: 0.5)]
+        for spans in [high + low, Array(low.reversed()) + Array(high.reversed())] {
+            let document = makeDocument(spans: spans)
+            let tiers = EpisodeAdAnalysisZoneMapper.zoneTiers(for: document, duration: 100)
+            #expect(tiers.autoSkip == [.init(id: 1, startTime: 10, endTime: 20), .init(id: 2, startTime: 30, endTime: 40)])
+            #expect(tiers.displayOnly.map(\.startTime) == [5, 20, 40])
+            #expect(tiers.displayOnly.map(\.endTime) == [10, 30, 45])
+            #expect(document.spans.count == 5) // raw anchors/evidence remain available
+        }
+    }
+
     @Test
     func tiersMergeInternallyButDisplayOnlyNeverExtendsAutoSkip() {
         // An adjacent (gap <= 1s) low-confidence span must not stretch the

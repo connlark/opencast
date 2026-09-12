@@ -16,6 +16,7 @@ nonisolated struct AnalysisJobPoller<Response: Decodable & Sendable & Equatable>
     let isTransientJobFailure: @Sendable (any Error) -> Bool
     let timedOutError: any Error
     let jobIDMismatchError: any Error
+    var jobIDsMatch: @Sendable (String, String) -> Bool = { $0 == $1 }
 
     func pollUntilCompleted(
         jobID: String,
@@ -70,7 +71,7 @@ nonisolated struct AnalysisJobPoller<Response: Decodable & Sendable & Equatable>
                 case .completed(let response):
                     return response
                 case .accepted(let resubmittedJobID, let nextPollAfter):
-                    guard resubmittedJobID == jobID else {
+                    guard jobIDsMatch(resubmittedJobID, jobID) else {
                         throw jobIDMismatchError
                     }
                     activeJobID = resubmittedJobID

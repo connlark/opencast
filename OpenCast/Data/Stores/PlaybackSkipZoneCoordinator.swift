@@ -123,7 +123,7 @@ final class PlaybackSkipZoneCoordinator {
             return (.empty, "")
         }
         guard let transcriptDocument = try? await transcriptions.loadDocument(for: episodeID),
-              let analysisDocument = try? await adAnalyses.loadDocument(for: episodeID),
+              let analysisDocument = try? await adAnalyses.loadDocument(for: episodeID, transcript: transcriptDocument),
               await adAnalyses.isCurrentAnalysisDocumentOffCaller(analysisDocument, for: transcriptDocument)
         else {
             return (.empty, "")

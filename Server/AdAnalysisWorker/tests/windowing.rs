@@ -72,6 +72,8 @@ fn sample_request(segment_count: usize) -> AdAnalysisRequest {
     AdAnalysisRequest {
         schema_version: SCHEMA_VERSION,
         async_supported: false,
+        retry_failed: false,
+        job_handle_version: None,
         request_id: "request-1".to_string(),
         episode_id: "episode-1".to_string(),
         podcast_id: "podcast-1".to_string(),

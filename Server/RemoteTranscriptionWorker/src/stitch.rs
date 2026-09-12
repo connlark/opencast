@@ -66,6 +66,7 @@ pub struct StitchedSegment {
     pub end: f64,
     pub text: String,
     pub words: Vec<ModelWord>,
+    pub word_timings_adjusted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +358,7 @@ pub fn stitch(
                 return Err(StitchError::NonFiniteTimestamp { chunk_index: index });
             }
             let mut owned: Vec<ModelWord> = Vec::new();
+            let mut word_timings_adjusted = false;
             for (word_index, word) in segment.words.iter().enumerate() {
                 let text = word.text.trim();
                 if text.is_empty() {
@@ -409,6 +411,7 @@ pub fn stitch(
                     }
                 }
                 previous_start = Some(start);
+                word_timings_adjusted |= start != word.start + offset || end != word.end + offset;
                 owned.push(ModelWord {
                     text: text.to_string(),
                     start,
@@ -433,6 +436,10 @@ pub fn stitch(
                 candidate_start
             };
             previous_segment_start = Some(segment_start);
+            // Lifting a segment boundary past an untouched word also loses
+            // raw timing ownership. Publish that provenance without moving
+            // words to manufacture precision; native refinement falls back.
+            word_timings_adjusted |= first.start < segment_start;
             let text = owned
                 .iter()
                 .map(|word| word.text.as_str())
@@ -444,6 +451,7 @@ pub fn stitch(
                 end: segment_end,
                 text,
                 words: owned,
+                word_timings_adjusted,
             });
         }
     }
@@ -829,6 +837,7 @@ mod tests {
             assert!(pair[1].start + 0.001 >= pair[0].start);
         }
         assert_eq!(stitched.segments[1].start, 1788.0 + 298.86);
+        assert!(stitched.segments[1].word_timings_adjusted);
     }
 
     #[test]
@@ -863,6 +872,31 @@ mod tests {
                 next_start: 5.0,
             }
         );
+    }
+
+    #[test]
+    fn interval_clamping_marks_word_timing_provenance_on_wire() {
+        let mut chunks = vec![ChunkTranscription {
+            requested_start_seconds: 0.0,
+            valid_end_seconds: 10.0,
+            segments: vec![ModelSegment {
+                start: 0.0,
+                end: 2.0,
+                text: String::new(),
+                words: vec![ModelWord {
+                    text: "ad".into(),
+                    start: -0.2,
+                    end: 2.0,
+                }],
+            }],
+        }];
+        let adjusted = stitch(&chunks, 2.0, 10.0).unwrap();
+        assert_eq!(adjusted.segments[0].words[0].start, 0.0);
+        assert!(adjusted.segments[0].word_timings_adjusted);
+        let wire = serde_json::to_value(&adjusted.segments[0]).unwrap();
+        assert_eq!(wire["word_timings_adjusted"], true);
+        chunks[0].segments[0].words[0].start = 0.0;
+        assert!(!stitch(&chunks, 2.0, 10.0).unwrap().segments[0].word_timings_adjusted);
     }
 
     #[test]
@@ -905,6 +939,44 @@ mod tests {
         assert_eq!(stitched.empty_model_word_count, 1);
         assert_eq!(stitched.reversed_timing_word_count, 1);
         assert_eq!(stitched.interval_trimmed_word_count, 0);
+    }
+
+    #[test]
+    fn lifted_segment_start_preserves_words_and_marks_lost_timing_ownership() {
+        let chunks = vec![ChunkTranscription {
+            requested_start_seconds: 0.0,
+            valid_end_seconds: 20.0,
+            segments: vec![ModelSegment {
+                start: 2.0,
+                end: 4.0,
+                text: "Sponsor ends".into(),
+                words: vec![
+                    ModelWord {
+                        text: "Sponsor".into(),
+                        start: 1.0,
+                        end: 2.5,
+                    },
+                    ModelWord {
+                        text: "ends".into(),
+                        start: 2.5,
+                        end: 4.0,
+                    },
+                ],
+            }],
+        }];
+        let result = stitch(&chunks, 2.0, 20.0).unwrap();
+        let segment = &result.segments[0];
+        assert_eq!(segment.start, 2.0);
+        assert_eq!(segment.words[0].start, 1.0);
+        assert!(segment.word_timings_adjusted);
+        let published = serde_json::to_value(segment).unwrap();
+        assert_eq!(published["word_timings_adjusted"], true);
+        let native_fixture: serde_json::Value = serde_json::from_str(include_str!("../../../Packages/OpenCastTranscription/Tests/OpenCastTranscriptionTests/Fixtures/RemoteSegmentStartAdjustment.json")).unwrap();
+        assert_eq!(published, native_fixture);
+        assert_eq!(
+            result.normalized_transcript_sha256,
+            normalized_transcript_sha256("Sponsor ends")
+        );
     }
 
     #[test]

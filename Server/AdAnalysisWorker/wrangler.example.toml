@@ -25,6 +25,8 @@ PUBLIC_AD_ANALYSIS_ENABLED = "false"
 # Independent kill switch for the service-bound internal surface.
 INTERNAL_AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
+# Serving policy bundle: absent or unknown keeps v2; v3 pins its own model.
+AD_ANALYSIS_POLICY = "promo_ad_breaks_v3"
 
 [[d1_databases]]
 binding = "AD_ANALYSIS_DB"
@@ -62,6 +64,8 @@ PUBLIC_AD_ANALYSIS_ENABLED = "false"
 # Independent kill switch for the service-bound internal surface.
 INTERNAL_AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_GEMINI_MODEL = "gemini-3.5-flash"
+# Serving policy bundle: absent or unknown keeps v2; v3 pins its own model.
+AD_ANALYSIS_POLICY = "promo_ad_breaks_v3"
 
 [[env.prod-staging.d1_databases]]
 binding = "AD_ANALYSIS_DB"

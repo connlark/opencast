@@ -164,6 +164,7 @@ final class EpisodeDiagnosticsModel {
             var ad: DocumentOutcome<EpisodeAdAnalysisDocument>?
             var didPublishAdAnalysis = false
             var didPublishZoneMatrix = false
+            var effectiveAd: DocumentOutcome<EpisodeAdAnalysisDocument>?
 
             // The ad-analysis section compares against the transcript document
             // and the zone matrix additionally needs the local media duration,
@@ -190,12 +191,20 @@ final class EpisodeDiagnosticsModel {
                     guard !Task.isCancelled else {
                         return
                     }
+                    var resolved = ad
+                    if isCurrent == true, let document = ad.document,
+                       let source = transcript.document {
+                        resolved.document = await EpisodeAdBoundaryRefiner.refined(document, transcript: source)
+                    }
+                    guard !Task.isCancelled else { return }
+                    effectiveAd = resolved
+                    setSection(.adSpans, .loaded(adSpansSection(outcome: resolved)))
                     setSection(
                         .adAnalysis,
                         .loaded(adAnalysisSection(
                             record: adRecord,
                             fileURL: adFileURL,
-                            outcome: ad,
+                            outcome: resolved,
                             isCurrentForTranscript: isCurrent
                         ))
                     )
@@ -205,7 +214,7 @@ final class EpisodeDiagnosticsModel {
                     setSection(
                         .zoneMatrix,
                         .loaded(zoneMatrixSection(
-                            outcome: ad,
+                            outcome: effectiveAd ?? ad,
                             rssDuration: episode?.duration,
                             transcriptDuration: transcriptDuration(record: transcriptRecord, document: transcript.document),
                             localMediaDuration: enrichment?.localDuration,
@@ -250,9 +259,6 @@ final class EpisodeDiagnosticsModel {
                     await publishSettledAdSections()
                 case .adAnalysis(let outcome):
                     ad = outcome
-                    if adRecord != nil {
-                        setSection(.adSpans, .loaded(adSpansSection(outcome: outcome)))
-                    }
                     await publishSettledAdSections()
                 case .feedProbe(let section):
                     setSection(.feedProbe, .loaded(section))

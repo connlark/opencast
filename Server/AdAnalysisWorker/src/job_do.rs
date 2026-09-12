@@ -8,6 +8,7 @@ use worker::{
 };
 
 use crate::analysis::run_windows_analysis;
+use crate::execution::Execution;
 use crate::job::{
     alarm_decision, poll_decision, submit_decision, transcript_content_hash, ActiveWindow,
     AlarmDecision, JobDoPollRequest, JobRecord, JobSubmitRequest, PollDecision, SubmitDecision,
@@ -15,8 +16,7 @@ use crate::job::{
     JOB_SUBMIT_POLL_AFTER_SECONDS, SUBMIT_ADMISSION_MAX_WAITS, SUBMIT_ADMISSION_WAIT_MILLIS,
 };
 use crate::route::JSON_CONTENT_TYPE;
-use crate::types::{resolve_gemini_model, ErrorResponse, GEMINI_MODEL_ENV_VAR};
-use crate::worker_app::admit_spend_caps;
+use crate::types::{ErrorResponse, GEMINI_MODEL_ENV_VAR};
 
 const JOB_STORAGE_KEY: &str = "job";
 const GEMINI_API_KEY: &str = "GEMINI_API_KEY";
@@ -90,12 +90,27 @@ impl AdAnalysisJob {
         let mut admission_waits: u32 = 0;
         loop {
             let mut record = read_record(&self.state.storage()).await?;
-            match submit_decision(
+            let mut decision = submit_decision(
                 record.as_ref(),
                 &submit.subject,
                 &submitted_hash,
                 submit.internal,
-            ) {
+            );
+            if submit.request.retry_failed && matches!(decision, SubmitDecision::ServeFailed { .. })
+            {
+                decision = SubmitDecision::Start;
+            }
+            match decision {
+                SubmitDecision::ServeFailed { status, code, join } => {
+                    if join {
+                        if let Some(record) = record.as_mut() {
+                            if record.push_subject(&submit.subject) {
+                                write_record(&self.state.storage(), record).await?;
+                            }
+                        }
+                    }
+                    return stored_error(status, code, record.as_ref());
+                }
                 SubmitDecision::Attach { job_id, join } => {
                     if join {
                         if let Some(record) = record.as_mut() {
@@ -147,19 +162,20 @@ impl AdAnalysisJob {
                 Delay::from(Duration::from_millis(SUBMIT_ADMISSION_WAIT_MILLIS)).await;
                 continue;
             };
-            if let Some(response) = admit_spend_caps(
+            let execution = match Execution::admit(
                 &self.env,
                 &submit.usage_object_name,
                 submit.usage_profile,
-                day_index(),
                 submit.estimated_input_tokens,
             )
-            .await?
+            .await
             {
-                return Ok(response);
-            }
+                Ok(execution) => execution,
+                Err(error) => return json_body(error.status, &error.body),
+            };
 
-            let job_id = submit.request.transcript.fingerprint.clone();
+            let policy = crate::worker_app::serving_policy(&self.env);
+            let job_id = policy.job_handle(&submit.request.transcript.fingerprint);
             let started_at = now_seconds();
             let subjects = if submit.subject.is_empty() {
                 Vec::new()
@@ -186,7 +202,9 @@ impl AdAnalysisJob {
             let recovery_state = self.state.clone();
             let recovery_job_id = job_id.clone();
             worker::wasm_bindgen_futures::spawn_local(async move {
-                if let Err(error) = run_job(state, env, job_id, started_at, request).await {
+                if let Err(error) =
+                    run_job(state, env, job_id, started_at, request, execution, policy).await
+                {
                     console_error!("Ad-analysis job task failed: {error:?}");
                     // AA-5: a paid model call whose bookkeeping failed (for
                     // example the terminal record write) must not leave the
@@ -220,23 +238,17 @@ impl AdAnalysisJob {
         let record = read_record(&self.state.storage()).await?;
         match poll_decision(record.as_ref(), poll.subject.as_deref()) {
             PollDecision::NotFound => json_error(404, "job_not_found"),
-            PollDecision::Running { job_id } => {
-                job_status(202, &job_id, "running", JOB_POLL_AFTER_SECONDS)
+            PollDecision::Running { .. } => {
+                // Echo the caller's validated routing handle. Older clients
+                // still poll by fingerprint and require the same ID back.
+                job_status(202, &poll.job_id, "running", JOB_POLL_AFTER_SECONDS)
             }
-            // Success is served idempotently until the TTL purge (a lost
-            // response re-polls). Failures purge as they serve: nothing of
-            // value is lost with them, and the purge is what lets a caller's
-            // resubmit — or the internal alarm loop's 404 path — start a
-            // fresh run instead of re-reading a dead record.
+            // Every terminal outcome is idempotently readable until TTL.
             PollDecision::ServeCompleted { result_json, .. } => raw_json(200, result_json),
             PollDecision::ServeFailedUpstream { status, code } => {
-                self.purge().await?;
-                json_error_owned(status, code)
+                stored_error(status, code, record.as_ref())
             }
-            PollDecision::ServeFailedTransient => {
-                self.purge().await?;
-                json_error(503, "job_failed_transient")
-            }
+            PollDecision::ServeFailedTransient => json_error(503, "job_failed_transient"),
         }
     }
 
@@ -248,7 +260,7 @@ impl AdAnalysisJob {
 
 enum RunOutcome {
     Completed { result_json: String },
-    FailedUpstream { status: u16, code: String },
+    FailedUpstream { status: u16, error: ErrorResponse },
 }
 
 async fn run_job(
@@ -257,6 +269,8 @@ async fn run_job(
     job_id: String,
     started_at: i64,
     request: crate::types::AdAnalysisRequest,
+    execution: Rc<Execution>,
+    policy: crate::policy::AnalysisPolicy,
 ) -> Result<()> {
     let outcome = match env.secret(GEMINI_API_KEY) {
         Ok(secret) => {
@@ -265,8 +279,29 @@ async fn run_job(
                 .var(GEMINI_MODEL_ENV_VAR)
                 .ok()
                 .map(|value| value.to_string());
-            let model = resolve_gemini_model(model_value.as_deref());
-            match run_windows_analysis(&gemini_api_key, model, request).await {
+            let model = policy.model(model_value.as_deref());
+            let outcome = if policy == crate::policy::AnalysisPolicy::V2 {
+                let estimate = crate::validation::validate_request(request.clone())
+                    .map(|r| r.estimate.estimated_input_tokens)
+                    .unwrap_or(120_000);
+                match execution.dispatch(0, estimate).await {
+                    Ok(()) => {
+                        run_windows_analysis(
+                            &gemini_api_key,
+                            model,
+                            request,
+                            policy,
+                            execution.clone(),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                run_windows_analysis(&gemini_api_key, model, request, policy, execution.clone())
+                    .await
+            };
+            match crate::execution::complete(outcome, &execution, policy).await {
                 Ok(response) => {
                     let result_json = serde_json::to_string(&response)?;
                     // AA-5: a result over the named budget would only fail
@@ -284,7 +319,7 @@ async fn run_job(
                         );
                         RunOutcome::FailedUpstream {
                             status: 502,
-                            code: "result_oversized".to_string(),
+                            error: ErrorResponse::new("result_oversized"),
                         }
                     } else {
                         RunOutcome::Completed { result_json }
@@ -292,13 +327,13 @@ async fn run_job(
                 }
                 Err(error) => RunOutcome::FailedUpstream {
                     status: error.status,
-                    code: error.body.error,
+                    error: error.body,
                 },
             }
         }
         Err(_) => RunOutcome::FailedUpstream {
             status: 503,
-            code: "worker_secret_missing".to_string(),
+            error: ErrorResponse::new("worker_secret_missing"),
         },
     };
 
@@ -328,10 +363,11 @@ async fn run_job(
             subjects,
             content_hash,
         },
-        RunOutcome::FailedUpstream { status, code } => JobRecord::FailedUpstream {
+        RunOutcome::FailedUpstream { status, error } => JobRecord::FailedUpstream {
             job_id,
             status,
-            code,
+            code: error.error.clone(),
+            error_json: Some(serde_json::to_string(&error)?),
             purge_at,
             subjects,
             content_hash,
@@ -363,6 +399,7 @@ async fn terminalize_failed_run(state: &Rc<State>, job_id: &str, started_at: i64
         job_id: job_id.to_string(),
         status: 500,
         code: "job_task_failed".to_string(),
+        error_json: None,
         purge_at,
         subjects,
         content_hash,
@@ -404,7 +441,14 @@ fn json_error(status: u16, code: &'static str) -> Result<Response> {
     json_body(status, &ErrorResponse::new(code))
 }
 
-fn json_error_owned(status: u16, code: String) -> Result<Response> {
+fn stored_error(status: u16, code: String, record: Option<&JobRecord>) -> Result<Response> {
+    if let Some(JobRecord::FailedUpstream {
+        error_json: Some(json),
+        ..
+    }) = record
+    {
+        return raw_json(status, json.clone());
+    }
     json_body(status, &ErrorResponse::new(code))
 }
 
@@ -425,8 +469,4 @@ fn now_seconds() -> i64 {
     (Date::now().as_millis() / 1_000)
         .try_into()
         .unwrap_or(i64::MAX)
-}
-
-fn day_index() -> u64 {
-    Date::now().as_millis() / 86_400_000
 }

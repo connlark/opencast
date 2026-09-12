@@ -1,6 +1,6 @@
 //! Contract with `AdAnalysisWorker`'s internal surface (cloud detect-ads):
 //! submit the stitched transcript for server-side ad detection over the
-//! service binding, poll the fingerprint-keyed job, and merge the outcome
+//! service binding, persist/poll its returned revision handle, and merge the outcome
 //! into the result envelope. The crates are not shared, so the wire types
 //! here mirror AdAnalysisWorker's snake_case shapes field for field.
 //!
@@ -22,7 +22,8 @@ pub fn ad_analysis_poll_path(ad_job_id: &str) -> String {
 }
 
 // Stable failure-marker codes surfaced in the envelope's `ad_analysis`
-// block; the app maps any of them to its automatic device-analysis fallback.
+// block. Typed validation failures suppress automatic same-input replay;
+// capacity defers and transient failures keep bounded recovery.
 pub const MARKER_CAPACITY: &str = "ad_analysis_capacity";
 pub const MARKER_TIMEOUT: &str = "ad_analysis_timeout";
 pub const MARKER_FAILED: &str = "ad_analysis_failed";
@@ -63,6 +64,8 @@ pub struct WireInternalAnalyzeRequest {
 pub struct WireAdAnalysisRequest {
     pub schema_version: u16,
     pub async_supported: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_handle_version: Option<u8>,
     pub request_id: String,
     pub episode_id: String,
     pub podcast_id: String,
@@ -99,6 +102,8 @@ pub struct WireAnalysisSuccess {
     pub request_id: String,
     pub model: String,
     pub policy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_revision: Option<String>,
     pub spans: Vec<WireAdSpan>,
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +120,31 @@ pub struct WireAdSpan {
     pub end_time: f64,
     pub confidence: f64,
     pub evidence_quote: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "decode_boundary"
+    )]
+    pub start_boundary: Option<WireAdBoundary>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "decode_boundary"
+    )]
+    pub end_boundary: Option<WireAdBoundary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WireAdBoundary {
+    pub segment_id: i64,
+    pub quote: String,
+}
+
+fn decode_boundary<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Option<WireAdBoundary>, D::Error> {
+    let value = serde_json::Value::deserialize(decoder)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -193,6 +223,7 @@ pub fn build_request(
         request: WireAdAnalysisRequest {
             schema_version: AD_WIRE_SCHEMA_VERSION,
             async_supported: true,
+            job_handle_version: Some(1),
             request_id: record.job_id.clone(),
             episode_id: record.episode_id.clone(),
             podcast_id,
@@ -219,7 +250,11 @@ pub enum AnalyzeOutcome {
     /// 200 with a decodable analysis body (submit attach-served or poll).
     Completed(WireAnalysisSuccess),
     /// 202: the fingerprint-keyed job is running (fresh or attached).
-    Running,
+    Running { job_id: String },
+    Failed {
+        code: String,
+        failure: WireAnalysisFailure,
+    },
     /// 429: a spend cap; terminal for this job (capacity marker).
     Capacity,
     /// Contract rejection (4xx) or an undecodable success body: terminal
@@ -233,13 +268,112 @@ pub enum AnalyzeOutcome {
     Retryable,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WireAnalysisFailure {
+    pub category: String,
+    pub retry_disposition: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_revision: Option<String>,
+}
+
+impl WireAnalysisFailure {
+    fn valid(&self) -> bool {
+        matches!(
+            (self.category.as_str(), self.retry_disposition.as_str()),
+            ("capacity", "after_capacity")
+                | ("transient_transport" | "interrupted_job", "bounded_retry")
+                | ("validation_exhausted", "explicit_retry")
+                | ("unsupported_input", "changed_input")
+        ) && self.policy_revision.as_ref().is_none_or(|r| {
+            r.len() <= 96
+                && r.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
+        })
+    }
+}
+
+pub fn valid_ad_job_handle(handle: &str) -> bool {
+    if let Some(rest) = handle.strip_prefix("a3.") {
+        let Some((tag, fingerprint)) = rest.split_once('.') else {
+            return false;
+        };
+        return (1..=24).contains(&tag.len())
+            && tag.bytes().all(|b| b.is_ascii_alphanumeric())
+            && valid_ad_fingerprint(fingerprint);
+    }
+    valid_ad_fingerprint(handle)
+}
+
+fn valid_ad_fingerprint(value: &str) -> bool {
+    (8..=128).contains(&value.len())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
+}
+
+pub fn handle_matches_fingerprint(handle: &str, fingerprint: &str) -> bool {
+    valid_ad_job_handle(handle)
+        && (handle == fingerprint
+            || handle
+                .strip_prefix("a3.")
+                .and_then(|rest| rest.split_once('.'))
+                .is_some_and(|(_, value)| value == fingerprint))
+}
+
 pub fn classify_analyze_response(status: u16, body: &[u8]) -> AnalyzeOutcome {
+    if status >= 400 {
+        #[derive(Deserialize)]
+        struct Error {
+            error: String,
+            failure: Option<WireAnalysisFailure>,
+        }
+        if let Ok(error) = serde_json::from_slice::<Error>(body) {
+            let failure = error
+                .failure
+                .filter(WireAnalysisFailure::valid)
+                .or_else(|| {
+                    matches!(
+                        error.error.as_str(),
+                        "ad_analysis_incomplete" | "repair_feedback_exceeded"
+                    )
+                    .then(|| WireAnalysisFailure {
+                        category: "validation_exhausted".into(),
+                        retry_disposition: "explicit_retry".into(),
+                        policy_revision: None,
+                    })
+                });
+            if let Some(failure) = failure {
+                if error.error.len() <= 96
+                    && error
+                        .error
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    return AnalyzeOutcome::Failed {
+                        code: error.error,
+                        failure,
+                    };
+                }
+            }
+        }
+    }
     match status {
         200 => match serde_json::from_slice::<WireAnalysisSuccess>(body) {
             Ok(success) => AnalyzeOutcome::Completed(success),
             Err(_) => AnalyzeOutcome::Rejected,
         },
-        202 => AnalyzeOutcome::Running,
+        202 => {
+            #[derive(Deserialize)]
+            struct Accepted {
+                job_id: String,
+            }
+            match serde_json::from_slice::<Accepted>(body) {
+                Ok(accepted) if valid_ad_job_handle(&accepted.job_id) => AnalyzeOutcome::Running {
+                    job_id: accepted.job_id,
+                },
+                _ => AnalyzeOutcome::Rejected,
+            }
+        }
         404 => AnalyzeOutcome::NotFound,
         429 => AnalyzeOutcome::Capacity,
         400..=499 => AnalyzeOutcome::Rejected,
@@ -289,6 +423,14 @@ pub fn validate_analysis(
             return Err("span_confidence");
         }
         span.confidence = span.confidence.clamp(0.0, 1.0);
+        // Optional refinement must not make an otherwise usable ad disappear.
+        for anchor in [&mut span.start_boundary, &mut span.end_boundary] {
+            if anchor.as_ref().is_some_and(|a| {
+                !segment_ids.contains(&a.segment_id) || a.quote.is_empty() || a.quote.len() > 2048
+            }) {
+                *anchor = None;
+            }
+        }
     }
     let serialized = serde_json::to_vec(&success).map_err(|_| "block_serialize")?;
     if serialized.len() > MAX_AD_BLOCK_BYTES {
@@ -405,6 +547,7 @@ mod tests {
             request_id: "job-ad-1".into(),
             model: "gemini-3.5-flash".into(),
             policy: "promo_ad_breaks_v2".into(),
+            policy_revision: None,
             spans: vec![WireAdSpan {
                 kind: "host_read_ad".into(),
                 label: "Sponsor".into(),
@@ -414,10 +557,35 @@ mod tests {
                 end_time: 5.0,
                 confidence: 0.9,
                 evidence_quote: "brought to you by".into(),
+                start_boundary: None,
+                end_boundary: None,
             }],
             warnings: vec![],
             usage: None,
         }
+    }
+
+    #[test]
+    fn typed_failures_and_revision_handles_survive_wire_classification() {
+        for body in [
+            br#"{"error":"ad_analysis_incomplete","failure":{"category":"validation_exhausted","retry_disposition":"explicit_retry","policy_revision":"revision-a"}}"#.as_slice(),
+            br#"{"error":"ad_analysis_incomplete"}"#.as_slice(),
+        ] {
+            let AnalyzeOutcome::Failed { code, failure } = classify_analyze_response(422, body) else { panic!("failure lost") };
+            assert_eq!(code, "ad_analysis_incomplete");
+            assert_eq!(failure.category, "validation_exhausted");
+            assert_eq!(failure.retry_disposition, "explicit_retry");
+        }
+        let handle = "a3.20260911b.fingerprint123";
+        assert_eq!(
+            classify_analyze_response(202, format!(r#"{{"job_id":"{handle}"}}"#).as_bytes()),
+            AnalyzeOutcome::Running {
+                job_id: handle.into()
+            }
+        );
+        assert!(handle_matches_fingerprint(handle, "fingerprint123"));
+        assert!(!handle_matches_fingerprint(handle, "other-input"));
+        assert!(!valid_ad_job_handle("a3../arbitrary"));
     }
 
     #[test]
@@ -523,6 +691,27 @@ mod tests {
     }
 
     #[test]
+    fn optional_boundaries_survive_validation_and_malformed_metadata_is_ignored() {
+        let mut wire = serde_json::to_value(success()).unwrap();
+        wire["spans"][0]["start_boundary"] =
+            serde_json::json!({ "segment_id": 0, "quote": "hello" });
+        wire["spans"][0]["end_boundary"] = serde_json::json!(12);
+        let mut decoded: WireAnalysisSuccess = serde_json::from_value(wire).unwrap();
+        assert!(decoded.spans[0].start_boundary.is_some());
+        assert!(decoded.spans[0].end_boundary.is_none());
+        let source = serde_json::to_vec(&envelope()).unwrap();
+        validate_analysis(&mut decoded, &source, 120.0).unwrap();
+        assert_eq!(
+            decoded.spans[0].start_boundary.as_ref().unwrap().quote,
+            "hello"
+        );
+        decoded.spans[0].start_boundary.as_mut().unwrap().segment_id = 999;
+        validate_analysis(&mut decoded, &source, 120.0).unwrap();
+        assert!(decoded.spans[0].start_boundary.is_none());
+        assert_eq!(decoded.spans.len(), 1);
+    }
+
+    #[test]
     fn classification_matrix() {
         let success_body = serde_json::to_vec(&success()).expect("serialize");
         assert!(matches!(
@@ -535,8 +724,10 @@ mod tests {
             AnalyzeOutcome::Rejected
         );
         assert_eq!(
-            classify_analyze_response(202, b"{}"),
-            AnalyzeOutcome::Running
+            classify_analyze_response(202, br#"{"job_id":"fingerprint-123"}"#),
+            AnalyzeOutcome::Running {
+                job_id: "fingerprint-123".into()
+            }
         );
         assert_eq!(
             classify_analyze_response(404, b"{}"),

@@ -548,7 +548,7 @@ async fn handle_job_action(
             if request.schema_version != SCHEMA_VERSION
                 || request.part_numbers.is_empty()
                 || request.part_numbers.len() > job::UPLOAD_MAX_PARTS_PER_BATCH
-                || request.part_numbers.iter().any(|number| *number == 0)
+                || request.part_numbers.contains(&0)
             {
                 return json_error_code(400, types::ERROR_INVALID_REQUEST);
             }

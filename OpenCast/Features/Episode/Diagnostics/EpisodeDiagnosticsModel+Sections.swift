@@ -318,6 +318,18 @@ extension EpisodeDiagnosticsModel {
             if !span.evidenceQuote.isEmpty {
                 rows.append(("Span #\(span.id) Evidence", span.evidenceQuote))
             }
+            if let refinement = span.boundaryRefinement {
+                rows.append(("Span #\(span.id) Boundary Resolver", refinement.revision))
+                rows.append(("Span #\(span.id) Original Cut", "\(EpisodeDiagnosticsFormatting.seconds(refinement.originalStartTime))–\(EpisodeDiagnosticsFormatting.seconds(refinement.originalEndTime))"))
+                rows.append(("Span #\(span.id) Word Timing Digest", refinement.wordTimingDigest))
+                for (name, anchor, result) in [("Start", span.startBoundary, refinement.start), ("End", span.endBoundary, refinement.end)] {
+                    let method = result.isRefined ? "word-timed" : "fallback: \(result.fallbackReason ?? "unknown")"
+                    rows.append(("Span #\(span.id) \(name) Boundary", "\(EpisodeDiagnosticsFormatting.seconds(result.time)) • \(method)"))
+                    if let anchor {
+                        rows.append(("Span #\(span.id) \(name) Quote", "segment \(anchor.segmentID): \(anchor.quote)"))
+                    }
+                }
+            }
         }
         return EpisodeDiagnosticsSection(
             rows: rows,

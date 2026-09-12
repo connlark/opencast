@@ -57,6 +57,18 @@ final class EpisodeAdAnalysisSectionModel {
         hasCurrentAnalysis(forKey: key, episodeID: episodeID) ? zoneTiers : .empty
     }
 
+    func timelineDuration(forKey key: String, episode: EpisodeListItemSnapshot) -> TimeInterval {
+        if let duration = transcriptDocument(forKey: key, episodeID: episode.episodeID)?.audioDuration,
+           duration.isFinite, duration > 0 {
+            return duration
+        }
+        if let duration = episode.duration, duration.isFinite, duration > 0 {
+            return duration
+        }
+        let tiers = zoneTiers(forKey: key, episodeID: episode.episodeID)
+        return (tiers.autoSkip + tiers.displayOnly).map(\.endTime).max() ?? 0
+    }
+
     /// The transcript a manual Detect Ads run submits, only while it is the
     /// one this key loaded.
     func transcriptDocument(forKey key: String, episodeID: String) -> EpisodeTranscriptDocument? {
@@ -100,7 +112,9 @@ final class EpisodeAdAnalysisSectionModel {
         let analysisDocument: EpisodeAdAnalysisDocument?
         if appModel.adAnalyses.record(for: episode.episodeID)?.state == .completed {
             do {
-                analysisDocument = try await appModel.adAnalyses.loadDocument(for: episode.episodeID)
+                analysisDocument = try await appModel.adAnalyses.loadDocument(
+                    for: episode.episodeID, transcript: transcriptDocument
+                )
             } catch is CancellationError {
                 return
             } catch {
@@ -128,7 +142,7 @@ final class EpisodeAdAnalysisSectionModel {
         if state.hasCurrentCompletedAnalysis, let analysisDocument {
             zoneTiers = EpisodeAdAnalysisZoneMapper.zoneTiers(
                 for: analysisDocument,
-                duration: episode.duration
+                duration: transcriptDocument.audioDuration
             )
         } else {
             zoneTiers = .empty

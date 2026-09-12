@@ -1982,10 +1982,16 @@ final class OpenCastAppModel {
             transcriptions: transcriptions,
             adAnalyses: adAnalyses
         )
+        var isReplaySuppressed = false
+        if let transcript = try? await transcriptions.loadDocument(for: episode.episodeID) {
+            do { isReplaySuppressed = try await adAnalyses.automaticReplayError(for: transcript) != nil }
+            catch { isReplaySuppressed = true }
+        }
         let policy = AdAutoDetectPlayPolicy(
             isAutoDetectEnabled: library.isAdAutoDetectEnabled(forPodcastID: episode.podcastID),
             hasCurrentCompletedAnalysis: hasCurrentCompletedAnalysis,
-            queueStatus: adFreePass.queueStatus(for: episode.episodeID)
+            queueStatus: adFreePass.queueStatus(for: episode.episodeID),
+            isReplaySuppressed: isReplaySuppressed
         )
         guard policy.shouldEnqueue else {
             return

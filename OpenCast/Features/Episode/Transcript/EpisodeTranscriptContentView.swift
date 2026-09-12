@@ -16,7 +16,7 @@ struct EpisodeTranscriptContentView: View {
     let document: EpisodeTranscriptDocument
     let timeline: TranscriptTimeline
     let searchIndex: TranscriptSearchIndex?
-    let adSpanBySegmentID: [Int: EpisodeAdAnalysisSpan]
+    let adSpanBySegmentID: [Int: TranscriptAdHighlight]
     let adAnalysisState: EpisodeAdAnalysisJobState
     let showsTimestamps: Bool
     @Binding var isSearchPresented: Bool
@@ -44,10 +44,11 @@ struct EpisodeTranscriptContentView: View {
                         isCurrentEpisode: isCurrentEpisode,
                         showsTimestamp: showsTimestamps,
                         adSpanLabel: adSpanBySegmentID[segment.id]?.label,
-                        isAdSpanStart: adSpanBySegmentID[segment.id]?.startSegmentID == segment.id,
+                        isAdSpanStart: adSpanBySegmentID[segment.id]?.isStart == true,
                         searchHighlightRanges: searchSession.highlightRangesBySegmentID[segment.id],
                         karaokeSpokenUpperBound: segment.id == activeSegmentID ? karaokeSpokenUpperBound : nil,
                         karaokeLayout: segment.id == activeSegmentID ? activeKaraokeLayout : nil,
+                        adHighlight: adSpanBySegmentID[segment.id],
                         action: { playFrom(segment) }
                     )
                 }

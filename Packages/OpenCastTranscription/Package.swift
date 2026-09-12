@@ -50,6 +50,7 @@ let package = Package(
             // generates a test-local `Bundle.module` that shadows the main
             // module's and breaks the resource-bundle tests. Test fixtures
             // (Fixtures/) load via #filePath instead.
+            exclude: ["Fixtures"],
             swiftSettings: swift63Settings()
         )
     ],

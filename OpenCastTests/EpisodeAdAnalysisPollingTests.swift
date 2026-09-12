@@ -104,17 +104,15 @@ struct EpisodeAdAnalysisPollingTests {
         #expect(store.record(for: transcript.episodeID)?.failureKind == .capExceeded)
     }
 
-    @Test("Lost submit response recovers by polling the fingerprint job")
-    func lostSubmitResponseRecoversByPollingTheFingerprintJob() async throws {
+    @Test("Lost submit response recovers its accepted revision handle")
+    func lostSubmitResponseRecoversAcceptedRevisionHandle() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let directory = try makeTemporaryDirectory()
-        // The observed production failure: the worker finished the analysis
-        // but the device lost the connection while receiving the response.
-        // The job ID is the transcript fingerprint, so the store needs no
-        // second submit — it polls straight for the result.
+        // A lost 202 body also loses the serving revision. Repeating the
+        // identical request recovers that handle without guessing a namespace.
         let client = PollingEpisodeAdAnalysisClient(
-            submitSteps: [.urlError(.networkConnectionLost)],
+            submitSteps: [.urlError(.networkConnectionLost), .accepted(pollAfter: 0, revision: "20260911b")],
             pollSteps: [.completed]
         )
         let store = makeStore(client: client, directory: directory)
@@ -128,20 +126,21 @@ struct EpisodeAdAnalysisPollingTests {
         let record = try #require(store.record(for: transcript.episodeID))
         let counts = await client.counts()
         let identifiers = await client.recordedIdentifiers()
-        #expect(counts.submit == 1)
+        #expect(counts.submit == 2)
         #expect(counts.poll == 1)
-        #expect(identifiers.polledJobIDs == [record.transcriptFingerprint])
+        #expect(identifiers.polledJobIDs == ["a3.20260911b.\(record.transcriptFingerprint)"])
         #expect(identifiers.fingerprint == record.transcriptFingerprint)
+        #expect(await client.repeatedIdenticalRequest())
     }
 
-    @Test("Lost submit that never landed resubmits through the poll loop")
-    func lostSubmitThatNeverLandedResubmitsThroughThePollLoop() async throws {
+    @Test("Lost submit that never landed accepts a new job on the one retry")
+    func lostSubmitThatNeverLandedAcceptsJobOnRetry() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let directory = try makeTemporaryDirectory()
         let client = PollingEpisodeAdAnalysisClient(
-            submitSteps: [.urlError(.networkConnectionLost), .accepted(pollAfter: 0)],
-            pollSteps: [.http(statusCode: 404, code: "job_not_found"), .completed]
+            submitSteps: [.urlError(.networkConnectionLost), .accepted(pollAfter: 0, revision: "20260911b")],
+            pollSteps: [.completed]
         )
         let store = makeStore(client: client, directory: directory)
         let transcript = makeTranscript(episodeID: "poll-lost-submit-404")
@@ -153,7 +152,59 @@ struct EpisodeAdAnalysisPollingTests {
         })
         let counts = await client.counts()
         #expect(counts.submit == 2)
-        #expect(counts.poll == 2)
+        #expect(counts.poll == 1)
+        #expect(await client.repeatedIdenticalRequest())
+    }
+
+    @Test("A second lost submit stops without polling a guessed handle")
+    func secondLostSubmitStopsWithoutPolling() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let client = PollingEpisodeAdAnalysisClient(
+            submitSteps: [.urlError(.networkConnectionLost), .urlError(.timedOut)],
+            pollSteps: []
+        )
+        let store = makeStore(client: client, directory: try makeTemporaryDirectory())
+        let transcript = makeTranscript(episodeID: "poll-second-lost-submit")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+
+        #expect(await waitUntil(store) {
+            store.record(for: transcript.episodeID)?.state == .failed
+        })
+        let counts = await client.counts()
+        #expect(counts.submit == 2)
+        #expect(counts.poll == 0)
+        #expect(await client.repeatedIdenticalRequest())
+        #expect(store.record(for: transcript.episodeID)?.jobAcceptedAt == nil)
+    }
+
+    @Test("A cancelled URL request never starts another submit")
+    func cancelledURLRequestDoesNotResubmit() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let client = PollingEpisodeAdAnalysisClient(submitSteps: [.urlError(.cancelled)], pollSteps: [])
+        let store = makeStore(client: client, directory: try makeTemporaryDirectory())
+        let transcript = makeTranscript(episodeID: "cancelled-submit")
+        store.startAnalysis(transcript: transcript, modelContext: ModelContext(container))
+
+        #expect(await waitUntil(store) { !store.hasActiveJob })
+        let counts = await client.counts()
+        #expect(counts.submit == 1)
+        #expect(counts.poll == 0)
+    }
+
+    @Test("Task cancellation while losing a submit response stops recovery")
+    func taskCancellationStopsLostSubmitRecovery() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let client = PollingEpisodeAdAnalysisClient(submitSteps: [.cancelTaskAndLoseResponse], pollSteps: [])
+        let store = makeStore(client: client, directory: try makeTemporaryDirectory())
+        let transcript = makeTranscript(episodeID: "cancelled-lost-submit")
+        store.startAnalysis(transcript: transcript, modelContext: ModelContext(container))
+
+        #expect(await waitUntil(store) { !store.hasActiveJob })
+        let counts = await client.counts()
+        #expect(counts.submit == 1)
+        #expect(counts.poll == 0)
     }
 
     @Test("Polling deadline records analysis timed out")
@@ -499,9 +550,10 @@ struct EpisodeAdAnalysisPollingTests {
 }
 
 private enum PollingSubmitStep: Sendable {
-    case accepted(pollAfter: TimeInterval)
+    case accepted(pollAfter: TimeInterval, revision: String? = nil)
     case completed
     case urlError(URLError.Code)
+    case cancelTaskAndLoseResponse
 }
 
 private enum PollingPollStep: Sendable {
@@ -518,6 +570,7 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     private var submitCount = 0
     private var pollCount = 0
     private var submittedFingerprint: String?
+    private var submittedRequests: [EpisodeAdAnalysisAPIRequest] = []
     private var polledJobIDs: [String] = []
     private var pollWaiters: [UUID: (threshold: Int, continuation: CheckedContinuation<Void, Never>)] = [:]
 
@@ -529,17 +582,22 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
         submitCount += 1
         submittedFingerprint = request.transcript.fingerprint
+        submittedRequests.append(request)
         guard !submitSteps.isEmpty else {
             throw EpisodeAdAnalysisHTTPError(statusCode: 500, code: "unexpected_submit", detail: nil)
         }
 
         switch submitSteps.removeFirst() {
-        case .accepted(let pollAfter):
-            return .accepted(jobID: request.transcript.fingerprint, pollAfter: pollAfter)
+        case .accepted(let pollAfter, let revision):
+            let prefix = revision.map { "a3.\($0)." } ?? ""
+            return .accepted(jobID: prefix + request.transcript.fingerprint, pollAfter: pollAfter)
         case .completed:
             return .completed(Self.response(requestID: request.requestID))
         case .urlError(let code):
             throw URLError(code)
+        case .cancelTaskAndLoseResponse:
+            withUnsafeCurrentTask { $0?.cancel() }
+            throw URLError(.networkConnectionLost)
         }
     }
 
@@ -574,6 +632,10 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
 
     func recordedIdentifiers() -> (fingerprint: String?, polledJobIDs: [String]) {
         (submittedFingerprint, polledJobIDs)
+    }
+
+    func repeatedIdenticalRequest() -> Bool {
+        submittedRequests.count == 2 && submittedRequests[0] == submittedRequests[1]
     }
 
     /// Signal-driven: each `pollJob` arrival resumes satisfied waiters, so

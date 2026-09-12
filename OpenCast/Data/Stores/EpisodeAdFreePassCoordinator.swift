@@ -1014,6 +1014,7 @@ final class EpisodeAdFreePassCoordinator {
                 for: transcriptDocument,
                 transcriptions: deps.transcriptions,
                 adAnalyses: deps.adAnalyses,
+                allowsExplicitRetry: entry.item.origin == .manual,
                 modelContext: deps.modelContext
             )
             let zoneCount = await deps.refreshSkipZones()
@@ -1119,11 +1120,12 @@ final class EpisodeAdFreePassCoordinator {
 
             if case .completed(let success) = outcome.adAnalysis {
                 do {
-                    let analysisDocument = try EpisodeRemoteAdAnalysisMapper.document(
+                    let analysisDocument = try await EpisodeRemoteAdAnalysisMapper.documentOffCaller(
                         from: success,
                         transcript: outcome.document,
                         requestID: outcome.jobID
                     )
+                    try Task.checkCancellation()
                     try deps.adAnalyses.importCompletedAnalysis(
                         analysisDocument,
                         modelContext: deps.modelContext
@@ -1137,6 +1139,17 @@ final class EpisodeAdFreePassCoordinator {
                         "cloud analysis import rejected episodeID=\(episode.episodeID); falling back to device analysis"
                     )
                 }
+            }
+            if case .failed(let code, let failure) = outcome.adAnalysis {
+                let error = EpisodeAdAnalysisHTTPError(
+                    statusCode: code == "ad_analysis_capacity" ? 429 : 422,
+                    code: code ?? "ad_analysis_failed", detail: nil, failure: failure
+                )
+                if error.replayFailure?.suppressesAutomaticReplay == true {
+                    try await deps.adAnalyses.retainFailure(error, transcript: outcome.document)
+                    throw error
+                }
+                if error.isCapExceeded || code == "ad_analysis_capacity" { throw PassStop.capDeferred }
             }
             // Failure marker, missing block, or an import the mapper refused:
             // the transcript is durably imported, so the existing on-device
@@ -1186,6 +1199,7 @@ final class EpisodeAdFreePassCoordinator {
             for: transcript,
             transcriptions: entry.deps.transcriptions,
             adAnalyses: entry.deps.adAnalyses,
+            allowsExplicitRetry: entry.item.origin == .manual,
             modelContext: entry.deps.modelContext
         )
         let zoneCount = await entry.deps.refreshSkipZones()
@@ -1676,8 +1690,10 @@ final class EpisodeAdFreePassCoordinator {
         for transcriptDocument: EpisodeTranscriptDocument,
         transcriptions: EpisodeTranscriptionStore,
         adAnalyses: EpisodeAdAnalysisStore,
+        allowsExplicitRetry: Bool,
         modelContext: ModelContext
     ) async throws {
+        if !allowsExplicitRetry, let blocked = try await adAnalyses.automaticReplayError(for: transcriptDocument) { throw blocked }
         var didStartAnalysis = false
 
         while true {
@@ -1701,6 +1717,7 @@ final class EpisodeAdFreePassCoordinator {
                         transcriptDocument: transcriptDocument,
                         transcriptions: transcriptions,
                         adAnalyses: adAnalyses,
+                        allowsExplicitRetry: allowsExplicitRetry,
                         modelContext: modelContext
                     )
                 case .failed:
@@ -1719,6 +1736,7 @@ final class EpisodeAdFreePassCoordinator {
                         transcriptDocument: transcriptDocument,
                         transcriptions: transcriptions,
                         adAnalyses: adAnalyses,
+                        allowsExplicitRetry: allowsExplicitRetry,
                         modelContext: modelContext
                     )
                 }
@@ -1737,6 +1755,7 @@ final class EpisodeAdFreePassCoordinator {
                     transcriptDocument: transcriptDocument,
                     transcriptions: transcriptions,
                     adAnalyses: adAnalyses,
+                    allowsExplicitRetry: allowsExplicitRetry,
                     modelContext: modelContext
                 )
             }
@@ -1750,6 +1769,7 @@ final class EpisodeAdFreePassCoordinator {
         transcriptDocument: EpisodeTranscriptDocument,
         transcriptions: EpisodeTranscriptionStore,
         adAnalyses: EpisodeAdAnalysisStore,
+        allowsExplicitRetry: Bool,
         modelContext: ModelContext
     ) throws {
         guard !didStartAnalysis else {
@@ -1765,6 +1785,7 @@ final class EpisodeAdFreePassCoordinator {
         adAnalyses.startAnalysis(
             transcript: transcriptDocument,
             transcriptState: transcriptions.record(for: transcriptDocument.episodeID)?.state,
+            retryFailed: allowsExplicitRetry,
             modelContext: modelContext
         )
         didStartAnalysis = true

@@ -112,7 +112,11 @@ export default defineConfig(async () => {
                   if (podcast.includes("ad-transient")) {
                     return json({ error: "job_failed_transient" }, 503);
                   }
-                  const fingerprint = inner.transcript.fingerprint;
+                  const fingerprint = inner.job_handle_version === 1
+                    ? `a3.20260911b.${inner.transcript.fingerprint}` : inner.transcript.fingerprint;
+                  if (podcast.includes("ad-validation")) {
+                    return json({error: "ad_analysis_incomplete", failure: {category: "validation_exhausted", retry_disposition: "explicit_retry", policy_revision: "2026-09-11.2-recovery"}}, 422);
+                  }
                   if (podcast.includes("ad-park")) {
                     // Park the submit in flight long enough for the spec to
                     // cancel the job while the DO is awaiting this response.

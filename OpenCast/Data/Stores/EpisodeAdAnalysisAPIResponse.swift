@@ -5,6 +5,7 @@ nonisolated struct EpisodeAdAnalysisAPIResponse: Codable, Sendable, Equatable {
     var requestID: String
     var model: String
     var policy: String
+    var policyRevision: String? = nil
     var spans: [EpisodeAdAnalysisAPIAdSpan]
     var warnings: [String]
     var usage: EpisodeAdAnalysisAPIUsage?
@@ -14,6 +15,7 @@ nonisolated struct EpisodeAdAnalysisAPIResponse: Codable, Sendable, Equatable {
         case requestID = "request_id"
         case model
         case policy
+        case policyRevision = "policy_revision"
         case spans
         case warnings
         case usage

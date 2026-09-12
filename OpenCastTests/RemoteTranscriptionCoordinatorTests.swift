@@ -377,6 +377,16 @@ struct EpisodeRemoteTranscriptMapperTests {
         #expect(document.segments[0].words?.count == 3)
     }
 
+    @Test("Remote adjustment provenance survives app import")
+    func remoteAdjustmentProvenanceSurvivesImport() throws {
+        var result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)
+        result.segments[0].wordTimingsAdjusted = true
+        let document = try EpisodeRemoteTranscriptMapper.document(from: result, context: context(identity: identity))
+        #expect(document.segments[0].wordTimingsAdjusted == true)
+        let normalized = OpenCastTranscriptSegmentNormalizer.normalized(document.segments)
+        #expect(normalized[0].wordTimingsAdjusted == true)
+    }
+
     @Test("Minted document dates carry no fractional seconds")
     func mintedDatesAreWholeSeconds() throws {
         let result = RemoteFixtures.result(identity: identity, durationSeconds: 120.4)

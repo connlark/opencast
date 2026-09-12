@@ -1,9 +1,11 @@
 import Foundation
+import OpenCastTranscription
 
 nonisolated struct AppAttestHTTPError: Error, LocalizedError, Equatable, Sendable {
     let statusCode: Int
     let code: String
     let detail: String?
+    var failure: OpenCastAdAnalysisFailure? = nil
 
     var errorDescription: String? {
         if let detail, !detail.isEmpty {

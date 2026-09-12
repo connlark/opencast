@@ -101,7 +101,8 @@ nonisolated enum EpisodeRemoteTranscriptMapper {
                 noSpeechProbability: 0,
                 words: segment.words?.map { word in
                     OpenCastTranscriptWord(start: word.start, end: word.end, text: word.text)
-                }
+                },
+                wordTimingsAdjusted: segment.wordTimingsAdjusted
             )
         }
         let segments = OpenCastTranscriptSegmentNormalizer.normalized(mappedSegments)

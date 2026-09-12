@@ -228,6 +228,7 @@ enum OpenCastUITestSeedData {
         let shouldSeedAdAnalysisSpanAtStart = includesAdAnalysisSpanAtStart
             || ProcessInfo.processInfo.environment["OPENCAST_SEED_AD_ANALYSIS_SPAN_AT_START"] == "1"
         let shouldSeedCompletedAdAnalysis = includesCompletedAdAnalysis
+            || OpenCastUITestWordBoundaryFixture.isEnabled
             || ProcessInfo.processInfo.environment["OPENCAST_SEED_COMPLETED_AD_ANALYSIS"] == "1"
             || shouldSeedStaleAdAnalysis
             || shouldSeedOutdatedPolicyAdAnalysis
@@ -355,7 +356,7 @@ enum OpenCastUITestSeedData {
                     OpenCastTranscriptWord(start: 2.6, end: 3.6, text: "transcript.")
                 ]
             ),
-            OpenCastTranscriptSegment(
+            OpenCastUITestWordBoundaryFixture.isEnabled ? OpenCastUITestWordBoundaryFixture.segment : OpenCastTranscriptSegment(
                 id: 1,
                 start: 4,
                 end: 9,
@@ -423,11 +424,13 @@ enum OpenCastUITestSeedData {
         )
         // Seeds must carry the current policy or the staleness gate silently
         // kills their zones; the outdated-policy variant exercises exactly that.
-        let policy = hasOutdatedPolicy ? "ads_only" : EpisodeAdAnalysisContract.expectedPolicy
+        let currentPolicy = OpenCastUITestWordBoundaryFixture.isEnabled
+            ? EpisodeAdAnalysisContract.wordBoundaryPolicy : EpisodeAdAnalysisContract.expectedPolicy
+        let policy = hasOutdatedPolicy ? "ads_only" : currentPolicy
         // The low-confidence variant sits below the 0.8 auto-skip floor:
         // rendered dimmed, never auto-skipped.
         let confidence = hasLowConfidenceSpan ? 0.5 : 0.92
-        let span = startsAtBeginning
+        var span = startsAtBeginning
             ? EpisodeAdAnalysisSpan(
                 id: 0,
                 kind: .hostReadAd,
@@ -450,6 +453,9 @@ enum OpenCastUITestSeedData {
                 confidence: confidence,
                 evidenceQuote: "brought to you"
             )
+        if OpenCastUITestWordBoundaryFixture.isEnabled {
+            span = OpenCastUITestWordBoundaryFixture.anchored(span)
+        }
         // The second low-confidence span sits mid-timeline so the dimmed
         // display-only rendering is legible in screenshots (the 4-9s zone
         // hides behind the playhead thumb on a ~5-minute bar).
@@ -638,7 +644,9 @@ enum OpenCastUITestSeedData {
                 startTime: span.startTime,
                 endTime: span.endTime,
                 confidence: span.confidence,
-                evidenceQuote: span.evidenceQuote
+                evidenceQuote: span.evidenceQuote,
+                startBoundary: span.startBoundary,
+                endBoundary: span.endBoundary
             )
         }
         let usage = response.usage.map {

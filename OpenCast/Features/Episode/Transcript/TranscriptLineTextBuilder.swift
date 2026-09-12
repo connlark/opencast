@@ -7,7 +7,10 @@ nonisolated enum TranscriptLineTextBuilder {
     static func attributedText(
         text: String,
         spokenUpperBound: String.Index?,
-        highlightRanges: [Range<String.Index>]?
+        highlightRanges: [Range<String.Index>]?,
+        adRanges: [Range<String.Index>] = [],
+        uncertainAdRanges: [Range<String.Index>] = [],
+        differentiateWithoutColor: Bool = false
     ) -> AttributedString {
         var attributed = AttributedString(text)
 
@@ -17,6 +20,23 @@ nonisolated enum TranscriptLineTextBuilder {
             }
             if let unspokenRange = Range(spokenUpperBound..<text.endIndex, in: attributed) {
                 attributed[unspokenRange].foregroundColor = .primary.opacity(0.35)
+            }
+        }
+
+        for range in uncertainAdRanges {
+            if let adRange = Range(range, in: attributed) {
+                attributed[adRange].backgroundColor = .orange.opacity(0.09)
+                if differentiateWithoutColor {
+                    attributed[adRange].underlineStyle = Text.LineStyle(pattern: .dash)
+                }
+            }
+        }
+        for range in adRanges {
+            if let adRange = Range(range, in: attributed) {
+                attributed[adRange].backgroundColor = .orange.opacity(0.22)
+                if differentiateWithoutColor {
+                    attributed[adRange].underlineStyle = Text.LineStyle(pattern: .solid)
+                }
             }
         }
 

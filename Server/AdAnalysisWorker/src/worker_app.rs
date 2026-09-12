@@ -15,22 +15,20 @@ use crate::challenge_limits::{
     MAX_APP_ATTEST_KEYS_PER_INSTALL_PER_DAY,
 };
 use crate::job::{
-    app_attest_subject, bearer_subject, job_object_name, transcription_account_subject,
-    valid_job_id, JobDoPollRequest, JobPollRequest, JobSubmitRequest, JOB_BINDING,
+    app_attest_subject, bearer_subject, transcription_account_subject, valid_job_id,
+    JobDoPollRequest, JobPollRequest, JobSubmitRequest, JOB_BINDING,
 };
+use crate::policy::{AnalysisPolicy, POLICY_ENV_VAR};
 use crate::route::{
     json_response as static_json_response, route_request, Header as StaticHeader, RouteAction,
     StaticResponse, ANALYZE_TRANSCRIPT_PATH, INSTALL_DELETE_PATH, INTERNAL_HOST, JSON_CONTENT_TYPE,
 };
 use crate::storage;
 use crate::types::{
-    resolve_gemini_model, ErrorResponse, InternalAnalyzeRequest, GEMINI_MODEL_ENV_VAR,
+    ErrorResponse, InternalAnalyzeRequest, GEMINI_MODEL_ENV_VAR,
     MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES, MAX_BODY_BYTES, SCHEMA_VERSION,
 };
-use crate::usage::{
-    global_usage_object_name, usage_object_name, UsageAdmitRequest, UsageLimitProfile,
-    USAGE_LIMITER_BINDING,
-};
+use crate::usage::{usage_object_name, UsageAdmitRequest, UsageLimitProfile};
 use crate::validation::{
     decode_and_validate_request, validate_content_length, validate_request, DailyUsage,
     ValidatedRequest,
@@ -72,6 +70,16 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
         .and_then(|url| url.host_str().map(|host| host == INTERNAL_HOST))
         .unwrap_or(false);
     let internal_enabled = env_flag(&env, INTERNAL_AD_ANALYSIS_ENABLED, false);
+
+    if !internal && path == crate::route::HEALTH_PATH && method == Method::Get {
+        let policy = serving_policy(&env);
+        let mut response = json_success(
+            200,
+            &serde_json::json!({"message":"ok", "policy_revision": if policy == AnalysisPolicy::V3 {crate::policy::V3_REVISION} else {crate::types::POLICY_NAME}}),
+        )?;
+        response.headers_mut().set("cache-control", "no-store")?;
+        return Ok(response);
+    }
 
     match route_request(method.as_ref(), &path, enabled, internal, internal_enabled) {
         RouteAction::Static(response) => static_response(response),
@@ -474,25 +482,56 @@ async fn analyze_validated_request(
         .await;
     }
 
-    if let Some(response) = admit_spend_caps(
+    let policy = serving_policy(env);
+    let execution = match crate::execution::Execution::admit(
         env,
         usage_object_name,
         usage_profile,
-        day_index(),
-        validated.estimate.estimated_input_tokens,
+        policy.admission_tokens(
+            &validated.request,
+            validated.estimate.estimated_input_tokens,
+        ),
     )
-    .await?
+    .await
     {
-        return Ok(response);
-    }
+        Ok(value) => value,
+        Err(error) => return json_error(error.status, error.body),
+    };
 
-    let model = resolve_gemini_model(
+    let model = policy.model(
         env.var(GEMINI_MODEL_ENV_VAR)
             .ok()
             .map(|value| value.to_string())
             .as_deref(),
     );
-    match run_windows_analysis(&gemini_api_key, model, validated.request).await {
+    let outcome = if policy == AnalysisPolicy::V2 {
+        match execution
+            .dispatch(0, validated.estimate.estimated_input_tokens)
+            .await
+        {
+            Ok(()) => {
+                run_windows_analysis(
+                    &gemini_api_key,
+                    model,
+                    validated.request,
+                    policy,
+                    execution.clone(),
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        run_windows_analysis(
+            &gemini_api_key,
+            model,
+            validated.request,
+            policy,
+            execution.clone(),
+        )
+        .await
+    };
+    match crate::execution::complete(outcome, &execution, policy).await {
         Ok(response) => json_success(200, &response),
         Err(error) => json_error(error.status, error.body),
     }
@@ -507,22 +546,34 @@ async fn submit_async_job(
     internal: bool,
 ) -> Result<Response> {
     let job_id = &validated.request.transcript.fingerprint;
-    if !valid_job_id(job_id) {
+    if !crate::job::valid_fingerprint(job_id) || job_id.starts_with("a3.") {
         return json_error_code(400, "invalid_fingerprint");
     }
 
     let namespace = env.durable_object(JOB_BINDING)?;
-    let stub = namespace.get_by_name(&job_object_name(job_id))?;
+    let policy = serving_policy(env);
+    let handles_supported = validated.request.job_handle_version == Some(1);
+    let legacy_job_id = job_id.clone();
+    let stub = namespace.get_by_name(&policy.job_object_name(job_id))?;
     let body = serde_json::to_string(&JobSubmitRequest {
         usage_object_name: usage_object_name.to_string(),
         usage_profile,
-        estimated_input_tokens: validated.estimate.estimated_input_tokens,
+        estimated_input_tokens: policy.admission_tokens(
+            &validated.request,
+            validated.estimate.estimated_input_tokens,
+        ),
         subject: subject.to_string(),
         internal,
         request: validated.request,
     })?;
     let request = internal_post("https://ad-analysis-job.opencast.internal/submit", body)?;
-    stub.fetch_with_request(request).await
+    let mut response = stub.fetch_with_request(request).await?;
+    if response.status_code() == 202 && !handles_supported {
+        let mut body: serde_json::Value = response.json().await?;
+        body["job_id"] = serde_json::Value::String(legacy_job_id);
+        return json_success(202, &body);
+    }
+    Ok(response)
 }
 
 async fn poll_job(req: &mut Request, env: &Env, path: &str, job_id: &str) -> Result<Response> {
@@ -641,13 +692,32 @@ async fn handle_install_delete(req: &mut Request, env: &Env) -> Result<Response>
 /// body can never reach the authorization check.
 async fn forward_job_poll(env: &Env, job_id: &str, subject: Option<String>) -> Result<Response> {
     let namespace = env.durable_object(JOB_BINDING)?;
-    let stub = namespace.get_by_name(&job_object_name(job_id))?;
+    let Some(names) = crate::policy::poll_object_names(job_id) else {
+        return json_error_code(404, "job_not_found");
+    };
     let body = serde_json::to_string(&JobDoPollRequest {
         job_id: job_id.to_string(),
         subject,
     })?;
-    let request = internal_post("https://ad-analysis-job.opencast.internal/poll", body)?;
-    stub.fetch_with_request(request).await
+    let mut found = None;
+    for name in names {
+        let stub = namespace.get_by_name(&name)?;
+        let request = internal_post(
+            "https://ad-analysis-job.opencast.internal/poll",
+            body.clone(),
+        )?;
+        let response = stub.fetch_with_request(request).await?;
+        if response.status_code() != 404 {
+            if found.is_some() {
+                return json_error_code(409, "ambiguous_legacy_job");
+            }
+            found = Some(response);
+        }
+    }
+    if let Some(response) = found {
+        return Ok(response);
+    }
+    json_error_code(404, "job_not_found")
 }
 
 fn internal_post(url: &str, body: String) -> Result<Request> {
@@ -660,69 +730,13 @@ fn internal_post(url: &str, body: String) -> Result<Request> {
     Request::new_with_init(url, &init)
 }
 
-pub(crate) async fn admit_spend_caps(
-    env: &Env,
-    usage_object_name: &str,
-    usage_profile: UsageLimitProfile,
-    day_index: u64,
-    estimated_input_tokens: u64,
-) -> Result<Option<Response>> {
-    if let Some(response) = admit_usage(
-        env,
-        usage_object_name,
-        usage_profile,
-        estimated_input_tokens,
+pub(crate) fn serving_policy(env: &Env) -> AnalysisPolicy {
+    AnalysisPolicy::resolve(
+        env.var(POLICY_ENV_VAR)
+            .ok()
+            .map(|v| v.to_string())
+            .as_deref(),
     )
-    .await?
-    {
-        return Ok(Some(response));
-    }
-
-    admit_usage(
-        env,
-        &global_usage_object_name(day_index),
-        UsageLimitProfile::Global,
-        estimated_input_tokens,
-    )
-    .await
-}
-
-async fn admit_usage(
-    env: &Env,
-    object_name: &str,
-    profile: UsageLimitProfile,
-    estimated_input_tokens: u64,
-) -> Result<Option<Response>> {
-    let namespace = env.durable_object(USAGE_LIMITER_BINDING)?;
-    let stub = namespace.get_by_name(object_name)?;
-    let body = serde_json::to_string(&UsageAdmitRequest {
-        estimated_input_tokens,
-        profile,
-    })?;
-    let headers = Headers::new();
-    headers.set("content-type", JSON_CONTENT_TYPE)?;
-
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(body.into()));
-
-    let request = Request::new_with_init("https://usage-limiter.opencast.internal/admit", &init)?;
-    let mut response = stub.fetch_with_request(request).await?;
-    let status = response.status_code();
-    if status == 200 {
-        let _: DailyUsage = response.json().await?;
-        return Ok(None);
-    }
-
-    let error = response
-        .json::<ErrorResponse>()
-        .await
-        .unwrap_or_else(|_| ErrorResponse::new("usage_limiter_error"));
-    Ok(Some(json_error(
-        if status == 429 { 429 } else { 503 },
-        error,
-    )?))
 }
 
 /// Objects are minted per subject and day and never addressed again once
@@ -735,8 +749,8 @@ const USAGE_LIMITER_CLEANUP_DELAY: std::time::Duration =
 
 #[durable_object(alarm)]
 pub struct AdAnalysisUsageLimiter {
-    state: State,
-    sql: SqlStorage,
+    pub(crate) state: State,
+    pub(crate) sql: SqlStorage,
 }
 
 impl DurableObject for AdAnalysisUsageLimiter {
@@ -751,12 +765,28 @@ impl DurableObject for AdAnalysisUsageLimiter {
             None,
         )
         .expect("create usage limiter table");
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS accounted_runs (
+                run_id TEXT PRIMARY KEY, subject TEXT NOT NULL,
+                request_count INTEGER NOT NULL, input_tokens INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL, finished INTEGER NOT NULL, record TEXT NOT NULL
+            );",
+            None,
+        )
+        .expect("create attempt accounting table");
         Self { state, sql }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
         if req.method() != Method::Post {
             return json_error(405, ErrorResponse::new("method_not_allowed"));
+        }
+
+        if req.path() == "/snapshot" {
+            return json_success(200, &self.current_usage()?);
+        }
+        if req.path() == "/account" {
+            return self.account(&mut req).await;
         }
 
         let admit_request = match req.json::<UsageAdmitRequest>().await {
@@ -781,6 +811,8 @@ impl DurableObject for AdAnalysisUsageLimiter {
         // the table explicitly keeps the wipe complete even if the SQLite
         // backend's delete_all semantics ever exclude SQL tables.
         self.sql.exec("DROP TABLE IF EXISTS daily_usage;", None)?;
+        self.sql
+            .exec("DROP TABLE IF EXISTS accounted_runs;", None)?;
         self.state.storage().delete_all().await?;
         self.state.storage().delete_alarm().await?;
         Response::ok("")
@@ -788,7 +820,7 @@ impl DurableObject for AdAnalysisUsageLimiter {
 }
 
 impl AdAnalysisUsageLimiter {
-    async fn schedule_cleanup(&self) -> Result<()> {
+    pub(crate) async fn schedule_cleanup(&self) -> Result<()> {
         if self.state.storage().get_alarm().await?.is_none() {
             self.state
                 .storage()
@@ -798,7 +830,7 @@ impl AdAnalysisUsageLimiter {
         Ok(())
     }
 
-    fn current_usage(&self) -> Result<DailyUsage> {
+    pub(crate) fn current_usage(&self) -> Result<DailyUsage> {
         let rows: Vec<DailyUsageRow> = self
             .sql
             .exec(

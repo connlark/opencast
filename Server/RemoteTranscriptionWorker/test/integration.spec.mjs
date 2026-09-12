@@ -1483,6 +1483,7 @@ describe("remote transcription dev lane", () => {
     const span = payload.ad_analysis.spans[0];
     expect(span.kind).toBe("host_read_ad");
     const segmentIds = payload.result.segments.map(({ id }) => id);
+    expect(payload.result.segments.every((segment) => typeof segment.word_timings_adjusted === "boolean")).toBe(true);
     expect(segmentIds).toContain(span.start_segment_id);
     expect(segmentIds).toContain(span.end_segment_id);
     // The transcript subtree is untouched by the injection.
@@ -1490,6 +1491,16 @@ describe("remote transcription dev lane", () => {
     expect(payload.result.provenance.provider).toBe("cloudflare-workers-ai");
     await ackJob(job.job_id);
     await expectJobStorageEmpty(job.job_id);
+  });
+
+  it("retains exhausted validation through chaining without erasing the delivered transcript", async () => {
+    const job = await runDetectJob({clientRequestId: "e2e-ads-validation-1", episodeId: "ep-ads-validation-1", podcastId: "https://example.com/ad-validation/feed.xml"});
+    await waitForState(job.job_id, ["result_ready"]);
+    const payload = await fetchResultEnvelope(job.job_id);
+    expect(payload.ad_analysis).toEqual({state: "failed", error_code: "ad_analysis_incomplete", failure: {category: "validation_exhausted", retry_disposition: "explicit_retry", policy_revision: "2026-09-11.2-recovery"}});
+    expect(payload.result.duration_seconds).toBe(120);
+    expect(payload.result.segments.length).toBeGreaterThan(0);
+    await ackJob(job.job_id);
   });
 
   it("keeps the envelope free of ad_analysis when the flag is off", async () => {

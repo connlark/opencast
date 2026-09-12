@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "request_id": "synthetic-paid-feed-and-ad-session",
+  "episode_id": "workbench-episode-8",
+  "podcast_id": "workbench-conversations",
+  "episode_title": "Tracing the history of a wooden boat",
+  "podcast_title": "Workbench Conversations",
+  "transcript": {"language_code":"en","audio_duration":720,"fingerprint":"synthetic-ad-session-v1","updated_at":"2026-09-10T00:00:00Z","state":"completed","segment_count":20},
+  "segments": [
+    {"id":0,"start":0,"end":130,"text":"Welcome to Workbench Conversations. The original shipyard ledger dates this hull to 1924. The next owner replaced its keel after a storm. Look at the old fastener holes along the planks; they show how that repair was carried out."},
+    {"id":10,"start":130,"end":137,"text":"We will get back to the ledger in a minute, but first let me do our sponsor read."},
+    {"id":20,"start":137,"end":145,"text":"Yes, go ahead. Wait, can you hear that drilling outside? Let me move this microphone."},
+    {"id":30,"start":145,"end":165,"text":"That is much better. Somebody has also left a giant coffee cup in front of my script. It has a tiny anchor painted on it. Very appropriate. All right, where was I?"},
+    {"id":40,"start":165,"end":180,"text":"Our sponsor today is HarborSafe insurance. Restoring an old boat takes time, and the right coverage helps you protect that work."},
+    {"id":50,"start":180,"end":210,"text":"I wanted a policy that understood vintage boats and the tools I keep aboard. Their team helped me understand my options without rushing me."},
+    {"id":60,"start":210,"end":218,"text":"Visit harborsafe.example slash workbench for a quote. Thanks to HarborSafe for supporting this show."},
+    {"id":70,"start":218,"end":260,"text":"Now, the next entry in the ledger is important. The yard replaced the port-side frame but left the starboard side intact. You can still see the difference in the grain."},
+    {"id":80,"start":260,"end":290,"text":"For next week's reporting, we are looking for people who worked at this shipyard. If that is you, please send us a voice memo describing what the yard was like. Your memories will help us fill a gap in the historical record."},
+    {"id":90,"start":290,"end":575,"text":"Returning to the keel repair, the bolts tell a different story from the invoice. They were replaced twice, not once. The first set rusted, while the second set is still intact. This is why we compare written records with the evidence in the boat itself."},
+    {"id":100,"start":575,"end":585,"text":"That is our investigation for today. Research by Mara and sound editing by Ellis."},
+    {"id":110,"start":585,"end":598,"text":"If your business would like to advertise on Workbench Conversations, email our sales team at sponsors@workbench.example."},
+    {"id":120,"start":598,"end":603,"text":"And you can send listener questions to the usual address."},
+    {"id":130,"start":603,"end":618,"text":"Want to hear the show without advertisements? Join our paid Cabin Club feed for bonus episodes and early access. Sign up at workbench.example slash club."},
+    {"id":140,"start":618,"end":625,"text":"Coming up this season on Workbench Conversations."},
+    {"id":150,"start":625,"end":645,"text":"When we opened the locker, nobody spoke. That compass should not have been there. I had been looking for it for thirty years. The next clue took us all the way to the lighthouse."},
+    {"id":160,"start":645,"end":654,"text":"More mysteries from the shipyard, coming soon. Follow Workbench Conversations wherever you listen."},
+    {"id":170,"start":654,"end":666,"text":"A clean deck starts with TideBright. Our new deck wash lifts salt and grime without harsh scrubbing."},
+    {"id":180,"start":666,"end":675,"text":"Shop TideBright at tidebright.example and save ten percent with code BOAT."},
+    {"id":190,"start":675,"end":720,"text":"You have been listening to Workbench Conversations. Goodbye."}
+  ]
+}

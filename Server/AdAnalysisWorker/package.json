@@ -12,10 +12,12 @@
     "test": "cargo test",
     "typecheck": "cargo check --target wasm32-unknown-unknown",
     "build:worker": "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release",
-    "test:integration": "yarn run build:worker && vitest run"
+    "test:integration": "yarn run build:worker && vitest run && OPENCAST_TEST_AD_POLICY=v3 vitest run && yarn run test:interruption",
+    "test:interruption": "node --test test/interruption.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",
+    "miniflare": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"
   }

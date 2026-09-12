@@ -786,6 +786,8 @@ pub fn validate_model_output(
                 end_time: end_segment.end,
                 confidence,
                 evidence_quote: span.evidence_quote.trim().to_string(),
+                start_boundary: None,
+                end_boundary: None,
             },
         });
     }

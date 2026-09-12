@@ -105,6 +105,10 @@ pub struct AdAnalysisRequest {
     pub schema_version: u16,
     #[serde(default)]
     pub async_supported: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retry_failed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_handle_version: Option<u8>,
     pub request_id: String,
     pub episode_id: String,
     pub podcast_id: String,
@@ -173,6 +177,10 @@ pub struct AdAnalysisResponse {
     pub request_id: String,
     pub model: String,
     pub policy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounting: Option<crate::accounting::Summary>,
     pub spans: Vec<ValidatedAdSpan>,
     pub warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -189,6 +197,18 @@ pub struct ValidatedAdSpan {
     pub end_time: f64,
     pub confidence: f64,
     pub evidence_quote: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_boundary: Option<AdBoundary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_boundary: Option<AdBoundary>,
+}
+
+/// A verified text anchor, not a model-generated timestamp. The app resolves
+/// it against the words belonging to its exact downloaded transcript.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AdBoundary {
+    pub segment_id: i64,
+    pub quote: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -208,20 +228,27 @@ pub struct ErrorResponse {
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<crate::failure::AnalysisFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounting: Option<Box<crate::accounting::Summary>>,
 }
 
 impl ErrorResponse {
     pub fn new(error: impl Into<String>) -> Self {
+        let error = error.into();
         Self {
-            error: error.into(),
+            failure: crate::failure::AnalysisFailure::for_code(&error),
+            error,
             detail: None,
+            accounting: None,
         }
     }
 
     pub fn with_detail(error: impl Into<String>, detail: impl Into<String>) -> Self {
         Self {
-            error: error.into(),
             detail: Some(detail.into()),
+            ..Self::new(error)
         }
     }
 }

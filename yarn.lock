@@ -5517,6 +5517,7 @@ __metadata:
   resolution: "opencast-ad-analysis-worker@workspace:Server/AdAnalysisWorker"
   dependencies:
     "@cloudflare/vitest-pool-workers": "catalog:"
+    miniflare: "catalog:"
     vitest: "catalog:"
     wrangler: "catalog:"
   languageName: unknown

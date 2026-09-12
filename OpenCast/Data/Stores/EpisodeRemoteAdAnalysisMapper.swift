@@ -19,7 +19,7 @@ nonisolated enum EpisodeRemoteAdAnalysisMapper {
         transcript: EpisodeTranscriptDocument,
         requestID: String
     ) throws -> EpisodeAdAnalysisDocument {
-        guard success.policy == EpisodeAdAnalysisContract.expectedPolicy else {
+        guard EpisodeAdAnalysisContract.supports(policy: success.policy) else {
             throw ValidationError(reason: "unexpected policy \(success.policy)")
         }
 
@@ -60,7 +60,9 @@ nonisolated enum EpisodeRemoteAdAnalysisMapper {
                 startTime: span.startTime,
                 endTime: span.endTime,
                 confidence: min(max(span.confidence, 0), 1),
-                evidenceQuote: span.evidenceQuote
+                evidenceQuote: span.evidenceQuote,
+                startBoundary: span.startBoundary,
+                endBoundary: span.endBoundary
             )
         }
 
@@ -68,7 +70,7 @@ nonisolated enum EpisodeRemoteAdAnalysisMapper {
             for: transcript,
             segments: segments
         )
-        return EpisodeAdAnalysisDocument(
+        let document = EpisodeAdAnalysisDocument(
             schemaVersion: EpisodeAdAnalysisContract.schemaVersion,
             episodeID: transcript.episodeID,
             podcastID: transcript.podcastID,
@@ -83,7 +85,18 @@ nonisolated enum EpisodeRemoteAdAnalysisMapper {
             warnings: success.warnings,
             usage: nil,
             createdAt: .now,
-            updatedAt: .now
+            updatedAt: .now,
+            policyRevision: success.policyRevision
         )
+        return EpisodeAdBoundaryRefiner.refine(document, transcript: transcript)
+    }
+
+    @concurrent
+    static func documentOffCaller(
+        from success: OpenCastRemoteTranscriptionAdAnalysisSuccess,
+        transcript: EpisodeTranscriptDocument,
+        requestID: String
+    ) async throws -> EpisodeAdAnalysisDocument {
+        try document(from: success, transcript: transcript, requestID: requestID)
     }
 }

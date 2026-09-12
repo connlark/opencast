@@ -44,6 +44,7 @@ fn job_record_serde_round_trips_every_state() {
             job_id: "fingerprint-123".to_string(),
             status: 503,
             code: "gemini_retry_exhausted".to_string(),
+            error_json: None,
             purge_at: 2_000,
             subjects: vec![OWNER.to_string()],
             content_hash: CONTENT.to_string(),
@@ -196,6 +197,7 @@ fn poll_unauthorized_subject_sees_not_found() {
             job_id: "fingerprint-123".to_string(),
             status: 503,
             code: "gemini_retry_exhausted".to_string(),
+            error_json: None,
             purge_at: 2_000,
             subjects: vec![OWNER.to_string()],
             content_hash: CONTENT.to_string(),
@@ -373,4 +375,44 @@ fn admission_window_releases_on_every_exit_path() {
         5_000
     );
     assert_eq!(ERROR_ADMISSION_BUSY, "admission_busy");
+}
+
+#[test]
+fn revision_handles_bind_old_completed_records_and_failures_stay_readable() {
+    use opencast_ad_analysis_worker::policy::{self, AnalysisPolicy};
+    let handle = AnalysisPolicy::V3.job_handle("fingerprint-123");
+    let names = policy::poll_object_names(&handle).unwrap();
+    assert_eq!(
+        names,
+        vec![AnalysisPolicy::V3.job_object_name("fingerprint-123")]
+    );
+    assert_ne!(
+        names[0],
+        AnalysisPolicy::V2.job_object_name("fingerprint-123")
+    );
+    assert!(policy::poll_object_names("a3.unknown.fingerprint-123").is_none());
+    assert!(policy::poll_object_names("a3.20260911b.../escape").is_none());
+    let record = JobRecord::FailedUpstream {
+        job_id: handle,
+        status: 422,
+        code: "ad_analysis_incomplete".into(),
+        error_json: None,
+        purge_at: 2000,
+        subjects: vec![OWNER.into()],
+        content_hash: CONTENT.into(),
+    };
+    for _ in 0..3 {
+        assert!(matches!(
+            poll_decision(Some(&record), Some(OWNER)),
+            PollDecision::ServeFailedUpstream { status: 422, .. }
+        ));
+    }
+    assert!(matches!(
+        submit_decision(Some(&record), OWNER, CONTENT, false),
+        SubmitDecision::ServeFailed { status: 422, .. }
+    ));
+    assert_eq!(
+        poll_decision(Some(&record), Some(STRANGER)),
+        PollDecision::NotFound
+    );
 }

@@ -11,6 +11,8 @@ public struct OpenCastRemoteTranscriptionAdAnalysisSpan: Codable, Sendable, Equa
     public var endTime: Double
     public var confidence: Double
     public var evidenceQuote: String
+    public var startBoundary: OpenCastAdBoundary?
+    public var endBoundary: OpenCastAdBoundary?
 
     public init(
         kind: String,
@@ -20,7 +22,9 @@ public struct OpenCastRemoteTranscriptionAdAnalysisSpan: Codable, Sendable, Equa
         startTime: Double,
         endTime: Double,
         confidence: Double,
-        evidenceQuote: String
+        evidenceQuote: String,
+        startBoundary: OpenCastAdBoundary? = nil,
+        endBoundary: OpenCastAdBoundary? = nil
     ) {
         self.kind = kind
         self.label = label
@@ -30,6 +34,8 @@ public struct OpenCastRemoteTranscriptionAdAnalysisSpan: Codable, Sendable, Equa
         self.endTime = endTime
         self.confidence = confidence
         self.evidenceQuote = evidenceQuote
+        self.startBoundary = startBoundary
+        self.endBoundary = endBoundary
     }
 
     enum CodingKeys: String, CodingKey {
@@ -41,5 +47,7 @@ public struct OpenCastRemoteTranscriptionAdAnalysisSpan: Codable, Sendable, Equa
         case endTime = "end_time"
         case confidence
         case evidenceQuote = "evidence_quote"
+        case startBoundary = "start_boundary"
+        case endBoundary = "end_boundary"
     }
 }

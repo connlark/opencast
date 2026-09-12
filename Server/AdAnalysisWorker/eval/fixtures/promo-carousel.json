@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "request_id": "synthetic-carousel",
+  "episode_id": "woodworking-episode-7",
+  "podcast_id": "workbench-conversations",
+  "episode_title": "Repairing a wooden boat",
+  "podcast_title": "Workbench Conversations",
+  "transcript": {"language_code": "en", "audio_duration": 800, "fingerprint": "synthetic-carousel-v1", "updated_at": "2026-09-10T00:00:00Z", "state": "completed", "segment_count": 12},
+  "segments": [
+    {"id": 10, "start": 0, "end": 160, "text": "Welcome to Workbench Conversations. Today we are repairing a wooden boat. Inspect each plank for damage before removing the old paint. We tried CedarBright varnish last year; it cracked. This is a discussion of what failed, not a recommendation. We'll compare it with the old oil finish after a short break."},
+    {"id": 20, "start": 161, "end": 173, "text": "I'm Mira, and this is Harbor Letters, a new documentary podcast. A sealed envelope arrived thirty years after the boat disappeared."},
+    {"id": 30, "start": 173, "end": 195, "text": "I recognized his handwriting immediately. I never thought I would hear his voice again. When they opened the shed, the missing logbook was lying on the floor. What happened that winter? We followed every clue."},
+    {"id": 40, "start": 195, "end": 210, "text": "Listen to Harbor Letters on your favorite podcast app. Every Monday, discover the stories the harbor kept."},
+    {"id": 50, "start": 211, "end": 241, "text": "On Backstage Supper, actors tell us what happened after the curtain fell. I forgot my own name on opening night. Did the audience notice? Only when I answered to the wrong one! Join us for the whole conversation. Subscribe to Backstage Supper wherever you get podcasts."},
+    {"id": 60, "start": 242, "end": 400, "text": "We are back at the workbench. The repair is curing now. The old varnish had separated because moisture got under it. You can see why the entire plank must dry before applying a new finish."},
+    {"id": 70, "start": 400, "end": 530, "text": "A listener asked why old boat posters say listen to the sea. That slogan was advertising, but today we are studying the typography of those posters. Our fictional sponsor, Bottomless Bucket, never did keep the water out. That's a joke, not a real company. Now check the fasteners along the keel."},
+    {"id": 80, "start": 531, "end": 543, "text": "I'm Mira, and this is Harbor Letters, a new documentary podcast. A sealed envelope arrived thirty years after the boat disappeared."},
+    {"id": 90, "start": 543, "end": 565, "text": "I recognized his handwriting immediately. I never thought I would hear his voice again. When they opened the shed, the missing logbook was lying on the floor. What happened that winter? We followed every clue."},
+    {"id": 100, "start": 565, "end": 580, "text": "Listen to Harbor Letters on your favorite podcast app. Every Monday, discover the stories the harbor kept."},
+    {"id": 110, "start": 581, "end": 791, "text": "Back to the boat. Use a fresh brush for the final coat. Leave it alone overnight, then inspect the edges once more. That is the end of our woodworking lesson. Thank you for listening to Workbench Conversations. Goodbye."},
+    {"id": 120, "start": 792, "end": 798.8, "text": "Try our sister show, Five Minute Gardens. Subscribe wherever you listen to podcasts."}
+  ]
+}

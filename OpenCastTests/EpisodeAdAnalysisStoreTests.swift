@@ -617,8 +617,8 @@ struct EpisodeAdAnalysisStoreTests {
         #expect(store.isCurrentAnalysisDocument(rerunDocument, for: transcript))
     }
 
-    @Test("Cloud-imported analysis stays current against the disk round-tripped transcript")
-    func cloudImportedAnalysisStaysCurrentAfterTranscriptRoundTrip() throws {
+    @Test("Supported cloud analyses stay current after transcript disk round trip", arguments: ["promo_ad_breaks_v2", "promo_ad_breaks_v3"])
+    func cloudImportedAnalysisStaysCurrentAfterTranscriptRoundTrip(policy: String) throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -635,7 +635,7 @@ struct EpisodeAdAnalysisStoreTests {
         )
         let success = OpenCastRemoteTranscriptionAdAnalysisSuccess(
             model: "gemini-3.5-flash",
-            policy: EpisodeAdAnalysisContract.expectedPolicy,
+            policy: policy,
             spans: [OpenCastRemoteTranscriptionAdAnalysisSpan(
                 kind: "host_read_ad",
                 label: "Sponsor",
@@ -939,6 +939,63 @@ struct EpisodeAdAnalysisStoreTests {
         let record = try #require(reloadedStore.record(for: transcript.episodeID))
         #expect(record.state == .failed)
         #expect(record.errorMessage == "Promo/ad analysis document is missing.")
+    }
+
+    @Test("Validation exhaustion persists across relaunch, but explicit retry and changed inputs remain eligible")
+    func validationReplayPersistence() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let files = EpisodeAdAnalysisFileStore(baseDirectory: try makeTemporaryDirectory())
+        let client = ThrowingEpisodeAdAnalysisClient(error: EpisodeAdAnalysisHTTPError(
+            statusCode: 422, code: "ad_analysis_incomplete", detail: nil,
+            failure: .init(category: .validationExhausted, retryDisposition: .explicitRetry, policyRevision: "revision-a")))
+        client.revision = "revision-a"
+        let store = EpisodeAdAnalysisStore(client: client, fileStore: files)
+        let transcript = makeTranscriptDocument(episodeID: "replay-persistence")
+        store.startAnalysis(transcript: transcript, modelContext: context)
+        #expect(await waitUntil { store.record(for: transcript.episodeID)?.state == .failed })
+        let reloaded = EpisodeAdAnalysisStore(client: client, fileStore: files)
+        reloaded.load(modelContext: context)
+        #expect(try await reloaded.automaticReplayError(for: transcript) != nil)
+        var reimported = transcript
+        reimported.updatedAt = .now
+        #expect(try await reloaded.automaticReplayError(for: reimported) != nil)
+        var changed = transcript
+        changed.sourceFileSHA256 = "different-recording"
+        #expect(try await reloaded.automaticReplayError(for: changed) == nil)
+        changed = transcript
+        changed.segments[0].text += " New source text."
+        #expect(try await reloaded.automaticReplayError(for: changed) == nil)
+        client.revision = "revision-b"
+        #expect(try await reloaded.automaticReplayError(for: transcript) == nil)
+        client.revision = "revision-a"
+        reloaded.startAnalysis(transcript: transcript, retryFailed: false, modelContext: context)
+        #expect(await waitUntil { !reloaded.isRunning(for: transcript.episodeID) })
+        #expect(client.calls == 1)
+        client.error = nil
+        reloaded.startAnalysis(transcript: transcript, modelContext: context)
+        #expect(await waitUntil { reloaded.record(for: transcript.episodeID)?.state == .completed })
+        #expect(client.calls == 2)
+        #expect(client.lastRetryFailed == true)
+        #expect(try await reloaded.automaticReplayError(for: transcript) == nil)
+    }
+
+    @Test("A failed replacement preserves the last valid ad document")
+    func replacementFailurePreservesGoodAnalysis() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let files = EpisodeAdAnalysisFileStore(baseDirectory: try makeTemporaryDirectory())
+        let client = ThrowingEpisodeAdAnalysisClient(error: nil)
+        let store = EpisodeAdAnalysisStore(client: client, fileStore: files)
+        let transcript = makeTranscriptDocument(episodeID: "retain-good-analysis")
+        await startAndWait(store: store, transcript: transcript, modelContext: context)
+        let original = try #require(store.document(for: transcript.episodeID))
+        client.error = EpisodeAdAnalysisHTTPError(statusCode: 422, code: "ad_analysis_incomplete", detail: nil)
+        store.startAnalysis(transcript: transcript, modelContext: context)
+        #expect(await waitUntil { client.calls == 2 && !store.isRunning(for: transcript.episodeID) })
+        #expect(store.record(for: transcript.episodeID)?.state == .completed)
+        #expect(store.document(for: transcript.episodeID) == original)
+        #expect(store.lastErrorMessage(for: transcript.episodeID) != nil)
     }
 
     @Test("Cap rejections thread a typed failure kind onto the record")
@@ -1430,10 +1487,18 @@ struct EpisodeAdAnalysisStoreTests {
 
         #expect(
             payload ==
-                #"{"episode_id":"client-episode","episode_title":"Client Episode","podcast_id":"https://example.com/feed.xml","podcast_title":"Client Podcast","request_id":"client-success","schema_version":1,"segments":[{"end":14,"id":4,"start":10.5,"text":"This part is brought to you by Example Sponsor."},{"end":21.25,"id":6,"start":14,"text":"Visit the sponsor for more details."}],"transcript":{"audio_duration":30,"fingerprint":"fingerprint","language_code":"en","model_identifier":"model","model_tree_sha256":"tree-sha","model_version":"v1","segment_count":2,"state":"completed","updated_at":"2026-05-28T20:26:40Z"}}"#
+                #"{"episode_id":"client-episode","episode_title":"Client Episode","job_handle_version":1,"podcast_id":"https://example.com/feed.xml","podcast_title":"Client Podcast","request_id":"client-success","schema_version":1,"segments":[{"end":14,"id":4,"start":10.5,"text":"This part is brought to you by Example Sponsor."},{"end":21.25,"id":6,"start":14,"text":"Visit the sponsor for more details."}],"transcript":{"audio_duration":30,"fingerprint":"fingerprint","language_code":"en","model_identifier":"model","model_tree_sha256":"tree-sha","model_version":"v1","segment_count":2,"state":"completed","updated_at":"2026-05-28T20:26:40Z"}}"#
         )
-        #expect(AppAttestRequestBinding.sha256Hex(Data(payload.utf8)) == "042cec13b4b71be3ec9b90671fe300c555507b7a04162fb248f4aa8ade69ee4a")
-        #expect(AppAttestRequestBinding.hexString(hash) == "e207f0dc7a4a4820ecf959aa727b7c0ecea7aa9d4e8eda2da8dfde45c472eec5")
+        #expect(AppAttestRequestBinding.sha256Hex(Data(payload.utf8)) == "5a234ddb76bbe237d0c337eacf08ccd17c3109e4be96c62d03045889d933cee1")
+        #expect(AppAttestRequestBinding.hexString(hash) == "9bac11efdc966dbf31898d1cea75d100615793a35402aae5c85291091e0726d6")
+
+        var legacyRequest = request
+        legacyRequest.jobHandleVersion = nil
+        let legacyPayload = try EpisodeAdAnalysisJSONCoding.canonicalPayloadString(legacyRequest)
+        #expect(AppAttestRequestBinding.sha256Hex(Data(legacyPayload.utf8)) == "042cec13b4b71be3ec9b90671fe300c555507b7a04162fb248f4aa8ade69ee4a")
+        #expect(AppAttestRequestBinding.hexString(AppAttestRequestBinding.clientDataHash(
+            method: "POST", path: "/v1/ad-analysis/transcript", payload: legacyPayload
+        )) == "e207f0dc7a4a4820ecf959aa727b7c0ecea7aa9d4e8eda2da8dfde45c472eec5")
     }
 
     @Test("Canonical poll payload hash matches Worker binding fixture")
@@ -1620,12 +1685,19 @@ struct EpisodeAdAnalysisStoreTests {
 
 private final class ThrowingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @unchecked Sendable {
     var error: Error?
+    var revision: String?
+    var calls = 0
+    var lastRetryFailed: Bool?
+
+    func servingPolicyRevision() async throws -> String? { revision }
 
     init(error: Error?) {
         self.error = error
     }
 
     func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
+        calls += 1
+        lastRetryFailed = request.retryFailed
         if let error {
             throw error
         }

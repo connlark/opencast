@@ -26,16 +26,24 @@ final class EpisodeAdAnalysisStore {
 
     init(
         fileStore: EpisodeAdAnalysisFileStore = EpisodeAdAnalysisFileStore(),
-        configuration: AdAnalysisBackendConfiguration = .current,
+        configuration: AdAnalysisBackendConfiguration? = nil,
         transport: any EpisodeAdAnalysisHTTPTransport & AppAttestHTTPTransport = URLSession.shared,
         preparationGate: @escaping @Sendable () async throws -> Void = {}
     ) {
-        client = URLSessionEpisodeAdAnalysisClient(
-            configuration: configuration,
-            transport: transport
-        )
+        let effectiveConfiguration = configuration ?? .current
+        #if DEBUG || INTERNAL_NOTIFICATIONS_DIAGNOSTICS
+        client = URLSessionEpisodeAdAnalysisClient(configuration: effectiveConfiguration, transport: transport)
+        #else
+        if let configuration {
+            client = URLSessionEpisodeAdAnalysisClient(configuration: configuration, transport: transport)
+        } else {
+            client = EpisodeAdAnalysisRoutedClient(clientFactory: { configuration in
+                URLSessionEpisodeAdAnalysisClient(configuration: configuration, transport: transport)
+            })
+        }
+        #endif
         self.fileStore = fileStore
-        analysisUnavailableMessage = configuration.analysisUnavailableMessage
+        analysisUnavailableMessage = effectiveConfiguration.analysisUnavailableMessage
         poller = Self.makePoller(timeout: .seconds(1_800)) { duration in
             try await Task.sleep(for: duration)
         }
@@ -124,7 +132,34 @@ final class EpisodeAdAnalysisStore {
     }
 
     func lastErrorMessage(for episodeID: String) -> String? {
-        failures.message(for: episodeID)
+        if let message = failures.message(for: episodeID) { return message }
+        guard let state = try? fileStore.readRunState(episodeID: episodeID), let failure = state.failure else { return nil }
+        return EpisodeAdAnalysisHTTPError(statusCode: 422, code: state.failureCode ?? "ad_analysis_incomplete", detail: nil, failure: failure).localizedDescription
+    }
+
+    func automaticReplayError(for transcript: EpisodeTranscriptDocument) async throws -> EpisodeAdAnalysisHTTPError? {
+        guard let state = try fileStore.readRunState(episodeID: transcript.episodeID),
+              let failure = state.failure, failure.suppressesAutomaticReplay,
+              state.replayIdentity == (try await EpisodeAdAnalysisRunState.inputIdentity(transcript))
+        else { return nil }
+        // A legacy failure with no known revision gets one opportunity when
+        // the server first advertises a revision; the next failure records it.
+        if let revision = try? await client.servingPolicyRevision(), revision != failure.policyRevision { return nil }
+        return EpisodeAdAnalysisHTTPError(statusCode: 422, code: state.failureCode ?? "ad_analysis_incomplete", detail: nil, failure: failure)
+    }
+
+    func retainFailure(_ error: EpisodeAdAnalysisHTTPError, transcript: EpisodeTranscriptDocument) async throws {
+        guard var failure = error.replayFailure else { return }
+        if failure.policyRevision == nil { failure.policyRevision = try? await client.servingPolicyRevision() }
+        let identity = try await EpisodeAdAnalysisRunState.inputIdentity(transcript)
+        try Task.checkCancellation()
+        var state = try fileStore.readRunState(episodeID: transcript.episodeID)
+            ?? EpisodeAdAnalysisRunState(transcriptFingerprint: "")
+        state.replayIdentity = identity
+        state.failure = failure
+        state.failureCode = error.code
+        try fileStore.writeRunState(state, episodeID: transcript.episodeID)
+        failures.record(error, episodeID: transcript.episodeID)
     }
 
     func document(for episodeID: String) -> EpisodeAdAnalysisDocument? {
@@ -136,13 +171,20 @@ final class EpisodeAdAnalysisStore {
         return try? fileStore.read(relativePath: relativePath)
     }
 
-    func loadDocument(for episodeID: String) async throws -> EpisodeAdAnalysisDocument {
+    func loadDocument(
+        for episodeID: String,
+        transcript: EpisodeTranscriptDocument? = nil
+    ) async throws -> EpisodeAdAnalysisDocument {
         guard let record = record(for: episodeID),
               let relativePath = record.analysisRelativePath
         else {
             throw EpisodeAdAnalysisError.analysisDocumentMissing
         }
-        return try await fileStore.readOffCaller(relativePath: relativePath)
+        let document = try await fileStore.readOffCaller(relativePath: relativePath)
+        guard let transcript,
+              await isCurrentAnalysisDocumentOffCaller(document, for: transcript)
+        else { return document }
+        return await EpisodeAdBoundaryRefiner.refined(document, transcript: transcript)
     }
 
     /// Resolved by the store so the diagnostics sheet never duplicates the
@@ -329,6 +371,7 @@ final class EpisodeAdAnalysisStore {
     func startAnalysis(
         transcript document: EpisodeTranscriptDocument,
         transcriptState: EpisodeTranscriptState? = .completed,
+        retryFailed: Bool = true,
         modelContext: ModelContext
     ) {
         guard activeTask == nil else {
@@ -352,6 +395,7 @@ final class EpisodeAdAnalysisStore {
             await runAnalysis(
                 runID: runID,
                 transcript: document,
+                retryFailed: retryFailed,
                 modelContext: modelContext
             )
         }
@@ -393,6 +437,7 @@ final class EpisodeAdAnalysisStore {
             modelContext: modelContext
         )
         try commit(episodeID: document.episodeID, modelContext: modelContext, resort: true)
+        try fileStore.writeRunState(.init(transcriptFingerprint: document.transcriptFingerprint), episodeID: document.episodeID)
         failures.clear(episodeID: document.episodeID)
     }
 
@@ -499,6 +544,7 @@ final class EpisodeAdAnalysisStore {
     private func runAnalysis(
         runID: UUID,
         transcript document: EpisodeTranscriptDocument,
+        retryFailed: Bool,
         modelContext: ModelContext
     ) async {
         defer {
@@ -516,13 +562,19 @@ final class EpisodeAdAnalysisStore {
 
         var relativePath: String?
         do {
+            if !retryFailed, let blocked = try await automaticReplayError(for: document) { throw blocked }
             let preparation = try await prepareAnalysis(transcript: document)
+            var request = preparation.request
+            request.retryFailed = retryFailed
             relativePath = preparation.relativePath
             try Task.checkCancellation()
             guard ownsActiveRun(episodeID: document.episodeID, runID: runID) else {
                 throw CancellationError()
             }
 
+            let previous = record(for: document.episodeID).flatMap { $0.state == .completed ? $0.analysisRelativePath : nil }
+                ?? (try? fileStore.readRunState(episodeID: document.episodeID))?.previousAnalysisPath
+            try fileStore.writeRunState(.init(transcriptFingerprint: preparation.fingerprint, previousAnalysisPath: previous), episodeID: document.episodeID)
             try upsertRecord(
                 episodeID: document.episodeID,
                 podcastID: document.podcastID,
@@ -543,35 +595,42 @@ final class EpisodeAdAnalysisStore {
 
             let submitOutcome: EpisodeAdAnalysisSubmitOutcome
             do {
-                submitOutcome = try await client.analyze(preparation.request)
-            } catch is URLError {
-                // A lost submit response is recovered through the poll loop:
-                // the job ID is the transcript fingerprint, so it is known
-                // without the response. If the submit landed, polling attaches
-                // to the running job (or re-reads the completed result, which
-                // the worker serves idempotently until its TTL purge); if it
-                // never landed, the poll's job_not_found resubmit path starts
-                // it fresh.
-                submitOutcome = .accepted(jobID: preparation.fingerprint, pollAfter: 1)
+                submitOutcome = try await client.analyze(request)
+            } catch let error as URLError {
+                try Task.checkCancellation()
+                guard error.code != .cancelled else { throw error }
+                // Repeat a lost submit once to recover its revision-aware
+                // handle. The worker returns the same accepted/completed job
+                // when the original request arrived; no guessed namespace is
+                // needed when the 202 body was lost.
+                submitOutcome = try await client.analyze(request)
             }
             let response: EpisodeAdAnalysisAPIResponse
             switch submitOutcome {
             case .completed(let completedResponse):
                 response = completedResponse
             case .accepted(let jobID, let pollAfter):
-                guard jobID == preparation.fingerprint else {
+                guard EpisodeAdAnalysisJobHandle.matches(jobID, fingerprint: preparation.fingerprint) else {
                     throw Self.jobIDMismatchError()
                 }
                 try persistAcceptedJob(
                     episodeID: document.episodeID,
                     fingerprint: preparation.fingerprint,
+                    jobID: jobID,
                     modelContext: modelContext
                 )
                 response = try await pollUntilCompleted(
                     jobID: jobID,
                     initialPollAfter: pollAfter,
-                    resubmit: { [client] in
-                        try await client.analyze(preparation.request)
+                    resubmit: { [client, fileStore, request] in
+                        let outcome = try await client.analyze(request)
+                        if case .accepted(let nextID, _) = outcome,
+                           EpisodeAdAnalysisJobHandle.matches(nextID, fingerprint: preparation.fingerprint) {
+                            var state = try fileStore.readRunState(episodeID: document.episodeID) ?? .init(transcriptFingerprint: preparation.fingerprint)
+                            state.jobID = nextID
+                            try fileStore.writeRunState(state, episodeID: document.episodeID)
+                        }
+                        return outcome
                     }
                 )
             }
@@ -580,12 +639,15 @@ final class EpisodeAdAnalysisStore {
                 throw CancellationError()
             }
 
-            let analysisDocument = makeDocument(
+            let coarseDocument = makeDocument(
                 transcript: document,
                 response: response,
                 fingerprint: preparation.fingerprint,
                 transcriptSegmentCount: preparation.segments.count
             )
+            let analysisDocument = await EpisodeAdBoundaryRefiner.refined(coarseDocument, transcript: document)
+            try Task.checkCancellation()
+            guard ownsActiveRun(episodeID: document.episodeID, runID: runID) else { throw CancellationError() }
             try completeAnalysis(
                 episodeID: document.episodeID,
                 fingerprint: preparation.fingerprint,
@@ -598,6 +660,12 @@ final class EpisodeAdAnalysisStore {
         } catch is CancellationError {
             return
         } catch {
+            guard ownsActiveRun(episodeID: document.episodeID, runID: runID) else { return }
+            if let failure = error as? EpisodeAdAnalysisHTTPError {
+                do { try await retainFailure(failure, transcript: document) }
+                catch { failures.record(error, episodeID: document.episodeID) }
+            }
+            guard !Task.isCancelled, ownsActiveRun(episodeID: document.episodeID, runID: runID) else { return }
             markFailed(
                 episodeID: document.episodeID,
                 relativePath: relativePath,
@@ -684,18 +752,43 @@ final class EpisodeAdAnalysisStore {
             }
         }
 
+        var resumedTranscript: EpisodeTranscriptDocument?
         do {
+            let episodeID = context.episodeID
+            let descriptor = FetchDescriptor<EpisodeTranscriptRecord>(predicate: #Predicate { $0.episodeID == episodeID })
+            if let path = try modelContext.fetch(descriptor).first?.transcriptRelativePath {
+                resumedTranscript = try? await EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory).readOffCaller(relativePath: path)
+            }
+            var resubmit: (@Sendable () async throws -> EpisodeAdAnalysisSubmitOutcome)?
+            if let transcript = resumedTranscript {
+                let preparation = try await prepareAnalysis(transcript: transcript)
+                if preparation.fingerprint == context.transcriptFingerprint {
+                    resubmit = { [client, fileStore] in
+                        let outcome = try await client.analyze(preparation.request)
+                        if case .accepted(let id, _) = outcome,
+                           EpisodeAdAnalysisJobHandle.matches(id, fingerprint: preparation.fingerprint) {
+                            var state = try fileStore.readRunState(episodeID: episodeID) ?? .init(transcriptFingerprint: preparation.fingerprint)
+                            state.jobID = id
+                            try fileStore.writeRunState(state, episodeID: episodeID)
+                        }
+                        return outcome
+                    }
+                }
+            }
+            let state = try fileStore.readRunState(episodeID: context.episodeID)
+            let jobID = state.flatMap { $0.transcriptFingerprint == context.transcriptFingerprint ? $0.jobID : nil }
+                ?? context.transcriptFingerprint
             let response = try await pollUntilCompleted(
-                jobID: context.transcriptFingerprint,
+                jobID: jobID,
                 initialPollAfter: resumeInitialPollAfter,
-                resubmit: nil
+                resubmit: resubmit
             )
             try Task.checkCancellation()
             guard ownsActiveRun(episodeID: context.episodeID, runID: runID) else {
                 throw CancellationError()
             }
 
-            let document = makeDocument(
+            var document = makeDocument(
                 episodeID: context.episodeID,
                 podcastID: context.podcastID,
                 transcriptUpdatedAt: context.transcriptUpdatedAt,
@@ -703,6 +796,12 @@ final class EpisodeAdAnalysisStore {
                 fingerprint: context.transcriptFingerprint,
                 transcriptSegmentCount: context.transcriptSegmentCount
             )
+            if let transcript = resumedTranscript,
+               await isCurrentAnalysisDocumentOffCaller(document, for: transcript) {
+                document = await EpisodeAdBoundaryRefiner.refined(document, transcript: transcript)
+            }
+            try Task.checkCancellation()
+            guard ownsActiveRun(episodeID: context.episodeID, runID: runID) else { throw CancellationError() }
             try completeAnalysis(
                 episodeID: context.episodeID,
                 fingerprint: context.transcriptFingerprint,
@@ -715,6 +814,12 @@ final class EpisodeAdAnalysisStore {
         } catch is CancellationError {
             return
         } catch {
+            guard ownsActiveRun(episodeID: context.episodeID, runID: runID) else { return }
+            if let failure = error as? EpisodeAdAnalysisHTTPError, let transcript = resumedTranscript {
+                do { try await retainFailure(failure, transcript: transcript) }
+                catch { failures.record(error, episodeID: context.episodeID) }
+            }
+            guard !Task.isCancelled, ownsActiveRun(episodeID: context.episodeID, runID: runID) else { return }
             markFailed(
                 episodeID: context.episodeID,
                 relativePath: context.analysisRelativePath,
@@ -727,6 +832,7 @@ final class EpisodeAdAnalysisStore {
     private func persistAcceptedJob(
         episodeID: String,
         fingerprint: String,
+        jobID: String,
         modelContext: ModelContext
     ) throws {
         guard let record = try recordSet.fetchStoredRecord(
@@ -738,6 +844,9 @@ final class EpisodeAdAnalysisStore {
             throw CancellationError()
         }
 
+        var state = try fileStore.readRunState(episodeID: episodeID) ?? .init(transcriptFingerprint: fingerprint)
+        state.jobID = jobID
+        try fileStore.writeRunState(state, episodeID: episodeID)
         record.jobAcceptedAt = .now
         record.updatedAt = .now
         try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
@@ -767,7 +876,8 @@ final class EpisodeAdAnalysisStore {
             sleep: sleep,
             isTransientJobFailure: { ($0 as? EpisodeAdAnalysisHTTPError)?.isTransientJobFailure == true },
             timedOutError: EpisodeAdAnalysisError.analysisTimedOut,
-            jobIDMismatchError: jobIDMismatchError()
+            jobIDMismatchError: jobIDMismatchError(),
+            jobIDsMatch: EpisodeAdAnalysisJobHandle.sameInput
         )
     }
 
@@ -807,6 +917,7 @@ final class EpisodeAdAnalysisStore {
         record.jobAcceptedAt = nil
         record.updatedAt = .now
         try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
+        try fileStore.writeRunState(.init(transcriptFingerprint: fingerprint), episodeID: episodeID)
     }
 
     private static func jobIDMismatchError() -> EpisodeAdAnalysisHTTPError {
@@ -894,7 +1005,9 @@ final class EpisodeAdAnalysisStore {
                     startTime: span.startTime,
                     endTime: span.endTime,
                     confidence: span.confidence,
-                    evidenceQuote: span.evidenceQuote
+                    evidenceQuote: span.evidenceQuote,
+                    startBoundary: span.startBoundary,
+                    endBoundary: span.endBoundary
                 )
             },
             warnings: response.warnings,
@@ -906,7 +1019,8 @@ final class EpisodeAdAnalysisStore {
                 )
             },
             createdAt: .now,
-            updatedAt: .now
+            updatedAt: .now,
+            policyRevision: response.policyRevision
         )
     }
 
@@ -916,14 +1030,13 @@ final class EpisodeAdAnalysisStore {
         transcriptFingerprint: String,
         transcriptSegmentCount: Int
     ) -> Bool {
-        // A completed record from a pre-`promo_ad_breaks_v2` policy is
-        // outdated even when its transcript still matches: the old contract's
-        // cue-fragment spans must never render or skip again.
+        // Only explicitly supported whole-break policies may render or skip,
+        // even when an older cue-fragment policy's transcript still matches.
         // Whole-second comparison: the transcript's `updatedAt` loses its
         // fractional seconds on the `.iso8601` disk round trip, while the
         // SwiftData record keeps full precision, so exact equality would
         // brand a record seeded from an in-memory document permanently stale.
-        return (record.state != .completed || record.policy == EpisodeAdAnalysisContract.expectedPolicy)
+        return (record.state != .completed || EpisodeAdAnalysisContract.supports(policy: record.policy))
             && record.transcriptFingerprint == transcriptFingerprint
             && record.transcriptUpdatedAt.truncatedToWholeSeconds == document.updatedAt.truncatedToWholeSeconds
             && record.transcriptSegmentCount == transcriptSegmentCount
@@ -937,7 +1050,7 @@ final class EpisodeAdAnalysisStore {
         transcriptFingerprint: String,
         transcriptSegmentCount: Int
     ) -> Bool {
-        analysisDocument.policy == EpisodeAdAnalysisContract.expectedPolicy
+        EpisodeAdAnalysisContract.supports(policy: analysisDocument.policy)
             && analysisDocument.transcriptFingerprint == transcriptFingerprint
             && analysisDocument.transcriptUpdatedAt.truncatedToWholeSeconds
                 == transcriptDocument.updatedAt.truncatedToWholeSeconds
@@ -1008,6 +1121,19 @@ final class EpisodeAdAnalysisStore {
         modelContext: ModelContext
     ) {
         do {
+            if let state = try fileStore.readRunState(episodeID: episodeID),
+               let path = state.previousAnalysisPath,
+               let previous = try? fileStore.read(relativePath: path) {
+                try importCompletedAnalysis(previous, modelContext: modelContext)
+                try fileStore.writeRunState(state, episodeID: episodeID)
+                if let record = record(for: episodeID) {
+                    record.failureKind = Self.failureKind(for: error)
+                    record.errorMessage = error.localizedDescription
+                    try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
+                }
+                failures.record(error, episodeID: episodeID)
+                return
+            }
             guard let record = try recordSet.fetchStoredRecord(episodeID: episodeID, modelContext: modelContext) else {
                 failures.record(error, episodeID: episodeID)
                 return

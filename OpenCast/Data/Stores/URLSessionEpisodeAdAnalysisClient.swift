@@ -90,7 +90,7 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
         }
 
         if case .accepted(let jobID, _) = outcome,
-           jobID != requestBody.transcript.fingerprint
+           !EpisodeAdAnalysisJobHandle.matches(jobID, fingerprint: requestBody.transcript.fingerprint)
         {
             throw EpisodeAdAnalysisHTTPError(
                 statusCode: -1,
@@ -127,6 +127,17 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
                 response: EpisodeAdAnalysisJobPollOutcome.self
             )
         }
+    }
+
+    func servingPolicyRevision() async throws -> String? {
+        var request = URLRequest(url: configuration.workerBaseURL.appending(path: "health"))
+        request.timeoutInterval = 10
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await transport.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 4096 else { return nil }
+        struct Health: Decodable { var policy_revision: String? }
+        let revision = try JSONDecoder().decode(Health.self, from: data).policy_revision
+        return revision.flatMap { $0.utf8.count <= 96 ? $0 : nil }
     }
 
     #if DEBUG
@@ -181,7 +192,8 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
             throw EpisodeAdAnalysisHTTPError(
                 statusCode: error.statusCode,
                 code: error.code,
-                detail: error.detail
+                detail: error.detail,
+                failure: error.failure
             )
         }
     }
@@ -214,7 +226,8 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
             throw EpisodeAdAnalysisHTTPError(
                 statusCode: httpResponse.statusCode,
                 code: errorResponse?.error ?? "http_\(httpResponse.statusCode)",
-                detail: errorResponse?.detail
+                detail: errorResponse?.detail,
+                failure: errorResponse?.failure
             )
         }
 

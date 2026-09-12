@@ -4,7 +4,6 @@
 // test` cannot reach. Requires `build/index.js` (see `yarn build:worker`).
 import {
   SELF,
-  abortAllDurableObjects,
   env,
   runDurableObjectAlarm,
 } from "cloudflare:test";
@@ -101,6 +100,7 @@ function installFetchStub() {
       }
       const pending = pendingGeminiResponses.shift();
       const body = typeof pending === "function" ? await pending() : pending;
+      if (body instanceof Response) return body;
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -408,7 +408,7 @@ describe("routing", () => {
   it("serves health without auth", async () => {
     const response = await SELF.fetch(`${BASE}/health`);
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ message: "ok" });
+    expect(await response.json()).toEqual({ message: "ok", policy_revision: "promo_ad_breaks_v2" });
   });
 
   it("returns 404 for unknown routes", async () => {
@@ -566,35 +566,10 @@ describe("async jobs", () => {
     expect(await repeated.json()).toEqual(result);
   });
 
-  it("turns an evicted running job into a transient failure on its alarm", async () => {
-    const { request, firstEvidence, secondEvidence } = makeLongRequest({
-      fingerprint: "c".repeat(64),
-    });
-    const first = mockGeminiDeferred(geminiResponseForSpan(2, firstEvidence));
-    const second = mockGeminiDeferred(
-      geminiResponseForSpan(1802, secondEvidence),
-    );
-
-    const submitted = await postAnalyze(JSON.stringify(request), {
-      authorization: `Bearer ${BEARER}`,
-    });
-    expect(submitted.status).toBe(202);
-    await Promise.all([first.started, second.started]);
-
-    await abortAllDurableObjects();
-    const stub = env.AD_ANALYSIS_JOB.getByName(
-      `ad-analysis:v1:job:${request.transcript.fingerprint}`,
-    );
-    expect(await runDurableObjectAlarm(stub)).toBe(true);
-
-    const failed = await postPoll(request.transcript.fingerprint, {
-      authorization: `Bearer ${BEARER}`,
-    });
-    expect(failed.status).toBe(503);
-    expect((await failed.json()).error).toBe("job_failed_transient");
-    first.release();
-    second.release();
-  });
+  // Active interruption/eviction runs in interruption.test.mjs: restarting
+  // workerd externally preserves the real ledger and blocked provider I/O.
+  // The in-runtime abortAllDurableObjects helper crashes workerd 20260811.1
+  // when a running job has made a nested Durable Object call.
 
   it("keeps legacy requests synchronous and runs opted-in single-window requests asynchronously", async () => {
     const legacy = makeLongRequest({

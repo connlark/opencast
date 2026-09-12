@@ -77,7 +77,7 @@ final class NowPlayingFramePacingProbe: NSObject {
     }
 
     private func flush() {
-        guard let firstEvent = events.first, let lastEvent = events.last, frames.count > 2 else {
+        guard let firstEvent = events.first, let lastEvent = events.last else {
             events.removeAll(keepingCapacity: true)
             return
         }
@@ -90,7 +90,7 @@ final class NowPlayingFramePacingProbe: NSObject {
         // Inter-frame deltas whose end timestamp falls inside the analysis window.
         var deltas: [(end: Double, delta: Double)] = []
         deltas.reserveCapacity(frames.count)
-        for index in 1..<frames.count {
+        for index in frames.indices.dropFirst() {
             let end = frames[index]
             guard end >= windowStart, end <= windowEnd else {
                 continue
@@ -98,8 +98,16 @@ final class NowPlayingFramePacingProbe: NSObject {
             deltas.append((end, frames[index] - frames[index - 1]))
         }
 
+        let eventLine = events.map { String(format: "%@@+%.0f", $0.label, ($0.time - origin) * 1000) }
+            .joined(separator: " ")
         guard !deltas.isEmpty else {
-            events.removeAll(keepingCapacity: true)
+            // A stalled/throttled display link can have no sample in the
+            // event window. Preserve lifecycle evidence without inventing a
+            // zero frame gap or silently dropping the event's session.
+            recordSummary(
+                "session=\(sessionIndex) frames=0 refresh=unavailable maxGap=unavailable | events: \(eventLine) | topGaps: unavailable",
+                origin: origin
+            )
             return
         }
 
@@ -116,14 +124,15 @@ final class NowPlayingFramePacingProbe: NSObject {
             return String(format: "%.1fms@+%.0f[%@]", gap.delta * 1000, startMs, phase(at: gap.end - gap.delta))
         }
 
-        let eventLine = events.map { String(format: "%@@+%.0f", $0.label, ($0.time - origin) * 1000) }
-            .joined(separator: " ")
-
         let summary = String(
             format: "session=%d frames=%d refresh=%.1fms maxGap=%.1fms >16.7=%d >33=%d >50=%d >100=%d | events: %@ | topGaps: %@",
             sessionIndex, deltas.count, refresh * 1000, maxDelta * 1000,
             over16, over33, over50, over100, eventLine, topGaps.joined(separator: ", ")
         )
+        recordSummary(summary, origin: origin)
+    }
+
+    private func recordSummary(_ summary: String, origin: Double) {
         logger.log("\(summary, privacy: .public)")
         sessionSummaries.append(summary)
         writeRawLog(sessionIndex: sessionIndex, origin: origin, summary: summary)
@@ -144,7 +153,7 @@ final class NowPlayingFramePacingProbe: NSObject {
         for event in events {
             lines.append(String(format: "EVENT %.2f %@", (event.time - origin) * 1000, event.label))
         }
-        for index in 1..<frames.count {
+        for index in frames.indices.dropFirst() {
             let relEnd = (frames[index] - origin) * 1000
             guard relEnd >= -10 else {
                 continue

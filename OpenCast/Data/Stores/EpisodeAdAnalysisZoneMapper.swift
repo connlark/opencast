@@ -16,10 +16,32 @@ enum EpisodeAdAnalysisZoneMapper {
         // audio), so the split happens before any merging.
         let autoSkipSpans = document.spans.filter { $0.confidence >= autoSkipConfidenceFloor }
         let displayOnlySpans = document.spans.filter { $0.confidence < autoSkipConfidenceFloor }
-        return EpisodeAdAnalysisZoneTiers(
-            autoSkip: mergedZones(for: autoSkipSpans, duration: duration),
-            displayOnly: mergedZones(for: displayOnlySpans, duration: duration)
-        )
+        let automatic = mergedZones(for: autoSkipSpans, duration: duration, mergeGap: effectiveMergeGap(document))
+        let uncertain = mergedZones(for: displayOnlySpans, duration: duration, mergeGap: effectiveMergeGap(document))
+        return EpisodeAdAnalysisZoneTiers(autoSkip: automatic, displayOnly: subtract(automatic, from: uncertain))
+    }
+
+    /// Presentation uses effective intervals after word refinement. Raw spans
+    /// and their potentially different anchors remain in the analysis document.
+    private static func subtract(_ automatic: [PlaybackSkipZone], from uncertain: [PlaybackSkipZone]) -> [PlaybackSkipZone] {
+        var result: [PlaybackSkipZone] = []
+        var usedIDs = Set((automatic + uncertain).map(\.id))
+        var extraID = 0
+        for zone in uncertain {
+            var start = zone.startTime
+            var id = zone.id
+            for cut in automatic where cut.endTime > start && cut.startTime < zone.endTime {
+                if cut.startTime > start {
+                    result.append(.init(id: id, startTime: start, endTime: min(cut.startTime, zone.endTime)))
+                    while usedIDs.contains(extraID) { extraID += 1 }
+                    id = extraID
+                    usedIDs.insert(id)
+                }
+                start = max(start, cut.endTime)
+            }
+            if start < zone.endTime { result.append(.init(id: id, startTime: start, endTime: zone.endTime)) }
+        }
+        return result
     }
 
     static func zones(
@@ -31,7 +53,8 @@ enum EpisodeAdAnalysisZoneMapper {
 
     private static func mergedZones(
         for spans: [EpisodeAdAnalysisSpan],
-        duration: TimeInterval?
+        duration: TimeInterval?,
+        mergeGap: TimeInterval
     ) -> [PlaybackSkipZone] {
         let finiteDuration = duration.flatMap { value in
             value.isFinite && value > 0 ? value : nil
@@ -70,7 +93,7 @@ enum EpisodeAdAnalysisZoneMapper {
                 return
             }
 
-            if zone.startTime - last.endTime <= Self.mergeGap {
+            if zone.startTime - last.endTime <= mergeGap {
                 result[result.endIndex - 1] = PlaybackSkipZone(
                     id: last.id,
                     startTime: last.startTime,
@@ -80,5 +103,9 @@ enum EpisodeAdAnalysisZoneMapper {
                 result.append(zone)
             }
         }
+    }
+
+    private static func effectiveMergeGap(_ document: EpisodeAdAnalysisDocument) -> TimeInterval {
+        document.spans.contains { $0.boundaryRefinement != nil } ? 0 : mergeGap
     }
 }

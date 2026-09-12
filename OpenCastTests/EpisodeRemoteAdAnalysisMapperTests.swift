@@ -6,11 +6,13 @@ import Testing
 @MainActor
 @Suite("Remote ad analysis mapper")
 struct EpisodeRemoteAdAnalysisMapperTests {
-    @Test("A valid cloud analysis maps to a current persisted document")
-    func validAnalysisMaps() throws {
+    @Test("Supported cloud policies map to current persisted documents", arguments: ["promo_ad_breaks_v2", "promo_ad_breaks_v3"])
+    func validAnalysisMaps(policy: String) throws {
         let transcript = makeTranscript()
+        var success = makeSuccess()
+        success.policy = policy
         let document = try EpisodeRemoteAdAnalysisMapper.document(
-            from: makeSuccess(),
+            from: success,
             transcript: transcript,
             requestID: "job-cloud-1"
         )
@@ -18,7 +20,7 @@ struct EpisodeRemoteAdAnalysisMapperTests {
         #expect(document.episodeID == transcript.episodeID)
         #expect(document.podcastID == transcript.podcastID)
         #expect(document.requestID == "job-cloud-1")
-        #expect(document.policy == EpisodeAdAnalysisContract.expectedPolicy)
+        #expect(document.policy == policy)
         #expect(document.model == "gemini-3.5-flash")
         #expect(document.spans.count == 1)
         #expect(document.spans[0].kind == .hostReadAd)
@@ -59,7 +61,7 @@ struct EpisodeRemoteAdAnalysisMapperTests {
     @Test("Policy drift throws so the pass falls back to device analysis")
     func policyDriftThrows() {
         var success = makeSuccess()
-        success.policy = "promo_ad_breaks_v3"
+        success.policy = "promo_ad_breaks_v4"
         #expect(throws: EpisodeRemoteAdAnalysisMapper.ValidationError.self) {
             try EpisodeRemoteAdAnalysisMapper.document(
                 from: success,
