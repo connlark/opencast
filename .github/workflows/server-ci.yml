@@ -103,9 +103,11 @@ jobs:
         run: |
           cargo test --locked \
             --lib \
+            --test accounting \
             --test app_attest_migrations \
             --test gemini_retry \
             --test job_state \
+            --test promo_v3 \
             --test prompt \
             --test routing \
             --test validation \

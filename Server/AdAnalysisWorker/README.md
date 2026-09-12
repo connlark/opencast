@@ -22,6 +22,12 @@ Create your own D1 database, replace every `REPLACE_WITH_...` value, and keep
 `PUBLIC_AD_ANALYSIS_ENABLED` set to `false` until App Attest, D1 migrations,
 the Durable Object, Gemini, and abuse controls are ready.
 
+`AD_ANALYSIS_POLICY` selects the serving policy bundle — a pinned
+prompt, validator, and model. `promo_ad_breaks_v3` is the recall-first bundle
+and pins its own model, ignoring `AD_ANALYSIS_GEMINI_MODEL`; any absent or
+unrecognized value serves v2, which reads that model override. Changing the
+policy also changes the cache namespace.
+
 Set required secrets with Wrangler; never commit their values:
 
 ```sh
