@@ -18,6 +18,7 @@ final class OpenCastAppModel {
 
     let cacheController: OpenCastCacheController
     let httpClient: any OpenCastHTTPClient
+    let helpContent: HelpContentStore
     let library: LibraryStore
     let downloads: DownloadStore
     let transcriptionModels: TranscriptionModelStore
@@ -74,6 +75,9 @@ final class OpenCastAppModel {
         playback.currentEpisode != nil || finishedPlaybackPresentation != nil
     }
     var onboardingPresentationRequest = 0
+    /// The nuke sheet stays hoisted at the root so `resetAfterDataNuke()` can
+    /// swap it for onboarding in one transaction; Delete Data requests it here.
+    var dataNukeConfirmationPresentationRequest = 0
     var lastPlaybackError: String?
     var lastUpNextError: String?
     /// Unsubscribe outcome surface, presented by the removal confirmation
@@ -135,6 +139,7 @@ final class OpenCastAppModel {
     init(
         cacheController: OpenCastCacheController = OpenCastCacheController(),
         httpClient: (any OpenCastHTTPClient)? = nil,
+        helpContent: HelpContentStore? = nil,
         library: LibraryStore? = nil,
         localLibraryCacheStore: (any LocalLibraryCacheStore)? = nil,
         downloads: DownloadStore = DownloadStore(),
@@ -181,6 +186,10 @@ final class OpenCastAppModel {
 
         self.cacheController = cacheController
         self.httpClient = resolvedHTTPClient
+        self.helpContent = helpContent ?? HelpContentStore(
+            httpClient: resolvedHTTPClient,
+            cacheDirectory: cacheController.rootDirectory.appending(path: "HelpContent", directoryHint: .isDirectory)
+        )
         let resolvedLibrary = library ?? LibraryStore(
             feedService: DefaultFeedService(httpClient: resolvedHTTPClient),
             localCache: localLibraryCacheStore ?? SQLiteLocalLibraryCacheStore(
@@ -1592,6 +1601,10 @@ final class OpenCastAppModel {
 
     func requestOnboardingPresentation() {
         onboardingPresentationRequest += 1
+    }
+
+    func requestDataNukeConfirmationPresentation() {
+        dataNukeConfirmationPresentationRequest += 1
     }
 
     @discardableResult

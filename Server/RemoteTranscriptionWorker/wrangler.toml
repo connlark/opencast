@@ -2,7 +2,7 @@
 # prod-staging and production must use isolated storage and credentials.
 name = "your-remote-transcription-worker"
 main = "build/index.js"
-compatibility_date = "2026-08-14"
+compatibility_date = "2026-09-03"
 workers_dev = true
 
 [observability]

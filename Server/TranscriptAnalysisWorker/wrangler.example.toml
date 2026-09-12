@@ -1,6 +1,6 @@
 name = "your-transcript-analysis-worker"
 main = "build/index.js"
-compatibility_date = "2026-08-14"
+compatibility_date = "2026-09-03"
 workers_dev = true
 
 [observability]

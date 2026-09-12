@@ -6,4 +6,5 @@ enum AppRoute: Hashable {
     case episodeArtwork(id: String)
     case episodeTranscript(id: String)
     case adDetectionQueue
+    case settings(SettingsRoute)
 }

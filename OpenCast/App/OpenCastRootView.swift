@@ -51,7 +51,6 @@ struct OpenCastRootView: View {
                 navigationPaths: $navigationPaths,
                 isNowPlayingPresented: appModel.isNowPlayingPresented,
                 onAdd: presentAddPodcast,
-                onPresentDataNukeConfirmation: presentDataNukeConfirmation,
                 onPresentNowPlaying: presentNowPlaying
             )
         }
@@ -153,10 +152,6 @@ struct OpenCastRootView: View {
 
     private func presentAddPodcast() {
         sheetDestination = .addPodcast
-    }
-
-    private func presentDataNukeConfirmation() {
-        sheetDestination = .nukeConfirmation
     }
 
     private func presentOnboardingIfNeeded() {
@@ -680,7 +675,7 @@ struct OpenCastRootView: View {
             !appModel.library.isActivelySubscribed(to: feedURL)
         case .episodeDetail(let id), .episodeTranscript(let id), .episodeArtwork(let id):
             appModel.library.episode(with: id) == nil && appModel.downloads.record(for: id) == nil
-        case .adDetectionQueue:
+        case .adDetectionQueue, .settings:
             false
         }
     }

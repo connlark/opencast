@@ -125,9 +125,9 @@ function derInteger(bytes) {
 }
 
 function ecdsaSignatureDER(signature) {
-  if (signature[0] === 0x30) {
-    return signature;
-  }
+  // WebCrypto ECDSA always yields raw r||s (64 bytes for P-256). Never sniff
+  // for DER by leading byte: r starts with 0x30 one time in 256, and the
+  // verifier then rejects the raw bytes as malformed DER (2026-09-12 flake).
   if (signature.length !== 64) {
     throw new Error(`unexpected ECDSA signature length ${signature.length}`);
   }

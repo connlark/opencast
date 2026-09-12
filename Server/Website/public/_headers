@@ -3,3 +3,6 @@
 
 /screenshots/*
   Cache-Control: public, max-age=31536000, immutable
+
+/app/help/*
+  Cache-Control: public, max-age=300

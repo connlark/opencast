@@ -31,31 +31,23 @@ final class AdDetectionModeSettingUITests: XCTestCase {
 
         let app = XCUIApplication()
         app.launch()
-        openSection("Settings", in: app)
+        openSettingsScreen("Ad Skipping", in: app)
         sleep(1)
 
-        let pickerPredicate = NSPredicate(format: "label BEGINSWITH %@", "Detect Ads")
-        var picker = app.buttons.matching(pickerPredicate).firstMatch
-        if !picker.waitForExistence(timeout: 2) {
-            picker = app.descendants(matching: .any).matching(pickerPredicate).firstMatch
-        }
+        // The Detect Ads picker is inline on the Ad Skipping screen: every
+        // option is its own row, so tap the row and check its selection.
+        let option = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@", optionTitle)
+        ).firstMatch
         var swipes = 0
-        while !(picker.exists && picker.isHittable), swipes < 6 {
+        while !(option.exists && option.isHittable), swipes < 6 {
             app.swipeUp()
             swipes += 1
         }
-        XCTAssertTrue(picker.exists, "Detect Ads picker should exist in Settings")
-        picker.tap()
-
-        let option = app.buttons[optionTitle].firstMatch
-        XCTAssertTrue(option.waitForExistence(timeout: 3), "\(optionTitle) option should appear")
+        XCTAssertTrue(option.exists, "\(optionTitle) option should exist on the Ad Skipping screen")
         option.tap()
         sleep(1)
 
-        let updated = app.buttons.matching(pickerPredicate).firstMatch
-        XCTAssertTrue(
-            updated.waitForExistence(timeout: 3) && updated.label.contains(optionTitle),
-            "picker should reflect \(optionTitle), got: \(updated.exists ? updated.label : "missing")"
-        )
+        XCTAssertTrue(option.isSelected, "\(optionTitle) should be selected after tapping it")
     }
 }

@@ -15,6 +15,10 @@ struct SheetDestinationView: View {
             )
         case .episodeDiagnostics(let episodeID):
             EpisodeDiagnosticsSheet(episodeID: episodeID)
+        case .helpTopic(let id):
+            HelpTopicSheet(topicID: id)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         case .importOPMLFile(let url):
             OPMLFileImportView(url: url)
         case .nukeConfirmation:

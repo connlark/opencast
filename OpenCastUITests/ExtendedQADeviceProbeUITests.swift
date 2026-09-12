@@ -80,7 +80,7 @@ final class ExtendedQADeviceProbeUITests: XCTestCase {
     @MainActor
     func testAccurateModelInstallMidFileProgressCancelRestart() throws {
         let app = launchApp()
-        openWhisperModelDiagnostics(in: app)
+        openTranscriptionSettings(in: app)
 
         app.buttons["Accurate"].tap()
         usleep(500_000)
@@ -125,7 +125,7 @@ final class ExtendedQADeviceProbeUITests: XCTestCase {
     @MainActor
     func testDeleteAccurateModelRestoreFastSelection() throws {
         let app = launchApp()
-        openWhisperModelDiagnostics(in: app)
+        openTranscriptionSettings(in: app)
 
         app.buttons["Accurate"].tap()
         usleep(500_000)
@@ -155,7 +155,7 @@ final class ExtendedQADeviceProbeUITests: XCTestCase {
     @MainActor
     func testDisableAppleTranscriptionPreference() throws {
         let app = launchApp()
-        openSection("Settings", in: app)
+        openSettingsScreen("Transcription", in: app)
         sleep(1)
 
         let toggle = app.switches["Use Apple Transcription"].firstMatch
@@ -316,27 +316,20 @@ final class ExtendedQADeviceProbeUITests: XCTestCase {
         return app
     }
 
+    /// Settings › Transcription owns both the engine toggle and the
+    /// Fast/Accurate Whisper picker.
     @MainActor
     private func openTranscriptionSettings(in app: XCUIApplication) {
-        openSection("Settings", in: app)
+        openSettingsScreen("Transcription", in: app)
         sleep(1)
         XCTAssertTrue(
             scrollToButton("Install Fast Model", in: app) || scrollToButton("Delete Fast Model", in: app)
                 || scrollToButton("Cancel Install", in: app),
-            "Transcription section must be reachable in Settings"
+            "Whisper model management must be reachable on the Transcription screen"
         )
-    }
-
-    @MainActor
-    private func openWhisperModelDiagnostics(in app: XCUIApplication) {
-        openSection("Settings", in: app)
-        sleep(1)
-        XCTAssertTrue(scrollToButton("Diagnostics", in: app), "Diagnostics row must exist in Settings")
-        app.buttons["Diagnostics"].tap()
-        sleep(1)
         XCTAssertTrue(
             app.buttons["Accurate"].waitForExistence(timeout: 10),
-            "Whisper Model picker must exist in Diagnostics"
+            "Whisper Model picker must exist on the Transcription screen"
         )
     }
 
@@ -480,7 +473,7 @@ final class ExtendedQADeviceProbeUITests: XCTestCase {
 
     @MainActor
     private func ensureWhisperEngineSelected(in app: XCUIApplication) {
-        openSection("Settings", in: app)
+        openSettingsScreen("Transcription", in: app)
         sleep(1)
         let toggle = app.switches["Use Apple Transcription"]
         guard toggle.waitForExistence(timeout: 3) else {

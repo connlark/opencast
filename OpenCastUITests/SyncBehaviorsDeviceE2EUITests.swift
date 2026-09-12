@@ -1130,13 +1130,19 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
 
     @MainActor
     private func clearHistoryForUnfollowedShows(in app: XCUIApplication) {
-        openTab("Settings", in: app)
-        let clearButton = app.buttons["Clear History for Unfollowed Shows"].firstMatch
+        openSettingsHub(in: app)
+        let deleteDataRow = app.buttons["Settings Row Delete Data"].firstMatch
         var swipes = 0
-        while !clearButton.exists && swipes < 12 {
+        while !deleteDataRow.exists && swipes < 12 {
             app.swipeUp()
             swipes += 1
         }
+        XCTAssertTrue(deleteDataRow.waitForExistence(timeout: 10), "Delete Data row should exist")
+        walkClearOfBottomAccessories(deleteDataRow, in: app)
+        deleteDataRow.tap()
+        XCTAssertTrue(app.navigationBars["Delete Data"].waitForExistence(timeout: 10), "Delete Data screen should push")
+
+        let clearButton = app.buttons["Clear History for Unfollowed Shows"].firstMatch
         XCTAssertTrue(clearButton.waitForExistence(timeout: 10), "manual clear action should exist")
         clearButton.tap()
 
@@ -1185,17 +1191,31 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         }
     }
 
+    /// Lands on the Settings hub: a second tab tap pops any pushed
+    /// sub-screen back to the root list.
+    @MainActor
+    private func openSettingsHub(in app: XCUIApplication) {
+        openTab("Settings", in: app)
+        if !app.navigationBars["Settings"].waitForExistence(timeout: 2) {
+            let settingsTab = app.tabBars.buttons["Settings"].firstMatch
+            if settingsTab.exists, settingsTab.isHittable {
+                settingsTab.tap()
+            }
+        }
+    }
+
     @MainActor
     private func openDiagnostics(in app: XCUIApplication) {
         dismissNowPlayingCardIfPresent(in: app)
-        openTab("Settings", in: app)
-        let diagnosticsLink = app.buttons["Diagnostics"].firstMatch
+        openSettingsHub(in: app)
+        let diagnosticsLink = app.buttons["Settings Row Diagnostics"].firstMatch
         var swipes = 0
-        while !diagnosticsLink.exists && swipes < 12 {
+        while !diagnosticsLink.exists && swipes < 4 {
             app.swipeUp()
             swipes += 1
         }
-        XCTAssertTrue(diagnosticsLink.waitForExistence(timeout: 10), "Diagnostics link should exist")
+        XCTAssertTrue(diagnosticsLink.waitForExistence(timeout: 10), "Diagnostics row should exist")
+        walkClearOfBottomAccessories(diagnosticsLink, in: app)
         diagnosticsLink.tap()
         XCTAssertTrue(
             app.navigationBars["Diagnostics"].waitForExistence(timeout: 10),

@@ -76,7 +76,7 @@ for (const policy of ["v2", "v3"]) {
     let calls = 0;
     const worker = {
       name: "ad-interruption-test",
-      compatibilityDate: "2026-08-14",
+      compatibilityDate: "2026-09-03",
       modules: [
         { type: "ESModule", path: path.join(root, "build/index.js"), contents: await readFile(path.join(root, "build/index.js"), "utf8") },
         { type: "CompiledWasm", path: path.join(root, "build/index_bg.wasm"), contents: await readFile(path.join(root, "build/index_bg.wasm")) },

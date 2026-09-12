@@ -17,6 +17,7 @@ One worker, two hostnames (Workers Custom Domains):
 | `support.opencast.mobile` | `/support`, `/privacy` | Served directly (App Store support/privacy URLs) |
 | `support.opencast.mobile` | `/health` | `200 ok` |
 | `support.opencast.mobile` | anything else | 404 with support page body |
+| both | `/app/help/*.json` | Versioned in-app help content (`application/json`, `max-age=300`; plain 404 when missing) |
 | both | non-GET/HEAD | 405 |
 
 These URLs are referenced by `OpenCast/App/OpenCastConstants.swift` and `fastlane/metadata/en-US/{marketing_url,privacy_url,support_url}.txt` — do not change semantics without checking those.
@@ -45,6 +46,27 @@ matches locally and every request falls through to the marketing branch (a
 `Host:` header or `curl --resolve` does not change this). Verify support-host
 behavior against the deployed site instead — `curl -s https://support.opencast.mobile/health`
 should print `ok`, and an unknown path should return 404 with the support body.
+
+## In-app help content
+
+`public/app/help/v1.json` is the canonical, remotely updatable Help document
+the iOS app renders natively (Settings › Help and the "How this works…" footer
+links). The app ships a byte-identical fallback at
+`OpenCast/Resources/HelpContent.json`, refreshed by `scripts/sync-help-content.sh`
+at the repository root; `scripts/preflight.sh` fails when the two drift.
+
+- `yarn check:help` (`scripts/validate-help.mjs`, no dependencies) enforces the
+  contract: `schemaVersion` 1, second-precision ISO 8601 UTC dates, unique slug
+  ids, resolvable `related` ids, per-block required fields, and `https:` or
+  `mailto:` links on public hosts only. `yarn build` runs it first and CI runs
+  it as its own step.
+- Block types: `heading`, `paragraph`, `bullets`, `callout`, `link`. Paragraph,
+  bullet, and callout text accept inline Markdown. The app renders unknown block
+  types as nothing and hides topics whose `minAppBuild` exceeds its build, so
+  content can lead app releases. Bump the top-level `updatedAt` on every edit —
+  the app only adopts a document that is newer than the one it has.
+- The worker serves the route on both hosts before the support-host 404
+  fallback, so the directory does **not** need a `run_worker_first` negation.
 
 ## Appearance
 

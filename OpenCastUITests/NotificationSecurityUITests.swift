@@ -569,6 +569,19 @@ final class NotificationSecurityUITests: XCTestCase {
             return
         }
 
+        let diagnosticsRow = app.buttons["Settings Row Diagnostics"].firstMatch
+        if diagnosticsRow.waitForExistence(timeout: 2) {
+            var swipes = 0
+            while !diagnosticsRow.isHittable, swipes < 4 {
+                swipeUpInDetailColumn(in: app)
+                swipes += 1
+            }
+            if diagnosticsRow.isHittable {
+                diagnosticsRow.tap()
+                return
+            }
+        }
+
         if tapDiagnosticsButtonIfHittable(in: app) {
             return
         }

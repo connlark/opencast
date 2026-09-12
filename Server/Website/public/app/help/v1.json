@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-09-12T06:00:00Z",
+  "topics": [
+    {
+      "id": "why-we-charge",
+      "title": "Why some features cost money",
+      "symbol": "dollarsign.circle",
+      "summary": "Open source, no ads, and cloud work priced at cost.",
+      "updatedAt": "2026-09-12T00:00:00Z",
+      "related": [
+        "credits"
+      ],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "opencast is free and open source, with no ads and no tracking. Almost everything runs on your device: playback, downloads, Whisper transcription, on-device ad detection, and iCloud sync through your own account."
+        },
+        {
+          "type": "heading",
+          "text": "What costs money"
+        },
+        {
+          "type": "paragraph",
+          "text": "Cloud transcription runs on Cloudflare Workers AI. Ad detection and Chapters & Summary use Google's Gemini models. Those are the only features that use **transcription credits** or cost opencast money per episode."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Credits come in two one-time packs, 20 hours and 100 hours. There are no subscriptions and nothing renews.",
+            "Prices cover the server cost plus Apple's commission, with a small buffer for failed jobs. They are not a profit center.",
+            "Packs are currently sold in the United States App Store only."
+          ]
+        },
+        {
+          "type": "callout",
+          "symbol": "lock.shield",
+          "title": "What leaves your device",
+          "text": "A cloud transcription job receives only that episode's audio. Ad detection and Chapters & Summary receive only the transcript text, never the audio. Your subscriptions, listening history, and account details stay on your device."
+        },
+        {
+          "type": "link",
+          "title": "Privacy Policy",
+          "url": "https://support.opencast.mobile/privacy"
+        }
+      ]
+    },
+    {
+      "id": "credits",
+      "title": "How credits work",
+      "symbol": "clock.arrow.circlepath",
+      "summary": "Hours are estimated before a job and settled when it finishes.",
+      "updatedAt": "2026-09-12T00:00:00Z",
+      "related": [
+        "why-we-charge",
+        "ad-detection"
+      ],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Credits are measured in audio hours. Buy a pack from Settings › Credits and the hours are added to the balance tied to your App Store account."
+        },
+        {
+          "type": "heading",
+          "text": "What each job costs"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Cloud transcription (Cloudflare Workers AI) charges the episode's length.",
+            "Cloud ad detection charges the episode's length and delivers the transcript too.",
+            "Chapters & Summary (Google Gemini) charges about 2.2 hours of credit per hour of episode."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "The estimated charge is shown before a job starts. A job can run slightly past your balance; the shortfall appears as **Owed** and comes out of your next pack."
+        },
+        {
+          "type": "paragraph",
+          "text": "Every App Store account receives one free hour, once, the first time opencast verifies it."
+        },
+        {
+          "type": "callout",
+          "symbol": "arrow.clockwise",
+          "title": "Balance looks wrong?",
+          "text": "Use Refresh Purchases on the Credits screen. Purchases follow your App Store account, so reinstalling the app or changing iCloud settings does not affect them."
+        },
+        {
+          "type": "paragraph",
+          "text": "Refunds are handled by Apple. Choose Request a Refund on the Credits screen to open Apple's refund form for a purchase."
+        }
+      ]
+    },
+    {
+      "id": "voice-boost",
+      "title": "Voice Boost",
+      "symbol": "speaker.wave.2",
+      "summary": "Lifts quiet voices and evens out volume.",
+      "updatedAt": "2026-09-12T00:00:00Z",
+      "related": [],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Voice Boost lifts quiet speech and evens out volume swings, so a show recorded at low levels or with unevenly miked guests stays comfortable at one volume setting."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "**Always** applies it to every episode.",
+            "**Per Episode** lets you turn it on or off from Now Playing for the episode you're listening to.",
+            "**Off** plays the original audio untouched."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "Processing happens on your device in real time and never changes the downloaded file."
+        }
+      ]
+    },
+    {
+      "id": "ad-detection",
+      "title": "Ad detection",
+      "symbol": "forward.end",
+      "summary": "Find promo and ad breaks on your device or in the cloud.",
+      "updatedAt": "2026-09-12T00:00:00Z",
+      "related": [
+        "credits",
+        "transcription-engines"
+      ],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Detect Ads transcribes an episode and marks the promo and ad breaks. With Auto-Skip on, playback jumps over them. With it off, the breaks stay visible in Now Playing so you can skip them by hand."
+        },
+        {
+          "type": "heading",
+          "text": "Where it runs"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "**On This Device** transcribes with the Whisper model on your device and uses no credits.",
+            "**In the Cloud** uploads the episode's audio to Cloudflare Workers AI for transcription and charges transcription hours. It is faster and delivers the transcript too.",
+            "**Ask First Time** shows this choice the first time you tap Detect Ads on an episode."
+          ]
+        },
+        {
+          "type": "paragraph",
+          "text": "In both modes the transcript text is sent to opencast's ad-analysis service, which uses Google's Gemini models to find the breaks. The audio itself never leaves your device unless you chose the cloud option."
+        },
+        {
+          "type": "paragraph",
+          "text": "Automatic skips apply only when the downloaded audio matches the analyzed transcript, so a re-edited episode never skips at the wrong spot."
+        }
+      ]
+    },
+    {
+      "id": "transcription-engines",
+      "title": "Transcription engines",
+      "symbol": "text.bubble",
+      "summary": "Whisper works everywhere; Apple transcription on supported devices.",
+      "updatedAt": "2026-09-12T00:00:00Z",
+      "related": [
+        "ad-detection",
+        "credits"
+      ],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Transcripts power transcript search, ad detection, and Chapters & Summary. They are generated on your device unless you choose a cloud job."
+        },
+        {
+          "type": "heading",
+          "text": "Whisper"
+        },
+        {
+          "type": "paragraph",
+          "text": "**Fast** uses a small English-only model (about 50 MB) that keeps transcription quick. **Accurate** downloads the large-v3 model (about 600 MB) for better results at the cost of speed and battery. Either model is stored on this device and can be deleted from Settings › Transcription."
+        },
+        {
+          "type": "heading",
+          "text": "Apple transcription"
+        },
+        {
+          "type": "paragraph",
+          "text": "On supported devices you can use Apple's on-device speech engine instead. It runs only while opencast is open in the foreground and starts over if the app is closed, backgrounded, or the screen locks mid-transcript. When a language or device isn't supported, the Whisper model is used automatically."
+        },
+        {
+          "type": "heading",
+          "text": "Cloud transcription"
+        },
+        {
+          "type": "paragraph",
+          "text": "Transcribe Remotely and cloud ad detection send the episode audio to Cloudflare Workers AI, which runs Whisper on opencast's behalf. They use transcription credits and are the only way audio leaves your device."
+        }
+      ]
+    },
+    {
+      "id": "icloud-sync",
+      "title": "iCloud sync",
+      "symbol": "icloud",
+      "summary": "Subscriptions and listening progress follow your Apple account.",
+      "updatedAt": "2026-09-12T00:00:00Z",
+      "related": [
+        "storage"
+      ],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "With iCloud on, your subscriptions and listening progress sync between your devices through your own iCloud account. opencast has no server in the middle and never sees them."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Downloads, transcripts, caches, and settings stay on each device.",
+            "If iCloud is off or unavailable, everything keeps working locally on this device.",
+            "If sync ever leaves duplicate entries behind, Settings › Diagnostics › Repair Sync Duplicates merges them."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "storage",
+      "title": "Storage",
+      "symbol": "internaldrive",
+      "summary": "Automatic caches are capped; downloads are yours to manage.",
+      "updatedAt": "2026-09-12T00:00:00Z",
+      "related": [
+        "icloud-sync"
+      ],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "opencast keeps two automatic caches: feed data (up to 128 MB) and artwork (up to 256 MB). When a cache goes over budget, the least recently used files are removed. Clear Automatic Caches empties both; nothing you chose to keep is affected."
+        },
+        {
+          "type": "paragraph",
+          "text": "Downloaded episodes are never removed automatically unless Delete Downloads After Played is on. Delete All Downloads removes the files but keeps your subscriptions and listening progress."
+        },
+        {
+          "type": "paragraph",
+          "text": "Whisper models are managed from Settings › Transcription, and Delete Data removes everything else opencast stores on this device."
+        }
+      ]
+    },
+    {
+      "id": "notifications",
+      "title": "Notifications",
+      "symbol": "bell",
+      "summary": "New-episode alerts from opencast's own service.",
+      "updatedAt": "2026-09-12T00:00:00Z",
+      "related": [],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "New Episode Notifications are sent by opencast's own notification service, not by a third party. It checks the feeds you follow and sends a push when a new episode appears."
+        },
+        {
+          "type": "paragraph",
+          "text": "To do that it stores a push token for this device and the list of feeds you follow, tied to an anonymous install identity. Turning notifications off disables the token, and Delete Data removes the install entirely."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "If iOS permission was denied, use Open Settings to allow notifications for opencast.",
+            "Delivery depends on how often the publisher updates its feed and on the service's polling schedule."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siri",
+      "title": "Siri",
+      "symbol": "mic",
+      "summary": "Say “in opencast” so Siri picks the right app.",
+      "updatedAt": "2026-09-12T00:00:00Z",
+      "related": [],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "opencast shares your shows with Siri so you can ask for them by name. Include “in opencast” so Siri knows which podcast app to use."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "“Play Security Now in opencast”",
+            "“Resume my podcast in opencast”",
+            "“Play at double speed in opencast”"
+          ]
+        }
+      ]
+    }
+  ]
+}

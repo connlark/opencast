@@ -19,6 +19,8 @@ struct RouteDestinationView: View {
             EpisodeTranscriptView(episodeID: id)
         case .adDetectionQueue:
             AdDetectionQueueView()
+        case .settings(let route):
+            SettingsRouteDestinationView(route: route)
         }
     }
 }

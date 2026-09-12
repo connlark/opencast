@@ -25,6 +25,23 @@ const worker = {
     }
     const url = new URL(request.url);
 
+    // Versioned help content the app fetches (public/app/help/*.json). It
+    // sits before the host split so the support host's 404 fallback never
+    // swallows it, and always carries a JSON content type plus a short cache.
+    if (url.pathname.startsWith("/app/help/") && url.pathname.endsWith(".json")) {
+      const res = await env.ASSETS.fetch(request);
+      if (res.status !== 200) {
+        return new Response("Not Found", {
+          status: 404,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+      const headers = new Headers(res.headers);
+      headers.set("content-type", "application/json; charset=utf-8");
+      headers.set("cache-control", "public, max-age=300");
+      return new Response(res.body, { status: 200, headers });
+    }
+
     if (url.hostname === SUPPORT_HOST) {
       if (url.pathname === "/health") {
         return new Response("ok", {

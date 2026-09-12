@@ -1,7 +1,7 @@
 {
   "name": "opencast-website",
   "main": "worker/index.ts",
-  "compatibility_date": "2026-08-14",
+  "compatibility_date": "2026-09-03",
   "assets": {
     "directory": "./out",
     "binding": "ASSETS",

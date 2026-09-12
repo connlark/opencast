@@ -24,6 +24,9 @@ struct OpenCastRootRoutingModifier: ViewModifier {
             .onChange(of: appModel.onboardingPresentationRequest) { _, _ in
                 sheetDestination = .onboarding
             }
+            .onChange(of: appModel.dataNukeConfirmationPresentationRequest) { _, _ in
+                sheetDestination = .nukeConfirmation
+            }
             .onChange(of: appModel.hasNowPlayingPresentationContent, initial: true) { _, hasContent in
                 if !hasContent {
                     dismissNowPlaying()

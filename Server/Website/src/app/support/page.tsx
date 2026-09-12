@@ -81,9 +81,9 @@ export default function SupportPage() {
                 balance before it starts.
               </p>
               <p>
-                If Remote Transcription is unavailable, open Settings, find
-                Remote Transcription, and choose Try Again. Check your network
-                connection and App Store sign-in if it still cannot connect.
+                If Remote Transcription is unavailable, open Settings, choose
+                Credits, and choose Try Again. Check your network connection
+                and App Store sign-in if it still cannot connect.
               </p>
               <p>
                 For a stuck job, missing credit, purchase, or refund issue,

@@ -66,18 +66,9 @@ final class OpenCastUITests: XCTestCase {
         ]
         app.launch()
 
-        openSettings(in: app)
-
-        let header = app.staticTexts["Remote Transcription"]
-        var swipes = 0
-        while !header.waitForExistence(timeout: 5) && swipes < 12 {
-            app.swipeUp()
-            swipes += 1
-        }
-        XCTAssertTrue(
-            header.exists,
-            "Remote Transcription section should remain discoverable when StoreKit is unavailable"
-        )
+        // The Credits row stays on the hub even when StoreKit is unavailable
+        // so the retry action stays reachable.
+        openSettingsScreen("Credits", expecting: "Transcription Credits", in: app)
         assertExists(app.buttons["Try Again"], named: "remote transcription retry action")
     }
 
@@ -90,10 +81,10 @@ final class OpenCastUITests: XCTestCase {
         ]
         app.launch()
 
-        openSettings(in: app)
+        openSettingsScreen("Credits", expecting: "Transcription Credits", in: app)
         let product = app.staticTexts["20 Transcription Hours"]
         scrollUntilExists(product, in: app, maxSwipes: 8)
-        assertExists(app.staticTexts["Remote Transcription"], named: "Remote Transcription section")
+        assertExists(app.navigationBars["Transcription Credits"], named: "Transcription Credits screen")
         assertExists(app.staticTexts["Balance, 1 hr"], named: "fixture balance")
         assertExists(product, named: "20-hour product")
         assertExists(app.staticTexts["100 Transcription Hours"], named: "100-hour product")
@@ -478,12 +469,9 @@ final class OpenCastUITests: XCTestCase {
         )
         app.launch()
 
-        openSettings(in: app)
-        let diagnosticsButton = app.buttons["Diagnostics"]
-        scrollUntilHittable(diagnosticsButton, in: app)
+        openSettingsScreen("Diagnostics", in: app)
         let runOnboardingButton = app.buttons["Run Onboarding"]
         scrollUntilHittable(runOnboardingButton, in: app)
-        XCTAssertGreaterThan(runOnboardingButton.frame.minY, diagnosticsButton.frame.minY)
         attachSmokeScreenshot(named: "settings_debug_run_onboarding")
 
         runOnboardingButton.tap()
@@ -555,9 +543,8 @@ final class OpenCastUITests: XCTestCase {
             app.launchEnvironment["OPENCAST_APPLE_SPEECH_FAKE_ASSETS"] = "installed"
             app.launch()
 
-            openSettings(in: app)
-            scrollUntilExists(app.staticTexts["Transcription"], in: app)
-            assertExists(app.staticTexts["Transcription"], named: "Whisper transcription settings section")
+            openSettingsScreen("Transcription", in: app)
+            assertExists(app.switches["Use Apple Transcription"], named: "Apple transcription toggle")
             let modelManagementAvailable = NSPredicate { object, _ in
                 guard let app = object as? XCUIApplication else {
                     return false
@@ -572,27 +559,17 @@ final class OpenCastUITests: XCTestCase {
             XCTAssertEqual(
                 XCTWaiter.wait(for: [modelManagementExpectation], timeout: 10),
                 .completed,
-                "Expected main Settings to expose Whisper model management."
+                "Expected the Transcription screen to expose Whisper model management."
             )
-            XCTAssertFalse(app.buttons["Check Speech Assets"].exists)
-            XCTAssertFalse(app.buttons["Fast"].exists)
-            XCTAssertFalse(app.buttons["Accurate"].exists)
-            attachSmokeScreenshot(named: forcesDarkMode ? "settings_whisper_transcription_dark" : "settings_whisper_transcription_light")
-
-            let diagnosticsLink = app.buttons["Diagnostics"].firstMatch
-            scrollUntilHittable(diagnosticsLink, in: app)
-            diagnosticsLink.tap()
-            scrollUntilExists(app.staticTexts["Apple Speech Assets"], in: app)
-            assertExists(app.staticTexts["Apple Speech Assets"], named: "Apple speech diagnostics section")
+            assertExists(app.buttons["Fast"], named: "Fast model picker")
+            assertExists(app.buttons["Accurate"], named: "Accurate model picker")
+            scrollUntilExists(app.staticTexts["Apple Speech"], in: app)
+            assertExists(app.staticTexts["Apple Speech"], named: "Apple speech section")
             let installedStatus = elementContaining(label: "Installed", in: app)
             scrollUntilExists(installedStatus, in: app)
             assertExists(installedStatus, named: "Apple speech installed status")
             assertExists(app.buttons["Check Speech Assets"], named: "Check Speech Assets action")
-            scrollUntilExists(app.staticTexts["Whisper Model"], in: app)
-            assertExists(app.staticTexts["Whisper Model"], named: "Whisper model diagnostics")
-            assertExists(app.buttons["Fast"], named: "Fast picker in Diagnostics")
-            assertExists(app.buttons["Accurate"], named: "Accurate picker in Diagnostics")
-            attachSmokeScreenshot(named: forcesDarkMode ? "diagnostics_transcription_dark" : "diagnostics_transcription_light")
+            attachSmokeScreenshot(named: forcesDarkMode ? "settings_transcription_dark" : "settings_transcription_light")
             app.terminate()
         }
     }
@@ -1615,11 +1592,9 @@ final class OpenCastUITests: XCTestCase {
 
         // Settings reflects the remembered device-local choice. (Cross-
         // relaunch persistence is covered at the store layer — UI-test
-        // launches deliberately use an in-memory store.) The section sits
-        // below the fold of the lazy settings list, so scroll it into
-        // existence, and the collapsed picker may expose the selection as
-        // its value rather than its label.
-        openSettings(in: app)
+        // launches deliberately use an in-memory store.) The inline picker
+        // exposes the selection as a row label or value.
+        openSettingsScreen("Ad Skipping", in: app)
         let modeSelection = app.descendants(matching: .any).matching(
             NSPredicate(
                 format: "label CONTAINS %@ OR value CONTAINS %@",
@@ -2330,7 +2305,7 @@ final class OpenCastUITests: XCTestCase {
         )
         app.launch()
 
-        openSettings(in: app)
+        openSettingsScreen("Ad Skipping", in: app)
         let autoSkipToggle = autoSkipSettingsToggle(in: app)
         scrollUntilHittable(autoSkipToggle, in: app)
         assertToggle(autoSkipToggle, isOn: true)
@@ -2647,18 +2622,20 @@ final class OpenCastUITests: XCTestCase {
         assertMiniPlayerDoesNotCover(libraryPodcast, named: "seeded library podcast after dismiss", in: app)
         attachSmokeScreenshot(named: "library_compact_after_dismiss")
 
-        openSettings(in: app)
-        assertExists(app.staticTexts["iCloud Sync"], named: "iCloud Sync section")
+        openSettingsScreen("iCloud Sync", in: app)
         assertExists(syncStatusTitle(in: app), named: "iCloud sync status")
+        attachSmokeScreenshot(named: "settings_sync")
+
+        openSettingsScreen("Storage", in: app)
         let downloadedEpisodesRow = app.staticTexts["Downloaded Episodes"]
         scrollUntilExists(downloadedEpisodesRow, in: app)
-        assertExists(app.staticTexts["Local Storage"], named: "Local Storage section")
         assertExists(app.staticTexts["Feed Cache"], named: "Feed Cache row")
         assertExists(app.staticTexts["Artwork Cache"], named: "Artwork Cache row")
         assertExists(downloadedEpisodesRow, named: "Downloaded Episodes row")
-        attachSmokeScreenshot(named: "settings_sync")
+        attachSmokeScreenshot(named: "settings_storage")
 
-        let diagnosticsLink = app.buttons["Diagnostics"]
+        openSettings(in: app)
+        let diagnosticsLink = app.buttons["Settings Row Diagnostics"]
         scrollUntilHittable(diagnosticsLink, in: app)
         scrollUntilMiniPlayerDoesNotCover(diagnosticsLink, in: app)
         assertMiniPlayerDoesNotCover(diagnosticsLink, named: "Diagnostics row", in: app)
@@ -2699,7 +2676,7 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "episode_detail_downloaded_menu")
         dismissContextualMenu(in: app)
 
-        app.tabBars.buttons["Settings"].tap()
+        openSettingsScreen("Storage", in: app)
         let deleteAllDownloadsButton = app.buttons["Delete All Downloads"]
         scrollUntilHittable(deleteAllDownloadsButton, in: app)
         assertExists(app.staticTexts["Downloaded Episodes"], named: "Downloaded Episodes row")
@@ -2795,13 +2772,10 @@ final class OpenCastUITests: XCTestCase {
         )
         app.launch()
 
-        openSettings(in: app)
-        scrollUntilExists(app.staticTexts["Transcription"], in: app)
-        assertExists(app.staticTexts["Transcription"], named: "Transcription settings section")
-        // The Fast/Accurate model picker left the product path;
-        // whisper management in main Settings is tiny-pinned.
-        XCTAssertFalse(app.buttons["Fast"].exists, "Fast/Accurate picker must be out of the product path")
-        XCTAssertFalse(app.buttons["Accurate"].exists, "Fast/Accurate picker must be out of the product path")
+        openSettingsScreen("Transcription", in: app)
+        // The Fast/Accurate model picker is back on the product path.
+        assertExists(app.buttons["Fast"], named: "Fast model picker")
+        assertExists(app.buttons["Accurate"], named: "Accurate model picker")
         let installedStatus = elementContaining(label: "Installed", in: app)
         scrollUntilExists(installedStatus, in: app)
         assertExists(installedStatus, named: "installed speech model status")
@@ -3272,7 +3246,7 @@ final class OpenCastUITests: XCTestCase {
         let app = makeSeededApp(seedsCompletedDownload: true)
         app.launch()
 
-        openSettings(in: app)
+        openSettingsScreen("Storage", in: app)
 
         let deleteAllDownloadsButton = app.buttons["Delete All Downloads"]
         scrollUntilHittable(deleteAllDownloadsButton, in: app)
@@ -3575,7 +3549,7 @@ final class OpenCastUITests: XCTestCase {
         app.launchEnvironment["OPENCAST_CAPTURE_VOICEBOOST_DIAGNOSTICS"] = "1"
         app.launch()
 
-        openSettings(in: app)
+        openSettingsScreen("Diagnostics", in: app)
 
         let runDeviceProbeButton = app.buttons["Run Device Probe"]
         scrollUntilHittable(runDeviceProbeButton, in: app)
@@ -3585,12 +3559,18 @@ final class OpenCastUITests: XCTestCase {
             diagnosticsRow(in: app, title: "Last Device Probe", value: "Not Run"),
             named: "initial Last Device Probe value"
         )
-        assertExists(app.staticTexts["Device Probe Report"], named: "Device Probe Report diagnostics row")
+        // The section sits below the repair and refresh-log sections on the
+        // Diagnostics screen, so the lower rows realize only once scrolled.
+        let deviceProbeReportRow = app.staticTexts["Device Probe Report"]
+        scrollUntilExists(deviceProbeReportRow, in: app)
+        assertExists(deviceProbeReportRow, named: "Device Probe Report diagnostics row")
         assertExists(
             diagnosticsRow(in: app, title: "Device Probe Report", value: "Not Written"),
             named: "initial Device Probe Report value"
         )
-        assertExists(app.staticTexts["Device Probe App State"], named: "Device Probe App State diagnostics row")
+        let deviceProbeAppStateRow = app.staticTexts["Device Probe App State"]
+        scrollUntilExists(deviceProbeAppStateRow, in: app)
+        assertExists(deviceProbeAppStateRow, named: "Device Probe App State diagnostics row")
 
         let processedFramesRow = app.staticTexts["Processed Frames"]
         scrollUntilExists(processedFramesRow, in: app)
@@ -3624,7 +3604,7 @@ final class OpenCastUITests: XCTestCase {
         app.launchEnvironment["OPENCAST_CAPTURE_VOICEBOOST_DIAGNOSTICS"] = "1"
         app.launch()
 
-        openSettings(in: app)
+        openSettingsScreen("Diagnostics", in: app)
 
         let runDeviceProbeButton = app.buttons["Run Device Probe"]
         scrollUntilHittable(runDeviceProbeButton, in: app)
@@ -3874,10 +3854,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(playbackProgress(in: app), named: "Playback Progress control after relaunch", timeout: 20)
         dismissNowPlayingOverlay(in: app)
 
-        openSettings(in: app)
-        assertExists(app.staticTexts["Settings"], named: "Settings title", timeout: 10)
-        scrollUntilExists(app.staticTexts["Import & Export"], in: app, maxSwipes: 4)
-        assertExists(app.staticTexts["Import & Export"], named: "OPML Import & Export section", timeout: 10)
+        openSettingsScreen("Import & Export", in: app)
         assertExists(app.buttons["Export Subscriptions"], named: "OPML Export Subscriptions action", timeout: 10)
     }
 

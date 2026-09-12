@@ -9,7 +9,6 @@ struct OpenCastTabRootView: View {
     @Binding var navigationPaths: AppNavigationPaths
     let isNowPlayingPresented: Bool
     let onAdd: () -> Void
-    let onPresentDataNukeConfirmation: () -> Void
     let onPresentNowPlaying: () -> Void
 
     var body: some View {
@@ -57,10 +56,9 @@ struct OpenCastTabRootView: View {
             .badge(appModel.downloads.activeDownloadCount)
 
             Tab(AppSection.settings.title, systemImage: AppSection.settings.systemImage, value: AppSection.settings) {
-                NavigationStack {
-                    SettingsView(
-                        onPresentDataNukeConfirmation: onPresentDataNukeConfirmation
-                    )
+                NavigationStack(path: $navigationPaths[.settings]) {
+                    SettingsView()
+                        .withOpenCastDestinations()
                 }
             }
 
