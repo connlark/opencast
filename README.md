@@ -19,7 +19,7 @@ no account. no tracking. no ads of our own. **your listening is not a growth fun
 | :--- | :--- |
 | **Transcribed on your phone.** Download an episode and opencast transcribes it on device with Apple Speech or Whisper, then marks every promo and sponsor read on the timeline and in the transcript. | **No account, no tracking.** No opencast login, no analytics SDK, no ads of our own. Subscriptions and progress sync through your private iCloud when you turn it on. |
 | **Skipped, with an undo.** High-confidence breaks skip automatically and a small red pill says "Skipped promo. Tap to undo." Borderline sponsor reads are marked, never skipped. | **Any RSS feed.** Find a show in the directory or paste its feed URL. Nothing between you and your subscriptions rearranges them. |
-| **Reads the episode.** Tap-to-seek transcripts with follow-along highlighting, full-text search across everything ever said in your library, generated chapters and summaries (optional, paid), and Voice Boost. | **Native and small.** SwiftUI on iOS 26, CarPlay and Siri, Up Next, sleep timer, per-show intro and outro skip, OPML, downloads. About 10 MB. MIT-licensed. |
+| **Reads the episode.** Tap-to-seek transcripts with follow-along highlighting, full-text search across everything ever said in your library, generated chapters and summaries (optional, paid), and Voice Boost. | **Native and small.** SwiftUI on iOS 27, CarPlay and Siri, Up Next, sleep timer, per-show intro and outro skip, OPML, downloads. About 10 MB. MIT-licensed. |
 
 ![Four opencast screens: Now Playing with a skipped promo, the Sound Lab, a transcript with a flagged sponsor read, and the Library](Screenshots/readme-showcase.png)
 
@@ -33,7 +33,7 @@ Read the [plain-language privacy policy](https://support.opencast.mobile/privacy
 
 ## Build from source
 
-You will need macOS, Xcode 26 or later, Swift 6.3, and an iOS 26 simulator.
+You will need macOS, Xcode 27 or later, Swift 6.4, and an iOS 27 simulator.
 
 ```zsh
 git clone https://github.com/connlark/opencast.git
@@ -41,14 +41,14 @@ cd opencast
 open opencast.xcodeproj
 ```
 
-Select the `OpenCast` scheme, choose an iPhone or iPad running iOS 26, and press Run. A simulator build does **not** require a Cloudflare deployment: RSS, the local library, playback, downloads, Voice Boost, and local persistence are all part of the app checkout.
+Select the `OpenCast` scheme, choose an iPhone or iPad running iOS 27, and press Run. A simulator build does **not** require a Cloudflare deployment: RSS, the local library, playback, downloads, Voice Boost, and local persistence are all part of the app checkout.
 
 The public repository is deliberately sanitized. Server-backed features point to placeholder endpoints, so notifications, ad analysis, model delivery, purchases, and remote transcription require services you operate and configure yourself.
 
 <details>
 <summary><strong>Running on a physical device</strong></summary>
 
-Use your own Apple development team and unique bundle identifiers for the app and both notification extensions. Update the iCloud container to one your team controls and enable Siri for the App ID and provisioning profile. CarPlay audio is granted by Apple per team; remove `com.apple.developer.carplay-audio` from the selected entitlements file if your team does not have it.
+Use your own Apple development team and unique bundle identifiers for the app, both notification extensions, and the `OpenCastWidgets` extension. Update the iCloud container to one your team controls and enable Siri for the App ID and provisioning profile. Create an App Group owned by your team and enable it for both the app and widget. Replace `group.com.connor.opencast` in the three app entitlement files under `OpenCast/Resources/`, in `OpenCastWidgets/OpenCastWidgets.entitlements`, and in `ResumeWidgetSnapshot.appGroup` (`OpenCast/Widgets/ResumeWidgetSnapshot.swift`) with the same group identifier. CarPlay audio is granted by Apple per team; remove `com.apple.developer.carplay-audio` from the selected entitlements file if your team does not have it.
 
 </details>
 
@@ -58,6 +58,7 @@ Use your own Apple development team and unique bundle identifiers for the app an
 | --- | --- |
 | [`OpenCast/`](OpenCast/) | SwiftUI app, SwiftData stores, playback and feature UI, resources, and platform integrations |
 | [`OpenCastNotificationService/`](OpenCastNotificationService/) and [`OpenCastNotificationContent/`](OpenCastNotificationContent/) | Rich new-episode notification extensions |
+| [`OpenCastWidgets/`](OpenCastWidgets/) | Resume-playback Home Screen widget, sharing a local snapshot with the app |
 | [`OpenCastCore`](Packages/OpenCastCore/) | Podcast domain types, RSS parsing, feed identity, and directory search |
 | [`OpenCastPlayback`](Packages/OpenCastPlayback/) | AVFoundation playback, remote commands, and Voice Boost integration |
 | [`OpenCastTranscription`](Packages/OpenCastTranscription/) | Apple Speech and vendored WhisperKit transcription support |

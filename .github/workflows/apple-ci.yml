@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -17,7 +20,7 @@ concurrency:
 jobs:
   app-unit-tests:
     name: App Unit Tests
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
     permissions:
       contents: read
@@ -25,7 +28,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Select an iOS 26 simulator
+      - name: Verify Xcode 27 and Swift 6.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun swift --version
+          xcodebuild -version | grep -Eq '^Xcode 27([.]|$)'
+          xcrun swift --version | grep -Eq 'Apple Swift version 6[.]4([. ]|$)'
+
+      - name: Select an iOS 27 simulator
         id: simulator
         shell: bash
         run: |
@@ -39,7 +51,7 @@ jobs:
           payload = json.load(sys.stdin)
           candidates = []
           for runtime_identifier, devices in payload["devices"].items():
-              match = re.search(r"iOS-(26(?:-\d+)*)$", runtime_identifier)
+              match = re.search(r"iOS-(27(?:-\d+)*)$", runtime_identifier)
               if match is None:
                   continue
               version = tuple(int(component) for component in match.group(1).split("-"))
@@ -48,15 +60,18 @@ jobs:
                       candidates.append((version, device["name"], device["udid"]))
 
           if not candidates:
-              print("No available iPhone simulator with an iOS 26 runtime was found.", file=sys.stderr)
+              print("No available iPhone simulator with an iOS 27 runtime was found.", file=sys.stderr)
               sys.exit(1)
 
           candidates.sort(reverse=True)
           print(candidates[0][2])
           '
           )"
-          echo "Selected iOS 26 simulator: ${simulator_udid}"
+          echo "Selected iOS 27 simulator: ${simulator_udid}"
           echo "udid=${simulator_udid}" >> "${GITHUB_OUTPUT}"
+
+      - name: Test the UI-test runner with mocked build tools
+        run: bash scripts/tests/run-ui-tests-selftest.sh
 
       - name: Run app and notification-service unit tests
         shell: bash
@@ -64,7 +79,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           xcodebuild \
-            -project OpenCast.xcodeproj \
+            -project opencast.xcodeproj \
             -scheme OpenCast \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
             -parallel-testing-enabled NO \
@@ -121,7 +136,7 @@ jobs:
 
   core-flow-ui-smoke:
     name: Core Flow UI Smoke
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 30
     permissions:
       contents: read
@@ -129,7 +144,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Select an iOS 26 simulator
+      - name: Verify Xcode 27 and Swift 6.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun swift --version
+          xcodebuild -version | grep -Eq '^Xcode 27([.]|$)'
+          xcrun swift --version | grep -Eq 'Apple Swift version 6[.]4([. ]|$)'
+
+      - name: Select an iOS 27 simulator
         id: simulator
         shell: bash
         run: |
@@ -143,7 +167,7 @@ jobs:
           payload = json.load(sys.stdin)
           candidates = []
           for runtime_identifier, devices in payload["devices"].items():
-              match = re.search(r"iOS-(26(?:-\d+)*)$", runtime_identifier)
+              match = re.search(r"iOS-(27(?:-\d+)*)$", runtime_identifier)
               if match is None:
                   continue
               version = tuple(int(component) for component in match.group(1).split("-"))
@@ -152,14 +176,14 @@ jobs:
                       candidates.append((version, device["name"], device["udid"]))
 
           if not candidates:
-              print("No available iPhone simulator with an iOS 26 runtime was found.", file=sys.stderr)
+              print("No available iPhone simulator with an iOS 27 runtime was found.", file=sys.stderr)
               sys.exit(1)
 
           candidates.sort(reverse=True)
           print(candidates[0][2])
           '
           )"
-          echo "Selected iOS 26 simulator: ${simulator_udid}"
+          echo "Selected iOS 27 simulator: ${simulator_udid}"
           echo "udid=${simulator_udid}" >> "${GITHUB_OUTPUT}"
 
       - name: Run seeded Inbox-to-Now-Playing smoke test
@@ -168,7 +192,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           xcodebuild \
-            -project OpenCast.xcodeproj \
+            -project opencast.xcodeproj \
             -scheme OpenCast \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
             -parallel-testing-enabled NO \
@@ -224,7 +248,7 @@ jobs:
 
   swift-packages:
     name: Swift Packages (${{ matrix.name }})
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 30
     permissions:
       contents: read
@@ -243,6 +267,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify Xcode 27 and Swift 6.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun swift --version
+          xcodebuild -version | grep -Eq '^Xcode 27([.]|$)'
+          xcrun swift --version | grep -Eq 'Apple Swift version 6[.]4([. ]|$)'
 
       - name: Run package tests
         working-directory: ${{ matrix.directory }}
