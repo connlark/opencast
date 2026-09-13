@@ -114,6 +114,7 @@ struct OpenCastSystemActionTests {
         try await fixture.model.systemActions.perform(.playEpisode("episode-1"), modelContext: fixture.context)
         defer { fixture.model.playback.unload() }
         #expect(fixture.model.playback.currentItemSourceIdentity?.assetURL == file)
-        #expect(fixture.model.playback.position == 40)
+        // Fresh progress resumes through the tier-1 smart rewind (3 s).
+        #expect(fixture.model.playback.position == 37)
     }
 }

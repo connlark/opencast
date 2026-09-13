@@ -20,6 +20,10 @@ chmod +x "$MOCK_XCB" "$MOCK_XCR"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# Every build is mocked; never inherit real device IDs or write bytecode in the repo.
+export SIM_A=mock-simulator-a SIM_B=mock-simulator-b
+export PYTHONPYCACHEPREFIX="${work}/pycache"
+
 pass=0; fail=0
 ok()   { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
@@ -79,8 +83,12 @@ grep -q "missing=" "$OUTFILE" && ok "names the omitted test" || bad "omitted tes
 MOCK_SCENARIO=hang XCODEBUILD="$MOCK_XCB" XCRESULTTOOL="$MOCK_XCR" XCTESTRUN="fake.xctestrun" \
   bash "$RUNNER" --no-build --out "${work}/intr" --jobs 2 >"${work}/intr.stdout" 2>&1 &
 wpid=$!
+interrupted_lane_count() {
+  # Scope the process probe to this invocation's bundles; other self-tests may run.
+  pgrep -f "${MOCK_XCB} .*${work}/intr/" | grep -c . || true
+}
 for _ in $(seq 1 20); do  # wait until both mock lanes are in flight
-  [[ "$(pgrep -f mock_xcodebuild.py | grep -c . || true)" -ge 2 ]] && break
+  [[ "$(interrupted_lane_count)" -ge 2 ]] && break
   sleep 0.3
 done
 kill -TERM "$wpid" 2>/dev/null
@@ -88,7 +96,7 @@ wait "$wpid"; irc=$?
 check 130 "$irc" "interrupt exits 130"
 [[ -d "${work}/intr" ]] && ok "output dir preserved after interrupt" || bad "output dir gone"
 sleep 0.5
-[[ "$(pgrep -f mock_xcodebuild.py | grep -c . || true)" -eq 0 ]] \
+[[ "$(interrupted_lane_count)" -eq 0 ]] \
   && ok "no orphaned lane processes after interrupt" || bad "orphaned lane processes remain"
 
 # ---- 6. --jobs 1 serial fallback ----

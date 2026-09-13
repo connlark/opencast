@@ -508,9 +508,11 @@ struct AVFoundationVoiceBoostIntegrationTests {
             in: diagnostics,
             exceeding: firstProcessedFrameCount
         )
+        // The tap can process audio before the player-status observation reaches MainActor.
+        let resumedSnapshot = try await waitForPlaying(controller, minimumPosition: 2)
 
-        #expect(controller.snapshot.state == .playing)
-        #expect(controller.snapshot.position >= 2)
+        #expect(resumedSnapshot.state == .playing)
+        #expect(resumedSnapshot.position >= 2)
         #expect(secondProcessedFrameCount > firstProcessedFrameCount)
         #expect(diagnostics.snapshot.sourceErrorCount == 0)
         #expect(diagnostics.snapshot.unsupportedFormatCount == 0)
@@ -862,6 +864,19 @@ struct AVFoundationVoiceBoostIntegrationTests {
             Issue.record("Timed out waiting for playback to end at or beyond \(minimumPosition).")
         }
         return snapshot
+    }
+
+    @MainActor
+    private func waitForPlaying(
+        _ controller: AVFoundationPlaybackController,
+        minimumPosition: TimeInterval
+    ) async throws -> PlaybackSnapshot {
+        let deadline = Date.now.addingTimeInterval(30)
+        while (controller.snapshot.state != .playing || controller.snapshot.position < minimumPosition)
+            && Date.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return controller.snapshot
     }
 
     @MainActor
