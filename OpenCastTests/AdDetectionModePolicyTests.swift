@@ -112,7 +112,7 @@ struct AdDetectionModePolicyTests {
     func settingsStoreRoundTrip() throws {
         let container = try ModelContainer(
             for: LocalPreferenceRecord.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         )
         let context = ModelContext(container)
         let store = AdDetectionSettingsStore()
