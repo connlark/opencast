@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 enum OpenCastModelContainerFactory {
-    static let cloudKitContainerIdentifier = "iCloud.com.connor.opencast"
+    nonisolated static let cloudKitContainerIdentifier = "iCloud.com.connor.opencast"
     static let syncedConfigurationName = "SyncedUserData"
     static let localConfigurationName = "LocalDeviceData"
 

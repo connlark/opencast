@@ -21,10 +21,6 @@ extension Float16: @retroactive BNNSScalar {
     public static var bnnsDataType: BNNSDataType { .float16 }
 }
 
-extension Float16: @retroactive MLShapedArrayScalar {
-    public static var multiArrayDataType: MLMultiArrayDataType { .float16 }
-}
-
 #endif
 
 // MARK: - Float16 BNNSScalar conformance for Mac Catalyst
@@ -34,10 +30,6 @@ extension Float16: @retroactive MLShapedArrayScalar {
 @available(macCatalyst, obsoleted: 26.0)
 extension Float16: @retroactive BNNSScalar {
     public static var bnnsDataType: BNNSDataType { .float16 }
-}
-
-extension Float16: @retroactive MLShapedArrayScalar {
-    public static var multiArrayDataType: MLMultiArrayDataType { .float16 }
 }
 
 #endif

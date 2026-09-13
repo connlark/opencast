@@ -43,6 +43,7 @@ struct InboxView: View {
         .animation(listAnimation, value: episodeIDs)
         .animation(listAnimation, value: appModel.library.state)
         .navigationTitle("Inbox")
+        .toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 InboxAdDetectionToolbarStatus(onOpen: onOpenAdDetectionQueue)

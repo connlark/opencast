@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 /// In-page progress surface for the foreground-only "Improve Transcript"

@@ -6,8 +6,14 @@ import UserNotifications
 enum UITestAdFreePassNotificationLookFixtureScheduler {
     static func schedule() {
         Task {
+            AdFreePassBackgroundRunLog.record("notification look fixture requesting authorization")
             let center = UNUserNotificationCenter.current()
-            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+            do {
+                let authorized = try await center.requestAuthorization(options: [.alert, .sound])
+                AdFreePassBackgroundRunLog.record("notification look fixture authorized=\(authorized)")
+            } catch {
+                AdFreePassBackgroundRunLog.record("notification look fixture authorization failed: \(error)")
+            }
             center.removePendingNotificationRequests(withIdentifiers: [requestIdentifier])
             center.removeDeliveredNotifications(withIdentifiers: [requestIdentifier])
 
@@ -42,7 +48,14 @@ enum UITestAdFreePassNotificationLookFixtureScheduler {
                 content: AdFreePassCompletionNotificationScheduler.notificationContent(for: content),
                 trigger: UNTimeIntervalNotificationTrigger(timeInterval: 4, repeats: false)
             )
-            try? await center.add(request)
+            do {
+                try await center.add(request)
+                let settings = await center.notificationSettings()
+                let pending = await center.pendingNotificationRequests()
+                AdFreePassBackgroundRunLog.record("notification look fixture scheduled status=\(settings.authorizationStatus.rawValue) pending=\(pending.count)")
+            } catch {
+                AdFreePassBackgroundRunLog.record("notification look fixture add failed: \(error)")
+            }
         }
     }
 

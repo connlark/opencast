@@ -1,7 +1,7 @@
 import Foundation
 @testable import OpenCast
 
-final class RecordingHangingEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
+nonisolated final class RecordingHangingEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedRequestCount = 0
 

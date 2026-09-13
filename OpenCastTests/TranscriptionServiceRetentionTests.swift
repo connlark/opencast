@@ -6,7 +6,7 @@ import Testing
 
 @Suite("Transcription service retention")
 struct TranscriptionServiceRetentionTests {
-    final class SpyService: RetainableTranscriptionService {
+    nonisolated final class SpyService: RetainableTranscriptionService {
         private struct State {
             var unloads = 0
             var waiters: [UUID: (threshold: Int, continuation: CheckedContinuation<Void, Never>)] = [:]

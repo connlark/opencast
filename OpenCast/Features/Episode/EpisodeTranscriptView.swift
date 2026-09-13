@@ -1,4 +1,5 @@
 import OpenCastTranscription
+import SwiftData
 import SwiftUI
 
 struct EpisodeTranscriptView: View {

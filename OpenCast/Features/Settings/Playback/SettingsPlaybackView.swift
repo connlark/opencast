@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 struct SettingsPlaybackView: View {
@@ -47,6 +48,7 @@ struct SettingsPlaybackView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
+                    .accessibilityIdentifier("playback-skip-forward-picker")
                 }
 
                 if let message = appModel.playbackSettings.lastErrorMessage {

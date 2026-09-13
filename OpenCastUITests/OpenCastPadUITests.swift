@@ -130,6 +130,83 @@ final class OpenCastPadUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededPadLibraryGridSwipeRemovalCanCancelAndConfirm() throws {
+        try skipUnlessPad()
+        let app = makeSeededApp()
+        app.launch()
+        openLibrary(in: app)
+        let tile = seededSubscriptionTile(in: app)
+        assertHittable(tile, named: "library tile before swipe")
+        tile.swipeLeft()
+        let confirmation = app.buttons["Remove & Clear History"]
+        if !confirmation.waitForExistence(timeout: 2) {
+            app.buttons["Remove Podcast Swipe Action"].firstMatch.tap()
+        }
+        assertExists(confirmation, named: "tile removal history choice")
+        attachSmokeScreenshot(named: "ipad_grid_swipe_confirmation")
+        let cancel = app.buttons["Cancel"].firstMatch
+        if cancel.exists, cancel.isHittable {
+            cancel.tap()
+        } else {
+            // iPad confirmation popovers dismiss when tapped outside instead
+            // of displaying the compact presentation's Cancel button.
+            app.navigationBars["Library"].staticTexts["Library"].tap()
+        }
+        assertHittable(tile, named: "tile retained after cancelling removal")
+        attachSmokeScreenshot(named: "ipad_grid_swipe_cancelled")
+        tile.swipeLeft()
+        if !confirmation.waitForExistence(timeout: 2) {
+            app.buttons["Remove Podcast Swipe Action"].firstMatch.tap()
+        }
+        assertExists(confirmation, named: "second tile removal confirmation")
+        app.buttons["Remove Podcast"].firstMatch.tap()
+        assertExists(app.staticTexts["No Subscriptions"], named: "empty Library after confirmed swipe removal")
+    }
+
+    @MainActor
+    func testSeededPadNarrowWindowKeepsToolbarActionsAvailable() throws {
+        try skipUnlessPad()
+        let app = makeSeededApp()
+        app.launchArguments.append("--opencast-seed-completed-download")
+        app.launch()
+        assertExists(app.navigationBars["Inbox"], named: "Inbox before window resize")
+
+        let window = app.windows.firstMatch
+        let originalWidth = window.frame.width
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.99))
+            .press(
+                forDuration: 0.5,
+                thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.42))
+            )
+        XCTAssertLessThan(window.frame.width, 700, "The app window itself must be narrow, not just the Simulator scale")
+        defer {
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.005)).doubleTap()
+        }
+
+        openLibrary(in: app)
+        app.swipeUp()
+        assertHittable(app.navigationBars["Library"].buttons["Add"], named: "pinned Add in narrow Library")
+        attachSmokeScreenshot(named: "ipad_narrow_library_toolbar")
+
+        openSection("Downloads", in: app)
+        let toolbar = app.navigationBars["Downloads"]
+        assertHittable(toolbar.buttons["Search"], named: "prioritized Search in narrow Downloads")
+        assertHittable(toolbar.buttons["Edit"], named: "pinned Edit in narrow Downloads")
+        toolbar.buttons["Edit"].tap()
+        app.swipeUp()
+        assertHittable(toolbar.buttons["Done"], named: "Done remains available after scrolling while editing")
+        attachSmokeScreenshot(named: "ipad_narrow_downloads_editing")
+        toolbar.buttons["Done"].tap()
+
+        toolbar.buttons["Search"].tap()
+        assertHittable(app.searchFields["Downloaded episodes"], named: "narrow Downloads search field")
+        app.swipeUp()
+        assertExists(app.searchFields["Downloaded episodes"], named: "search stays presented after scrolling")
+        attachSmokeScreenshot(named: "ipad_narrow_downloads_search")
+        XCTAssertLessThan(window.frame.width, originalWidth, "The toolbar checks must run in the resized window")
+    }
+
+    @MainActor
     func testSeededPadMiniPlayerAccessorySurvivesTabSwitchAndExpands() throws {
         try skipUnlessPad()
 

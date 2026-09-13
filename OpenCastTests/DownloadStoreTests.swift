@@ -1487,7 +1487,7 @@ private struct CompletedBytesHangingEpisodeAudioDownloader: EpisodeAudioDownload
     }
 }
 
-private final class ResumableGatedEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
+nonisolated private final class ResumableGatedEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedResumeContexts: [EpisodeDownloadResumeContext?] = []
 
@@ -1537,7 +1537,7 @@ private final class ResumableGatedEpisodeAudioDownloader: EpisodeAudioDownloadin
     }
 }
 
-private final class ResumeFailingOnceEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
+nonisolated private final class ResumeFailingOnceEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedResumeOffsets: [Int64] = []
 

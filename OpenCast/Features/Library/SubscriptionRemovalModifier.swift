@@ -16,19 +16,10 @@ struct SubscriptionRemovalModifier: ViewModifier {
         decoratedContent(content)
             .alert(
                 "Remove Podcast",
-                // Alert API exception: no item: overload for a
-                // non-Identifiable optional.
-                isPresented: Binding(
-                    get: { removalErrorMessage != nil },
-                    set: { isPresented in
-                        if !isPresented {
-                            removalErrorMessage = nil
-                        }
-                    }
-                )
-            ) {
-            } message: {
-                Text(removalErrorMessage ?? "")
+                item: $removalErrorMessage
+            ) { _ in
+            } message: { message in
+                Text(message)
             }
     }
 
@@ -97,6 +88,8 @@ struct SubscriptionRemovalModifier: ViewModifier {
     private var swipeRemoveButton: some View {
         Button("Remove", systemImage: "trash", action: confirmRemoval)
             .tint(.red)
+            .accessibilityLabel("Remove")
+            .accessibilityIdentifier("Remove Podcast Swipe Action")
     }
 
     private var contextMenuRemoveButton: some View {

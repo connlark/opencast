@@ -8,10 +8,9 @@ timestamp="$(date +%Y%m%d-%H%M%S)"
 run_dir="${artifact_root}/${timestamp}"
 test_identifier="OpenCastUITests/AppStoreScreenshotUITests/testAppStoreScreenshotSet"
 
-# OS-pinned: bare names resolve ambiguously (and to iOS 27) once a newer
-# runtime is installed; this repo's lanes are iOS 26 only.
-iphone_destination="${IPHONE_DESTINATION:-platform=iOS Simulator,name=iPhone 17 Pro Max,OS=26.5}"
-ipad_destination="${IPAD_DESTINATION:-platform=iOS Simulator,name=iPad Pro 13-inch (M4),OS=26.5}"
+# OS-pinned: bare names are ambiguous across installed runtimes.
+iphone_destination="${IPHONE_DESTINATION:-platform=iOS Simulator,name=iPhone 17 Pro Max,OS=27.0}"
+ipad_destination="${IPAD_DESTINATION:-platform=iOS Simulator,name=iPad Pro 13-inch (M4),OS=27.0}"
 capture_ipad="${CAPTURE_IPAD:-1}"
 
 mkdir -p "${run_dir}"

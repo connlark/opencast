@@ -136,6 +136,38 @@ struct TranscriptionModelStoreTests {
         })
     }
 
+    @Test("Cancelling install clears ownership and ignores late progress before retry")
+    func cancelledInstallCanRetry() async {
+        let installer = FakeTranscriptionModelInstaller(isInstalled: false)
+        installer.installDelay = .seconds(60)
+        let store = TranscriptionModelStore(installer: installer)
+        #expect(store.installPinnedModel())
+        #expect(await waitUntil { installer.installRequestCount == 1 })
+        store.cancelInstall()
+        #expect(await waitUntil { store.state == .notInstalled })
+        #expect(installer.emitLateProgress())
+        #expect(await waitUntil { installer.lateProgressDeliveryAcknowledged })
+        #expect(store.state == .notInstalled)
+
+        installer.installDelay = .milliseconds(40)
+        #expect(store.installPinnedModel())
+        #expect(await waitUntil { installer.isInstalled })
+        #expect(installer.installRequestCount == 2)
+    }
+
+    @Test("A finite install owns its store until completion then releases it")
+    func installOwnsStoreUntilCompletion() async {
+        let installer = FakeTranscriptionModelInstaller(isInstalled: false)
+        var store: TranscriptionModelStore? = TranscriptionModelStore(installer: installer)
+        weak let releasedStore = store
+        #expect(store?.installPinnedModel() == true)
+        store = nil
+        #expect(releasedStore != nil)
+        #expect(await waitUntil { releasedStore == nil })
+        #expect(installer.isInstalled)
+        #expect(installer.emitLateProgress())
+    }
+
     @Test("Starting install reports false while another model operation is active")
     func startingInstallReportsFalseWhileAnotherModelOperationIsActive() async {
         let installer = FakeTranscriptionModelInstaller(isInstalled: false)
@@ -319,6 +351,7 @@ private final class FakeTranscriptionModelInstaller: TranscriptionModelInstallin
     let summary: OpenCastWhisperModelInstalledSummary
     let manifestSummary: OpenCastWhisperModelInstalledSummary
     var installRequestCount = 0
+    var installDelay: Duration = .milliseconds(40)
     var requestedInstallModel: OpenCastWhisperModel?
     var requestedInstallVersion: String?
     private(set) var lateProgressDeliveryAcknowledged = false
@@ -378,7 +411,7 @@ private final class FakeTranscriptionModelInstaller: TranscriptionModelInstallin
             totalByteCount: 10,
             currentFilePath: "model/config.json"
         ))
-        try await Task.sleep(for: .milliseconds(40))
+        try await Task.sleep(for: installDelay)
         isInstalled = true
         return summary
     }

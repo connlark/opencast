@@ -73,6 +73,12 @@ struct RemoteCommandAvailabilityMatrixTests {
             expected: ExpectedAvailability(play: true, pause: false, whileLoaded: true, seek: true)
         ),
         MatrixRow(
+            name: "buffering",
+            snapshot: PlaybackSnapshot(state: .buffering, currentEpisode: episode(duration: 300)),
+            resolvedDuration: nil,
+            expected: ExpectedAvailability(play: false, pause: true, whileLoaded: true, seek: true)
+        ),
+        MatrixRow(
             name: "playing",
             snapshot: PlaybackSnapshot(
                 state: .playing,
@@ -121,6 +127,19 @@ struct RemoteCommandAvailabilityMatrixTests {
             for: row.snapshot,
             resolvedDuration: row.resolvedDuration
         )
+
+        let adapter = PlaybackMediaSessionAdapter(artworkLoader: ImmediateArtworkLoader())
+        adapter.publish(row.snapshot, resolvedDuration: row.resolvedDuration)
+        let actual = adapter.availableCommands
+        #expect(actual.contains(.play) == play.isEnabled)
+        #expect(actual.contains(.pause) == pause.isEnabled)
+        #expect(actual.contains(.togglePlayPause) == togglePlayPause.isEnabled)
+        #expect(actual.contains(.skipForward) == skipForward.isEnabled)
+        #expect(actual.contains(.skipBackward) == skipBackward.isEnabled)
+        #expect(actual.contains(.next) == nextTrack.isEnabled)
+        #expect(actual.contains(.previous) == previousTrack.isEnabled)
+        #expect(actual.contains(.changeRate) == changeRate.isEnabled)
+        #expect(actual.contains(.seek) == changePosition.isEnabled)
 
         #expect(play.isEnabled == row.expected.play, "\(row.name): play")
         #expect(pause.isEnabled == row.expected.pause, "\(row.name): pause")

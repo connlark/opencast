@@ -8,6 +8,8 @@ import UserNotifications
 
 @Observable
 final class OpenCastAppModel {
+    @ObservationIgnored lazy var systemActions = OpenCastSystemActionRouter(appModel: self)
+    var systemSearchRequest: OpenCastSearchRequest?
     /// The periodic synced flush only guards against a hard crash mid-listen
     /// (losing up to this much position is accepted); every deliberate exit -
     /// pause, seek, skip, background, completion, dismiss, episode switch -

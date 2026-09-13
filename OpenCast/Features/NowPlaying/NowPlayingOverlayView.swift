@@ -180,6 +180,7 @@ struct NowPlayingOverlayView: View {
     private func prepareForPresentation(containerHeight: CGFloat) {
         if reduceMotion {
             offsetY = 0
+            nowPlayingProbeMark("card-settled")
             return
         }
 
@@ -271,6 +272,7 @@ struct NowPlayingOverlayView: View {
             return
         }
 
+        nowPlayingProbeMark("dismiss-animate-start")
         if reduceMotion {
             onDismissed()
             completion?()

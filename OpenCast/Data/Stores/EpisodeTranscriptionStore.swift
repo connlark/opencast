@@ -30,6 +30,12 @@ final class EpisodeTranscriptionStore {
     private(set) var progressByEpisodeID: [String: EpisodeTranscriptionProgress] = [:]
     private(set) var lastErrorMessage: String?
     private(set) var activeEpisodeID: String?
+    var diagnosticComputeClass: String {
+        guard activeEpisodeID != nil else { return "idle" }
+        guard activeEngine != .appleSpeech else { return "system-speech" }
+        return diagnosticWhisperComputeClass
+    }
+    private(set) var diagnosticWhisperComputeClass = "background-safe"
     private var lastErrorEpisodeID: String?
     /// Episode-ID groups that held more than one record and were collapsed to
     /// a proven survivor, cumulative for this process (startup repair plus
@@ -603,7 +609,14 @@ final class EpisodeTranscriptionStore {
 
         var workingRelativePath: String?
         var computeProfile = initialComputeProfile
+        defer { diagnosticWhisperComputeClass = "background-safe" }
         while true {
+            diagnosticWhisperComputeClass = switch computeProfile {
+            case .backgroundSafe: "background-safe"
+            case .cpuOnly: "cpu"
+            case .cpuAndNeuralEngine: "neural-engine"
+            case .whisperKitDefault: "gpu"
+            }
             do {
                 try await runTranscriptionAttempt(
                     runID: runID,

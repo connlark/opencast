@@ -20,7 +20,7 @@ final class RemoteEpisodeNotificationRouteBridge {
                 continuation.yield(pendingRoute)
                 self.pendingRoute = nil
             }
-            continuation.onTermination = { @Sendable _ in
+            continuation.onTermination = { @Sendable [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.clearContinuation(id: streamID)
                 }

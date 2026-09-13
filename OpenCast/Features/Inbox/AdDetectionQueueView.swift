@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 /// The Ad Detection queue screen: live per-episode status for the active,

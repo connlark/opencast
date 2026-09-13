@@ -348,7 +348,7 @@ final class OpenCastUITests: XCTestCase {
             navigationBarTitle: "UI Test Show"
         )
         // Search scopes are presented only after the field has content on the
-        // current iOS 26 search presentation.
+        // current iOS 27 search presentation.
         searchField.typeText("show notes")
         let showFullTextScope = app.buttons["Full Text"].firstMatch
         assertExists(showFullTextScope, named: "show full-text scope")
@@ -639,6 +639,16 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(alert.staticTexts.element(boundBy: 1).exists)
         alert.buttons["OK"].tap()
         assertExists(inboxEpisode, named: "seeded inbox episode after failed playback")
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
+        // An asynchronous playback failure can leave Now Playing above Inbox.
+        if nowPlayingOverlay(in: app).exists {
+            dismissNowPlayingOverlay(in: app)
+        }
+        assertHittable(inboxEpisode, named: "episode available for another failed playback attempt")
+        inboxEpisode.tap()
+        assertExists(alert, named: "repeated Playback Failed alert", timeout: 10)
+        alert.buttons["OK"].tap()
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
     }
 
     @MainActor
@@ -881,6 +891,31 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededMiniPlayerUsesConfiguredSkipInterval() throws {
+        let app = makeSeededApp(audioDurationSeconds: 600)
+        app.launch()
+        openSettings(in: app)
+        app.buttons["Playback"].tap()
+        let picker = app.buttons["playback-skip-forward-picker"]
+        assertHittable(picker, named: "Skip Forward picker")
+        picker.tap()
+        app.buttons["45s"].tap()
+        openInbox(in: app)
+        openSeededNowPlaying(in: app)
+        let overlay = nowPlayingOverlay(in: app)
+        assertHittable(overlay.buttons["Pause"], named: "Pause before testing skip")
+        overlay.buttons["Pause"].tap()
+        let before = try XCTUnwrap(playbackElapsedSeconds(from: playbackProgress(in: app).value as? String ?? ""))
+        dismissNowPlayingOverlay(in: app)
+        let skip = app.buttons["Skip Forward 45 Seconds"]
+        assertHittable(skip, named: "configured mini-player skip")
+        skip.tap()
+        app.buttons["Open Now Playing"].tap()
+        assertNowPlayingOverlay(in: app)
+        _ = waitForPlaybackElapsed(playbackProgress(in: app), in: (before + 44)..<(before + 47), timeout: 5)
+    }
+
+    @MainActor
     func testSeededCompletionRemovesCollapsedMiniPlayer() throws {
         let app = makeSeededApp(audioDurationSeconds: 15)
         app.launch()
@@ -1004,11 +1039,9 @@ final class OpenCastUITests: XCTestCase {
 
     @MainActor
     func testSeededCompletionDuringExitAnimationLeavesInteractiveTabs() throws {
-        let app = makeSeededApp(
-            audioDurationSeconds: 15,
-            skipIntroSeconds: 13.4
-        )
+        let app = makeSeededApp(audioDurationSeconds: 600)
         app.launchArguments.append("--opencast-frame-probe")
+        app.launchEnvironment["OPENCAST_UI_TEST_COMPLETE_DURING_DISMISSAL"] = "1"
         app.launch()
 
         openSeededNowPlaying(in: app)
@@ -1024,7 +1057,7 @@ final class OpenCastUITests: XCTestCase {
         assertHittable(app.tabBars.buttons["Library"], named: "interactive Library tab after in-flight completion")
         let summary = captureFramePacingSummary(in: app, expectedSessions: 1)
         assertEventOrder(
-            ["dismiss-drag-ended", "playback-finished", "card-dismissed"],
+            ["dismiss-drag-ended", "completion-fixture-triggered", "playback-finished", "card-dismissed"],
             in: summary,
             named: "completion during dismissal exit"
         )
@@ -1065,14 +1098,28 @@ final class OpenCastUITests: XCTestCase {
         assertExists(miniPlayer, named: "mini-player before Inbox scroll")
         assertExists(tabBar, named: "tab bar before Inbox scroll")
         XCTAssertTrue(miniPlayer.isHittable)
+        let expanded = app.descendants(matching: .any)["mini-player-expanded"].firstMatch
+        assertExists(expanded, named: "expanded player placement")
+        assertHittable(app.buttons["Skip Forward 15 Seconds"], named: "expanded player skip")
+        attachSmokeScreenshot(named: "mini_player_tab_accessory_expanded")
 
         scrollUntilExists(seededExtraEpisodeRow(in: app, index: 8), in: app, maxSwipes: 4)
 
         assertExists(miniPlayer, named: "mini-player after Inbox scroll")
         assertExists(tabBar, named: "tab bar after Inbox scroll")
         XCTAssertTrue(miniPlayer.isHittable)
+        let inline = app.descendants(matching: .any)["mini-player-inline"].firstMatch
+        assertExists(inline, named: "inline player placement after scrolling")
+        XCTAssertFalse(app.buttons["Skip Forward 15 Seconds"].isHittable)
         attachSmokeScreenshot(named: "mini_player_tab_accessory_inbox_scrolled")
 
+        app.swipeDown()
+        assertExists(expanded, named: "expanded player restored on upward scroll")
+        assertHittable(app.buttons["Skip Forward 15 Seconds"], named: "restored skip control")
+
+        app.tabBars.buttons["Search"].tap()
+        assertExists(app.searchFields.firstMatch, named: "Search tab search field")
+        openInbox(in: app)
         miniPlayer.tap()
         assertNowPlayingOverlay(in: app)
         assertExists(playbackProgress(in: app), named: "Playback Progress control")
@@ -1856,7 +1903,10 @@ final class OpenCastUITests: XCTestCase {
 
         let timestampLink = app.links["1:30"]
         scrollUntilExists(timestampLink, in: app, maxSwipes: 8)
-        timestampLink.tap()
+        XCTAssertTrue(timestampLink.isHittable)
+        // iOS 27's suggested glyph-edge hit point misses this native Text
+        // link. Target its visible center; keep the actual seek assertion.
+        timestampLink.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         // A timestamp tap starts playback without presenting Now Playing, so
         // the mini player is the way in to read the position.
@@ -4103,6 +4153,22 @@ final class OpenCastUITests: XCTestCase {
         assertNowPlayingControlIsReachable(app.buttons["Up Next"], named: "Up Next control", in: app)
         assertPlayerUtilityControlHeightsAreBalanced(in: app)
         attachSmokeScreenshot(named: "now_playing_expanded_accessibility_xxxl")
+
+        dismissNowPlayingOverlay(in: app)
+        let miniPlayer = app.descendants(matching: .any)["mini-player-expanded"].firstMatch
+        let openPlayer = miniPlayer.buttons["Open Now Playing"]
+        assertHittable(openPlayer, named: "mini-player metadata at Accessibility XXXL")
+        XCTAssertEqual(openPlayer.value as? String, "Deterministic UI Episode, UI Test Show")
+        let transport = miniPlayer.buttons.matching(
+            NSPredicate(format: "label IN %@", ["Play", "Pause"])
+        ).firstMatch
+        assertHittable(transport, named: "mini-player transport at Accessibility XXXL")
+        XCTAssertGreaterThanOrEqual(transport.frame.width, 43.99)
+        XCTAssertGreaterThanOrEqual(transport.frame.height, 43.99)
+        XCTAssertFalse(miniPlayer.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Skip Forward")
+        ).firstMatch.exists)
+        attachSmokeScreenshot(named: "mini_player_accessibility_xxxl")
     }
 
     @MainActor

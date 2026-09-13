@@ -1,4 +1,4 @@
-// swift-tools-version: 6.3
+// swift-tools-version: 6.4
 
 import PackageDescription
 
@@ -10,7 +10,7 @@ let swift63Settings: [SwiftSetting] = [
 let package = Package(
     name: "OpenCastPlayback",
     platforms: [
-        .iOS(.v26),
+        .iOS(.v27),
         .macOS(.v15)
     ],
     products: [

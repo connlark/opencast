@@ -122,15 +122,24 @@ struct DownloadsView: View {
         .scrollDismissesKeyboard(.immediately)
         .contentMargins(.horizontal, horizontalSizeClass == .regular ? 32 : nil, for: .scrollContent)
         .navigationTitle("Downloads")
+        .toolbarMinimizationBehavior(
+            editMode.isEditing || isSearchVisible ? .never : .onScrollDown,
+            for: .navigationBar
+        )
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
+            ToolbarItem(placement: .topBarTrailing) {
                 Button("Search", systemImage: "magnifyingglass", action: showSearch)
                     .disabled(editMode != .inactive || allDownloads.downloaded.isEmpty)
+            }
+            .visibilityPriority(.high)
 
-                if !allDownloads.downloaded.isEmpty || editMode == .active {
+            if !allDownloads.downloaded.isEmpty || editMode == .active {
+                ToolbarItem(placement: .topBarPinnedTrailing) {
                     EditButton()
                 }
+            }
 
+            ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Toggle(isOn: $showsUnplayedOnly) {
                         Label("Unplayed Only", systemImage: "circle")
@@ -158,7 +167,7 @@ struct DownloadsView: View {
                     Text("Played downloads that aren’t currently in use will be removed from this device.")
                 }
             }
-
+            .visibilityPriority(.low)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if editMode == .active {

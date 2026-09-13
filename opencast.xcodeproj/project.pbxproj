@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		013CA7D0036479D9C055E61D /* ResumeWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B8D930945FAD5C4384C9167 /* ResumeWidgetView.swift */; };
+		04F96C796531DBB2FB21BD77 /* ResumeWidgetEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C6C49AEC88516661DAA219 /* ResumeWidgetEntry.swift */; };
+		13AB9CF5E4F576BDFDEA83EB /* ResumeWidgetProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ADC9EA0833D889E83D30AA8 /* ResumeWidgetProvider.swift */; };
+		3D202B0EF0340961D72790A8 /* ResumeWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE562EA9B50391FB2A7C2564 /* ResumeWidgetSnapshot.swift */; };
+		776B90882D81388942F64354 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EEEC57972BE60B1502C491A0 /* Foundation.framework */; };
 		A10000000000000000000001 /* OpenCastCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* OpenCastCore */; };
 		A10000000000000000000003 /* OpenCastPlayback in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* OpenCastPlayback */; };
 		A10000000000000000000034 /* OpenCastNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000033 /* OpenCastNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -15,10 +20,10 @@
 		B20000000000000000000013 /* OpenCastNotificationService/ImageFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000010 /* OpenCastNotificationService/ImageFormat.swift */; };
 		B20000000000000000000014 /* OpenCastNotificationService/NotificationAttachmentFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000011 /* OpenCastNotificationService/NotificationAttachmentFactory.swift */; };
 		B20000000000000000000015 /* OpenCastNotificationService/NotificationPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000012 /* OpenCastNotificationService/NotificationPayload.swift */; };
-		B2000000000000000000002B /* OpenCastNotificationService/NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000002A /* OpenCastNotificationService/NotificationService.swift */; };
-		B2000000000000000000002D /* OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000002C /* OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift */; };
 		B20000000000000000000016 /* OpenCastCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* OpenCastCore */; };
 		B20000000000000000000017 /* OpenCastPlayback in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* OpenCastPlayback */; };
+		B2000000000000000000002B /* OpenCastNotificationService/NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000002A /* OpenCastNotificationService/NotificationService.swift */; };
+		B2000000000000000000002D /* OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000002C /* OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift */; };
 		C30000000000000000000001 /* OpenCastNotificationContent.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C30000000000000000000004 /* OpenCastNotificationContent.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C30000000000000000000002 /* OpenCastNotificationContent/EpisodeNotificationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000005 /* OpenCastNotificationContent/EpisodeNotificationViewModel.swift */; };
 		C3000000000000000000001D /* UserNotificationsUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C3000000000000000000001E /* UserNotificationsUI.framework */; };
@@ -30,9 +35,18 @@
 		D40000000000000000000003 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40000000000000000000004 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift */; };
 		D40000000000000000000005 /* OpenCastNotificationService/ArtworkDownloadAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40000000000000000000007 /* OpenCastNotificationService/ArtworkDownloadAccumulator.swift */; };
 		D40000000000000000000006 /* OpenCastNotificationService/ArtworkDownloadRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40000000000000000000008 /* OpenCastNotificationService/ArtworkDownloadRequest.swift */; };
+		DC491ADBB27ACC9D7C41E635 /* OpenCastWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 192CD3FA3C8CE63DAC9FCE45 /* OpenCastWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		EA933FBA0878F5C212123D6E /* OpenCastResumeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D8080B3436C189323BFF97 /* OpenCastResumeWidget.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		6A6DD54385F3FD5F00B48453 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000006 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1D39CDDBA120927557BB72D1;
+			remoteInfo = OpenCastWidgets;
+		};
 		A10000000000000000000005 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A10000000000000000000006 /* Project object */;
@@ -79,6 +93,7 @@
 			files = (
 				A10000000000000000000034 /* OpenCastNotificationService.appex in Embed Foundation Extensions */,
 				C30000000000000000000001 /* OpenCastNotificationContent.appex in Embed Foundation Extensions */,
+				DC491ADBB27ACC9D7C41E635 /* OpenCastWidgets.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -86,10 +101,16 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0FA60CF4265491A26D59B58C /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		192CD3FA3C8CE63DAC9FCE45 /* OpenCastWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OpenCastWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		1B8D930945FAD5C4384C9167 /* ResumeWidgetView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ResumeWidgetView.swift; sourceTree = "<group>"; };
+		55C6C49AEC88516661DAA219 /* ResumeWidgetEntry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ResumeWidgetEntry.swift; sourceTree = "<group>"; };
+		9ADC9EA0833D889E83D30AA8 /* ResumeWidgetProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ResumeWidgetProvider.swift; sourceTree = "<group>"; };
 		A10000000000000000000009 /* OpenCast.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenCast.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000000000000000000000A /* OpenCastTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OpenCastTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000000000000000000000B /* OpenCastUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OpenCastUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000033 /* OpenCastNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OpenCastNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A79CF2197DE30D17D4348C0D /* OpenCastWidgets.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = OpenCastWidgets.entitlements; sourceTree = "<group>"; };
 		B20000000000000000000001 /* OpenCastNotificationServiceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OpenCastNotificationServiceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000010 /* OpenCastNotificationService/ImageFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/ImageFormat.swift; sourceTree = "<group>"; };
 		B20000000000000000000011 /* OpenCastNotificationService/NotificationAttachmentFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/NotificationAttachmentFactory.swift; sourceTree = "<group>"; };
@@ -105,6 +126,9 @@
 		D40000000000000000000004 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift; sourceTree = "<group>"; };
 		D40000000000000000000007 /* OpenCastNotificationService/ArtworkDownloadAccumulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/ArtworkDownloadAccumulator.swift; sourceTree = "<group>"; };
 		D40000000000000000000008 /* OpenCastNotificationService/ArtworkDownloadRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/ArtworkDownloadRequest.swift; sourceTree = "<group>"; };
+		EE562EA9B50391FB2A7C2564 /* ResumeWidgetSnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ResumeWidgetSnapshot.swift; path = OpenCast/Widgets/ResumeWidgetSnapshot.swift; sourceTree = "<group>"; };
+		EEEC57972BE60B1502C491A0 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
+		F2D8080B3436C189323BFF97 /* OpenCastResumeWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OpenCastResumeWidget.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -190,9 +214,46 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F0863EA28487DFB0A8ACCD87 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				776B90882D81388942F64354 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		2920835A4112A0E49462666A /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				EEEC57972BE60B1502C491A0 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		47581C8F56081E48C609223F /* OpenCastWidgets */ = {
+			isa = PBXGroup;
+			children = (
+				0FA60CF4265491A26D59B58C /* Info.plist */,
+				F2D8080B3436C189323BFF97 /* OpenCastResumeWidget.swift */,
+				A79CF2197DE30D17D4348C0D /* OpenCastWidgets.entitlements */,
+				55C6C49AEC88516661DAA219 /* ResumeWidgetEntry.swift */,
+				9ADC9EA0833D889E83D30AA8 /* ResumeWidgetProvider.swift */,
+				1B8D930945FAD5C4384C9167 /* ResumeWidgetView.swift */,
+			);
+			path = OpenCastWidgets;
+			sourceTree = "<group>";
+		};
+		63B0F4656B957D1718E7708B /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				2920835A4112A0E49462666A /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		A10000000000000000000012 = {
 			isa = PBXGroup;
 			children = (
@@ -205,6 +266,9 @@
 				A10000000000000000000013 /* Packages */,
 				A10000000000000000000014 /* Products */,
 				B3DF43342FE8A1090089FE77 /* Recovered References */,
+				63B0F4656B957D1718E7708B /* Frameworks */,
+				47581C8F56081E48C609223F /* OpenCastWidgets */,
+				EE562EA9B50391FB2A7C2564 /* ResumeWidgetSnapshot.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -224,6 +288,7 @@
 				B20000000000000000000001 /* OpenCastNotificationServiceTests.xctest */,
 				A1000000000000000000000A /* OpenCastTests.xctest */,
 				A1000000000000000000000B /* OpenCastUITests.xctest */,
+				192CD3FA3C8CE63DAC9FCE45 /* OpenCastWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -251,6 +316,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		1D39CDDBA120927557BB72D1 /* OpenCastWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B7FDB0B32CFA3E4550AEC7FC /* Build configuration list for PBXNativeTarget "OpenCastWidgets" */;
+			buildPhases = (
+				F2DB06CCD49969138837DB01 /* Sources */,
+				F0863EA28487DFB0A8ACCD87 /* Frameworks */,
+				081873741D4593E5383EAF37 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OpenCastWidgets;
+			productName = OpenCastWidgets;
+			productReference = 192CD3FA3C8CE63DAC9FCE45 /* OpenCastWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		A10000000000000000000007 /* OpenCast */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A10000000000000000000015 /* Build configuration list for PBXNativeTarget "OpenCast" */;
@@ -266,6 +348,7 @@
 			dependencies = (
 				A10000000000000000000036 /* PBXTargetDependency */,
 				C3000000000000000000000C /* PBXTargetDependency */,
+				CB8CFAFFE248D2F550F67E83 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A1000000000000000000000C /* OpenCast */,
@@ -343,8 +426,6 @@
 				A10000000000000000000038 /* OpenCastNotificationService */,
 			);
 			name = OpenCastNotificationService;
-			packageProductDependencies = (
-			);
 			productName = OpenCastNotificationService;
 			productReference = A10000000000000000000033 /* OpenCastNotificationService.appex */;
 			productType = "com.apple.product-type.app-extension";
@@ -366,8 +447,6 @@
 				B20000000000000000000002 /* OpenCastNotificationServiceTests */,
 			);
 			name = OpenCastNotificationServiceTests;
-			packageProductDependencies = (
-			);
 			productName = OpenCastNotificationServiceTests;
 			productReference = B20000000000000000000001 /* OpenCastNotificationServiceTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -388,8 +467,6 @@
 				C30000000000000000000007 /* OpenCastNotificationContent */,
 			);
 			name = OpenCastNotificationContent;
-			packageProductDependencies = (
-			);
 			productName = OpenCastNotificationContent;
 			productReference = C30000000000000000000004 /* OpenCastNotificationContent.appex */;
 			productType = "com.apple.product-type.app-extension";
@@ -452,11 +529,19 @@
 				B20000000000000000000006 /* OpenCastNotificationServiceTests */,
 				A10000000000000000000018 /* OpenCastTests */,
 				A1000000000000000000001D /* OpenCastUITests */,
+				1D39CDDBA120927557BB72D1 /* OpenCastWidgets */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		081873741D4593E5383EAF37 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000017 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -606,6 +691,18 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F2DB06CCD49969138837DB01 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EA933FBA0878F5C212123D6E /* OpenCastResumeWidget.swift in Sources */,
+				04F96C796531DBB2FB21BD77 /* ResumeWidgetEntry.swift in Sources */,
+				13AB9CF5E4F576BDFDEA83EB /* ResumeWidgetProvider.swift in Sources */,
+				013CA7D0036479D9C055E61D /* ResumeWidgetView.swift in Sources */,
+				3D202B0EF0340961D72790A8 /* ResumeWidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -634,9 +731,68 @@
 			target = C30000000000000000000009 /* OpenCastNotificationContent */;
 			targetProxy = C30000000000000000000003 /* PBXContainerItemProxy */;
 		};
+		CB8CFAFFE248D2F550F67E83 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = OpenCastWidgets;
+			target = 1D39CDDBA120927557BB72D1 /* OpenCastWidgets */;
+			targetProxy = 6A6DD54385F3FD5F00B48453 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		01045A3DE230E9BA71D308AD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = OpenCastWidgets/OpenCastWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 261;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = OpenCastWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = OpenCast;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 2026.9.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.connor.opencast.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		75E95CCF4BE55CC353AA793B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = OpenCastWidgets/OpenCastWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 261;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = OpenCastWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = OpenCast;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 2026.9.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.connor.opencast.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		A10000000000000000000025 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -690,7 +846,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -749,7 +905,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
@@ -766,7 +922,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OpenCast/Resources/OpenCast.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -794,7 +950,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OpenCast/Resources/OpenCastProduction.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -821,9 +977,9 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -843,9 +999,9 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -865,9 +1021,9 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -886,9 +1042,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -952,7 +1108,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -970,7 +1126,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OpenCast/Resources/OpenCastNotificationsInternal.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -998,9 +1154,9 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1020,9 +1176,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1043,11 +1199,11 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenCastNotificationService/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1070,11 +1226,11 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenCastNotificationService/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1096,11 +1252,11 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenCastNotificationService/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1123,9 +1279,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1143,9 +1299,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1163,9 +1319,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1180,16 +1336,43 @@
 			};
 			name = NotificationsInternal;
 		};
+		C138D6057B0711AFE41E969F /* NotificationsInternal */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = OpenCastWidgets/OpenCastWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 261;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = OpenCastWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = OpenCast;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 2026.9.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.connor.opencast.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = NotificationsInternal;
+		};
 		C3000000000000000000000D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenCastNotificationContent/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1213,11 +1396,11 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenCastNotificationContent/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1240,11 +1423,11 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 260;
+				CURRENT_PROJECT_VERSION = 261;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OpenCastNotificationContent/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1323,6 +1506,16 @@
 				B2000000000000000000000A /* Debug */,
 				B2000000000000000000000B /* Release */,
 				B2000000000000000000000C /* NotificationsInternal */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B7FDB0B32CFA3E4550AEC7FC /* Build configuration list for PBXNativeTarget "OpenCastWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				75E95CCF4BE55CC353AA793B /* Release */,
+				01045A3DE230E9BA71D308AD /* Debug */,
+				C138D6057B0711AFE41E969F /* NotificationsInternal */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

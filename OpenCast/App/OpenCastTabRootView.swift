@@ -86,7 +86,7 @@ struct OpenCastTabRootView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(tabBarMinimizeBehavior)
-        .openCastMiniPlayerTabAccessory(
+        .tabViewBottomAccessory(
             isEnabled: appModel.playback.currentEpisode != nil
         ) {
             MiniPlayerView(

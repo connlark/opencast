@@ -1,4 +1,5 @@
 import OpenCastPlayback
+import SwiftData
 import SwiftUI
 
 struct PlaybackSpeedView: View {

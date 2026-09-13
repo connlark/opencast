@@ -8,64 +8,39 @@ struct OpenCastRootPresentationModifier: ViewModifier {
     @Binding var sheetDestination: SheetDestination?
 
     func body(content: Content) -> some View {
+        @Bindable var appModel = appModel
+        @Bindable var library = appModel.library
+
         content
             .sheet(item: $sheetDestination) { destination in
                 SheetDestinationView(destination: destination, onDismiss: dismissSheet)
                     .environment(appModel)
                     .modelContext(modelContext)
             }
-            // The alert API needs Bool bindings because the presented Strings are not Identifiable.
             .alert(
                 "Playback Failed",
-                isPresented: playbackErrorAlertBinding,
-                presenting: appModel.lastPlaybackError
+                item: $appModel.lastPlaybackError
             ) { _ in
-                Button("OK", role: .cancel) {}
             } message: { message in
                 Text(message)
             }
             .alert(
                 "Up Next Error",
-                isPresented: upNextErrorAlertBinding,
-                presenting: appModel.lastUpNextError
+                item: $appModel.lastUpNextError
             ) { _ in
-                Button("OK", role: .cancel) {}
             } message: { message in
                 Text(message)
             }
             .alert(
                 "Library Error",
-                isPresented: libraryErrorAlertBinding,
-                presenting: appModel.library.lastErrorMessage
+                item: $library.lastErrorMessage
             ) { _ in
-                Button("OK", role: .cancel) {}
             } message: { message in
                 Text(message)
             }
     }
 
-    private var playbackErrorAlertBinding: Binding<Bool> {
-        Binding(
-            get: { appModel.lastPlaybackError != nil },
-            set: { if !$0 { appModel.lastPlaybackError = nil } }
-        )
-    }
-
-    private var upNextErrorAlertBinding: Binding<Bool> {
-        Binding(
-            get: { appModel.lastUpNextError != nil },
-            set: { if !$0 { appModel.lastUpNextError = nil } }
-        )
-    }
-
     private func dismissSheet() {
         sheetDestination = nil
-    }
-
-    private var libraryErrorAlertBinding: Binding<Bool> {
-        Binding(
-            get: { appModel.library.lastErrorMessage != nil },
-            set: { if !$0 { appModel.library.clearLastError() } }
-        )
     }
 }

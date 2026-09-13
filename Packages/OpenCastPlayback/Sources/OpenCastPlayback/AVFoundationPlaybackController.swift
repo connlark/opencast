@@ -39,8 +39,7 @@ public final class AVFoundationPlaybackController {
     public private(set) var playbackDiagnosticsText = ""
 
     @ObservationIgnored private let player = AVPlayer()
-    @ObservationIgnored private let nowPlayingPublisher: NowPlayingInfoPublisher
-    @ObservationIgnored private let remoteCommandController = RemoteCommandController()
+    @ObservationIgnored private let mediaSession: SystemPlaybackMediaSession
     @ObservationIgnored private var timeObserver: PlayerTimeObserver?
     @ObservationIgnored private var outroBoundaryObserver: PlayerTimeObserver?
     @ObservationIgnored private var outroBoundaryCutoff: TimeInterval?
@@ -115,7 +114,7 @@ public final class AVFoundationPlaybackController {
             try VoiceBoostAudioTap(configuration: $0, diagnostics: $1)
         }
     ) {
-        self.nowPlayingPublisher = NowPlayingInfoPublisher(
+        self.mediaSession = SystemPlaybackMediaSession(
             artworkLoader: nowPlayingArtworkLoader ?? DefaultNowPlayingArtworkLoader()
         )
         self.voiceBoostTapDiagnostics = voiceBoostTapDiagnostics
@@ -145,8 +144,7 @@ public final class AVFoundationPlaybackController {
         player.pause()
         player.replaceCurrentItem(with: nil)
         currentVoiceBoostTap = nil
-        nowPlayingPublisher.clear()
-        remoteCommandController.updateAvailability(for: PlaybackSnapshot(), resolvedDuration: nil)
+        mediaSession.clear()
         #if os(iOS) || os(tvOS) || os(visionOS)
         if isAudioSessionActive {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -290,7 +288,7 @@ public final class AVFoundationPlaybackController {
 
         skipBackwardInterval = backward
         skipForwardInterval = forward
-        remoteCommandController.setSkipIntervals(backward: backward, forward: forward)
+        mediaSession.setSkipIntervals(backward: backward, forward: forward)
     }
 
     public func setSkipZones(_ zones: [PlaybackSkipZone]) {
@@ -426,8 +424,7 @@ public final class AVFoundationPlaybackController {
         hasFinishedCurrentEpisode = false
         recordDiagnosticsEvent("unloaded playback")
         replaceSnapshot(PlaybackSnapshot(rate: snapshot.rate, progressBoundaryID: snapshot.progressBoundaryID))
-        nowPlayingPublisher.clear()
-        remoteCommandController.updateAvailability(for: snapshot, resolvedDuration: nil)
+        mediaSession.clear()
         deactivateAudioSession()
     }
 
@@ -748,7 +745,7 @@ public final class AVFoundationPlaybackController {
     }
 
     private func installRemoteCommands() {
-        remoteCommandController.install(RemoteCommandHandlers(
+        mediaSession.install(RemoteCommandHandlers(
             play: { [weak self] in
                 self?.play(source: "remote play command")
             },
@@ -1063,7 +1060,7 @@ public final class AVFoundationPlaybackController {
 
     private func observeEnd(of playerItem: AVPlayerItem, generation: Int) {
         currentItemEndObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
+            forName: AVPlayerItem.didPlayToEndTimeNotification,
             object: playerItem,
             queue: .main
         ) { [weak self] _ in
@@ -1080,7 +1077,7 @@ public final class AVFoundationPlaybackController {
 
     private func observePlaybackStall(of playerItem: AVPlayerItem, generation: Int) {
         currentItemPlaybackStalledObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemPlaybackStalled,
+            forName: AVPlayerItem.playbackStalledNotification,
             object: playerItem,
             queue: .main
         ) { [weak self] _ in
@@ -1823,8 +1820,7 @@ public final class AVFoundationPlaybackController {
         }
 
         guard snapshot.currentEpisode != nil else {
-            nowPlayingPublisher.clear()
-            remoteCommandController.updateAvailability(for: snapshot, resolvedDuration: nil)
+            mediaSession.clear()
             return
         }
 
@@ -1836,8 +1832,7 @@ public final class AVFoundationPlaybackController {
             snapshot.position = 0
         }
 
-        nowPlayingPublisher.publish(snapshot, resolvedDuration: duration)
-        remoteCommandController.updateAvailability(for: snapshot, resolvedDuration: duration)
+        mediaSession.publish(snapshot, resolvedDuration: duration)
     }
 
     private func recordDiagnosticsEvent(_ event: @autoclosure () -> String) {

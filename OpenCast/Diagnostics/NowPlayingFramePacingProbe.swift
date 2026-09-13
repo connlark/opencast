@@ -1,12 +1,13 @@
 import Foundation
 
-/// Records a frame-pacing marker for the Now Playing presentation probe.
+/// Reports the corresponding presentation state and optional frame-probe marker.
 ///
-/// No-op unless the DEBUG frame probe is enabled (`--opencast-frame-probe` /
-/// `OPENCAST_FRAME_PROBE=1`). Used to measure presentation smoothness independent
+/// Frame sampling requires the DEBUG probe (`--opencast-frame-probe` /
+/// `OPENCAST_FRAME_PROBE=1`). It measures presentation smoothness independent
 /// of screen recording, which warms the compositor and masks first-frame stalls.
 @inline(always)
 func nowPlayingProbeMark(_ label: String) {
+    PerformanceStateReporter.shared.nowPlayingMarker(label)
     #if DEBUG
     NowPlayingFramePacingProbe.shared.mark(label)
     #endif
@@ -26,6 +27,7 @@ final class NowPlayingFramePacingProbe: NSObject {
     )
 
     private(set) var isEnabled = false
+    var onMark: ((String) -> Void)?
     /// Flushed per-session summary lines, exposed to UI tests via accessibility
     /// because xcodebuild runs tests on an ephemeral simulator clone whose
     /// container is unreadable from the host.
@@ -62,6 +64,7 @@ final class NowPlayingFramePacingProbe: NSObject {
         events.append((label, CACurrentMediaTime()))
         Self.signposter.emitEvent("mark", "\(label, privacy: .public)")
         flushDeadline = CACurrentMediaTime() + Self.flushQuietWindow
+        onMark?(label)
     }
 
     @objc private func onFrame(_ link: CADisplayLink) {

@@ -1451,7 +1451,7 @@ private struct HangingEpisodeAudioDownloader: EpisodeAudioDownloading {
 
 /// Completes downloads only after the test releases the episode's gate,
 /// so tests can hold an item mid-download while shaping the queue.
-private final class GatedEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
+nonisolated private final class GatedEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
     private let lock = NSLock()
     private var releasedURLFragments: [String] = []
     private let contents = Data("downloaded audio".utf8)

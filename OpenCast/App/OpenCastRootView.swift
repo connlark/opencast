@@ -64,6 +64,9 @@ struct OpenCastRootView: View {
                 runVoiceBoostDeviceProbeIfActive: runVoiceBoostDeviceProbeIfActive
             )
         )
+        .modifier(OpenCastSystemIntegrationModifier())
+        .modifier(PerformanceDiagnosticsModifier())
+        .modifier(ResumeWidgetPublicationModifier())
         .modifier(
             OpenCastRootRoutingModifier(
                 sheetDestination: $sheetDestination,
@@ -80,6 +83,12 @@ struct OpenCastRootView: View {
         )
         .onChange(of: appModel.dataNukeCompletionID) { _, _ in
             resetAfterDataNuke()
+        }
+        .onChange(of: appModel.systemSearchRequest, initial: true) { _, request in
+            guard request != nil else { return }
+            selectedTab = .search
+            navigationPaths[.search] = []
+            dismissNowPlaying()
         }
         .onChange(of: appModel.library.activePodcastIDs) { _, activePodcastIDs in
             appModel.notificationSettings.scheduleSubscriptionSyncIfEnabled(activePodcastIDs: activePodcastIDs)
@@ -191,6 +200,7 @@ struct OpenCastRootView: View {
         isInitialSetupComplete = true
         SearchColdStartProbe.recordFirstUsableIfRequested()
         initialSetupGate.complete()
+        OpenCastAppRuntime.shared.performanceDiagnostics.start()
         await appModel.refreshLibraryIfStale(modelContext: modelContext)
         appModel.cacheController.pruneIfNeeded()
         await runVoiceBoostDeviceProbeIfActive()
@@ -642,6 +652,20 @@ struct OpenCastRootView: View {
     }
 
     private func openExternalURL(_ url: URL) {
+        if let action = ResumeWidgetRoute.action(for: url) {
+            Task {
+                do {
+                    try await appModel.systemActions.perform(action, modelContext: modelContext)
+                } catch is CancellationError {
+                    return
+                } catch let error as OpenCastSystemActionError {
+                    appModel.lastPlaybackError = String(localized: error.localizedStringResource)
+                } catch {
+                    appModel.lastPlaybackError = error.localizedDescription
+                }
+            }
+            return
+        }
         guard url.isFileURL else {
             return
         }

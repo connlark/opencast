@@ -123,7 +123,7 @@ struct TimestampFilterDecisionEquivalenceTests {
     ) throws -> MLMultiArray {
         guard sampleBegin <= tokenHistory.count else { return logits }
         let time = tokens.timeTokenBegin
-        logits.fill(indexes: [[0, 0, NSNumber(value: tokens.noTimestampsToken)]], with: -FloatType.infinity)
+        logits.fill(indexes: [[0, 0, tokens.noTimestampsToken]], with: -FloatType.infinity)
         if tokenHistory.count > sampleBegin {
             let sampled = tokenHistory[sampleBegin...]
             let lastWasTimestamp = sampled.count >= 1 && sampled.last! >= time

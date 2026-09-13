@@ -24,6 +24,7 @@ final class AppStoreScreenshotUITests: XCTestCase {
 
     // The runner's own idiom has evaluated non-pad on iPad destinations, so
     // this shares the pad tests' model-string-based decision.
+    @MainActor
     private var isPad: Bool {
         OpenCastPadUITests.isPadDestination(
             environment: ProcessInfo.processInfo.environment,

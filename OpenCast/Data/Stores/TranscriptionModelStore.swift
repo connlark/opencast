@@ -131,7 +131,7 @@ final class TranscriptionModelStore {
             return
         }
 
-        operationTask = Task {
+        operationTask = Task { [self] in
             state = .checking
             do {
                 let manifest = try await installer.fetchManifest()
@@ -213,7 +213,9 @@ final class TranscriptionModelStore {
         let model = selectedModel
         let version = selectedVersion
         activeInstallOperationID = operationID
-        operationTask = Task {
+        // Keep the store alive for this finite operation, then clear the task
+        // below. The installer's escaping progress callback must stay weak.
+        operationTask = Task { [self] in
             state = .checking
             do {
                 let manifest = try await installer.fetchManifest()

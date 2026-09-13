@@ -594,7 +594,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
                     }
                 }
             }
-            // All tab bars: the iOS 26 search-role tab renders in its own
+            // All tab bars: the search-role tab renders in its own
             // trailing tab-bar element beside the main group. A tap on a
             // scroll-minimized bar only un-minimizes it, so arrival must be
             // verified — a pushed detail similarly needs a second tap to pop.

@@ -10,6 +10,7 @@ final class FakeAppleSpeechAssetProvider: AppleSpeechAssetProviding, @unchecked 
     var reserved: [String]
     var installError: Error?
     var installProgressFractions: [Double]
+    private(set) var retainedProgress: (@Sendable (Double) -> Void)?
     /// When set, `installAssets` waits here before finishing so tests can
     /// observe the mid-install state.
     var installGate: AsyncStream<Void>.Continuation?
@@ -62,6 +63,7 @@ final class FakeAppleSpeechAssetProvider: AppleSpeechAssetProviding, @unchecked 
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
         installRequests.append(localeIdentifier)
+        retainedProgress = onProgress
         for fraction in installProgressFractions {
             onProgress(fraction)
         }

@@ -69,6 +69,19 @@ struct AppleSpeechAssetStoreTests {
         #expect(store.state == .ready(installedLocaleIdentifiers: ["en_US"]))
     }
 
+    @Test("A retained provider progress callback does not retain the completed store")
+    func retainedProgressReleasesStore() async throws {
+        let provider = FakeAppleSpeechAssetProvider(statusesByLocaleIdentifier: ["en_US": .supported])
+        var store: AppleSpeechAssetStore? = makeStore(provider: provider)
+        weak let releasedStore = store
+        _ = try await store?.ensureInstalledAssets(forLanguageCode: "en-US")
+        #expect(provider.retainedProgress != nil)
+        store = nil
+        try await waitUntil { releasedStore == nil }
+        #expect(releasedStore == nil)
+        provider.retainedProgress?(0.5)
+    }
+
     @Test("Ensure surfaces install failure and fails the state")
     func ensureSurfacesInstallFailure() async {
         let provider = FakeAppleSpeechAssetProvider(

@@ -126,7 +126,7 @@ public extension ProcessInfo {
         sysctlbyname(name, nil, &size, nil, 0)
         var machineModel = [CChar](repeating: 0, count: Int(size))
         sysctlbyname(name, &machineModel, &size, nil, 0)
-        return String(cString: machineModel)
+        return String(decoding: machineModel.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     static let processor = stringFromSysctl(named: "machdep.cpu.brand_string")

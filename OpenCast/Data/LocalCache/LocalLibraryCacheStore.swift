@@ -5,7 +5,7 @@ import OpenCastCore
 ///
 /// Subscriptions and playback progress are CloudKit-backed SwiftData models and
 /// stay outside this boundary.
-protocol LocalLibraryCacheStore: Sendable {
+nonisolated protocol LocalLibraryCacheStore: Sendable {
     /// `refreshLogs` in the returned snapshot is the per-feed projection
     /// (each feed's latest log, plus its latest success when the latest is a
     /// failure); the full retained history comes from `allRefreshLogs()`.

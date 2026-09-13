@@ -74,7 +74,7 @@ struct LibrarySubscriptionTileView: View {
             SubscriptionRemovalModifier(
                 isConfirmingRemoval: $isConfirmingRemoval,
                 subscription: subscription,
-                supportsSwipeAction: false,
+                supportsSwipeAction: true,
                 supportsContextMenu: true
             )
         )

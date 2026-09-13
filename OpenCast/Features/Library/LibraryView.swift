@@ -19,11 +19,12 @@ struct LibraryView: View {
                 value: appModel.library.subscriptions.map(\.feedURL)
             )
             .navigationTitle("Library")
+            .toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
             .refreshable {
                 await appModel.library.refreshAll(modelContext: modelContext)
             }
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItem(placement: .topBarPinnedTrailing) {
                     Button("Add", systemImage: "plus", action: onAdd)
                 }
             }
@@ -77,6 +78,7 @@ struct LibraryView: View {
             }
             .padding(.vertical, 8)
         }
+        .swipeActionsContainer()
         .contentMargins(.horizontal, 24, for: .scrollContent)
         .contentMargins(.bottom, 72, for: .scrollContent)
     }

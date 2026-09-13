@@ -9,6 +9,7 @@ final class OpenCastAppRuntime {
     let launchConfiguration: OpenCastLaunchConfiguration
     let modelContainer: ModelContainer
     let appModel: OpenCastAppModel
+    let performanceDiagnostics = PerformanceDiagnosticsService()
 
     private init() {
         SearchColdStartProbe.recordProcessStart()
@@ -119,6 +120,14 @@ final class OpenCastAppRuntime {
                 adFreePassPresentationOverride: launchConfiguration.adFreePassPresentationOverride,
                 adFreePassQueueOverride: launchConfiguration.adFreePassQueueOverride
             )
+            #if DEBUG
+            if launchConfiguration.seedsUITestData {
+                UITestNowPlayingCompletionFixture.installIfRequested(
+                    appModel: appModel,
+                    modelContext: modelContainer.mainContext
+                )
+            }
+            #endif
         } catch {
             fatalError("Unable to create OpenCast model container: \(error)")
         }

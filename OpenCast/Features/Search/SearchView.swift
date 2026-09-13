@@ -141,6 +141,11 @@ struct SearchView: View {
             )
         }
         .onSubmit(of: .search, recordRecentSearch)
+        .onChange(of: appModel.systemSearchRequest, initial: true) { _, request in
+            guard let request else { return }
+            query = request.query
+            appModel.systemSearchRequest = nil
+        }
         .onChange(of: query) { _, _ in
             synchronizeDirectorySearch()
         }

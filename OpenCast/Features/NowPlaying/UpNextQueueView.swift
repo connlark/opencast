@@ -62,22 +62,11 @@ struct UpNextQueueView: View {
         }
         .alert(
             activeAlert?.title ?? "Up Next Error",
-            isPresented: alertBinding,
-            presenting: activeAlert
+            item: $activeAlert
         ) { _ in
-            Button("OK", role: .cancel) {
-                activeAlert = nil
-            }
         } message: { alert in
             Text(alert.message)
         }
-    }
-
-    private var alertBinding: Binding<Bool> {
-        Binding(
-            get: { activeAlert != nil },
-            set: { if !$0 { activeAlert = nil } }
-        )
     }
 
     private func resolvedEpisodes() -> [EpisodeListItemSnapshot] {

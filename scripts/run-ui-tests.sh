@@ -3,7 +3,7 @@
 # run-ui-tests.sh — explicit two-destination shard runner for OpenCastUITests.
 #
 # Builds the test bundle once, then runs the parallel-safe seeded iPhone UI tests as
-# two concurrent `test-without-building` shards on two distinct iPhone 17 / iOS 26.5
+# two concurrent `test-without-building` shards on two distinct iPhone 18 Pro / iOS 27.0
 # simulators, followed by a serial tail for timing-sensitive tests. Each lane gets its
 # own result bundle, log, and TMPDIR. The wrapper fails (nonzero) if any lane fails, is
 # interrupted, produces an incomplete result bundle, or omits an assigned test.

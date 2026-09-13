@@ -3,6 +3,11 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "${script_dir}/.." && pwd)"
+iphone_udid="${OPENCAST_IPHONE_SIMULATOR_ID:-}"
+if [[ -z "${iphone_udid}" ]]; then
+  printf 'Set OPENCAST_IPHONE_SIMULATOR_ID to the iOS 27 iPhone simulator UDID.\n' >&2
+  exit 1
+fi
 artifact_root="${repo_dir}/artifacts/ui-smoke"
 timestamp="$(date +%Y%m%d-%H%M%S)"
 result_bundle="${artifact_root}/OpenCastUISmoke-${timestamp}.xcresult"
@@ -14,7 +19,7 @@ rm -rf "${result_bundle}" "${attachments_dir}"
 xcodebuild \
   -project "${repo_dir}/opencast.xcodeproj" \
   -scheme OpenCast \
-  -destination "platform=iOS Simulator,name=iPhone 17" \
+  -destination "platform=iOS Simulator,id=${iphone_udid}" \
   -only-testing:OpenCastUITests/OpenCastUITests/testSeededCompactSmokeScreenshots \
   -only-testing:OpenCastUITests/OpenCastUITests/testSeededCompletedDownloadSmokeScreenshots \
   -only-testing:OpenCastUITests/OpenCastUITests/testSeededEpisodeProgressRestoresMiniPlayerAndShowsRows \

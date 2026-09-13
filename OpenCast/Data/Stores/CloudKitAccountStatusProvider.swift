@@ -13,7 +13,7 @@ struct CloudKitAccountStatusProvider: CloudKitAccountStatusProviding {
     }
 }
 
-private extension SyncAccountStatus {
+nonisolated private extension SyncAccountStatus {
     init(cloudKitAccountStatus: CKAccountStatus) {
         switch cloudKitAccountStatus {
         case .available:

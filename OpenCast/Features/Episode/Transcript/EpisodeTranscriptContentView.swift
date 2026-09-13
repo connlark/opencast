@@ -1,4 +1,5 @@
 import OpenCastTranscription
+import SwiftData
 import SwiftUI
 
 /// Owns everything in the transcript page that churns with playback —

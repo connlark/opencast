@@ -39,15 +39,7 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
         }
 
         do {
-            if appModel.playback.currentEpisode?.id.rawValue == episode.episodeID {
-                appModel.playback.play()
-            } else {
-                try appModel.playEpisode(
-                    episode,
-                    presentsNowPlaying: false,
-                    modelContext: modelContext
-                )
-            }
+            try await appModel.systemActions.perform(.playEpisode(episode.episodeID), modelContext: modelContext)
             if let playbackSpeed = intent.playbackSpeed {
                 appModel.setPlaybackRate(
                     Float(playbackSpeed),

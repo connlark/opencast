@@ -59,8 +59,11 @@ final class FeedXMLInputStream: InputStream {
         guard count > 0 else { return count }
         if count > available { return fail(.decodedByteLimit) }
         decodedBytes += count
-        for index in 0..<count {
+        // Avoid generic Range iteration in this per-byte Debug hot path.
+        var index = 0
+        while index < count {
             let raw = buffer[index]
+            index += 1
             let byte: UInt8
             if unitWidth == 1 {
                 byte = raw

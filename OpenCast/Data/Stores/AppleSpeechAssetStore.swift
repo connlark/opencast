@@ -137,7 +137,7 @@ final class AppleSpeechAssetStore {
         AdFreePassBackgroundRunLog.record("apple assets install starting locale=\(localeIdentifier)")
 
         do {
-            try await provider.installAssets(forLocaleIdentifier: localeIdentifier) { fraction in
+            try await provider.installAssets(forLocaleIdentifier: localeIdentifier) { [weak self] fraction in
                 Task { @MainActor [weak self] in
                     self?.noteInstallProgress(localeIdentifier: localeIdentifier, fractionCompleted: fraction)
                 }
