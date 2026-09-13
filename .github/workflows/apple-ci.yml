@@ -32,10 +32,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xcodebuild -version
-          xcrun swift --version
-          xcodebuild -version | grep -Eq '^Xcode 27([.]|$)'
-          xcrun swift --version | grep -Eq 'Apple Swift version 6[.]4([. ]|$)'
+          xcode_version="$(xcodebuild -version)"
+          swift_version="$(xcrun swift --version)"
+          printf '%s\n' "${xcode_version}" "${swift_version}"
+          grep -Eq '^Xcode 27([.]|$)' <<< "${xcode_version}"
+          grep -Eq 'Apple Swift version 6[.]4([. ]|$)' <<< "${swift_version}"
 
       - name: Select an iOS 27 simulator
         id: simulator
@@ -148,10 +149,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xcodebuild -version
-          xcrun swift --version
-          xcodebuild -version | grep -Eq '^Xcode 27([.]|$)'
-          xcrun swift --version | grep -Eq 'Apple Swift version 6[.]4([. ]|$)'
+          xcode_version="$(xcodebuild -version)"
+          swift_version="$(xcrun swift --version)"
+          printf '%s\n' "${xcode_version}" "${swift_version}"
+          grep -Eq '^Xcode 27([.]|$)' <<< "${xcode_version}"
+          grep -Eq 'Apple Swift version 6[.]4([. ]|$)' <<< "${swift_version}"
 
       - name: Select an iOS 27 simulator
         id: simulator
@@ -272,10 +274,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xcodebuild -version
-          xcrun swift --version
-          xcodebuild -version | grep -Eq '^Xcode 27([.]|$)'
-          xcrun swift --version | grep -Eq 'Apple Swift version 6[.]4([. ]|$)'
+          xcode_version="$(xcodebuild -version)"
+          swift_version="$(xcrun swift --version)"
+          printf '%s\n' "${xcode_version}" "${swift_version}"
+          grep -Eq '^Xcode 27([.]|$)' <<< "${xcode_version}"
+          grep -Eq 'Apple Swift version 6[.]4([. ]|$)' <<< "${swift_version}"
 
       - name: Run package tests
         working-directory: ${{ matrix.directory }}
