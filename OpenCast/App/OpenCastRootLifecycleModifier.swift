@@ -75,6 +75,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             hasFlushedProgressForLifecycleExit = false
             appModel.resumeEnvironmentalAdFreePassIfNeeded(modelContext: modelContext)
             appModel.retryDeferredTranscriptAnalyses(modelContext: modelContext, trigger: .sceneActivated)
+            appModel.transcriptIntelligence.refreshAvailability()
             startForegroundSyncedDataRefresh()
             runOrDeferForegroundMaintenance()
         @unknown default:

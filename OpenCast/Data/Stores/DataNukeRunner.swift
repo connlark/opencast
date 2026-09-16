@@ -22,6 +22,7 @@ final class DataNukeRunner {
     @ObservationIgnored private let transcriptionModels: TranscriptionModelStore
     @ObservationIgnored private let cacheController: OpenCastCacheController
     @ObservationIgnored private let siriMediaDiscovery: SiriMediaDiscovery
+    @ObservationIgnored private let transcriptRecaps: TranscriptRecapCache
     /// Runs after the iCloud check and before any store is nuked.
     @ObservationIgnored var prepareRuntime: () async -> Void = {}
     /// Runs after the row wipe and before the cache clears.
@@ -36,7 +37,8 @@ final class DataNukeRunner {
         transcriptAnalyses: EpisodeTranscriptAnalysisStore,
         transcriptionModels: TranscriptionModelStore,
         cacheController: OpenCastCacheController,
-        siriMediaDiscovery: SiriMediaDiscovery
+        siriMediaDiscovery: SiriMediaDiscovery,
+        transcriptRecaps: TranscriptRecapCache = TranscriptRecapCache()
     ) {
         self.syncStatus = syncStatus
         self.library = library
@@ -47,6 +49,7 @@ final class DataNukeRunner {
         self.transcriptionModels = transcriptionModels
         self.cacheController = cacheController
         self.siriMediaDiscovery = siriMediaDiscovery
+        self.transcriptRecaps = transcriptRecaps
     }
 
     func run(modelContext: ModelContext) async throws {
@@ -85,6 +88,7 @@ final class DataNukeRunner {
             await resetRuntime(modelContext)
             try await library.deleteAllLocalCache()
             try await cacheController.clearCachesNow()
+            try transcriptRecaps.removeAll()
             completionID += 1
         } catch {
             lastErrorMessage = error.localizedDescription

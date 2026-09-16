@@ -316,6 +316,255 @@ final class OpenCastPadUITests: XCTestCase {
         attachSmokeScreenshot(named: "ipad_episode_diagnostics_share")
     }
 
+    // MARK: - Transcript recap on a PCC-eligible iPad
+
+    /// Real Private Cloud Compute through the seeded in-memory library (the
+    /// on-device store is untouched): a v3 transcript fixture pushed into the
+    /// app container stands in for the two-line seed, both recap entries
+    /// render, the first request passes the one-time disclosure, the recap
+    /// arrives, and a citation tap seeks playback. Opt in with
+    /// `TEST_RUNNER_OPENCAST_DEVICE_E2E=1`; `OPENCAST_RECAP_APPEARANCE`
+    /// (light|dark), `OPENCAST_RECAP_FIXTURE` (path under Documents),
+    /// `OPENCAST_RECAP_POSITION` and `OPENCAST_RECAP_AUDIO_DURATION` shape the
+    /// run. Screenshots land as attachments named `ipad_recap_*`.
+    @MainActor
+    func testDeviceTranscriptRecapFromPrivateCloudCompute() throws {
+        try skipUnlessPad()
+        try skipUnlessDeviceRecapOptIn()
+        let environment = ProcessInfo.processInfo.environment
+        let appearance = Self.deviceRecapValue("OPENCAST_RECAP_APPEARANCE", in: environment) ?? "light"
+        let fixture = Self.deviceRecapValue("OPENCAST_RECAP_FIXTURE", in: environment)
+            ?? "TranscriptIntelligenceEvaluationInputs/fixtures/audio-illusion.json"
+        let position = Self.deviceRecapValue("OPENCAST_RECAP_POSITION", in: environment) ?? "1200"
+        let audioDuration = Self.deviceRecapValue("OPENCAST_RECAP_AUDIO_DURATION", in: environment) ?? "3527"
+
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "--opencast-ui-testing",
+            "--opencast-seed-ui-library",
+            "--opencast-seed-completed-transcript",
+            "--opencast-seed-episode-progress",
+            "--transcript-intelligence-enabled",
+            appearance == "dark" ? "--opencast-force-dark-mode" : "--opencast-force-light-mode"
+        ]
+        app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
+        app.launchEnvironment["OPENCAST_SEED_UI_LIBRARY"] = "1"
+        app.launchEnvironment["OPENCAST_SEED_COMPLETED_TRANSCRIPT"] = "1"
+        app.launchEnvironment["OPENCAST_SEED_EPISODE_PROGRESS"] = "1"
+        app.launchEnvironment["OPENCAST_SEED_TRANSCRIPT_FIXTURE_PATH"] = fixture
+        app.launchEnvironment["OPENCAST_SEED_EPISODE_PROGRESS_POSITION"] = position
+        app.launchEnvironment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] = audioDuration
+        app.launchEnvironment[appearance == "dark" ? "OPENCAST_FORCE_DARK_MODE" : "OPENCAST_FORCE_LIGHT_MODE"] = "1"
+        app.launch()
+
+        openInbox(in: app)
+        openEpisodeDetailFromContextMenu(seededEpisodeRow(in: app), in: app, named: "seeded inbox episode")
+        let readTranscript = app.buttons["Read Transcript"]
+        var swipes = 0
+        while !(readTranscript.waitForExistence(timeout: 1) && readTranscript.isHittable), swipes < 8 {
+            app.swipeUp()
+            swipes += 1
+        }
+        assertExists(readTranscript, named: "Read Transcript button")
+        readTranscript.tap()
+        assertExists(app.navigationBars["Transcript"], named: "Transcript route", timeout: 10)
+
+        let recapList = app.descendants(matching: .any).matching(identifier: "Transcript Recap List").firstMatch
+
+        // So far first: the first request on this launch passes the
+        // disclosure, then a real PCC round trip.
+        openDeviceRecapSheet(entry: "Recap So Far", in: app)
+        let continueButton = app.buttons["Continue"].firstMatch
+        if continueButton.waitForExistence(timeout: 5) {
+            attachSmokeScreenshot(named: "ipad_recap_disclosure_\(appearance)")
+            continueButton.tap()
+        }
+        assertExists(recapList, named: "so-far recap from Private Cloud Compute", timeout: 120)
+        sleep(1)
+        attachSmokeScreenshot(named: "ipad_recap_so_far_\(appearance)")
+        attachHierarchyDump(named: "ipad_recap_so_far_hierarchy_\(appearance)", in: app)
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Recap"].waitForNonExistence(timeout: 5), "Done should dismiss the recap sheet")
+
+        openDeviceRecapSheet(entry: "Recap the Last 5 Minutes", in: app)
+        assertExists(recapList, named: "last-five-minutes recap from Private Cloud Compute", timeout: 120)
+        sleep(1)
+        attachSmokeScreenshot(named: "ipad_recap_last_five_\(appearance)")
+        attachHierarchyDump(named: "ipad_recap_last_five_hierarchy_\(appearance)", in: app)
+
+        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play from")).firstMatch
+        assertExists(chip, named: "citation chip")
+        let chipLabel = chip.label
+        chip.tap()
+        XCTAssertTrue(
+            app.navigationBars["Recap"].waitForNonExistence(timeout: 5),
+            "tapping a citation should dismiss the recap sheet"
+        )
+        assertExists(app.navigationBars["Transcript"], named: "transcript route after seeking", timeout: 5)
+        sleep(2)
+        attachSmokeScreenshot(named: "ipad_recap_after_seek_\(appearance)")
+        let seekNote = XCTAttachment(string: "tapped \(chipLabel)")
+        seekNote.name = "ipad_recap_seek_\(appearance)"
+        seekNote.lifetime = .keepAlways
+        add(seekNote)
+    }
+
+    // MARK: - Transcript Ask on a PCC-eligible iPad
+
+    /// Real Private Cloud Compute Ask through the seeded in-memory library:
+    /// the pushed v3 transcript fixture stands in for the two-line seed, the
+    /// first open passes the disclosure, a suggested question and a typed
+    /// question each stream an answer with citation chips (or the calm
+    /// declined / unanswerable state), and a chip tap seeks playback. Opt in
+    /// with `TEST_RUNNER_OPENCAST_DEVICE_E2E=1`; the recap run's
+    /// `OPENCAST_RECAP_*` keys shape the fixture, plus `OPENCAST_ASK_QUESTION`
+    /// for the typed question. Screenshots land as `ipad_ask_*`.
+    @MainActor
+    func testDeviceTranscriptAskFromPrivateCloudCompute() throws {
+        try skipUnlessPad()
+        try skipUnlessDeviceRecapOptIn()
+        let environment = ProcessInfo.processInfo.environment
+        let appearance = Self.deviceRecapValue("OPENCAST_RECAP_APPEARANCE", in: environment) ?? "light"
+        let fixture = Self.deviceRecapValue("OPENCAST_RECAP_FIXTURE", in: environment)
+            ?? "TranscriptIntelligenceEvaluationInputs/fixtures/audio-illusion.json"
+        let position = Self.deviceRecapValue("OPENCAST_RECAP_POSITION", in: environment) ?? "1200"
+        let audioDuration = Self.deviceRecapValue("OPENCAST_RECAP_AUDIO_DURATION", in: environment) ?? "3527"
+        let typedQuestion = Self.deviceRecapValue("OPENCAST_ASK_QUESTION", in: environment)
+            ?? "Who set the world record for fastest drumming?"
+
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "--opencast-ui-testing",
+            "--opencast-seed-ui-library",
+            "--opencast-seed-completed-transcript",
+            "--opencast-seed-episode-progress",
+            "--transcript-intelligence-enabled",
+            "--transcript-intelligence-ask-enabled",
+            appearance == "dark" ? "--opencast-force-dark-mode" : "--opencast-force-light-mode"
+        ]
+        app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
+        app.launchEnvironment["OPENCAST_SEED_UI_LIBRARY"] = "1"
+        app.launchEnvironment["OPENCAST_SEED_COMPLETED_TRANSCRIPT"] = "1"
+        app.launchEnvironment["OPENCAST_SEED_EPISODE_PROGRESS"] = "1"
+        app.launchEnvironment["OPENCAST_SEED_TRANSCRIPT_FIXTURE_PATH"] = fixture
+        app.launchEnvironment["OPENCAST_SEED_EPISODE_PROGRESS_POSITION"] = position
+        app.launchEnvironment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] = audioDuration
+        app.launchEnvironment[appearance == "dark" ? "OPENCAST_FORCE_DARK_MODE" : "OPENCAST_FORCE_LIGHT_MODE"] = "1"
+        app.launch()
+
+        openInbox(in: app)
+        openEpisodeDetailFromContextMenu(seededEpisodeRow(in: app), in: app, named: "seeded inbox episode")
+        let readTranscript = app.buttons["Read Transcript"]
+        var swipes = 0
+        while !(readTranscript.waitForExistence(timeout: 1) && readTranscript.isHittable), swipes < 8 {
+            app.swipeUp()
+            swipes += 1
+        }
+        assertExists(readTranscript, named: "Read Transcript button")
+        readTranscript.tap()
+        assertExists(app.navigationBars["Transcript"], named: "Transcript route", timeout: 10)
+
+        openDeviceIntelligenceSheet(entry: "Ask About This Episode", navigationTitle: "Ask", in: app)
+        let continueButton = app.buttons["Continue"].firstMatch
+        if continueButton.waitForExistence(timeout: 5) {
+            attachSmokeScreenshot(named: "ipad_ask_disclosure_\(appearance)")
+            continueButton.tap()
+        }
+        let suggestion = app.buttons["What is this episode about?"].firstMatch
+        assertExists(suggestion, named: "suggested question", timeout: 20)
+        attachSmokeScreenshot(named: "ipad_ask_intro_\(appearance)")
+        suggestion.tap()
+        waitForDeviceAskOutcome(in: app, named: "first answer from Private Cloud Compute")
+        sleep(1)
+        attachSmokeScreenshot(named: "ipad_ask_first_answer_\(appearance)")
+        attachHierarchyDump(named: "ipad_ask_first_answer_hierarchy_\(appearance)", in: app)
+
+        let composer = app.textFields["Transcript Ask Composer"]
+        assertExists(composer, named: "ask composer")
+        composer.tap()
+        composer.typeText(typedQuestion)
+        let send = app.buttons["Transcript Ask Send"]
+        assertExists(send, named: "send button")
+        send.tap()
+        waitForDeviceAskOutcome(in: app, named: "typed-question answer from Private Cloud Compute")
+        sleep(1)
+        attachSmokeScreenshot(named: "ipad_ask_second_answer_\(appearance)")
+        attachHierarchyDump(named: "ipad_ask_second_answer_hierarchy_\(appearance)", in: app)
+
+        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play from")).firstMatch
+        guard chip.waitForExistence(timeout: 2) else {
+            let note = XCTAttachment(string: "no citation chip to tap (declined or unanswerable)")
+            note.name = "ipad_ask_seek_\(appearance)"
+            note.lifetime = .keepAlways
+            add(note)
+            return
+        }
+        let chipLabel = chip.label
+        chip.tap()
+        XCTAssertTrue(
+            app.navigationBars["Ask"].waitForNonExistence(timeout: 5),
+            "tapping a citation should dismiss the ask sheet"
+        )
+        assertExists(app.navigationBars["Transcript"], named: "transcript route after seeking", timeout: 5)
+        sleep(2)
+        attachSmokeScreenshot(named: "ipad_ask_after_seek_\(appearance)")
+        let seekNote = XCTAttachment(string: "tapped \(chipLabel)")
+        seekNote.name = "ipad_ask_seek_\(appearance)"
+        seekNote.lifetime = .keepAlways
+        add(seekNote)
+    }
+
+    /// A real turn ends in chips, a decline, an unanswerable note, or a calm
+    /// failure; any of those is an outcome worth capturing.
+    @MainActor
+    private func waitForDeviceAskOutcome(in app: XCUIApplication, named name: String) {
+        let outcome = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier IN %@ OR label BEGINSWITH %@",
+            ["Transcript Ask Unanswerable", "Transcript Ask Unverified Note", "Transcript Ask Failure"],
+            "Play from"
+        )).firstMatch
+        assertExists(outcome, named: name, timeout: 120)
+    }
+
+    private func skipUnlessDeviceRecapOptIn() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("The recap device run needs a PCC-eligible iPad.")
+        #else
+        guard Self.deviceRecapValue("OPENCAST_DEVICE_E2E", in: ProcessInfo.processInfo.environment) == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_OPENCAST_DEVICE_E2E=1 to run the recap device test.")
+        }
+        #endif
+    }
+
+    private static func deviceRecapValue(_ key: String, in environment: [String: String]) -> String? {
+        environment[key] ?? environment["TEST_RUNNER_\(key)"]
+    }
+
+    /// Menu entries are glass controls on the device: an element tap that
+    /// does not open the sheet within a few seconds is retried by coordinate.
+    @MainActor
+    private func openDeviceRecapSheet(entry title: String, in app: XCUIApplication) {
+        openDeviceIntelligenceSheet(entry: title, navigationTitle: "Recap", in: app)
+    }
+
+    @MainActor
+    private func openDeviceIntelligenceSheet(entry title: String, navigationTitle: String, in app: XCUIApplication) {
+        let menu = app.buttons["Transcript Options"]
+        assertExists(menu, named: "Transcript Options menu")
+        menu.tap()
+        let entry = app.buttons[title]
+        assertExists(entry, named: "\(title) entry", timeout: 8)
+        entry.tap()
+        if !app.navigationBars[navigationTitle].waitForExistence(timeout: 4) {
+            if !entry.exists {
+                menu.tap()
+                assertExists(entry, named: "\(title) entry (retry)", timeout: 8)
+            }
+            entry.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        assertExists(app.navigationBars[navigationTitle], named: "\(navigationTitle.lowercased()) sheet for \(title)", timeout: 8)
+    }
+
     @MainActor
     private func makeSeededApp() -> XCUIApplication {
         let app = XCUIApplication()

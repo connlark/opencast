@@ -110,6 +110,7 @@ final class OpenCastAppRuntime {
                 transcriptionModels: transcriptionModels,
                 appleSpeechAssets: appleSpeechAssets,
                 transcriptions: transcriptions,
+                transcriptIntelligence: Self.transcriptIntelligenceStore(launchConfiguration: launchConfiguration),
                 playback: playback,
                 onboardingState: onboardingState,
                 voiceBoostDiagnostics: voiceBoostDiagnostics,
@@ -131,6 +132,19 @@ final class OpenCastAppRuntime {
         } catch {
             fatalError("Unable to create OpenCast model container: \(error)")
         }
+    }
+
+    private static func transcriptIntelligenceStore(
+        launchConfiguration: OpenCastLaunchConfiguration
+    ) -> TranscriptIntelligenceStore {
+        #if DEBUG
+        if let availability = launchConfiguration.uiTestTranscriptIntelligenceAvailability {
+            return TranscriptIntelligenceStore(
+                client: UITestTranscriptIntelligenceClient(modelAvailability: availability)
+            )
+        }
+        #endif
+        return TranscriptIntelligenceStore()
     }
 
     private static func makeAppleSpeechAssetStore() -> AppleSpeechAssetStore {

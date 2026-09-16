@@ -4,6 +4,12 @@
 No dependency on private notes, hosted services, or non-stdlib Python packages.
 Inputs are a local manifest of request paths and pre-annotated segment ranges.
 Outputs may contain copyrighted transcripts: use a private, ignored directory.
+
+Providers: Gemini and OpenAI over HTTPS (metered by the shared ledger), and
+`pcc`, Apple's Private Cloud Compute model, reached through a signed, entitled
+helper executable (`--pcc-helper`) that speaks the JSON contract in `pcc_input`.
+PCC has no monetary price and an unpublished per-user quota, so its calls are
+journaled to `pcc-usage.json` in the output root instead of the ledger.
 """
 
 from __future__ import annotations
@@ -23,6 +29,35 @@ from budget import PRICES, Ledger
 
 WORKER = Path(__file__).resolve().parents[1]
 BRIDGE_HASH = None
+PCC_MODEL = "pcc"
+# The harness thinking vocabulary mapped onto ContextOptions.ReasoningLevel.
+PCC_REASONING = {
+    "default": None,
+    "none": None,
+    "low": "light",
+    "medium": "moderate",
+    "high": "deep",
+}
+# Background-class PCC requests were shed intermittently in the probes and the
+# limit cleared within minutes; retry a rate limit a few times per window.
+PCC_RETRY_DELAYS_S = (30, 90, 180)
+PCC_HELPER_TIMEOUT_S = 900
+# Not model answers: the serving path would fall back to another provider, not
+# spend a repair turn on them.
+PCC_TRANSPORT_ERRORS = frozenset(
+    {
+        "rateLimited",
+        "timeout",
+        "pcc.networkFailure",
+        "pcc.serviceUnavailable",
+        "contextSizeExceeded",
+        "contextBudgetExhausted",
+    }
+)
+
+
+class PCCQuotaExhausted(RuntimeError):
+    pass
 
 
 def verify_bridge():
@@ -83,12 +118,31 @@ def safe_error(error, key):
         if isinstance(error, urllib.error.HTTPError)
         else str(error)
     )
-    detail = detail.replace(key, "[REDACTED]")
+    if key:
+        detail = detail.replace(key, "[REDACTED]")
     detail = re.sub(r"(?:sk-|AIza)[A-Za-z0-9_-]{16,}", "[REDACTED]", detail)
     return detail[:1600]
 
 
+def pcc_run(report):
+    """The helper's final attempt, or None when it never reached the model."""
+    runs = (report or {}).get("runs") or []
+    return runs[-1] if runs else None
+
+
 def usage_of(model, response):
+    if model == PCC_MODEL:
+        run = pcc_run(response)
+        u = run.get("usage") if run and run.get("ok") else None
+        if not u:
+            return None
+        return {
+            "input": u["input_total"],
+            "cached": u["input_cached"],
+            "write": 0,
+            "output": u["output_total"],
+            "reasoning": u["output_reasoning"],
+        }
     if model.startswith("gemini"):
         u = response.get("usageMetadata", {})
         # Missing billed output metadata is ambiguous, even for safety refusals.
@@ -115,7 +169,12 @@ def usage_of(model, response):
 
 
 def answer_of(model, response):
-    if model.startswith("gemini"):
+    if model == PCC_MODEL:
+        run = pcc_run(response)
+        if not run or not run.get("ok"):
+            raise ValueError("Incomplete or refused PCC output")
+        texts = [str(run.get("raw_json", ""))]
+    elif model.startswith("gemini"):
         candidates = response.get("candidates", [])
         if len(candidates) != 1 or candidates[0].get("finishReason") != "STOP":
             raise ValueError("Incomplete or refused Gemini output")
@@ -144,7 +203,132 @@ def answer_of(model, response):
     return json.loads(texts[0])
 
 
+def pcc_ordered(schema):
+    """Ordered-properties form for the helper's DynamicGenerationSchema builder."""
+    result = dict(schema)
+    if "properties" in schema:
+        result["properties"] = [[k, pcc_ordered(v)] for k, v in schema["properties"].items()]
+    if "items" in schema:
+        result["items"] = pcc_ordered(schema["items"])
+    return result
+
+
+def pcc_input(payload, max_output, label):
+    """Helper input: the same instructions, turns, and schema the Worker sends Gemini."""
+    return {
+        "label": label,
+        "instructions": payload["systemInstruction"]["parts"][0]["text"],
+        "messages": [
+            {"role": m["role"], "text": m["parts"][0]["text"]}
+            for m in payload["contents"]
+        ],
+        "schema": pcc_ordered(payload["generationConfig"]["responseJsonSchema"]),
+        "max_output_tokens": max_output,
+    }
+
+
+def pcc_journal(path, entry):
+    doc = json.loads(path.read_text()) if path.exists() else {"calls": []}
+    doc["calls"].append(entry)
+    calls = doc["calls"]
+    doc["totals"] = {
+        "calls": len(calls),
+        "ok": sum(1 for c in calls if c["ok"]),
+        "rate_limited": sum(1 for c in calls if c.get("error_kind") == "rateLimited"),
+        "input_tokens": sum((c.get("usage") or {}).get("input", 0) for c in calls),
+        "output_tokens": sum((c.get("usage") or {}).get("output", 0) for c in calls),
+        "helper_wall_s": round(sum(c["wall_s"] for c in calls), 1),
+    }
+    write(path, doc)
+    return doc["totals"]
+
+
+def call_pcc(helper, payload, out, context, max_output, reasoning, journal):
+    write(out / "request.json", payload)
+    label = "-".join(str(context[k]) for k in ("tag", "fixture", "repeat", "window"))
+    if context.get("repair"):
+        label += "-repair"
+    request_path = out / "pcc-request.json"
+    write(request_path, pcc_input(payload, max_output, label))
+    kind = None
+    for attempt, delay in enumerate((0, *PCC_RETRY_DELAYS_S)):
+        if delay:
+            time.sleep(delay)
+        report_path = out / f"response-attempt-{attempt}.json"
+        command = [
+            str(helper),
+            "--in",
+            str(request_path),
+            "--out",
+            str(report_path),
+            "--fit-context",
+            "1",
+        ]
+        if reasoning:
+            command += ["--reasoning", reasoning]
+        start = time.monotonic()
+        process = subprocess.run(
+            command, capture_output=True, text=True, timeout=PCC_HELPER_TIMEOUT_S
+        )
+        wall = time.monotonic() - start
+        report = json.loads(report_path.read_text()) if report_path.exists() else None
+        run = pcc_run(report)
+        if run is None:
+            raise RuntimeError(
+                f"PCC helper produced no run (exit {process.returncode}): "
+                + process.stderr[-800:]
+            )
+        kind = None if run.get("ok") else (run.get("error") or {}).get("kind", "unknown")
+        pcc_journal(
+            journal,
+            {
+                "context": context,
+                "attempt": attempt,
+                "ok": bool(run.get("ok")),
+                "error_kind": kind,
+                "elapsed_s": round(run.get("elapsed_s", 0), 3),
+                "wall_s": round(wall, 3),
+                "usage": usage_of(PCC_MODEL, report),
+                "quota_after": run.get("quota_after"),
+                "max_output_effective": report.get("max_output_effective"),
+                "at": run.get("finished_at"),
+            },
+        )
+        if kind != "rateLimited":
+            break
+    os.replace(report_path, out / "response.json")
+    if kind == "pcc.quotaLimitReached" or (run.get("quota_after") or {}).get(
+        "isLimitReached"
+    ):
+        raise PCCQuotaExhausted(f"PCC quota reached ({kind}); stopping")
+    details = {
+        "elapsed_s": round(run.get("elapsed_s", 0), 3),
+        "usage": usage_of(PCC_MODEL, report),
+        "pcc": {
+            "reasoning": reasoning,
+            "attempts": attempt + 1,
+            "error_kind": kind,
+            "quota_after": run.get("quota_after"),
+            "max_output_effective": report.get("max_output_effective"),
+            "token_proxy_total": report.get("token_proxy_total"),
+        },
+    }
+    if kind in PCC_TRANSPORT_ERRORS:
+        details["transport_error"] = kind
+        return None, details
+    try:
+        return answer_of(PCC_MODEL, report), details
+    except (ValueError, KeyError, TypeError) as error:
+        details["answer_error"] = f"pcc_{kind}" if kind else str(error)
+        return None, details
+
+
 def provider_payload(model, payload, thinking, max_output):
+    if model == PCC_MODEL:
+        # Same Gemini-shaped archive as the other providers; the helper input is
+        # derived from it per call and reasoning travels as a helper flag.
+        payload["generationConfig"]["maxOutputTokens"] = max_output
+        return payload
     if model.startswith("gemini"):
         payload["generationConfig"]["maxOutputTokens"] = max_output
         if model == "gemini-3.8-flash":
@@ -318,8 +502,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--key-file", type=Path, required=True)
-    parser.add_argument("--model", choices=PRICES, required=True)
+    parser.add_argument("--key-file", type=Path, help="Provider API key (paid providers)")
+    parser.add_argument("--model", choices=(*PRICES, PCC_MODEL), required=True)
+    parser.add_argument(
+        "--pcc-helper",
+        type=Path,
+        help="Signed, PCC-entitled helper executable (required for --model pcc)",
+    )
     parser.add_argument(
         "--policy", choices=("promo_ad_breaks_v2", "promo_ad_breaks_v3"), required=True
     )
@@ -344,11 +533,22 @@ def main():
     if not 1 <= args.repeats <= 10 or not 256 <= args.max_output <= 16384:
         parser.error("Invalid run bounds")
     os.umask(0o077)
-    key = args.key_file.read_text().strip()
-    if not key:
-        parser.error("Empty key file")
+    pcc = args.model == PCC_MODEL
+    if pcc:
+        if not args.pcc_helper or not os.access(args.pcc_helper, os.X_OK):
+            parser.error("--pcc-helper must point at an executable PCC helper")
+        key = ""
+        helper_hash = hashlib.sha256(args.pcc_helper.read_bytes()).hexdigest()
+    else:
+        if not args.key_file:
+            parser.error("--key-file is required for paid providers")
+        key = args.key_file.read_text().strip()
+        if not key:
+            parser.error("Empty key file")
+        helper_hash = None
     binary_hash = verify_bridge()
-    ledger = Ledger(args.out / "budget-ledger.json", args.max_spend)
+    ledger = None if pcc else Ledger(args.out / "budget-ledger.json", args.max_spend)
+    journal = args.out / "pcc-usage.json"
     manifest = json.loads(args.manifest.read_text())
     selected = [
         f
@@ -377,20 +577,45 @@ def main():
                         request_path.read_bytes()
                     ).hexdigest(),
                     "eval_binary_sha256": binary_hash,
+                    **({"pcc_helper_sha256": helper_hash} if pcc else {}),
                 },
             )
             started = time.monotonic()
             outputs = []
             calls = []
             error = None
+
+            def dispatch(payload, directory, context):
+                if pcc:
+                    output, details = call_pcc(
+                        args.pcc_helper,
+                        payload,
+                        directory,
+                        context,
+                        args.max_output,
+                        PCC_REASONING[args.thinking],
+                        journal,
+                    )
+                else:
+                    output, details = call(
+                        args.model, payload, key, ledger, directory, context, args.max_output
+                    )
+                calls.append(details)
+                if details.get("transport_error"):
+                    raise ValueError(
+                        "ad_analysis_incomplete: pcc_" + details["transport_error"]
+                    )
+                return output
+
             try:
                 windows = bridge(
                     {
                         "op": "prepare",
                         "policy": args.policy,
                         "request": request,
+                        # PCC reasoning is a helper flag, never a Gemini config.
                         "thinking": None
-                        if args.thinking == "default"
+                        if args.thinking == "default" or pcc
                         else args.thinking,
                     }
                 )["windows"]
@@ -398,11 +623,8 @@ def main():
                     payload = provider_payload(
                         args.model, window["payload"], args.thinking, args.max_output
                     )
-                    output, details = call(
-                        args.model,
+                    output = dispatch(
                         payload,
-                        key,
-                        ledger,
                         run / f"window-{index}",
                         {
                             "tag": args.tag,
@@ -410,9 +632,7 @@ def main():
                             "repeat": repeat + 1,
                             "window": index,
                         },
-                        args.max_output,
                     )
-                    calls.append(details)
                     if args.repair and args.policy.endswith("v3"):
                         checked = bridge(
                             {
@@ -440,16 +660,13 @@ def main():
                                     "issues": checked["warnings"],
                                 }
                             )
-                            output, repair_details = call(
-                                args.model,
+                            output = dispatch(
                                 provider_payload(
                                     args.model,
                                     corrective,
                                     args.thinking,
                                     args.max_output,
                                 ),
-                                key,
-                                ledger,
                                 run / f"repair-{index}",
                                 {
                                     "tag": args.tag,
@@ -458,9 +675,7 @@ def main():
                                     "window": index,
                                     "repair": True,
                                 },
-                                args.max_output,
                             )
-                            calls.append(repair_details)
                             repaired = bridge(
                                 {
                                     "op": "validate",
@@ -515,6 +730,7 @@ def main():
                 "model": args.model,
                 "policy": args.policy,
                 "thinking": args.thinking,
+                **({"pcc_reasoning": PCC_REASONING[args.thinking]} if pcc else {}),
                 "raw_spans": outputs,
                 "validation": validated,
                 "metrics": measure(request, installed, fixture["ground_truth"]),
@@ -530,7 +746,10 @@ def main():
                         "metrics": summary["metrics"],
                         "warnings": validated["warnings"],
                         "error": error,
-                        "budget": ledger.snapshot()["totals"],
+                        "budget": ledger.snapshot()["totals"] if ledger else None,
+                        "pcc": json.loads(journal.read_text())["totals"]
+                        if pcc and journal.exists()
+                        else None,
                     }
                 ),
                 flush=True,

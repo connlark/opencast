@@ -139,22 +139,31 @@ final class FeedRefreshCoordinator {
             return false
         }
 
-        let feedURLStrings = host.feedURLStringsNeedingLocalCache.filter {
-            automaticRetryIsEligible(feedURL: $0, now: now)
-        }
-        guard !feedURLStrings.isEmpty else {
-            return false
-        }
+        var attemptedFeedURLs: Set<String> = []
+        var didRefresh = false
+        while !Task.isCancelled {
+            let feedURLStrings = host.feedURLStringsNeedingLocalCache.filter {
+                !attemptedFeedURLs.contains($0) && automaticRetryIsEligible(feedURL: $0, now: now)
+            }
+            guard !feedURLStrings.isEmpty else { break }
+            attemptedFeedURLs.formUnion(feedURLStrings)
 
-        return await performRefreshFlow(setsRefreshingState: true, modelContext: modelContext) { generation in
-            try await refreshAll(
-                feedURLStrings: feedURLStrings,
-                intent: .automatic,
-                generation: generation,
-                modelContext: modelContext
-            )
-            return .full
+            let completed = await performRefreshFlow(setsRefreshingState: true, modelContext: modelContext) { generation in
+                try await refreshAll(
+                    feedURLStrings: feedURLStrings,
+                    intent: .automatic,
+                    generation: generation,
+                    modelContext: modelContext,
+                    publishesIncrementally: true
+                )
+                return .full
+            }
+            guard completed else { break }
+            didRefresh = true
+            // The trailing reload can discover another CloudKit batch. Drain
+            // those feeds too, without retrying failed or legitimately empty feeds.
         }
+        return didRefresh
     }
 
     /// What a refresh flow's `work` closure asks the trailing publication to
@@ -247,7 +256,8 @@ final class FeedRefreshCoordinator {
         feedURLStrings: [String],
         intent: FeedPreparationIntent,
         generation: Int,
-        modelContext: ModelContext
+        modelContext: ModelContext,
+        publishesIncrementally: Bool = false
     ) async throws {
         let feedURLStrings = uniqueFeedURLStrings(from: feedURLStrings)
         guard !feedURLStrings.isEmpty else {
@@ -255,6 +265,7 @@ final class FeedRefreshCoordinator {
         }
 
         let startedAt = now()
+        var lastPublication: ContinuousClock.Instant?
         var pendingFeedURLStrings = Set(feedURLStrings)
         beginRefreshing(feedURLStrings)
         defer {
@@ -273,12 +284,17 @@ final class FeedRefreshCoordinator {
             defer {
                 self.endRefreshing([result.feedURLString])
             }
-            _ = try await self.applyRefreshResult(
+            let didChangeContent = try await self.applyRefreshResult(
                 result,
                 startedAt: startedAt,
                 generation: generation,
                 modelContext: modelContext
             )
+            if publishesIncrementally, didChangeContent,
+               lastPublication.map({ $0.duration(to: .now) >= .seconds(1) }) ?? true {
+                try await self.host.reloadFromStore(modelContext: modelContext)
+                lastPublication = .now
+            }
         }
     }
 

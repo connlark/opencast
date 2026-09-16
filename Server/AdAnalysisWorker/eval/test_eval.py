@@ -1,10 +1,13 @@
+import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from boundary_probe import review_input
 from budget import BudgetExceeded, Ledger, MAX_AUTHORIZED_CAP
-from run import answer_of, measure, usage_of
+import run
+from run import PCC_MODEL, answer_of, call_pcc, measure, pcc_input, safe_error, usage_of
 
 
 class BudgetTests(unittest.TestCase):
@@ -178,6 +181,140 @@ class BoundaryProbeTests(unittest.TestCase):
         request["segments"][1]["id"] = 7
         with self.assertRaises(ValueError):
             review_input(request, [7, 7], blind=True)
+
+
+def pcc_report(ok=True, kind=None, raw='{"spans":[]}', limit_reached=False):
+    run_ = {
+        "index": 0,
+        "ok": ok,
+        "elapsed_s": 1.5,
+        "finished_at": "2026-09-15T00:00:00Z",
+        "quota_after": {"status": "belowLimit", "isLimitReached": limit_reached},
+    }
+    if ok:
+        run_["raw_json"] = raw
+        run_["usage"] = {
+            "input_total": 100,
+            "input_cached": 4,
+            "output_total": 20,
+            "output_reasoning": 0,
+            "total": 120,
+        }
+    else:
+        run_["error"] = {"kind": kind, "description": kind}
+    return {"label": "t", "max_output_effective": 900, "token_proxy_total": 100, "runs": [run_]}
+
+
+def fake_helper(directory, reports):
+    """A stand-in helper that serves canned reports in order, one per invocation."""
+    queue = Path(directory) / "queue.json"
+    queue.write_text(json.dumps(reports))
+    script = Path(directory) / "helper.py"
+    script.write_text(
+        "import json, sys\n"
+        f"queue = {str(queue)!r}\n"
+        "reports = json.load(open(queue))\n"
+        "report = reports.pop(0)\n"
+        "json.dump(reports, open(queue, 'w'))\n"
+        "out = sys.argv[sys.argv.index('--out') + 1]\n"
+        "json.dump(report, open(out, 'w'))\n"
+    )
+    launcher = Path(directory) / "helper"
+    launcher.write_text(f"#!/bin/sh\nexec {sys.executable} {script} \"$@\"\n")
+    launcher.chmod(0o700)
+    return launcher
+
+
+class PCCTests(unittest.TestCase):
+    payload = {
+        "systemInstruction": {"parts": [{"text": "rules"}]},
+        "contents": [
+            {"role": "user", "parts": [{"text": "window"}]},
+            {"role": "model", "parts": [{"text": '{"spans":[]}'}]},
+            {"role": "user", "parts": [{"text": "fix it"}]},
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 16384,
+            "responseJsonSchema": {
+                "type": "object",
+                "properties": {
+                    "spans": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"kind": {"type": "string"}, "label": {"type": "string"}},
+                            "required": ["kind"],
+                        },
+                    }
+                },
+                "required": ["spans"],
+            },
+        },
+    }
+
+    def test_helper_input_keeps_turns_and_property_order(self):
+        helper_input = pcc_input(self.payload, 4096, "label")
+        self.assertEqual([m["role"] for m in helper_input["messages"]], ["user", "model", "user"])
+        self.assertEqual(helper_input["messages"][-1]["text"], "fix it")
+        self.assertEqual(helper_input["instructions"], "rules")
+        self.assertEqual(helper_input["max_output_tokens"], 4096)
+        items = helper_input["schema"]["properties"][0][1]["items"]
+        self.assertEqual([name for name, _ in items["properties"]], ["kind", "label"])
+        self.assertEqual(items["required"], ["kind"])
+
+    def test_answer_and_usage_read_the_final_attempt(self):
+        report = pcc_report(raw='{"spans":[{"kind":"inserted_ad"}]}')
+        self.assertEqual(answer_of(PCC_MODEL, report), {"spans": [{"kind": "inserted_ad"}]})
+        self.assertEqual(usage_of(PCC_MODEL, report)["input"], 100)
+        self.assertEqual(usage_of(PCC_MODEL, report)["cached"], 4)
+        with self.assertRaises(ValueError):
+            answer_of(PCC_MODEL, pcc_report(ok=False, kind="refusal"))
+        self.assertIsNone(usage_of(PCC_MODEL, pcc_report(ok=False, kind="refusal")))
+        with self.assertRaises(ValueError):
+            answer_of(PCC_MODEL, pcc_report(raw="x" * 100_001))
+
+    def test_rate_limit_retries_then_reports_transport_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            helper = fake_helper(tmp, [pcc_report(ok=False, kind="rateLimited"), pcc_report()])
+            out = Path(tmp) / "window-0"
+            journal = Path(tmp) / "pcc-usage.json"
+            original = run.PCC_RETRY_DELAYS_S
+            run.PCC_RETRY_DELAYS_S = (0,)
+            try:
+                context = {"tag": "t", "fixture": "f", "repeat": 1, "window": 0}
+                output, details = call_pcc(helper, self.payload, out, context, 4096, "light", journal)
+                self.assertEqual(output, {"spans": []})
+                self.assertEqual(details["pcc"]["attempts"], 2)
+                self.assertNotIn("transport_error", details)
+                self.assertTrue((out / "response.json").exists())
+                self.assertTrue((out / "response-attempt-0.json").exists())
+                totals = json.loads(journal.read_text())["totals"]
+                self.assertEqual((totals["calls"], totals["ok"], totals["rate_limited"]), (2, 1, 1))
+
+                helper = fake_helper(tmp, [pcc_report(ok=False, kind="rateLimited")] * 2)
+                output, details = call_pcc(
+                    helper, self.payload, Path(tmp) / "window-1", context, 4096, None, journal
+                )
+                self.assertIsNone(output)
+                self.assertEqual(details["transport_error"], "rateLimited")
+
+                helper = fake_helper(tmp, [pcc_report(ok=False, kind="refusal")])
+                output, details = call_pcc(
+                    helper, self.payload, Path(tmp) / "window-2", context, 4096, None, journal
+                )
+                self.assertIsNone(output)
+                self.assertEqual(details["answer_error"], "pcc_refusal")
+                self.assertNotIn("transport_error", details)
+
+                helper = fake_helper(tmp, [pcc_report(limit_reached=True)])
+                with self.assertRaises(run.PCCQuotaExhausted):
+                    call_pcc(helper, self.payload, Path(tmp) / "window-3", context, 4096, None, journal)
+            finally:
+                run.PCC_RETRY_DELAYS_S = original
+
+    def test_empty_key_never_redacts_every_character(self):
+        self.assertEqual(safe_error(ValueError("plain"), ""), "plain")
+        self.assertEqual(safe_error(ValueError("k3y here"), "k3y"), "[REDACTED] here")
 
 
 if __name__ == "__main__":

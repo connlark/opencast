@@ -138,8 +138,29 @@ pub fn verify_assertion(
     previous_counter: u32,
 ) -> Result<AssertionVerification, AppAttestError> {
     let cbor = decode_base64(assertion_base64)?;
-    let assertion = Assertion::from_cbor(&cbor)?;
-    let authenticator_data = AuthenticatorData::new(assertion.authenticator_data)?;
+    let assertion = Assertion::from_cbor(&cbor).inspect_err(|_| {
+        #[cfg(target_arch = "wasm32")]
+        worker::console_warn!(
+            "App Attest assertion CBOR rejected: bytes={} first={:?}",
+            cbor.len(),
+            cbor.first()
+        );
+    })?;
+    let authenticator_data = AuthenticatorData::from_assertion(assertion.authenticator_data)
+        .inspect_err(|_| {
+            #[cfg(target_arch = "wasm32")]
+            worker::console_warn!(
+                "App Attest authenticator format rejected: bytes={} flags={:?} extensions={}",
+                assertion.authenticator_data.len(),
+                assertion.authenticator_data.get(32),
+                assertion_extension_shape(
+                    assertion
+                        .authenticator_data
+                        .get(AUTHENTICATOR_DATA_LEN..)
+                        .unwrap_or_default()
+                )
+            );
+        })?;
     authenticator_data.verify_app_id(app_id)?;
 
     if authenticator_data.counter <= previous_counter {
@@ -319,7 +340,7 @@ impl<'a> Assertion<'a> {
                     let bytes = decoder
                         .bytes()
                         .map_err(|_| AppAttestError::InvalidAssertionFormat)?;
-                    if bytes.len() != AUTHENTICATOR_DATA_LEN {
+                    if bytes.len() < AUTHENTICATOR_DATA_LEN {
                         return Err(AppAttestError::InvalidAssertionFormat);
                     }
                     authenticator_data = Some(bytes);
@@ -352,6 +373,22 @@ struct AuthenticatorData<'a> {
 }
 
 impl<'a> AuthenticatorData<'a> {
+    fn from_assertion(bytes: &'a [u8]) -> Result<Self, AppAttestError> {
+        let header = bytes
+            .get(..AUTHENTICATOR_DATA_LEN)
+            .ok_or(AppAttestError::InvalidAssertionFormat)?;
+        let data = Self::new(header)?;
+        let extensions = &bytes[AUTHENTICATOR_DATA_LEN..];
+        if header[32] & 0x80 == 0 {
+            if !extensions.is_empty() {
+                return Err(AppAttestError::InvalidAssertionFormat);
+            }
+        } else {
+            validate_assertion_extensions(extensions)?;
+        }
+        Ok(data)
+    }
+
     fn new(bytes: &'a [u8]) -> Result<Self, AppAttestError> {
         if bytes.len() < AUTHENTICATOR_DATA_LEN {
             return Err(AppAttestError::InvalidAssertionFormat);
@@ -423,6 +460,81 @@ impl<'a> AuthenticatorData<'a> {
             Err(AppAttestError::InvalidCredentialId)
         }
     }
+}
+
+// Assertions carry no attested credential, even though Apple's legacy assertions
+// set the AT bit. iOS 27 can append a signed extension map after the 37-byte header.
+// Keep those bytes in the nonce; interpreting their length as a credential fails.
+fn validate_assertion_extensions(bytes: &[u8]) -> Result<(), AppAttestError> {
+    let invalid = |_| AppAttestError::InvalidAssertionFormat;
+    let mut decoder = minicbor::Decoder::new(bytes);
+    let entries = decoder
+        .map()
+        .map_err(invalid)?
+        .ok_or(AppAttestError::InvalidAssertionFormat)?;
+    let mut saw_category = false;
+    let mut saw_version = false;
+    for _ in 0..entries {
+        match decoder.str().map_err(invalid)? {
+            "validationCategory" | "apple_validation_category_01" => {
+                if saw_category {
+                    return Err(AppAttestError::InvalidAssertionFormat);
+                }
+                // Apple's published fixture encodes this UInt32 as four
+                // little-endian bytes, rather than a CBOR integer.
+                let category =
+                    if decoder.datatype().map_err(invalid)? == minicbor::data::Type::Bytes {
+                        let bytes: [u8; 4] = decoder
+                            .bytes()
+                            .map_err(invalid)?
+                            .try_into()
+                            .map_err(|_| AppAttestError::InvalidAssertionFormat)?;
+                        u32::from_le_bytes(bytes)
+                    } else {
+                        decoder.u32().map_err(invalid)?
+                    };
+                if !matches!(category, 2..=5) {
+                    return Err(AppAttestError::InvalidAssertionFormat);
+                }
+                saw_category = true;
+            }
+            "bundleVersion" | "apple_bundle_version_01" => {
+                if saw_version || decoder.str().map_err(invalid)?.is_empty() {
+                    return Err(AppAttestError::InvalidAssertionFormat);
+                }
+                saw_version = true;
+            }
+            _ => decoder.skip().map_err(invalid)?,
+        }
+    }
+    if decoder.position() != bytes.len() {
+        return Err(AppAttestError::InvalidAssertionFormat);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn assertion_extension_shape(bytes: &[u8]) -> String {
+    let mut decoder = minicbor::Decoder::new(bytes);
+    let Ok(Some(entries)) = decoder.map() else {
+        return format!("map={:?}", minicbor::Decoder::new(bytes).datatype());
+    };
+    let mut fields = Vec::new();
+    for _ in 0..entries.min(8) {
+        let Ok(key) = decoder.str() else {
+            break;
+        };
+        let label = match key {
+            "validationCategory" | "apple_validation_category_01" => "category",
+            "bundleVersion" | "apple_bundle_version_01" => "version",
+            _ => "unknown",
+        };
+        fields.push(format!("{label}:{:?}", decoder.datatype()));
+        if decoder.skip().is_err() {
+            break;
+        }
+    }
+    format!("entries={entries} fields={fields:?}")
 }
 
 fn trim_trailing_zeros(bytes: &[u8]) -> &[u8] {

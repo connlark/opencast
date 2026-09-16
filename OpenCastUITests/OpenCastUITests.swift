@@ -39,8 +39,20 @@ final class OpenCastUITests: XCTestCase {
     private static let thisAmericanLifeReviewerPathProbeEnvironmentKey = "OPENCAST_RUN_TAL_REVIEWER_PATH_UI_TESTS"
     private static let thisAmericanLifeReviewerPathProbeFilePath = "/tmp/opencast-run-tal-reviewer-path-ui-tests"
 
+    /// Set while the app-icon picker test has an alternate icon applied so a
+    /// mid-test failure still leaves the shared simulator on the primary icon.
+    private var needsPrimaryAppIconRestore = false
+
     override func setUpWithError() throws {
         continueAfterFailure = false
+    }
+
+    override func tearDown() async throws {
+        if needsPrimaryAppIconRestore {
+            needsPrimaryAppIconRestore = false
+            await Self.restorePrimaryAppIcon()
+        }
+        try await super.tearDown()
     }
 
     @MainActor
@@ -503,7 +515,7 @@ final class OpenCastUITests: XCTestCase {
         app.launch()
 
         assertExists(app.staticTexts["Welcome to opencast!"], named: "clean onboarding welcome", timeout: 20)
-        assertExists(app.staticTexts["1 feed auto imported"], named: "iCloud auto-import notification", timeout: 10)
+        assertExists(app.staticTexts["1 subscription restored"], named: "iCloud restore notification", timeout: 10)
         attachSmokeScreenshot(named: "onboarding_imported_subscription_notice_light")
         app.buttons["Continue"].tap()
         assertExists(app.buttons["Skip"], named: "Skip OPML onboarding action")
@@ -4198,6 +4210,498 @@ final class OpenCastUITests: XCTestCase {
 
         app.buttons["Cancel"].tap()
         app.terminate()
+    }
+
+    @MainActor
+    func testSettingsAppIconPickerSwitchesIconAndRestoresPrimary() throws {
+        let app = makeSeededApp(forcesDarkMode: false, forcesLightMode: true)
+        app.launch()
+
+        openSettingsScreen("App Icon", expecting: "App Icon", in: app)
+        let violetOption = app.buttons["App Icon Option Violet"]
+        let emberOption = app.buttons["App Icon Option Ember"]
+        assertHittable(violetOption, named: "Violet app icon option")
+        // Shared simulators and devices keep the last icon across installs;
+        // start from the primary regardless of what an earlier run left.
+        if !emberOption.isSelected {
+            emberOption.tap()
+            dismissAppIconChangeAlertIfPresented(in: app)
+            XCTAssertTrue(waitForSelection(of: emberOption), "Ember should be selectable as the starting icon")
+        }
+        XCTAssertTrue(emberOption.isSelected, "Ember should be the initial app icon selection")
+        attachSmokeScreenshot(named: "settings_app_icon_initial")
+
+        needsPrimaryAppIconRestore = true
+        violetOption.tap()
+        attachSmokeScreenshot(named: "settings_app_icon_violet_confirmation")
+        dismissAppIconChangeAlertIfPresented(in: app)
+        XCTAssertTrue(waitForSelection(of: violetOption), "Violet should be selected after tapping it")
+        XCTAssertFalse(emberOption.isSelected, "Ember should no longer be selected")
+        attachSmokeScreenshot(named: "settings_app_icon_violet")
+
+        returnToSettingsHub(in: app)
+        let hubRow = app.buttons["Settings Row App Icon"].firstMatch
+        XCTAssertTrue(settingsHubRow(hubRow, showsValue: "Violet"), "App Icon hub row should show Violet")
+
+        app.terminate()
+        app.launch()
+        openSettingsScreen("App Icon", expecting: "App Icon", in: app)
+        XCTAssertTrue(waitForSelection(of: violetOption), "Violet should survive a relaunch")
+
+        emberOption.tap()
+        dismissAppIconChangeAlertIfPresented(in: app)
+        XCTAssertTrue(waitForSelection(of: emberOption), "Ember should be selected after tapping it")
+        needsPrimaryAppIconRestore = false
+
+        returnToSettingsHub(in: app)
+        XCTAssertTrue(settingsHubRow(hubRow, showsValue: "Ember"), "App Icon hub row should return to Ember")
+    }
+
+    /// LaunchServices confirms an icon change with a system alert owned by
+    /// SpringBoard (not the app) and holds the change until it is answered;
+    /// an app-scoped query never sees it. Both owners are checked so a
+    /// release that drops the alert still passes.
+    @MainActor
+    private func dismissAppIconChangeAlertIfPresented(in app: XCUIApplication) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let deadline = Date.now.addingTimeInterval(5)
+        repeat {
+            for alert in [app.alerts.firstMatch, springboard.alerts.firstMatch] where alert.exists {
+                let okButton = alert.buttons["OK"]
+                (okButton.exists ? okButton : alert.buttons.firstMatch).tap()
+                XCTAssertTrue(alert.waitForNonExistence(timeout: 3), "App icon change alert should dismiss")
+                return
+            }
+            _ = springboard.alerts.firstMatch.waitForExistence(timeout: 0.5)
+        } while Date.now < deadline
+    }
+
+    /// Rows disable while a change is in flight, so waiting for `enabled`
+    /// proves the change completed rather than reading the optimistic state.
+    @MainActor
+    private func waitForSelection(of element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true AND enabled == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    private func returnToSettingsHub(in app: XCUIApplication) {
+        openSection("Settings", in: app)
+        if !app.navigationBars["Settings"].waitForExistence(timeout: 2) {
+            openSection("Settings", in: app)
+        }
+        assertExists(app.navigationBars["Settings"], named: "Settings hub navigation bar")
+    }
+
+    @MainActor
+    private func settingsHubRow(_ row: XCUIElement, showsValue value: String, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date.now.addingTimeInterval(timeout)
+        repeat {
+            if row.exists,
+               row.label.contains(value)
+               || (row.value as? String)?.contains(value) == true
+               || row.staticTexts[value].exists {
+                return true
+            }
+            _ = row.staticTexts[value].waitForExistence(timeout: 0.5)
+        } while Date.now < deadline
+        return false
+    }
+
+    /// Best-effort, assertion-free: runs from teardown after a failure, so it
+    /// relaunches a fresh seeded app rather than trusting the test's instance.
+    @MainActor
+    private static func restorePrimaryAppIcon() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "--opencast-ui-testing",
+            "--opencast-seed-ui-library",
+            "--opencast-force-light-mode"
+        ]
+        app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
+        app.launchEnvironment["OPENCAST_SEED_UI_LIBRARY"] = "1"
+        app.launchEnvironment["OPENCAST_FORCE_LIGHT_MODE"] = "1"
+        app.launch()
+
+        let settingsTab = app.tabBars.buttons["Settings"]
+        guard settingsTab.waitForExistence(timeout: 10) else {
+            return
+        }
+        settingsTab.tap()
+        if !app.navigationBars["Settings"].waitForExistence(timeout: 2) {
+            settingsTab.tap()
+        }
+        let appIconRow = app.buttons["Settings Row App Icon"].firstMatch
+        guard appIconRow.waitForExistence(timeout: 5) else {
+            return
+        }
+        appIconRow.tap()
+        let emberOption = app.buttons["App Icon Option Ember"]
+        guard emberOption.waitForExistence(timeout: 5), !emberOption.isSelected else {
+            return
+        }
+        emberOption.tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for alert in [app.alerts.firstMatch, springboard.alerts.firstMatch] where alert.waitForExistence(timeout: 3) {
+            alert.buttons.firstMatch.tap()
+            break
+        }
+        _ = XCTWaiter.wait(
+            for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true AND enabled == true"), object: emberOption)],
+            timeout: 10
+        )
+    }
+
+    // MARK: - Transcript recap (Private Cloud Compute)
+
+    /// Ineligible hardware hides the recap entries rather than disabling
+    /// them. Scripted through the seam: the simulator's own eligibility
+    /// follows the host Mac (PCC answered from this simulator on
+    /// 2026-09-15), so it cannot stand in for an ineligible device.
+    @MainActor
+    func testSeededTranscriptRecapEntriesHiddenWhenDeviceIneligible() throws {
+        let app = makeSeededApp(seedsCompletedTranscript: true, seedsEpisodeProgress: true)
+        app.launchArguments.append(Self.transcriptIntelligenceEnableArgument)
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "deviceNotEligible"
+        app.launch()
+
+        openSeededTranscriptRouteFromInbox(in: app)
+        openTranscriptOptionsMenu(in: app)
+        assertExists(app.buttons["Share Transcript"], named: "transcript options menu content")
+        assertDoesNotExist(app.buttons[Self.recapLastFiveMinutesTitle], named: "recap entry on ineligible hardware")
+        assertDoesNotExist(app.buttons[Self.recapSoFarTitle], named: "recap-so-far entry on ineligible hardware")
+        attachSmokeScreenshot(named: "transcript_recap_entries_hidden")
+    }
+
+    /// Opt-in real Private Cloud Compute round trip from the simulator
+    /// (`TEST_RUNNER_OPENCAST_PCC_E2E=1`): eligibility follows the host Mac,
+    /// so this is a local smoke, never a gate.
+    @MainActor
+    func testSeededTranscriptRecapFromPrivateCloudComputeOnSimulator() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["OPENCAST_PCC_E2E"] == "1" || environment["TEST_RUNNER_OPENCAST_PCC_E2E"] == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_OPENCAST_PCC_E2E=1 to run the real PCC recap smoke.")
+        }
+        let app = makeSeededApp(seedsCompletedTranscript: true, seedsEpisodeProgress: true)
+        app.launchArguments.append(Self.transcriptIntelligenceEnableArgument)
+        app.launch()
+
+        openSeededTranscriptRouteFromInbox(in: app)
+        openTranscriptOptionsMenu(in: app)
+        let recap = app.buttons[Self.recapLastFiveMinutesTitle]
+        assertExists(recap, named: "recap entry with the host's Apple Intelligence")
+        recap.tap()
+        assertExists(app.navigationBars["Recap"], named: "recap sheet")
+        let continueButton = app.buttons["Continue"].firstMatch
+        if continueButton.waitForExistence(timeout: 5) {
+            continueButton.tap()
+        }
+        let list = app.descendants(matching: .any).matching(identifier: "Transcript Recap List").firstMatch
+        assertExists(list, named: "recap from Private Cloud Compute", timeout: 120)
+        attachSmokeScreenshot(named: "transcript_recap_pcc_simulator")
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "transcript_recap_pcc_simulator_hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play from")).firstMatch
+        assertExists(chip, named: "citation chip from a real recap")
+    }
+
+    /// Visible but unavailable: with Apple Intelligence scripted off the
+    /// entries render, and the sheet explains instead of requesting.
+    @MainActor
+    func testSeededTranscriptRecapShowsUnavailableStateWhenAppleIntelligenceOff() throws {
+        let app = makeSeededApp(seedsCompletedTranscript: true, seedsEpisodeProgress: true)
+        app.launchArguments.append(Self.transcriptIntelligenceEnableArgument)
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "appleIntelligenceNotEnabled"
+        app.launch()
+
+        openSeededTranscriptRouteFromInbox(in: app)
+        openTranscriptOptionsMenu(in: app)
+        let recap = app.buttons[Self.recapLastFiveMinutesTitle]
+        assertExists(recap, named: "recap entry with Apple Intelligence off")
+        assertDoesNotExist(app.buttons[Self.recapSoFarTitle], named: "recap-so-far entry below fifteen minutes")
+        recap.tap()
+
+        assertExists(app.navigationBars["Recap"], named: "recap sheet")
+        assertExists(app.staticTexts["Turn On Apple Intelligence"], named: "unavailable state title")
+        assertDoesNotExist(app.buttons["Continue"], named: "disclosure while unavailable")
+        attachSmokeScreenshot(named: "transcript_recap_unavailable")
+        app.buttons["Done"].firstMatch.tap()
+        assertExists(app.navigationBars["Transcript"], named: "transcript route after dismissing the recap sheet")
+    }
+
+    /// Available: the first request passes through the one-time disclosure,
+    /// the canned recap renders with tappable timestamps, and a tap seeks
+    /// and dismisses.
+    @MainActor
+    func testSeededTranscriptRecapDisclosureThenRecapAndSeek() throws {
+        let app = makeSeededApp(seedsCompletedTranscript: true, seedsEpisodeProgress: true)
+        app.launchArguments.append(Self.transcriptIntelligenceEnableArgument)
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "available"
+        app.launch()
+
+        openSeededTranscriptRouteFromInbox(in: app)
+        openTranscriptOptionsMenu(in: app)
+        let recap = app.buttons[Self.recapLastFiveMinutesTitle]
+        assertExists(recap, named: "recap entry")
+        recap.tap()
+
+        assertExists(app.navigationBars["Recap"], named: "recap sheet")
+        assertExists(app.staticTexts["Use Apple Intelligence?"], named: "one-time disclosure title")
+        attachSmokeScreenshot(named: "transcript_recap_disclosure")
+        let continueButton = app.buttons["Continue"].firstMatch
+        assertExists(continueButton, named: "disclosure Continue action")
+        continueButton.tap()
+
+        let chip = app.buttons["Play from 0:04"].firstMatch
+        assertExists(chip, named: "citation chip for the sponsor line", timeout: 10)
+        assertExists(
+            app.staticTexts["A short sponsor read for Seed Sponsor follows the welcome."],
+            named: "canned recap bullet"
+        )
+        attachSmokeScreenshot(named: "transcript_recap_loaded")
+        chip.tap()
+
+        XCTAssertTrue(
+            app.navigationBars["Recap"].waitForNonExistence(timeout: 5),
+            "tapping a citation should dismiss the recap sheet"
+        )
+        assertExists(app.navigationBars["Transcript"], named: "transcript route after seeking")
+
+        // Seeking from the recap starts playback without presenting Now
+        // Playing; the mini player is the way in to read the landed position.
+        let openNowPlaying = app.buttons["Open Now Playing"]
+        assertExists(openNowPlaying, named: "mini player after seeking from the recap")
+        openNowPlaying.tap()
+        assertNowPlayingOverlay(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+        waitForPlaybackElapsed(progress, in: 4..<20, timeout: 8)
+        attachSmokeScreenshot(named: "transcript_recap_seeked")
+    }
+
+    // MARK: - Transcript Ask (Private Cloud Compute)
+
+    /// Visible but unavailable: with Apple Intelligence scripted off the Ask
+    /// entry renders, and the sheet explains instead of building a session.
+    @MainActor
+    func testSeededTranscriptAskShowsUnavailableStateWhenAppleIntelligenceOff() throws {
+        let app = makeSeededApp(seedsCompletedTranscript: true, seedsEpisodeProgress: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.transcriptIntelligenceAskEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "appleIntelligenceNotEnabled"
+        app.launch()
+
+        openSeededTranscriptRouteFromInbox(in: app)
+        openTranscriptOptionsMenu(in: app)
+        let ask = app.buttons[Self.askTitle]
+        assertExists(ask, named: "Ask entry with Apple Intelligence off")
+        ask.tap()
+
+        assertExists(app.navigationBars["Ask"], named: "ask sheet")
+        assertExists(app.staticTexts["Turn On Apple Intelligence"], named: "unavailable state title")
+        assertDoesNotExist(app.buttons["Continue"], named: "disclosure while unavailable")
+        assertDoesNotExist(app.textFields["Transcript Ask Composer"], named: "composer while unavailable")
+        attachSmokeScreenshot(named: "transcript_ask_unavailable")
+        app.buttons["Done"].firstMatch.tap()
+        assertExists(app.navigationBars["Transcript"], named: "transcript route after dismissing the ask sheet")
+    }
+
+    /// Available: the first open passes through the one-time disclosure, a
+    /// suggested question streams a canned answer whose citation chips
+    /// resolve against the seeded transcript, and a chip tap seeks and
+    /// dismisses.
+    @MainActor
+    func testSeededTranscriptAskDisclosureThenAnswerAndSeek() throws {
+        let app = makeSeededApp(seedsCompletedTranscript: true, seedsEpisodeProgress: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.transcriptIntelligenceAskEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "available"
+        app.launch()
+
+        openSeededTranscriptRouteFromInbox(in: app)
+        openTranscriptOptionsMenu(in: app)
+        let ask = app.buttons[Self.askTitle]
+        assertExists(ask, named: "Ask entry")
+        ask.tap()
+
+        assertExists(app.navigationBars["Ask"], named: "ask sheet")
+        assertExists(app.staticTexts["Use Apple Intelligence?"], named: "one-time disclosure title")
+        attachSmokeScreenshot(named: "transcript_ask_disclosure")
+        let continueButton = app.buttons["Continue"].firstMatch
+        assertExists(continueButton, named: "disclosure Continue action")
+        continueButton.tap()
+
+        let suggestion = app.buttons["What is this episode about?"].firstMatch
+        assertExists(suggestion, named: "suggested question", timeout: 10)
+        attachSmokeScreenshot(named: "transcript_ask_intro")
+        suggestion.tap()
+
+        assertExists(app.staticTexts["What is this episode about?"], named: "question row")
+        let chip = app.buttons["Play from 0:04"].firstMatch
+        assertExists(chip, named: "citation chip for the sponsor line", timeout: 10)
+        assertExists(
+            app.staticTexts["The episode opens with a welcome and a short read for Seed Sponsor."],
+            named: "canned answer text"
+        )
+        assertExists(app.buttons["Play from 0:00"], named: "citation chip for the welcome line")
+        assertDoesNotExist(
+            app.descendants(matching: .any).matching(identifier: "Transcript Ask Unverified Note").firstMatch,
+            named: "unverified note on a verified answer"
+        )
+        attachSmokeScreenshot(named: "transcript_ask_answered")
+        chip.tap()
+
+        XCTAssertTrue(
+            app.navigationBars["Ask"].waitForNonExistence(timeout: 5),
+            "tapping a citation should dismiss the ask sheet"
+        )
+        assertExists(app.navigationBars["Transcript"], named: "transcript route after seeking")
+        let openNowPlaying = app.buttons["Open Now Playing"]
+        assertExists(openNowPlaying, named: "mini player after seeking from an answer")
+        openNowPlaying.tap()
+        assertNowPlayingOverlay(in: app)
+        let progress = playbackProgress(in: app)
+        assertExists(progress, named: "Playback Progress control")
+        waitForPlaybackElapsed(progress, in: 4..<20, timeout: 8)
+        attachSmokeScreenshot(named: "transcript_ask_seeked")
+    }
+
+    /// The two calm renderings that never show chips: an answer whose
+    /// citations all failed validation (text plus a note) and an
+    /// unanswerable question.
+    @MainActor
+    func testSeededTranscriptAskRendersUnverifiedAndUnanswerableAnswers() throws {
+        let app = makeSeededApp(seedsCompletedTranscript: true, seedsEpisodeProgress: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.transcriptIntelligenceAskEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "available"
+        app.launchEnvironment["OPENCAST_UI_TEST_TRANSCRIPT_ASK_ANSWER"] = "unverified"
+        app.launch()
+
+        openSeededTranscriptRouteFromInbox(in: app)
+        openTranscriptOptionsMenu(in: app)
+        app.buttons[Self.askTitle].tap()
+        assertExists(app.navigationBars["Ask"], named: "ask sheet")
+        let continueButton = app.buttons["Continue"].firstMatch
+        if continueButton.waitForExistence(timeout: 5) {
+            continueButton.tap()
+        }
+        let suggestion = app.buttons["What is this episode about?"].firstMatch
+        assertExists(suggestion, named: "suggested question", timeout: 10)
+        suggestion.tap()
+        assertExists(
+            app.descendants(matching: .any).matching(identifier: "Transcript Ask Unverified Note").firstMatch,
+            named: "could-not-verify note",
+            timeout: 10
+        )
+        assertDoesNotExist(
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play from")).firstMatch,
+            named: "citation chips on an unverified answer"
+        )
+        attachSmokeScreenshot(named: "transcript_ask_unverified")
+        app.buttons["Done"].firstMatch.tap()
+
+        app.terminate()
+        app.launchEnvironment["OPENCAST_UI_TEST_TRANSCRIPT_ASK_ANSWER"] = "unanswerable"
+        app.launch()
+        openSeededTranscriptRouteFromInbox(in: app)
+        openTranscriptOptionsMenu(in: app)
+        app.buttons[Self.askTitle].tap()
+        assertExists(app.navigationBars["Ask"], named: "ask sheet (second launch)")
+        if continueButton.waitForExistence(timeout: 5) {
+            continueButton.tap()
+        }
+        assertExists(suggestion, named: "suggested question (second launch)", timeout: 10)
+        suggestion.tap()
+        assertExists(
+            app.descendants(matching: .any).matching(identifier: "Transcript Ask Unanswerable").firstMatch,
+            named: "transcript-does-not-cover-that rendering",
+            timeout: 10
+        )
+        assertDoesNotExist(
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play from")).firstMatch,
+            named: "citation chips on an unanswerable answer"
+        )
+        attachSmokeScreenshot(named: "transcript_ask_unanswerable")
+    }
+
+    /// Opt-in real Private Cloud Compute Ask round trip from the simulator
+    /// (`TEST_RUNNER_OPENCAST_PCC_E2E=1`): eligibility follows the host Mac,
+    /// so this is a local smoke, never a gate.
+    @MainActor
+    func testSeededTranscriptAskFromPrivateCloudComputeOnSimulator() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["OPENCAST_PCC_E2E"] == "1" || environment["TEST_RUNNER_OPENCAST_PCC_E2E"] == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_OPENCAST_PCC_E2E=1 to run the real PCC ask smoke.")
+        }
+        let app = makeSeededApp(seedsCompletedTranscript: true, seedsEpisodeProgress: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.transcriptIntelligenceAskEnableArgument]
+        app.launch()
+
+        openSeededTranscriptRouteFromInbox(in: app)
+        openTranscriptOptionsMenu(in: app)
+        let ask = app.buttons[Self.askTitle]
+        assertExists(ask, named: "Ask entry with the host's Apple Intelligence")
+        ask.tap()
+        assertExists(app.navigationBars["Ask"], named: "ask sheet")
+        let continueButton = app.buttons["Continue"].firstMatch
+        if continueButton.waitForExistence(timeout: 5) {
+            continueButton.tap()
+        }
+        let suggestion = app.buttons["What is this episode about?"].firstMatch
+        assertExists(suggestion, named: "suggested question", timeout: 15)
+        suggestion.tap()
+        let answered = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play from")).firstMatch
+        let unanswerable = app.descendants(matching: .any).matching(identifier: "Transcript Ask Unanswerable").firstMatch
+        let unverified = app.descendants(matching: .any).matching(identifier: "Transcript Ask Unverified Note").firstMatch
+        let failure = app.descendants(matching: .any).matching(identifier: "Transcript Ask Failure").firstMatch
+        let outcome = XCTWaiter.wait(for: [
+            XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true"),
+                object: app.descendants(matching: .any).matching(NSPredicate(format: "identifier IN %@ OR label BEGINSWITH %@", ["Transcript Ask Unanswerable", "Transcript Ask Unverified Note", "Transcript Ask Failure"], "Play from")).firstMatch
+            )
+        ], timeout: 120)
+        XCTAssertEqual(outcome, .completed, "a real PCC turn should end in an answer, a decline, or a calm failure")
+        attachSmokeScreenshot(named: "transcript_ask_pcc_simulator")
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "transcript_ask_pcc_simulator_hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        let note = XCTAttachment(string: "answered=\(answered.exists) unanswerable=\(unanswerable.exists) unverified=\(unverified.exists) failure=\(failure.exists)")
+        note.name = "transcript_ask_pcc_simulator_outcome"
+        note.lifetime = .keepAlways
+        add(note)
+    }
+
+    private static let transcriptIntelligenceAskEnableArgument = "--transcript-intelligence-ask-enabled"
+    private static let askTitle = "Ask About This Episode"
+
+    private static let transcriptIntelligenceEnableArgument = "--transcript-intelligence-enabled"
+    private static let transcriptIntelligenceAvailabilityEnvironmentKey = "OPENCAST_UI_TEST_TRANSCRIPT_INTELLIGENCE_AVAILABILITY"
+    private static let recapLastFiveMinutesTitle = "Recap the Last 5 Minutes"
+    private static let recapSoFarTitle = "Recap So Far"
+
+    /// Detail route, never playback: the recap playhead then comes from the
+    /// seeded progress record (90 s), which clears the five-minute entry's
+    /// threshold without the fixture audio having to play.
+    @MainActor
+    private func openSeededTranscriptRouteFromInbox(in app: XCUIApplication) {
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.press(forDuration: 1.2)
+        let detailsAction = app.buttons["View Episode Details"]
+        assertExists(detailsAction, named: "seeded inbox episode details context action")
+        detailsAction.tap()
+        assertExists(app.buttons["Play Episode"], named: "seeded episode detail")
+
+        let readTranscriptButton = app.buttons["Read Transcript"]
+        scrollUntilHittable(readTranscriptButton, in: app)
+        assertExists(readTranscriptButton, named: "Read Transcript button")
+        readTranscriptButton.tap()
+        assertExists(app.navigationBars["Transcript"], named: "Transcript route")
     }
 
     @MainActor

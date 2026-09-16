@@ -369,8 +369,8 @@ final class RemoteTranscriptionPurchaseStore {
 
     // MARK: - Preparation
 
-    /// Returns false only when environment resolution is retryable. Successful
-    /// resolution remains coalesced even when the backend or store is disabled.
+    /// Retryable environment and service failures must not disable purchases
+    /// for the rest of the session. Successful resolution remains coalesced.
     private func resolve(refreshAppTransaction: Bool) async -> Bool {
         let configuration = await configurationResolver(refreshAppTransaction)
         guard !Task.isCancelled else { return false }
@@ -388,7 +388,7 @@ final class RemoteTranscriptionPurchaseStore {
             return false
         } catch {
             availability = .storeDisabled(reason: String(localized: "The transcription service can’t be reached right now."))
-            return true
+            return false
         }
         apply(bootstrap: bootstrap)
 

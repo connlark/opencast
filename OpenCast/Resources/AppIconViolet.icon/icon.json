@@ -1,0 +1,102 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "extended-srgb:0.54118,0.47059,0.89804,1.00000",
+      "extended-srgb:0.42353,0.35294,0.80000,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "fill" : {
+            "solid" : "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+          },
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : {
+                "linear-gradient" : [
+                  "extended-srgb:0.36078,0.24706,0.80000,1.00000",
+                  "extended-srgb:0.25098,0.15686,0.60392,1.00000"
+                ]
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ],
+          "image-name" : "OpenCast-Mark.svg",
+          "name" : "Mark",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -16,
+              0
+            ]
+          }
+        }
+      ],
+      "name" : "OpenCast Mark",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.25
+      },
+      "specular" : false,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.3
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : {
+                "linear-gradient" : [
+                  "extended-srgb:0.10196,0.07059,0.20000,1.00000",
+                  "extended-srgb:0.05098,0.03137,0.11765,1.00000"
+                ]
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "extended-srgb:0.00000,0.00000,0.00000,0.00000"
+              }
+            }
+          ],
+          "image-name" : "Background.svg",
+          "name" : "Background",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "name" : "Background",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0
+      },
+      "specular" : false,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "iOS"
+    ]
+  }
+}

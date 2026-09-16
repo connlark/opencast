@@ -35,6 +35,7 @@ final class OpenCastAppModel {
     let remoteTranscriptionPurchases: RemoteTranscriptionPurchaseStore
     let adAnalyses: EpisodeAdAnalysisStore
     let transcriptAnalyses: EpisodeTranscriptAnalysisStore
+    let transcriptIntelligence: TranscriptIntelligenceStore
     let adFreePass: EpisodeAdFreePassCoordinator
     let upNextQueue: UpNextQueueStore
     let adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession
@@ -42,6 +43,7 @@ final class OpenCastAppModel {
     let transcriptImprovement: EpisodeTranscriptImprovementCoordinator
     let playback: AVFoundationPlaybackController
     let appearanceSettings: AppearanceSettingsStore
+    let appIcon: AppIconStore
     let podcastEpisodeListSettings: PodcastEpisodeListSettingsStore
     let recentSearches: RecentSearchesStore
     let playbackSettings: PlaybackSettingsStore
@@ -152,12 +154,14 @@ final class OpenCastAppModel {
         transcriptions: EpisodeTranscriptionStore = EpisodeTranscriptionStore(),
         adAnalyses: EpisodeAdAnalysisStore = EpisodeAdAnalysisStore(),
         transcriptAnalyses: EpisodeTranscriptAnalysisStore = EpisodeTranscriptAnalysisStore(),
+        transcriptIntelligence: TranscriptIntelligenceStore = TranscriptIntelligenceStore(),
         adFreePass: EpisodeAdFreePassCoordinator = EpisodeAdFreePassCoordinator(),
         upNextQueue: UpNextQueueStore = UpNextQueueStore(),
         adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession = EpisodeAdFreePassBackgroundSession(),
         transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession = EpisodeTranscriptGenerationBackgroundSession(),
         playback: AVFoundationPlaybackController? = nil,
         appearanceSettings: AppearanceSettingsStore = AppearanceSettingsStore(),
+        appIcon: AppIconStore = AppIconStore(),
         podcastEpisodeListSettings: PodcastEpisodeListSettingsStore = PodcastEpisodeListSettingsStore(),
         recentSearches: RecentSearchesStore = RecentSearchesStore(),
         playbackSettings: PlaybackSettingsStore = PlaybackSettingsStore(),
@@ -258,6 +262,7 @@ final class OpenCastAppModel {
         #endif
         self.adAnalyses = adAnalyses
         self.transcriptAnalyses = transcriptAnalyses
+        self.transcriptIntelligence = transcriptIntelligence
         transcriptAnalysisQueue = TranscriptAnalysisQueue(
             transcriptAnalyses: transcriptAnalyses,
             transcriptions: transcriptions,
@@ -305,6 +310,7 @@ final class OpenCastAppModel {
             adFreePass: adFreePass
         )
         self.appearanceSettings = appearanceSettings
+        self.appIcon = appIcon
         self.podcastEpisodeListSettings = podcastEpisodeListSettings
         self.recentSearches = recentSearches
         self.playbackSettings = playbackSettings
@@ -866,6 +872,7 @@ final class OpenCastAppModel {
         transcriptions.load(modelContext: modelContext)
         adAnalyses.load(modelContext: modelContext)
         transcriptAnalyses.load(modelContext: modelContext)
+        transcriptIntelligence.load(modelContext: modelContext)
         // Launch is the "retry next day" moment for cap-deferred runs; the
         // scene-activation probe can fire before this load and find nothing.
         transcriptAnalysisQueue.retryDeferred(modelContext: modelContext, trigger: .launch)
@@ -1610,26 +1617,23 @@ final class OpenCastAppModel {
     }
 
     @discardableResult
-    func presentImportedSubscriptionsNotification(feedCount: Int) -> ImportedSubscriptionsNotification? {
-        guard feedCount > 0 else {
+    func presentImportedSubscriptionsNotification(feedURLStrings: Set<String>) -> ImportedSubscriptionsNotification? {
+        guard !feedURLStrings.isEmpty else {
             return nil
         }
 
+        if let existing = importedSubscriptionsNotification {
+            let notification = existing.merging(feedURLStrings: feedURLStrings)
+            importedSubscriptionsNotification = notification
+            return notification
+        }
         importedSubscriptionsNotificationID += 1
         let notification = ImportedSubscriptionsNotification(
             id: importedSubscriptionsNotificationID,
-            feedCount: feedCount
+            feedURLStrings: feedURLStrings
         )
         importedSubscriptionsNotification = notification
         return notification
-    }
-
-    func dismissImportedSubscriptionsNotification(id: Int) {
-        guard importedSubscriptionsNotification?.id == id else {
-            return
-        }
-
-        importedSubscriptionsNotification = nil
     }
 
     func refreshLibraryIfStale(modelContext: ModelContext) async {
@@ -1891,6 +1895,7 @@ final class OpenCastAppModel {
         adAnalyses.load(modelContext: modelContext)
         transcriptAnalysisQueue.resetAfterDataNuke()
         transcriptAnalyses.load(modelContext: modelContext)
+        transcriptIntelligence.load(modelContext: modelContext)
         adFreePass.reset()
         upNextQueue.resetAfterDataNuke()
         adFreePassBackgroundSession.reset()
@@ -1899,6 +1904,7 @@ final class OpenCastAppModel {
         transcriptionModels.resetAfterDataNuke()
         transcriptionEngineSettings.load(modelContext: modelContext)
         appearanceSettings.load(modelContext: modelContext)
+        appIcon.load()
         podcastEpisodeListSettings.load(modelContext: modelContext)
         recentSearches.load(modelContext: modelContext)
         playbackSettings.load(modelContext: modelContext, playback: playback)

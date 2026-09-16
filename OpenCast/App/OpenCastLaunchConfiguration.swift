@@ -27,6 +27,9 @@ struct OpenCastLaunchConfiguration {
     var resetsAdAnalysisAppAttestCredential: Bool
     var adFreePassPresentationOverride: EpisodeAdFreePassPresentation?
     var adFreePassQueueOverride: AdFreePassQueueUITestOverride?
+    /// UI-test seam: scripts PCC eligibility so the recap entries and the
+    /// sheet's unavailable state can be exercised on a simulator.
+    var uiTestTranscriptIntelligenceAvailability: TranscriptIntelligenceModelAvailability?
     /// App Store screenshot pins: keep the "Skipped promo" pill on screen, and
     /// seed the Sound Lab reveal at a fixed progress for a mid-slide still.
     var pinsAppStoreAutoSkipPill: Bool
@@ -117,6 +120,13 @@ struct OpenCastLaunchConfiguration {
         let uiTestLibraryLoadDelayMilliseconds = isUITesting
             ? Self.uiTestLibraryLoadDelayMilliseconds(environment: environment)
             : nil
+        #if DEBUG
+        let uiTestTranscriptIntelligenceAvailability = isUITesting
+            ? UITestTranscriptIntelligenceClient.resolve(environment: environment)
+            : nil
+        #else
+        let uiTestTranscriptIntelligenceAvailability: TranscriptIntelligenceModelAvailability? = nil
+        #endif
         let uiTestCloudKitAccountStatus = isUITesting
             ? Self.uiTestCloudKitAccountStatus(environment: environment)
             : nil
@@ -166,6 +176,7 @@ struct OpenCastLaunchConfiguration {
             resetsAdAnalysisAppAttestCredential: isUITesting && shouldResetAdAnalysisAppAttestCredential,
             adFreePassPresentationOverride: adFreePassPresentationOverride,
             adFreePassQueueOverride: adFreePassQueueOverride,
+            uiTestTranscriptIntelligenceAvailability: uiTestTranscriptIntelligenceAvailability,
             pinsAppStoreAutoSkipPill: isUITesting && shouldPinAppStoreAutoSkipPill,
             appStoreSoundLabRevealProgress: appStoreSoundLabRevealProgress,
             uiTestLibraryLoadDelayMilliseconds: uiTestLibraryLoadDelayMilliseconds,

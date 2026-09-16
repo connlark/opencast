@@ -12,7 +12,7 @@
 # Measured baseline: shard1 960s + 3 unmeasured (40 tests) |
 # shard2 984s + 2 unmeasured (41 tests) | serial 37s + 5 unmeasured (6 tests)
 
-# --- shard1 (est 960s + 2 unmeasured) ---
+# --- shard1 (est 960s + 3 unmeasured) ---
 shard1 OpenCastUITests/OpenCastUITests/testAddPodcastRSSClipboardPrefillScreenshots
 shard1 OpenCastUITests/OpenCastUITests/testCloudUnavailableDetectPassOffersOneTapOnDeviceFallback
 shard1 OpenCastUITests/OpenCastUITests/testEpisodeMenuShowsRemoteSurfacesOnFreshLaunchWithoutSettings
@@ -55,8 +55,11 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededStaleAdAnalysisDoesNotAnnotateT
 shard1 OpenCastUITests/OpenCastUITests/testSeededTranscriptAndSpeechModelSmoke
 shard1 OpenCastUITests/OpenCastUITests/testSeededWordBoundaryTranscriptHighlightsOnlySponsorWords
 shard1 OpenCastUITests/OpenCastUITests/testSeededUpNextQueueSmoke
+shard1 OpenCastUITests/OpenCastUITests/testSettingsAppIconPickerSwitchesIconAndRestoresPrimary
 shard1 OpenCastUITests/OpenCastUITests/testSettingsDebugRunOnboardingScreenshotsAndKeepsSubscriptions
 shard1 OpenCastUITests/OpenCastUITests/testSettingsShowsRemoteTranscriptionUnavailableRetry
+shard1 OpenCastUITests/OpenCastUITests/testSeededTranscriptRecapEntriesHiddenWhenDeviceIneligible
+shard1 OpenCastUITests/OpenCastUITests/testSeededTranscriptAskShowsUnavailableStateWhenAppleIntelligenceOff
 
 # --- shard2 (est 984s + 1 unmeasured) ---
 shard2 OpenCastUITests/OpenCastUITests/testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty
@@ -101,6 +104,10 @@ shard2 OpenCastUITests/OpenCastUITests/testSeededStaleAdAnalysisSkipsNothingAndO
 shard2 OpenCastUITests/OpenCastUITests/testSeededTranscriptWithoutAdAnalysisTokenHidesAnalyzeControls
 shard2 OpenCastUITests/OpenCastUITests/testSettingsClearAutomaticCachesAndDeleteDownloadsStaySeparate
 shard2 OpenCastUITests/OpenCastUITests/testVoiceBoostDiagnosticsSectionCanBeShownForManualDeviceRuns
+shard2 OpenCastUITests/OpenCastUITests/testSeededTranscriptRecapShowsUnavailableStateWhenAppleIntelligenceOff
+shard2 OpenCastUITests/OpenCastUITests/testSeededTranscriptRecapDisclosureThenRecapAndSeek
+shard2 OpenCastUITests/OpenCastUITests/testSeededTranscriptAskDisclosureThenAnswerAndSeek
+shard2 OpenCastUITests/OpenCastUITests/testSeededTranscriptAskRendersUnverifiedAndUnanswerableAnswers
 
 # --- serial tail (timing-sensitive; runs alone) ---
 serial OpenCastUITests/OpenCastUITests/testNowPlayingFramePacing
@@ -126,3 +133,5 @@ exclude OpenCastUITests/OpenCastUITests/testOptInThisAmericanLifeFallbackDismiss
 exclude OpenCastUITests/OpenCastUITests/testOptInThisAmericanLifeRapidScrubVisualProbe
 exclude OpenCastUITests/OpenCastUITests/testOptInVoiceBoostSettingsDeviceProbeCanRunFromForeground
 exclude OpenCastUITests/OpenCastUITests/testSeededNowPlayingAirPlayPickerCanOpen
+exclude OpenCastUITests/OpenCastUITests/testSeededTranscriptRecapFromPrivateCloudComputeOnSimulator
+exclude OpenCastUITests/OpenCastUITests/testSeededTranscriptAskFromPrivateCloudComputeOnSimulator

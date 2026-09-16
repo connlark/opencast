@@ -7,10 +7,18 @@ struct EpisodeTranscriptMenu: View {
     let adAnalysisState: EpisodeAdAnalysisJobState
     let canAnalyze: Bool
     let canImproveTranscript: Bool
+    /// Nil hides the recap entries entirely (ineligible device, flag off).
+    let recapMenuState: TranscriptRecapMenuState?
+    /// Ask stays behind its own sub-flag until its stage closes.
+    let showsAsk: Bool
+    let onRecap: (TranscriptRecapWindowKind) -> Void
+    let onAsk: () -> Void
     let onAnalyzeAds: () -> Void
     let onDeleteAdAnalysis: () -> Void
     let onImproveTranscript: () -> Void
     let onDeleteTranscript: () -> Void
+
+    static let askMenuTitle = "Ask About This Episode"
 
     @State private var isConfirmingDelete = false
     @State private var isConfirmingImprove = false
@@ -25,6 +33,29 @@ struct EpisodeTranscriptMenu: View {
                 }
                 ShareLink(item: timestampedTextExport) {
                     Label("Share with Timestamps", systemImage: "square.and.arrow.up.on.square")
+                }
+            }
+
+            if recapMenuState != nil || showsAsk {
+                Section {
+                    if let recapMenuState {
+                        Button(
+                            TranscriptRecapWindowKind.lastFiveMinutes.menuTitle,
+                            systemImage: "apple.intelligence",
+                            action: recapLastFiveMinutes
+                        )
+                        .disabled(!recapMenuState.canRecapLastFiveMinutes)
+                        if recapMenuState.showsRecapSoFar {
+                            Button(
+                                TranscriptRecapWindowKind.soFar.menuTitle,
+                                systemImage: "clock.arrow.circlepath",
+                                action: recapSoFar
+                            )
+                        }
+                    }
+                    if showsAsk {
+                        Button(Self.askMenuTitle, systemImage: "questionmark.bubble", action: onAsk)
+                    }
                 }
             }
 
@@ -88,6 +119,14 @@ struct EpisodeTranscriptMenu: View {
             }
             Button("Delete Promo/Ad Analysis", systemImage: "trash", role: .destructive, action: onDeleteAdAnalysis)
         }
+    }
+
+    private func recapLastFiveMinutes() {
+        onRecap(.lastFiveMinutes)
+    }
+
+    private func recapSoFar() {
+        onRecap(.soFar)
     }
 
     private func confirmDelete() {

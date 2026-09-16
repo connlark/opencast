@@ -46,6 +46,37 @@ The runner refuses stale/replaced native binaries and output overwrites. Do not
 edit Worker source during a paid batch. Input text is sent to the selected
 provider; OpenAI uses standard tier, no tools, `store: false`.
 
+## Apple Private Cloud Compute (`--model pcc`)
+
+`pcc` sends the same v3 instructions, window, schema, and one-round repair turn
+to Apple's `PrivateCloudComputeLanguageModel` through a **signed, PCC-entitled
+helper executable** supplied with `--pcc-helper` (the entitlement is a managed
+capability granted per developer account, so the helper is not part of this
+tree). No `--key-file` is needed. The helper contract is one JSON file in, one
+JSON report out:
+
+- Input (`pcc-request.json`, built by `pcc_input`): `label`, `instructions`,
+  `messages` (`[{role: user|model, text}]`, ending with a user turn; earlier
+  turns are replayed as the session transcript so the repair reaches the model
+  as a second turn of the same conversation), ordered `schema` (properties as
+  `[name, schema]` pairs), `max_output_tokens`.
+- Flags: `--in`, `--out`, `--reasoning light|moderate|deep` (from `--thinking`
+  low/medium/high; `default`/`none` omit it), `--fit-context 1` (cap the
+  response budget to the context left after the on-device token count).
+- Report: `runs[-1]` with `ok`, `elapsed_s`, `usage` (`input_total`,
+  `input_cached`, `output_total`, `output_reasoning`), `raw_json`, `quota_after`,
+  or `error.kind` (`rateLimited`, `refusal`, `guardrailViolation`,
+  `contextSizeExceeded`, `pcc.quotaLimitReached`, ...).
+
+PCC has no monetary price and an unpublished per-user daily quota, so PCC calls
+never touch the spend ledger; the runner journals every attempt (tokens, quota
+status, rate limits) to `pcc-usage.json` in the output root. A `rateLimited`
+window is retried after 30/90/180 s; transport-class failures make the run
+`ad_analysis_incomplete: pcc_<kind>` (the serving path would fall back, not
+repair), model-class failures take the normal repair turn, and a reached quota
+stops the batch. The 32K context means v3's 16,384 `maxOutputTokens` is capped
+per call to what remains; the report records `max_output_effective`.
+
 Manifest ground truth uses inclusive **segment IDs**, not array indexes:
 
 - `pods`: required uninterrupted ad cores.

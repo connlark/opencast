@@ -8,6 +8,8 @@ enum SheetDestination: Identifiable {
     case nukeConfirmation
     case onboarding
     case podcastPlaybackSettings(feedURL: String)
+    case transcriptRecap(episodeID: String, kind: TranscriptRecapWindowKind, playhead: TimeInterval)
+    case transcriptAsk(episodeID: String)
 
     var id: String {
         switch self {
@@ -25,6 +27,10 @@ enum SheetDestination: Identifiable {
             "onboarding"
         case .podcastPlaybackSettings(let feedURL):
             "podcastPlaybackSettings-\(feedURL)"
+        case .transcriptRecap(let episodeID, let kind, let playhead):
+            "transcriptRecap-\(episodeID)-\(kind.rawValue)-\(Int(playhead))"
+        case .transcriptAsk(let episodeID):
+            "transcriptAsk-\(episodeID)"
         }
     }
 }

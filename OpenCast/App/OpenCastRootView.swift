@@ -4,10 +4,8 @@ import SwiftData
 import SwiftUI
 
 struct OpenCastRootView: View {
-    private static let remoteStoreChangeDebounce: Duration = .milliseconds(750)
     private static let emptyImportPollInterval: Duration = .seconds(1)
     private static let emptyImportPollAttempts = 15
-    private static let importedSubscriptionsNotificationDuration: Duration = .seconds(5)
 
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -22,9 +20,8 @@ struct OpenCastRootView: View {
     @State private var importedDataRefreshTask: Task<Void, Never>?
     @State private var remoteStoreChangeArbiter = SyncedStoreRemoteChangeArbiter()
     @State private var foregroundMaintenanceGate = ForegroundMaintenanceGate()
-    @State private var remoteStoreChangeReloadTask: Task<Void, Never>?
+    @State private var remoteStoreReloadScheduler = SyncedStoreReloadScheduler()
     @State private var emptyImportPollingTask: Task<Void, Never>?
-    @State private var importedSubscriptionsNotificationDismissalTask: Task<Void, Never>?
     @State private var hasStartedTranscriptionBenchmark = false
     @State private var hasStartedSearchBenchmark = false
     @State private var hasStartedFeedBenchmark = false
@@ -37,6 +34,9 @@ struct OpenCastRootView: View {
     @State private var hasStartedAdFreePassBackgroundProbe = false
     @State private var hasStartedAdFreePassAutoStart = false
     @State private var hasStartedEpisodePanelTranscribeProbe = false
+    @State private var hasStartedPCCBackgroundProbe = false
+    @State private var hasStartedTranscriptIntelligenceToolProbe = false
+    @State private var hasStartedTranscriptIntelligenceEvaluation = false
     #endif
 
     var body: some View {
@@ -93,6 +93,11 @@ struct OpenCastRootView: View {
         .onChange(of: appModel.library.activePodcastIDs) { _, activePodcastIDs in
             appModel.notificationSettings.scheduleSubscriptionSyncIfEnabled(activePodcastIDs: activePodcastIDs)
         }
+        .onChange(of: appModel.onboardingState.isCompleted) { _, isCompleted in
+            if isCompleted {
+                appModel.importedSubscriptionsNotification = nil
+            }
+        }
         .task {
             await consumeRemoteEpisodeNotificationRoutes()
         }
@@ -142,6 +147,15 @@ struct OpenCastRootView: View {
             runAdFreePassBackgroundProbeIfRequested()
         }
         .task {
+            runPCCBackgroundProbeIfRequested()
+        }
+        .task {
+            runTranscriptIntelligenceToolProbeIfRequested()
+        }
+        .task {
+            await runTranscriptIntelligenceEvaluationIfRequested()
+        }
+        .task {
             await runAdFreePassAutoStartIfRequested()
         }
         .task {
@@ -184,9 +198,6 @@ struct OpenCastRootView: View {
         await appModel.notificationSettings.load(modelContext: modelContext)
         let accountStatus = await appModel.syncStatus.refreshAccountStatus(force: true)
         let didRepairSyncDuplicates = await repairSyncDuplicatesAfterImportedData()
-        if didRepairSyncDuplicates {
-            await hydrateImportedFeedsIfNeeded()
-        }
         appModel.onboardingState.load(modelContext: modelContext)
         presentOnboardingIfNeeded()
         presentImportedSubscriptionsNotificationIfNeeded(
@@ -201,6 +212,13 @@ struct OpenCastRootView: View {
         SearchColdStartProbe.recordFirstUsableIfRequested()
         initialSetupGate.complete()
         OpenCastAppRuntime.shared.performanceDiagnostics.start()
+        if didRepairSyncDuplicates {
+            await hydrateImportedFeedsIfNeeded()
+            updateLibrarySyncActivityAfterImportCheck(accountStatus: accountStatus)
+            presentImportedSubscriptionsNotificationIfNeeded(
+                addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeInitialLoad)
+            )
+        }
         await appModel.refreshLibraryIfStale(modelContext: modelContext)
         appModel.cacheController.pruneIfNeeded()
         await runVoiceBoostDeviceProbeIfActive()
@@ -349,6 +367,33 @@ struct OpenCastRootView: View {
         AdFreePassBackgroundProbe.runIfRequested()
     }
 
+    private func runPCCBackgroundProbeIfRequested() {
+        guard !hasStartedPCCBackgroundProbe else {
+            return
+        }
+
+        hasStartedPCCBackgroundProbe = true
+        PCCBackgroundProbe.runIfRequested()
+    }
+
+    private func runTranscriptIntelligenceToolProbeIfRequested() {
+        guard !hasStartedTranscriptIntelligenceToolProbe else {
+            return
+        }
+
+        hasStartedTranscriptIntelligenceToolProbe = true
+        TranscriptIntelligenceToolProbe.runIfRequested()
+    }
+
+    private func runTranscriptIntelligenceEvaluationIfRequested() async {
+        guard !hasStartedTranscriptIntelligenceEvaluation else {
+            return
+        }
+
+        hasStartedTranscriptIntelligenceEvaluation = true
+        await TranscriptIntelligenceEvaluationRunner.runIfRequested()
+    }
+
     private func runAdFreePassAutoStartIfRequested() async {
         guard !hasStartedAdFreePassAutoStart else {
             return
@@ -383,22 +428,14 @@ struct OpenCastRootView: View {
     #endif
 
     private func scheduleRemoteStoreChangeReload() {
-        remoteStoreChangeReloadTask?.cancel()
-        remoteStoreChangeReloadTask = Task {
-            do {
-                try await Task.sleep(for: Self.remoteStoreChangeDebounce)
-            } catch is CancellationError {
-                return
-            } catch {
-                return
-            }
-
+        remoteStoreReloadScheduler.schedule {
             await refreshSyncedUserData()
-            remoteStoreChangeReloadTask = nil
         }
     }
 
     private func refreshSyncedUserData() async {
+        await initialSetupGate.wait()
+        guard !Task.isCancelled else { return }
         let activePodcastIDsBeforeReload = appModel.library.activePodcastIDs
         let result: SyncedUserDataReloadResult
         do {
@@ -413,7 +450,7 @@ struct OpenCastRootView: View {
         }
 
         await processImportedSubscriptionChanges(
-            addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeReload)
+            activePodcastIDsBeforeReload: activePodcastIDsBeforeReload
         )
     }
 
@@ -449,6 +486,9 @@ struct OpenCastRootView: View {
         guard await repairSyncDuplicatesAfterImportedData() else {
             return
         }
+        presentImportedSubscriptionsNotificationIfNeeded(
+            addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeReload)
+        )
         await hydrateImportedFeedsIfNeeded()
         let accountStatus = await appModel.syncStatus.refreshAccountStatus()
         updateLibrarySyncActivityAfterImportCheck(
@@ -466,18 +506,25 @@ struct OpenCastRootView: View {
         foregroundMaintenanceGate.shouldRunMaintenancePass()
     }
 
-    private func processImportedSubscriptionChanges(addedFeedURLStrings: Set<String>) async {
+    private func processImportedSubscriptionChanges(activePodcastIDsBeforeReload: Set<String>) async {
         guard await repairSyncDuplicatesAfterImportedData() else {
             return
         }
 
+        presentImportedSubscriptionsNotificationIfNeeded(
+            addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeReload)
+        )
         await hydrateImportedFeedsIfNeeded()
+        // Hydration can publish another imported batch before the next remote
+        // reload observes it. Include that batch in the same restore notice.
+        presentImportedSubscriptionsNotificationIfNeeded(
+            addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeReload)
+        )
         if case .failed = appModel.library.state {
             return
         }
 
         appModel.syncStatus.finishLibraryActivity()
-        presentImportedSubscriptionsNotificationIfNeeded(addedFeedURLStrings: addedFeedURLStrings)
     }
 
     private func repairSyncDuplicatesAfterImportedData() async -> Bool {
@@ -582,24 +629,7 @@ struct OpenCastRootView: View {
             return
         }
 
-        guard let notification = appModel.presentImportedSubscriptionsNotification(
-            feedCount: addedFeedURLStrings.count
-        ) else {
-            return
-        }
-
-        importedSubscriptionsNotificationDismissalTask?.cancel()
-        importedSubscriptionsNotificationDismissalTask = Task {
-            do {
-                try await Task.sleep(for: Self.importedSubscriptionsNotificationDuration)
-            } catch is CancellationError {
-                return
-            } catch {
-                return
-            }
-
-            appModel.dismissImportedSubscriptionsNotification(id: notification.id)
-        }
+        appModel.presentImportedSubscriptionsNotification(feedURLStrings: addedFeedURLStrings)
     }
 
     private func handleRemoteEpisodeNotificationRoute(
@@ -705,6 +735,7 @@ struct OpenCastRootView: View {
     }
 
     private func resetAfterDataNuke() {
+        appModel.importedSubscriptionsNotification = nil
         selectedTab = .inbox
         navigationPaths.removeAll()
         sheetDestination = nil

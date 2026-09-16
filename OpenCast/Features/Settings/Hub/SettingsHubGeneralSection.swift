@@ -13,6 +13,12 @@ struct SettingsHubGeneralSection: View {
                 value: notificationsValue
             )
             SettingsAppearancePickerRow()
+            SettingsNavigationRow(
+                title: "App Icon",
+                systemImage: "app",
+                route: .appIcon,
+                value: appModel.appIcon.selection.title
+            )
         }
     }
 

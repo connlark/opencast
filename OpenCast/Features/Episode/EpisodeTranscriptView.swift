@@ -22,6 +22,8 @@ struct EpisodeTranscriptView: View {
     @State private var timeline = TranscriptTimeline()
     @State private var searchIndex: TranscriptSearchIndex?
     @State private var isSearchPresented = false
+    @State private var recapMenuState = TranscriptRecapMenuState()
+    @State private var sheetDestination: SheetDestination?
 
     var body: some View {
         Group {
@@ -61,6 +63,10 @@ struct EpisodeTranscriptView: View {
                         adAnalysisState: adAnalysisJobState,
                         canAnalyze: appModel.adAnalyses.canStartAnalysis,
                         canImproveTranscript: canImproveTranscript(for: document),
+                        recapMenuState: appModel.transcriptIntelligence.isVisible ? recapMenuState : nil,
+                        showsAsk: appModel.transcriptIntelligence.isAskVisible,
+                        onRecap: presentRecap,
+                        onAsk: presentAsk,
                         onAnalyzeAds: analyzeAds,
                         onDeleteAdAnalysis: deleteAdAnalysis,
                         onImproveTranscript: improveTranscript,
@@ -77,6 +83,21 @@ struct EpisodeTranscriptView: View {
         }
         .task(id: adAnalysisStateIdentifier) {
             refreshAdAnalysisDerivedState()
+        }
+        .task(id: recapMenuStateIdentifier) {
+            refreshRecapMenuState()
+        }
+        .background {
+            // Zero-sized: only this child re-evaluates on the 1 Hz tick;
+            // the menu re-renders when a recap threshold is crossed.
+            TranscriptPlaybackObserver(
+                onPositionTick: refreshRecapMenuState,
+                onStateChange: refreshRecapMenuState,
+                onProgressBoundary: refreshRecapMenuState
+            )
+        }
+        .sheet(item: $sheetDestination) { destination in
+            SheetDestinationView(destination: destination, onDismiss: dismissSheet)
         }
     }
 
@@ -109,6 +130,12 @@ struct EpisodeTranscriptView: View {
         return "\(episodeID)|\(completedStamp)"
     }
 
+    /// Reloads the menu state when the document, eligibility, or the current
+    /// episode changes; playhead movement arrives through the observer.
+    private var recapMenuStateIdentifier: String {
+        "\(transcriptLoadRevision)|\(appModel.transcriptIntelligence.isVisible)|\(appModel.playback.currentEpisode?.id.rawValue ?? "none")"
+    }
+
     private func canImproveTranscript(for document: EpisodeTranscriptDocument) -> Bool {
         guard document.modelIdentifier.hasPrefix("openai_whisper"),
               appModel.appleSpeechAssets.isTranscriberAvailable,
@@ -135,6 +162,40 @@ struct EpisodeTranscriptView: View {
 
     private func toggleSearch() {
         isSearchPresented.toggle()
+    }
+
+    // MARK: - Recap
+
+    /// The playback controller's position while this episode is current;
+    /// the saved progress otherwise. Read in actions, never in body, so the
+    /// toolbar owner does not subscribe to the 1 Hz tick.
+    private func recapPlayhead() -> TimeInterval {
+        if appModel.playback.currentEpisode?.id.rawValue == episodeID {
+            return appModel.playback.position
+        }
+        return appModel.library.progressRecord(for: episodeID)?.position ?? 0
+    }
+
+    private func refreshRecapMenuState() {
+        guard document != nil, appModel.transcriptIntelligence.isVisible else {
+            return
+        }
+        let state = TranscriptRecapMenuState.resolve(playhead: recapPlayhead())
+        if state != recapMenuState {
+            recapMenuState = state
+        }
+    }
+
+    private func presentRecap(_ kind: TranscriptRecapWindowKind) {
+        sheetDestination = .transcriptRecap(episodeID: episodeID, kind: kind, playhead: recapPlayhead())
+    }
+
+    private func presentAsk() {
+        sheetDestination = .transcriptAsk(episodeID: episodeID)
+    }
+
+    private func dismissSheet() {
+        sheetDestination = nil
     }
 
     // MARK: - Document loading

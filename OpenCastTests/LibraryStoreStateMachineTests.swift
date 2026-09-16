@@ -7,6 +7,44 @@ import Testing
 @MainActor
 @Suite("LibraryStore state machine")
 struct LibraryStoreStateMachineTests {
+    @Test("Restore publishes ready episodes before slow feeds and drains later iCloud batches")
+    func hydrationPublishesIncrementallyAndDrainsLaterImports() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fast = "https://example.com/restore-fast.xml"
+        let slow = "https://example.com/restore-slow.xml"
+        let late = "https://example.com/restore-late.xml"
+        let gate = AsyncTestGate()
+        let service = ScriptedFeedService(scripts: [
+            fast: [.success(makeSnapshot(feedURL: fast, episodeID: "restore-fast"))],
+            slow: [.gatedSuccess(makeSnapshot(feedURL: slow, episodeID: "restore-slow"), gate)],
+            late: [.success(makeSnapshot(feedURL: late, episodeID: "restore-late"))]
+        ])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        context.insert(SubscriptionRecord(feedURL: fast, title: "Fast"))
+        context.insert(SubscriptionRecord(feedURL: slow, title: "Slow"))
+        try context.save()
+        await store.load(modelContext: context)
+
+        let hydration = Task { await store.refreshFeedsNeedingLocalCache(modelContext: context) }
+        #expect(await service.waitForRequestCount(2))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while store.episode(with: "restore-fast") == nil, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        let publishedBeforeSlowFeed = store.episode(with: "restore-fast") != nil
+        context.insert(SubscriptionRecord(feedURL: late, title: "Late"))
+        try context.save()
+        await gate.release()
+        let didHydrate = await hydration.value
+
+        #expect(publishedBeforeSlowFeed)
+        #expect(didHydrate)
+        #expect(store.episode(with: "restore-late") != nil)
+        #expect(store.feedURLStringsNeedingLocalCache.isEmpty)
+        #expect(store.refreshingFeedURLs.isEmpty)
+    }
+
     // MARK: - State machine
 
     @Test("Single-feed fetch failure lands in the refresh log, not store state")

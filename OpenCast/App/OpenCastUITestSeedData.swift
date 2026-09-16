@@ -19,6 +19,11 @@ enum OpenCastUITestSeedData {
     private static let adDetectionModeEnvironmentKey = "OPENCAST_SEED_AD_DETECTION_MODE"
     private static let liveAdAnalysisTranscriptPathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_TRANSCRIPT_PATH"
     private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
+    /// A v3 transcript fixture (`segments` of id/start/end/text) that replaces
+    /// the two-line seeded transcript, absolute or relative to Documents, so a
+    /// device run can recap real speech through the seeded library.
+    private static let transcriptFixturePathEnvironmentKey = "OPENCAST_SEED_TRANSCRIPT_FIXTURE_PATH"
+    private static let episodeProgressPositionEnvironmentKey = "OPENCAST_SEED_EPISODE_PROGRESS_POSITION"
 
     static func seed(
         in container: ModelContainer,
@@ -175,12 +180,13 @@ enum OpenCastUITestSeedData {
         }
 
         if includesEpisodeProgress {
+            let overriddenPosition = ProcessInfo.processInfo.environment[episodeProgressPositionEnvironmentKey].flatMap(Double.init)
             context.insert(
                 EpisodeProgressRecord(
                     episodeID: episodeID,
                     podcastID: feedURL,
-                    position: 90,
-                    duration: 180,
+                    position: overriddenPosition ?? 90,
+                    duration: overriddenPosition.map { max($0, Double(audioDuration)) } ?? 180,
                     isPlayed: false,
                     updatedAt: refreshedAt
                 )
@@ -340,7 +346,7 @@ enum OpenCastUITestSeedData {
             modelTreeSHA256: modelSummary.treeSHA256
         )
         let relativePath = fileStore.relativePath(episodeID: episodeID, fingerprint: fingerprint)
-        let segments = [
+        let segments = try fixtureSegments() ?? [
             OpenCastTranscriptSegment(
                 id: 0,
                 start: 0,
@@ -404,6 +410,35 @@ enum OpenCastUITestSeedData {
             updatedAt: createdAt
         ))
         return document
+    }
+
+    private static func fixtureSegments() throws -> [OpenCastTranscriptSegment]? {
+        guard let path = ProcessInfo.processInfo.environment[transcriptFixturePathEnvironmentKey] else {
+            return nil
+        }
+        let url = path.hasPrefix("/")
+            ? URL(fileURLWithPath: path)
+            : URL.documentsDirectory.appending(path: path)
+        struct Fixture: Decodable {
+            struct Segment: Decodable {
+                var id: Int
+                var start: TimeInterval
+                var end: TimeInterval
+                var text: String
+            }
+            var segments: [Segment]
+        }
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        return fixture.segments.map {
+            OpenCastTranscriptSegment(
+                id: $0.id,
+                start: $0.start,
+                end: $0.end,
+                text: $0.text,
+                avgLogProbability: -0.1,
+                noSpeechProbability: 0.01
+            )
+        }
     }
 
     private static func seedCompletedAdAnalysis(

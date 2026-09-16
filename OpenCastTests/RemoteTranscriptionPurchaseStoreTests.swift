@@ -523,6 +523,34 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(api.bootstrapCalls == 1)
     }
 
+    @Test("Credit-store bootstrap recovers after an authentication service outage")
+    func failedBootstrapCanRecoverWithoutRelaunch() async {
+        let api = FakePurchaseAPI()
+        api.bootstrapError = RemoteTranscriptionHTTPError(
+            statusCode: 401,
+            code: "invalid_assertion_format",
+            detail: nil
+        )
+        let storeKit = FakeStoreKitClient()
+        let store = Self.makeStore(api: api, storeKit: storeKit)
+
+        await store.prepare()
+        if case .storeDisabled = store.availability {} else {
+            Issue.record("expected storeDisabled, got \(store.availability)")
+        }
+        #expect(store.products.isEmpty)
+
+        api.bootstrapError = nil
+        await store.prepare()
+
+        #expect(store.availability == .available)
+        #expect(!store.products.isEmpty)
+        #expect(api.bootstrapCalls == 2)
+        #expect(storeKit.refreshEnvironmentCalls == 0)
+        await store.prepare()
+        #expect(api.bootstrapCalls == 2)
+    }
+
     @Test("A cancelled waiter does not cancel the shared preparation")
     func cancelledWaiterKeepsSharedPreparationAlive() async throws {
         let api = FakePurchaseAPI()
@@ -792,6 +820,7 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
     var redeemError: Error?
     var redeemOutcome: OpenCastRemoteTranscriptionRedeemOutcome = .credited
     var bootstrapDelay: Duration?
+    var bootstrapError: Error?
 
     private var recordedBootstrapCalls = 0
     private var recordedRedeemCalls = 0
@@ -813,6 +842,9 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
         lock.withLock { recordedBootstrapCalls += 1 }
         if let bootstrapDelay {
             try await Task.sleep(for: bootstrapDelay)
+        }
+        if let bootstrapError {
+            throw bootstrapError
         }
         return OpenCastRemoteTranscriptionBootstrapResponse(
             schemaVersion: 1,

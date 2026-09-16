@@ -33,6 +33,14 @@ struct SheetDestinationView: View {
             PodcastPlaybackSettingsView(feedURL: feedURL)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        case .transcriptRecap(let episodeID, let kind, let playhead):
+            TranscriptRecapSheet(episodeID: episodeID, kind: kind, playhead: playhead)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        case .transcriptAsk(let episodeID):
+            TranscriptAskSheet(episodeID: episodeID)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
     }
 }

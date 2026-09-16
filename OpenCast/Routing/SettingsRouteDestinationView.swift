@@ -7,6 +7,8 @@ struct SettingsRouteDestinationView: View {
         switch route {
         case .playback:
             SettingsPlaybackView()
+        case .appIcon:
+            SettingsAppIconView()
         case .notifications:
             SettingsNotificationsView()
         case .transcription:
