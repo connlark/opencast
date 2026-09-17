@@ -77,6 +77,11 @@ AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_DEADLINE_SECONDS = "900"
 AD_ANALYSIS_POLL_SECONDS = "5"
 AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS = "3"
+# Anchored re-transcription of intra-chunk word-timeline holes
+# (src/gap_repair.rs). "false" stores the model's first answer as-is; the
+# threshold is the hole length that triggers a bounded repair call.
+GAP_REPAIR_ENABLED = "false"
+GAP_REPAIR_MIN_GAP_SECONDS = "5"
 
 [ai]
 binding = "AI"
@@ -171,6 +176,11 @@ AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_DEADLINE_SECONDS = "900"
 AD_ANALYSIS_POLL_SECONDS = "5"
 AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS = "3"
+# Anchored re-transcription of intra-chunk word-timeline holes
+# (src/gap_repair.rs). "false" stores the model's first answer as-is; the
+# threshold is the hole length that triggers a bounded repair call.
+GAP_REPAIR_ENABLED = "false"
+GAP_REPAIR_MIN_GAP_SECONDS = "5"
 
 [env.prod-staging.ai]
 binding = "AI"
@@ -275,6 +285,11 @@ AD_ANALYSIS_ENABLED = "false"
 AD_ANALYSIS_DEADLINE_SECONDS = "900"
 AD_ANALYSIS_POLL_SECONDS = "5"
 AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS = "3"
+# Anchored re-transcription of intra-chunk word-timeline holes
+# (src/gap_repair.rs). "false" stores the model's first answer as-is; the
+# threshold is the hole length that triggers a bounded repair call.
+GAP_REPAIR_ENABLED = "false"
+GAP_REPAIR_MIN_GAP_SECONDS = "5"
 
 [env.production.ai]
 binding = "AI"

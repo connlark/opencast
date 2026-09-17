@@ -78,6 +78,12 @@ pub struct AppConfig {
     /// the historical 60 s pacing; workerd tests shrink it so re-entry paths
     /// (e.g. stitch after a settle failure) run in test time.
     pub alarm_retry_seconds: u64,
+    /// Anchored re-transcription of intra-chunk word-timeline holes
+    /// (`gap_repair.rs`, 2026-09-16 incident). Fail-safe default: off ⇒ the
+    /// model's first answer is stored as-is, exactly as before.
+    pub gap_repair_enabled: bool,
+    /// Hole length that triggers a repair, seconds.
+    pub gap_repair_min_gap_seconds: f64,
 }
 
 impl AppConfig {
@@ -189,6 +195,15 @@ impl AppConfig {
             ad_analysis_max_submit_attempts: int_var(env, "AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS", 3)
                 .clamp(1, 10) as u32,
             alarm_retry_seconds: int_var(env, "ALARM_RETRY_SECONDS", 60).max(1) as u64,
+            gap_repair_enabled: optional_var(env, "GAP_REPAIR_ENABLED")
+                .map(|value| value == "true")
+                .unwrap_or(false),
+            gap_repair_min_gap_seconds: float_var(
+                env,
+                "GAP_REPAIR_MIN_GAP_SECONDS",
+                crate::gap_repair::DEFAULT_MIN_GAP_SECONDS,
+            )
+            .clamp(1.0, 120.0),
         })
     }
 

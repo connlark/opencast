@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use base64::Engine;
+use futures_util::lock::Mutex;
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use worker::{
@@ -21,16 +22,19 @@ use crate::ai::{self, AiFailureClass};
 use crate::config::AppConfig;
 use crate::credit::{CreditAuthority, CreditError};
 use crate::eta;
+use crate::gap_repair;
 use crate::job::{self, JobRecord};
 use crate::limiter::{
-    LimiterAdmitRequest, LimiterBusyResponse, LimiterReleaseRequest, GLOBAL_LIMITER_OBJECT,
-    LIMITER_ADMIT_PATH, LIMITER_INTERNAL_ORIGIN, LIMITER_RELEASE_PATH, USAGE_LIMITER_BINDING,
+    LimiterAdmitRequest, LimiterBusyResponse, LimiterReleaseRequest, LimiterRepairRequest,
+    GLOBAL_LIMITER_OBJECT, LIMITER_ADMIT_PATH, LIMITER_INTERNAL_ORIGIN, LIMITER_RELEASE_PATH,
+    LIMITER_REPAIR_PATH, USAGE_LIMITER_BINDING,
 };
 use crate::media::{
     self, MediaChunkRequest, MediaChunkResponse, MediaProbeRequest, MediaProbeResponse,
     MEDIA_BINDING, MEDIA_CHUNK_PATH, MEDIA_INTERNAL_ORIGIN, MEDIA_PROBE_PATH, MEDIA_WAKE_PATH,
 };
 use crate::native_media::{self, NativeFallback, NativePlan};
+use crate::repair_budget::{self, Reservation};
 use crate::route::JSON_CONTENT_TYPE;
 use crate::stitch;
 use crate::storage as d1;
@@ -131,6 +135,11 @@ struct AckMessage {
 pub struct TranscriptionJob {
     state: Rc<State>,
     env: Env,
+    /// Input gates do not serialize siblings inside one FuturesUnordered.
+    /// Hold this only across record storage, never external calls. Every
+    /// record update shares it, so a reservation cannot be overwritten by
+    /// a completion, cancellation, or another repair's stale snapshot.
+    record_mutation: Mutex<()>,
     /// Epoch seconds at which the alarm handler currently running (if any)
     /// started. In-memory only, so a Durable Object reset clears it. The
     /// stranded-job repair reads it because `Storage::get_alarm` returns
@@ -148,6 +157,7 @@ impl DurableObject for TranscriptionJob {
         Self {
             state: Rc::new(state),
             env,
+            record_mutation: Mutex::new(()),
             alarm_started_at: Cell::new(None),
             alarm_armed_at: Cell::new(None),
         }
@@ -241,6 +251,7 @@ impl TranscriptionJob {
     where
         F: FnOnce(&mut JobRecord),
     {
+        let _guard = self.record_mutation.lock().await;
         let Some(mut record) = self.read_record().await? else {
             return Ok(None);
         };
@@ -270,6 +281,14 @@ impl TranscriptionJob {
     /// this instead of `update_record`, and its caller bails on refusal
     /// (the `step_chunk`/`handle_source` precedent, generalized).
     async fn update_record_if_live<F>(&self, mutate: F) -> Result<LiveUpdate>
+    where
+        F: FnOnce(&mut JobRecord),
+    {
+        let _guard = self.record_mutation.lock().await;
+        self.update_record_if_live_locked(mutate).await
+    }
+
+    async fn update_record_if_live_locked<F>(&self, mutate: F) -> Result<LiveUpdate>
     where
         F: FnOnce(&mut JobRecord),
     {
@@ -310,13 +329,14 @@ impl TranscriptionJob {
     where
         F: FnOnce(&mut JobRecord),
     {
+        let _guard = self.record_mutation.lock().await;
         let Some(record) = self.read_record().await? else {
             return Ok(StateUpdate::Missing);
         };
         if job::transition_refusal(&record.state).is_none() && record.state != expected {
             return Ok(StateUpdate::RefusedStale(record));
         }
-        Ok(match self.update_record_if_live(mutate).await? {
+        Ok(match self.update_record_if_live_locked(mutate).await? {
             LiveUpdate::Applied(record) => StateUpdate::Applied(record),
             LiveUpdate::RefusedTerminal(record) => StateUpdate::RefusedTerminal(record),
             LiveUpdate::RefusedCancelling(record) => StateUpdate::RefusedCancelling(record),
@@ -1770,7 +1790,9 @@ impl TranscriptionJob {
             // still writing the rest of them. Concurrency 1 keeps the strict
             // pass-0 chunk-then-transcribe walk — the rollback story.
             let concurrency = self.chunk_concurrency(&record, config);
-            if concurrency > 1 {
+            let no_overlap = self.fake_ai_enabled(config)
+                && ai::parse_fake_hooks(record.language_code.as_deref()).no_overlap;
+            if concurrency > 1 && !no_overlap {
                 self.run_chunk_overlap(&record, config, concurrency).await?
             } else {
                 OverlapReport {
@@ -2177,9 +2199,8 @@ impl TranscriptionJob {
     /// Bounded chunk fan-out: one alarm turn runs one wave of
     /// up to `CHUNK_AI_CONCURRENCY` chunk futures joined together, persisting
     /// each completion as it lands. `CHUNK_AI_CONCURRENCY=1` reproduces the
-    /// pass-0 sequential walk. All record writes happen in this driver loop
-    /// (one completion at a time), so they never interleave; concurrent route
-    /// mutations stay safe through the same read-modify-write pattern.
+    /// pass-0 sequential walk. Record mutations share a storage-only mutex
+    /// with repair reservations and route handlers.
     async fn step_transcribe_wave(&self, record: JobRecord, config: &AppConfig) -> Result<()> {
         if record.state == job::STATE_CANCELLING || job::is_terminal(&record.state) {
             return Ok(());
@@ -2397,8 +2418,8 @@ impl TranscriptionJob {
         )
     }
 
-    /// One chunk's admission → read → AI → persist sequence. Never touches
-    /// the job record: the wave driver owns every record write. Internal
+    /// One chunk's read → AI → persist sequence. Optional inference reserves
+    /// its allowance through the shared durable record before each call. Internal
     /// transport errors map to `TransportError` so sibling chunks survive.
     async fn run_chunk(
         &self,
@@ -2427,6 +2448,26 @@ impl TranscriptionJob {
             Some((plan, chunk_plan))
         });
         let spans_served = span_plan.is_some();
+
+        // A primary response is durable before optional work starts. Re-entry
+        // recovers that response even if the audio deletion/record write was
+        // lost, and never starts the same repair work again.
+        match self
+            .read_chunk_audio(&job::r2_response_key(&record.job_id, chunk.index))
+            .await
+        {
+            Ok(Some(_)) => {
+                if !spans_served {
+                    if let Ok(bucket) = self.env.bucket(TRANSCRIPTION_BUCKET) {
+                        bucket.delete(&chunk.key).await.ok();
+                    }
+                }
+                outcome.result = ChunkCallResult::AlreadyTranscribed;
+                return outcome;
+            }
+            Ok(None) => {}
+            Err(_) => return outcome,
+        }
 
         let audio = if let Some((plan, chunk_plan)) = span_plan {
             match self
@@ -2490,16 +2531,35 @@ impl TranscriptionJob {
             Ok(response_json) => {
                 let persisted: Result<()> = async {
                     let bucket = self.env.bucket(TRANSCRIPTION_BUCKET)?;
+                    let response_key = job::r2_response_key(&record.job_id, chunk.index);
+                    // Preserve useful paid work before optional calls. On
+                    // reset AlreadyTranscribed recovers this exact response.
                     bucket
-                        .put(
-                            job::r2_response_key(&record.job_id, chunk.index),
-                            response_json,
-                        )
+                        .put(&response_key, response_json.clone())
                         .execute()
                         .await?;
+                    let repaired = race_deadline(
+                        self.repair_response_gaps(
+                            record,
+                            config,
+                            &audio,
+                            &chunk,
+                            response_json.clone(),
+                        ),
+                        self.repair_deadline(record, chunk.index),
+                    )
+                    .await
+                    .unwrap_or_else(|| response_json.clone());
+                    if repaired != response_json {
+                        // An overwrite failure retains the primary. The
+                        // attempt ledger already accounts for issued work.
+                        if self.fake_repair_write_failure(record, config).await? {
+                            self.bump("gap_repair_persist_errors", 1).await;
+                        } else if bucket.put(&response_key, repaired).execute().await.is_err() {
+                            self.bump("gap_repair_persist_errors", 1).await;
+                        }
+                    }
                     if !spans_served {
-                        // Chunk audio is deleted only after its response is
-                        // durable. Span-served chunks never had an object.
                         bucket.delete(&chunk.key).await?;
                     }
                     Ok(())
@@ -2762,6 +2822,7 @@ impl TranscriptionJob {
         bucket: &worker::Bucket,
     ) -> Result<Option<String>> {
         let canonical = record.canonical_duration_seconds.unwrap_or_default();
+        let mut repair_reports = Vec::new();
         let mut chunk_transcriptions = Vec::with_capacity(record.chunks.len());
         for chunk in &record.chunks {
             let key = job::r2_response_key(&record.job_id, chunk.index);
@@ -2780,6 +2841,10 @@ impl TranscriptionJob {
             let bytes = body.bytes().await?;
             let response: ai::WhisperResponse = serde_json::from_slice(&bytes)
                 .map_err(|error| worker::Error::RustError(format!("response decode: {error}")))?;
+            if let Some(report) = response.extra.get("gap_repair") {
+                repair_reports
+                    .push(serde_json::json!({ "chunk_index": chunk.index, "report": report }));
+            }
             chunk_transcriptions.push(
                 response.to_chunk_transcription(chunk.valid_start_seconds, chunk.valid_end_seconds),
             );
@@ -2909,6 +2974,17 @@ impl TranscriptionJob {
                     "chunk_audio_profile": record.chunk_audio_profile.as_deref().unwrap_or("mp3-stream-copy-v1"),
                     "normalized_transcript_sha256": stitched.normalized_transcript_sha256,
                     "pipeline_version": stitch::PIPELINE_VERSION,
+                    "gap_repair": {
+                        "version": gap_repair::REPAIR_VERSION,
+                        "enabled": config.gap_repair_enabled,
+                        "settings": { "vad_filter": true, "condition_on_previous_text": false,
+                            "min_gap_seconds": config.gap_repair_min_gap_seconds,
+                            "splice_inset_seconds": gap_repair::SPLICE_INSET_SECONDS },
+                        "reserved_audio_seconds": record.gap_repair_audio_seconds,
+                        "issued_audio_seconds": record.gap_repair_attempts.iter().filter(|a| a.issued).map(|a| a.seconds()).sum::<f64>(),
+                        "attempts": record.gap_repair_attempts,
+                        "chunks": repair_reports,
+                    },
                     // Additive provenance: how the source bytes were proven.
                     "source_match_mode": if record.upload_completed {
                         "exact_device_upload"
@@ -4242,22 +4318,453 @@ impl TranscriptionJob {
                 .get(chunk_index as usize)
                 .map(|chunk| chunk.actual_duration_seconds)
                 .unwrap_or(300.0);
-            let response = ai::fake_whisper_response(chunk_index, duration);
+            let response = match hooks.gap.as_ref() {
+                Some(rule) if rule.applies(chunk_index) => {
+                    ai::fake_whisper_response_with_gap(chunk_index, duration, rule)
+                }
+                _ => ai::fake_whisper_response(chunk_index, duration),
+            };
             return serde_json::to_vec(&response).map_err(|error| error.to_string());
         }
 
         let encoded = base64::engine::general_purpose::STANDARD.encode(audio);
         let request = ai::WhisperRequest::transcribe(encoded, record.language_code.clone());
+        self.run_whisper(config, &request).await
+    }
+
+    /// One Workers AI call with the raw response bytes back; decode is
+    /// validated at stitch time (and by the repair splice).
+    async fn run_whisper(
+        &self,
+        config: &AppConfig,
+        request: &ai::WhisperRequest,
+    ) -> std::result::Result<Vec<u8>, String> {
         let ai_binding = self
             .env
             .ai("AI")
             .map_err(|error| ai::sanitize_ai_error(&error.to_string()))?;
         let value: serde_json::Value = ai_binding
-            .run(&config.model, &request)
+            .run(&config.model, request)
             .await
             .map_err(|error| ai::sanitize_ai_error(&format!("{error:?}")))?;
-        // Persist the raw response bytes; decode is validated at stitch time.
         serde_json::to_vec(&value).map_err(|error| error.to_string())
+    }
+
+    /// Whether gap repair runs for this chunk and how its model calls are
+    /// served. Under FAKE_AI the default three-word fake is nothing but
+    /// holes, so repair runs only for the chunk a `gap` hook names.
+    fn gap_repair_mode(
+        &self,
+        record: &JobRecord,
+        config: &AppConfig,
+        chunk_index: u32,
+    ) -> Option<GapRepairMode> {
+        if !config.gap_repair_enabled {
+            return None;
+        }
+        if self.fake_ai_enabled(config) {
+            let hooks = ai::parse_fake_hooks(record.language_code.as_deref());
+            let rule = hooks.gap?;
+            return rule
+                .applies(chunk_index)
+                .then_some(GapRepairMode::Fake(rule));
+        }
+        config.gap_repair_enabled.then_some(GapRepairMode::Real)
+    }
+
+    /// One gap-repair model call: the window's frames with `vad_filter` on
+    /// (real), or the hooked fake.
+    async fn run_ai_repair(
+        &self,
+        record: &JobRecord,
+        config: &AppConfig,
+        audio: &[u8],
+        chunk_index: u32,
+        mode: &GapRepairMode,
+        window_start_seconds: f64,
+        window_length_seconds: f64,
+    ) -> std::result::Result<Vec<u8>, String> {
+        match mode {
+            GapRepairMode::Fake(rule) => {
+                let hooks = ai::parse_fake_hooks(record.language_code.as_deref());
+                if let Some(latency_ms) = hooks.repair_latency_ms.or(hooks.latency_ms) {
+                    worker::Delay::from(Duration::from_millis(latency_ms)).await;
+                }
+                match hooks.repair_reply.as_deref() {
+                    Some("error") => return Err("injected repair error".into()),
+                    Some("invalid_json") => return Ok(b"not JSON".to_vec()),
+                    Some("empty") => return Ok(br#"{"segments":[]}"#.to_vec()),
+                    _ => {}
+                }
+                let response = ai::fake_repair_response(
+                    Some(rule),
+                    chunk_index,
+                    window_start_seconds,
+                    window_length_seconds,
+                );
+                serde_json::to_vec(&response).map_err(|error| error.to_string())
+            }
+            GapRepairMode::Real => {
+                let encoded = base64::engine::general_purpose::STANDARD.encode(audio);
+                let request =
+                    ai::WhisperRequest::with_vad(encoded, record.language_code.clone(), true);
+                self.run_whisper(config, &request).await
+            }
+        }
+    }
+
+    /// Optional work shares a durable allowance across both drivers. A
+    /// reservation survives errors, cancellation, reset, and response loss.
+    async fn repair_response_gaps(
+        &self,
+        record: &JobRecord,
+        config: &AppConfig,
+        audio: &[u8],
+        chunk: &job::ChunkRef,
+        response_json: Vec<u8>,
+    ) -> Vec<u8> {
+        let Some(mode) = self.gap_repair_mode(record, config, chunk.index) else {
+            return response_json;
+        };
+        let valid_span = chunk.valid_end_seconds - chunk.requested_start_seconds;
+        let duration = chunk.actual_duration_seconds.min(valid_span);
+        if !duration.is_finite() || duration <= 0.0 {
+            return response_json;
+        }
+        let Ok(Some(current)) = self.read_record().await else {
+            return response_json;
+        };
+        if !repair_budget::is_active(&current) {
+            return response_json;
+        }
+        let mut ledger = repair_budget::ledger(&current, chunk.index);
+        let mut response: ai::WhisperResponse = match serde_json::from_slice(&response_json) {
+            Ok(response) => response,
+            Err(_) => return response_json,
+        };
+        let min_gap = config.gap_repair_min_gap_seconds;
+        let initial_gaps = gap_repair::detect_gaps(&response, duration, min_gap);
+        if initial_gaps.is_empty() {
+            return response_json;
+        }
+        let mut report = gap_repair::RepairReport::new(min_gap);
+        report.gaps_detected = initial_gaps.len();
+        let deadline = self.repair_deadline(&current, chunk.index);
+        while report.calls < gap_repair::MAX_CALLS_PER_CHUNK && now_millis() < deadline {
+            let gaps = gap_repair::detect_gaps(&response, duration, min_gap);
+            let Some((gap, ordinal)) = gap_repair::next_attempt(&gaps, &ledger) else {
+                break;
+            };
+            // Locally rejected windows must not starve affordable gaps.
+            ledger.record(&gap);
+            let Some(window) = gap_repair::plan_window(&gap, ordinal, duration) else {
+                continue;
+            };
+            let (window_bytes, actual): (&[u8], gap_repair::Window) = match &mode {
+                GapRepairMode::Fake(_) => (&[], window),
+                GapRepairMode::Real => match gap_repair::slice_frames(audio, &window) {
+                    Some(slice) => (
+                        &audio[slice.byte_range],
+                        gap_repair::Window {
+                            start: slice.start_seconds,
+                            end: slice.end_seconds,
+                        },
+                    ),
+                    None => {
+                        report.errors += 1;
+                        continue;
+                    }
+                },
+            };
+            let mut reservation = Reservation::Inactive;
+            let updated = self
+                .update_record_if_live(|current| {
+                    reservation = repair_budget::reserve(
+                        current,
+                        chunk.index,
+                        &gap,
+                        ordinal,
+                        &actual,
+                        now_millis(),
+                    );
+                })
+                .await;
+            let id = match reservation {
+                Reservation::Reserved(id) if updated.is_ok() => id,
+                Reservation::Unaffordable => {
+                    report.unaffordable_windows += 1;
+                    if let Ok(LiveUpdate::Applied(current)) = updated {
+                        let cap = gap_repair::job_audio_cap_seconds(
+                            current.canonical_duration_seconds.unwrap_or_default(),
+                        );
+                        report.budget_exhausted =
+                            cap - current.gap_repair_audio_seconds < gap_repair::MIN_WINDOW_SECONDS;
+                    }
+                    continue;
+                }
+                Reservation::AlreadyAttempted => continue,
+                _ => break,
+            };
+            let issued = Cell::new(false);
+            let call_deadline =
+                deadline.min(now_millis() + self.repair_call_wall_millis(record, config));
+            let result = race_deadline(
+                self.issue_gap_repair(
+                    record,
+                    config,
+                    window_bytes,
+                    chunk.index,
+                    &mode,
+                    &actual,
+                    id,
+                    &issued,
+                    call_deadline,
+                ),
+                call_deadline,
+            )
+            .await;
+            if issued.get() {
+                report.calls += 1;
+                report.audio_seconds += actual.length();
+            }
+            let mut inserted_words = 0;
+            let status = match result {
+                None => {
+                    report.timed_out = true;
+                    "timeout"
+                }
+                Some(Err(status)) => {
+                    report.service_denied = status == "service_denied";
+                    report.errors += u32::from(status == "ai_error" || status == "admission_error");
+                    status
+                }
+                Some(Ok(bytes)) => match serde_json::from_slice::<ai::WhisperResponse>(&bytes) {
+                    Err(_) => {
+                        report.errors += 1;
+                        "decode_error"
+                    }
+                    Ok(repair) => {
+                        let outcome = gap_repair::splice(
+                            &mut response,
+                            &gap,
+                            actual.start,
+                            &repair,
+                            duration,
+                        );
+                        report.rejected_segments += outcome.rejected_segments;
+                        report.dropped_outside_words += outcome.dropped_outside_words;
+                        inserted_words = outcome.inserted_words;
+                        report.words_filled += inserted_words;
+                        if outcome.invalid_candidate {
+                            "invalid_candidate"
+                        } else if inserted_words > 0 {
+                            "filled"
+                        } else if outcome.rejected_segments > 0 {
+                            "rejected"
+                        } else {
+                            "empty"
+                        }
+                    }
+                },
+            };
+            // Includes terminal records: already-issued work stays accounted
+            // even when cancellation has released the customer's hold.
+            if self
+                .update_record(|current| {
+                    if let Some(attempt) = current.gap_repair_attempts.get_mut(id) {
+                        attempt.outcome = status.into();
+                    }
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+            report.attempts.push(gap_repair::AttemptReport {
+                gap_start: gap.start,
+                gap_end: gap.end,
+                attempt: ordinal,
+                window_start: actual.start,
+                window_end: actual.end,
+                inserted_words,
+                outcome: status,
+            });
+            if matches!(
+                status,
+                "timeout"
+                    | "service_denied"
+                    | "inactive"
+                    | "admission_error"
+                    | "ai_error"
+                    | "decode_error"
+            ) {
+                break;
+            }
+        }
+        report.timed_out |= now_millis() >= deadline;
+        report.gaps_unfilled = gap_repair::detect_gaps(&response, duration, min_gap).len();
+        report.gaps_filled = report.gaps_detected.saturating_sub(report.gaps_unfilled);
+        self.bump("gap_repair_chunks", 1).await;
+        for (name, count) in [
+            ("gap_repair_calls", i64::from(report.calls)),
+            ("gap_repair_words_filled", report.words_filled as i64),
+            ("gap_repair_gaps_filled", report.gaps_filled as i64),
+            ("gap_repair_gaps_unfilled", report.gaps_unfilled as i64),
+            (
+                "gap_repair_rejected_segments",
+                report.rejected_segments as i64,
+            ),
+            ("gap_repair_errors", i64::from(report.errors)),
+            (
+                "gap_repair_budget_exhausted",
+                i64::from(report.budget_exhausted),
+            ),
+            (
+                "gap_repair_unaffordable_windows",
+                i64::from(report.unaffordable_windows),
+            ),
+            (
+                "gap_repair_service_denied",
+                i64::from(report.service_denied),
+            ),
+            ("gap_repair_timeouts", i64::from(report.timed_out)),
+        ] {
+            if count > 0 {
+                self.bump(name, count).await;
+            }
+        }
+        worker::console_log!(
+            "gap repair: job {} chunk {} calls={} seconds={:.2} words={} unfilled={}",
+            record.job_id,
+            chunk.index,
+            report.calls,
+            report.audio_seconds,
+            report.words_filled,
+            report.gaps_unfilled
+        );
+        if let Ok(value) = serde_json::to_value(&report) {
+            response.extra.insert("gap_repair".into(), value);
+        }
+        serde_json::to_vec(&response).unwrap_or(response_json)
+    }
+
+    fn repair_deadline(&self, record: &JobRecord, chunk: u32) -> i64 {
+        let chunk_deadline = record
+            .gap_repair_deadlines
+            .get(&chunk)
+            .copied()
+            .unwrap_or(now_millis() + repair_budget::CHUNK_WALL_MILLIS);
+        // Leave three minutes of the alarm's hard wall for publication and
+        // cleanup. Persisted primary responses also survive a hard reset.
+        let alarm_deadline = self
+            .alarm_started_at
+            .get()
+            .map(|started| started * 1_000 + 12 * 60_000)
+            .unwrap_or(chunk_deadline);
+        chunk_deadline.min(alarm_deadline)
+    }
+
+    fn repair_call_wall_millis(&self, record: &JobRecord, config: &AppConfig) -> i64 {
+        if self.fake_ai_enabled(config) {
+            if let Some(wall) = ai::parse_fake_hooks(record.language_code.as_deref()).repair_wall_ms
+            {
+                return wall.min(repair_budget::CALL_WALL_MILLIS as u64) as i64;
+            }
+        }
+        repair_budget::CALL_WALL_MILLIS
+    }
+
+    async fn issue_gap_repair(
+        &self,
+        record: &JobRecord,
+        config: &AppConfig,
+        audio: &[u8],
+        chunk: u32,
+        mode: &GapRepairMode,
+        window: &gap_repair::Window,
+        id: usize,
+        issued: &Cell<bool>,
+        deadline: i64,
+    ) -> std::result::Result<Vec<u8>, &'static str> {
+        let namespace = self
+            .env
+            .durable_object(USAGE_LIMITER_BINDING)
+            .map_err(|_| "admission_error")?;
+        let stub = namespace
+            .get_by_name(GLOBAL_LIMITER_OBJECT)
+            .map_err(|_| "admission_error")?;
+        let body = serde_json::to_string(&LimiterRepairRequest {
+            job_id: record.job_id.clone(),
+            audio_seconds: window.length(),
+            daily_cap_micro_usd: config.daily_spend_cap_usd_micro,
+        })
+        .map_err(|_| "admission_error")?;
+        let req = internal_post(
+            &format!("{LIMITER_INTERNAL_ORIGIN}{LIMITER_REPAIR_PATH}"),
+            body,
+        )
+        .map_err(|_| "admission_error")?;
+        let response = stub
+            .fetch_with_request(req)
+            .await
+            .map_err(|_| "admission_error")?;
+        if response.status_code() != 200 {
+            return Err("service_denied");
+        }
+        let mut may_issue = false;
+        let updated = self
+            .update_record_if_live(|current| {
+                if repair_budget::is_active(current) && now_millis() < deadline {
+                    if let Some(attempt) = current.gap_repair_attempts.get_mut(id) {
+                        if !attempt.issued && attempt.outcome == "reserved" {
+                            attempt.issued = true;
+                            attempt.outcome = "issued".into();
+                            may_issue = true;
+                        }
+                    }
+                }
+            })
+            .await
+            .map_err(|_| "admission_error")?;
+        if !may_issue || !matches!(updated, LiveUpdate::Applied(_)) {
+            return Err("inactive");
+        }
+        // No telemetry/subrequest await between this liveness check and the
+        // model request. Cancellation during the request prevents the NEXT
+        // reservation, without pretending already-issued work was free.
+        issued.set(true);
+        self.run_ai_repair(
+            record,
+            config,
+            audio,
+            chunk,
+            mode,
+            window.start,
+            window.length(),
+        )
+        .await
+        .map_err(|error| {
+            worker::console_error!(
+                "gap repair ai error: job {} chunk {} {}",
+                record.job_id,
+                chunk,
+                error
+            );
+            "ai_error"
+        })
+    }
+
+    async fn fake_repair_write_failure(
+        &self,
+        record: &JobRecord,
+        config: &AppConfig,
+    ) -> Result<bool> {
+        if !self.fake_ai_enabled(config)
+            || !ai::parse_fake_hooks(record.language_code.as_deref()).repair_write_fail
+        {
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     async fn limiter_admit(
@@ -4449,6 +4956,12 @@ struct ChunkOutcome {
     result: ChunkCallResult,
 }
 
+/// How gap repair serves its model calls for one chunk.
+enum GapRepairMode {
+    Real,
+    Fake(ai::FakeGapRule),
+}
+
 enum ChunkCallResult {
     Success,
     /// The chunk's response object already exists (a previous turn's work
@@ -4508,6 +5021,25 @@ pub fn job_status(
         created_at: Some(job::iso8601(record.created_at)),
         updated_at: Some(job::iso8601(record.updated_at)),
         phase_timestamps,
+    }
+}
+
+/// Optional inference deadlines include admission and persistence. Dropping
+/// the future bounds our wait; upstream compute may still finish and its
+/// durable reservation/service debit deliberately remain consumed.
+async fn race_deadline<F: std::future::Future>(
+    future: F,
+    deadline_millis: i64,
+) -> Option<F::Output> {
+    let remaining = deadline_millis.saturating_sub(now_millis());
+    if remaining <= 0 {
+        return None;
+    }
+    let timeout = worker::Delay::from(Duration::from_millis(remaining as u64));
+    futures_util::pin_mut!(future, timeout);
+    match futures_util::future::select(future, timeout).await {
+        futures_util::future::Either::Left((value, _)) => Some(value),
+        futures_util::future::Either::Right(_) => None,
     }
 }
 
@@ -4656,6 +5188,29 @@ impl DurableObject for TranscriptionUsageLimiter {
                         write_limiter_row(&sql, &next)?;
                         json_error(429, types::ERROR_RATE_LIMITED)
                     }
+                }
+            }
+            LIMITER_REPAIR_PATH => {
+                let request: LimiterRepairRequest = match serde_json::from_str(&body) {
+                    Ok(request) => request,
+                    Err(_) => return json_error(400, types::ERROR_INVALID_REQUEST),
+                };
+                let current = read_limiter_row(&sql)?.unwrap_or_default();
+                let (next, decision) = crate::limiter::admit_repair(
+                    &current,
+                    &request,
+                    (Date::now().as_millis() / 86_400_000) as i64,
+                    now_seconds(),
+                );
+                write_limiter_row(&sql, &next)?;
+                match decision {
+                    crate::limiter::AdmitDecision::Admit { .. } => {
+                        json_success(200, &serde_json::json!({"admitted": true}))
+                    }
+                    crate::limiter::AdmitDecision::SpendCapped => {
+                        json_error(429, types::ERROR_RATE_LIMITED)
+                    }
+                    crate::limiter::AdmitDecision::Busy { .. } => json_error(409, "inactive_hold"),
                 }
             }
             LIMITER_RELEASE_PATH => {

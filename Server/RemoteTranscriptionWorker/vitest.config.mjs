@@ -5,7 +5,7 @@ import {
 } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 
-export default defineConfig(async () => {
+export async function workerTestConfig(overrides = {}) {
   const migrations = await readD1Migrations(
     path.join(import.meta.dirname, "migrations"),
   );
@@ -66,6 +66,11 @@ export default defineConfig(async () => {
             AD_ANALYSIS_DEADLINE_SECONDS: "10",
             AD_ANALYSIS_POLL_SECONDS: "1",
             AD_ANALYSIS_MAX_SUBMIT_ATTEMPTS: "3",
+            // Gap repair on for the integration suite's anchored-retry test,
+            // independent of the lane default in wrangler.toml (the public
+            // template ships it off). vitest.gap-disabled.config.mjs overrides
+            // it back to "false" through overrides.bindings.
+            GAP_REPAIR_ENABLED: "true",
             // Alarm-error retry in test time so re-entry paths (the stitch
             // sfail hook) run inside test timeouts; production default is 60.
             ALARM_RETRY_SECONDS: "1",
@@ -73,6 +78,7 @@ export default defineConfig(async () => {
             // test time; live stagings here finish in well under a second,
             // and the parked-staging race test stays inside this budget.
             ORIGIN_FETCH_WALL_SECONDS: "4",
+            ...overrides.bindings,
           },
           serviceBindings: {
             // FAKE_MEDIA short-circuits before the service binding; this stub
@@ -216,7 +222,7 @@ export default defineConfig(async () => {
     test: {
       // Top level only: test/purchase + test/killswitch run under their own
       // configs (vitest.purchase.config.mjs / vitest.killswitch.config.mjs).
-      include: ["test/*.spec.mjs"],
+      include: overrides.include ?? ["test/*.spec.mjs"],
       setupFiles: ["./test/apply-migrations.mjs"],
       testTimeout: 30_000,
       // Jobs span multiple requests and alarms; tests share storage and use
@@ -225,4 +231,6 @@ export default defineConfig(async () => {
       isolate: false,
     },
   };
-});
+}
+
+export default defineConfig(() => workerTestConfig());

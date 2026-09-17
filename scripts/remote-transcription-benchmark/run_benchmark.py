@@ -467,6 +467,8 @@ def run(args: argparse.Namespace) -> dict:
     cleanup = verify_r2_cleanup(job_id, chunk_count) if job["state"] in TERMINAL_STATES else {"skipped": True}
 
     result_summary = None
+    if result_payload and args.save_result:
+        Path(args.save_result).write_text(json.dumps(result_payload, indent=2) + "\n")
     if result_payload:
         result = result_payload["result"]
         result_summary = {
@@ -572,6 +574,11 @@ def main() -> None:
     parser.add_argument("--label", required=True, help="short run label, e.g. ep45-c4-warm")
     parser.add_argument("--url", required=True, help="public MP3 enclosure URL")
     parser.add_argument("--note", default="", help="free-form context recorded in the row")
+    parser.add_argument(
+        "--save-result",
+        default=None,
+        help="also write the full /result payload (segments, words, provenance) to this path",
+    )
     parser.add_argument("--stability-check", action="store_true", help="verify the enclosure is byte-stable before running")
     parser.add_argument(
         "--require-probing-eta",

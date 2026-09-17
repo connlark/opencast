@@ -457,6 +457,16 @@ pub struct JobRecord {
     /// per-job ceiling caps service spend without ever charging the customer.
     #[serde(default)]
     pub requested_audio_seconds: f64,
+    /// Audio seconds durably reserved for gap-repair retries, including
+    /// uncertain calls and admissions. Never refunded after a reset. Kept
+    /// apart from `requested_audio_seconds` so repairs never push a job into
+    /// the retry ceiling; capped by `gap_repair::job_audio_cap_seconds`.
+    #[serde(default)]
+    pub gap_repair_audio_seconds: f64,
+    #[serde(default)]
+    pub gap_repair_attempts: Vec<crate::repair_budget::Attempt>,
+    #[serde(default)]
+    pub gap_repair_deadlines: BTreeMap<u32, i64>,
     /// Last durable queue snapshot returned by the global limiter. Polling
     /// only reads these fields; one denied alarm turn writes them together.
     #[serde(default)]
@@ -594,6 +604,9 @@ impl JobRecord {
             phase_timestamps: BTreeMap::from([(STATE_CREATED.to_string(), now)]),
             media_attempts: 0,
             requested_audio_seconds: 0.0,
+            gap_repair_audio_seconds: 0.0,
+            gap_repair_attempts: Vec::new(),
+            gap_repair_deadlines: BTreeMap::new(),
             queued_since: None,
             queue_position: None,
             queue_wait_seconds: None,

@@ -1276,6 +1276,110 @@ describe("remote transcription dev lane", () => {
     await expectJobStorageEmpty(job.job_id);
   });
 
+  it("repairs an intra-chunk word-timeline hole with an anchored retry (2026-09-16 incident)", async () => {
+    // One 10 s chunk whose fake primary response has "remote" ending at
+    // 2 s, a hole to 8.5 s, then "transcription chunk0". The hole is the
+    // only one at the 5 s threshold; its first anchored attempt (window
+    // 2–10 s) returns "repair0" at 3 s and "repair1" at 7 s, which close it.
+    // Placed here, after the last absolute-balance assertion, so its small
+    // spend disturbs no cumulative expectation and credits still remain.
+    const source = await deviceIdentity(10);
+    const before = await counterValues([
+      "gap_repair_chunks",
+      "gap_repair_calls",
+      "gap_repair_words_filled",
+      "gap_repair_gaps_filled",
+      "gap_repair_gaps_unfilled",
+      "gap_repair_errors",
+    ]);
+    const job = await createJob({
+      clientRequestId: "gap-repair-1",
+      episodeId: "ep-gap-repair-1",
+      durationSeconds: 10,
+      languageCode: "fake:gap=0:2-8",
+    });
+    await waitForState(job.job_id, ["waiting_for_device_source"]);
+    await reportSource(job.job_id, source);
+    await waitForState(job.job_id, ["result_ready"]);
+
+    const payload = await (
+      await post(`/v1/remote-transcription/jobs/${job.job_id}/result`, {
+        schema_version: 1,
+      })
+    ).json();
+    const words = payload.result.segments.flatMap((segment) => segment.words);
+    const texts = words.map(({ text }) => text);
+    expect(texts).toEqual(["remote", "repair0", "repair1", "transcription", "chunk0"]);
+    // Spliced words carry the window offset: 3 s and 7 s absolute.
+    expect(words.slice(1, 3).map(({ start }) => start)).toEqual([3, 7]);
+    let previous = Number.NEGATIVE_INFINITY;
+    for (const word of words) {
+      expect(word.start + 0.001).toBeGreaterThanOrEqual(previous);
+      previous = word.start;
+    }
+    expect(payload.result.text).toBe(texts.join(" "));
+
+    // The stored chunk response is gone after result publication (deletes
+    // at every stage), so provenance is checked through the counters.
+    const after = await counterValues([
+      "gap_repair_chunks",
+      "gap_repair_calls",
+      "gap_repair_words_filled",
+      "gap_repair_gaps_filled",
+      "gap_repair_gaps_unfilled",
+      "gap_repair_errors",
+    ]);
+    expect(after.gap_repair_chunks - (before.gap_repair_chunks ?? 0)).toBe(1);
+    expect(after.gap_repair_calls - (before.gap_repair_calls ?? 0)).toBe(1);
+    expect(after.gap_repair_words_filled - (before.gap_repair_words_filled ?? 0)).toBe(2);
+    expect(after.gap_repair_gaps_filled - (before.gap_repair_gaps_filled ?? 0)).toBe(1);
+    expect((after.gap_repair_gaps_unfilled ?? 0) - (before.gap_repair_gaps_unfilled ?? 0)).toBe(0);
+    expect(after.gap_repair_errors ?? 0).toBe(before.gap_repair_errors ?? 0);
+
+    const ackResponse = await post(
+      `/v1/remote-transcription/jobs/${job.job_id}/ack`,
+      {
+        schema_version: 1,
+        normalized_transcript_sha256:
+          payload.result.provenance.normalized_transcript_sha256,
+      },
+    );
+    expect(ackResponse.status).toBe(200);
+    await expectJobStorageEmpty(job.job_id);
+  });
+
+  it("leaves the default fake untouched when no gap hook is set", async () => {
+    // The default three-word fake is nothing but holes; without the hook,
+    // repair must not run at all (no calls, no counters). The fake places
+    // its words on the provisional 300 s chunk width, so a 10 s job keeps
+    // only the first word — the text itself is not the subject here.
+    const source = await deviceIdentity(10);
+    const before = await counterValues(["gap_repair_chunks", "gap_repair_calls"]);
+    const job = await createJob({
+      clientRequestId: "gap-repair-2",
+      episodeId: "ep-gap-repair-2",
+      durationSeconds: 10,
+    });
+    await waitForState(job.job_id, ["waiting_for_device_source"]);
+    await reportSource(job.job_id, source);
+    await waitForState(job.job_id, ["result_ready"]);
+    const payload = await (
+      await post(`/v1/remote-transcription/jobs/${job.job_id}/result`, {
+        schema_version: 1,
+      })
+    ).json();
+    expect(payload.result.text.startsWith("remote")).toBe(true);
+    const after = await counterValues(["gap_repair_chunks", "gap_repair_calls"]);
+    expect(after.gap_repair_chunks ?? 0).toBe(before.gap_repair_chunks ?? 0);
+    expect(after.gap_repair_calls ?? 0).toBe(before.gap_repair_calls ?? 0);
+    await post(`/v1/remote-transcription/jobs/${job.job_id}/ack`, {
+      schema_version: 1,
+      normalized_transcript_sha256:
+        payload.result.provenance.normalized_transcript_sha256,
+    });
+    await expectJobStorageEmpty(job.job_id);
+  });
+
   it(
     "queues a second job with a combined ETA, then returns it to on_track",
     async () => {

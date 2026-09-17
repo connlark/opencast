@@ -9,6 +9,7 @@ pub const USAGE_LIMITER_BINDING: &str = "TRANSCRIPTION_USAGE_LIMITER";
 pub const GLOBAL_LIMITER_OBJECT: &str = "global";
 pub const LIMITER_ADMIT_PATH: &str = "/admit";
 pub const LIMITER_RELEASE_PATH: &str = "/release";
+pub const LIMITER_REPAIR_PATH: &str = "/repair";
 pub const LIMITER_INTERNAL_ORIGIN: &str = "https://usage-limiter.opencast.internal";
 
 /// Long enough for the largest expected chunk-preparation pass, but bounded
@@ -58,6 +59,54 @@ pub struct LimiterAdmitRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LimiterReleaseRequest {
     pub job_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LimiterRepairRequest {
+    pub job_id: String,
+    pub audio_seconds: f64,
+    pub daily_cap_micro_usd: i64,
+}
+
+/// Optional work may spend only under an existing, unexpired hold. It never
+/// joins the queue, takes another slot, or renews FIFO ownership. A caller
+/// persists a unique attempt before admission and never retries that admit.
+pub fn admit_repair(
+    state: &LimiterState,
+    request: &LimiterRepairRequest,
+    day_index: i64,
+    now: i64,
+) -> (LimiterState, AdmitDecision) {
+    let mut next = state.normalized();
+    if next.day_index != day_index {
+        next.day_index = day_index;
+        next.spent_micro_usd = 0;
+    }
+    if !next.active.iter().any(|slot| {
+        slot.job_id == request.job_id
+            && now
+                < if slot.expires_at > 0 {
+                    slot.expires_at
+                } else {
+                    slot.updated_at.saturating_add(HOLD_TTL_SECONDS)
+                }
+    }) {
+        return (
+            next,
+            AdmitDecision::Busy {
+                queue_position: 0,
+                wait_seconds: 0,
+            },
+        );
+    }
+    let estimate = estimated_micro_usd(request.audio_seconds);
+    if estimate <= 0 || next.spent_micro_usd.saturating_add(estimate) > request.daily_cap_micro_usd
+    {
+        return (next, AdmitDecision::SpendCapped);
+    }
+    next.spent_micro_usd = next.spent_micro_usd.saturating_add(estimate);
+    let spend_micro_usd = next.spent_micro_usd;
+    (next, AdmitDecision::Admit { spend_micro_usd })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -344,6 +393,49 @@ mod tests {
             expires_at: 1_000,
             remaining_seconds,
         }
+    }
+
+    #[test]
+    fn optional_spend_requires_live_ownership_and_preserves_fifo() {
+        let (state, _) = admit(
+            &LimiterState::default(),
+            &request("owner", 10.0, 1, Some(50)),
+            1,
+            100,
+        );
+        let (state, _) = admit(&state, &request("queued", 10.0, 1, Some(50)), 1, 100);
+        let request = LimiterRepairRequest {
+            job_id: "owner".into(),
+            audio_seconds: 8.0,
+            daily_cap_micro_usd: 151,
+        };
+        let (spent, decision) = admit_repair(&state, &request, 1, 101);
+        assert_eq!(
+            decision,
+            AdmitDecision::Admit {
+                spend_micro_usd: 151
+            }
+        );
+        assert_eq!(spent.active, state.active);
+        assert_eq!(spent.tickets, state.tickets);
+        let (denied, decision) = admit_repair(&spent, &request, 1, 102);
+        assert_eq!(decision, AdmitDecision::SpendCapped);
+        assert_eq!(denied, spent);
+        let released = release(&spent, "owner");
+        let (denied, decision) = admit_repair(&released, &request, 1, 103);
+        assert!(matches!(decision, AdmitDecision::Busy { .. }));
+        assert_eq!(denied, released);
+        let (_, decision) = admit_repair(&state, &request, 1, 100 + HOLD_TTL_SECONDS);
+        assert!(matches!(decision, AdmitDecision::Busy { .. }));
+        // Day rollover resets spend while preserving the same ownership.
+        let (rolled, decision) = admit_repair(&spent, &request, 2, 104);
+        assert_eq!(
+            decision,
+            AdmitDecision::Admit {
+                spend_micro_usd: 67
+            }
+        );
+        assert_eq!(rolled.tickets, state.tickets);
     }
 
     #[test]

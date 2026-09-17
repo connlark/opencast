@@ -17,11 +17,18 @@ pub struct WhisperRequest {
 
 impl WhisperRequest {
     pub fn transcribe(audio_base64: String, language: Option<String>) -> Self {
+        Self::with_vad(audio_base64, language, false)
+    }
+
+    /// Gap-repair retries run with `vad_filter` on: on the incident windows
+    /// VAD recovered four of six mis-aligned windows against two of six
+    /// without it, and never lost an anchored one (`gap_repair.rs`).
+    pub fn with_vad(audio_base64: String, language: Option<String>, vad_filter: bool) -> Self {
         Self {
             audio: audio_base64,
             task: "transcribe",
             language,
-            vad_filter: false,
+            vad_filter,
             condition_on_previous_text: false,
         }
     }
@@ -199,7 +206,59 @@ pub struct FakeAiHooks {
     /// to leave an active state with no alarm, which drives the stranded-job
     /// repair tests (2026-08-19).
     pub strand: Option<FakeStrandRule>,
+    /// `gap=<chunk>:<start>-<end>`: the fake primary response for `<chunk>`
+    /// leaves a word-timeline hole over `[start, end)` seconds, and a fake
+    /// repair call whose window starts inside that hole returns three words
+    /// at 1/2/3 s into the window — the only way gap repair runs at all
+    /// under FAKE_AI, since the default three-word fake is nothing but
+    /// holes (2026-09-16 incident).
+    pub gap: Option<FakeGapRule>,
+    pub repair_latency_ms: Option<u64>,
+    pub repair_wall_ms: Option<u64>,
+    pub repair_write_fail: bool,
+    pub repair_reply: Option<String>,
+    pub no_overlap: bool,
     pub failure: Option<FakeAiFailureRule>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FakeGapRule {
+    pub chunk_index: u32,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+}
+
+impl FakeGapRule {
+    fn parse(value: &str) -> Option<Self> {
+        let (chunk, range) = value.split_once(':')?;
+        let (start, end) = range.split_once('-')?;
+        let rule = Self {
+            chunk_index: if chunk == "*" {
+                u32::MAX
+            } else {
+                chunk.parse().ok()?
+            },
+            start_seconds: start.parse().ok()?,
+            end_seconds: end.parse().ok()?,
+        };
+        (rule.start_seconds.is_finite()
+            && rule.end_seconds.is_finite()
+            && rule.start_seconds >= 0.0
+            && rule.end_seconds > rule.start_seconds)
+            .then_some(rule)
+    }
+
+    pub fn applies(&self, chunk_index: u32) -> bool {
+        self.chunk_index == u32::MAX || self.chunk_index == chunk_index
+    }
+
+    /// True when a repair window anchored at `window_start` lies inside the
+    /// hooked hole, i.e. the fake should hand back words.
+    pub fn window_hits(&self, chunk_index: u32, window_start: f64) -> bool {
+        self.applies(chunk_index)
+            && window_start + 0.01 >= self.start_seconds
+            && window_start < self.end_seconds
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -292,6 +351,12 @@ pub fn parse_fake_hooks(language_code: Option<&str>) -> FakeAiHooks {
                 "resfail" => hooks.reserve_fail_count = value.parse().ok(),
                 "rfail" => hooks.release_fail_count = value.parse().ok(),
                 "strand" => hooks.strand = FakeStrandRule::parse(value),
+                "gap" => hooks.gap = FakeGapRule::parse(value),
+                "rlat" => hooks.repair_latency_ms = value.parse().ok(),
+                "rwall" => hooks.repair_wall_ms = value.parse().ok(),
+                "rwritefail" => hooks.repair_write_fail = value == "true",
+                "rreply" => hooks.repair_reply = Some(value.into()),
+                "nooverlap" => hooks.no_overlap = value == "true",
                 _ => {}
             }
         }
@@ -305,16 +370,77 @@ pub fn parse_fake_hooks(language_code: Option<&str>) -> FakeAiHooks {
 pub fn fake_whisper_response(chunk_index: u32, duration_seconds: f64) -> WhisperResponse {
     let words = ["remote", "transcription", &format!("chunk{chunk_index}")];
     let step = (duration_seconds.max(3.0) - 1.0) / words.len() as f64;
+    let starts: Vec<f64> = (0..words.len())
+        .map(|index| 0.5 + step * index as f64)
+        .collect();
+    fake_response_at(&words, &starts, duration_seconds)
+}
+
+/// The `gap` hook's primary response: the first word before the hole, the
+/// other two right after it, so the hole is the only interior gap.
+pub fn fake_whisper_response_with_gap(
+    chunk_index: u32,
+    duration_seconds: f64,
+    rule: &FakeGapRule,
+) -> WhisperResponse {
+    let words = ["remote", "transcription", &format!("chunk{chunk_index}")];
+    // "remote" ends exactly at the hole start; the others follow the hole.
+    let starts = [
+        (rule.start_seconds - 0.4).max(0.0),
+        rule.end_seconds + 0.5,
+        rule.end_seconds + 1.5,
+    ];
+    fake_response_at(&words, &starts, duration_seconds)
+}
+
+/// A fake repair call: when the window is anchored inside the hooked hole,
+/// `repair<k>` words every four seconds from one second into the window up
+/// to the hole's end (dense enough to close the hole for the detector);
+/// otherwise silence.
+pub fn fake_repair_response(
+    rule: Option<&FakeGapRule>,
+    chunk_index: u32,
+    window_start_seconds: f64,
+    window_length_seconds: f64,
+) -> WhisperResponse {
+    match rule {
+        Some(rule) if rule.window_hits(chunk_index, window_start_seconds) => {
+            let mut starts = Vec::new();
+            let mut at = 1.0;
+            while window_start_seconds + at + 0.4 < rule.end_seconds {
+                starts.push(at);
+                at += 4.0;
+            }
+            let words: Vec<String> = (0..starts.len()).map(|k| format!("repair{k}")).collect();
+            let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+            fake_response_at(&refs, &starts, window_length_seconds)
+        }
+        _ => fake_response_at(&[], &[], window_length_seconds),
+    }
+}
+
+fn fake_response_at(words: &[&str], starts: &[f64], duration_seconds: f64) -> WhisperResponse {
     let whisper_words: Vec<WhisperWord> = words
         .iter()
-        .enumerate()
-        .map(|(index, word)| WhisperWord {
+        .zip(starts)
+        .map(|(word, start)| WhisperWord {
             word: (*word).to_string(),
-            start: 0.5 + step * index as f64,
-            end: 0.5 + step * index as f64 + 0.4,
+            start: *start,
+            end: *start + 0.4,
             extra: serde_json::Map::new(),
         })
         .collect();
+    let segments = if whisper_words.is_empty() {
+        Vec::new()
+    } else {
+        vec![WhisperSegment {
+            start: 0.0,
+            end: duration_seconds,
+            text: words.join(" "),
+            words: whisper_words,
+            extra: serde_json::Map::new(),
+        }]
+    };
     WhisperResponse {
         transcription_info: Some(WhisperTranscriptionInfo {
             language: Some("en".to_string()),
@@ -322,13 +448,7 @@ pub fn fake_whisper_response(chunk_index: u32, duration_seconds: f64) -> Whisper
             extra: serde_json::Map::new(),
         }),
         text: Some(words.join(" ")),
-        segments: vec![WhisperSegment {
-            start: 0.0,
-            end: duration_seconds,
-            text: words.join(" "),
-            words: whisper_words,
-            extra: serde_json::Map::new(),
-        }],
+        segments,
         extra: serde_json::Map::new(),
     }
 }
@@ -482,6 +602,50 @@ mod tests {
         assert!(!strand_in.applies("created", 0));
         assert_eq!(parse_fake_hooks(Some("fake:strand=x")).strand, None);
         assert_eq!(latency_only.strand, None);
+
+        let gap = parse_fake_hooks(Some("fake:gap=0:20-80;latency=5"))
+            .gap
+            .expect("gap");
+        assert_eq!(
+            gap,
+            FakeGapRule {
+                chunk_index: 0,
+                start_seconds: 20.0,
+                end_seconds: 80.0
+            }
+        );
+        assert!(gap.window_hits(0, 20.0));
+        assert!(gap.window_hits(0, 21.5));
+        assert!(!gap.window_hits(0, 80.0));
+        assert!(!gap.window_hits(1, 20.0));
+        assert_eq!(parse_fake_hooks(Some("fake:gap=0:80-20")).gap, None);
+        assert_eq!(parse_fake_hooks(Some("fake:gap=x")).gap, None);
+        assert_eq!(latency_only.gap, None);
+    }
+
+    #[test]
+    fn fake_gap_responses_shape_the_hole_and_the_repair() {
+        let rule = FakeGapRule {
+            chunk_index: 0,
+            start_seconds: 20.0,
+            end_seconds: 80.0,
+        };
+        let primary = fake_whisper_response_with_gap(0, 120.0, &rule);
+        let starts: Vec<f64> = primary.segments[0].words.iter().map(|w| w.start).collect();
+        assert_eq!(starts, vec![19.6, 80.5, 81.5]);
+        let hit = fake_repair_response(Some(&rule), 0, 20.0, 63.0);
+        assert_eq!(hit.segments.len(), 1);
+        // 21, 25, …, 77 s absolute: 15 words, none past the hole's end.
+        assert_eq!(hit.segments[0].words.len(), 15);
+        assert_eq!(hit.segments[0].words[0].start, 1.0);
+        assert_eq!(hit.segments[0].words[0].word, "repair0");
+        assert!(20.0 + hit.segments[0].words[14].end < 80.0);
+        let miss = fake_repair_response(Some(&rule), 0, 81.9, 38.1);
+        assert!(miss.segments.is_empty());
+        assert_eq!(miss.text.as_deref(), Some(""));
+        assert!(fake_repair_response(None, 0, 20.0, 60.0)
+            .segments
+            .is_empty());
     }
 
     #[test]

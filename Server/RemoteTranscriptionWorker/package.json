@@ -12,11 +12,12 @@
     "test": "cargo test",
     "typecheck": "cargo check --target wasm32-unknown-unknown",
     "build:worker": "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release",
-    "test:integration": "yarn run build:worker && vitest run",
+    "test:integration": "yarn run build:worker && vitest run && vitest run -c vitest.gap-repair.config.mjs && vitest run -c vitest.gap-disabled.config.mjs",
     "test:production": "yarn run build:worker && vitest run -c vitest.production.config.mjs",
     "test:purchase": "yarn run build:worker && yarn workspace opencast-purchase-worker build:test-bundle && vitest run -c vitest.purchase.config.mjs && vitest run -c vitest.killswitch.config.mjs",
     "provision": "./scripts/provision-dev.sh",
-    "provision:production": "./scripts/provision-production.sh"
+    "provision:production": "./scripts/provision-production.sh",
+    "test:gap-repair": "yarn run build:worker && vitest run -c vitest.gap-repair.config.mjs && vitest run -c vitest.gap-disabled.config.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",
