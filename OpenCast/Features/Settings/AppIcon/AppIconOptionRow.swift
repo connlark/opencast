@@ -18,13 +18,8 @@ struct AppIconOptionRow: View {
                     .frame(width: 60, height: 60)
                     .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(option.title)
-                        .foregroundStyle(Color.primary)
-                    Text(option.caption)
-                        .font(.footnote)
-                        .foregroundStyle(Color.secondary)
-                }
+                Text(option.title)
+                    .foregroundStyle(Color.primary)
 
                 Spacer()
 

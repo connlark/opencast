@@ -9,17 +9,17 @@
     {
       "layers" : [
         {
-          "fill" : {
-            "solid" : "extended-srgb:1.00000,1.00000,1.00000,1.00000"
-          },
           "fill-specializations" : [
+            {
+              "appearance" : "light",
+              "value" : {
+                "solid" : "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            },
             {
               "appearance" : "dark",
               "value" : {
-                "linear-gradient" : [
-                  "extended-srgb:0.36078,0.24706,0.80000,1.00000",
-                  "extended-srgb:0.25098,0.15686,0.60392,1.00000"
-                ]
+                "solid" : "extended-srgb:0.30196,0.18824,0.65490,1.00000"
               }
             },
             {
@@ -59,8 +59,8 @@
               "appearance" : "dark",
               "value" : {
                 "linear-gradient" : [
-                  "extended-srgb:0.10196,0.07059,0.20000,1.00000",
-                  "extended-srgb:0.05098,0.03137,0.11765,1.00000"
+                  "extended-srgb:0.07451,0.04706,0.16078,1.00000",
+                  "extended-srgb:0.03137,0.01569,0.06275,1.00000"
                 ]
               }
             },

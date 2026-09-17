@@ -12,7 +12,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "${script_dir}/.." && pwd)"
 resources_dir="${repo_dir}/OpenCast/Resources"
 previews_dir="${resources_dir}/Assets.xcassets/AppIconPreviews"
-ictool="${OPENCAST_ICTOOL:-/Applications/Xcode-27.0.app/Contents/Applications/Icon Composer.app/Contents/Executables/ictool}"
+ictool="${OPENCAST_ICTOOL:-$(dirname "$(xcode-select -p)")/Applications/Icon Composer.app/Contents/Executables/ictool}"
 master_size=1024
 point_size=60
 

@@ -1,8 +1,8 @@
 {
   "fill" : {
     "linear-gradient" : [
-      "extended-srgb:0.98431,0.54510,0.16471,1.00000",
-      "extended-srgb:0.94902,0.41569,0.04706,1.00000"
+      "extended-srgb:0.23922,0.73333,0.43137,1.00000",
+      "extended-srgb:0.13725,0.59608,0.30980,1.00000"
     ]
   },
   "groups" : [
@@ -50,8 +50,8 @@
               "appearance" : "dark",
               "value" : {
                 "linear-gradient" : [
-                  "extended-srgb:0.16471,0.07059,0.02353,1.00000",
-                  "extended-srgb:0.07843,0.03529,0.01176,1.00000"
+                  "extended-srgb:0.02745,0.09804,0.05490,1.00000",
+                  "extended-srgb:0.01176,0.05098,0.02745,1.00000"
                 ]
               }
             },

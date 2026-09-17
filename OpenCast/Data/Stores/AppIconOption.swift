@@ -2,9 +2,17 @@ import SwiftUI
 
 enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
     case ember = "AppIcon"
-    case violet = "AppIconViolet"
     case sunset = "AppIconSunset"
+    case honey = "AppIconHoney"
+    case rose = "AppIconRose"
+    case violet = "AppIconViolet"
+    case ocean = "AppIconOcean"
+    case lagoon = "AppIconLagoon"
+    case fern = "AppIconFern"
+    case pearl = "AppIconPearl"
     case graphite = "AppIconGraphite"
+    case midnight = "AppIconMidnight"
+    case abyss = "AppIconAbyss"
 
     /// Maps UIKit's stored alternate icon name back to an option; `nil` and
     /// names from a build that no longer ships them resolve to the primary.
@@ -25,25 +33,28 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .ember:
             "Ember"
-        case .violet:
-            "Violet"
         case .sunset:
             "Sunset"
+        case .honey:
+            "Honey"
+        case .rose:
+            "Rose"
+        case .violet:
+            "Violet"
+        case .ocean:
+            "Ocean"
+        case .lagoon:
+            "Lagoon"
+        case .fern:
+            "Fern"
+        case .pearl:
+            "Pearl"
         case .graphite:
             "Graphite"
-        }
-    }
-
-    var caption: String {
-        switch self {
-        case .ember:
-            "The original navy and orange"
-        case .violet:
-            "Purple in light, near-black in dark"
-        case .sunset:
-            "Brand orange, burnt in dark"
-        case .graphite:
-            "Grey in light, charcoal in dark"
+        case .midnight:
+            "Midnight"
+        case .abyss:
+            "Abyss"
         }
     }
 
@@ -51,12 +62,28 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .ember:
             .appIconPreviewEmber
-        case .violet:
-            .appIconPreviewViolet
         case .sunset:
             .appIconPreviewSunset
+        case .honey:
+            .appIconPreviewHoney
+        case .rose:
+            .appIconPreviewRose
+        case .violet:
+            .appIconPreviewViolet
+        case .ocean:
+            .appIconPreviewOcean
+        case .lagoon:
+            .appIconPreviewLagoon
+        case .fern:
+            .appIconPreviewFern
+        case .pearl:
+            .appIconPreviewPearl
         case .graphite:
             .appIconPreviewGraphite
+        case .midnight:
+            .appIconPreviewMidnight
+        case .abyss:
+            .appIconPreviewAbyss
         }
     }
 }
