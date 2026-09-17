@@ -48,12 +48,28 @@ default.
 yarn test
 yarn typecheck
 yarn test:integration
+yarn test:gap-repair
 yarn test:production
 yarn deploy:dry-run
 ```
 
 The provisioning scripts are fail-closed helpers. Review their placeholder
 resource names before running them against your account.
+
+## Gap Repair
+
+Whisper occasionally drops speech after a pause or music sting. With
+`GAP_REPAIR_ENABLED = "true"`, the Worker re-transcribes word-timeline holes
+of at least `GAP_REPAIR_MIN_GAP_SECONDS` (default 5) with an anchored,
+VAD-enabled retry and splices in only the words inside the hole. A failed or
+rejected repair keeps the primary transcript.
+
+Repairs never touch customer credits. Each attempt is reserved durably before
+inference, never refunded, and capped at six calls per chunk and 15% of the
+episode duration (120 s floor); spend counts against
+`DAILY_SPEND_CAP_USD_MICRO`. The template ships the flag `"false"`; enable it
+once your spend cap covers the extra audio. `yarn test:gap-repair` runs the
+repair matrix and the disabled-mode check.
 
 ## Security Defaults
 
