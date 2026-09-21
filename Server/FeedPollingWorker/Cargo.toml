@@ -1,0 +1,18 @@
+[package]
+name = "opencast-feed-polling-worker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+opencast-notifications-worker = { path = "../NotificationsWorker", default-features = false }
+worker = { version = "0.8", features = ["d1", "queue"] }
+worker-macros = "0.8"
+
+[profile.release]
+lto = true
+strip = "debuginfo"
+codegen-units = 1

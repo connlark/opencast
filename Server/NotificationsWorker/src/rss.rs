@@ -80,6 +80,7 @@ struct ChannelAccumulator {
 
 #[derive(Default)]
 struct ItemAccumulator {
+    raw_date: Option<String>,
     title: Option<String>,
     summary: Option<String>,
     show_notes_html: Option<String>,
@@ -286,7 +287,10 @@ fn apply_item_value(name: &str, value: &str, item: Option<&mut ItemAccumulator>)
         }
         "content:encoded" => item.show_notes_html = Some(value.to_string()),
         "guid" => item.guid = Some(value.to_string()),
-        "pubdate" => item.published_at = parse_rss_date(value),
+        "pubdate" => {
+            item.raw_date = Some(truncated_utf8(value, 128));
+            item.published_at = parse_rss_date(value);
+        }
         "itunes:duration" => item.duration_seconds = parse_rss_duration_seconds(value),
         _ => {}
     }

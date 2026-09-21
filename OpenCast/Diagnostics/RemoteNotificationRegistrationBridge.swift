@@ -4,42 +4,48 @@ import UIKit
 final class RemoteNotificationRegistrationBridge {
     static let shared = RemoteNotificationRegistrationBridge()
 
-    private var continuation: CheckedContinuation<Data, Error>?
+    private var continuations: [UUID: CheckedContinuation<Data, Error>] = [:]
     private var deliveryContinuation: CheckedContinuation<String, Error>?
-    private var registrationID: UUID?
     private var deliveryID: UUID?
     private var deliveryTimeoutTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
+    private let requestRegistration: () -> Void
 
-    init() {}
+    init(requestRegistration: @escaping () -> Void = {
+        UIApplication.shared.registerForRemoteNotifications()
+    }) {
+        self.requestRegistration = requestRegistration
+    }
 
     func registerForRemoteNotifications() async throws -> Data {
         let requestID = UUID()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
-                replacePendingContinuation(with: continuation, id: requestID)
+                let needsRequest = continuations.isEmpty
+                continuations[requestID] = continuation
+                guard needsRequest else { return }
                 timeoutTask = Task { @MainActor in
                     try? await Task.sleep(for: .seconds(20))
                     guard !Task.isCancelled else {
                         return
                     }
-                    finish(
-                        id: requestID,
-                        .failure(RemoteNotificationRegistrationError.timedOut)
-                    )
+                    finish(.failure(RemoteNotificationRegistrationError.timedOut))
                 }
-                UIApplication.shared.registerForRemoteNotifications()
+                requestRegistration()
             }
         } onCancel: {
             Task { @MainActor [weak self] in
-                self?.finish(id: requestID, .failure(CancellationError()))
+                self?.cancel(requestID)
             }
         }
     }
 
-    func didRegister(deviceToken: Data) {
+    @discardableResult
+    func didRegister(deviceToken: Data) -> Bool {
+        let wasRequested = !continuations.isEmpty
         finish(.success(deviceToken))
+        return wasRequested
     }
 
     func didFailToRegister(error: Error) {
@@ -74,39 +80,22 @@ final class RemoteNotificationRegistrationBridge {
         finishDelivery(.success("Received"))
     }
 
-    private func replacePendingContinuation(
-        with nextContinuation: CheckedContinuation<Data, Error>,
-        id: UUID
-    ) {
-        continuation?.resume(throwing: CancellationError())
-        timeoutTask?.cancel()
-        continuation = nextContinuation
-        registrationID = id
-    }
-
-    private func finish(id: UUID, _ result: Result<Data, Error>) {
-        guard registrationID == id else {
-            return
+    private func cancel(_ id: UUID) {
+        continuations.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        if continuations.isEmpty {
+            timeoutTask?.cancel()
+            timeoutTask = nil
         }
-
-        finish(result)
     }
 
     private func finish(_ result: Result<Data, Error>) {
-        guard let continuation else {
-            return
-        }
-
-        self.continuation = nil
-        registrationID = nil
+        let pending = continuations.values
+        continuations = [:]
         timeoutTask?.cancel()
         timeoutTask = nil
 
-        switch result {
-        case .success(let deviceToken):
-            continuation.resume(returning: deviceToken)
-        case .failure(let error):
-            continuation.resume(throwing: error)
+        for continuation in pending {
+            continuation.resume(with: result)
         }
     }
 

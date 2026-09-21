@@ -13,6 +13,8 @@ struct NotificationRegistrationDiagnosticsSection: View {
         Section("Notification Registration") {
             Button("Register and Send Test Push", systemImage: "bell.badge", action: runRegistration)
                 .disabled(isRunning)
+            Button("Send Test Push", systemImage: "paperplane", action: sendTestPush)
+                .disabled(isRunning)
 
             if isRunning {
                 ProgressView("Running")
@@ -56,6 +58,14 @@ struct NotificationRegistrationDiagnosticsSection: View {
     }
 
     private func runRegistration() {
+        runDiagnostic(registersDevice: true)
+    }
+
+    private func sendTestPush() {
+        runDiagnostic(registersDevice: false)
+    }
+
+    private func runDiagnostic(registersDevice: Bool) {
         registrationTask?.cancel()
 
         isRunning = true
@@ -69,7 +79,11 @@ struct NotificationRegistrationDiagnosticsSection: View {
             }
 
             do {
-                result = try await service.run()
+                result = if registersDevice {
+                    try await service.run()
+                } else {
+                    try await service.sendTestPush()
+                }
             } catch is CancellationError {
             } catch {
                 errorMessage = error.localizedDescription

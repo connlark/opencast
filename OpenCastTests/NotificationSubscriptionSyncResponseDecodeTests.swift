@@ -45,5 +45,17 @@ struct NotificationSubscriptionSyncResponseDecodeTests {
 
         #expect(response.accepted.count == 1)
         #expect(response.pending.isEmpty)
+        #expect(response.registrationReady == nil)
+    }
+
+    @Test("Readiness is additive and distinct from accepted subscriptions", arguments: [true, false])
+    func decodesRegistrationReadiness(_ ready: Bool) throws {
+        let body = Data("""
+        {"message":"synced","accepted":[{"feed_url":"https://example.com/feed.xml"}],
+         "rejected":[],"registration_ready":\(ready)}
+        """.utf8)
+        let response = try JSONDecoder().decode(NotificationSubscriptionSyncResponse.self, from: body)
+        #expect(response.accepted.count == 1)
+        #expect(response.registrationReady == ready)
     }
 }

@@ -6,6 +6,7 @@ import {
   SELF,
   env,
   runDurableObjectAlarm,
+  runInDurableObject,
 } from "cloudflare:test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import fixture from "../tests/fixtures/ad_analysis_app_attest_development_fixture.json";
@@ -863,6 +864,13 @@ describe("internal transcription surface", () => {
     const result = await completed.json();
     expect(result.request_id).toBe(request.request_id);
     expect(result.policy).toBe("promo_ad_breaks_v2");
+    const namespace = env.AD_ANALYSIS_JOB;
+    const stub = namespace.get(namespace.idFromName(`ad-analysis:v1:job:${fingerprint}`));
+    const stored = await runInDurableObject(stub, async (_instance, state) =>
+      JSON.parse(await state.storage.get("job")));
+    expect(stored.purge_at - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(86395);
+    expect(stored.purge_at - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(86400);
+
     expect(result.spans).toHaveLength(1);
     expect(result.spans[0].start_segment_id).toBe(2);
 

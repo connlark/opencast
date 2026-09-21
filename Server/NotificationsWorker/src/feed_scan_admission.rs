@@ -19,6 +19,7 @@ struct AdmissionState {
     stale_releases: u32,
 }
 
+#[cfg(test)]
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct FeedScanAdmissionDiagnostics {
     pub(crate) refused: u32,
@@ -45,10 +46,20 @@ impl FeedScanPermit {
         })
     }
 
+    /// Complete observations hold the isolate's whole scan budget: a supported
+    /// maximum feed must not overlap another scan or preparation's working set.
+    pub(crate) fn try_acquire_exclusive() -> Option<Vec<Self>> {
+        if Self::active_count() != 0 {
+            return None;
+        }
+        (0..MAX_ACTIVE_SCANS).map(|_| Self::try_acquire()).collect()
+    }
+
     pub(crate) fn active_count() -> usize {
         ADMISSION.with(|admission| admission.borrow().active_owner_ids.len())
     }
 
+    #[cfg(test)]
     pub(crate) fn take_diagnostics() -> FeedScanAdmissionDiagnostics {
         ADMISSION.with(|admission| {
             let mut admission = admission.borrow_mut();
@@ -109,6 +120,17 @@ mod tests {
         drop((second, replacement));
         assert_eq!(FeedScanPermit::active_count(), 0);
         assert!(FeedScanPermit::try_acquire().is_some());
+    }
+
+    #[test]
+    fn complete_observation_reserves_the_whole_scan_budget() {
+        let ordinary = FeedScanPermit::try_acquire().unwrap();
+        assert!(FeedScanPermit::try_acquire_exclusive().is_none());
+        drop(ordinary);
+        let observation = FeedScanPermit::try_acquire_exclusive().unwrap();
+        assert!(FeedScanPermit::try_acquire().is_none());
+        drop(observation);
+        assert_eq!(FeedScanPermit::active_count(), 0);
     }
 
     #[test]

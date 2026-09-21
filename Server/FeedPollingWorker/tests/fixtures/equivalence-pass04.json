@@ -1,0 +1,489 @@
+{
+ "recorded_from": "the previous complete-observation executor, before the cost reset",
+ "releases": [
+  {
+   "feed": "burst",
+   "episode_id": "6b0c053dd942a566903950440893b873e98d15e41e19e5aa714e4870af066bd4",
+   "event_id": "08b483e888b5f58b415d964ce365a3d12c015ce0ce0d16754ef000370c473592",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "3811ffee17d99e170a3d54f6fbdebb1912e4ddb454423c5d1e06db7b38d009a8",
+   "published_vs_base": -597,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "6b0c053dd942a566903950440893b873e98d15e41e19e5aa714e4870af066bd4",
+    "b4b563640201f19d03c97d3ba9a44ff38fc5ce334afd0b9fbd68361cf5b087f7",
+    "bbf6e29ac4d41d76de1048481eb730e0742c684a0f6d14c31442ebcac1ba15b9",
+    "c21ce77d486fe1da830f5c23aca400bd77dc6f09023fb8240c833faccee94245",
+    "fafcd31b7bedeee2867e806da171a6ab9875e44c2e046ab9a805caa0a192c10d",
+    "fafdd8b5c736c670617c51a8d6722079ac9da5d286d46b310c66356509a2646c"
+   ]
+  },
+  {
+   "feed": "burst",
+   "episode_id": "b4b563640201f19d03c97d3ba9a44ff38fc5ce334afd0b9fbd68361cf5b087f7",
+   "event_id": "0935a187b6091f3bc93b7058bb5b88b71123ed8d48d0b0f044915b5eab49d567",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "c4a56b6cb2d9690f5f45747306767b3d7ae882ca66e24fd979080654bac4d805",
+   "published_vs_base": -598,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "6b0c053dd942a566903950440893b873e98d15e41e19e5aa714e4870af066bd4",
+    "b4b563640201f19d03c97d3ba9a44ff38fc5ce334afd0b9fbd68361cf5b087f7",
+    "bbf6e29ac4d41d76de1048481eb730e0742c684a0f6d14c31442ebcac1ba15b9",
+    "c21ce77d486fe1da830f5c23aca400bd77dc6f09023fb8240c833faccee94245",
+    "fafcd31b7bedeee2867e806da171a6ab9875e44c2e046ab9a805caa0a192c10d",
+    "fafdd8b5c736c670617c51a8d6722079ac9da5d286d46b310c66356509a2646c"
+   ]
+  },
+  {
+   "feed": "burst",
+   "episode_id": "bbf6e29ac4d41d76de1048481eb730e0742c684a0f6d14c31442ebcac1ba15b9",
+   "event_id": "6bfa7a0efc3d7529eab6595b9385cdc33c2b47b5047439a221339cc4c7aead8e",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "26fe9e20b8cc0759d96055e51150ea0c05771b1e597b6cd8f99e6172394c4cf7",
+   "published_vs_base": -600,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "6b0c053dd942a566903950440893b873e98d15e41e19e5aa714e4870af066bd4",
+    "b4b563640201f19d03c97d3ba9a44ff38fc5ce334afd0b9fbd68361cf5b087f7",
+    "bbf6e29ac4d41d76de1048481eb730e0742c684a0f6d14c31442ebcac1ba15b9",
+    "c21ce77d486fe1da830f5c23aca400bd77dc6f09023fb8240c833faccee94245",
+    "fafcd31b7bedeee2867e806da171a6ab9875e44c2e046ab9a805caa0a192c10d",
+    "fafdd8b5c736c670617c51a8d6722079ac9da5d286d46b310c66356509a2646c"
+   ]
+  },
+  {
+   "feed": "burst",
+   "episode_id": "c21ce77d486fe1da830f5c23aca400bd77dc6f09023fb8240c833faccee94245",
+   "event_id": "19d370ce51955550a24ce92711d6d47ac537d4eb35fa694ac01d5da1dd9f0de0",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "d9d673d903f15a7f93beb32a5fcfd4218a2edded51e34fc54ce652d631eb661f",
+   "published_vs_base": -595,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "6b0c053dd942a566903950440893b873e98d15e41e19e5aa714e4870af066bd4",
+    "b4b563640201f19d03c97d3ba9a44ff38fc5ce334afd0b9fbd68361cf5b087f7",
+    "bbf6e29ac4d41d76de1048481eb730e0742c684a0f6d14c31442ebcac1ba15b9",
+    "c21ce77d486fe1da830f5c23aca400bd77dc6f09023fb8240c833faccee94245",
+    "fafcd31b7bedeee2867e806da171a6ab9875e44c2e046ab9a805caa0a192c10d",
+    "fafdd8b5c736c670617c51a8d6722079ac9da5d286d46b310c66356509a2646c"
+   ]
+  },
+  {
+   "feed": "burst",
+   "episode_id": "fafcd31b7bedeee2867e806da171a6ab9875e44c2e046ab9a805caa0a192c10d",
+   "event_id": "f836b43b6505232dc6d42205f1e5077cea74e9ab5f973b27bde7107c5f10d622",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "e722996fd3e43b051edafb78916e4e6e201118e27d1f71d4876038dbcf100e63",
+   "published_vs_base": -599,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "6b0c053dd942a566903950440893b873e98d15e41e19e5aa714e4870af066bd4",
+    "b4b563640201f19d03c97d3ba9a44ff38fc5ce334afd0b9fbd68361cf5b087f7",
+    "bbf6e29ac4d41d76de1048481eb730e0742c684a0f6d14c31442ebcac1ba15b9",
+    "c21ce77d486fe1da830f5c23aca400bd77dc6f09023fb8240c833faccee94245",
+    "fafcd31b7bedeee2867e806da171a6ab9875e44c2e046ab9a805caa0a192c10d",
+    "fafdd8b5c736c670617c51a8d6722079ac9da5d286d46b310c66356509a2646c"
+   ]
+  },
+  {
+   "feed": "burst",
+   "episode_id": "fafdd8b5c736c670617c51a8d6722079ac9da5d286d46b310c66356509a2646c",
+   "event_id": "d77691c3d981ee2e6297666b0975334b3a2003bce619ac1eadf97181af232a48",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "d9f7a6f55b24da8971ba7532389bdd063f30181d3275ab17fba930be2fd5a20f",
+   "published_vs_base": -596,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "6b0c053dd942a566903950440893b873e98d15e41e19e5aa714e4870af066bd4",
+    "b4b563640201f19d03c97d3ba9a44ff38fc5ce334afd0b9fbd68361cf5b087f7",
+    "bbf6e29ac4d41d76de1048481eb730e0742c684a0f6d14c31442ebcac1ba15b9",
+    "c21ce77d486fe1da830f5c23aca400bd77dc6f09023fb8240c833faccee94245",
+    "fafcd31b7bedeee2867e806da171a6ab9875e44c2e046ab9a805caa0a192c10d",
+    "fafdd8b5c736c670617c51a8d6722079ac9da5d286d46b310c66356509a2646c"
+   ]
+  },
+  {
+   "feed": "no-validators-undated",
+   "episode_id": "102a773d91a020042d29e7d5e1c1ed90e8cc614fe69b34448b37543e881e7948",
+   "event_id": "0f24a084d9f98cf737df269a498d6d044cedebe51825f079c287aa22794f6342",
+   "reason": "undated",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "6c5a6d9779ca7b60d6a201c8023271a0a24aee3ad5d6b5caa51a8f0238f3ee5c",
+   "published_vs_base": null,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "102a773d91a020042d29e7d5e1c1ed90e8cc614fe69b34448b37543e881e7948"
+   ]
+  },
+  {
+   "feed": "edited-bonus",
+   "episode_id": "1dd6f3a3419d056387c379dc79734fad410894525ac4a6291ce5b50215250f2e",
+   "event_id": "f7ddad161163f12c152d47e7aa05161aa32b3526abccf2453ebaaee01c958252",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "2db3b870f87215b21fb59db9512c30beff0f2667c750a064fbe3468299fe48bc",
+   "published_vs_base": -50,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "1dd6f3a3419d056387c379dc79734fad410894525ac4a6291ce5b50215250f2e",
+    "9a23acdf58b7008080dc0f90b3a99ba90c4a6cd6b6679442bcd8228a5f0387b3"
+   ]
+  },
+  {
+   "feed": "edited-bonus",
+   "episode_id": "9a23acdf58b7008080dc0f90b3a99ba90c4a6cd6b6679442bcd8228a5f0387b3",
+   "event_id": "dcf4558f9298b2747d2a3d28a638d9220b53bb3daa7292b2803bfff7f1ecfc67",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "0896b1ee35ee4095f396b1a8eff69d0db35c3d7ee51584a81a008263db64614e",
+   "published_vs_base": -100,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "1dd6f3a3419d056387c379dc79734fad410894525ac4a6291ce5b50215250f2e",
+    "9a23acdf58b7008080dc0f90b3a99ba90c4a6cd6b6679442bcd8228a5f0387b3"
+   ]
+  },
+  {
+   "feed": "future-withdrawn",
+   "episode_id": "680c52114fde1cc36b304c943ba79949ebd48c63a7de7f2e79c40cdd1cec4c29",
+   "event_id": "ec89211d621b7832c80f9b70c673aa0b84e7b10db1856f4bab7fc0aad10751c7",
+   "reason": "future",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "54f81a061fc7e493096bc5839e630106295e91a4d1a66da13c061b4e4ac1a498",
+   "published_vs_base": 7200,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_base": 7200
+   },
+   "delivery_window": 86400,
+   "group": [
+    "680c52114fde1cc36b304c943ba79949ebd48c63a7de7f2e79c40cdd1cec4c29"
+   ]
+  },
+  {
+   "feed": "future-withdrawn",
+   "episode_id": "ed15b1953581b55f76acea786ebd5fc0e47665a39f03db6f31e0e2349f933115",
+   "event_id": "2c37a90820a122d789f7620cd1f79a98506e3d256b0f10d94d6f7036607763f7",
+   "reason": "future",
+   "state": "withdrawn",
+   "disposition": "withdrawn",
+   "fingerprint": "d43b58f85bb836c9ac3ce55b89a565b693113c3790357f26cb8fea2b5ce0d197",
+   "published_vs_base": 10800,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_base": 10800
+   },
+   "delivery_window": 86400,
+   "group": [
+    "ed15b1953581b55f76acea786ebd5fc0e47665a39f03db6f31e0e2349f933115"
+   ]
+  },
+  {
+   "feed": "reordered-pinned",
+   "episode_id": "a1ccb8d63e5e1a06e9354f16417c70cafab96ab0b85d8d659705f724af97c740",
+   "event_id": "a4ed12c6d2fe41dd4ee63fb0170382bf4afe629e042b831e9ad2e29101761783",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "8286a9e20b0560fe134248aa380176f77e2ddd0de549480fa43bf8afccd7391f",
+   "published_vs_base": -60,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "a1ccb8d63e5e1a06e9354f16417c70cafab96ab0b85d8d659705f724af97c740"
+   ]
+  },
+  {
+   "feed": "limited-catch-up",
+   "episode_id": "9c4902b9e2abaefcd1df263360a1fcd6f65d2e1299555e42bc2f41f7af0769a9",
+   "event_id": "35ae834dd8b45ab2f9d881ea485ba9881c6dd61f04818acdc8b3e9dd1b92ac93",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "b565b5ca3809a7f5a43ef5613f883da44fcc823fe91a0a5a87ed52f37ec58f66",
+   "published_vs_base": -16,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "9c4902b9e2abaefcd1df263360a1fcd6f65d2e1299555e42bc2f41f7af0769a9",
+    "b4125ec14ca2481676f4ac2240a2c9e1d8b5deb237b132ef712a9551b363ded2"
+   ]
+  },
+  {
+   "feed": "limited-catch-up",
+   "episode_id": "b4125ec14ca2481676f4ac2240a2c9e1d8b5deb237b132ef712a9551b363ded2",
+   "event_id": "087af5250d1002087087b6a34a9324320935c16f030483722e028c941a294a82",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "0498870634cee029a1a54197a5e2eef449d57dd9417b8fb3bcf956f7beacc91e",
+   "published_vs_base": -12,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "9c4902b9e2abaefcd1df263360a1fcd6f65d2e1299555e42bc2f41f7af0769a9",
+    "b4125ec14ca2481676f4ac2240a2c9e1d8b5deb237b132ef712a9551b363ded2"
+   ]
+  },
+  {
+   "feed": "limited-catch-up",
+   "episode_id": "c593cdbc3ba0a168cf9c8723ce1ba9797e5d55464a79a904a59320f2a9ccc405",
+   "event_id": "afd424dc8f6228367ffe6454c958af78cf3ba79e535eefd8dde4b5a480da6b48",
+   "reason": "recent",
+   "state": "outboxed",
+   "disposition": "eligible_pending",
+   "fingerprint": "4a885a74adace3850fa055ba9864c1b88da5800af4ee269b072fa92f5e782d53",
+   "published_vs_base": -20,
+   "first_observed_vs_scan": 0,
+   "eligible": {
+    "vs_scan": 0
+   },
+   "delivery_window": 86400,
+   "group": [
+    "c593cdbc3ba0a168cf9c8723ce1ba9797e5d55464a79a904a59320f2a9ccc405"
+   ]
+  }
+ ],
+ "events": [
+  {
+   "event_id": "087af5250d1002087087b6a34a9324320935c16f030483722e028c941a294a82",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "08b483e888b5f58b415d964ce365a3d12c015ce0ce0d16754ef000370c473592",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "0935a187b6091f3bc93b7058bb5b88b71123ed8d48d0b0f044915b5eab49d567",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "0f24a084d9f98cf737df269a498d6d044cedebe51825f079c287aa22794f6342",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "19d370ce51955550a24ce92711d6d47ac537d4eb35fa694ac01d5da1dd9f0de0",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "35ae834dd8b45ab2f9d881ea485ba9881c6dd61f04818acdc8b3e9dd1b92ac93",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "6bfa7a0efc3d7529eab6595b9385cdc33c2b47b5047439a221339cc4c7aead8e",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "a4ed12c6d2fe41dd4ee63fb0170382bf4afe629e042b831e9ad2e29101761783",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "afd424dc8f6228367ffe6454c958af78cf3ba79e535eefd8dde4b5a480da6b48",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "d77691c3d981ee2e6297666b0975334b3a2003bce619ac1eadf97181af232a48",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "dcf4558f9298b2747d2a3d28a638d9220b53bb3daa7292b2803bfff7f1ecfc67",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "ec89211d621b7832c80f9b70c673aa0b84e7b10db1856f4bab7fc0aad10751c7",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "f7ddad161163f12c152d47e7aa05161aa32b3526abccf2453ebaaee01c958252",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  },
+  {
+   "event_id": "f836b43b6505232dc6d42205f1e5077cea74e9ab5f973b27bde7107c5f10d622",
+   "kind": "episode",
+   "source": "feed_polling",
+   "window": 86400
+  }
+ ],
+ "deliveries": [
+  {
+   "feed": "burst",
+   "state": "accepted",
+   "member_count": 6
+  },
+  {
+   "feed": "no-validators-undated",
+   "state": "accepted",
+   "member_count": 1
+  },
+  {
+   "feed": "edited-bonus",
+   "state": "accepted",
+   "member_count": 1
+  },
+  {
+   "feed": "edited-bonus",
+   "state": "accepted",
+   "member_count": 1
+  },
+  {
+   "feed": "future-withdrawn",
+   "state": "accepted",
+   "member_count": 1
+  },
+  {
+   "feed": "reordered-pinned",
+   "state": "accepted",
+   "member_count": 1
+  },
+  {
+   "feed": "limited-catch-up",
+   "state": "accepted",
+   "member_count": 1
+  },
+  {
+   "feed": "limited-catch-up",
+   "state": "accepted",
+   "member_count": 1
+  },
+  {
+   "feed": "limited-catch-up",
+   "state": "accepted",
+   "member_count": 1
+  }
+ ],
+ "sends": [
+  {
+   "category": "OPENCAST_EPISODE",
+   "count": 1,
+   "episode": "102a773d91a020042d29e7d5e1c1ed90e8cc614fe69b34448b37543e881e7948"
+  },
+  {
+   "category": "OPENCAST_EPISODE",
+   "count": 1,
+   "episode": "1dd6f3a3419d056387c379dc79734fad410894525ac4a6291ce5b50215250f2e"
+  },
+  {
+   "category": "OPENCAST_EPISODE",
+   "count": 1,
+   "episode": "680c52114fde1cc36b304c943ba79949ebd48c63a7de7f2e79c40cdd1cec4c29"
+  },
+  {
+   "category": "OPENCAST_EPISODE",
+   "count": 1,
+   "episode": "9a23acdf58b7008080dc0f90b3a99ba90c4a6cd6b6679442bcd8228a5f0387b3"
+  },
+  {
+   "category": "OPENCAST_EPISODE",
+   "count": 1,
+   "episode": "9c4902b9e2abaefcd1df263360a1fcd6f65d2e1299555e42bc2f41f7af0769a9"
+  },
+  {
+   "category": "OPENCAST_EPISODE",
+   "count": 1,
+   "episode": "a1ccb8d63e5e1a06e9354f16417c70cafab96ab0b85d8d659705f724af97c740"
+  },
+  {
+   "category": "OPENCAST_EPISODE",
+   "count": 1,
+   "episode": "b4125ec14ca2481676f4ac2240a2c9e1d8b5deb237b132ef712a9551b363ded2"
+  },
+  {
+   "category": "OPENCAST_EPISODE",
+   "count": 1,
+   "episode": "c593cdbc3ba0a168cf9c8723ce1ba9797e5d55464a79a904a59320f2a9ccc405"
+  },
+  {
+   "category": "OPENCAST_EPISODE",
+   "count": 6,
+   "episode": "fafdd8b5c736c670617c51a8d6722079ac9da5d286d46b310c66356509a2646c"
+  }
+ ]
+}

@@ -435,6 +435,10 @@ it("retains validation failure on repeated polls/submits and accepts an explicit
     await new Promise(resolve => setTimeout(resolve, 1));
   }
   expect(failed.status).toBe(422);
+  const failedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-09-11.2-recovery:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
+  const failedRecord = await runInDurableObject(failedStub, async (_instance, state) => JSON.parse(await state.storage.get("job")));
+  expect(failedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(1795);
+  expect(failedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(1800);
   expect(await failed.json()).toMatchObject({failure: {category: "validation_exhausted", retry_disposition: "explicit_retry", policy_revision: "2026-09-11.2-recovery"}, accounting: {request_count: 1, dispatched_attempts: 2}});
   expect((await poll()).status).toBe(422);
   expect((await analyze(body)).status).toBe(422);
@@ -449,6 +453,11 @@ it("retains validation failure on repeated polls/submits and accepts an explicit
   }
   expect(failed.status).toBe(200);
   expect(payloads).toHaveLength(3);
+  const completedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-09-11.2-recovery:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
+  const completedRecord = await runInDurableObject(completedStub, async (_instance, state) => JSON.parse(await state.storage.get("job")));
+  expect(completedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(86395);
+  expect(completedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(86400);
+
 });
 
 it("polls a retained revision-A record while new submissions select isolated revision B", async () => {

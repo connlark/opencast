@@ -1,0 +1,14 @@
+{
+  "name": "@opencast/feed-polling-worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy:dry-run": "wrangler deploy --dry-run --outdir dist",
+    "test": "cargo test --locked",
+    "typecheck": "cargo check --locked --target wasm32-unknown-unknown"
+  },
+  "devDependencies": {
+    "wrangler": "catalog:"
+  }
+}

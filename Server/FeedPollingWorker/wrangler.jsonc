@@ -1,0 +1,226 @@
+{
+  // Public self-hosting template. Replace every REPLACE_WITH_* value and every
+  // "your-*" name with resources from your own Cloudflare account, and keep the
+  // queue names exactly as they are: the notifications Worker's queue ingress
+  // compares each message against opencast-notification-<kind>-<lane> and
+  // rejects anything else.
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "main": "adapter/index.js",
+  "compatibility_date": "2026-09-10",
+  "compatibility_flags": [
+    "enable_request_signal"
+  ],
+  "limits": {
+    "cpu_ms": 300000
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  "build": {
+    "command": "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release"
+  },
+  "name": "your-feed-polling-worker",
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "NOTIFICATION_ENVIRONMENT": "development",
+    // Both these vars and the matching n_control rows must allow an operation.
+    // Leave every switch closed until your D1, R2, Queues and the notifications
+    // Worker are provisioned, migrated and reachable.
+    "NOTIFICATION_DISPATCHER_ADMISSION": "false",
+    "NOTIFICATION_FEED_OBSERVATION": "false",
+    "NOTIFICATION_FIVE_MINUTE_POLLING": "false",
+    "NOTIFICATION_CLEANUP": "false"
+  },
+  "triggers": {
+    // The dispatcher runs on a one-minute cron. Enable it with ["* * * * *"]
+    // only after App Attest, APNs, D1 migrations, the Queues and your abuse
+    // controls are configured and the n_control rows are deliberately opened.
+    "crons": []
+  },
+  "d1_databases": [
+    {
+      "binding": "APP_ATTEST_DB",
+      // The same database the notifications lane uses; migrations live there.
+      "database_name": "your-notifications-db",
+      "database_id": "REPLACE_WITH_DEVELOPMENT_D1_DATABASE_ID",
+      "migrations_dir": "../NotificationsWorker/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FEED_SNAPSHOTS",
+      // Private immutable feed history. Keep R2's default rule that aborts
+      // incomplete multipart uploads after seven days.
+      "bucket_name": "your-feed-snapshots"
+    }
+  ],
+  "services": [
+    {
+      "binding": "NOTIFICATION_EVENTS",
+      "service": "your-notifications-worker",
+      "entrypoint": "FeedEvents"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "POLL_QUEUE",
+        "queue": "opencast-notification-poll-development"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "opencast-notification-poll-development",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_concurrency": 2,
+        "max_retries": 3,
+        "retry_delay": 60,
+        "dead_letter_queue": "opencast-notification-poll-development-dlq"
+      },
+      {
+        "queue": "opencast-notification-poll-development-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_concurrency": 1,
+        "max_retries": 1
+      }
+    ]
+  },
+  "env": {
+    "prod-staging": {
+      "name": "your-feed-polling-worker-prod-staging",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": {
+        "NOTIFICATION_ENVIRONMENT": "prod-staging",
+        "NOTIFICATION_DISPATCHER_ADMISSION": "false",
+        "NOTIFICATION_FEED_OBSERVATION": "false",
+        "NOTIFICATION_FIVE_MINUTE_POLLING": "false",
+        "NOTIFICATION_CLEANUP": "false"
+      },
+      "triggers": {
+        "crons": []
+      },
+      "d1_databases": [
+        {
+          "binding": "APP_ATTEST_DB",
+          "database_name": "your-notifications-db-prod-staging",
+          "database_id": "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID",
+          "migrations_dir": "../NotificationsWorker/migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "FEED_SNAPSHOTS",
+          "bucket_name": "your-feed-snapshots-prod-staging"
+        }
+      ],
+      "services": [
+        {
+          "binding": "NOTIFICATION_EVENTS",
+          "service": "your-notifications-worker-prod-staging",
+          "entrypoint": "FeedEvents"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "POLL_QUEUE",
+            "queue": "opencast-notification-poll-prod-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "opencast-notification-poll-prod-staging",
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "max_concurrency": 2,
+            "max_retries": 3,
+            "retry_delay": 60,
+            "dead_letter_queue": "opencast-notification-poll-prod-staging-dlq"
+          },
+          {
+            "queue": "opencast-notification-poll-prod-staging-dlq",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 1
+          }
+        ]
+      }
+    },
+    "production": {
+      "name": "your-feed-polling-worker-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": {
+        "NOTIFICATION_ENVIRONMENT": "production",
+        "NOTIFICATION_DISPATCHER_ADMISSION": "false",
+        "NOTIFICATION_FEED_OBSERVATION": "false",
+        "NOTIFICATION_FIVE_MINUTE_POLLING": "false",
+        "NOTIFICATION_CLEANUP": "false"
+      },
+      "triggers": {
+        "crons": []
+      },
+      "d1_databases": [
+        {
+          "binding": "APP_ATTEST_DB",
+          "database_name": "your-notifications-db-production",
+          "database_id": "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID",
+          "migrations_dir": "../NotificationsWorker/migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "FEED_SNAPSHOTS",
+          "bucket_name": "your-feed-snapshots-production"
+        }
+      ],
+      "services": [
+        {
+          "binding": "NOTIFICATION_EVENTS",
+          "service": "your-notifications-worker-production",
+          "entrypoint": "FeedEvents"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "POLL_QUEUE",
+            "queue": "opencast-notification-poll-production"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "opencast-notification-poll-production",
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "max_concurrency": 2,
+            "max_retries": 3,
+            "retry_delay": 60,
+            "dead_letter_queue": "opencast-notification-poll-production-dlq"
+          },
+          {
+            "queue": "opencast-notification-poll-production-dlq",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_concurrency": 1,
+            "max_retries": 1
+          }
+        ]
+      }
+    }
+  }
+}

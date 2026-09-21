@@ -1,0 +1,269 @@
+{
+  "register": {
+    "device_token": "abababababababababababababababababababababababababababababababab",
+    "apns_environment": "development",
+    "app_version": "fixture",
+    "app_build": "0"
+  },
+  "unregister": {
+    "device_token": "abababababababababababababababababababababababababababababababab"
+  },
+  "envelope": {
+    "install_id": "synthetic-install",
+    "key_id": "synthetic-key",
+    "payload": "{\"subscriptions\":[{\"feed_url\":\"https://fixtures.example.invalid/private/feed.xml?token=SYNTHETIC_ONLY\",\"notifications_enabled\":true}]}",
+    "assertion": "SYNTHETIC_NOT_VALID"
+  },
+  "binding": {
+    "method": "POST",
+    "path": "/v1/subscriptions/sync",
+    "sha256": "805a394ad1d37925726d9ad189e68bd7e137e20a4e622a4c1e863117fdd6d4c0"
+  },
+  "sync_response": {
+    "message": "synced",
+    "accepted": [
+      {
+        "feed_url": "https://fixtures.example.invalid/private/feed.xml?token=SYNTHETIC_ONLY",
+        "title": "Owned fixture",
+        "health": {
+          "consecutive_failures": 0
+        }
+      }
+    ],
+    "pending": [],
+    "rejected": []
+  },
+  "episode": {
+    "aps": {
+      "category": "OPENCAST_EPISODE",
+      "mutable-content": 1,
+      "alert": {
+        "title": "Owned fixture",
+        "subtitle": "Owned episode",
+        "body": "Synthetic summary."
+      },
+      "sound": "default"
+    },
+    "opencast": {
+      "kind": "episode",
+      "feed_url": "https://fixtures.example.invalid/private/feed.xml?token=SYNTHETIC_ONLY",
+      "episode_id": "59002d57dccc8efbc148b9c4505326ecc3d6ee169bd74791a7d4f4879e64d67f",
+      "podcast_title": "Owned fixture",
+      "episode_title": "Owned episode",
+      "episode_summary": "Synthetic summary.",
+      "episode_duration_seconds": 2640,
+      "episode_duration_text": "44 MIN",
+      "artwork_url": "https://art.example.invalid/show.jpg"
+    }
+  },
+  "grouped_episode": {
+    "aps": {
+      "category": "OPENCAST_EPISODE",
+      "mutable-content": 1,
+      "alert": {
+        "title": "Owned fixture",
+        "body": "5 new episodes"
+      },
+      "sound": "default"
+    },
+    "opencast": {
+      "kind": "episode",
+      "feed_url": "https://fixtures.example.invalid/private/feed.xml?token=SYNTHETIC_ONLY",
+      "episode_id": "59002d57dccc8efbc148b9c4505326ecc3d6ee169bd74791a7d4f4879e64d67f",
+      "episode_count": 5
+    }
+  },
+  "local_ad_free_pass": {
+    "opencast": {
+      "kind": "ad-free-pass"
+    }
+  },
+  "diagnostic": {
+    "opencast": {
+      "kind": "diagnostic"
+    }
+  },
+  "completion": {
+    "aps": {
+      "category": "OPENCAST_JOB_COMPLETION",
+      "thread-id": "opencast-operation-00000000-0000-4000-8000-000000000001",
+      "alert": {
+        "title": "Ad analysis ready",
+        "body": "The server result is ready."
+      },
+      "sound": "default"
+    },
+    "opencast": {
+      "schema_version": 1,
+      "kind": "ad_analysis.completed",
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "run_id": "00000000-0000-4000-8000-000000000002",
+      "event_id": "f19d9329d15c334f880dac94f2493c94baa996fe64f695d38b2fe49331a609b3",
+      "environment": "development",
+      "completed_at": 1800000000,
+      "result_expires_at": 1800086400
+    }
+  },
+  "identifiers": {
+    "feed_id": {
+      "parts": [
+        "feed-v1",
+        "https://fixtures.example.invalid/private/feed.xml?token=SYNTHETIC_ONLY"
+      ],
+      "utf8": "[\"feed-v1\",\"https://fixtures.example.invalid/private/feed.xml?token=SYNTHETIC_ONLY\"]",
+      "sha256": "104ea990f4a62a1606a3c47f501c33507b31d53bdfa2dd7a0af1c373f97d4943"
+    },
+    "episode_event_id": {
+      "parts": [
+        "episode-v1",
+        "development",
+        "104ea990f4a62a1606a3c47f501c33507b31d53bdfa2dd7a0af1c373f97d4943",
+        "59002d57dccc8efbc148b9c4505326ecc3d6ee169bd74791a7d4f4879e64d67f"
+      ],
+      "utf8": "[\"episode-v1\",\"development\",\"104ea990f4a62a1606a3c47f501c33507b31d53bdfa2dd7a0af1c373f97d4943\",\"59002d57dccc8efbc148b9c4505326ecc3d6ee169bd74791a7d4f4879e64d67f\"]",
+      "sha256": "f99f996ba5fcf8461aafdadca973dfec4fe7dbf6e163b0e37225a0f3404c4323"
+    },
+    "interest_id": {
+      "parts": [
+        "interest-v1",
+        "development",
+        "00000000-0000-4000-8000-000000000003",
+        "1",
+        "00000000-0000-4000-8000-000000000001",
+        "1"
+      ],
+      "utf8": "[\"interest-v1\",\"development\",\"00000000-0000-4000-8000-000000000003\",\"1\",\"00000000-0000-4000-8000-000000000001\",\"1\"]",
+      "sha256": "2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3"
+    },
+    "job_event_id": {
+      "parts": [
+        "job-v1",
+        "development",
+        "ad_analysis",
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000001",
+        "2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3",
+        "ad_analysis.completed"
+      ],
+      "utf8": "[\"job-v1\",\"development\",\"ad_analysis\",\"00000000-0000-4000-8000-000000000002\",\"00000000-0000-4000-8000-000000000001\",\"2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3\",\"ad_analysis.completed\"]",
+      "sha256": "f19d9329d15c334f880dac94f2493c94baa996fe64f695d38b2fe49331a609b3"
+    },
+    "delivery_id": {
+      "parts": [
+        "delivery-v1",
+        "development",
+        "f19d9329d15c334f880dac94f2493c94baa996fe64f695d38b2fe49331a609b3",
+        "00000000-0000-4000-8000-000000000003",
+        "1",
+        "2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3",
+        "1"
+      ],
+      "utf8": "[\"delivery-v1\",\"development\",\"f19d9329d15c334f880dac94f2493c94baa996fe64f695d38b2fe49331a609b3\",\"00000000-0000-4000-8000-000000000003\",\"1\",\"2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3\",\"1\"]",
+      "sha256": "0a646982edd773e83231a63f6d973edede454d406454d9e4a46c8790842466c5"
+    },
+    "unicode_delimiters": {
+      "parts": [
+        "é",
+        "é",
+        "🎧",
+        "a|b",
+        "c",
+        "quote\"\\\n"
+      ],
+      "utf8": "[\"é\",\"é\",\"🎧\",\"a|b\",\"c\",\"quote\\\"\\\\\\n\"]",
+      "sha256": "0cf3d74414ceed78cb4394ba866a1f66f07ca463fd432b49be35689c0a16d97f"
+    }
+  },
+  "payload_digest": {
+    "envelope": {
+      "schema_version": 1,
+      "environment": "development",
+      "source": "ad_analysis",
+      "event_id": "f19d9329d15c334f880dac94f2493c94baa996fe64f695d38b2fe49331a609b3",
+      "kind": "ad_analysis.completed",
+      "occurred_at": 1800000000,
+      "eligible_at": 1800000000,
+      "expires_at": 1800021600,
+      "routing": {
+        "interest_id": "2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3",
+        "interest_generation": 1,
+        "operation_id": "00000000-0000-4000-8000-000000000001",
+        "run_id": "00000000-0000-4000-8000-000000000002"
+      },
+      "data": {
+        "job_handle": "synthetic-handle",
+        "result_expires_at": 1800086400,
+        "title": "Analyse prête 🎧",
+        "body": "Épisode « café » — ready.\nTap to open."
+      }
+    },
+    "omitted_optional_field": "ad_analysis_state",
+    "canonical_utf8": "{\"data\":{\"body\":\"Épisode « café » — ready.\\nTap to open.\",\"job_handle\":\"synthetic-handle\",\"result_expires_at\":1800086400,\"title\":\"Analyse prête 🎧\"},\"eligible_at\":1800000000,\"environment\":\"development\",\"event_id\":\"f19d9329d15c334f880dac94f2493c94baa996fe64f695d38b2fe49331a609b3\",\"expires_at\":1800021600,\"kind\":\"ad_analysis.completed\",\"occurred_at\":1800000000,\"routing\":{\"interest_generation\":1,\"interest_id\":\"2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3\",\"operation_id\":\"00000000-0000-4000-8000-000000000001\",\"run_id\":\"00000000-0000-4000-8000-000000000002\"},\"schema_version\":1,\"source\":\"ad_analysis\"}",
+    "sha256": "c2b604688b72c6418cd0ce965b1035548b708a187edc98464a763277f7714487"
+  },
+  "legacy_collapse_id": {
+    "episode_id": "59002d57dccc8efbc148b9c4505326ecc3d6ee169bd74791a7d4f4879e64d67f",
+    "sha256": "a9a21ed5c8e106333fd781df7881bde7dd5600d7808abbfb7ec90287d6337ea9"
+  },
+  "ingress_rejections": [
+    {
+      "name": "duplicate_key",
+      "raw": "{\"schema_version\":1,\"schema_version\":1,\"environment\":\"development\",\"source\":\"ad_analysis\",\"event_id\":\"f19d9329d15c334f880dac94f2493c94baa996fe64f695d38b2fe49331a609b3\",\"kind\":\"ad_analysis.completed\",\"occurred_at\":1800000000,\"eligible_at\":1800000000,\"expires_at\":1800021600,\"routing\":{\"interest_id\":\"2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3\",\"interest_generation\":1,\"operation_id\":\"00000000-0000-4000-8000-000000000001\",\"run_id\":\"00000000-0000-4000-8000-000000000002\"},\"data\":{\"job_handle\":\"synthetic-handle\",\"result_expires_at\":1800086400,\"title\":\"Analyse prête 🎧\",\"body\":\"Épisode « café » — ready.\\nTap to open.\"}}",
+      "error": "invalid_request"
+    },
+    {
+      "name": "unknown_key",
+      "envelope": {
+        "schema_version": 1,
+        "environment": "development",
+        "source": "ad_analysis",
+        "event_id": "f19d9329d15c334f880dac94f2493c94baa996fe64f695d38b2fe49331a609b3",
+        "kind": "ad_analysis.completed",
+        "occurred_at": 1800000000,
+        "eligible_at": 1800000000,
+        "expires_at": 1800021600,
+        "routing": {
+          "interest_id": "2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3",
+          "interest_generation": 1,
+          "operation_id": "00000000-0000-4000-8000-000000000001",
+          "run_id": "00000000-0000-4000-8000-000000000002"
+        },
+        "data": {
+          "job_handle": "synthetic-handle",
+          "result_expires_at": 1800086400,
+          "title": "Analyse prête 🎧",
+          "body": "Épisode « café » — ready.\nTap to open."
+        },
+        "admin": true
+      },
+      "error": "invalid_request"
+    },
+    {
+      "name": "future_skew",
+      "envelope": {
+        "schema_version": 1,
+        "environment": "development",
+        "source": "ad_analysis",
+        "event_id": "f19d9329d15c334f880dac94f2493c94baa996fe64f695d38b2fe49331a609b3",
+        "kind": "ad_analysis.completed",
+        "occurred_at": 1800000061,
+        "eligible_at": 1800000061,
+        "expires_at": 1800021661,
+        "routing": {
+          "interest_id": "2be01a1b89fa4863edd38e9e53178fae316a59e21f6d6af8e0debb2c5dfc8ca3",
+          "interest_generation": 1,
+          "operation_id": "00000000-0000-4000-8000-000000000001",
+          "run_id": "00000000-0000-4000-8000-000000000002"
+        },
+        "data": {
+          "job_handle": "synthetic-handle",
+          "result_expires_at": 1800086400,
+          "title": "Analyse prête 🎧",
+          "body": "Épisode « café » — ready.\nTap to open."
+        }
+      },
+      "receiver_now": 1800000000,
+      "error": "invalid_request"
+    }
+  ]
+}

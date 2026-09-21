@@ -5,17 +5,20 @@ nonisolated struct NotificationSubscriptionSyncResponse: Decodable, Sendable {
     let accepted: [NotificationSubscriptionSyncAccepted]
     let rejected: [NotificationSubscriptionSyncRejected]
     let pending: [NotificationSubscriptionSyncPending]
+    let registrationReady: Bool?
 
     init(
         message: String,
         accepted: [NotificationSubscriptionSyncAccepted],
         rejected: [NotificationSubscriptionSyncRejected],
-        pending: [NotificationSubscriptionSyncPending] = []
+        pending: [NotificationSubscriptionSyncPending] = [],
+        registrationReady: Bool? = nil
     ) {
         self.message = message
         self.accepted = accepted
         self.rejected = rejected
         self.pending = pending
+        self.registrationReady = registrationReady
     }
 
     init(from decoder: any Decoder) throws {
@@ -34,6 +37,7 @@ nonisolated struct NotificationSubscriptionSyncResponse: Decodable, Sendable {
             [NotificationSubscriptionSyncPending].self,
             forKey: .pending
         ) ?? []
+        registrationReady = try container.decodeIfPresent(Bool.self, forKey: .registrationReady)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -41,5 +45,6 @@ nonisolated struct NotificationSubscriptionSyncResponse: Decodable, Sendable {
         case accepted
         case rejected
         case pending
+        case registrationReady = "registration_ready"
     }
 }

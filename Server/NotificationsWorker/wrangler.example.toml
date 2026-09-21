@@ -1,5 +1,5 @@
 name = "your-notifications-worker"
-main = "build/index.js"
+main = "adapter/index.js"
 compatibility_date = "2026-09-03"
 compatibility_flags = ["enable_request_signal"]
 
@@ -15,18 +15,30 @@ invocation_logs = true
 enabled = false
 
 [triggers]
-# Enable only after your APNs, App Attest, D1, route, and abuse controls are ready.
+# The scheduled handler reconciles durable delivery and prunes retention; it
+# does not poll feeds. Enable it only after your APNs, App Attest, D1, route,
+# Queues and abuse controls are ready.
 crons = []
 
 [build]
 command = "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release"
 
 [vars]
+NOTIFICATION_ENVIRONMENT = "development"
+# Release brakes. Each one also needs its matching n_control row enabled in D1,
+# so a deployment with these set to "true" still does nothing until you open the
+# control deliberately. Leave them closed until the lane is fully configured.
+NOTIFICATION_EPISODE_ACTIVATION = "false"
+NOTIFICATION_EPISODE_SEND = "false"
+NOTIFICATION_JOB_SEND = "false"
+NOTIFICATION_JOB_ENROLLMENT = "false"
+NOTIFICATION_DISPATCHER_ADMISSION = "false"
+NOTIFICATION_CLEANUP = "false"
+NOTIFICATION_FEED_OBSERVATION = "false"
 APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
 APP_ATTEST_ENVIRONMENT = "development"
 APNS_ENVIRONMENT = "development"
-ADMIN_TEST_ENDPOINTS_ENABLED = "false"
 DEBUG_ENDPOINTS_ENABLED = "false"
 PUBLIC_NOTIFICATIONS_ENABLED = "false"
 
@@ -45,11 +57,19 @@ name = "your-notifications-worker-prod-staging"
 workers_dev = true
 
 [env.prod-staging.vars]
+NOTIFICATION_ENVIRONMENT = "prod-staging"
+# Release brakes: enabling later requires both these vars and D1 controls.
+NOTIFICATION_EPISODE_ACTIVATION = "false"
+NOTIFICATION_EPISODE_SEND = "false"
+NOTIFICATION_JOB_SEND = "false"
+NOTIFICATION_JOB_ENROLLMENT = "false"
+NOTIFICATION_DISPATCHER_ADMISSION = "false"
+NOTIFICATION_CLEANUP = "false"
+NOTIFICATION_FEED_OBSERVATION = "false"
 APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
 APP_ATTEST_ENVIRONMENT = "production"
 APNS_ENVIRONMENT = "production"
-ADMIN_TEST_ENDPOINTS_ENABLED = "false"
 DEBUG_ENDPOINTS_ENABLED = "false"
 PUBLIC_NOTIFICATIONS_ENABLED = "false"
 
@@ -76,16 +96,28 @@ pattern = "notifications.example.com"
 custom_domain = true
 
 [env.production.vars]
+NOTIFICATION_ENVIRONMENT = "production"
+# Release brakes: enabling later requires both these vars and D1 controls.
+NOTIFICATION_EPISODE_ACTIVATION = "false"
+NOTIFICATION_EPISODE_SEND = "false"
+NOTIFICATION_JOB_SEND = "false"
+NOTIFICATION_JOB_ENROLLMENT = "false"
+NOTIFICATION_DISPATCHER_ADMISSION = "false"
+NOTIFICATION_CLEANUP = "false"
+NOTIFICATION_FEED_OBSERVATION = "false"
+# Kept off: the adaptive cadence is the production schedule. This switch exists
+# only for a bounded fixture experiment.
+NOTIFICATION_FIVE_MINUTE_POLLING = "false"
 APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
 APP_ATTEST_ENVIRONMENT = "production"
 APNS_ENVIRONMENT = "production"
-ADMIN_TEST_ENDPOINTS_ENABLED = "false"
 DEBUG_ENDPOINTS_ENABLED = "false"
 PUBLIC_NOTIFICATIONS_ENABLED = "false"
 
 [env.production.triggers]
-# For example: ["*/15 * * * *"] after production readiness review.
+# Delivery reconciliation and shared authentication/subscription retention.
+# For example: ["* * * * *"] after production readiness review.
 crons = []
 
 [[env.production.d1_databases]]
@@ -97,3 +129,146 @@ migrations_dir = "migrations"
 [[env.production.mtls_certificates]]
 binding = "APNS_CERT"
 certificate_id = "REPLACE_WITH_PRODUCTION_APNS_MTLS_CERTIFICATE_ID"
+
+# Queue names are fixed by the Worker: the queue ingress compares each delivered
+# message against opencast-notification-<kind>-<lane> and rejects anything else.
+# Create the queues with these names and only choose the lane suffix.
+[[queues.producers]]
+binding = "EVENT_QUEUE"
+queue = "opencast-notification-event-development"
+
+[[queues.consumers]]
+queue = "opencast-notification-event-development"
+max_batch_size = 10
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 3
+dead_letter_queue = "opencast-notification-event-development-dlq"
+
+[[queues.producers]]
+binding = "EPISODE_DELIVERY_QUEUE"
+queue = "opencast-notification-episode-development"
+
+[[queues.consumers]]
+queue = "opencast-notification-episode-development"
+max_batch_size = 10
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 3
+dead_letter_queue = "opencast-notification-episode-development-dlq"
+
+[[queues.producers]]
+binding = "JOB_DELIVERY_QUEUE"
+queue = "opencast-notification-job-development"
+
+[[queues.consumers]]
+queue = "opencast-notification-job-development"
+max_batch_size = 10
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 3
+dead_letter_queue = "opencast-notification-job-development-dlq"
+
+[[env.prod-staging.queues.producers]]
+binding = "EVENT_QUEUE"
+queue = "opencast-notification-event-prod-staging"
+
+[[env.prod-staging.queues.consumers]]
+queue = "opencast-notification-event-prod-staging"
+max_batch_size = 10
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 3
+dead_letter_queue = "opencast-notification-event-prod-staging-dlq"
+
+[[env.prod-staging.queues.producers]]
+binding = "EPISODE_DELIVERY_QUEUE"
+queue = "opencast-notification-episode-prod-staging"
+
+[[env.prod-staging.queues.consumers]]
+queue = "opencast-notification-episode-prod-staging"
+max_batch_size = 10
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 3
+dead_letter_queue = "opencast-notification-episode-prod-staging-dlq"
+
+[[env.prod-staging.queues.producers]]
+binding = "JOB_DELIVERY_QUEUE"
+queue = "opencast-notification-job-prod-staging"
+
+[[env.prod-staging.queues.consumers]]
+queue = "opencast-notification-job-prod-staging"
+max_batch_size = 10
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 3
+dead_letter_queue = "opencast-notification-job-prod-staging-dlq"
+
+[[env.production.queues.producers]]
+binding = "EVENT_QUEUE"
+queue = "opencast-notification-event-production"
+
+[[env.production.queues.consumers]]
+queue = "opencast-notification-event-production"
+max_batch_size = 10
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 3
+dead_letter_queue = "opencast-notification-event-production-dlq"
+
+[[env.production.queues.producers]]
+binding = "EPISODE_DELIVERY_QUEUE"
+queue = "opencast-notification-episode-production"
+
+[[env.production.queues.consumers]]
+queue = "opencast-notification-episode-production"
+max_batch_size = 10
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 3
+dead_letter_queue = "opencast-notification-episode-production-dlq"
+
+[[env.production.queues.producers]]
+binding = "JOB_DELIVERY_QUEUE"
+queue = "opencast-notification-job-production"
+
+[[env.production.queues.consumers]]
+queue = "opencast-notification-job-production"
+max_batch_size = 10
+max_batch_timeout = 1
+max_concurrency = 2
+max_retries = 3
+dead_letter_queue = "opencast-notification-job-production-dlq"
+
+# Private immutable feed history. Provision explicitly before any deployment,
+# and keep R2's default rule that aborts incomplete multipart uploads after
+# seven days.
+[[r2_buckets]]
+binding = "FEED_SNAPSHOTS"
+bucket_name = "your-feed-snapshots"
+
+[[env.prod-staging.r2_buckets]]
+binding = "FEED_SNAPSHOTS"
+bucket_name = "your-feed-snapshots-prod-staging"
+
+[[env.production.r2_buckets]]
+binding = "FEED_SNAPSHOTS"
+bucket_name = "your-feed-snapshots-production"
+
+# The Worker's own FeedEvents entrypoint, bound to itself: event ingress is
+# reachable only through a service binding, never through public HTTP.
+[[services]]
+binding = "NOTIFICATION_EVENTS"
+service = "your-notifications-worker"
+entrypoint = "FeedEvents"
+
+[[env.prod-staging.services]]
+binding = "NOTIFICATION_EVENTS"
+service = "your-notifications-worker-prod-staging"
+entrypoint = "FeedEvents"
+
+[[env.production.services]]
+binding = "NOTIFICATION_EVENTS"
+service = "your-notifications-worker-production"
+entrypoint = "FeedEvents"

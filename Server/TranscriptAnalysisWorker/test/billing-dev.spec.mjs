@@ -11,6 +11,7 @@ import {
   abortAllDurableObjects,
   env,
   runDurableObjectAlarm,
+  runInDurableObject,
 } from "cloudflare:test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -182,6 +183,9 @@ describe("async lane lifecycle", () => {
     );
     expect(completed.status).toBe(200);
     await waitForReservationState(identity.accountID, "settled");
+    const retained = await runInDurableObject(jobStub(request.transcript.fingerprint), async (_instance, state) => JSON.parse(await state.storage.get("job")));
+    expect(retained.purge_at - retained.billing.retry_deadline).toBe(84600);
+
 
     const settledCounters = {
       analysis_attempts: 1,

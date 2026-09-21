@@ -7,23 +7,13 @@ use crate::challenge_limits::{
     MAX_APP_ATTEST_KEYS_PER_INSTALL_PER_DAY, MAX_CHALLENGES_PER_SOURCE_PER_HOUR,
     MAX_GLOBAL_CHALLENGES_PER_HOUR,
 };
-use crate::poll_decisions::{
-    episode_should_notify_subscription, feed_failure_retry_seconds, fetch_with_deadline,
-    FEED_FETCH_TIMEOUT_SECONDS,
-};
 use crate::route::{
     content_length_exceeds, diagnostic_endpoint_path, parse_env_flag, public_write_endpoint,
-    ADMIN_TEST_POLL_FEED_PATH, DEBUG_POLL_SUBSCRIPTIONS_PATH, DEBUG_SEND_TEST_PUSH_PATH,
-    DEVICES_REGISTER_PATH, DEVICES_UNREGISTER_PATH, INSTALL_DELETE_PATH, SECURE_HELLO_PATH,
-    SUBSCRIPTIONS_SYNC_PATH,
+    DEBUG_SEND_TEST_PUSH_PATH, DEVICES_REGISTER_PATH, DEVICES_UNREGISTER_PATH, INSTALL_DELETE_PATH,
+    SECURE_HELLO_PATH, SUBSCRIPTIONS_SYNC_PATH,
 };
 use crate::{
-    apns, feed_admission,
-    feed_fetch::{
-        feed_response_disposition, same_origin, FeedFetchError, FeedResponseDisposition,
-        FEED_USER_AGENT,
-    },
-    notification_retry, poll_scheduling, random, route, rss, storage,
+    apns, feed_admission, random, route, storage,
     subscription_admission::{
         admit_pending_enqueue, stale_subscription_urls, subscription_count_error,
         MAX_EXPECTED_PUBLIC_ROLLOUT_INSTALLS_PER_DAY, MAX_GLOBAL_NEW_FEED_ADMISSIONS_PER_DAY,
@@ -31,26 +21,14 @@ use crate::{
     },
     subscription_payloads::{AcceptedSubscription, AcceptedSubscriptionHealth},
 };
-use crate::{
-    feed_resource,
-    feed_scan_admission::{FeedScanAdmissionDiagnostics, FeedScanPermit},
-    feed_stream::{FeedFetchCancellation, FeedStream},
-};
-use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use opencast_app_attest_core::app_attest_envelope::{self, AuthFailure, AuthenticatedPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
-use std::time::Duration;
-use worker::{
-    Delay, Env, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response, Result,
-};
+use worker::{Env, Headers, Request, Response, Result};
 
 const APP_ATTEST_DB: &str = "APP_ATTEST_DB";
-const APNS_CERT_BINDING: &str = "APNS_CERT";
 const REGISTER_PURPOSE: &str = "register";
 const CHALLENGE_SOURCE_HASH_KEY: &str = "CHALLENGE_SOURCE_HASH_KEY";
 const DEVELOPMENT_CHALLENGE_SOURCE_HASH_KEY: &str = "opencast-development-challenge-source-key";
@@ -60,8 +38,6 @@ const FEED_ATTEMPT_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 // diagnosis, not audit.
 const PUSH_SEND_ATTEMPT_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 const DELETED_SUBSCRIPTION_RETENTION_SECONDS: i64 = 90 * 24 * 60 * 60;
-const UNSUBSCRIBED_FEED_RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
-const MAX_FEED_GC_PER_SCHEDULED_RUN: i64 = 50;
 // A DoS bound on an authenticated endpoint, not a quota: 96 KiB covers the
 // full 200-subscription set at ~490-byte URLs. The sync is a full-set
 // declaration (any absent subscription is marked deleted), so client-side
@@ -73,12 +49,7 @@ const MAX_REGISTER_REQUEST_BODY_BYTES: usize = 48 * 1024;
 const MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES: usize =
     MAX_SUBSCRIPTION_SYNC_PAYLOAD_BYTES + 16 * 1024;
 const MAX_SMALL_AUTHENTICATED_PAYLOAD_BYTES: usize = 4 * 1024;
-const MAX_ADMIN_TEST_POLL_FEED_REQUEST_BODY_BYTES: usize = 4 * 1024;
 const MAX_DEVICES_PER_INSTALL: i64 = 5;
-const FEED_POLL_INTERVAL_SECONDS: i64 = poll_scheduling::HOT_INTERVAL_SECONDS;
-const MAX_FEEDS_PER_SCHEDULED_RUN: i64 = 50;
-const MAX_FEEDS_PER_MANUAL_POLL: usize = 10;
-const MAX_FEED_REDIRECTS: usize = 5;
 
 const _: () = assert!(
     MAX_GLOBAL_NEW_FEED_ADMISSIONS_PER_DAY
@@ -89,12 +60,25 @@ const _: () = assert!(MAX_GLOBAL_CHALLENGES_PER_HOUR > MAX_CHALLENGES_PER_SOURCE
 #[derive(Clone)]
 struct AppConfig {
     app_id: String,
+    deletion_hash_key: Option<String>,
     bundle_id: String,
     app_attest_environment: String,
     apns_environment: apns::ApnsEnvironment,
 }
 
 impl AppConfig {
+    fn deletion_fence(&self, install: &str) -> Result<String> {
+        let key = self.deletion_hash_key.as_deref().ok_or_else(|| {
+            worker::Error::RustError(
+                "CHALLENGE_SOURCE_HASH_KEY required for deletion fencing".into(),
+            )
+        })?;
+        Ok(keyed_source_token(
+            key,
+            &serde_json::to_string(&["notification-deletion-v1", install])?,
+        ))
+    }
+
     fn from_env(env: &Env) -> Result<Self> {
         let team_id = env.var("APPLE_TEAM_ID")?.to_string();
         let bundle_id = env.var("APPLE_BUNDLE_ID")?.to_string();
@@ -113,6 +97,7 @@ impl AppConfig {
 
         Ok(Self {
             app_id: format!("{team_id}.{bundle_id}"),
+            deletion_hash_key: challenge_source_hash_key(env)?,
             bundle_id,
             app_attest_environment: environment,
             apns_environment,
@@ -143,6 +128,8 @@ struct RegisterRequest {
 
 #[derive(Deserialize)]
 struct RegisterDevicePayload {
+    #[serde(default)]
+    capabilities: Vec<String>,
     device_token: String,
     apns_environment: String,
 }
@@ -176,6 +163,7 @@ struct SyncSubscriptionsResponse {
     accepted: Vec<AcceptedSubscription>,
     rejected: Vec<RejectedSubscription>,
     pending: Vec<PendingSubscription>,
+    registration_ready: bool,
 }
 
 #[derive(Serialize)]
@@ -189,64 +177,11 @@ struct PendingSubscription {
     feed_url: String,
 }
 
-#[derive(Deserialize)]
-struct DebugPollSubscriptionsPayload {
-    feed_url: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct AdminTestPollFeedPayload {
-    feed_url: String,
-}
-
-#[derive(Serialize, Default)]
-struct PollSubscriptionsResponse {
-    message: &'static str,
-    feeds_polled: usize,
-    feeds_changed: usize,
-    notifications_attempted: usize,
-    apns_200_count: usize,
-    deduped_count: usize,
-    admission_refused: usize,
-    first_error: Option<String>,
-    scan_active: usize,
-    isolate_id: String,
-    wasm_instance_id: u32,
-    wasm_memory_bytes: u32,
-}
-
-#[derive(Deserialize)]
-struct ApnsErrorResponse {
-    reason: String,
-}
-
 struct AdmittedSubscription {
     canonical_url: String,
     source_url: String,
     host: String,
     notifications_enabled: bool,
-}
-
-struct FetchedFeed {
-    status: u16,
-    decoded_bytes: usize,
-    parsed: std::result::Result<rss::scan::ScannedFeed, rss::RSSParseError>,
-    etag: Option<String>,
-    last_modified: Option<String>,
-}
-
-enum FeedFetchOutcome {
-    NotModified { status: u16 },
-    Fetched(Box<FetchedFeed>),
-}
-
-#[derive(Default)]
-struct EpisodeSendCounts {
-    attempted: usize,
-    apns_200: usize,
-    deduped: usize,
-    retryable_failures: usize,
-    truncated_fanouts: usize,
 }
 
 struct ApnsSendResult {
@@ -264,7 +199,19 @@ struct TestPushResponse {
 }
 
 pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
-    log_feed_scan_admission_diagnostics("request_start");
+    let capability = env
+        .var("NOTIFICATION_CAPABILITY")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    if capability == "feed_control" {
+        return crate::feed_control::handle(req, env).await;
+    }
+    if capability == "feed_observations" {
+        return crate::observation::runtime::handle(req, env).await;
+    }
+    if !capability.is_empty() {
+        return crate::delivery::handle(req, env, &capability).await;
+    }
     let method = req.method();
     let path = req.path();
 
@@ -300,12 +247,6 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
         ("POST", SUBSCRIPTIONS_SYNC_PATH) => {
             handle_sync_subscriptions(&mut req, &db, &config, now).await
         }
-        ("POST", DEBUG_POLL_SUBSCRIPTIONS_PATH) => {
-            handle_debug_poll_subscriptions(&mut req, &env, &db, &config, now).await
-        }
-        ("POST", ADMIN_TEST_POLL_FEED_PATH) => {
-            handle_admin_test_poll_feed(&mut req, &env, &db, &config, now).await
-        }
         (
             "GET",
             "/v1/app-attest/challenge"
@@ -315,53 +256,22 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
             | DEVICES_UNREGISTER_PATH
             | INSTALL_DELETE_PATH
             | DEBUG_SEND_TEST_PUSH_PATH
-            | SUBSCRIPTIONS_SYNC_PATH
-            | DEBUG_POLL_SUBSCRIPTIONS_PATH
-            | ADMIN_TEST_POLL_FEED_PATH,
+            | SUBSCRIPTIONS_SYNC_PATH,
         ) => json_error(405, "method_not_allowed"),
         _ => json_error(404, "not_found"),
     }
 }
 
 pub async fn handle_scheduled(env: Env) -> Result<()> {
-    log_feed_scan_admission_diagnostics("scheduled_start");
-    let config = AppConfig::from_env(&env)?;
+    if crate::delivery::reconcile(&env).await.is_err() {
+        worker::console_warn!("notification reconciliation failed; continuing maintenance");
+    }
     let db = env.d1(APP_ATTEST_DB)?;
     let now = now_seconds();
-    let feeds = storage::due_feed_rows(
-        &db,
-        now,
-        MAX_FEEDS_PER_SCHEDULED_RUN,
-        config.apns_environment.as_str(),
-    )
-    .await?;
-    if feeds.len() == MAX_FEEDS_PER_SCHEDULED_RUN as usize {
-        worker::console_warn!(
-            "scheduled drain saturated: due feeds hit MAX_FEEDS_PER_SCHEDULED_RUN={}",
-            MAX_FEEDS_PER_SCHEDULED_RUN
-        );
+    if !crate::delivery::db::permitted(&env, &db, "cleanup").await? {
+        return Ok(());
     }
-    // Optimistic per-feed claims keep an overlapping invocation (a tick that
-    // ran long) from double-fetching the same due rows. Manual/debug polls
-    // deliberately bypass the claim: they poll regardless of dueness.
-    // Claim only when a scan slot is admitted. Claiming this entire list
-    // would postpone unstarted feeds when the invocation reaches its budget.
-    let summary = poll_feeds(feeds, &env, &db, &config, now, true).await?;
-    worker::console_log!(
-        "{}",
-        json!({
-            "event": "scheduled_poll_complete",
-            "feeds_polled": summary.feeds_polled,
-            "feeds_changed": summary.feeds_changed,
-            "notifications_attempted": summary.notifications_attempted,
-            "admission_refused": summary.admission_refused,
-            "scan_active": summary.scan_active,
-            "isolate_id": summary.isolate_id,
-            "wasm_instance_id": summary.wasm_instance_id,
-            "wasm_memory_bytes": summary.wasm_memory_bytes,
-        })
-    );
-    log_feed_scan_admission_diagnostics("scheduled_after_poll");
+    // Authentication and subscription retention also serve the queued engine.
     storage::prune_challenges_before(&db, now.saturating_sub(CHALLENGE_RETENTION_SECONDS))
         .await
         .ok();
@@ -399,21 +309,12 @@ pub async fn handle_scheduled(env: Env) -> Result<()> {
     )
     .await
     .unwrap_or(0);
-    let feed_gc = storage::gc_unsubscribed_feeds(
-        &db,
-        now.saturating_sub(UNSUBSCRIBED_FEED_RETENTION_SECONDS),
-        MAX_FEED_GC_PER_SCHEDULED_RUN,
-    )
-    .await
-    .unwrap_or_default();
     worker::console_log!(
-        "scheduled retention: push_attempts={} admission_attempts={} secure_attempts={} deleted_subscriptions={} feeds={} feed_sends={}",
+        "scheduled retention: push_attempts={} admission_attempts={} secure_attempts={} deleted_subscriptions={}",
         push_attempts_pruned,
         admission_attempts_pruned,
         secure_attempts_pruned,
         subscriptions_gcd,
-        feed_gc.feeds_deleted,
-        feed_gc.sends_deleted
     );
     Ok(())
 }
@@ -550,7 +451,7 @@ async fn handle_register(
         Err(error) => return json_error(401, error.code()),
     };
 
-    storage::upsert_key(
+    if !storage::upsert_key_for_challenge(
         db,
         &body.install_id,
         &key_id,
@@ -558,8 +459,12 @@ async fn handle_register(
         &config.app_id,
         &config.app_attest_environment,
         now,
+        &body.challenge_id,
     )
-    .await?;
+    .await?
+    {
+        return json_error(401, "invalid_challenge");
+    }
 
     json_response(200, &json!({ "message": "registered" }))
 }
@@ -664,6 +569,10 @@ async fn handle_register_device(
             apns_environment: &payload.apns_environment,
             bundle_id: &config.bundle_id,
             notifications_enabled: true,
+            job_capable: payload
+                .capabilities
+                .iter()
+                .any(|c| c == "job_completion_v1"),
             now,
         },
     )
@@ -728,7 +637,13 @@ async fn handle_delete_install(
         Err(failure) => return respond_to_auth_failure(db, failure, false, now).await,
     };
 
-    storage::delete_install_data(db, &authenticated.install_id).await?;
+    storage::delete_install_data(
+        db,
+        &authenticated.install_id,
+        &config.deletion_fence(&authenticated.install_id)?,
+        now,
+    )
+    .await?;
 
     json_response(200, &json!({ "message": "deleted" }))
 }
@@ -778,12 +693,8 @@ async fn handle_debug_send_test_push(
         Ok(request) => request,
         Err(error) => return json_error(400, error.code()),
     };
-    let Ok(fetcher) = env.service(APNS_CERT_BINDING) else {
-        return json_error(500, "apns_binding_missing");
-    };
-
     let send_result = send_apns_request(
-        fetcher,
+        env,
         request,
         &authenticated.install_id,
         &device,
@@ -792,19 +703,6 @@ async fn handle_debug_send_test_push(
         now,
     )
     .await?;
-
-    if notification_retry::should_disable_device(
-        send_result.apns_status,
-        send_result.apns_error.as_deref(),
-    ) {
-        storage::disable_device(
-            db,
-            &authenticated.install_id,
-            &device.device_token_hash,
-            now,
-        )
-        .await?;
-    }
 
     json_response(200, &send_result)
 }
@@ -907,6 +805,11 @@ async fn handle_sync_subscriptions(
         storage::accepted_admission_counts_for_hosts_since(db, &unknown_hosts, day_start).await?;
 
     for admitted in admitted_by_url.into_values() {
+        writes.push(crate::delivery::db::ensure_feed(
+            db,
+            &admitted.canonical_url,
+            now,
+        )?);
         if let Some(feed) = known_feeds.remove(&admitted.canonical_url) {
             writes.push(storage::upsert_feed_subscription_statement(
                 db,
@@ -914,6 +817,7 @@ async fn handle_sync_subscriptions(
                 &admitted.canonical_url,
                 admitted.notifications_enabled,
                 now,
+                &authenticated.key_id,
             )?);
             accepted_urls.insert(admitted.canonical_url.clone());
             accepted.push(AcceptedSubscription {
@@ -948,7 +852,6 @@ async fn handle_sync_subscriptions(
                     db,
                     &admitted.canonical_url,
                     &admitted.source_url,
-                    FEED_POLL_INTERVAL_SECONDS,
                     now,
                 )?);
                 writes.push(feed_admission_attempt_statement(
@@ -966,6 +869,7 @@ async fn handle_sync_subscriptions(
                     &admitted.canonical_url,
                     admitted.notifications_enabled,
                     now,
+                    &authenticated.key_id,
                 )?);
                 accepted_urls.insert(admitted.canonical_url.clone());
                 pending.push(PendingSubscription {
@@ -1003,6 +907,7 @@ async fn handle_sync_subscriptions(
             &authenticated.install_id,
             &feed_url,
             now,
+            &authenticated.key_id,
         )?);
     }
 
@@ -1022,777 +927,17 @@ async fn handle_sync_subscriptions(
             accepted,
             rejected,
             pending,
+            registration_ready: storage::registration_ready(
+                db,
+                &authenticated.install_id,
+                config.apns_environment.as_str(),
+                &config.bundle_id,
+            )
+            .await?,
         },
     )
 }
 
-async fn handle_debug_poll_subscriptions(
-    req: &mut Request,
-    env: &Env,
-    db: &worker::D1Database,
-    config: &AppConfig,
-    now: i64,
-) -> Result<Response> {
-    let authenticated = match authenticate_envelope(
-        req,
-        db,
-        config,
-        now,
-        "POST",
-        DEBUG_POLL_SUBSCRIPTIONS_PATH,
-        MAX_SMALL_AUTHENTICATED_PAYLOAD_BYTES,
-    )
-    .await?
-    {
-        Ok(authenticated) => authenticated,
-        Err(failure) => return respond_to_auth_failure(db, failure, false, now).await,
-    };
-    let payload = match decode_payload::<DebugPollSubscriptionsPayload>(&authenticated.payload) {
-        Ok(payload) => payload,
-        Err(response) => return response,
-    };
-
-    let feeds = if let Some(feed_url) = payload.feed_url {
-        let admitted = match feed_admission::admit_feed_url(&feed_url) {
-            Ok(admitted) => admitted,
-            Err(error) => return json_error(400, error.code()),
-        };
-        match storage::subscribed_feed_row(db, &authenticated.install_id, &admitted.canonical_url)
-            .await?
-        {
-            Some(feed) => vec![feed],
-            None => return json_error(403, "feed_not_subscribed"),
-        }
-    } else {
-        let mut feeds = storage::subscribed_feed_rows(db, &authenticated.install_id).await?;
-        feeds.truncate(MAX_FEEDS_PER_MANUAL_POLL);
-        feeds
-    };
-
-    let response = poll_feeds(feeds, env, db, config, now, false).await?;
-    json_response(200, &response)
-}
-
-async fn handle_admin_test_poll_feed(
-    req: &mut Request,
-    env: &Env,
-    db: &worker::D1Database,
-    config: &AppConfig,
-    now: i64,
-) -> Result<Response> {
-    if !admin_test_endpoints_enabled(env) {
-        return json_error(404, "not_found");
-    }
-    if !admin_request_is_authorized(req, env)? {
-        return json_error(401, "unauthorized");
-    }
-
-    let body = match read_limited_json::<AdminTestPollFeedPayload>(
-        req,
-        MAX_ADMIN_TEST_POLL_FEED_REQUEST_BODY_BYTES,
-    )
-    .await?
-    {
-        Ok(body) => body,
-        Err(response) => return Ok(response),
-    };
-    let admitted = match feed_admission::admit_feed_url(&body.feed_url) {
-        Ok(admitted) => admitted,
-        Err(error) => return json_error(400, error.code()),
-    };
-    let Some(feed) = storage::feed_poll_row(db, &admitted.canonical_url).await? else {
-        return json_error(403, "feed_not_admitted");
-    };
-    if storage::enabled_subscription_count_for_feed(db, &admitted.canonical_url).await? == 0 {
-        return json_error(403, "feed_not_subscribed");
-    }
-
-    let response = poll_feeds(vec![feed], env, db, config, now, false).await?;
-    json_response(200, &response)
-}
-
-async fn poll_feeds(
-    feeds: Vec<storage::FeedPollRow>,
-    env: &Env,
-    db: &worker::D1Database,
-    config: &AppConfig,
-    now: i64,
-    claim_due: bool,
-) -> Result<PollSubscriptionsResponse> {
-    let mut response = PollSubscriptionsResponse {
-        message: "polled",
-        ..PollSubscriptionsResponse::default()
-    };
-
-    let admission_started = now_seconds();
-    let invocation_bytes = Rc::new(Cell::new(0usize));
-    let mut feeds = feeds.into_iter();
-    let mut pending_feed = None;
-    let mut active = FuturesUnordered::new();
-    loop {
-        while active.len() < feed_resource::MAX_ACTIVE_SCANS
-            && now_seconds().saturating_sub(admission_started)
-                < feed_resource::POLL_ADMISSION_SECONDS
-            && invocation_bytes.get() < feed_resource::MAX_DECODED_BYTES
-        {
-            let Some(feed) = pending_feed.take().or_else(|| feeds.next()) else {
-                break;
-            };
-            let Some(permit) = FeedScanPermit::try_acquire() else {
-                pending_feed = Some(feed);
-                response.admission_refused += 1;
-                break;
-            };
-            if claim_due
-                && !storage::claim_due_feed(
-                    db,
-                    &feed.feed_url,
-                    now,
-                    now.saturating_add(FEED_POLL_INTERVAL_SECONDS),
-                )
-                .await?
-            {
-                continue;
-            }
-            active.push(poll_one_feed(
-                feed,
-                env,
-                db,
-                config,
-                now,
-                invocation_bytes.clone(),
-                permit,
-            ));
-        }
-        let Some(result) = active.next().await else {
-            break;
-        };
-        response.feeds_polled += 1;
-        match result {
-            Ok(counts) => {
-                if counts.changed {
-                    response.feeds_changed += 1;
-                }
-                response.notifications_attempted += counts.sends.attempted;
-                response.apns_200_count += counts.sends.apns_200;
-                response.deduped_count += counts.sends.deduped;
-            }
-            Err(error) => {
-                if response.first_error.is_none() {
-                    response.first_error = Some(error);
-                }
-            }
-        }
-    }
-
-    if response.feeds_polled == 0 && response.admission_refused > 0 && pending_feed.is_some() {
-        response.message = "scan_capacity_unavailable";
-    }
-
-    storage::prune_feed_poll_attempts_before(
-        db,
-        now.saturating_sub(FEED_ATTEMPT_RETENTION_SECONDS),
-    )
-    .await
-    .ok();
-
-    let runtime = crate::runtime_diagnostics::current();
-    response.scan_active = FeedScanPermit::active_count();
-    response.isolate_id = runtime.isolate_id;
-    response.wasm_instance_id = runtime.wasm_instance_id;
-    response.wasm_memory_bytes = runtime.wasm_memory_bytes;
-
-    Ok(response)
-}
-
-fn log_feed_scan_admission_diagnostics(phase: &'static str) {
-    let FeedScanAdmissionDiagnostics {
-        refused,
-        abandoned_recovered,
-        stale_releases,
-    } = FeedScanPermit::take_diagnostics();
-    if refused == 0 && abandoned_recovered == 0 && stale_releases == 0 {
-        return;
-    }
-    let runtime = crate::runtime_diagnostics::current();
-    worker::console_warn!(
-        "{}",
-        json!({
-            "event": "feed_scan_admission",
-            "phase": phase,
-            "active": FeedScanPermit::active_count(),
-            "refused": refused,
-            "abandoned_recovered": abandoned_recovered,
-            "stale_releases": stale_releases,
-            "isolate_id": runtime.isolate_id,
-            "wasm_instance_id": runtime.wasm_instance_id,
-            "wasm_memory_bytes": runtime.wasm_memory_bytes,
-        })
-    );
-}
-
-struct PollOneFeedResult {
-    changed: bool,
-    sends: EpisodeSendCounts,
-}
-
-async fn poll_one_feed(
-    feed: storage::FeedPollRow,
-    env: &Env,
-    db: &worker::D1Database,
-    config: &AppConfig,
-    now: i64,
-    invocation_bytes: Rc<Cell<usize>>,
-    _permit: FeedScanPermit,
-) -> std::result::Result<PollOneFeedResult, String> {
-    let started_at = now_seconds();
-    match fetch_with_deadline(
-        fetch_feed(
-            &feed.source_url,
-            feed.etag.as_deref(),
-            feed.last_modified.as_deref(),
-            &feed,
-            invocation_bytes,
-        ),
-        Delay::from(Duration::from_secs(FEED_FETCH_TIMEOUT_SECONDS)),
-        FeedFetchError::FetchFailed,
-    )
-    .await
-    {
-        Ok(FeedFetchOutcome::NotModified { status }) => {
-            let poll_interval_seconds = poll_scheduling::poll_interval_seconds(
-                feed.publish_cadence_seconds,
-                feed.latest_episode_published_at,
-                now,
-            );
-            storage::update_feed_poll_not_modified(
-                db,
-                &feed.feed_url,
-                now.saturating_add(poll_interval_seconds),
-                poll_interval_seconds,
-                now,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            record_feed_poll_attempt(
-                db,
-                &feed.feed_url,
-                Some(status),
-                false,
-                None,
-                None,
-                started_at,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            Ok(PollOneFeedResult {
-                changed: false,
-                sends: EpisodeSendCounts::default(),
-            })
-        }
-        Ok(FeedFetchOutcome::Fetched(fetched)) => {
-            let FetchedFeed {
-                status,
-                decoded_bytes,
-                parsed: parsed_result,
-                etag,
-                last_modified,
-            } = *fetched;
-            let parsed = match parsed_result {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    worker::console_warn!(
-                        "{}",
-                        json!({"event":"feed_scan_failed", "reason":error.code(),
-                        "decoded_bytes":decoded_bytes, "elapsed_seconds":now_seconds()-started_at})
-                    );
-                    record_feed_poll_failure(
-                        db,
-                        &feed,
-                        Some(status),
-                        error.code(),
-                        error.is_persistent_compatibility(),
-                        started_at,
-                        now,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
-                    return Err(format!("{}: {}", feed.feed_url, error.code()));
-                }
-            };
-            let latest = &parsed.latest;
-            worker::console_log!(
-                "{}",
-                json!({"event":"feed_scan_complete", "items":parsed.item_count,
-                "decoded_bytes":decoded_bytes,
-                "checkpoint_found":parsed.checkpoint_found, "elapsed_seconds":now_seconds()-started_at})
-            );
-            let changed = feed
-                .latest_episode_id
-                .as_deref()
-                .map(|known| known != latest.id)
-                .unwrap_or(false);
-            // Oldest-first so devices receive a catch-up burst in
-            // chronological order; each episode takes its own send-ledger
-            // claims and per-device gate, and J's per-episode collapse IDs
-            // keep the burst individually visible.
-            let mut sends = EpisodeSendCounts::default();
-            for candidate in &parsed.notifications {
-                let episode = &candidate.episode;
-                let episode_fingerprint = &candidate.fingerprint;
-                let episode_sends = send_episode_notifications(
-                    env,
-                    db,
-                    config,
-                    &feed.feed_url,
-                    &parsed.title,
-                    parsed.artwork_url.as_deref(),
-                    episode,
-                    episode_fingerprint.as_deref(),
-                    now,
-                )
-                .await
-                .map_err(|error| error.to_string())?;
-                sends.attempted += episode_sends.attempted;
-                sends.apns_200 += episode_sends.apns_200;
-                sends.deduped += episode_sends.deduped;
-                sends.retryable_failures += episode_sends.retryable_failures;
-                sends.truncated_fanouts += episode_sends.truncated_fanouts;
-            }
-            let publish_cadence_seconds = parsed.publish_cadence_seconds;
-            let poll_interval_seconds = poll_scheduling::poll_interval_seconds(
-                publish_cadence_seconds,
-                latest.published_at,
-                now,
-            );
-            let completion = notification_retry::feed_poll_completion(
-                notification_retry::FeedPollCompletionInput {
-                    previous_etag: feed.etag.as_deref(),
-                    previous_last_modified: feed.last_modified.as_deref(),
-                    previous_episode_id: feed.latest_episode_id.as_deref(),
-                    previous_episode_title: feed.latest_episode_title.as_deref(),
-                    previous_episode_published_at: feed.latest_episode_published_at,
-                    fetched_etag: etag.as_deref(),
-                    fetched_last_modified: last_modified.as_deref(),
-                    fetched_episode_id: &latest.id,
-                    fetched_episode_title: &latest.title,
-                    fetched_episode_published_at: latest.published_at,
-                    computed_poll_interval_seconds: poll_interval_seconds,
-                    retryable_failures: sends.retryable_failures,
-                    truncated_fanouts: sends.truncated_fanouts,
-                    now,
-                },
-            );
-
-            storage::update_feed_poll_success(
-                db,
-                storage::FeedPollSuccess {
-                    feed_url: &feed.feed_url,
-                    title: Some(&parsed.title),
-                    website_url: parsed.website_url.as_deref(),
-                    etag: completion.etag,
-                    last_modified: completion.last_modified,
-                    latest_episode_id: completion.latest_episode_id,
-                    latest_episode_title: completion.latest_episode_title,
-                    latest_episode_published_at: completion.latest_episode_published_at,
-                    http_status: i32::from(status),
-                    next_poll_at: completion.next_poll_at,
-                    poll_interval_seconds,
-                    publish_cadence_seconds,
-                    now,
-                },
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            if feed.baseline_established_at.is_none() {
-                // First successful poll of a pending-admission feed: arm the
-                // back-catalog guard. Admission never notifies — `changed`
-                // is structurally false while no latest_episode_id was
-                // stored, so this pass only establishes the baseline.
-                storage::establish_feed_baseline(db, &feed.feed_url, now)
-                    .await
-                    .map_err(|error| error.to_string())?;
-            }
-            record_feed_poll_attempt(
-                db,
-                &feed.feed_url,
-                Some(status),
-                changed,
-                changed.then_some(latest.id.as_str()),
-                None,
-                started_at,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-
-            Ok(PollOneFeedResult { changed, sends })
-        }
-        Err(error) => {
-            let code = error.code();
-            record_feed_poll_failure(
-                db,
-                &feed,
-                error.http_status(),
-                code,
-                error.is_persistent_compatibility(),
-                started_at,
-                now,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            Err(format!("{}: {}", feed.feed_url, code))
-        }
-    }
-}
-
-async fn fetch_feed(
-    source_url: &str,
-    etag: Option<&str>,
-    last_modified: Option<&str>,
-    feed: &storage::FeedPollRow,
-    invocation_bytes: Rc<Cell<usize>>,
-) -> std::result::Result<FeedFetchOutcome, FeedFetchError> {
-    let mut current_url = source_url.to_string();
-    let original_url = url::Url::parse(source_url).map_err(|_| FeedFetchError::FetchFailed)?;
-
-    for redirect_count in 0..=MAX_FEED_REDIRECTS {
-        let parsed_current_url =
-            url::Url::parse(&current_url).map_err(|_| FeedFetchError::FetchFailed)?;
-        let headers = Headers::new();
-        // UA-less fetches trip host WAFs into 403 -> six-hour backoff; one
-        // unconditional identity serves both the poll and admission paths.
-        headers
-            .set("user-agent", FEED_USER_AGENT)
-            .map_err(|_| FeedFetchError::FetchFailed)?;
-        if same_origin(&parsed_current_url, &original_url) {
-            if let Some(etag) = etag {
-                headers
-                    .set("if-none-match", etag)
-                    .map_err(|_| FeedFetchError::FetchFailed)?;
-            }
-            if let Some(last_modified) = last_modified {
-                headers
-                    .set("if-modified-since", last_modified)
-                    .map_err(|_| FeedFetchError::FetchFailed)?;
-            }
-        }
-
-        let mut init = RequestInit::new();
-        init.with_method(Method::Get)
-            .with_headers(headers)
-            .with_redirect(RequestRedirect::Manual);
-        let request =
-            Request::new_with_init(&current_url, &init).map_err(|_| FeedFetchError::FetchFailed)?;
-        let cancellation = FeedFetchCancellation::default();
-        let signal = cancellation.signal();
-        let response = fetch_with_deadline(
-            async {
-                Fetch::Request(request)
-                    .send_with_signal(&signal)
-                    .await
-                    .map_err(|_| FeedFetchError::FetchFailed)
-            },
-            Delay::from(Duration::from_secs(feed_resource::INACTIVITY_SECONDS)),
-            FeedFetchError::FetchFailed,
-        )
-        .await?;
-        let status = response.status_code();
-
-        match feed_response_disposition(status) {
-            FeedResponseDisposition::NotModified => {
-                // A new or cross-origin request cannot validate a scan it
-                // never completed. Keep admission failures visible in health.
-                if !same_origin(&parsed_current_url, &original_url)
-                    || (etag.is_none() && last_modified.is_none())
-                {
-                    return Err(FeedFetchError::UnexpectedNotModified);
-                }
-                return Ok(FeedFetchOutcome::NotModified { status });
-            }
-            FeedResponseDisposition::Redirect => {
-                if redirect_count == MAX_FEED_REDIRECTS {
-                    return Err(FeedFetchError::TooManyRedirects);
-                }
-                let location = response
-                    .headers()
-                    .get("location")
-                    .map_err(|_| FeedFetchError::FetchFailed)?
-                    .ok_or(FeedFetchError::MissingRedirectLocation)?;
-                let next = parsed_current_url
-                    .join(&location)
-                    .map_err(|_| FeedFetchError::InvalidRedirect)?;
-                feed_admission::admit_feed_url(next.as_str())
-                    .map_err(|_| FeedFetchError::InvalidRedirect)?;
-                current_url = next.to_string();
-                continue;
-            }
-            FeedResponseDisposition::Other => {}
-        }
-        if !(200..300).contains(&status) {
-            return Err(FeedFetchError::HTTPStatus(status));
-        }
-
-        let etag = response
-            .headers()
-            .get("etag")
-            .map_err(|_| FeedFetchError::FetchFailed)?;
-        let last_modified = response
-            .headers()
-            .get("last-modified")
-            .map_err(|_| FeedFetchError::FetchFailed)?;
-        let decoded_bytes = Rc::new(Cell::new(0usize));
-        let stream = FeedStream::new(&response, invocation_bytes.clone(), decoded_bytes.clone())
-            .map_err(|_| FeedFetchError::FetchFailed)?;
-        let parsed = rss::scan::scan_rss(stream, feed).await;
-
-        return Ok(FeedFetchOutcome::Fetched(Box::new(FetchedFeed {
-            status,
-            decoded_bytes: decoded_bytes.get(),
-            parsed,
-            etag,
-            last_modified,
-        })));
-    }
-
-    Err(FeedFetchError::TooManyRedirects)
-}
-
-async fn send_episode_notifications(
-    env: &Env,
-    db: &worker::D1Database,
-    config: &AppConfig,
-    feed_url: &str,
-    podcast_title: &str,
-    podcast_artwork_url: Option<&str>,
-    episode: &rss::ParsedEpisode,
-    episode_fingerprint: Option<&str>,
-    now: i64,
-) -> Result<EpisodeSendCounts> {
-    // No publish date means no subscription can predate the episode (the
-    // back-catalog guard below rejects every device), so skip the reads.
-    let Some(episode_published_at) = episode.published_at else {
-        return Ok(EpisodeSendCounts::default());
-    };
-    let released = storage::release_stale_episode_send_claims(
-        db,
-        feed_url,
-        &episode.id,
-        episode_fingerprint,
-        now.saturating_sub(notification_retry::STALE_SEND_CLAIM_SECONDS),
-    )
-    .await?;
-    if released > 0 {
-        worker::console_warn!(
-            "released {released} stale send claims for {feed_url} episode {}",
-            episode.id
-        );
-    }
-    // One extra row tells us whether the page was cut short.
-    let page_limit = notification_retry::MAX_EPISODE_FANOUT_DEVICES_PER_POLL + 1;
-    let mut devices = storage::episode_fanout_devices(
-        db,
-        storage::EpisodeFanoutQuery {
-            feed_url,
-            apns_environment: config.apns_environment.as_str(),
-            episode_published_at,
-            episode_id: &episode.id,
-            episode_fingerprint,
-            limit: page_limit as i64,
-        },
-    )
-    .await?;
-    if devices.is_empty() {
-        return Ok(EpisodeSendCounts::default());
-    }
-    let mut counts = EpisodeSendCounts::default();
-    if devices.len() >= page_limit {
-        devices.truncate(notification_retry::MAX_EPISODE_FANOUT_DEVICES_PER_POLL);
-        counts.truncated_fanouts = 1;
-        worker::console_warn!(
-            "fanout for {feed_url} episode {} truncated at {} devices; continuing next poll",
-            episode.id,
-            notification_retry::MAX_EPISODE_FANOUT_DEVICES_PER_POLL
-        );
-    }
-    let Ok(fetcher) = env.service(APNS_CERT_BINDING) else {
-        return Err(worker::Error::RustError("apns_binding_missing".to_string()));
-    };
-
-    for device in devices {
-        if !episode_should_notify_subscription(episode, device.subscription_created_at) {
-            continue;
-        }
-
-        let request = match apns::episode_delivery_push_request(
-            &device.device_token,
-            &config.bundle_id,
-            config.apns_environment,
-            apns::EpisodeNotification {
-                podcast_title,
-                episode_title: &episode.title,
-                episode_summary: episode.summary.as_deref(),
-                show_notes_html: episode.show_notes_html.as_deref(),
-                duration_seconds: episode.duration_seconds,
-                podcast_artwork_url,
-                episode_artwork_url: episode.artwork_url.as_deref(),
-                feed_url,
-                episode_id: &episode.id,
-            },
-            now,
-        ) {
-            Ok(request) => request,
-            Err(_) => continue,
-        };
-
-        let send_id = random::random_urlsafe_token(16)
-            .map_err(|error| worker::Error::RustError(error.to_string()))?;
-        let claimed = storage::claim_episode_notification_send(
-            db,
-            storage::EpisodeNotificationSendClaim {
-                send_id: &send_id,
-                install_id: &device.install_id,
-                device_token_hash: &device.device_token_hash,
-                feed_url,
-                episode_id: &episode.id,
-                episode_fingerprint,
-                apns_environment: config.apns_environment.as_str(),
-                now,
-            },
-        )
-        .await?;
-        if !claimed {
-            counts.deduped += 1;
-            continue;
-        }
-
-        counts.attempted += 1;
-        let result = perform_apns_request(fetcher.clone(), request).await?;
-        if result.apns_status == Some(200) {
-            counts.apns_200 += 1;
-        }
-
-        // Everything the outcome implies lands in one D1 batch: the audit
-        // row, the claim's outcome (or its release for a retryable failure,
-        // which is what lets the next poll claim the device again), and the
-        // device disable for a dead token.
-        let attempt_id = random::random_urlsafe_token(16)
-            .map_err(|error| worker::Error::RustError(error.to_string()))?;
-        let mut writes = vec![storage::insert_push_send_attempt_statement(
-            db,
-            storage::PushSendAttemptInsert {
-                attempt_id: &attempt_id,
-                install_id: Some(&device.install_id),
-                device_token_hash: Some(&device.device_token_hash),
-                apns_environment: config.apns_environment.as_str(),
-                apns_status: result.apns_status.map(i32::from),
-                apns_id: result.apns_id.as_deref(),
-                apns_error: result.apns_error.as_deref(),
-                created_at: now,
-            },
-        )?];
-        if notification_retry::retryable_apns_failure(
-            result.apns_status,
-            result.apns_error.as_deref(),
-        ) {
-            counts.retryable_failures += 1;
-            writes.push(storage::delete_episode_notification_send_statement(
-                db, &send_id,
-            )?);
-        } else {
-            writes.push(storage::update_episode_notification_send_statement(
-                db,
-                storage::EpisodeNotificationSendOutcome {
-                    send_id: &send_id,
-                    apns_status: result.apns_status.map(i32::from),
-                    apns_id: result.apns_id.as_deref(),
-                    apns_error: result.apns_error.as_deref(),
-                    now,
-                },
-            )?);
-        }
-        if notification_retry::should_disable_device(
-            result.apns_status,
-            result.apns_error.as_deref(),
-        ) {
-            writes.push(storage::disable_device_statement(
-                db,
-                &device.install_id,
-                &device.device_token_hash,
-                now,
-            )?);
-        }
-        storage::run_write_batch(db, writes).await?;
-    }
-
-    Ok(counts)
-}
-
-async fn record_feed_poll_failure(
-    db: &worker::D1Database,
-    feed: &storage::FeedPollRow,
-    http_status: Option<u16>,
-    error_code: &str,
-    persistent_compatibility: bool,
-    started_at: i64,
-    now: i64,
-) -> Result<()> {
-    let failures = feed.consecutive_failures.saturating_add(1);
-    let retry_seconds = feed_failure_retry_seconds(
-        failures,
-        persistent_compatibility,
-        worker::js_sys::Math::random(),
-    );
-    storage::update_feed_poll_failure(
-        db,
-        &feed.feed_url,
-        http_status.map(i32::from),
-        error_code,
-        failures,
-        now.saturating_add(retry_seconds),
-        now,
-    )
-    .await?;
-    record_feed_poll_attempt(
-        db,
-        &feed.feed_url,
-        http_status,
-        false,
-        None,
-        Some(error_code),
-        started_at,
-    )
-    .await
-}
-
-async fn record_feed_poll_attempt(
-    db: &worker::D1Database,
-    feed_url: &str,
-    http_status: Option<u16>,
-    changed: bool,
-    new_episode_id: Option<&str>,
-    error_code: Option<&str>,
-    started_at: i64,
-) -> Result<()> {
-    let attempt_id = random::random_urlsafe_token(16)
-        .map_err(|error| worker::Error::RustError(error.to_string()))?;
-    storage::insert_feed_poll_attempt(
-        db,
-        storage::FeedPollAttemptInsert {
-            attempt_id: &attempt_id,
-            feed_url,
-            http_status: http_status.map(i32::from),
-            changed,
-            new_episode_id,
-            error_code,
-            started_at,
-            finished_at: now_seconds(),
-        },
-    )
-    .await
-}
-
-/// The logging convention for install identity: a 16-hex SHA-256 prefix —
-/// enough to correlate log lines, never the raw install id.
 fn logged_install_id(install_id: &str) -> String {
     use sha2::{Digest, Sha256};
     hex::encode(&Sha256::digest(install_id.as_bytes())[..8])
@@ -1807,7 +952,7 @@ async fn authenticate_envelope(
     path: &'static str,
     max_payload_bytes: usize,
 ) -> Result<std::result::Result<AuthenticatedPayload, AuthFailure>> {
-    app_attest_envelope::authenticate_envelope(
+    let result = app_attest_envelope::authenticate_envelope(
         req,
         db,
         &config.app_id,
@@ -1818,7 +963,8 @@ async fn authenticate_envelope(
         MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES,
         max_payload_bytes,
     )
-    .await
+    .await?;
+    Ok(result)
 }
 
 async fn respond_to_auth_failure(
@@ -1840,10 +986,6 @@ async fn respond_to_auth_failure(
     json_error(failure.status, failure.code)
 }
 
-fn admin_test_endpoints_enabled(env: &Env) -> bool {
-    env_flag(env, "ADMIN_TEST_ENDPOINTS_ENABLED", false)
-}
-
 fn debug_endpoints_enabled(env: &Env) -> bool {
     env_flag(env, "DEBUG_ENDPOINTS_ENABLED", false)
 }
@@ -1857,33 +999,6 @@ fn env_flag(env: &Env, name: &str, default_value: bool) -> bool {
         env.var(name).ok().map(|value| value.to_string()),
         default_value,
     )
-}
-
-fn admin_request_is_authorized(req: &Request, env: &Env) -> Result<bool> {
-    let expected_token = env.secret("ADMIN_TEST_TOKEN")?.to_string();
-    let Some(authorization) = req.headers().get("authorization")? else {
-        return Ok(false);
-    };
-    let Some(token) = authorization.strip_prefix("Bearer ") else {
-        return Ok(false);
-    };
-
-    Ok(timing_safe_equal(token, &expected_token))
-}
-
-fn timing_safe_equal(left: &str, right: &str) -> bool {
-    let left = left.as_bytes();
-    let right = right.as_bytes();
-    let max_length = left.len().max(right.len());
-    let mut difference = left.len() ^ right.len();
-
-    for index in 0..max_length {
-        let left_byte = left.get(index).copied().unwrap_or(0);
-        let right_byte = right.get(index).copied().unwrap_or(0);
-        difference |= usize::from(left_byte ^ right_byte);
-    }
-
-    difference == 0
 }
 
 async fn read_limited_json<T: for<'de> Deserialize<'de>>(
@@ -1978,7 +1093,7 @@ fn device_token_hash_from_unregister_payload(payload: UnregisterDevicePayload) -
 }
 
 async fn send_apns_request(
-    fetcher: worker::Fetcher,
+    env: &Env,
     request: apns::PushRequest,
     install_id: &str,
     device: &storage::DeviceRow,
@@ -1986,7 +1101,34 @@ async fn send_apns_request(
     apns_environment: apns::ApnsEnvironment,
     now: i64,
 ) -> Result<TestPushResponse> {
-    let result = perform_apns_request(fetcher, request).await?;
+    if !crate::delivery::control(db, "diagnostic_send").await? {
+        return Ok(TestPushResponse {
+            message: "send_disabled",
+            apns_status: None,
+            apns_id: None,
+            apns_error: None,
+        });
+    }
+    let result = match crate::delivery::send::diagnostic(
+        db,
+        env,
+        install_id,
+        &device.device_token_hash,
+        request,
+    )
+    .await?
+    {
+        Some(outcome) => ApnsSendResult {
+            apns_status: Some(outcome.status),
+            apns_id: outcome.apns_id,
+            apns_error: (!outcome.reason.is_empty()).then_some(outcome.reason),
+        },
+        None => ApnsSendResult {
+            apns_status: None,
+            apns_id: None,
+            apns_error: Some("fetch_failed".into()),
+        },
+    };
     record_push_send_attempt(
         db,
         install_id,
@@ -2011,58 +1153,6 @@ async fn send_apns_request(
         apns_id: result.apns_id,
         apns_error: result.apns_error,
     })
-}
-
-async fn perform_apns_request(
-    fetcher: worker::Fetcher,
-    request: apns::PushRequest,
-) -> Result<ApnsSendResult> {
-    let headers = Headers::new();
-    for (name, value) in request.headers {
-        headers.set(name, &value)?;
-    }
-
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(worker::wasm_bindgen::JsValue::from_str(&request.body)));
-
-    let mut apns_response = match fetcher.fetch(request.url, Some(init)).await {
-        Ok(response) => response,
-        Err(_) => {
-            return Ok(ApnsSendResult {
-                apns_status: None,
-                apns_id: None,
-                apns_error: Some("fetch_failed".to_string()),
-            });
-        }
-    };
-
-    let apns_status = apns_response.status_code();
-    let apns_id = apns_response.headers().get("apns-id")?;
-    let apns_error = if apns_status == 200 {
-        None
-    } else {
-        apns_error_reason(&mut apns_response).await
-    };
-
-    Ok(ApnsSendResult {
-        apns_status: Some(apns_status),
-        apns_id,
-        apns_error,
-    })
-}
-
-async fn apns_error_reason(response: &mut Response) -> Option<String> {
-    let text = response.text().await.ok()?;
-    if text.is_empty() {
-        return None;
-    }
-
-    serde_json::from_str::<ApnsErrorResponse>(&text)
-        .map(|body| body.reason)
-        .ok()
-        .or_else(|| Some(text.chars().take(200).collect()))
 }
 
 async fn record_push_send_attempt(

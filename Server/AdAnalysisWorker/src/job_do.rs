@@ -12,8 +12,9 @@ use crate::execution::Execution;
 use crate::job::{
     alarm_decision, poll_decision, submit_decision, transcript_content_hash, ActiveWindow,
     AlarmDecision, JobDoPollRequest, JobRecord, JobSubmitRequest, PollDecision, SubmitDecision,
-    ERROR_ADMISSION_BUSY, JOB_HEARTBEAT_SECONDS, JOB_POLL_AFTER_SECONDS, JOB_RESULT_TTL_SECONDS,
-    JOB_SUBMIT_POLL_AFTER_SECONDS, SUBMIT_ADMISSION_MAX_WAITS, SUBMIT_ADMISSION_WAIT_MILLIS,
+    ERROR_ADMISSION_BUSY, JOB_FAILURE_TTL_SECONDS, JOB_HEARTBEAT_SECONDS, JOB_POLL_AFTER_SECONDS,
+    JOB_SUBMIT_POLL_AFTER_SECONDS, JOB_SUCCESS_TTL_SECONDS, SUBMIT_ADMISSION_MAX_WAITS,
+    SUBMIT_ADMISSION_WAIT_MILLIS,
 };
 use crate::route::JSON_CONTENT_TYPE;
 use crate::types::{ErrorResponse, GEMINI_MODEL_ENV_VAR};
@@ -91,7 +92,9 @@ impl AdAnalysisJob {
         loop {
             let mut record = read_record(&self.state.storage()).await?;
             let mut decision = submit_decision(
-                record.as_ref(),
+                record
+                    .as_ref()
+                    .and_then(|record| record.unexpired(now_seconds())),
                 &submit.subject,
                 &submitted_hash,
                 submit.internal,
@@ -125,7 +128,7 @@ impl AdAnalysisJob {
                     result_json, join, ..
                 } => {
                     // Completed results serve idempotently until the TTL
-                    // alarm purges them: a response lost in transit must be
+                    // deadline expires: a response lost in transit must be
                     // recoverable by asking again, never by re-running the
                     // model. A content-proven new subject joins first so its
                     // later polls stay authorized.
@@ -236,7 +239,12 @@ impl AdAnalysisJob {
             Err(_) => return json_error(400, "malformed_json"),
         };
         let record = read_record(&self.state.storage()).await?;
-        match poll_decision(record.as_ref(), poll.subject.as_deref()) {
+        match poll_decision(
+            record
+                .as_ref()
+                .and_then(|record| record.unexpired(now_seconds())),
+            poll.subject.as_deref(),
+        ) {
             PollDecision::NotFound => json_error(404, "job_not_found"),
             PollDecision::Running { .. } => {
                 // Echo the caller's validated routing handle. Older clients
@@ -354,7 +362,11 @@ async fn run_job(
         return Ok(());
     }
 
-    let purge_at = now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS);
+    let retention = match outcome {
+        RunOutcome::Completed { .. } => JOB_SUCCESS_TTL_SECONDS,
+        RunOutcome::FailedUpstream { .. } => JOB_FAILURE_TTL_SECONDS,
+    };
+    let purge_at = now_seconds().saturating_add(retention);
     let record = match outcome {
         RunOutcome::Completed { result_json } => JobRecord::Completed {
             job_id,
@@ -394,7 +406,7 @@ async fn terminalize_failed_run(state: &Rc<State>, job_id: &str, started_at: i64
     if current_job_id != job_id || current_started_at != started_at {
         return Ok(());
     }
-    let purge_at = now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS);
+    let purge_at = now_seconds().saturating_add(JOB_FAILURE_TTL_SECONDS);
     let record = JobRecord::FailedUpstream {
         job_id: job_id.to_string(),
         status: 500,

@@ -2,7 +2,7 @@ use opencast_transcript_analysis_worker::billing::{JobBillingState, PendingBilli
 use opencast_transcript_analysis_worker::job::{
     alarm_decision, app_attest_subject, bearer_subject, completion_log_line, job_object_name,
     poll_decision, submit_decision, terminal_billing_action, transcript_content_hash, valid_job_id,
-    AlarmDecision, JobRecord, PollDecision, SubmitDecision, JOB_RESULT_TTL_SECONDS,
+    AlarmDecision, JobRecord, PollDecision, SubmitDecision, JOB_FAILURE_TTL_SECONDS,
     JOB_RUNNING_DEADLINE_SECONDS,
 };
 use opencast_transcript_analysis_worker::types::{
@@ -260,7 +260,7 @@ fn alarm_decisions_heartbeat_watchdog_and_purge() {
             AlarmDecision::FailTransient {
                 record: JobRecord::FailedTransient {
                     job_id: "fingerprint-123".to_string(),
-                    purge_at: now + JOB_RESULT_TTL_SECONDS,
+                    purge_at: now + JOB_FAILURE_TTL_SECONDS,
                     subjects: vec![OWNER.to_string()],
                     content_hash: CONTENT.to_string(),
                     billing: None,
@@ -359,6 +359,7 @@ fn alarm_retries_pending_billing_before_purge() {
     let mut record = completed();
     if let JobRecord::Completed { billing, .. } = &mut record {
         *billing = Some(JobBillingState {
+            retry_deadline: None,
             billing_id: "tan-abc123def456ghij".to_string(),
             charge_seconds: 500,
             account_id: "pacct-test".to_string(),
@@ -398,6 +399,7 @@ fn job_record_billing_serde_covers_skew_and_round_trip() {
     let mut billed = completed();
     if let JobRecord::Completed { billing, .. } = &mut billed {
         *billing = Some(JobBillingState {
+            retry_deadline: None,
             billing_id: "tan-abc123def456ghij".to_string(),
             charge_seconds: 500,
             account_id: "pacct-test".to_string(),
@@ -512,4 +514,123 @@ fn completion_log_line_without_usage_keeps_token_fields_null() {
     assert!(parsed["candidates_tokens"].is_null());
     assert!(parsed["thoughts_tokens"].is_null());
     assert!(parsed["total_tokens"].is_null());
+}
+
+#[test]
+fn stored_expiry_bounds_reads_and_coalescing_without_sliding() {
+    // Both a pre-deploy 30-minute record and a newly promised 24-hour record
+    // survive serialization, repeated reads, and content-proven joins unchanged.
+    let completed_at = 10_000;
+    for lifetime in [1_800, 86_400] {
+        let mut record = completed();
+        let deadline = completed_at + lifetime;
+        if let JobRecord::Completed { purge_at, .. } = &mut record {
+            *purge_at = deadline;
+        }
+        let encoded = serde_json::to_string(&record).unwrap();
+        let mut record: JobRecord = serde_json::from_str(&encoded).unwrap();
+        for now in [completed_at + 1_799, completed_at + 1_800, deadline - 1] {
+            if now >= deadline {
+                continue;
+            }
+            let live = record.unexpired(now);
+            assert!(matches!(
+                poll_decision(live, Some(OWNER)),
+                PollDecision::ServeCompleted { .. }
+            ));
+            assert_eq!(poll_decision(live, Some(STRANGER)), PollDecision::NotFound);
+            assert_eq!(
+                submit_decision(live, STRANGER, OTHER_CONTENT),
+                SubmitDecision::DenyContentMismatch
+            );
+            assert!(matches!(
+                submit_decision(live, STRANGER, CONTENT),
+                SubmitDecision::ServeCompleted { join: true, .. }
+            ));
+            assert_eq!(
+                alarm_decision(Some(&record), false, now),
+                AlarmDecision::SchedulePurge { purge_at: deadline }
+            );
+        }
+        assert!(record.push_subject(STRANGER));
+        assert!(matches!(
+            poll_decision(record.unexpired(deadline - 1), Some(STRANGER)),
+            PollDecision::ServeCompleted { .. }
+        ));
+        for now in [deadline, deadline + 1, deadline + 86_400] {
+            assert_eq!(
+                poll_decision(record.unexpired(now), Some(OWNER)),
+                PollDecision::NotFound
+            );
+            assert_eq!(
+                submit_decision(record.unexpired(now), OWNER, CONTENT),
+                SubmitDecision::Start
+            );
+            assert_eq!(
+                alarm_decision(Some(&record), false, now),
+                AlarmDecision::Purge
+            );
+        }
+    }
+}
+
+#[test]
+fn expired_failures_are_unavailable_but_live_failures_keep_retry_policy() {
+    let record = JobRecord::FailedTransient {
+        job_id: "fingerprint-123".into(),
+        purge_at: 2_000,
+        subjects: vec![OWNER.into()],
+        content_hash: CONTENT.into(),
+        billing: None,
+    };
+    assert_eq!(
+        poll_decision(record.unexpired(1_999), Some(OWNER)),
+        PollDecision::ServeFailedTransient
+    );
+    assert_eq!(
+        submit_decision(record.unexpired(1_999), OWNER, CONTENT),
+        SubmitDecision::Start
+    );
+    assert_eq!(
+        poll_decision(record.unexpired(2_000), Some(OWNER)),
+        PollDecision::NotFound
+    );
+    assert!(running().unexpired(i64::MAX).is_some()); // watchdog owns execution expiry
+}
+
+#[test]
+fn billing_deadline_is_independent_of_success_and_legacy_uses_stored_purge() {
+    let mut record = completed();
+    if let JobRecord::Completed {
+        purge_at, billing, ..
+    } = &mut record
+    {
+        *purge_at = 86_500;
+        let mut state = JobBillingState::reserved("tan-retention".into(), 10, "account".into());
+        state.pending = Some(PendingBillingAction::Settle);
+        state.retry_deadline = Some(1_900);
+        *billing = Some(state);
+    }
+    assert_eq!(
+        alarm_decision(Some(&record), false, 1_899),
+        AlarmDecision::RetryBilling
+    );
+    assert_eq!(
+        alarm_decision(Some(&record), false, 1_900),
+        AlarmDecision::FinalizeBilling
+    );
+    assert_eq!(
+        alarm_decision(Some(&record), false, 86_499),
+        AlarmDecision::FinalizeBilling
+    );
+    assert_eq!(
+        alarm_decision(Some(&record), false, 86_500),
+        AlarmDecision::Purge
+    );
+    record.billing_mut().unwrap().retry_deadline = None;
+    assert_eq!(record.billing_deadline(), Some(86_500));
+    assert_eq!(
+        alarm_decision(Some(&record), false, 1_900),
+        AlarmDecision::RetryBilling
+    );
 }

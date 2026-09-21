@@ -160,11 +160,10 @@ mod tests {
             reader.accept(&xml.as_bytes()[split..]).unwrap();
         }
 
-        let scanned =
-            crate::rss::scan::scan_rss(xml.as_bytes(), &crate::rss::scan_tests::row(None))
-                .now_or_never()
-                .unwrap()
-                .unwrap();
+        let scanned = crate::rss::scan::scan_rss(xml.as_bytes(), crate::rss::scan_tests::FEED_URL)
+            .now_or_never()
+            .unwrap()
+            .unwrap();
         assert_eq!(scanned.title, "Lexical Show");
         assert_eq!(scanned.item_count, 1);
     }

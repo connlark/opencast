@@ -108,11 +108,15 @@ fn parse_failures_distinguish_malformed_response_missing_text_and_model_json() {
 /// the text is never trusted.
 #[test]
 fn max_tokens_is_a_failure_even_when_the_json_parses() {
-    let parsed = parse_generate_content_response(&wrap_candidate(&model_output_json(), "MAX_TOKENS"));
+    let parsed =
+        parse_generate_content_response(&wrap_candidate(&model_output_json(), "MAX_TOKENS"));
 
     assert!(parsed.output.is_none());
     assert_eq!(parsed.failure, Some(GeminiParseError::MaxTokensTruncated));
-    assert_eq!(GeminiParseError::MaxTokensTruncated.code(), "max_tokens_truncated");
+    assert_eq!(
+        GeminiParseError::MaxTokensTruncated.code(),
+        "max_tokens_truncated"
+    );
     assert_eq!(parsed.warnings, vec!["gemini_finish_reason:MAX_TOKENS"]);
     // The burned usage still surfaces for cost instrumentation.
     assert_eq!(parsed.usage.unwrap().total_token_count, 3_120);

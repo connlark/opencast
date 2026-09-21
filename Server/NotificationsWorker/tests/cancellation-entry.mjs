@@ -1,7 +1,7 @@
 // Local workerd test entrypoint only. The production entrypoint and Wasm are
 // imported unchanged. This barrier delays a read result after scanning, so an
 // abandoned Rust continuation must not reach notification claims/checkpoints.
-import worker from '../build/index.js';
+import worker, {FeedObservations} from '../adapter/index.js';
 
 let incomingAborts = 0;
 const postscanReads = new Set();
@@ -13,8 +13,8 @@ function delayedStatement(statement) {
     get(target, property) {
       if (property === 'constructor') return target.constructor;
       if (property === 'bind') return (...values) => delayedStatement(target.bind(...values));
-      if (property === 'all') return async (...args) => {
-        const result = await target.all(...args);
+      if (property === 'first') return async (...args) => {
+        const result = await target.first(...args);
         const pending = { released: false };
         postscanReads.add(pending);
         while (!pending.released) await pause();
@@ -51,7 +51,7 @@ export default {
     if (cancellationID) {
       // Miniflare's HTTP proxy does not reliably propagate socket disconnects.
       // A native, controllable signal tests the real Rust entrypoint locally;
-      // the remote harness separately proves the platform's disconnect wiring.
+      // platform disconnect propagation is distinct from this cancellation proof.
       const controller = new AbortController();
       cancellation = { requested: false, finished: false };
       cancellations.set(cancellationID, cancellation);
@@ -72,7 +72,7 @@ export default {
           if (property === 'constructor') return target.constructor;
           if (property === 'prepare') return sql => {
             const statement = target.prepare(sql);
-            return sql.startsWith('SELECT devices.install_id, devices.device_token,')
+            return sql.startsWith('SELECT sha256,bytes FROM n_snapshot')
               ? delayedStatement(statement) : statement;
           };
           const value = Reflect.get(target, property);
@@ -81,7 +81,7 @@ export default {
       }) };
     }
     try {
-      return await new worker(ctx, env).fetch(request);
+      return await new FeedObservations(ctx, env).fetch(new Request(request.url.replace('/observation',''),request));
     } finally {
       if (cancellation) cancellation.finished = true;
       cancellations.delete(cancellationID);

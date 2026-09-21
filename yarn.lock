@@ -1544,6 +1544,14 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@opencast/feed-polling-worker@workspace:Server/FeedPollingWorker":
+  version: 0.0.0-use.local
+  resolution: "@opencast/feed-polling-worker@workspace:Server/FeedPollingWorker"
+  dependencies:
+    wrangler: "catalog:"
+  languageName: unknown
+  linkType: soft
+
 "@opencast/model-gateway-worker@workspace:Server/ModelGatewayWorker":
   version: 0.0.0-use.local
   resolution: "@opencast/model-gateway-worker@workspace:Server/ModelGatewayWorker"

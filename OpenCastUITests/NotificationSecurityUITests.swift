@@ -2,9 +2,6 @@ import XCTest
 
 final class NotificationSecurityUITests: XCTestCase {
     private static let notificationSyncFeedURLKey = "OPENCAST_NOTIFICATION_SYNC_FEED_URL"
-    private static let notificationFixtureFeedBaseURLKey = "OPENCAST_NOTIFICATION_FIXTURE_FEED_BASE_URL"
-    private static let adminPollURLKey = "OPENCAST_NOTIFICATION_ADMIN_POLL_URL"
-    private static let notificationLargeFeedURLKey = "OPENCAST_NOTIFICATION_LARGE_FEED_URL"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -69,7 +66,7 @@ final class NotificationSecurityUITests: XCTestCase {
     }
 
     @MainActor
-    func testPhysicalDeviceNotificationSubscriptionSyncAndPollDiagnosticsPass() throws {
+    func testPhysicalDeviceNotificationSubscriptionSyncDiagnosticPasses() throws {
         try skipIfRunningOnSimulator()
 
         let app = makePhysicalDiagnosticApp()
@@ -82,14 +79,7 @@ final class NotificationSecurityUITests: XCTestCase {
         scrollUntilHittable(app.buttons["Sync Notification Subscriptions"], in: app).tap()
 
         XCTAssertTrue(waitForDiagnosticText(containing: "Sync, synced", in: app, timeout: 90))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Accepted, 1", in: app, timeout: 15))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Rejected, 0", in: app, timeout: 15))
-
-        scrollUntilHittable(app.buttons["Poll Synced Feeds"], in: app).tap()
-
-        XCTAssertTrue(waitForDiagnosticText(containing: "Poll, polled", in: app, timeout: 90))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Feeds Polled, 1", in: app, timeout: 15))
-        XCTAssertFalse(staticText(containing: "missing_redirect_location", in: app).exists)
+        assertSingleFeedEnqueuedOrAccepted(in: app)
     }
 
     @MainActor
@@ -188,12 +178,12 @@ final class NotificationSecurityUITests: XCTestCase {
             timeout: 30
         )
         XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 2))
-        attachScreen(named: "notification_look_collapsed")
+        attachSmokeScreenshot(named: "notification_look_collapsed")
 
         notification.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.2)
         Thread.sleep(forTimeInterval: 2)
         XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 2))
-        attachScreen(named: "notification_look_expanded")
+        attachSmokeScreenshot(named: "notification_look_expanded")
     }
 
     @MainActor
@@ -238,7 +228,7 @@ final class NotificationSecurityUITests: XCTestCase {
         )
         XCTAssertTrue(notification.exists)
         XCTAssertNotEqual(app.state, .runningForeground)
-        attachScreen(named: "adfreepass_notification_look_collapsed")
+        attachSmokeScreenshot(named: "adfreepass_notification_look_collapsed")
 
         notification.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.2)
         Thread.sleep(forTimeInterval: 2)
@@ -247,269 +237,18 @@ final class NotificationSecurityUITests: XCTestCase {
             "Expanded ad-free-pass notification should render the failures body line."
         )
         XCTAssertNotEqual(app.state, .runningForeground)
-        attachScreen(named: "adfreepass_notification_look_expanded")
+        attachSmokeScreenshot(named: "adfreepass_notification_look_expanded")
     }
 
-    @MainActor
-    func testPhysicalDeviceTemporaryFeedSendsFreshEpisodeAndDedupes() throws {
-        try skipIfRunningOnSimulator()
-
-        let runID = "proof-\(Int(Date().timeIntervalSince1970))"
-        let rolloverTime = Date().timeIntervalSince1970 + 180
-        let feedURL = try Self.notificationFixtureFeedURL(runID: runID, rolloverTime: rolloverTime)
-
-        XCTAssertLessThan(
-            Date().timeIntervalSince1970,
-            rolloverTime - 20,
-            "Fixture rollover must still be in the future when the baseline sync starts."
-        )
-
-        let permissionMonitor = addUIInterruptionMonitor(withDescription: "Notification Permission") { alert in
-            for buttonTitle in ["Allow", "Allow Notifications"] {
-                let button = alert.buttons[buttonTitle]
-                if button.exists {
-                    button.tap()
-                    return true
-                }
-            }
-            return false
+    private static func notificationSyncFeedURLOrSkip() throws -> String {
+        guard let feedURL = ProcessInfo.processInfo.environment[notificationSyncFeedURLKey],
+              !feedURL.isEmpty
+        else {
+            throw XCTSkip("Set \(notificationSyncFeedURLKey) to a public RSS feed before running this proof.")
         }
-        defer { removeUIInterruptionMonitor(permissionMonitor) }
 
-        let app = makePhysicalDiagnosticApp()
-        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = feedURL
-        app.launch()
-
-        openDiagnostics(in: app)
-        scrollUntilHittable(app.buttons["Register and Send Test Push"], in: app).tap()
-        app.tap()
-
-        XCTAssertTrue(staticText(containing: "Worker Registration, registered", in: app).waitForExistence(timeout: 90))
-        XCTAssertTrue(staticText(containing: "APNs Status, 200", in: app).waitForExistence(timeout: 90))
-
-        subscribeToFeed(in: app, title: "OpenCast Notification Fixture")
-
-        openDiagnostics(in: app)
-        scrollUntilHittable(app.buttons["Sync Notification Subscriptions"], in: app).tap()
-
-        XCTAssertTrue(waitForDiagnosticText(containing: "Sync, synced", in: app, timeout: 90))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Accepted, 1", in: app, timeout: 15))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Rejected, 0", in: app, timeout: 15))
-
-        waitForFixtureRollover(rolloverTime)
-
-        scrollUntilHittable(app.buttons["Poll Synced Feeds"], in: app).tap()
-        XCTAssertTrue(waitForDiagnosticText(containing: "Poll, polled", in: app, timeout: 90))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Feeds Changed, 1", in: app, timeout: 15))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Notifications Attempted, 1", in: app, timeout: 15))
-        XCTAssertTrue(waitForDiagnosticText(containing: "APNs 200, 1", in: app, timeout: 15))
-        XCTAssertFalse(staticText(containing: "missing_redirect_location", in: app).exists)
-
-        openDiagnostics(in: app)
-        scrollUntilHittable(app.buttons["Poll Synced Feeds"], in: app).tap()
-
-        XCTAssertTrue(waitForDiagnosticText(containing: "Poll, polled", in: app, timeout: 90))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Notifications Attempted, 0", in: app, timeout: 15))
-        XCTAssertFalse(staticText(containing: "missing_redirect_location", in: app).exists)
+        return feedURL
     }
-
-    #if INTERNAL_NOTIFICATIONS_DIAGNOSTICS
-    @MainActor
-    func testPhysicalDeviceProdStagingFixturePushArrivesWhileBackgroundedAndDedupes() async throws {
-        try skipIfRunningOnSimulator()
-
-        let adminToken = try Self.prodStagingAdminTokenOrSkip()
-        let runID = "prod-staging-\(Int(Date().timeIntervalSince1970))"
-        let rolloverTime = Date().timeIntervalSince1970 + 180
-        let feedURL = try Self.notificationFixtureFeedURL(runID: runID, rolloverTime: rolloverTime)
-
-        XCTAssertLessThan(
-            Date().timeIntervalSince1970,
-            rolloverTime - 20,
-            "Fixture rollover must still be in the future when the baseline sync starts."
-        )
-
-        let permissionMonitor = addUIInterruptionMonitor(withDescription: "Notification Permission") { alert in
-            for buttonTitle in ["Allow", "Allow Notifications"] {
-                let button = alert.buttons[buttonTitle]
-                if button.exists {
-                    button.tap()
-                    return true
-                }
-            }
-            return false
-        }
-        defer { removeUIInterruptionMonitor(permissionMonitor) }
-
-        let app = makePhysicalDiagnosticApp()
-        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = feedURL
-        app.launch()
-
-        openDiagnostics(in: app)
-        scrollUntilHittable(app.buttons["Register and Send Test Push"], in: app).tap()
-        app.tap()
-
-        XCTAssertTrue(staticText(containing: "Worker Registration, registered", in: app).waitForExistence(timeout: 90))
-        XCTAssertTrue(staticText(containing: "APNs Status, 200", in: app).waitForExistence(timeout: 90))
-
-        subscribeToFeed(in: app, title: "OpenCast Notification Fixture")
-
-        openDiagnostics(in: app)
-        scrollUntilHittable(app.buttons["Sync Notification Subscriptions"], in: app).tap()
-
-        XCTAssertTrue(waitForDiagnosticText(containing: "Sync, synced", in: app, timeout: 90))
-        assertSingleFeedEnqueuedOrAccepted(in: app)
-
-        // Admission enqueues new feeds. Establish the complete-scan baseline
-        // explicitly while staging crons are disabled, before fixture rollover.
-        let baselinePoll = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
-        XCTAssertEqual(baselinePoll.feedsPolled, 1)
-        XCTAssertEqual(baselinePoll.notificationsAttempted, 0)
-        XCTAssertNil(baselinePoll.firstError)
-
-        XCUIDevice.shared.press(.home)
-        waitForFixtureRollover(rolloverTime)
-
-        let firstPoll = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
-        XCTAssertEqual(firstPoll.message, "polled")
-        XCTAssertEqual(firstPoll.feedsPolled, 1)
-        XCTAssertEqual(firstPoll.feedsChanged, 1)
-        XCTAssertEqual(firstPoll.notificationsAttempted, 1)
-        XCTAssertEqual(firstPoll.apns200Count, 1)
-        XCTAssertEqual(firstPoll.dedupedCount, 0)
-        XCTAssertNil(firstPoll.firstError)
-
-        let secondPoll = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
-        XCTAssertEqual(secondPoll.message, "polled")
-        XCTAssertEqual(secondPoll.feedsPolled, 1)
-        XCTAssertEqual(secondPoll.notificationsAttempted, 0)
-        XCTAssertEqual(secondPoll.apns200Count, 0)
-        XCTAssertNil(secondPoll.firstError)
-    }
-
-    @MainActor
-    func testPhysicalDeviceProdStagingLargeFeedAdmission() async throws {
-        try skipIfRunningOnSimulator()
-        let adminToken = try Self.prodStagingAdminTokenOrSkip()
-        let feedURL = try Self.notificationLargeFeedURLOrSkip()
-        let permissionMonitor = addUIInterruptionMonitor(withDescription: "Notification Permission") { alert in
-            for title in ["Allow", "Allow Notifications"] where alert.buttons[title].exists {
-                alert.buttons[title].tap()
-                return true
-            }
-            return false
-        }
-        defer { removeUIInterruptionMonitor(permissionMonitor) }
-        let app = makePhysicalDiagnosticApp()
-        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = feedURL
-        app.launch()
-        openDiagnostics(in: app)
-        scrollUntilHittable(app.buttons["Register and Send Test Push"], in: app).tap()
-        app.tap()
-        XCTAssertTrue(staticText(containing: "Worker Registration, registered", in: app).waitForExistence(timeout: 90))
-        XCTAssertTrue(staticText(containing: "APNs Status, 200", in: app).waitForExistence(timeout: 90))
-        subscribeToFeed(in: app, title: "The Herd with Colin Cowherd", timeout: 360)
-        openDiagnostics(in: app)
-        scrollUntilHittable(app.buttons["Sync Notification Subscriptions"], in: app).tap()
-        XCTAssertTrue(waitForDiagnosticText(containing: "Sync, synced", in: app, timeout: 90))
-        assertSingleFeedEnqueuedOrAccepted(in: app)
-        let baseline = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
-        XCTAssertEqual(baseline.feedsPolled, 1)
-        XCTAssertEqual(baseline.notificationsAttempted, 0)
-        XCTAssertNil(baseline.firstError)
-        let repeated = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
-        XCTAssertEqual(repeated.feedsPolled, 1)
-        XCTAssertEqual(repeated.notificationsAttempted, 0)
-        XCTAssertNil(repeated.firstError)
-    }
-
-    @MainActor
-    func testPhysicalDeviceProdStagingFixtureManualNotificationTapRoutesToFreshEpisode() async throws {
-        try skipIfRunningOnSimulator()
-
-        guard ProcessInfo.processInfo.environment["OPENCAST_MANUAL_NOTIFICATION_TAP_PROOF"] == "1" else {
-            throw XCTSkip(
-                "Set OPENCAST_MANUAL_NOTIFICATION_TAP_PROOF=1 and tap the delivered notification on the iPad to run this manual proof."
-            )
-        }
-
-        let adminToken = try Self.prodStagingAdminTokenOrSkip()
-        let runID = "manual-tap-\(Int(Date().timeIntervalSince1970))"
-        let rolloverTime = Date().timeIntervalSince1970 + 180
-        let feedURL = try Self.notificationFixtureFeedURL(runID: runID, rolloverTime: rolloverTime)
-
-        XCTAssertLessThan(
-            Date().timeIntervalSince1970,
-            rolloverTime - 20,
-            "Fixture rollover must still be in the future when the baseline sync starts."
-        )
-
-        let permissionMonitor = addUIInterruptionMonitor(withDescription: "Notification Permission") { alert in
-            for buttonTitle in ["Allow", "Allow Notifications"] {
-                let button = alert.buttons[buttonTitle]
-                if button.exists {
-                    button.tap()
-                    return true
-                }
-            }
-            return false
-        }
-        defer { removeUIInterruptionMonitor(permissionMonitor) }
-
-        let app = makePhysicalDiagnosticApp()
-        app.launchEnvironment["OPENCAST_DEFAULT_FEED_URL"] = feedURL
-        app.launch()
-
-        openDiagnostics(in: app)
-        scrollUntilHittable(app.buttons["Register and Send Test Push"], in: app).tap()
-        app.tap()
-
-        XCTAssertTrue(staticText(containing: "Worker Registration, registered", in: app).waitForExistence(timeout: 90))
-        XCTAssertTrue(staticText(containing: "APNs Status, 200", in: app).waitForExistence(timeout: 90))
-
-        subscribeToFeed(in: app, title: "OpenCast Notification Fixture")
-
-        openDiagnostics(in: app)
-        scrollUntilHittable(app.buttons["Sync Notification Subscriptions"], in: app).tap()
-
-        XCTAssertTrue(waitForDiagnosticText(containing: "Sync, synced", in: app, timeout: 90))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Accepted, 1", in: app, timeout: 15))
-        XCTAssertTrue(waitForDiagnosticText(containing: "Rejected, 0", in: app, timeout: 15))
-
-        XCUIDevice.shared.press(.home)
-        waitForFixtureRollover(rolloverTime)
-
-        let firstPoll = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
-        XCTAssertEqual(firstPoll.message, "polled")
-        XCTAssertEqual(firstPoll.feedsPolled, 1)
-        XCTAssertEqual(firstPoll.feedsChanged, 1)
-        XCTAssertEqual(firstPoll.notificationsAttempted, 1)
-        XCTAssertEqual(firstPoll.apns200Count, 1)
-        XCTAssertEqual(firstPoll.dedupedCount, 0)
-        XCTAssertNil(firstPoll.firstError)
-
-        if ProcessInfo.processInfo.environment["OPENCAST_AUTOMATED_NOTIFICATION_TAP_PROOF"] == "1" {
-            _ = tapFreshFixtureNotificationFromSpringBoard(for: app, timeout: 45)
-        }
-
-        guard app.wait(for: .runningForeground, timeout: 240) else {
-            XCTFail("Tap the delivered Fresh Fixture Episode notification on the test device before the timeout.")
-            return
-        }
-
-        XCTAssertTrue(
-            waitForDiagnosticText(containing: "Fresh Fixture Episode", in: app, timeout: 90),
-            "Manual notification tap should route to the fresh episode detail."
-        )
-
-        let secondPoll = try await Self.triggerProdStagingAdminPoll(feedURL: feedURL, adminToken: adminToken)
-        XCTAssertEqual(secondPoll.message, "polled")
-        XCTAssertEqual(secondPoll.feedsPolled, 1)
-        XCTAssertEqual(secondPoll.notificationsAttempted, 0)
-        XCTAssertEqual(secondPoll.apns200Count, 0)
-        XCTAssertNil(secondPoll.firstError)
-    }
-    #endif
 
     private func skipIfRunningOnSimulator() throws {
         #if targetEnvironment(simulator)
@@ -552,7 +291,7 @@ final class NotificationSecurityUITests: XCTestCase {
     private func assertSingleFeedEnqueuedOrAccepted(in app: XCUIApplication) {
         XCTAssertTrue(waitForDiagnosticText(containing: "Rejected, 0", in: app, timeout: 15))
         // Unknown feeds enqueue without fetching in the sync request. The
-        // explicit baseline poll below must finish successfully before sends.
+        // queued engine establishes the baseline before sending any releases.
         let accepted = staticText(containing: "Accepted, 1", in: app).exists
         let pending = staticText(containing: "Pending, 1", in: app).exists
         XCTAssertNotEqual(accepted, pending, "Exactly one feed must be accepted or pending its first scan")
@@ -608,7 +347,6 @@ final class NotificationSecurityUITests: XCTestCase {
         app.buttons["Run Check"].exists
             || app.buttons["Register and Send Test Push"].exists
             || app.buttons["Sync Notification Subscriptions"].exists
-            || app.buttons["Poll Synced Feeds"].exists
     }
 
     @MainActor
@@ -713,222 +451,5 @@ final class NotificationSecurityUITests: XCTestCase {
 
         return staticText(containing: label, in: app).waitForExistence(timeout: 1)
     }
-
-    @MainActor
-    private func waitForFixtureRollover(_ rolloverTime: TimeInterval) {
-        let secondsUntilRollover = rolloverTime - Date().timeIntervalSince1970
-        guard secondsUntilRollover > 0 else {
-            return
-        }
-
-        Thread.sleep(forTimeInterval: secondsUntilRollover + 5)
-    }
-
-    @MainActor
-    private func tapFreshFixtureNotificationFromSpringBoard(
-        for app: XCUIApplication,
-        timeout: TimeInterval
-    ) -> Bool {
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let deadline = Date().addingTimeInterval(timeout)
-        var didOpenNotificationCenter = false
-
-        while Date() < deadline {
-            if tapSpringBoardNotificationSurface(in: springboard),
-               app.wait(for: .runningForeground, timeout: 5) {
-                return true
-            }
-
-            if tapSpringBoardText(containing: "Fresh Fixture Episode", in: springboard),
-               app.wait(for: .runningForeground, timeout: 5) {
-                return true
-            }
-
-            tapTopBannerCoordinate(in: springboard)
-            if app.wait(for: .runningForeground, timeout: 5) {
-                return true
-            }
-
-            if !didOpenNotificationCenter {
-                openNotificationCenter(in: springboard)
-                didOpenNotificationCenter = true
-            } else {
-                Thread.sleep(forTimeInterval: 1)
-            }
-        }
-
-        return false
-    }
-
-    @MainActor
-    private func tapSpringBoardNotificationSurface(in springboard: XCUIApplication) -> Bool {
-        let predicate = NSPredicate(format: "identifier == %@ OR label CONTAINS %@", "NotificationShortLookView", "Fresh Fixture Episode")
-        let element = springboard.descendants(matching: .any).matching(predicate).firstMatch
-        guard element.waitForExistence(timeout: 1) else {
-            return false
-        }
-
-        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        return true
-    }
-
-    // Thin redirect onto the shared helper. Call sites live inside
-    // INTERNAL_NOTIFICATIONS_DIAGNOSTICS-gated regions that look dead and are
-    // live — the forwarder stays so those regions remain untouched.
-    @MainActor
-    private func attachScreen(named name: String) {
-        attachSmokeScreenshot(named: name)
-    }
-
-    @MainActor
-    private func tapSpringBoardText(containing label: String, in springboard: XCUIApplication) -> Bool {
-        let element = staticText(containing: label, in: springboard)
-        guard element.waitForExistence(timeout: 1) else {
-            return false
-        }
-
-        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        return true
-    }
-
-    @MainActor
-    private func tapTopBannerCoordinate(in springboard: XCUIApplication) {
-        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.10)).tap()
-    }
-
-    private static func notificationSyncFeedURLOrSkip() throws -> String {
-        guard let feedURL = ProcessInfo.processInfo.environment[notificationSyncFeedURLKey],
-              !feedURL.isEmpty
-        else {
-            throw XCTSkip("Set \(notificationSyncFeedURLKey) to a public RSS feed before running this proof.")
-        }
-
-        return feedURL
-    }
-
-    private static func notificationFixtureFeedURL(
-        runID: String,
-        rolloverTime: TimeInterval
-    ) throws -> String {
-        guard let baseURL = ProcessInfo.processInfo.environment[notificationFixtureFeedBaseURLKey],
-              var components = URLComponents(string: baseURL),
-              !baseURL.isEmpty
-        else {
-            throw XCTSkip("Set \(notificationFixtureFeedBaseURLKey) to a self-hosted rollover fixture feed before running this proof.")
-        }
-
-        var queryItems = components.queryItems ?? []
-        queryItems.append(URLQueryItem(name: "run", value: runID))
-        queryItems.append(URLQueryItem(name: "rollover", value: String(Int(rolloverTime))))
-        components.queryItems = queryItems
-
-        guard let url = components.url else {
-            throw XCTSkip("\(notificationFixtureFeedBaseURLKey) must be an absolute URL.")
-        }
-
-        return url.absoluteString
-    }
-
-    private static func notificationLargeFeedURLOrSkip() throws -> String {
-        guard let feedURL = ProcessInfo.processInfo.environment[notificationLargeFeedURLKey],
-              !feedURL.isEmpty
-        else {
-            throw XCTSkip("Set \(notificationLargeFeedURLKey) to the expected public large-feed RSS URL before running this proof.")
-        }
-
-        return feedURL
-    }
-
-    #if INTERNAL_NOTIFICATIONS_DIAGNOSTICS
-    private static func triggerProdStagingAdminPoll(
-        feedURL: String,
-        adminToken: String
-    ) async throws -> AdminPollResponse {
-        var request = URLRequest(url: try prodStagingAdminPollURLOrSkip())
-        request.timeoutInterval = 130
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(adminToken)", forHTTPHeaderField: "authorization")
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try JSONEncoder().encode(AdminPollPayload(feedURL: feedURL))
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AdminPollError.invalidResponse
-        }
-        if httpResponse.statusCode == 404 {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw XCTSkip("Prod-staging admin poll endpoint is disabled by default. Temporarily enable ADMIN_TEST_ENDPOINTS_ENABLED for a proof run, then disable and redeploy it. Response: \(body)")
-        }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw AdminPollError.http(statusCode: httpResponse.statusCode, body: body)
-        }
-
-        return try JSONDecoder().decode(AdminPollResponse.self, from: data)
-    }
-
-    private static func prodStagingAdminPollURLOrSkip() throws -> URL {
-        guard let urlString = ProcessInfo.processInfo.environment[adminPollURLKey],
-              let url = URL(string: urlString),
-              !urlString.isEmpty
-        else {
-            throw XCTSkip("Set \(adminPollURLKey) to your self-hosted admin poll endpoint before running this proof.")
-        }
-
-        return url
-    }
-
-    private static func prodStagingAdminTokenOrSkip() throws -> String {
-        guard let token = ProcessInfo.processInfo.environment["OPENCAST_NOTIFICATION_ADMIN_TOKEN"],
-              !token.isEmpty
-        else {
-            throw XCTSkip("OPENCAST_NOTIFICATION_ADMIN_TOKEN is absent; skipping prod-staging admin endpoint proof.")
-        }
-
-        return token
-    }
-
-    private struct AdminPollPayload: Encodable, Sendable {
-        let feedURL: String
-
-        enum CodingKeys: String, CodingKey {
-            case feedURL = "feed_url"
-        }
-    }
-
-    private struct AdminPollResponse: Decodable, Sendable {
-        let message: String
-        let feedsPolled: Int
-        let feedsChanged: Int
-        let notificationsAttempted: Int
-        let apns200Count: Int
-        let dedupedCount: Int
-        let firstError: String?
-
-        enum CodingKeys: String, CodingKey {
-            case message
-            case feedsPolled = "feeds_polled"
-            case feedsChanged = "feeds_changed"
-            case notificationsAttempted = "notifications_attempted"
-            case apns200Count = "apns_200_count"
-            case dedupedCount = "deduped_count"
-            case firstError = "first_error"
-        }
-    }
-
-    private enum AdminPollError: Error, CustomStringConvertible, Sendable {
-        case invalidResponse
-        case http(statusCode: Int, body: String)
-
-        var description: String {
-            switch self {
-            case .invalidResponse:
-                "Admin poll returned a non-HTTP response."
-            case .http(let statusCode, let body):
-                "Admin poll failed with HTTP \(statusCode): \(body)"
-            }
-        }
-    }
-    #endif
 
 }

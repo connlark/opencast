@@ -27,7 +27,7 @@ struct NotificationRegistrationService {
         self.tokenStore = tokenStore
     }
 
-    func registerCurrentDevice() async throws -> UNAuthorizationStatus {
+    func registerCurrentDevice(uploadsUnchangedToken: Bool) async throws -> UNAuthorizationStatus {
         guard credentialService.isAppAttestSupported else {
             throw NotificationRegistrationServiceError.appAttestUnavailable
         }
@@ -37,14 +37,20 @@ struct NotificationRegistrationService {
             throw NotificationRegistrationServiceError.permissionDenied(status)
         }
 
-        let deviceToken = try await registrationBridge.registerForRemoteNotifications()
-        let deviceTokenString = tokenStore.save(deviceToken)
-        try await registerDeviceToken(deviceTokenString)
+        // APNs is always asked for the current token; only the redundant backend upload is skipped.
+        let deviceToken = NotificationDeviceTokenStore.hexString(
+            for: try await registrationBridge.registerForRemoteNotifications()
+        )
+        guard uploadsUnchangedToken || !tokenStore.isUploaded(deviceToken) else {
+            return status
+        }
+        try await registerDeviceToken(deviceToken)
+        tokenStore.markUploaded(deviceToken)
         return status
     }
 
     func unregisterCurrentDeviceIfPossible() async throws {
-        guard let deviceToken = tokenStore.loadLatestToken(),
+        guard let deviceTokenHash = tokenStore.loadUploadedTokenHash(),
               let credential = try credentialService.loadRegisteredCredential()
         else {
             UIApplication.shared.unregisterForRemoteNotifications()
@@ -52,7 +58,7 @@ struct NotificationRegistrationService {
             return
         }
 
-        let payload = NotificationDeviceUnregistrationPayload(deviceToken: deviceToken)
+        let payload = NotificationDeviceUnregistrationPayload(deviceTokenHash: deviceTokenHash)
         _ = try await secureClient.sendJSONPayload(
             path: "/v1/devices/unregister",
             installID: credential.installID,

@@ -17,10 +17,6 @@ export function opencastWorkerGlue(operation, value, number) {
       value.cancel().catch(() => {});
       try { value.releaseLock(); } catch (_) {}
       return undefined;
-    case 3:
-      return globalThis.__opencast_isolate_id ??= crypto.randomUUID();
-    case 4:
-      return globalThis.__worker_init_state?.instanceId ?? 0;
     case 5:
       return value.buffer.byteLength;
     default:
@@ -46,20 +42,6 @@ pub(crate) fn read_feed_chunk(reader: &JsValue, size: u32) -> Promise {
 
 pub(crate) fn cancel_feed_reader(reader: &JsValue) {
     let _ = js_worker_glue(2, reader, 0);
-}
-
-pub(crate) fn isolate_id() -> String {
-    js_worker_glue(3, &JsValue::UNDEFINED, 0)
-        .ok()
-        .and_then(|value| value.as_string())
-        .unwrap_or_default()
-}
-
-pub(crate) fn wasm_instance_id() -> u32 {
-    js_worker_glue(4, &JsValue::UNDEFINED, 0)
-        .ok()
-        .and_then(|value| value.as_f64())
-        .unwrap_or_default() as u32
 }
 
 pub(crate) fn wasm_memory_bytes() -> u32 {

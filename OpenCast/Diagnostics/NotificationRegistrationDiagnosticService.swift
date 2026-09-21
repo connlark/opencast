@@ -27,6 +27,14 @@ struct NotificationRegistrationDiagnosticService {
     }
 
     func run() async throws -> NotificationRegistrationDiagnosticResult {
+        try await run(registersDevice: true)
+    }
+
+    func sendTestPush() async throws -> NotificationRegistrationDiagnosticResult {
+        try await run(registersDevice: false)
+    }
+
+    private func run(registersDevice: Bool) async throws -> NotificationRegistrationDiagnosticResult {
         guard credentialService.isAppAttestSupported else {
             return NotificationRegistrationDiagnosticResult(
                 permissionStatus: "Not Run",
@@ -40,7 +48,11 @@ struct NotificationRegistrationDiagnosticService {
             )
         }
 
-        let permissionStatus = try await authorizedStatus()
+        let permissionStatus = if registersDevice {
+            try await authorizedStatus()
+        } else {
+            await authorizationService.authorizationStatus()
+        }
         let permissionLabel = NotificationAuthorizationService.label(for: permissionStatus)
         guard NotificationAuthorizationService.allowsRemoteRegistration(permissionStatus) else {
             return NotificationRegistrationDiagnosticResult(
@@ -55,13 +67,25 @@ struct NotificationRegistrationDiagnosticService {
             )
         }
 
-        let deviceToken = try await registrationBridge.registerForRemoteNotifications()
-        let deviceTokenHex = tokenStore.save(deviceToken)
-        let credential = try await credentialService.ensureRegisteredCredential()
-        let registrationMessage = try await registerDevice(
-            deviceToken: deviceTokenHex,
-            credential: credential
-        )
+        let credential: AppAttestCredential
+        let registrationMessage: String
+        if registersDevice {
+            let deviceTokenHex = NotificationDeviceTokenStore.hexString(
+                for: try await registrationBridge.registerForRemoteNotifications()
+            )
+            credential = try await credentialService.ensureRegisteredCredential()
+            registrationMessage = try await registerDevice(
+                deviceToken: deviceTokenHex,
+                credential: credential
+            )
+            tokenStore.markUploaded(deviceTokenHex)
+        } else {
+            guard let existingCredential = try credentialService.loadRegisteredCredential() else {
+                throw NotificationRegistrationDiagnosticError.missingRegisteredCredential
+            }
+            credential = existingCredential
+            registrationMessage = "Not Requested"
+        }
         let deliveryTask = Task {
             try await registrationBridge.waitForDiagnosticNotification()
         }
@@ -79,7 +103,7 @@ struct NotificationRegistrationDiagnosticService {
 
         return NotificationRegistrationDiagnosticResult(
             permissionStatus: permissionLabel,
-            apnsRegistrationStatus: "Registered",
+            apnsRegistrationStatus: registersDevice ? "Registered" : "Not Requested",
             workerRegistrationStatus: registrationMessage,
             testPushStatus: pushResponse.message,
             apnsStatus: pushResponse.apnsStatus.map(String.init) ?? "None",

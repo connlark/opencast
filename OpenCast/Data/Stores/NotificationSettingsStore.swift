@@ -16,6 +16,7 @@ final class NotificationSettingsStore {
     private(set) var lastSyncMessage: String?
     private(set) var lastErrorMessage: String?
     private(set) var lastSyncedAt: Date?
+    private(set) var isRegistrationConfirmed = false
 
     private var pendingReconciliation: PendingNotificationReconciliation?
 
@@ -28,6 +29,8 @@ final class NotificationSettingsStore {
     @ObservationIgnored var feedHealthRecorder: (([NotificationFeedHealthRecord]) async -> Void)?
     @ObservationIgnored private var scheduledSyncTask: Task<Void, Never>?
     @ObservationIgnored private var pendingActivePodcastIDs: Set<String>?
+    @ObservationIgnored private var pendingEnableRequest: (Bool, Set<String>, ModelContext)?
+    @ObservationIgnored private var pendingRefresh: (Set<String>, ModelContext)?
 
     init(
         authorizationService: any NotificationAuthorizationProviding = NotificationAuthorizationService(),
@@ -49,19 +52,20 @@ final class NotificationSettingsStore {
         if isWorking {
             return "Updating"
         }
-        if let pendingReconciliation {
-            switch pendingReconciliation {
-            case .enable:
-                return "Sync Pending"
-            case .disable:
-                return "Cleanup Pending"
-            }
+        if pendingReconciliation == .disable {
+            return "Cleanup Pending"
         }
         guard isEnabled else {
             return "Off"
         }
         guard NotificationAuthorizationService.allowsRemoteRegistration(authorizationStatus) else {
             return NotificationAuthorizationService.label(for: authorizationStatus)
+        }
+        guard isRegistrationConfirmed else {
+            return "Registration Pending"
+        }
+        if pendingReconciliation == .enable {
+            return "Sync Pending"
         }
         return lastSyncMessage ?? "On"
     }
@@ -84,7 +88,7 @@ final class NotificationSettingsStore {
         scheduledSyncTask?.cancel()
         scheduledSyncTask = nil
         guard !isWorking else {
-            pendingActivePodcastIDs = activePodcastIDs
+            pendingEnableRequest = (enabled, activePodcastIDs, modelContext)
             return
         }
 
@@ -105,28 +109,64 @@ final class NotificationSettingsStore {
         activePodcastIDs: Set<String>,
         modelContext: ModelContext
     ) async {
+        guard !isWorking else {
+            pendingRefresh = (activePodcastIDs, modelContext)
+            return
+        }
+        isWorking = true
+        lastErrorMessage = nil
+        await refreshRegistrationAndSubscriptions(activePodcastIDs: activePodcastIDs, modelContext: modelContext)
+        isWorking = false
+        await drainPendingSubscriptionSyncIfNeeded()
+    }
+
+    private func refreshRegistrationAndSubscriptions(
+        activePodcastIDs: Set<String>,
+        modelContext: ModelContext
+    ) async {
         await load(modelContext: modelContext)
-        await retryPendingReconciliationIfNeeded(
-            activePodcastIDs: activePodcastIDs,
-            modelContext: modelContext
-        )
+        if pendingReconciliation == .disable {
+            await disableNotifications(modelContext: modelContext)
+            return
+        }
 
         guard isEnabled else {
             return
         }
 
         guard NotificationAuthorizationService.allowsRemoteRegistration(authorizationStatus) else {
+            isRegistrationConfirmed = false
             lastErrorMessage = NotificationAuthorizationService.permissionUnavailableMessage(
                 for: authorizationStatus
             )
             return
         }
 
-        guard lastSyncedAt.map({ Date.now.timeIntervalSince($0) >= Self.syncStalenessInterval }) ?? true else {
+        // Every activation asks APNs for the current token, but an unchanged token is uploaded
+        // only once per process. A rotated token always uploads, and a backend that dropped the
+        // endpoint says so through the sync response's `registrationReady`.
+        let wasRegistrationConfirmed = isRegistrationConfirmed
+        do {
+            authorizationStatus = try await registrationService.registerCurrentDevice(
+                uploadsUnchangedToken: !wasRegistrationConfirmed
+            )
+            isRegistrationConfirmed = true
+        } catch is CancellationError {
+            return
+        } catch {
+            isRegistrationConfirmed = false
+            lastErrorMessage = error.localizedDescription
             return
         }
 
-        await syncSubscriptionsIfEnabled(activePodcastIDs: activePodcastIDs)
+        if pendingReconciliation == .enable {
+            await retryPendingEnable(activePodcastIDs: activePodcastIDs, modelContext: modelContext)
+        } else if !wasRegistrationConfirmed || (lastSyncedAt.map({ Date.now.timeIntervalSince($0) >= Self.syncStalenessInterval }) ?? true) {
+            await performSubscriptionSync(
+                activePodcastIDs: activePodcastIDs,
+                didUploadToken: !wasRegistrationConfirmed
+            )
+        }
     }
 
     func scheduleSubscriptionSyncIfEnabled(activePodcastIDs: Set<String>) {
@@ -166,33 +206,49 @@ final class NotificationSettingsStore {
             return
         }
 
-        guard NotificationAuthorizationService.allowsRemoteRegistration(authorizationStatus) else {
-            lastErrorMessage = NotificationAuthorizationService.permissionUnavailableMessage(
-                for: authorizationStatus
-            )
-            return
-        }
-
-        authorizationStatus = await authorizationService.authorizationStatus()
-        guard NotificationAuthorizationService.allowsRemoteRegistration(authorizationStatus) else {
-            lastErrorMessage = NotificationAuthorizationService.permissionUnavailableMessage(
-                for: authorizationStatus
-            )
-            return
-        }
-
         isWorking = true
         lastErrorMessage = nil
+        await performSubscriptionSync(activePodcastIDs: activePodcastIDs)
+        isWorking = false
+        await drainPendingSubscriptionSyncIfNeeded()
+    }
+
+    private func performSubscriptionSync(
+        activePodcastIDs: Set<String>,
+        didUploadToken: Bool = false
+    ) async {
+        authorizationStatus = await authorizationService.authorizationStatus()
+        guard NotificationAuthorizationService.allowsRemoteRegistration(authorizationStatus) else {
+            isRegistrationConfirmed = false
+            lastErrorMessage = NotificationAuthorizationService.permissionUnavailableMessage(
+                for: authorizationStatus
+            )
+            return
+        }
 
         do {
+            var didUploadToken = didUploadToken
+            if !isRegistrationConfirmed {
+                authorizationStatus = try await registrationService.registerCurrentDevice(uploadsUnchangedToken: true)
+                isRegistrationConfirmed = true
+                didUploadToken = true
+            }
             let response = try await subscriptionSyncService.sync(activePodcastIDs: activePodcastIDs)
             recordSync(response)
+            // The backend dropped this endpoint (for example after an APNs 410) while the token
+            // stayed the same. An upload that just happened would not be helped by another.
+            if response.registrationReady == false, !didUploadToken {
+                authorizationStatus = try await registrationService.registerCurrentDevice(uploadsUnchangedToken: true)
+                isRegistrationConfirmed = true
+                if response.rejected.isEmpty {
+                    lastErrorMessage = nil
+                }
+            }
+        } catch is CancellationError {
+            return
         } catch {
             lastErrorMessage = error.localizedDescription
         }
-
-        isWorking = false
-        await drainPendingSubscriptionSyncIfNeeded()
     }
 
     func deleteInstallIfRegistered() async {
@@ -204,9 +260,12 @@ final class NotificationSettingsStore {
             lastErrorMessage = error.localizedDescription
         }
         registrationService.clearLocalDeviceToken()
+        isRegistrationConfirmed = false
         isEnabled = false
         pendingReconciliation = nil
         pendingActivePodcastIDs = nil
+        pendingEnableRequest = nil
+        pendingRefresh = nil
         lastSyncMessage = nil
         lastSyncedAt = nil
     }
@@ -216,8 +275,11 @@ final class NotificationSettingsStore {
         scheduledSyncTask = nil
         isEnabled = false
         isWorking = false
+        isRegistrationConfirmed = false
         pendingReconciliation = nil
         pendingActivePodcastIDs = nil
+        pendingEnableRequest = nil
+        pendingRefresh = nil
         lastSyncMessage = nil
         lastErrorMessage = nil
         lastSyncedAt = nil
@@ -228,9 +290,11 @@ final class NotificationSettingsStore {
         modelContext: ModelContext
     ) async {
         var didRegisterDevice = false
+        isRegistrationConfirmed = false
         do {
-            authorizationStatus = try await registrationService.registerCurrentDevice()
+            authorizationStatus = try await registrationService.registerCurrentDevice(uploadsUnchangedToken: true)
             didRegisterDevice = true
+            isRegistrationConfirmed = true
             let response = try await subscriptionSyncService.sync(activePodcastIDs: activePodcastIDs)
             try Self.persistEnabled(true, modelContext: modelContext)
             try Self.clearPendingReconciliation(modelContext: modelContext)
@@ -239,7 +303,7 @@ final class NotificationSettingsStore {
             recordSync(response)
         } catch {
             authorizationStatus = await authorizationService.authorizationStatus()
-            if didRegisterDevice {
+            if didRegisterDevice || NotificationAuthorizationService.allowsRemoteRegistration(authorizationStatus) {
                 do {
                     try Self.persistEnabled(true, modelContext: modelContext)
                     try Self.persistPendingReconciliation(
@@ -254,11 +318,14 @@ final class NotificationSettingsStore {
                     return
                 }
             }
-            lastErrorMessage = error.localizedDescription
+            if !(error is CancellationError) {
+                lastErrorMessage = error.localizedDescription
+            }
         }
     }
 
     private func disableNotifications(modelContext: ModelContext) async {
+        isRegistrationConfirmed = false
         let firstError = await disableRemoteNotifications()
         do {
             try Self.persistEnabled(false, modelContext: modelContext)
@@ -280,38 +347,13 @@ final class NotificationSettingsStore {
         }
     }
 
-    private func retryPendingReconciliationIfNeeded(
-        activePodcastIDs: Set<String>,
-        modelContext: ModelContext
-    ) async {
-        guard let pendingReconciliation else {
-            return
-        }
-        guard !isWorking else {
-            if pendingReconciliation == .enable {
-                pendingActivePodcastIDs = activePodcastIDs
-            }
-            return
-        }
-
-        isWorking = true
-        lastErrorMessage = nil
-        switch pendingReconciliation {
-        case .enable:
-            await retryPendingEnable(activePodcastIDs: activePodcastIDs, modelContext: modelContext)
-        case .disable:
-            await disableNotifications(modelContext: modelContext)
-        }
-        isWorking = false
-        await drainPendingSubscriptionSyncIfNeeded()
-    }
-
     private func retryPendingEnable(
         activePodcastIDs: Set<String>,
         modelContext: ModelContext
     ) async {
         authorizationStatus = await authorizationService.authorizationStatus()
         guard NotificationAuthorizationService.allowsRemoteRegistration(authorizationStatus) else {
+            isRegistrationConfirmed = false
             lastErrorMessage = NotificationAuthorizationService.permissionUnavailableMessage(
                 for: authorizationStatus
             )
@@ -338,11 +380,23 @@ final class NotificationSettingsStore {
                 lastErrorMessage = error.localizedDescription
                 return
             }
-            lastErrorMessage = error.localizedDescription
+            if !(error is CancellationError) {
+                lastErrorMessage = error.localizedDescription
+            }
         }
     }
 
     private func drainPendingSubscriptionSyncIfNeeded() async {
+        if let (enabled, activePodcastIDs, modelContext) = pendingEnableRequest {
+            pendingEnableRequest = nil
+            await setEnabled(enabled, activePodcastIDs: activePodcastIDs, modelContext: modelContext)
+            return
+        }
+        if let (activePodcastIDs, modelContext) = pendingRefresh {
+            pendingRefresh = nil
+            await refreshIfNeeded(activePodcastIDs: activePodcastIDs, modelContext: modelContext)
+            return
+        }
         guard let activePodcastIDs = pendingActivePodcastIDs else {
             return
         }
@@ -370,6 +424,10 @@ final class NotificationSettingsStore {
     }
 
     private func recordSync(_ response: NotificationSubscriptionSyncResponse) {
+        if response.registrationReady == false {
+            isRegistrationConfirmed = false
+            lastErrorMessage = "Push registration needs to be renewed. OpenCast will retry when you reopen the app."
+        }
         lastSyncedAt = .now
         lastSyncMessage = response.pending.isEmpty
             ? "\(response.accepted.count) synced"

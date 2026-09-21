@@ -8,7 +8,9 @@ use crate::types::{
 use crate::usage::UsageLimitProfile;
 
 pub const JOB_BINDING: &str = "TRANSCRIPT_ANALYSIS_JOB";
-pub const JOB_RESULT_TTL_SECONDS: i64 = 1_800;
+// Only new successful completions use this retention. Stored deadlines are authoritative.
+pub const JOB_SUCCESS_TTL_SECONDS: i64 = 86_400;
+pub const JOB_FAILURE_TTL_SECONDS: i64 = 1_800;
 pub const JOB_RUNNING_DEADLINE_SECONDS: i64 = 600;
 pub const JOB_HEARTBEAT_SECONDS: u64 = 30;
 pub const JOB_SUBMIT_POLL_AFTER_SECONDS: u64 = 15;
@@ -74,6 +76,22 @@ pub enum JobRecord {
 }
 
 impl JobRecord {
+    /// Request paths must honor stored expiry even if the cleanup alarm is late.
+    /// Filtering never rewrites the record or drops pending billing work.
+    pub fn unexpired(&self, now: i64) -> Option<&Self> {
+        match self {
+            Self::Running { .. } => Some(self),
+            Self::Completed { purge_at, .. }
+            | Self::FailedUpstream { purge_at, .. }
+            | Self::FailedTransient { purge_at, .. }
+                if now < *purge_at =>
+            {
+                Some(self)
+            }
+            _ => None,
+        }
+    }
+
     pub fn subjects(&self) -> &[String] {
         match self {
             JobRecord::Running { subjects, .. }
@@ -126,6 +144,13 @@ impl JobRecord {
         }
     }
 
+    pub fn billing_deadline(&self) -> Option<i64> {
+        let billing = self.billing()?;
+        billing.pending?;
+        let purge_at = self.purge_at()?;
+        Some(billing.retry_deadline.unwrap_or(purge_at).min(purge_at))
+    }
+
     pub fn purge_at(&self) -> Option<i64> {
         match self {
             JobRecord::Running { .. } => None,
@@ -136,8 +161,7 @@ impl JobRecord {
     }
 
     /// A skew-window submit that carried no subject leaves the set empty;
-    /// such records keep the open behavior until their TTL purge — at most
-    /// 30 minutes.
+    /// such records keep the open behavior until their stored TTL purge.
     fn legacy_open(&self) -> bool {
         self.subjects().is_empty()
     }
@@ -152,7 +176,7 @@ impl JobRecord {
 /// the client fingerprint stands for. Serialization of equal parsed values
 /// is deterministic, so equal content always agrees; the sentinel on the
 /// (unreachable) serialization failure is non-empty so it can never read as
-/// a legacy record. NOTE: this is the 30-minute idempotency join key, NOT
+/// a legacy record. NOTE: this is the result-lifetime idempotency join key, NOT
 /// the future sharing content key — the durable share store hashes normalized
 /// segment text only, deliberately excluding timings and metadata
 /// so identity deduplication and content sharing remain separate mechanisms.
@@ -277,11 +301,17 @@ pub enum PollDecision {
 pub enum AlarmDecision {
     Purge,
     Heartbeat,
-    SchedulePurge { purge_at: i64 },
-    FailTransient { record: JobRecord },
+    SchedulePurge {
+        purge_at: i64,
+    },
+    FailTransient {
+        record: JobRecord,
+    },
     /// A terminal record still carries an unresolved settle/release: attempt
-    /// it under the bounded budget before the purge deadline.
+    /// it under the bounded budget before the billing deadline.
     RetryBilling,
+    /// Final attempt at the billing deadline, preserving any unexpired result.
+    FinalizeBilling,
 }
 
 pub fn valid_job_id(value: &str) -> bool {
@@ -403,7 +433,7 @@ pub fn alarm_decision(record: Option<&JobRecord>, run_active: bool, now: i64) ->
             AlarmDecision::FailTransient {
                 record: JobRecord::FailedTransient {
                     job_id: job_id.clone(),
-                    purge_at: now.saturating_add(JOB_RESULT_TTL_SECONDS),
+                    purge_at: now.saturating_add(JOB_FAILURE_TTL_SECONDS),
                     subjects: subjects.clone(),
                     content_hash: content_hash.clone(),
                     billing: billing.clone(),
@@ -414,16 +444,17 @@ pub fn alarm_decision(record: Option<&JobRecord>, run_active: bool, now: i64) ->
         // Unresolved settle/release on a live terminal record beats the
         // purge schedule; at/after the purge deadline the purge path makes
         // one final attempt instead (bounded either way).
-        Some(record @ (JobRecord::Completed { purge_at, .. }
-        | JobRecord::FailedUpstream { purge_at, .. }
-        | JobRecord::FailedTransient { purge_at, .. }))
-            if now < *purge_at =>
-        {
-            if record
-                .billing()
-                .is_some_and(|billing| billing.pending.is_some())
-            {
-                AlarmDecision::RetryBilling
+        Some(
+            record @ (JobRecord::Completed { purge_at, .. }
+            | JobRecord::FailedUpstream { purge_at, .. }
+            | JobRecord::FailedTransient { purge_at, .. }),
+        ) if now < *purge_at => {
+            if let Some(deadline) = record.billing_deadline() {
+                if now >= deadline {
+                    AlarmDecision::FinalizeBilling
+                } else {
+                    AlarmDecision::RetryBilling
+                }
             } else {
                 AlarmDecision::SchedulePurge {
                     purge_at: *purge_at,

@@ -27,6 +27,7 @@ import {
   geminiResponse,
   globalLimiterStub,
   installFetchStub,
+  jobStub,
   makeDenseRequest,
   makeRequest,
   makeSyntheticAppAttestIdentity,
@@ -365,6 +366,11 @@ describe("async jobs", () => {
       0, 6,
     ]);
     expect(result.summary.one_line_description).toBe("A two-act conversation");
+    const stored = await runInDurableObject(jobStub(request.transcript.fingerprint), async (_instance, state) =>
+      JSON.parse(await state.storage.get("job")));
+    expect(stored.purge_at - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(86395);
+    expect(stored.purge_at - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(86400);
+
 
     const repeated = await postPoll(request.transcript.fingerprint, {
       authorization: `Bearer ${BEARER}`,

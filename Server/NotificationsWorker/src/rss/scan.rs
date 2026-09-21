@@ -1,59 +1,47 @@
 use super::*;
-use crate::{feed_resource as limits, poll_decisions, poll_scheduling, storage};
+use crate::feed_resource as limits;
 use tokio::io::{AsyncRead, BufReader};
 
 #[derive(Debug)]
 pub(crate) struct ScannedFeed {
     pub title: String,
-    pub website_url: Option<String>,
     pub artwork_url: Option<String>,
-    pub latest: ParsedEpisode,
-    pub notifications: Vec<NotificationCandidate>,
+    #[cfg(test)]
     pub item_count: usize,
-    pub checkpoint_found: bool,
-    pub publish_cadence_seconds: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct NotificationCandidate {
-    pub episode: ParsedEpisode,
-    pub fingerprint: Option<String>,
+/// An awaited consumer shares the validated streaming parser. It may stage data,
+/// but must not publish until `scan_rss_with_sink` returns successfully.
+#[allow(async_fn_in_trait)]
+pub(crate) trait EpisodeSink {
+    async fn item(
+        &mut self,
+        episode: &ParsedEpisode,
+        raw_date: Option<&str>,
+    ) -> Result<(), RSSParseError>;
 }
-
-impl NotificationCandidate {
-    fn new(mut episode: ParsedEpisode) -> Self {
-        let fingerprint = feed_identity::episode_notification_fingerprint(
-            feed_identity::EpisodeNotificationFingerprintInput {
-                title: &episode.title,
-                guid: episode.guid.as_deref(),
-                audio_url: episode.audio_url.as_deref(),
-                duration_seconds: episode.duration_seconds,
-                summary: episode.summary.as_deref(),
-                show_notes_html: episode.show_notes_html.as_deref(),
-                episode_id: &episode.id,
-            },
-        );
-        // Identity material can itself be megabytes. After deriving the exact
-        // identity and fingerprint, retain only the fields the APNs payload
-        // actually uses, with its existing artwork output limit.
-        episode.guid = None;
-        episode.audio_url = None;
-        episode.artwork_url = episode
-            .artwork_url
-            .map(|url| truncated_utf8(url.trim(), 512));
-        Self {
-            episode,
-            fingerprint,
-        }
+#[cfg(test)]
+struct IgnoreEpisodes;
+#[cfg(test)]
+impl EpisodeSink for IgnoreEpisodes {
+    async fn item(&mut self, _: &ParsedEpisode, _: Option<&str>) -> Result<(), RSSParseError> {
+        Ok(())
     }
 }
 
-/// Complete-document scan with bounded retained state. Notification eligibility
-/// uses the existing decision function; a deep checkpoint still authorizes the
-/// same three candidates as the materializing parser.
+/// Complete-document scan with bounded retained state.
+#[cfg(test)]
 pub(crate) async fn scan_rss<R: AsyncRead + Unpin>(
     source: R,
-    feed: &storage::FeedPollRow,
+    feed_url: &str,
+) -> Result<ScannedFeed, RSSParseError> {
+    scan_rss_with_sink(source, feed_url, &mut IgnoreEpisodes).await
+}
+
+pub(crate) async fn scan_rss_with_sink<R: AsyncRead + Unpin, S: EpisodeSink>(
+    source: R,
+    feed_url: &str,
+    sink: &mut S,
 ) -> Result<ScannedFeed, RSSParseError> {
     let source = super::guarded_reader::GuardedReader::new(source);
     let mut reader = Reader::from_reader(BufReader::with_capacity(limits::CHUNK_BYTES, source));
@@ -72,10 +60,7 @@ pub(crate) async fn scan_rss<R: AsyncRead + Unpin>(
     let mut item_count = 0usize;
     let mut root_seen = false;
     let mut root_closed = false;
-    let mut latest: Option<NotificationCandidate> = None;
-    let mut candidates = Vec::new();
-    let mut checkpoint_found = false;
-    let mut timestamps = Vec::with_capacity(11);
+    let mut parsed_items = 0usize;
 
     loop {
         let event = reader
@@ -216,27 +201,10 @@ pub(crate) async fn scan_rss<R: AsyncRead + Unpin>(
                 }
                 if name == "item" {
                     let item = current_item.take().ok_or(RSSParseError::InvalidXML)?;
-                    let episode = parsed_episode(item, &feed.feed_url);
-                    if let Some(date) = episode.published_at {
-                        timestamps.push(date);
-                        timestamps.sort_unstable_by(|a, b| b.cmp(a));
-                        timestamps.truncate(10);
-                    }
-                    if feed.latest_episode_id.as_deref() == Some(&episode.id) {
-                        checkpoint_found = true;
-                    }
-                    let is_candidate = !checkpoint_found
-                        && candidates.len() < poll_decisions::MAX_CATCH_UP_NOTIFICATIONS
-                        && poll_decisions::changed_episode_should_notify(feed, &episode);
-                    if latest.is_none() || is_candidate {
-                        let candidate = NotificationCandidate::new(episode);
-                        if latest.is_none() {
-                            latest = Some(candidate.clone());
-                        }
-                        if is_candidate {
-                            candidates.push(candidate);
-                        }
-                    }
+                    let raw_date = item.raw_date.clone();
+                    let episode = parsed_episode(item, feed_url);
+                    sink.item(&episode, raw_date.as_deref()).await?;
+                    parsed_items += 1;
                 }
                 stack.pop();
                 if stack.is_empty() {
@@ -255,26 +223,15 @@ pub(crate) async fn scan_rss<R: AsyncRead + Unpin>(
     if !root_seen || !root_closed || !stack.is_empty() {
         return Err(RSSParseError::InvalidXML);
     }
-    let latest = latest.ok_or(RSSParseError::EmptyFeed)?;
-    if feed.latest_episode_id.is_none() {
-        candidates.clear();
-    } else if !checkpoint_found {
-        candidates.clear();
-        if poll_decisions::changed_episode_should_notify(feed, &latest.episode) {
-            candidates.push(latest.clone());
-        }
+    if parsed_items == 0 {
+        return Err(RSSParseError::EmptyFeed);
     }
-    candidates.reverse();
-    let title = non_empty(channel.title.as_deref()).unwrap_or(&feed.feed_url);
+    let title = non_empty(channel.title.as_deref()).unwrap_or(feed_url);
     Ok(ScannedFeed {
         title: truncated_chars(title, MAX_FEED_TITLE_CHARS),
-        website_url: channel.website_url.and_then(non_empty_string),
         artwork_url: channel.artwork_url.and_then(non_empty_string),
-        latest: latest.episode,
-        notifications: candidates,
+        #[cfg(test)]
         item_count,
-        checkpoint_found,
-        publish_cadence_seconds: poll_scheduling::publish_cadence_seconds(&mut timestamps),
     })
 }
 

@@ -8,8 +8,6 @@ pub const DEVICES_UNREGISTER_PATH: &str = "/v1/devices/unregister";
 pub const INSTALL_DELETE_PATH: &str = "/v1/install/delete";
 pub const DEBUG_SEND_TEST_PUSH_PATH: &str = "/v1/debug/send-test-push";
 pub const SUBSCRIPTIONS_SYNC_PATH: &str = "/v1/subscriptions/sync";
-pub const DEBUG_POLL_SUBSCRIPTIONS_PATH: &str = "/v1/debug/poll-subscriptions";
-pub const ADMIN_TEST_POLL_FEED_PATH: &str = "/v1/admin/test/poll-feed";
 
 const HEALTH_PATH: &str = "/health";
 const HEALTH_JSON: &str = r#"{"message":"hello world"}"#;
@@ -68,10 +66,7 @@ fn json_response(status: u16, body: &'static str) -> RouteResponse {
 }
 
 pub fn diagnostic_endpoint_path(path: &str) -> bool {
-    matches!(
-        path,
-        SECURE_HELLO_PATH | DEBUG_SEND_TEST_PUSH_PATH | DEBUG_POLL_SUBSCRIPTIONS_PATH
-    )
+    matches!(path, SECURE_HELLO_PATH | DEBUG_SEND_TEST_PUSH_PATH)
 }
 
 pub fn public_write_endpoint(method: &str, path: &str) -> bool {
@@ -104,7 +99,6 @@ mod tests {
     fn diagnostic_endpoint_classification_keeps_production_surface_small() {
         assert!(diagnostic_endpoint_path(SECURE_HELLO_PATH));
         assert!(diagnostic_endpoint_path(DEBUG_SEND_TEST_PUSH_PATH));
-        assert!(diagnostic_endpoint_path(DEBUG_POLL_SUBSCRIPTIONS_PATH));
         assert!(!diagnostic_endpoint_path(DEVICES_REGISTER_PATH));
         assert!(!diagnostic_endpoint_path(SUBSCRIPTIONS_SYNC_PATH));
     }

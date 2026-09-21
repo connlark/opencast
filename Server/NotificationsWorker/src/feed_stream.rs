@@ -1,6 +1,6 @@
 //! A bounded BYOB browser-stream adapter for quick-xml's Tokio io-util reader.
 //! No Tokio runtime: Workers promises wake the existing async executor.
-use crate::{feed_resource, poll_decisions::fetch_with_deadline};
+use crate::{deadline::fetch_with_deadline, feed_resource};
 use std::cell::Cell;
 use std::future::Future;
 use std::io;
@@ -51,6 +51,7 @@ pub(crate) struct FeedStream {
     ended: bool,
     invocation_bytes: Rc<Cell<usize>>,
     decoded_bytes: Rc<Cell<usize>>,
+    inactivity_seconds: u64,
 }
 
 impl FeedStream {
@@ -72,7 +73,12 @@ impl FeedStream {
             ended: false,
             invocation_bytes,
             decoded_bytes,
+            inactivity_seconds: feed_resource::INACTIVITY_SECONDS,
         })
+    }
+    pub(crate) fn with_inactivity(mut self, seconds: u64) -> Self {
+        self.inactivity_seconds = seconds;
+        self
     }
 }
 
@@ -97,6 +103,7 @@ impl AsyncRead for FeedStream {
                     &self.reader,
                     feed_resource::CHUNK_BYTES as u32,
                 );
+                let inactivity_seconds = self.inactivity_seconds;
                 self.pending = Some(Box::pin(async move {
                     let result = fetch_with_deadline(
                         async {
@@ -104,7 +111,7 @@ impl AsyncRead for FeedStream {
                                 .await
                                 .map_err(|_| io::Error::other("feed_transfer_interrupted"))
                         },
-                        Delay::from(Duration::from_secs(feed_resource::INACTIVITY_SECONDS)),
+                        Delay::from(Duration::from_secs(inactivity_seconds)),
                         io::Error::other("feed_inactivity_timeout"),
                     )
                     .await?;

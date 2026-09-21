@@ -33,7 +33,7 @@ export default defineConfig(async () => {
       }),
     ],
     test: {
-      include: [v3 ? "test/promo-v3.spec.mjs" : "test/integration.spec.mjs"],
+      include: [v3 ? "test/promo-v3.spec.mjs" : "test/integration.spec.mjs", "test/retention.spec.mjs"],
       setupFiles: ["./test/apply-migrations.mjs"],
     },
   };

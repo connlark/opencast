@@ -30,6 +30,8 @@ pub const ANALYSIS_CREDIT_SECONDS_PER_AUDIO_HOUR: u32 = 7_850;
 /// an abandoned release is surfaced loudly via console_error.
 pub const BILLING_MAX_ATTEMPTS: u32 = 4;
 pub const BILLING_RETRY_SECONDS: u64 = 60;
+/// Final recovery remains bounded even when result retention changes.
+pub const BILLING_RETRY_WINDOW_SECONDS: i64 = 1_800;
 
 /// Pacing for the next billing-retry alarm: `BILLING_RETRY_SECONDS`, clamped
 /// so a retry never overshoots the record's purge deadline. The single home
@@ -199,6 +201,10 @@ pub struct JobBillingState {
     pub pending: Option<PendingBillingAction>,
     #[serde(default)]
     pub attempts: u32,
+    /// Fixed final recovery deadline, independent of successful result retention.
+    /// Older records fall back to their already stored result purge deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_deadline: Option<i64>,
 }
 
 impl JobBillingState {
@@ -209,6 +215,7 @@ impl JobBillingState {
             account_id,
             pending: None,
             attempts: 0,
+            retry_deadline: None,
         }
     }
 }

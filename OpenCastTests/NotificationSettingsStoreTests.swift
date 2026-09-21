@@ -6,6 +6,204 @@ import UserNotifications
 @MainActor
 @Suite("Notification settings store")
 struct NotificationSettingsStoreTests {
+    @Test("Launching an opted-in installation restores a disabled backend with either token", arguments: ["same", "rotated"])
+    func launchRestoresDisabledRegistration(token: String) async throws {
+        let context = try makeEnabledContext()
+        let registration = ImmediateNotificationRegistrationService()
+        // An earlier process uploaded "same"; the backend has since dropped the endpoint.
+        registration.uploadedToken = "same"
+        registration.currentToken = token
+        let sync = MockNotificationSubscriptionSyncService()
+        let store = NotificationSettingsStore(
+            authorizationService: StubNotificationAuthorizationService(),
+            registrationService: registration,
+            subscriptionSyncService: sync
+        )
+        await store.load(modelContext: context)
+        #expect(store.statusText == "Registration Pending")
+        #expect(registration.backendToken == nil)
+        await store.refreshIfNeeded(activePodcastIDs: ["https://example.com/feed.xml"], modelContext: context)
+        #expect(registration.backendToken == token)
+        #expect(store.statusText == "1 synced")
+    }
+
+    @Test("Later activations ask APNs again but upload only a rotated token")
+    func laterActivationsUploadOnlyRotatedToken() async throws {
+        let context = try makeEnabledContext()
+        let registration = ImmediateNotificationRegistrationService()
+        let sync = MockNotificationSubscriptionSyncService()
+        let store = NotificationSettingsStore(
+            authorizationService: StubNotificationAuthorizationService(),
+            registrationService: registration,
+            subscriptionSyncService: sync
+        )
+        await store.refreshIfNeeded(activePodcastIDs: ["https://example.com/feed.xml"], modelContext: context)
+        #expect(registration.uploadCount == 1)
+
+        await store.refreshIfNeeded(activePodcastIDs: ["https://example.com/feed.xml"], modelContext: context)
+        #expect(registration.registerCallCount == 2)
+        #expect(registration.uploadCount == 1)
+
+        registration.currentToken = "rotated"
+        await store.refreshIfNeeded(activePodcastIDs: ["https://example.com/feed.xml"], modelContext: context)
+        #expect(registration.uploadCount == 2)
+        #expect(registration.backendToken == "rotated")
+        #expect(store.isRegistrationConfirmed)
+        #expect(sync.syncCalls.count == 1)
+    }
+
+    @Test("A sync reporting a disabled endpoint re-uploads the unchanged token in the same pass")
+    func syncInvalidationRenewsRegistration() async throws {
+        let context = try makeEnabledContext()
+        let registration = ImmediateNotificationRegistrationService()
+        let sync = MockNotificationSubscriptionSyncService(syncOutcomes: [
+            .success(NotificationSubscriptionSyncResponse(message: "synced", accepted: [], rejected: [])),
+            .success(NotificationSubscriptionSyncResponse(
+                message: "synced", accepted: [], rejected: [], registrationReady: false
+            )),
+        ])
+        let store = NotificationSettingsStore(
+            authorizationService: StubNotificationAuthorizationService(),
+            registrationService: registration,
+            subscriptionSyncService: sync
+        )
+        await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context)
+        #expect(registration.uploadCount == 1)
+
+        registration.backendToken = nil
+        await store.syncSubscriptionsIfEnabled(activePodcastIDs: [])
+        #expect(registration.backendToken == "same")
+        #expect(registration.uploadCount == 2)
+        #expect(store.isRegistrationConfirmed)
+        #expect(store.lastErrorMessage == nil)
+        #expect(store.statusText == "0 synced")
+    }
+
+    @Test("Registration failure retries without toggling, including an initial opt-in", arguments: [true, false])
+    func failedRegistrationRetries(alreadyEnabled: Bool) async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = alreadyEnabled ? try makeEnabledContext() : ModelContext(container)
+        let registration = ImmediateNotificationRegistrationService()
+        registration.failure = NotificationSettingsTestError.registrationFailed
+        let sync = MockNotificationSubscriptionSyncService()
+        let store = NotificationSettingsStore(
+            authorizationService: StubNotificationAuthorizationService(),
+            registrationService: registration,
+            subscriptionSyncService: sync
+        )
+        if alreadyEnabled {
+            await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context)
+        } else {
+            await store.setEnabled(true, activePodcastIDs: [], modelContext: context)
+        }
+        #expect(store.isEnabled)
+        #expect(store.statusText == "Registration Pending")
+        #expect(store.lastErrorMessage == "Push registration failed.")
+        #expect(sync.syncCalls.isEmpty)
+        registration.failure = nil
+        await store.refreshIfNeeded(activePodcastIDs: ["https://example.com/feed.xml"], modelContext: context)
+        #expect(store.statusText == "1 synced")
+        #expect(store.lastErrorMessage == nil)
+        #expect(registration.registerCallCount == 2)
+    }
+
+    @Test("A successful sync reporting a disabled endpoint never claims readiness")
+    func syncReportsInvalidation() async throws {
+        let context = try makeEnabledContext()
+        let registration = ImmediateNotificationRegistrationService()
+        let sync = MockNotificationSubscriptionSyncService(syncOutcomes: [.success(
+            NotificationSubscriptionSyncResponse(message: "synced", accepted: [], rejected: [], registrationReady: false)
+        )])
+        let store = NotificationSettingsStore(
+            authorizationService: StubNotificationAuthorizationService(),
+            registrationService: registration,
+            subscriptionSyncService: sync
+        )
+        await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context)
+        #expect(store.statusText == "Registration Pending")
+        #expect(!store.isRegistrationConfirmed)
+        await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context)
+        #expect(store.statusText == "0 synced")
+        #expect(store.isRegistrationConfirmed)
+    }
+
+    @Test("Revoked permission prevents automatic registration and allows recovery after regrant")
+    func revokedPermission() async throws {
+        let context = try makeEnabledContext()
+        let authorization = StubNotificationAuthorizationService(status: .denied)
+        let registration = ImmediateNotificationRegistrationService()
+        let sync = MockNotificationSubscriptionSyncService()
+        let store = NotificationSettingsStore(
+            authorizationService: authorization, registrationService: registration, subscriptionSyncService: sync
+        )
+        await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context)
+        #expect(store.isPermissionDenied)
+        #expect(registration.registerCallCount == 0)
+        #expect(sync.syncCalls.isEmpty)
+        authorization.status = .authorized
+        await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context)
+        #expect(store.isRegistrationConfirmed)
+    }
+
+    @Test("Explicit opt-out survives launch and unsolicited-callback reconciliation")
+    func optedOutNeverRegisters() async throws {
+        let context = try makeEnabledContext()
+        let registration = ImmediateNotificationRegistrationService()
+        let store = NotificationSettingsStore(
+            authorizationService: StubNotificationAuthorizationService(),
+            registrationService: registration,
+            subscriptionSyncService: MockNotificationSubscriptionSyncService()
+        )
+        await store.load(modelContext: context)
+        await store.setEnabled(false, activePodcastIDs: [], modelContext: context)
+        await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context)
+        #expect(registration.registerCallCount == 0)
+        #expect(registration.unregisterCallCount == 1)
+        #expect(store.statusText == "Off")
+    }
+
+    @Test("Opt-out requested during launch recovery runs after registration and wins")
+    func optOutDuringRecovery() async throws {
+        let context = try makeEnabledContext()
+        let registration = HangingNotificationRegistrationService()
+        let store = NotificationSettingsStore(
+            authorizationService: StubNotificationAuthorizationService(),
+            registrationService: registration,
+            subscriptionSyncService: MockNotificationSubscriptionSyncService()
+        )
+        let task = Task { await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context) }
+        try #require(await registration.waitForRegisterRequest())
+        await store.setEnabled(false, activePodcastIDs: [], modelContext: context)
+        registration.releaseRegister()
+        await task.value
+        #expect(registration.unregisterCallCount == 1)
+        #expect(store.statusText == "Off")
+        await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context)
+        #expect(registration.registerCallCount == 1)
+    }
+
+    @Test("An explicit enable racing launch registration is serialized")
+    func enableDuringRecovery() async throws {
+        let context = try makeEnabledContext()
+        let registration = HangingNotificationRegistrationService()
+        let store = NotificationSettingsStore(
+            authorizationService: StubNotificationAuthorizationService(),
+            registrationService: registration,
+            subscriptionSyncService: MockNotificationSubscriptionSyncService()
+        )
+        let task = Task { await store.refreshIfNeeded(activePodcastIDs: [], modelContext: context) }
+        try #require(await registration.waitForRegisterRequest())
+        await store.setEnabled(true, activePodcastIDs: [], modelContext: context)
+        #expect(registration.registerCallCount == 1)
+        registration.releaseRegister()
+        try #require(await registration.waitForRegisterRequest())
+        #expect(registration.registerCallCount == 2)
+        registration.releaseRegister()
+        await task.value
+        #expect(store.isRegistrationConfirmed)
+        #expect(store.lastErrorMessage == nil)
+    }
+
     @Test("Scheduled sync during an in-flight operation drains after the operation")
     func scheduledSyncDuringInFlightOperationDrainsAfterOperation() async throws {
         let context = try makeEnabledContext()
@@ -186,13 +384,28 @@ private final class StubNotificationAuthorizationService: NotificationAuthorizat
 @MainActor
 private final class ImmediateNotificationRegistrationService: NotificationDeviceRegistrationServicing {
     private(set) var unregisterCallCount = 0
+    private(set) var registerCallCount = 0
+    private(set) var uploadCount = 0
+    var currentToken = "same"
+    var uploadedToken: String?
+    var backendToken: String?
+    var failure: Error?
 
-    func registerCurrentDevice() async throws -> UNAuthorizationStatus {
-        .authorized
+    func registerCurrentDevice(uploadsUnchangedToken: Bool) async throws -> UNAuthorizationStatus {
+        registerCallCount += 1
+        if let failure { throw failure }
+        guard uploadsUnchangedToken || uploadedToken != currentToken else {
+            return .authorized
+        }
+        uploadCount += 1
+        uploadedToken = currentToken
+        backendToken = currentToken
+        return .authorized
     }
 
     func unregisterCurrentDeviceIfPossible() async throws {
         unregisterCallCount += 1
+        backendToken = nil
     }
 
     func clearLocalDeviceToken() {}
@@ -201,15 +414,18 @@ private final class ImmediateNotificationRegistrationService: NotificationDevice
 @MainActor
 private final class HangingNotificationRegistrationService: NotificationDeviceRegistrationServicing {
     private var registerContinuation: CheckedContinuation<Void, Never>?
+    private(set) var registerCallCount = 0
+    private(set) var unregisterCallCount = 0
 
-    func registerCurrentDevice() async throws -> UNAuthorizationStatus {
+    func registerCurrentDevice(uploadsUnchangedToken: Bool) async throws -> UNAuthorizationStatus {
+        registerCallCount += 1
         await withCheckedContinuation { continuation in
             registerContinuation = continuation
         }
         return .authorized
     }
 
-    func unregisterCurrentDeviceIfPossible() async throws {}
+    func unregisterCurrentDeviceIfPossible() async throws { unregisterCallCount += 1 }
 
     func clearLocalDeviceToken() {}
 
@@ -300,11 +516,14 @@ private enum NotificationSettingsSyncIfRegisteredOutcome {
 }
 
 private enum NotificationSettingsTestError: Error, LocalizedError {
+    case registrationFailed
     case syncFailed
     case cleanupFailed
 
     var errorDescription: String? {
         switch self {
+        case .registrationFailed:
+            "Push registration failed."
         case .syncFailed:
             "Subscription sync failed."
         case .cleanupFailed:

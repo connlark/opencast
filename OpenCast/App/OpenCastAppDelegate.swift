@@ -38,7 +38,17 @@ final class OpenCastAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
-        RemoteNotificationRegistrationBridge.shared.didRegister(deviceToken: deviceToken)
+        guard !RemoteNotificationRegistrationBridge.shared.didRegister(deviceToken: deviceToken) else {
+            return
+        }
+        // Reconcile unsolicited token changes through the same opt-in and serialization gates.
+        Task {
+            let runtime = OpenCastAppRuntime.shared
+            await runtime.appModel.notificationSettings.refreshIfNeeded(
+                activePodcastIDs: runtime.appModel.library.activePodcastIDs,
+                modelContext: runtime.modelContainer.mainContext
+            )
+        }
     }
 
     func application(

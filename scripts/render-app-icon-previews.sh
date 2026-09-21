@@ -5,7 +5,10 @@
 # AppIcon<Name>.icon alternate). Light and Dark renditions are exported at
 # 1024 px with Icon Composer's embedded ictool, downsampled to 60 pt @2x/@3x,
 # and written as committed imagesets so builds never need Icon Composer.
-# Re-run after editing any icon document; the output is byte-stable.
+# Re-run after editing any icon document. Output is byte-stable for a given
+# ictool and ImageMagick; a toolchain update can rewrite every byte while the
+# rendered art stays identical (observed: 0.14% RMSE, versus 8% for a real
+# icon edit), so judge staleness by appearance, not by a changed blob.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

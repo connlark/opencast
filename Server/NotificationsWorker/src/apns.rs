@@ -204,6 +204,46 @@ pub fn episode_delivery_push_request(
     Ok(request)
 }
 
+/// Additive grouped copy preserves the installed app's episode category and
+/// newest-member routing. Membership comes from the durable delivery record.
+pub fn group_episode_request(
+    request: &mut PushRequest,
+    count: i64,
+) -> Result<(), PushRequestError> {
+    if count <= 3 {
+        return Ok(());
+    }
+    let mut payload: serde_json::Value =
+        serde_json::from_str(&request.body).map_err(|_| PushRequestError::PayloadTooLarge)?;
+    payload["aps"]["alert"]
+        .as_object_mut()
+        .expect("episode alert")
+        .remove("subtitle");
+    payload["aps"]["alert"]["body"] = serde_json::json!(format!("{count} new episodes"));
+    payload["opencast"]["episode_count"] = serde_json::json!(count);
+    let mut body = payload.to_string();
+    for optional in [
+        "episode_summary",
+        "episode_duration_text",
+        "episode_artwork_url",
+        "artwork_url",
+    ] {
+        if body.len() <= MAX_APNS_PAYLOAD_BYTES {
+            break;
+        }
+        payload["opencast"]
+            .as_object_mut()
+            .expect("episode payload")
+            .remove(optional);
+        body = payload.to_string();
+    }
+    if body.len() > MAX_APNS_PAYLOAD_BYTES {
+        return Err(PushRequestError::PayloadTooLarge);
+    }
+    request.body = body;
+    Ok(())
+}
+
 fn episode_push_request(
     device_token: &str,
     bundle_id: &str,

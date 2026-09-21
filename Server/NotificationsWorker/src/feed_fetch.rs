@@ -2,6 +2,7 @@
 // Keep the product identity URL-free for both admission and polling.
 pub(crate) const FEED_USER_AGENT: &str = "OpenCast-Notifications/1";
 
+#[cfg(target_arch = "wasm32")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FeedFetchError {
     InvalidRedirect,
@@ -10,10 +11,12 @@ pub(crate) enum FeedFetchError {
     MissingRedirectLocation,
     HTTPStatus(u16),
     UnexpectedNotModified,
+    OriginDeferred,
+    StorageFailed,
 }
 
+#[cfg(target_arch = "wasm32")]
 impl FeedFetchError {
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn code(&self) -> &'static str {
         match self {
             FeedFetchError::InvalidRedirect => "invalid_redirect",
@@ -22,19 +25,9 @@ impl FeedFetchError {
             FeedFetchError::MissingRedirectLocation => "missing_redirect_location",
             FeedFetchError::HTTPStatus(_) => "http_error",
             FeedFetchError::UnexpectedNotModified => "unexpected_not_modified",
+            FeedFetchError::OriginDeferred => "origin_deferred",
+            FeedFetchError::StorageFailed => "storage_failed",
         }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn http_status(&self) -> Option<u16> {
-        match self {
-            FeedFetchError::HTTPStatus(status) => Some(*status),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn is_persistent_compatibility(&self) -> bool {
-        false
     }
 }
 
@@ -93,20 +86,6 @@ mod tests {
             feed_response_disposition(404),
             FeedResponseDisposition::Other
         );
-    }
-
-    #[test]
-    fn current_fetch_failures_use_transient_retry_policy() {
-        for error in [
-            FeedFetchError::InvalidRedirect,
-            FeedFetchError::TooManyRedirects,
-            FeedFetchError::FetchFailed,
-            FeedFetchError::MissingRedirectLocation,
-            FeedFetchError::HTTPStatus(503),
-            FeedFetchError::UnexpectedNotModified,
-        ] {
-            assert!(!error.is_persistent_compatibility(), "{error:?}");
-        }
     }
 
     #[test]

@@ -7,7 +7,9 @@ use crate::types::{AdAnalysisRequest, TranscriptMetadata, TranscriptSegment};
 use crate::usage::UsageLimitProfile;
 
 pub const JOB_BINDING: &str = "AD_ANALYSIS_JOB";
-pub const JOB_RESULT_TTL_SECONDS: i64 = 1_800;
+// Only new successful completions use this retention. Stored deadlines are authoritative.
+pub const JOB_SUCCESS_TTL_SECONDS: i64 = 86_400;
+pub const JOB_FAILURE_TTL_SECONDS: i64 = 1_800;
 pub const JOB_RUNNING_DEADLINE_SECONDS: i64 = 600;
 pub const JOB_HEARTBEAT_SECONDS: u64 = 30;
 pub const JOB_SUBMIT_POLL_AFTER_SECONDS: u64 = 15;
@@ -96,6 +98,22 @@ pub enum JobRecord {
 }
 
 impl JobRecord {
+    /// Request paths must honor stored expiry even if the cleanup alarm is late.
+    /// Filtering never rewrites the record or drops pending billing work.
+    pub fn unexpired(&self, now: i64) -> Option<&Self> {
+        match self {
+            Self::Running { .. } => Some(self),
+            Self::Completed { purge_at, .. }
+            | Self::FailedUpstream { purge_at, .. }
+            | Self::FailedTransient { purge_at, .. }
+                if now < *purge_at =>
+            {
+                Some(self)
+            }
+            _ => None,
+        }
+    }
+
     pub fn subjects(&self) -> &[String] {
         match self {
             JobRecord::Running { subjects, .. }
@@ -132,7 +150,7 @@ impl JobRecord {
 
     /// Pre-scheme records (and skew-window submits that carried no subject)
     /// have an empty subject set and keep the old open behavior until their
-    /// TTL purge — at most 30 minutes after deploy.
+    /// stored TTL purge; reads never extend that deadline.
     fn legacy_open(&self) -> bool {
         self.subjects().is_empty()
     }
@@ -378,7 +396,7 @@ pub fn alarm_decision(record: Option<&JobRecord>, run_active: bool, now: i64) ->
             AlarmDecision::FailTransient {
                 record: JobRecord::FailedTransient {
                     job_id: job_id.clone(),
-                    purge_at: now.saturating_add(JOB_RESULT_TTL_SECONDS),
+                    purge_at: now.saturating_add(JOB_FAILURE_TTL_SECONDS),
                     subjects: subjects.clone(),
                     content_hash: content_hash.clone(),
                 },

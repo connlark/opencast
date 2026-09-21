@@ -10,15 +10,15 @@ use worker::{
 use crate::analysis::run_analysis;
 use crate::billing::{
     billing_retry_delay_seconds, BillingContext, JobBillingState, PendingBillingAction,
-    BILLING_MAX_ATTEMPTS, ERROR_BILLING_UNAVAILABLE,
+    BILLING_MAX_ATTEMPTS, BILLING_RETRY_WINDOW_SECONDS, ERROR_BILLING_UNAVAILABLE,
 };
 use crate::counters;
 use crate::credit::CreditError;
 use crate::job::{
     alarm_decision, poll_decision, submit_decision, terminal_billing_action,
     transcript_content_hash, AlarmDecision, JobDoPollRequest, JobRecord, JobSubmitRequest,
-    PollDecision, SubmitDecision, JOB_HEARTBEAT_SECONDS, JOB_POLL_AFTER_SECONDS,
-    JOB_RESULT_TTL_SECONDS, JOB_SUBMIT_POLL_AFTER_SECONDS,
+    PollDecision, SubmitDecision, JOB_FAILURE_TTL_SECONDS, JOB_HEARTBEAT_SECONDS,
+    JOB_POLL_AFTER_SECONDS, JOB_SUBMIT_POLL_AFTER_SECONDS, JOB_SUCCESS_TTL_SECONDS,
 };
 use crate::route::JSON_CONTENT_TYPE;
 use crate::types::{resolve_gemini_model, ErrorResponse, GEMINI_MODEL_ENV_VAR};
@@ -62,7 +62,9 @@ impl DurableObject for TranscriptAnalysisJob {
     async fn alarm(&self) -> Result<Response> {
         let record = read_record(&self.state.storage()).await?;
         match alarm_decision(record.as_ref(), self.run_active.get(), now_seconds()) {
-            AlarmDecision::Purge => self.purge_with_final_billing().await?,
+            AlarmDecision::Purge | AlarmDecision::FinalizeBilling => {
+                self.finalize_billing_or_purge().await?;
+            }
             AlarmDecision::Heartbeat => {
                 self.state
                     .storage()
@@ -104,7 +106,13 @@ impl TranscriptAnalysisJob {
 
         loop {
             let mut record = read_record(&self.state.storage()).await?;
-            match submit_decision(record.as_ref(), &submit.subject, &submitted_hash) {
+            match submit_decision(
+                record
+                    .as_ref()
+                    .and_then(|record| record.unexpired(now_seconds())),
+                &submit.subject,
+                &submitted_hash,
+            ) {
                 SubmitDecision::Attach { job_id, join } => {
                     if join {
                         if let Some(record) = record.as_mut() {
@@ -119,7 +127,7 @@ impl TranscriptAnalysisJob {
                     result_json, join, ..
                 } => {
                     // Completed results serve idempotently until the TTL
-                    // alarm purges them: a response lost in transit must be
+                    // deadline expires: a response lost in transit must be
                     // recoverable by asking again, never by re-running the
                     // model. A content-proven new subject joins first so its
                     // later polls stay authorized.
@@ -316,7 +324,12 @@ impl TranscriptAnalysisJob {
             Err(_) => return json_error(400, "malformed_json"),
         };
         let record = read_record(&self.state.storage()).await?;
-        match poll_decision(record.as_ref(), poll.subject.as_deref()) {
+        match poll_decision(
+            record
+                .as_ref()
+                .and_then(|record| record.unexpired(now_seconds())),
+            poll.subject.as_deref(),
+        ) {
             PollDecision::NotFound => json_error(404, "job_not_found"),
             PollDecision::Running { job_id } => {
                 job_status(202, &job_id, "running", JOB_POLL_AFTER_SECONDS)
@@ -357,27 +370,39 @@ impl TranscriptAnalysisJob {
         self.purge().await
     }
 
-    /// Purge at the TTL deadline, but never silently drop an unresolved
-    /// settle/release with the record: one final attempt, then a loud
-    /// abandonment (operator signal).
-    async fn purge_with_final_billing(&self) -> Result<()> {
-        let Some(record) = read_record(&self.state.storage()).await? else {
+    /// At either stored deadline, resolve pending billing once or abandon
+    /// loudly. Successful result bytes remain until their own stored expiry.
+    async fn finalize_billing_or_purge(&self) -> Result<()> {
+        let Some(mut record) = read_record(&self.state.storage()).await? else {
             return self.purge().await;
         };
         if let Some((account_id, billing_id, action)) = pending_billing(Some(&record)) {
             if !attempt_billing_action(&self.env, &account_id, &billing_id, action).await {
                 console_error!(
-                    "transcript-analysis billing {action:?} abandoned at purge: {billing_id}"
+                    "transcript-analysis billing {action:?} abandoned at deadline: {billing_id}"
                 );
                 counters::bump(&self.env, &[(abandoned_counter(action), 1)]).await;
                 release_abandoned_settle(&self.env, &account_id, &billing_id, action).await;
             }
-            // The attempts above opened the input gate: an interleaved
-            // submit may own a fresh run (record, reservation, heartbeat
-            // alarm) — purge only the exact record this pass read.
-            if read_record(&self.state.storage()).await?.as_ref() != Some(&record) {
+            // Billing I/O opens the input gate. Preserve any subject that
+            // joined the still-live result, but never overwrite a fresh run
+            // (which has a different billing id and owns its own alarm).
+            let Some(current) =
+                reread_matching_terminal(&self.state.storage(), &billing_id).await?
+            else {
                 return Ok(());
+            };
+            record = current;
+        }
+        if record.unexpired(now_seconds()).is_some() {
+            if let Some(billing) = record.billing_mut() {
+                billing.pending = None;
             }
+            let purge_at = record
+                .purge_at()
+                .expect("terminal billing has a purge deadline");
+            write_record(&self.state.storage(), &record).await?;
+            return set_alarm_at(&self.state.storage(), purge_at).await;
         }
         self.purge().await
     }
@@ -550,7 +575,11 @@ async fn run_job(
         RunOutcome::Completed { .. } => counters::JOBS_COMPLETED,
         RunOutcome::FailedUpstream { .. } => counters::JOBS_FAILED_UPSTREAM,
     };
-    let purge_at = now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS);
+    let retention = match outcome {
+        RunOutcome::Completed { .. } => JOB_SUCCESS_TTL_SECONDS,
+        RunOutcome::FailedUpstream { .. } => JOB_FAILURE_TTL_SECONDS,
+    };
+    let purge_at = now_seconds().saturating_add(retention);
     let record = match outcome {
         RunOutcome::Completed { result_json } => JobRecord::Completed {
             job_id,
@@ -596,7 +625,7 @@ async fn terminalize_failed_run(
     if current_job_id != job_id || current_started_at != started_at {
         return Ok(());
     }
-    let purge_at = now_seconds().saturating_add(JOB_RESULT_TTL_SECONDS);
+    let purge_at = now_seconds().saturating_add(JOB_FAILURE_TTL_SECONDS);
     let record = JobRecord::FailedUpstream {
         job_id: job_id.to_string(),
         status: 500,
@@ -642,6 +671,8 @@ async fn apply_terminal_billing(
     };
     if let Some(billing) = record.billing_mut() {
         billing.pending = Some(action);
+        billing.retry_deadline =
+            Some(purge_at.min(now_seconds().saturating_add(BILLING_RETRY_WINDOW_SECONDS)));
     }
     write_record(storage, &record).await?;
     counters::bump(env, &[(outcome_counter, 1)]).await;
@@ -746,7 +777,7 @@ async fn record_failed_billing_attempt(
         write_record(storage, &record).await?;
         return storage
             .set_alarm(Duration::from_secs(billing_retry_delay_seconds(
-                purge_at,
+                record.billing_deadline().unwrap_or(purge_at),
                 now_seconds(),
             )))
             .await;

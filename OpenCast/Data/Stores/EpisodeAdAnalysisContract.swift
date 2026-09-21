@@ -3,7 +3,8 @@ import Foundation
 enum EpisodeAdAnalysisContract {
     nonisolated static let schemaVersion = 1
     nonisolated static let completedTranscriptState = EpisodeTranscriptState.completed.rawValue
-    /// Production stays on v2 during the v3 staging bake-off. Both contracts
+    /// Production serves v3 since 2026-09-18; v2 stays accepted for cached
+    /// analyses and as the server's rollback policy. Both contracts
     /// produce complete-break spans in the same schema; older cue-fragment or
     /// unknown future policies remain unusable. This does not invalidate v2.
     nonisolated static let expectedPolicy = "promo_ad_breaks_v2"

@@ -37,7 +37,7 @@ export default defineConfig(async () => {
     test: {
       // The billing suites run under their own configs (vitest.billing /
       // vitest.purchase) with different worker bindings.
-      include: ["test/integration.spec.mjs"],
+      include: ["test/integration.spec.mjs", "test/retention.spec.mjs"],
       setupFiles: ["./test/apply-migrations.mjs"],
     },
   };

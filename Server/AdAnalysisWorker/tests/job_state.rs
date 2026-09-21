@@ -5,7 +5,7 @@ use opencast_ad_analysis_worker::job::{
     alarm_decision, app_attest_subject, bearer_subject, job_object_name, poll_decision,
     submit_decision, transcript_content_hash, transcription_account_subject, valid_job_id,
     ActiveWindow, AlarmDecision, JobRecord, PollDecision, SubmitDecision, ERROR_ADMISSION_BUSY,
-    JOB_RESULT_TTL_SECONDS, JOB_RUNNING_DEADLINE_SECONDS, SUBMIT_ADMISSION_MAX_WAITS,
+    JOB_FAILURE_TTL_SECONDS, JOB_RUNNING_DEADLINE_SECONDS, SUBMIT_ADMISSION_MAX_WAITS,
     SUBMIT_ADMISSION_WAIT_MILLIS,
 };
 use opencast_ad_analysis_worker::types::{TranscriptMetadata, TranscriptSegment};
@@ -295,7 +295,7 @@ fn alarm_decisions_heartbeat_watchdog_and_purge() {
             AlarmDecision::FailTransient {
                 record: JobRecord::FailedTransient {
                     job_id: "fingerprint-123".to_string(),
-                    purge_at: now + JOB_RESULT_TTL_SECONDS,
+                    purge_at: now + JOB_FAILURE_TTL_SECONDS,
                     subjects: vec![OWNER.to_string()],
                     content_hash: CONTENT.to_string(),
                 }
@@ -415,4 +415,85 @@ fn revision_handles_bind_old_completed_records_and_failures_stay_readable() {
         poll_decision(Some(&record), Some(STRANGER)),
         PollDecision::NotFound
     );
+}
+
+#[test]
+fn stored_expiry_bounds_reads_and_coalescing_without_sliding() {
+    // Both a pre-deploy 30-minute record and a newly promised 24-hour record
+    // survive serialization, repeated reads, and content-proven joins unchanged.
+    let completed_at = 10_000;
+    for lifetime in [1_800, 86_400] {
+        let mut record = completed();
+        let deadline = completed_at + lifetime;
+        if let JobRecord::Completed { purge_at, .. } = &mut record {
+            *purge_at = deadline;
+        }
+        let encoded = serde_json::to_string(&record).unwrap();
+        let mut record: JobRecord = serde_json::from_str(&encoded).unwrap();
+        for now in [completed_at + 1_799, completed_at + 1_800, deadline - 1] {
+            if now >= deadline {
+                continue;
+            }
+            let live = record.unexpired(now);
+            assert!(matches!(
+                poll_decision(live, Some(OWNER)),
+                PollDecision::ServeCompleted { .. }
+            ));
+            assert_eq!(poll_decision(live, Some(STRANGER)), PollDecision::NotFound);
+            assert_eq!(
+                submit_decision(live, STRANGER, OTHER_CONTENT, false),
+                SubmitDecision::DenyContentMismatch
+            );
+            assert!(matches!(
+                submit_decision(live, STRANGER, CONTENT, false),
+                SubmitDecision::ServeCompleted { join: true, .. }
+            ));
+            assert_eq!(
+                alarm_decision(Some(&record), false, now),
+                AlarmDecision::SchedulePurge { purge_at: deadline }
+            );
+        }
+        assert!(record.push_subject(STRANGER));
+        assert!(matches!(
+            poll_decision(record.unexpired(deadline - 1), Some(STRANGER)),
+            PollDecision::ServeCompleted { .. }
+        ));
+        for now in [deadline, deadline + 1, deadline + 86_400] {
+            assert_eq!(
+                poll_decision(record.unexpired(now), Some(OWNER)),
+                PollDecision::NotFound
+            );
+            assert_eq!(
+                submit_decision(record.unexpired(now), OWNER, CONTENT, false),
+                SubmitDecision::Start
+            );
+            assert_eq!(
+                alarm_decision(Some(&record), false, now),
+                AlarmDecision::Purge
+            );
+        }
+    }
+}
+
+#[test]
+fn expired_failures_are_unavailable_but_live_failures_keep_retry_policy() {
+    let record = JobRecord::FailedTransient {
+        job_id: "fingerprint-123".into(),
+        purge_at: 2_000,
+        subjects: vec![OWNER.into()],
+        content_hash: CONTENT.into(),
+    };
+    assert_eq!(
+        poll_decision(record.unexpired(1_999), Some(OWNER)),
+        PollDecision::ServeFailedTransient
+    );
+    assert_eq!(
+        submit_decision(record.unexpired(1_999), OWNER, CONTENT, false),
+        SubmitDecision::Start
+    );
+    assert_eq!(
+        poll_decision(record.unexpired(2_000), Some(OWNER)),
+        PollDecision::NotFound
+    );
+    assert!(running().unexpired(i64::MAX).is_some()); // watchdog owns execution expiry
 }
