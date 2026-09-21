@@ -66,6 +66,14 @@ Run locally after creating `wrangler.toml`:
 yarn dev
 ```
 
+## Result retention
+
+A completed analysis is readable for 24 hours from durable completion; a failed
+record keeps a 30-minute lifetime. The stored expiry is authoritative: polls,
+cached submissions and content-proven subject joins never extend it, and a read
+past expiry returns 404 even if the cleanup alarm is late. An explicit
+submission may start a new run. The response schema carries no expiry field.
+
 ## Security Defaults
 
 - Keep App Attest on public write endpoints.

@@ -29,12 +29,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
+
       - name: Verify cross-component server contracts
         run: |
           ./scripts/check-yarn-workspace.sh
           ./scripts/check-media-ua-pins.sh
           ./scripts/check-wasm-only-test-gating.sh
           python3 ./scripts/check-feed-resource-policy.py
+
+      - name: Run notification contract oracles
+        run: node --test scripts/notifications-overhaul/*.test.mjs
 
   rust:
     name: Rust (${{ matrix.name }})
@@ -56,6 +64,10 @@ jobs:
             check_args: ""
           - name: NotificationsWorker
             directory: Server/NotificationsWorker
+            wasm: true
+            check_args: ""
+          - name: FeedPollingWorker
+            directory: Server/FeedPollingWorker
             wasm: true
             check_args: ""
           - name: AdAnalysisWorker
@@ -136,7 +148,8 @@ jobs:
   deterministic-integration:
     name: Integration (${{ matrix.name }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    # The FeedPolling lane packages two release Rust Workers before its suites.
+    timeout-minutes: 45
     permissions:
       contents: read
     strategy:
@@ -145,6 +158,8 @@ jobs:
         include:
           - name: NotificationsWorker
             directory: Server/NotificationsWorker
+          - name: FeedPollingWorker
+            directory: Server/FeedPollingWorker
           - name: AdAnalysisWorker
             directory: Server/AdAnalysisWorker
           - name: TranscriptAnalysisWorker
@@ -206,9 +221,11 @@ jobs:
           node --input-type=module --eval \
             "import { writeFileSync } from 'node:fs'; writeFileSync('tests/fixtures/ad_analysis_app_attest_development_fixture.json', '{}\n');"
 
+      # FeedPolling links the notifications crate and its harness boots the
+      # packaged notifications Worker, so that lane needs the same template.
       - name: Prepare public Notifications integration harness
-        if: matrix.name == 'NotificationsWorker'
-        working-directory: ${{ matrix.directory }}
+        if: matrix.name == 'NotificationsWorker' || matrix.name == 'FeedPollingWorker'
+        working-directory: Server/NotificationsWorker
         run: cp wrangler.example.toml wrangler.toml
 
       - name: Prepare public TranscriptAnalysis integration harness
@@ -287,7 +304,23 @@ jobs:
         working-directory: ${{ matrix.directory }}
         run: |
           yarn deploy:dry-run
-          node tests/feed-runtime.mjs
+          node tests/storage-cleanup.mjs
+          node tests/current-schema-upgrade.mjs
+          node tests/catalog-contract-runtime.mjs
+          node tests/current-engine-runtime.mjs
+          node tests/delivery-runtime.mjs
+          node tests/observation-runtime.mjs
+          node tests/feed-cancellation-runtime.mjs
+
+      - name: Run deterministic FeedPolling integration tests
+        if: matrix.name == 'FeedPollingWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          yarn workspace @opencast/notifications-worker deploy:dry-run
+          yarn deploy:dry-run
+          node tests/lifecycle.mjs
+          node tests/digest-runtime.mjs
+          node tests/review-regressions.mjs
 
       - name: Run deterministic TranscriptAnalysis integration tests
         if: matrix.name == 'TranscriptAnalysisWorker'

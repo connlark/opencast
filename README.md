@@ -73,7 +73,7 @@ Every public Worker configuration is a disabled, self-hostable template.
 
 | Capability | Setup guide |
 | --- | --- |
-| New-episode notifications | [`NotificationsWorker`](Server/NotificationsWorker/README.md) |
+| New-episode notifications | [`NotificationsWorker`](Server/NotificationsWorker/README.md) and [`FeedPollingWorker`](Server/FeedPollingWorker/README.md) |
 | Transcript-based ad analysis | [`AdAnalysisWorker`](Server/AdAnalysisWorker/README.md) |
 | Transcript chapters and summaries | [`TranscriptAnalysisWorker`](Server/TranscriptAnalysisWorker/README.md) |
 | Whisper model manifests and assets | [`ModelGatewayWorker`](Server/ModelGatewayWorker/README.md) |

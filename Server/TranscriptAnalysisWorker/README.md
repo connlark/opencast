@@ -96,6 +96,21 @@ Worker locally with `yarn dev`.
 - `POST /v1/transcript-analysis/account/bootstrap` links an App Attest install
   to the configured credit authority.
 
+## Result retention
+
+A successful chapter/summary result lives for 24 hours from durable completion.
+The persisted expiry is authoritative: existing records keep the expiry they
+were stored with, and polls, cached submissions and content-proven subject joins
+never renew it. An expired read returns the usual 404 `job_not_found` even when
+the cleanup alarm is delayed; an explicit submission can start a new run, and no
+poll ever reruns inference on its own. The response schema adds no expiry field,
+and subject authorization and exact-content possession checks still gate
+coalesced results.
+
+Failures keep their 30-minute expiry, watchdog deadline and authenticated
+purge-on-read behavior, except while pending credit work blocks the purge. New
+terminal billing records carry an independent 30-minute retry deadline.
+
 ## Security and Privacy Defaults
 
 - Keep public analysis and billing disabled until deployment is complete.
