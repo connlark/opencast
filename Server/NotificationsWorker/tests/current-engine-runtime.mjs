@@ -23,6 +23,15 @@ try {
  const url='https://fixture.example.com/current.xml',feed=H(['feed-v1',url]);
  const sync=async(subscribed=true)=>expect(await auth(worker,'/v1/subscriptions/sync',{subscriptions:subscribed?[{feed_url:url,notifications_enabled:true}]:[]}));
  assert.equal((await sync()).registration_ready,true);assert.deepEqual(await first('SELECT epoch FROM n_feed WHERE feed_id=?',feed),{epoch:1});
+ // Clients resend every subscription on every sync; an unchanged one is rewritten
+ // (and its interest re-asserted through the trigger) at most once a day.
+ const stamps=()=>first("SELECT s.updated_at,j.changed_at FROM feed_subscriptions s JOIN n_interest j ON j.install_id=s.install_id WHERE s.install_id='current-install' AND s.feed_url=?",url);
+ const age=seconds=>sql("UPDATE feed_subscriptions SET updated_at=? WHERE install_id='current-install'",now-seconds).run();
+ await age(3600);const recent=await stamps();assert.deepEqual(recent,{updated_at:now-3600,changed_at:now-3600});
+ await sync();assert.deepEqual(await stamps(),recent);
+ await age(2*86400);await sync();const confirmed=await stamps();
+ assert.ok(confirmed.updated_at>=now&&confirmed.changed_at===confirmed.updated_at,JSON.stringify(confirmed));
+ console.log('PASS an unchanged subscription is rewritten at most daily and still re-asserts its interest');
  const endpoint=()=>first("SELECT token_generation,registered_at,enabled FROM n_install WHERE install_id='current-install'");
  const initial=await endpoint();
  const interests=await sql("SELECT * FROM n_interest WHERE install_id='current-install'").all();

@@ -97,6 +97,10 @@ const INSERT_PENDING_FEED_SQL: &str = "INSERT INTO n_feed_catalog \
          VALUES (?1, ?2, ?3, ?3) \
          ON CONFLICT(feed_url) DO NOTHING";
 
+// Clients resend their whole subscription set on every sync. Rewriting an unchanged
+// row costs a second write through `n_subscription_update`, so a live row is left
+// alone until it is a day (86400 s) old. The daily rewrite keeps `updated_at` usable
+// as "this installation synced" evidence and lets the trigger re-assert `n_interest`.
 const UPSERT_FEED_SUBSCRIPTION_SQL: &str = "INSERT INTO feed_subscriptions \
          (install_id, feed_url, notifications_enabled, created_at, updated_at, deleted_at) \
          SELECT ?1, ?2, ?3, ?4, ?5, NULL WHERE EXISTS(SELECT 1 FROM app_attest_keys WHERE install_id=?1 AND key_id=?6) \
@@ -108,7 +112,10 @@ const UPSERT_FEED_SUBSCRIPTION_SQL: &str = "INSERT INTO feed_subscriptions \
          END, \
          notifications_enabled = excluded.notifications_enabled, \
          updated_at = excluded.updated_at, \
-         deleted_at = NULL";
+         deleted_at = NULL \
+         WHERE feed_subscriptions.notifications_enabled <> excluded.notifications_enabled \
+            OR feed_subscriptions.deleted_at IS NOT NULL \
+            OR feed_subscriptions.updated_at <= excluded.updated_at - 86400";
 
 const MARK_SUBSCRIPTION_DELETED_SQL: &str = "UPDATE feed_subscriptions \
          SET notifications_enabled = 0, updated_at = ?1, deleted_at = ?1 \
@@ -1022,37 +1029,65 @@ mod tests {
         .expect("insert subscription");
         assert_eq!(read(&db), (1, NOW, NOW, None));
 
-        // A live enabled subscription keeps its original created_at.
+        // Resending an unchanged subscription within a day writes nothing.
+        const DAY: i64 = 86_400;
+        let changed = db
+            .execute(
+                UPSERT_FEED_SUBSCRIPTION_SQL,
+                params![install, feed_url, 1, NOW + DAY - 1, NOW + DAY - 1, "key"],
+            )
+            .expect("re-upsert subscription within a day");
+        assert_eq!(changed, 0);
+        assert_eq!(read(&db), (1, NOW, NOW, None));
+
+        // A day later it is confirmed again, keeping its original created_at.
         db.execute(
             UPSERT_FEED_SUBSCRIPTION_SQL,
-            params![install, feed_url, 1, NOW + 10, NOW + 10, "key"],
+            params![install, feed_url, 1, NOW + DAY, NOW + DAY, "key"],
         )
-        .expect("re-upsert subscription");
-        assert_eq!(read(&db), (1, NOW, NOW + 10, None));
+        .expect("re-upsert subscription after a day");
+        assert_eq!(read(&db), (1, NOW, NOW + DAY, None));
+
+        // A changed preference is written immediately.
+        db.execute(
+            UPSERT_FEED_SUBSCRIPTION_SQL,
+            params![install, feed_url, 0, NOW + DAY + 5, NOW + DAY + 5, "key"],
+        )
+        .expect("disable subscription");
+        assert_eq!(read(&db), (0, NOW, NOW + DAY + 5, None));
+        db.execute(
+            UPSERT_FEED_SUBSCRIPTION_SQL,
+            params![install, feed_url, 1, NOW + DAY + 10, NOW + DAY + 10, "key"],
+        )
+        .expect("re-enable subscription");
+        assert_eq!(read(&db), (1, NOW + DAY + 10, NOW + DAY + 10, None));
 
         db.execute(
             MARK_SUBSCRIPTION_DELETED_SQL,
-            params![NOW + 20, install, feed_url, "key"],
+            params![NOW + DAY + 20, install, feed_url, "key"],
         )
         .expect("mark deleted");
-        assert_eq!(read(&db), (0, NOW, NOW + 20, Some(NOW + 20)));
+        assert_eq!(
+            read(&db),
+            (0, NOW + DAY + 10, NOW + DAY + 20, Some(NOW + DAY + 20))
+        );
 
         // Marking an already-deleted row again is a no-op.
         let changed = db
             .execute(
                 MARK_SUBSCRIPTION_DELETED_SQL,
-                params![NOW + 25, install, feed_url, "key"],
+                params![NOW + DAY + 25, install, feed_url, "key"],
             )
             .expect("mark deleted again");
         assert_eq!(changed, 0);
 
-        // Resubscribing resurrects the row with a fresh created_at.
+        // Resubscribing resurrects the row at once, with a fresh created_at.
         db.execute(
             UPSERT_FEED_SUBSCRIPTION_SQL,
-            params![install, feed_url, 1, NOW + 30, NOW + 30, "key"],
+            params![install, feed_url, 1, NOW + DAY + 30, NOW + DAY + 30, "key"],
         )
         .expect("resubscribe");
-        assert_eq!(read(&db), (1, NOW + 30, NOW + 30, None));
+        assert_eq!(read(&db), (1, NOW + DAY + 30, NOW + DAY + 30, None));
     }
 
     #[test]
