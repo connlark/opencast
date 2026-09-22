@@ -11,6 +11,9 @@ final class OpenCastUITests: XCTestCase {
     }
     private static let liveAdAnalysisEpisodeRowIdentifier = "episode-row-audio-illusion-that-proves-we-dont-experience-reality"
     private static let seededSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-feed.xml"
+    private static let aardvarkSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-aardvark.xml"
+    private static let zephyrSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-zephyr.xml"
+    private static let firstExtraSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-extra-1.xml"
     private static let soundLabTranscriptActionIdentifier = "Now Playing Sound Lab Transcript Action"
     private static let seedVoiceBoostModeEnvironmentKey = "OPENCAST_SEED_VOICE_BOOST_MODE"
     private static let seedAdDetectionModeEnvironmentKey = "OPENCAST_SEED_AD_DETECTION_MODE"
@@ -1338,6 +1341,138 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertGreaterThan(inboxAddPodcastButton.frame.width, 180)
         XCTAssertLessThan(abs(inboxAddPodcastButton.frame.midX - app.staticTexts["Inbox Empty"].frame.midX), 4)
         attachSmokeScreenshot(named: "inbox_after_library_swipe_remove")
+    }
+
+    @MainActor
+    func testSeededCompactLibraryGridSortAndNewEpisodeBadges() throws {
+        let app = makeSeededApp(
+            seedsArtworkPreview: true,
+            seedsVariedArtworkPreviews: true,
+            seedsLibraryNewEpisodes: true,
+            artworkVariant: "placeholder"
+        )
+        app.launch()
+
+        openLibrary(in: app)
+        let list = libraryContainer("Library List", in: app)
+        let grid = libraryContainer("Library Grid", in: app)
+        let aardvark = libraryShow(Self.aardvarkSubscriptionRowIdentifier, in: app)
+        let mainShow = libraryShow(Self.seededSubscriptionRowIdentifier, in: app)
+        let zephyr = libraryShow(Self.zephyrSubscriptionRowIdentifier, in: app)
+
+        // Automatic resolves to the list at compact width.
+        assertExists(list, named: "Library list under Automatic")
+        assertDoesNotExist(grid, named: "Library grid under Automatic")
+        assertSeededNewEpisodeValues(aardvark: aardvark, mainShow: mainShow, zephyr: zephyr)
+        attachSmokeScreenshot(named: "library_compact_list_badges")
+
+        chooseLibraryViewOption("Grid", in: app)
+        assertExists(grid, named: "Library grid after choosing Grid")
+        assertDoesNotExist(list, named: "Library list after choosing Grid", timeout: 5)
+        assertSeededNewEpisodeValues(aardvark: aardvark, mainShow: mainShow, zephyr: zephyr)
+        XCTAssertTrue(
+            waitUntil { libraryTilesShareRow([aardvark, mainShow, zephyr], in: app) },
+            "Three grid tiles should share one on-screen row in title order"
+        )
+        attachSmokeScreenshot(named: "library_compact_grid")
+
+        chooseLibraryViewOption("Recent Episodes", inSubmenu: "Sort By", in: app)
+        XCTAssertTrue(
+            waitUntil { libraryTilesShareRow([zephyr, mainShow, aardvark], in: app) },
+            "Recent Episodes should order grid tiles newest release first"
+        )
+        attachSmokeScreenshot(named: "library_compact_grid_recent")
+
+        // Compact tiles are too narrow for a swipe action; removal stays
+        // reachable from the context menu.
+        aardvark.press(forDuration: 1.2)
+        let removeAction = app.buttons["Remove Podcast"].firstMatch
+        assertHittable(removeAction, named: "compact grid tile Remove Podcast context action")
+        dismissContextualMenu(in: app)
+        assertDoesNotExist(removeAction, named: "dismissed grid tile context menu", timeout: 5)
+
+        mainShow.tap()
+        assertExists(
+            app.descendants(matching: .any)["Podcast Hero Header"],
+            named: "podcast detail opened from a grid tile"
+        )
+        tapBackButton(in: app)
+        assertExists(grid, named: "Library grid after podcast detail Back")
+
+        chooseLibraryViewOption("List", in: app)
+        assertExists(list, named: "Library list after choosing List")
+        assertDoesNotExist(grid, named: "Library grid after choosing List", timeout: 5)
+        // From the grid, so only a stored Automatic can bring the list back.
+        chooseLibraryViewOption("Grid", in: app)
+        assertExists(grid, named: "Library grid before choosing Automatic")
+        assertDoesNotExist(list, named: "Library list before choosing Automatic", timeout: 5)
+        chooseLibraryViewOption("Automatic", in: app)
+        assertExists(list, named: "Library list after choosing Automatic at compact width")
+        assertDoesNotExist(grid, named: "Library grid after choosing Automatic at compact width")
+
+        openSettings(in: app)
+        let badgesToggle = app.switches.matching(
+            NSPredicate(format: "label CONTAINS %@", "New Episode Badges")
+        ).firstMatch
+        assertExists(badgesToggle, named: "New Episode Badges toggle")
+        scrollUntilHittable(badgesToggle, in: app, maxSwipes: 3)
+        assertToggle(badgesToggle, isOn: true)
+        tapToggle(badgesToggle, to: false)
+
+        openLibrary(in: app)
+        assertNewEpisodeValue(of: mainShow, is: "", named: "UI Test Show row with badges off")
+        assertNewEpisodeValue(of: zephyr, is: "", named: "Zephyr row with badges off")
+        attachSmokeScreenshot(named: "library_compact_list_badges_hidden")
+
+        openSettings(in: app)
+        assertHittable(badgesToggle, named: "New Episode Badges toggle after returning to Settings")
+        tapToggle(badgesToggle, to: true)
+        openLibrary(in: app)
+        assertNewEpisodeValue(of: mainShow, is: "3 new episodes", named: "UI Test Show row with badges back on")
+    }
+
+    /// Loads a stored Grid choice (compact width would otherwise default to
+    /// the list) and checks the column rule against real frames: the largest
+    /// text drops the phone grid to two columns. The iPhone app is
+    /// portrait-only, so the three-column landscape cap lives in
+    /// `LibraryGridMetricsTests` alone.
+    @MainActor
+    func testSeededCompactLibraryLoadsStoredGridAtLargestText() throws {
+        let app = makeSeededApp(
+            seedsArtworkPreview: true,
+            seedsVariedArtworkPreviews: true,
+            seedsLibraryNewEpisodes: true,
+            seededLibraryLayout: "grid",
+            extraFeedCount: 1,
+            artworkVariant: "placeholder",
+            preferredContentSizeCategoryName: "UICTContentSizeCategoryAccessibilityXXXL"
+        )
+        app.launch()
+
+        openLibrary(in: app)
+        assertExists(libraryContainer("Library Grid", in: app), named: "stored Library grid")
+        assertDoesNotExist(libraryContainer("Library List", in: app), named: "Library list under a stored Grid")
+
+        // Title order: Aardvark, UI Test Extra Show 1, UI Test Show, Zephyr.
+        let aardvark = libraryShow(Self.aardvarkSubscriptionRowIdentifier, in: app)
+        let extraShow = libraryShow(Self.firstExtraSubscriptionRowIdentifier, in: app)
+        let mainShow = libraryShow(Self.seededSubscriptionRowIdentifier, in: app)
+        let zephyr = libraryShow(Self.zephyrSubscriptionRowIdentifier, in: app)
+
+        XCTAssertTrue(
+            waitUntil { libraryTilesShareRow([aardvark, extraShow], in: app) },
+            "The first two tiles should share a row at the largest text size"
+        )
+        XCTAssertTrue(
+            waitUntil { libraryTilesShareRow([mainShow, zephyr], in: app) },
+            "The last two tiles should share the second row at the largest text size"
+        )
+        XCTAssertGreaterThan(
+            mainShow.frame.minY,
+            aardvark.frame.midY,
+            "The third tile should wrap to a second row at the largest text size"
+        )
+        attachSmokeScreenshot(named: "library_compact_grid_largest_text")
     }
 
     @MainActor
@@ -4725,6 +4860,8 @@ final class OpenCastUITests: XCTestCase {
         seedsPerEpisodeVoiceBoost: Bool = false,
         seedsLongShowNotes: Bool = false,
         seedsUpNextQueue: Bool = false,
+        seedsLibraryNewEpisodes: Bool = false,
+        seededLibraryLayout: String? = nil,
         audioDurationSeconds: Int? = nil,
         skipIntroSeconds: Double? = nil,
         extraFeedCount: Int = 0,
@@ -4810,6 +4947,12 @@ final class OpenCastUITests: XCTestCase {
         }
         if seedsUpNextQueue {
             app.launchEnvironment["OPENCAST_SEED_UP_NEXT_QUEUE"] = "1"
+        }
+        if seedsLibraryNewEpisodes {
+            app.launchEnvironment["OPENCAST_SEED_LIBRARY_NEW_EPISODES"] = "1"
+        }
+        if let seededLibraryLayout {
+            app.launchEnvironment["OPENCAST_SEED_LIBRARY_LAYOUT"] = seededLibraryLayout
         }
         if let audioDurationSeconds = audioDurationSeconds ?? (seedsUpNextQueue ? 600 : nil) {
             app.launchEnvironment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] = String(audioDurationSeconds)
@@ -5150,6 +5293,113 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     private func seededSubscriptionRow(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: Self.seededSubscriptionRowIdentifier).firstMatch
+    }
+
+    /// A Library show's link, as a list row or grid tile; its value carries
+    /// the show's new-episode count.
+    @MainActor
+    private func libraryShow(_ rowIdentifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: rowIdentifier).firstMatch
+    }
+
+    /// The Library's `Library List` or `Library Grid` container.
+    @MainActor
+    private func libraryContainer(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    /// Picks a Library View Options entry, opening `submenu` first for the
+    /// entries that sit in one (Sort By). Entries match by label only: the
+    /// menu button's value names the current layout.
+    @MainActor
+    private func chooseLibraryViewOption(
+        _ title: String,
+        inSubmenu submenu: String? = nil,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let menu = app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "Library View Options", "View Options")
+        ).firstMatch
+        assertHittable(menu, named: "Library View Options menu", file: file, line: line)
+        menu.tap()
+        if let submenu {
+            // A menu-style picker's entry shows its current choice after the title.
+            let submenuEntry = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", submenu)).firstMatch
+            assertHittable(submenuEntry, named: "\(submenu) submenu", file: file, line: line)
+            submenuEntry.tap()
+        }
+        let option = app.buttons.matching(NSPredicate(format: "label == %@", title)).firstMatch
+        assertHittable(option, named: "\(title) view option", file: file, line: line)
+        option.tap()
+        XCTAssertTrue(
+            option.waitForNonExistence(timeout: 5),
+            "View Options should close after choosing \(title)",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func assertSeededNewEpisodeValues(
+        aardvark: XCUIElement,
+        mainShow: XCUIElement,
+        zephyr: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertNewEpisodeValue(of: aardvark, is: "1 new episode", named: "Aardvark", file: file, line: line)
+        assertNewEpisodeValue(of: mainShow, is: "3 new episodes", named: "UI Test Show", file: file, line: line)
+        // The spoken value keeps the full count the 99+ badge caps.
+        assertNewEpisodeValue(of: zephyr, is: "120 new episodes", named: "Zephyr", file: file, line: line)
+    }
+
+    /// Badges off (or nothing new) leaves the link's value empty.
+    @MainActor
+    private func assertNewEpisodeValue(
+        of show: XCUIElement,
+        is expected: String,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertExists(show, named: "\(name) Library show", file: file, line: line)
+        XCTAssertTrue(
+            waitUntil { (show.value as? String ?? "") == expected },
+            "\(name) should read \"\(expected)\", got \"\(show.value as? String ?? "nil")\"",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Whether `tiles` sit side by side in one grid row, in the given order,
+    /// within the window's width.
+    @MainActor
+    private func libraryTilesShareRow(_ tiles: [XCUIElement], in app: XCUIApplication) -> Bool {
+        guard tiles.allSatisfy(\.exists) else {
+            return false
+        }
+        let frames = tiles.map(\.frame)
+        let window = app.windows.firstMatch.frame
+        let isOneRow = frames.allSatisfy { abs($0.minY - frames[0].minY) < 4 }
+        let isInsideWindow = frames.allSatisfy { $0.minX >= window.minX && $0.maxX <= window.maxX }
+        let isOrdered = zip(frames, frames.dropFirst()).allSatisfy { $0.maxX <= $1.minX }
+        return isOneRow && isInsideWindow && isOrdered
+    }
+
+    /// Polls `condition` for layout that settles through an animation, such
+    /// as a grid reorder or a rotation, rather than an element appearing.
+    @MainActor
+    private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
+        let deadline = Date.now.addingTimeInterval(timeout)
+        while !condition() {
+            guard Date.now < deadline else {
+                return false
+            }
+            usleep(250_000)
+        }
+        return true
     }
 
     @MainActor

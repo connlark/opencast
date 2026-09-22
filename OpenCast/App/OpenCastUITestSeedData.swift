@@ -24,6 +24,11 @@ enum OpenCastUITestSeedData {
     /// device run can recap real speech through the seeded library.
     private static let transcriptFixturePathEnvironmentKey = "OPENCAST_SEED_TRANSCRIPT_FIXTURE_PATH"
     private static let episodeProgressPositionEnvironmentKey = "OPENCAST_SEED_EPISODE_PROGRESS_POSITION"
+    private static let libraryNewEpisodesEnvironmentKey = "OPENCAST_SEED_LIBRARY_NEW_EPISODES"
+    private static let libraryLayoutEnvironmentKey = "OPENCAST_SEED_LIBRARY_LAYOUT"
+    private static let libraryRecentCompletedEpisodeID = "ui-test-recent-completed-episode"
+    private static let secondsPerHour: TimeInterval = 60 * 60
+    private static let secondsPerDay: TimeInterval = 24 * secondsPerHour
 
     static func seed(
         in container: ModelContainer,
@@ -62,6 +67,12 @@ enum OpenCastUITestSeedData {
         let shouldSeedUpNextQueue = ProcessInfo.processInfo.environment[
             "OPENCAST_SEED_UP_NEXT_QUEUE"
         ] == "1"
+        let shouldSeedLibraryNewEpisodes = ProcessInfo.processInfo.environment[
+            libraryNewEpisodesEnvironmentKey
+        ] == "1"
+        // Badge fixtures date everything from one instant so each episode
+        // stays on its side of the subscription and 30-day boundaries.
+        let seedNow = Date.now
         let audioURL = if usesBadAudioURL {
             "file:///tmp/opencast-ui-test-missing-audio.wav"
         } else if let overrideAudioFileURL, !overrideAudioFileURL.isEmpty {
@@ -83,6 +94,9 @@ enum OpenCastUITestSeedData {
                 title: podcastTitle,
                 author: "UI Test Author",
                 artworkURL: artworkURL,
+                subscribedAt: shouldSeedLibraryNewEpisodes
+                    ? seedNow.addingTimeInterval(-20 * secondsPerDay)
+                    : seedNow,
                 lastRefreshAt: refreshedAt,
                 skipIntroSeconds: overriddenSkipIntroSeconds ?? 0
             )
@@ -135,6 +149,14 @@ enum OpenCastUITestSeedData {
                 )
             })
         }
+        if shouldSeedLibraryNewEpisodes {
+            episodes.append(contentsOf: libraryNewEpisodeFixtures(
+                seedNow: seedNow,
+                duration: episodeDuration,
+                audioURL: audioURL,
+                artworkURL: artworkURL
+            ))
+        }
         try upsertSeedFeed(
             into: cacheStore,
             feedURL: feedURL,
@@ -165,6 +187,28 @@ enum OpenCastUITestSeedData {
             usesVariedArtworkPreviews: usesVariedArtworkPreviews,
             refreshedAt: refreshedAt
         )
+
+        if shouldSeedLibraryNewEpisodes {
+            context.insert(
+                EpisodeProgressRecord(
+                    episodeID: libraryRecentCompletedEpisodeID,
+                    podcastID: feedURL,
+                    position: episodeDuration,
+                    duration: episodeDuration,
+                    isPlayed: true,
+                    updatedAt: seedNow
+                )
+            )
+            try seedLibraryNewEpisodeShows(
+                seedNow: seedNow,
+                cacheStore: cacheStore,
+                context: context,
+                audioURL: audioURL,
+                artworkURL: artworkURL,
+                artworkPreview: artworkPreview,
+                usesVariedArtworkPreviews: usesVariedArtworkPreviews
+            )
+        }
 
         if shouldSeedUpNextQueue {
             for (sequence, episodeID) in queuedEpisodeIDs.enumerated() {
@@ -221,6 +265,17 @@ enum OpenCastUITestSeedData {
             context.insert(LocalPreferenceRecord(
                 key: AdDetectionSettingsStore.modePreferenceKey,
                 value: seededAdDetectionMode
+            ))
+        }
+
+        // Automatic is stored as the absence of a row, as the settings store
+        // writes it.
+        let seededLibraryLayout = ProcessInfo.processInfo.environment[libraryLayoutEnvironmentKey]
+            .flatMap(LibraryLayoutPreference.init(rawValue:))
+        if let seededLibraryLayout, seededLibraryLayout != .automatic {
+            context.insert(LocalPreferenceRecord(
+                key: LibraryDisplaySettingsStore.layoutPreferenceKey,
+                value: seededLibraryLayout.rawValue
             ))
         }
 
@@ -813,6 +868,109 @@ enum OpenCastUITestSeedData {
                 refreshedAt: refreshedAt,
                 podcastArtworkPreview: resolvedArtworkPreview,
                 episodeArtworkPreviews: resolvedArtworkPreview.map { [episodeID: $0] } ?? [:]
+            )
+        }
+    }
+
+    /// The main show's badge fixtures around its subscription 20 days before
+    /// `seedNow`: three unplayed episodes count as new; a completed one, one
+    /// released before the subscription, and one not yet released don't.
+    /// The show's older seeded episodes predate the subscription, so its
+    /// Library count is exactly 3.
+    private static func libraryNewEpisodeFixtures(
+        seedNow: Date,
+        duration: TimeInterval,
+        audioURL: String,
+        artworkURL: String?
+    ) -> [Episode] {
+        let fixtures: [(id: String, title: String, age: TimeInterval)] = [
+            ("ui-test-new-episode-1", "New UI Episode 1", secondsPerHour),
+            ("ui-test-new-episode-2", "New UI Episode 2", secondsPerDay),
+            ("ui-test-new-episode-3", "New UI Episode 3", 2 * secondsPerDay),
+            (libraryRecentCompletedEpisodeID, "Recent Completed UI Episode", 3 * secondsPerDay),
+            ("ui-test-pre-subscription-episode", "Pre-Subscription UI Episode", 25 * secondsPerDay),
+            ("ui-test-upcoming-episode", "Upcoming UI Episode", -3 * secondsPerDay)
+        ]
+        return fixtures.map { fixture in
+            Episode(
+                id: EpisodeID(rawValue: fixture.id),
+                podcastID: PodcastID(rawValue: feedURL),
+                podcastTitle: podcastTitle,
+                title: fixture.title,
+                summary: "A deterministic Library badge episode seeded for UI tests.",
+                publishedAt: seedNow.addingTimeInterval(-fixture.age),
+                duration: duration,
+                audioURL: URL(string: audioURL),
+                artworkURL: artworkURL.flatMap(URL.init(string:)),
+                guid: fixture.id
+            )
+        }
+    }
+
+    /// Two more shows, followed 60 days before `seedNow`, whose title order
+    /// (Aardvark, UI Test Show, Zephyr) differs from their newest-release
+    /// order (Zephyr, UI Test Show, Aardvark). Aardvark has one new episode;
+    /// Zephyr's 120 run past the badge's 99+ cap, all inside 30 days.
+    private static func seedLibraryNewEpisodeShows(
+        seedNow: Date,
+        cacheStore: SQLiteLocalLibraryCacheStore,
+        context: ModelContext,
+        audioURL: String,
+        artworkURL: String?,
+        artworkPreview: ArtworkPreview?,
+        usesVariedArtworkPreviews: Bool
+    ) throws {
+        let zephyrEpisodeAges = (0..<120).map { secondsPerHour / 2 + Double($0) * 5 * secondsPerHour }
+        let shows: [(slug: String, title: String, artworkVariant: Int, episodeAges: [TimeInterval])] = [
+            ("aardvark", "Aardvark Seeded Show", 5, [10 * secondsPerDay]),
+            ("zephyr", "Zephyr Seeded Show", 11, zephyrEpisodeAges)
+        ]
+
+        for show in shows {
+            let feedURL = "https://example.com/ui-test-\(show.slug).xml"
+            let episodes: [Episode] = show.episodeAges.enumerated().map { index, age in
+                let episodeID = "ui-test-\(show.slug)-episode-\(index + 1)"
+                return Episode(
+                    id: EpisodeID(rawValue: episodeID),
+                    podcastID: PodcastID(rawValue: feedURL),
+                    podcastTitle: show.title,
+                    title: "\(show.title) Episode \(index + 1)",
+                    summary: "A deterministic Library badge episode seeded for UI tests.",
+                    publishedAt: seedNow.addingTimeInterval(-age),
+                    duration: 180,
+                    audioURL: URL(string: audioURL),
+                    artworkURL: artworkURL.flatMap(URL.init(string:)),
+                    guid: episodeID
+                )
+            }
+            let resolvedArtworkPreview = usesVariedArtworkPreviews
+                ? seededArtworkPreview(artworkURL: artworkURL, variantIndex: show.artworkVariant)
+                : artworkPreview
+
+            context.insert(
+                SubscriptionRecord(
+                    feedURL: feedURL,
+                    title: show.title,
+                    author: "UI Test Author",
+                    artworkURL: artworkURL,
+                    subscribedAt: seedNow.addingTimeInterval(-60 * secondsPerDay),
+                    lastRefreshAt: seedNow
+                )
+            )
+            try upsertSeedFeed(
+                into: cacheStore,
+                feedURL: feedURL,
+                title: show.title,
+                author: "UI Test Author",
+                summary: "A deterministic show seeded for Library badge UI tests.",
+                websiteURL: "https://example.com/ui-test-\(show.slug)",
+                artworkURL: artworkURL,
+                episodes: episodes,
+                refreshedAt: seedNow,
+                podcastArtworkPreview: resolvedArtworkPreview,
+                episodeArtworkPreviews: resolvedArtworkPreview.map { preview in
+                    Dictionary(uniqueKeysWithValues: episodes.map { ($0.id.rawValue, preview) })
+                } ?? [:]
             )
         }
     }

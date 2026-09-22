@@ -122,6 +122,24 @@ final class LibraryStore {
     @ObservationIgnored private var refreshLogReloadGeneration = 0
     @ObservationIgnored private var episodeIndexByID: [String: Int] = [:]
     @ObservationIgnored private var episodeIndicesByPodcastID: [String: [Int]] = [:]
+    /// Read by the new-episode lookups in `LibraryStore+NewEpisodes`.
+    @ObservationIgnored private(set) var episodeReleaseOrderByPodcastID: [String: [Int]] = [:]
+    /// The instant new-episode badges and the Recent Episodes sort evaluate
+    /// against. It moves with every library publication and on Library entry
+    /// or scene activation — never on a timer — so time-based changes land
+    /// at those checkpoints while progress changes land immediately.
+    private(set) var newEpisodeReferenceDate: Date
+    /// Advances after every full progress refetch. A refetch that picks up
+    /// another context's edit to a row this store already holds refreshes
+    /// that object's values without an Observation notification, and
+    /// `EpisodeProgressWriter.revision` tracks only index membership, so the
+    /// derived per-show readers (new-episode counts) read this too.
+    private(set) var progressRefetchRevision = 0
+    /// Each active feed's newest follow date — the new-episode cutoff —
+    /// copied out of the subscription records so a synced reload can compare
+    /// values: a refetch refreshes a live record's `subscribedAt` without an
+    /// Observation notification, and the records compare equal by reference.
+    private(set) var newEpisodeCutoffByFeedURL: [String: Date] = [:]
     /// O(1) search-session invalidation token. Every publication that changes
     /// `episodes` rebuilds the lookup indexes and advances this revision.
     private(set) var episodeSearchCorpusRevision = 0
@@ -146,6 +164,7 @@ final class LibraryStore {
         self.feedService = feedService
         self.localCache = localCache
         self.now = now
+        newEpisodeReferenceDate = now()
         let ledger = SyncedStoreSelfSaveLedger(performSave: savePlaybackSkipSettingsModelContext)
         let writeGeneration = LibraryWriteGeneration()
         let progressWriter = EpisodeProgressWriter(ledger: ledger)
@@ -277,10 +296,15 @@ final class LibraryStore {
             } else {
                 progressRecordsChanged = try progressWriter.reloadIfChanged(modelContext: modelContext)
                 lastSyncedProgressProbe = progressProbe
+                progressRefetchRevision &+= 1
             }
 
             if activeSubscriptionRecordsChanged {
                 subscriptions = fetchedSubscriptions
+            }
+            let newEpisodeCutoffs = Self.newEpisodeCutoffs(fetchedSubscriptions)
+            if newEpisodeCutoffs != newEpisodeCutoffByFeedURL {
+                newEpisodeCutoffByFeedURL = newEpisodeCutoffs
             }
             if activePodcastIDsChanged {
                 activePodcastIDs = fetchedActivePodcastIDs
@@ -593,9 +617,22 @@ final class LibraryStore {
         }
     }
 
+    /// Library entry and scene activation call this. Sub-minute movement
+    /// cannot meaningfully change a 30-day window, so it is skipped rather
+    /// than invalidating every row on each tab switch.
+    func advanceNewEpisodeReferenceDate() {
+        let currentDate = now()
+        guard abs(currentDate.timeIntervalSince(newEpisodeReferenceDate)) >= 60 else {
+            return
+        }
+
+        newEpisodeReferenceDate = currentDate
+    }
+
     func refreshProgressRecords(modelContext: ModelContext) {
         do {
             try progressWriter.reloadIfChanged(modelContext: modelContext)
+            progressRefetchRevision &+= 1
         } catch {
             recordFailure(error)
         }
@@ -650,6 +687,8 @@ final class LibraryStore {
         artworkPreviewOverridesByEpisodeID.removeAll()
         artworkPreviewOverridesByFeedURL.removeAll()
         lastSyncedProgressProbe = nil
+        newEpisodeReferenceDate = now()
+        newEpisodeCutoffByFeedURL.removeAll()
         // Derived indexes rebuild from the now-empty sources.
         rebuildEpisodeIndexes()
         rebuildLatestRefreshLogByFeedURL()
@@ -1133,6 +1172,7 @@ final class LibraryStore {
         let activeSubscriptions = try modelContext.fetch(activeSubscriptionsDescriptor())
         subscriptions = activeSubscriptions
         activePodcastIDs = Set(activeSubscriptions.map(\.feedURL))
+        newEpisodeCutoffByFeedURL = Self.newEpisodeCutoffs(activeSubscriptions)
         try progressWriter.reload(modelContext: modelContext)
         episodes = cacheSnapshot.episodes
         visibleEpisodeIDs = indexes.visibleIDs
@@ -1144,6 +1184,8 @@ final class LibraryStore {
         episodeIndexByID = indexes.byID
         episodeIndicesByPodcastID = indexes.byPodcastID
         latestEpisodeContentChangeByFeedURL = indexes.latestContentChangeByPodcastID
+        episodeReleaseOrderByPodcastID = indexes.releaseOrderByPodcastID
+        newEpisodeReferenceDate = now()
         episodeSearchCorpusRevision &+= 1
         rebuildLatestRefreshLogByFeedURL()
         prepareEpisodeSearchIndexIfNeeded()
@@ -1279,6 +1321,12 @@ final class LibraryStore {
         )
     }
 
+    /// Duplicate records for one feed take the newest follow date, the
+    /// direction duplicate repair converges on.
+    private static func newEpisodeCutoffs(_ subscriptions: [SubscriptionRecord]) -> [String: Date] {
+        Dictionary(subscriptions.map { ($0.feedURL, $0.subscribedAt) }, uniquingKeysWith: max)
+    }
+
     private static func subscriptionRecords(
         _ lhs: [SubscriptionRecord],
         match rhs: [SubscriptionRecord]
@@ -1336,6 +1384,7 @@ final class LibraryStore {
         episodeIndexByID = indexes.byID
         episodeIndicesByPodcastID = indexes.byPodcastID
         latestEpisodeContentChangeByFeedURL = indexes.latestContentChangeByPodcastID
+        episodeReleaseOrderByPodcastID = indexes.releaseOrderByPodcastID
         episodeSearchCorpusRevision &+= 1
     }
 

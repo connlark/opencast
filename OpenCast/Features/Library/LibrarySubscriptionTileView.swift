@@ -3,10 +3,12 @@ import SwiftUI
 
 struct LibrarySubscriptionTileView: View {
     @Environment(OpenCastAppModel.self) private var appModel
-    @State private var tileWidth = 160.0
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var isConfirmingRemoval = false
 
     let subscription: SubscriptionRecord
+    let metrics: LibraryGridMetrics
+    let showsNewEpisodeCount: Bool
 
     private var podcastCache: PodcastCacheSnapshot? {
         appModel.library.podcastCache(for: subscription.feedURL)
@@ -30,51 +32,50 @@ struct LibrarySubscriptionTileView: View {
         return errorMessage
     }
 
-    private var artworkSize: CGFloat {
-        CGFloat(tileWidth)
+    private var newEpisodeCount: Int {
+        showsNewEpisodeCount ? appModel.library.newEpisodeCount(for: subscription) : 0
     }
 
     var body: some View {
-        NavigationLink(value: AppRoute.podcastDetail(feedURL: subscription.feedURL)) {
-            VStack(alignment: .leading, spacing: 10) {
-                ZStack(alignment: .topTrailing) {
-                    ArtworkPlaceholder(
-                        title: subscription.title,
-                        imageURL: podcastCache?.artworkURL ?? subscription.artworkURL,
-                        size: artworkSize,
-                        preview: podcastCache.flatMap { appModel.library.artworkPreview(for: $0) },
-                        onPreviewResolved: updateArtworkPreview
-                    )
+        let newEpisodeCount = newEpisodeCount
 
+        NavigationLink(value: AppRoute.podcastDetail(feedURL: subscription.feedURL)) {
+            VStack(alignment: .leading, spacing: metrics.isCompact ? 6 : 10) {
+                ArtworkPlaceholder(
+                    title: subscription.title,
+                    imageURL: podcastCache?.artworkURL ?? subscription.artworkURL,
+                    size: metrics.tileWidth,
+                    preview: podcastCache.flatMap { appModel.library.artworkPreview(for: $0) },
+                    onPreviewResolved: updateArtworkPreview
+                )
+                .overlay(alignment: .topLeading) {
                     refreshStatusOverlay
+                }
+                .overlay(alignment: .topTrailing) {
+                    if newEpisodeCount > 0 {
+                        LibraryNewEpisodeBadge(count: newEpisodeCount)
+                            .padding(6)
+                    }
                 }
 
                 Text(subscription.title)
-                    .font(.headline)
+                    .font(metrics.isCompact ? .subheadline : .headline)
                     .foregroundStyle(.primary)
-                    .lineLimit(2)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .contentShape(.rect)
-            .onGeometryChange(for: Double.self) { proxy in
-                proxy.size.width
-            } action: { newWidth in
-                let clampedWidth = min(max(newWidth, 160), 240)
-                guard abs(tileWidth - clampedWidth) >= 0.5 else {
-                    return
-                }
-
-                tileWidth = clampedWidth
-            }
         }
         .buttonStyle(.plain)
+        .accessibilityValue(LibraryNewEpisodeBadge.accessibilityValue(count: newEpisodeCount))
         .accessibilityIdentifier(LibrarySubscriptionRowView.accessibilityIdentifier(for: subscription.feedURL))
         .modifier(
             SubscriptionRemovalModifier(
                 isConfirmingRemoval: $isConfirmingRemoval,
                 subscription: subscription,
-                supportsSwipeAction: true,
+                // Compact tiles are too narrow for a trailing swipe action.
+                supportsSwipeAction: !metrics.isCompact,
                 supportsContextMenu: true
             )
         )
@@ -87,6 +88,7 @@ struct LibrarySubscriptionTileView: View {
                 .controlSize(.small)
                 .padding(6)
                 .glassEffect(.regular, in: .circle)
+                .padding(6)
                 .accessibilityLabel("Refreshing")
         } else if refreshErrorMessage != nil {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -94,6 +96,7 @@ struct LibrarySubscriptionTileView: View {
                 .foregroundStyle(.orange)
                 .padding(6)
                 .glassEffect(.regular, in: .circle)
+                .padding(6)
                 .accessibilityLabel("Last refresh failed")
         }
     }

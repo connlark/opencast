@@ -207,6 +207,52 @@ final class OpenCastPadUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededPadLibraryViewOptionsSwitchesLayouts() throws {
+        try skipUnlessPad()
+        let app = makeSeededApp(seedsLibraryNewEpisodes: true)
+        app.launch()
+
+        openLibrary(in: app)
+        let list = libraryContainer("Library List", in: app)
+        let grid = libraryContainer("Library Grid", in: app)
+
+        // Automatic resolves to the grid at regular width.
+        assertExists(grid, named: "Library grid under Automatic")
+        assertDoesNotExist(list, named: "Library list under Automatic")
+
+        chooseLibraryViewOption("List", in: app)
+        assertExists(list, named: "Library list after choosing List")
+        assertDoesNotExist(grid, named: "Library grid after choosing List", timeout: 5)
+        assertExists(seededSubscriptionTile(in: app), named: "seeded library row")
+        assertHittable(app.navigationBars["Library"].buttons["Add"], named: "pinned Add beside View Options")
+        attachSmokeScreenshot(named: "ipad_library_list")
+
+        chooseLibraryViewOption("Grid", in: app)
+        assertExists(grid, named: "Library grid after choosing Grid")
+        assertDoesNotExist(list, named: "Library list after choosing Grid", timeout: 5)
+
+        chooseLibraryViewOption("Automatic", in: app)
+        assertExists(grid, named: "Library grid after choosing Automatic at regular width")
+        assertDoesNotExist(list, named: "Library list after choosing Automatic at regular width")
+
+        // Automatic follows the window: narrowing it to compact width swaps
+        // in the list with no further choice.
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.99))
+            .press(
+                forDuration: 0.5,
+                thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.42))
+            )
+        defer {
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.005)).doubleTap()
+        }
+        XCTAssertLessThan(window.frame.width, 700, "The app window itself must be narrow, not just the Simulator scale")
+        assertExists(list, named: "Library list under Automatic in a narrow window")
+        assertDoesNotExist(grid, named: "Library grid under Automatic in a narrow window", timeout: 5)
+        attachSmokeScreenshot(named: "ipad_library_narrow_automatic_list")
+    }
+
+    @MainActor
     func testSeededPadMiniPlayerAccessorySurvivesTabSwitchAndExpands() throws {
         try skipUnlessPad()
 
@@ -566,7 +612,7 @@ final class OpenCastPadUITests: XCTestCase {
     }
 
     @MainActor
-    private func makeSeededApp() -> XCUIApplication {
+    private func makeSeededApp(seedsLibraryNewEpisodes: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "--opencast-ui-testing",
@@ -576,6 +622,9 @@ final class OpenCastPadUITests: XCTestCase {
         app.launchEnvironment["OPENCAST_UI_TESTING"] = "1"
         app.launchEnvironment["OPENCAST_SEED_UI_LIBRARY"] = "1"
         app.launchEnvironment["OPENCAST_FORCE_DARK_MODE"] = "1"
+        if seedsLibraryNewEpisodes {
+            app.launchEnvironment["OPENCAST_SEED_LIBRARY_NEW_EPISODES"] = "1"
+        }
         return app
     }
 
@@ -648,6 +697,27 @@ final class OpenCastPadUITests: XCTestCase {
     @MainActor
     private func seededSubscriptionTile(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: Self.seededSubscriptionRowIdentifier).firstMatch
+    }
+
+    /// The Library's `Library List` or `Library Grid` container.
+    @MainActor
+    private func libraryContainer(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    /// Picks a Library View Options layout entry. Entries match by label
+    /// only: the menu button's value names the current layout.
+    @MainActor
+    private func chooseLibraryViewOption(_ title: String, in app: XCUIApplication) {
+        let menu = app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "Library View Options", "View Options")
+        ).firstMatch
+        assertHittable(menu, named: "Library View Options menu")
+        menu.tap()
+        let option = app.buttons.matching(NSPredicate(format: "label == %@", title)).firstMatch
+        assertHittable(option, named: "\(title) view option")
+        option.tap()
+        XCTAssertTrue(option.waitForNonExistence(timeout: 5), "View Options should close after choosing \(title)")
     }
 
     @MainActor

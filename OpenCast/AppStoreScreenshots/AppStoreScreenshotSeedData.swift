@@ -74,6 +74,13 @@ enum AppStoreScreenshotSeedData {
             value: VoiceBoostMode.perEpisode.rawValue,
             updatedAt: refreshedAt
         ))
+        // The catalog's follow dates sit hours before a same-day episode,
+        // which would badge one show alone; keep the frames as composed.
+        context.insert(LocalPreferenceRecord(
+            key: LibraryDisplaySettingsStore.showsNewEpisodeBadgesPreferenceKey,
+            value: String(false),
+            updatedAt: refreshedAt
+        ))
 
         // The transcript and skip zones only follow playback when the
         // transcript's source SHA matches a completed download of the file

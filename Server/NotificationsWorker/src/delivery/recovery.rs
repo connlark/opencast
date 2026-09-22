@@ -92,7 +92,7 @@ pub async fn reconcile(env: &Env) -> Result<()> {
     }
     // Terminal receipts keep only immutable digests/IDs. Source replay cannot
     // extend expiry; the ingress rejects old timestamps even after receipt GC.
-    run(&db,"UPDATE n_event SET terminal_at=?1,envelope_json='{}' WHERE rowid IN(SELECT e.rowid FROM n_event e WHERE e.fanout_complete=1 AND e.terminal_at IS NULL AND (e.source<>'legacy' OR e.expires_at<=?1) AND NOT EXISTS(SELECT 1 FROM n_delivery d WHERE d.source=e.source AND d.event_id=e.event_id AND d.state IN('pending','leased','uncertain','poisoned')) LIMIT 100)",&[json!(t)]).await?;
+    run(&db,"UPDATE n_event SET terminal_at=?1,envelope_json='{}' WHERE rowid IN(SELECT e.rowid FROM n_event e WHERE e.fanout_complete=1 AND e.terminal_at IS NULL AND NOT EXISTS(SELECT 1 FROM n_delivery d WHERE d.source=e.source AND d.event_id=e.event_id AND d.state IN('pending','leased','uncertain','poisoned')) LIMIT 100)",&[json!(t)]).await?;
     // The keyed deletion fence has a fixed seven-day privacy lifetime; pruning
     // it is user erasure, independent of the periodic cleanup feature switch.
     run(&db,"DELETE FROM n_deleted_install WHERE fence IN(SELECT fence FROM n_deleted_install WHERE expires_at<=?1 LIMIT 100)",&[json!(t)]).await?;

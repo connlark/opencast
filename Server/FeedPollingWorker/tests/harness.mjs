@@ -6,7 +6,12 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { migrate } from '../../NotificationsWorker/tests/migrations.mjs';
 export const hash = parts => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const config = JSON.parse(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8'));
+// wrangler.jsonc is JSONC, not JSON: the public self-hosting template carries a
+// comment banner. Drop comments and trailing commas that sit outside strings.
+const jsonc = text => text
+  .replace(/"(?:\\.|[^"\\])*"|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, match => (match[0] === '"' ? match : ' '))
+  .replace(/"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g, match => (match[0] === '"' ? match : ''));
+const config = JSON.parse(jsonc(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8')));
 export async function harness(outbound, options = {}) {
   const sends = [], fetches = [], events = [];
   let instance;

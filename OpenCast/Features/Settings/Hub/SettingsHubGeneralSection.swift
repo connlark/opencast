@@ -13,6 +13,7 @@ struct SettingsHubGeneralSection: View {
                 value: notificationsValue
             )
             SettingsAppearancePickerRow()
+            SettingsNewEpisodeBadgesToggleRow()
             SettingsNavigationRow(
                 title: "App Icon",
                 systemImage: "app",

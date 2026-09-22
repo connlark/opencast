@@ -6,38 +6,68 @@ struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @State private var sampleSubscriptionErrorMessage: String?
     @State private var isSubscribingSample = false
 
     let onAdd: () -> Void
 
+    private var displaySettings: LibraryDisplaySettingsStore {
+        appModel.libraryDisplaySettings
+    }
+
+    private var layout: LibraryLayout {
+        displaySettings.layout.resolved(isRegularWidth: horizontalSizeClass == .regular)
+    }
+
     var body: some View {
-        content
+        // Sorting reads release dates, never progress, so playback cannot
+        // reorder the Library.
+        let subscriptions = displaySettings.sortOrder.sorted(
+            appModel.library.subscriptions,
+            latestReleaseDate: appModel.library.latestReleasedEpisodeDate(forPodcastID:)
+        )
+
+        content(subscriptions: subscriptions)
             .animation(reduceMotion ? nil : .default, value: appModel.library.state)
-            .animation(
-                reduceMotion ? nil : .default,
-                value: appModel.library.subscriptions.map(\.feedURL)
-            )
+            .animation(reduceMotion ? nil : .default, value: subscriptions.map(\.feedURL))
+            .animation(reduceMotion ? nil : .default, value: layout)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                displaySettingsError
+            }
             .navigationTitle("Library")
             .toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
             .refreshable {
                 await appModel.library.refreshAll(modelContext: modelContext)
             }
             .toolbar {
+                if !subscriptions.isEmpty {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        LibraryViewOptionsMenu(resolvedLayout: layout)
+                    }
+                    .visibilityPriority(.low)
+                }
+
                 ToolbarItem(placement: .topBarPinnedTrailing) {
                     Button("Add", systemImage: "plus", action: onAdd)
+                }
+            }
+            .onAppear(perform: appModel.library.advanceNewEpisodeReferenceDate)
+            .onChange(of: scenePhase) { _, scenePhase in
+                if scenePhase == .active {
+                    appModel.library.advanceNewEpisodeReferenceDate()
                 }
             }
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(subscriptions: [SubscriptionRecord]) -> some View {
         switch appModel.library.state {
-        case .loading where appModel.library.subscriptions.isEmpty:
+        case .loading where subscriptions.isEmpty:
             List {
                 ProgressView()
             }
-        case .failed(let message) where appModel.library.subscriptions.isEmpty:
+        case .failed(let message) where subscriptions.isEmpty:
             List {
                 ContentUnavailableView(
                     "Library Unavailable",
@@ -46,7 +76,7 @@ struct LibraryView: View {
                 )
             }
         default:
-            if appModel.library.subscriptions.isEmpty {
+            if subscriptions.isEmpty {
                 List {
                     LibraryEmptyStateView(
                         syncActivity: appModel.syncStatus.libraryActivity,
@@ -56,36 +86,37 @@ struct LibraryView: View {
                         onSubscribeSample: subscribeToSample
                     )
                 }
-            } else if horizontalSizeClass == .regular {
-                subscriptionGrid
+            } else if layout == .grid {
+                LibrarySubscriptionGridView(
+                    subscriptions: subscriptions,
+                    showsNewEpisodeCount: displaySettings.showsNewEpisodeBadges
+                )
+                .transition(.opacity)
             } else {
                 List {
-                    subscriptionRows
+                    ForEach(subscriptions) { subscription in
+                        LibrarySubscriptionRowView(
+                            subscription: subscription,
+                            showsNewEpisodeCount: displaySettings.showsNewEpisodeBadges
+                        )
+                    }
                 }
+                .accessibilityIdentifier("Library List")
+                .transition(.opacity)
             }
         }
     }
 
-    private var subscriptionGrid: some View {
-        ScrollView {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 16)],
-                spacing: 24
-            ) {
-                ForEach(appModel.library.subscriptions) { subscription in
-                    LibrarySubscriptionTileView(subscription: subscription)
-                }
-            }
-            .padding(.vertical, 8)
-        }
-        .swipeActionsContainer()
-        .contentMargins(.horizontal, 24, for: .scrollContent)
-        .contentMargins(.bottom, 72, for: .scrollContent)
-    }
-
-    private var subscriptionRows: some View {
-        ForEach(appModel.library.subscriptions) { subscription in
-            LibrarySubscriptionRowView(subscription: subscription)
+    @ViewBuilder
+    private var displaySettingsError: some View {
+        if let message = displaySettings.lastErrorMessage {
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(.bar)
         }
     }
 

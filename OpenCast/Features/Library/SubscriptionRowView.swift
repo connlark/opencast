@@ -5,6 +5,8 @@ struct SubscriptionRowView: View {
     @Environment(OpenCastAppModel.self) private var appModel
 
     let subscription: SubscriptionRecord
+    /// Library rows pass the show's new-episode count; zero shows nothing.
+    var newEpisodeCount = 0
 
     private var podcastCache: PodcastCacheSnapshot? {
         appModel.library.podcastCache(for: subscription.feedURL)
@@ -66,6 +68,10 @@ struct SubscriptionRowView: View {
             }
 
             Spacer(minLength: 8)
+
+            if newEpisodeCount > 0 {
+                LibraryNewEpisodeCountLabel(count: newEpisodeCount)
+            }
 
             if isRefreshing {
                 ProgressView()
