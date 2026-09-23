@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-12T06:00:00Z",
+  "updatedAt": "2026-09-22T00:00:00Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -288,6 +288,35 @@
             "“Resume my podcast in opencast”",
             "“Play at double speed in opencast”"
           ]
+        }
+      ]
+    },
+    {
+      "id": "sharing",
+      "title": "Share an Episode",
+      "symbol": "square.and.arrow.up",
+      "summary": "Send a link that plays in any browser, from the start or from where you are.",
+      "updatedAt": "2026-09-22T00:00:00Z",
+      "minAppBuild": 274,
+      "related": [],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Share Episode** is in the **Episode Actions** menu on an episode's page, in the menu you get by touching and holding an episode in a list, and in **More Actions** in Now Playing. It sends a link to a web player at opencast.mobile that plays the episode in any browser, with no app or account needed."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Once you've started an episode, choose **Share**, then **Share from 12:34** to start the listener where you are.",
+            "In Messages, the link shows the episode's artwork with a Play button, so it can play right in the conversation.",
+            "The web player has play and pause, skip back and forward, playback speed, and a **Download** button that saves the audio file."
+          ]
+        },
+        {
+          "type": "callout",
+          "symbol": "lock.shield",
+          "title": "What the link contains",
+          "text": "The link itself holds the episode's audio address, titles, artwork, feed address, and date. Nothing about you or your library is in it, and nothing is stored on a server, so a link can't be recalled once you've sent it. The audio and artwork load from the podcast's own host, just as in any podcast app."
         }
       ]
     }

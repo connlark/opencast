@@ -1,0 +1,129 @@
+{
+  "dictionary" : {
+    "sha256" : "2d2ad4210b59d48d9d491a0319caa92685a7e50b380601f543d52d1d79951fc9",
+    "utf8Bytes" : 965
+  },
+  "format" : "opencast-episode-share-token",
+  "vectors" : [
+    {
+      "maxTokenLength" : 197,
+      "name" : "almanac-fixture",
+      "payload" : {
+        "artworkURL" : "https://almanac.example.com/artwork/cover-v2.png",
+        "audioURL" : "https://almanac.example.com/media/010-rubber-duck-final-witness.mp3",
+        "durationSeconds" : 2400,
+        "feedURL" : "https://almanac.example.com/feed.xml",
+        "guid" : "tag:example.com,2026:almanac:010-rubber-duck-final-witness",
+        "podcastTitle" : "The Example Almanac",
+        "publishedUnix" : 1778590800,
+        "title" : "Rubber Duck, Final Witness"
+      },
+      "startTime" : 754,
+      "token" : "1g9GJObmJecBkklqRCApnRGTrGxga6BaVJiWlFukCk1y2blpmXmKOLtDAvFRgGgXayhUEllVwAcrqKLiBpBXCIdJcINtcIUYqOEKs4MJnJTAhl-cXZQODH5iVdcuMQD7EqwEWcFwlielWSBI6RgZGZlZQHVZ4_cBlBAxZLkNzcwtTSwMLAwMA",
+      "url" : "https://opencast.mobile/e/1g9GJObmJecBkklqRCApnRGTrGxga6BaVJiWlFukCk1y2blpmXmKOLtDAvFRgGgXayhUEllVwAcrqKLiBpBXCIdJcINtcIUYqOEKs4MJnJTAhl-cXZQODH5iVdcuMQD7EqwEWcFwlielWSBI6RgZGZlZQHVZ4_cBlBAxZLkNzcwtTSwMLAwMA?t=754"
+    },
+    {
+      "maxTokenLength" : 135,
+      "name" : "seed-fixture",
+      "payload" : {
+        "artworkURL" : "https://seed.example.com/artwork/cover.svg",
+        "audioURL" : "https://seed.example.com/media/001-seed.mp3",
+        "durationSeconds" : 5,
+        "feedURL" : "https://seed.example.com/feed.xml",
+        "guid" : "urn:castseed:seed:001",
+        "podcastTitle" : "The Seed Podcast",
+        "publishedUnix" : 1778605200,
+        "title" : "Seed One"
+      },
+      "startTime" : 0,
+      "token" : "1g9HFIAekViSCAhkR0_pAu3XBUkDTuYKBDAX_vFQukBlgTgDEpVw4TQEmzPL8omxgcJaB8kNZOm6lsCDgKi3KswLHHlDACkwAXcFlymVobm5hZmBqZGAAAA",
+      "url" : "https://opencast.mobile/e/1g9HFIAekViSCAhkR0_pAu3XBUkDTuYKBDAX_vFQukBlgTgDEpVw4TQEmzPL8omxgcJaB8kNZOm6lsCDgKi3KswLHHlDACkwAXcFlymVobm5hZmBqZGAAAA"
+    },
+    {
+      "maxTokenLength" : 490,
+      "name" : "tracker-prefixes",
+      "payload" : {
+        "artworkURL" : "https://images.example.com/podcasts/5b1f9c2a/image/3000x3000_example-cover.jpg?ixlib=rails-4.3.1&max-w=3000&max-h=3000&fit=crop&auto=format,compress",
+        "audioURL" : "https://tracking.example.com/redirect.mp3/pdst.fm/e/chrt.fm/track/9F2C4A/prfx.byspotify.com/e/op3.dev/e/dts.podtrac.com/redirect.mp3/verifi.podscribe.com/rss/p/traffic.megaphone.fm/EXS1234567890.mp3?updated=1758211200&aid=rss_feed&awCollectionId=example-collection-2c9f&awEpisodeId=0f6d2c1e-8b0a-4b8e-9a51-3c2d1e0f9a87&feed=exampleshow&listenerSession=7c1e0a9b3f2d4e6a8b0c1d2e3f4a5b6c&ts=1758211200",
+        "durationSeconds" : 5400,
+        "feedURL" : "https://feeds.example.com/example-weekly",
+        "guid" : "5b1f9c2a-7d3e-11ef-9a4b-0f1e2d3c4b5a",
+        "podcastTitle" : "The Example Weekly Show",
+        "publishedUnix" : 1758211200,
+        "title" : "Episode 212: The Long Road Back | Interview with Sam Example"
+      },
+      "startTime" : 3725,
+      "token" : "1hVTJTsMwEL3nK3LKCVe242xIEYKqSJU4kQPckJcxjUibKgmk_D2TtUFAOXlkjd6M3-Lp7L2eIxycZEf0z_D9ldjknq_F7X_5upjrC7H9NWCb54xxXwRhFCe0Q5jpZlEQc8Y4pd534tt1WaB9usRsTTo-kuj5knCdWGwbKcQeakPDNQMSKyqJUDGQRAaM-JobBtQmMo68DnxCq3dl6xXoYzhAlUFdI2waIQKVifItNwJCiWCaGQ6-FTJQofaaerG0MynIGb_upXooD6_uYymNe4dko6hb9GX1kUM7aJrJvbsZ5jtd_1i7TwBvxaeb4U7OpPFo96XCc1ACxWyiuRyaztZ7OVOFKnVmu8HPPFdpJfOiJmLlr5i3lyfSpl17X-6G0uZNqqvy6Mn3pkxtWe1lc4VDj5i1el5qiPtyp2li2z_BmTYjkfGBMAYWdRCKUMuAG18LFUgnwHA4Zx6_AA",
+      "url" : "https://opencast.mobile/e/1hVTJTsMwEL3nK3LKCVe242xIEYKqSJU4kQPckJcxjUibKgmk_D2TtUFAOXlkjd6M3-Lp7L2eIxycZEf0z_D9ldjknq_F7X_5upjrC7H9NWCb54xxXwRhFCe0Q5jpZlEQc8Y4pd534tt1WaB9usRsTTo-kuj5knCdWGwbKcQeakPDNQMSKyqJUDGQRAaM-JobBtQmMo68DnxCq3dl6xXoYzhAlUFdI2waIQKVifItNwJCiWCaGQ6-FTJQofaaerG0MynIGb_upXooD6_uYymNe4dko6hb9GX1kUM7aJrJvbsZ5jtd_1i7TwBvxaeb4U7OpPFo96XCc1ACxWyiuRyaztZ7OVOFKnVmu8HPPFdpJfOiJmLlr5i3lyfSpl17X-6G0uZNqqvy6Mn3pkxtWe1lc4VDj5i1el5qiPtyp2li2z_BmTYjkfGBMAYWdRCKUMuAG18LFUgnwHA4Zx6_AA?t=3725"
+    },
+    {
+      "maxTokenLength" : 200,
+      "name" : "unicode-title",
+      "payload" : {
+        "artworkURL" : "https://audio.example.com/cafe/art.jpeg",
+        "audioURL" : "https://audio.example.com/cafe/ep-07.m4a",
+        "durationSeconds" : 1805,
+        "feedURL" : "https://audio.example.com/cafe/podcast.rss",
+        "guid" : "café-07",
+        "podcastTitle" : "Radio Ünïcödé ✨",
+        "publishedUnix" : 1756684800,
+        "title" : "Café Stories — “The Last Word” 🎧 播客的未来"
+      },
+      "startTime" : 61,
+      "token" : "1g9GQBJBakQgKZYgXE9NSgQlP18AcZDyXc2La4ZUKwcDgyEwtBhv6qGEOyDAfoFMVwvOLUh41zFX4ML9vucKzSWufrlv0fFbLszmrns1dyhWUCDRb4fCcvMPrkw9vSwEa82jOCi4CNgOTNNiPhNQhhSJXMsiNQAdzGVoYmHIZmpuamVmYWBgYAAA",
+      "url" : "https://opencast.mobile/e/1g9GQBJBakQgKZYgXE9NSgQlP18AcZDyXc2La4ZUKwcDgyEwtBhv6qGEOyDAfoFMVwvOLUh41zFX4ML9vucKzSWufrlv0fFbLszmrns1dyhWUCDRb4fCcvMPrkw9vSwEa82jOCi4CNgOTNNiPhNQhhSJXMsiNQAdzGVoYmHIZmpuamVmYWBgYAAA?t=61"
+    },
+    {
+      "maxTokenLength" : 95,
+      "name" : "empty-optionals",
+      "payload" : {
+        "artworkURL" : "",
+        "audioURL" : "http://plain.example.com/episodes/42.mp3",
+        "durationSeconds" : 0,
+        "feedURL" : "",
+        "guid" : "",
+        "podcastTitle" : "Bare Feed",
+        "publishedUnix" : 0,
+        "title" : "A Show Without Artwork"
+      },
+      "startTime" : 30,
+      "token" : "1A9FACphUMvP0UisSQYGMmuRMjEBGczkqBGfklyuEAw0Cxp6CY1FJeX5RNpcTMOQU3ICu5wICAy4DAA",
+      "url" : "https://opencast.mobile/e/1A9FACphUMvP0UisSQYGMmuRMjEBGczkqBGfklyuEAw0Cxp6CY1FJeX5RNpcTMOQU3ICu5wICAy4DAA?t=30"
+    },
+    {
+      "maxTokenLength" : 149,
+      "name" : "crlf-title",
+      "payload" : {
+        "artworkURL" : "https://media.example.com/crlf/cover.jpg",
+        "audioURL" : "https://media.example.com/crlf/01.mp3",
+        "durationSeconds" : 1800,
+        "feedURL" : "https://media.example.com/crlf/feed.xml",
+        "guid" : "urn:example:crlf:01",
+        "podcastTitle" : "Line Break FM",
+        "publishedUnix" : 1757000000,
+        "title" : "Live from the Studio Part 2"
+      },
+      "startTime" : 0,
+      "token" : "1g9GQiE2tSASFMsSLRTlp-gaGIHO5fDLLUhWA3s1VKAFqDy4BpRaFAGCqUzACyuWlKjgVpSZmK7j5chEwLzkfmEVBTiakEBYgXKVFeVZQWSuQjJWBIZehhYEBl6G5qbkBGAAA",
+      "url" : "https://opencast.mobile/e/1g9GQiE2tSASFMsSLRTlp-gaGIHO5fDLLUhWA3s1VKAFqDy4BpRaFAGCqUzACyuWlKjgVpSZmK7j5chEwLzkfmEVBTiakEBYgXKVFeVZQWSuQjJWBIZehhYEBl6G5qbkBGAAA"
+    },
+    {
+      "maxTokenLength" : 192,
+      "name" : "dictionary-sensitivity",
+      "payload" : {
+        "artworkURL" : "https://images.example.com/image.simplecastcdn.com/images/megaphone.imgix.net/podcasts/3000x3000_3000x3000.jpeg",
+        "audioURL" : "https://media.example.com/dts.podtrac.com/redirect.mp3/chrt.fm/track/pdst.fm/e/traffic.megaphone.fm/stitcher.simplecastaudio.com/audio.simplecast.com/episode.mp3?updated=1&aid=rss_feed",
+        "durationSeconds" : 3600,
+        "feedURL" : "https://feeds.example.com/feeds.megaphone.fm/feeds.simplecast.com/podcast.rss",
+        "guid" : "Ep. 1 - The_Episode",
+        "podcastTitle" : "The Podcast",
+        "publishedUnix" : 1758500000,
+        "title" : "Episode 1 | The Show – with The Guests — The End"
+      },
+      "startTime" : 0,
+      "token" : "1g9GQiE2tSASFMtgLeHMiaqZFZGbS8wPWlAdN7yCr4CFpiBJ6XDC_GgI9CvJTcEZ-OdjDYK-CRNxLU4FJAOx_ENc1L4ULRAdAQpcL5nNoIkD2OiUpDh5DaHEFtw-SvpGtw5lb0EIFKcFwgaLYUEEX5LN4aFBwGZsZGHAZmptamBqAAAA",
+      "url" : "https://opencast.mobile/e/1g9GQiE2tSASFMtgLeHMiaqZFZGbS8wPWlAdN7yCr4CFpiBJ6XDC_GgI9CvJTcEZ-OdjDYK-CRNxLU4FJAOx_ENc1L4ULRAdAQpcL5nNoIkD2OiUpDh5DaHEFtw-SvpGtw5lb0EIFKcFwgaLYUEEX5LN4aFBwGZsZGHAZmptamBqAAAA"
+    }
+  ],
+  "version" : "1"
+}

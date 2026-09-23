@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct NowPlayingMoreMenu: View {
+    /// The cached snapshot of the current episode, for sharing; nil when the
+    /// episode is neither cached nor downloaded.
+    let episode: EpisodeListItemSnapshot?
     let hasTranscript: Bool
     let canShowDescription: Bool
     let canShowShow: Bool
@@ -10,6 +13,11 @@ struct NowPlayingMoreMenu: View {
 
     var body: some View {
         Menu {
+            if let episode {
+                Section {
+                    EpisodeShareMenu(episode: episode)
+                }
+            }
             Button(
                 hasTranscript ? "Show Transcript" : "Generate Transcript",
                 systemImage: "text.quote",

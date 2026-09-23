@@ -175,6 +175,7 @@ struct NowPlayingView: View {
             .overlay(alignment: .topTrailing) {
                 if appModel.playback.currentEpisode != nil {
                     NowPlayingMoreMenu(
+                        episode: currentEpisodeID.flatMap(appModel.episodeSnapshot(for:)),
                         hasTranscript: hasCompletedTranscript,
                         canShowDescription: canOpenCurrentEpisode,
                         canShowShow: canOpenCurrentPodcast,

@@ -17,6 +17,9 @@ enum OpenCastConstants {
     static let supportURL = URL(string: "https://support.opencast.mobile/support")!
     static let privacyPolicyURL = URL(string: "https://support.opencast.mobile/privacy")!
     static let sourceCodeURL = URL(string: "https://github.com/connlark/opencast")!
+    /// Share links always use the production origin; the token works on any
+    /// ShareWorker host, so a link can be replayed against a staging lane.
+    static let episodeShareBaseURL = URL(string: "https://opencast.mobile/e/")!
     static let applePodcastsOPMLShortcutURL = URL(
         string: "https://www.icloud.com/shortcuts/f1cc341b82494ad09166fd9133d16cf3"
     )!

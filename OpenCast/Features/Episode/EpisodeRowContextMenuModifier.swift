@@ -18,6 +18,9 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
             .adDetectionModeDialog(episode: $modePromptEpisode)
             .contextMenu {
             let isCurrentlyPlaying = appModel.playback.currentEpisode?.id.rawValue == episode.episodeID
+            Section {
+                EpisodeShareMenu(episode: episode)
+            }
             Button("View Episode Details", systemImage: "info.circle", action: viewDetails)
             if showsGoToShow {
                 NavigationLink(value: AppRoute.podcastDetail(feedURL: episode.podcastID)) {

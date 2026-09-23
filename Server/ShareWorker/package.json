@@ -1,0 +1,38 @@
+{
+  "name": "opencast-share-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:prod-staging": "CLOUDFLARE_ENV=prod-staging vite build",
+    "build:production": "CLOUDFLARE_ENV=production vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run -c vitest.unit.config.mjs",
+    "test:integration": "yarn build && vitest run -c vitest.workerd.config.mjs",
+    "deploy": "yarn build && wrangler deploy",
+    "deploy:prod-staging": "yarn build:prod-staging && CLOUDFLARE_ENV=prod-staging wrangler deploy",
+    "deploy:production": "yarn build:production && CLOUDFLARE_ENV=production wrangler deploy",
+    "deploy:dry-run": "yarn build && wrangler deploy --dry-run --outdir dist-dry/dev",
+    "deploy:dry-run:prod-staging": "yarn build:prod-staging && CLOUDFLARE_ENV=prod-staging wrangler deploy --dry-run --outdir dist-dry/prod-staging",
+    "deploy:dry-run:production": "yarn build:production && CLOUDFLARE_ENV=production wrangler deploy --dry-run --outdir dist-dry/production",
+    "login": "wrangler login"
+  },
+  "dependencies": {
+    "preact": "10.29.8",
+    "preact-render-to-string": "6.7.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.54.4",
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "^24",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "tailwindcss": "4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "8.2.1",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

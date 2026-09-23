@@ -280,6 +280,25 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@cloudflare/vite-plugin@npm:1.54.4":
+  version: 1.54.4
+  resolution: "@cloudflare/vite-plugin@npm:1.54.4"
+  dependencies:
+    "@cloudflare/unenv-preset": "npm:2.16.1"
+    miniflare: "npm:5.20260903.0-alpha"
+    unenv: "npm:2.0.0-rc.24"
+    workerd: "npm:1.20260903.1"
+    wrangler: "npm:4.129.0"
+    ws: "npm:8.21.0"
+  peerDependencies:
+    vite: ^6.1.0 || ^7.0.0 || ^8.0.0
+    wrangler: ^4.129.0
+  bin:
+    cf-vite: bin/cf-vite
+  checksum: 10c0/0741713ca9e2b093360dbbe5453053e0149f41f3a129382d061e3a68968728af5d3b452e62f32bbc3271a50599b1a4b609f7a2738eae454d48aba69dce904030
+  languageName: node
+  linkType: hard
+
 "@cloudflare/vitest-pool-workers@npm:0.22.0":
   version: 0.22.0
   resolution: "@cloudflare/vitest-pool-workers@npm:0.22.0"
@@ -2215,6 +2234,19 @@ __metadata:
     postcss: "npm:^8.5.16"
     tailwindcss: "npm:4.3.3"
   checksum: 10c0/50b33643a4ba50c0d2ea0fd769d16072b0b3d2f31180df667fe5ad4ef60464b5f00931cfd5f2de2116a91219edb7a2dbd4c073b5c2f23393eab6ef1163db8dbf
+  languageName: node
+  linkType: hard
+
+"@tailwindcss/vite@npm:4.3.3":
+  version: 4.3.3
+  resolution: "@tailwindcss/vite@npm:4.3.3"
+  dependencies:
+    "@tailwindcss/node": "npm:4.3.3"
+    "@tailwindcss/oxide": "npm:4.3.3"
+    tailwindcss: "npm:4.3.3"
+  peerDependencies:
+    vite: ^5.2.0 || ^6 || ^7 || ^8
+  checksum: 10c0/bb1fe12f7a0bb8f6d6142f6bb2e96060ee853902314ef838e8d7f50cf30cc4b07adb7c2c86be2164e0d62eb581b8cc4df2d9aa13b4449f597a67f73c5772d549
   languageName: node
   linkType: hard
 
@@ -5584,6 +5616,26 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"opencast-share-worker@workspace:Server/ShareWorker":
+  version: 0.0.0-use.local
+  resolution: "opencast-share-worker@workspace:Server/ShareWorker"
+  dependencies:
+    "@cloudflare/vite-plugin": "npm:1.54.4"
+    "@cloudflare/vitest-pool-workers": "catalog:"
+    "@tailwindcss/vite": "npm:4.3.3"
+    "@types/node": "npm:^24"
+    "@types/react": "npm:^19.2.18"
+    "@types/react-dom": "npm:^19.2.7"
+    preact: "npm:10.29.8"
+    preact-render-to-string: "npm:6.7.0"
+    tailwindcss: "npm:4.3.3"
+    typescript: "npm:^5.9.3"
+    vite: "npm:8.2.1"
+    vitest: "catalog:"
+    wrangler: "catalog:"
+  languageName: unknown
+  linkType: soft
+
 "opencast-transcript-analysis-worker@workspace:Server/TranscriptAnalysisWorker":
   version: 0.0.0-use.local
   resolution: "opencast-transcript-analysis-worker@workspace:Server/TranscriptAnalysisWorker"
@@ -5742,6 +5794,27 @@ __metadata:
     picocolors: "npm:^1.1.1"
     source-map-js: "npm:^1.2.1"
   checksum: 10c0/2bdafc00d96bd57b6649a52e458864a4bf58ee56cfdbe4aea1472b5cccc127e6c1ad653bd0bec50d211e650eb0b9270c80e1e72aff2e2fa40d9e7363234d6e43
+  languageName: node
+  linkType: hard
+
+"preact-render-to-string@npm:6.7.0":
+  version: 6.7.0
+  resolution: "preact-render-to-string@npm:6.7.0"
+  peerDependencies:
+    preact: ">=10 || >= 11.0.0-0"
+  checksum: 10c0/40b86e9efe538de784a273b4f3d9bcb956c25d8d2f408700fa09824ddad389e3e5a591712690e5e207a832aace92490b8e95df0311c949dc148a1fbd355b31b2
+  languageName: node
+  linkType: hard
+
+"preact@npm:10.29.8":
+  version: 10.29.8
+  resolution: "preact@npm:10.29.8"
+  peerDependencies:
+    preact-render-to-string: ">=5"
+  peerDependenciesMeta:
+    preact-render-to-string:
+      optional: true
+  checksum: 10c0/505460352139e0ce5b9c971b69d8d9f3b73ea0f316e3ff1c0b3db9a1abe206c9dff6ba385eb796253c38fcc08b5ade70cd8da3d9d6c9e9aec1a2fd59348253ae
   languageName: node
   linkType: hard
 
@@ -6994,7 +7067,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"vite@npm:^6.0.0 || ^7.0.0 || ^8.0.0":
+"vite@npm:8.2.1, vite@npm:^6.0.0 || ^7.0.0 || ^8.0.0":
   version: 8.2.1
   resolution: "vite@npm:8.2.1"
   dependencies:

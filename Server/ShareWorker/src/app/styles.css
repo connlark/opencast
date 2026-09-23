@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+/*
+ * Tokens copied from Server/Website/src/app/globals.css (2026-09-22) so the
+ * share page reads as opencast. Appearance follows the system. Fonts are the
+ * system stack: SF Pro on Apple devices, no font bytes on a page opened cold.
+ */
+:root {
+  color-scheme: light dark;
+  --background: #fbf7f2;
+  --foreground: #111f3b;
+  --surface: #ffffff;
+  --surface-secondary: #f5eee3;
+  --muted: #616978;
+  --border: #e5dacb;
+  --accent: #af4d00;
+  --accent-display: #c25600;
+  --cta-bg: #111f3b;
+  --cta-ink: #fbf7f2;
+  --skip-zone: #e0393e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0e18;
+    --foreground: #f6f2ea;
+    --surface: #131a2c;
+    --surface-secondary: #1a2340;
+    --muted: #8492aa;
+    --border: #253052;
+    --accent: #f9730e;
+    --accent-display: #f9730e;
+    --cta-bg: #f5f0e8;
+    --cta-ink: #111f3b;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-secondary: var(--surface-secondary);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-display: var(--accent-display);
+  --color-cta: var(--cta-bg);
+  --color-cta-ink: var(--cta-ink);
+  --color-skip: var(--skip-zone);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+}
+
+html {
+  background: var(--background);
+  color: var(--foreground);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* The mask clips the blur to the element's box, so the box is wider than the
+   viewport and fades out before its edges; body clips the overflow. */
+.artwork-glow {
+  -webkit-mask-image: radial-gradient(ellipse 45% 50% at 50% 40%, black 20%, transparent 100%);
+  mask-image: radial-gradient(ellipse 45% 50% at 50% 40%, black 20%, transparent 100%);
+}
+
+body {
+  overflow-x: clip;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 44 px tall for touch; browsers centre the 6 px track inside it. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 2.75rem;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--track, var(--border));
+}
+input[type="range"]::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--track, var(--border));
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -6px;
+  border-radius: 9999px;
+  background: var(--foreground);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.3);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--foreground);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.3);
+}

@@ -17,6 +17,9 @@ struct EpisodeMoreMenu: View {
 
     var body: some View {
         Menu {
+            Section {
+                EpisodeShareMenu(episode: episode)
+            }
             progressActions
             Divider()
             downloadActions

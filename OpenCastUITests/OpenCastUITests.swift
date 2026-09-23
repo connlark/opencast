@@ -144,6 +144,49 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededEpisodeActionsShareEpisodeOpensActivitySheet() throws {
+        let app = makeSeededApp(
+            forcesDarkMode: false,
+            forcesLightMode: true
+        )
+        // The default seed plays a file:// fixture, which is never shareable.
+        // Detail does not autoplay, so the unreachable https URL is harmless.
+        app.launchEnvironment["OPENCAST_SEED_AUDIO_FILE_URL"] = "https://example.com/ui-test-episode.mp3"
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertExists(inboxEpisode, named: "seeded inbox episode")
+        openEpisodeDetailFromContextMenu(inboxEpisode, in: app, named: "seeded inbox episode")
+
+        let actionsButton = app.buttons["Episode Actions"].firstMatch
+        assertExists(actionsButton, named: "Episode Actions menu", timeout: 8)
+        actionsButton.tap()
+        let shareEpisode = app.buttons["Share Episode"].firstMatch
+        assertExists(shareEpisode, named: "Share Episode menu entry")
+        shareEpisode.tap()
+
+        // Scope to the remote share sheet: its Link Presentation caption
+        // carries the SharePreview title. On iOS 27 iPhone the sheet is a
+        // half-height card with no close button.
+        let shareSheet = app.otherElements["ShareSheet.RemoteContainerView"]
+        let caption = shareSheet.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier == %@ AND label CONTAINS %@",
+                "LP.CaptionBar.TopCaption",
+                "Deterministic UI Episode"
+            )
+        ).firstMatch
+        assertExists(caption, named: "share sheet captioned with the episode title", timeout: 10)
+        attachSmokeScreenshot(named: "episode_share_sheet")
+
+        // The remote card reports an empty frame to XCUITest, so dismiss it by
+        // tapping the dimmed area above it.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(caption.waitForNonExistence(timeout: 5), "share sheet should dismiss")
+    }
+
+    @MainActor
     func testSeededEpisodeDiagnosticsSheetShowsSectionsAndReportActions() throws {
         let app = makeSeededApp(
             forcesDarkMode: false,

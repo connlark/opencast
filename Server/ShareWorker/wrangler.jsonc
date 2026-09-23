@@ -1,0 +1,62 @@
+// Public self-hosting template for ShareWorker: it decodes a self-contained
+// share token, server-renders the episode page with Open Graph tags, serves the
+// hydrated player's assets, and proxies the explicit Download action. Nothing
+// is stored; there are no secrets.
+//
+// Replace every "your-*" name and the example.com route with your own. Build
+// and deploy only through the package scripts: `vite build` writes the
+// flattened config under dist/<lane>/ and redirects `wrangler deploy` to it.
+//
+// Every lane ships off workers.dev. Set a non-production lane's workers_dev to
+// true to preview it there; production serves only its zone route. Give each
+// lane its own rate-limit namespace ID, unique in your account.
+{
+  "name": "your-share-worker",
+  "main": "src/worker/index.tsx",
+  "compatibility_date": "2026-09-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": { "binding": "ASSETS", "html_handling": "none", "not_found_handling": "none" },
+  "observability": { "enabled": false },
+  "vars": { "LANE": "development" },
+  "ratelimits": [
+    {
+      "name": "DOWNLOAD_RATE_LIMITER",
+      "namespace_id": "1003",
+      "simple": { "limit": 20, "period": 60 }
+    }
+  ],
+  "env": {
+    "prod-staging": {
+      "name": "your-share-worker-prod-staging",
+      "workers_dev": false,
+      "assets": { "binding": "ASSETS", "html_handling": "none", "not_found_handling": "none" },
+      "observability": { "enabled": false },
+      "vars": { "LANE": "prod-staging" },
+      "ratelimits": [
+        {
+          "name": "DOWNLOAD_RATE_LIMITER",
+          "namespace_id": "1004",
+          "simple": { "limit": 20, "period": 60 }
+        }
+      ]
+    },
+    "production": {
+      "name": "your-share-worker-production",
+      "workers_dev": false,
+      "routes": [
+        { "pattern": "example.com/e/*", "zone_name": "example.com" }
+      ],
+      "assets": { "binding": "ASSETS", "html_handling": "none", "not_found_handling": "none" },
+      "observability": { "enabled": false },
+      "vars": { "LANE": "production" },
+      "ratelimits": [
+        {
+          "name": "DOWNLOAD_RATE_LIMITER",
+          "namespace_id": "1005",
+          "simple": { "limit": 20, "period": 60 }
+        }
+      ]
+    }
+  }
+}
