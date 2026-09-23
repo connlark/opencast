@@ -361,6 +361,9 @@ jobs:
           - name: ExerciseFeedWorker
             directory: Server/ExerciseFeedWorker
             timeout_minutes: 15
+          - name: ShareWorker
+            directory: Server/ShareWorker
+            timeout_minutes: 20
           - name: Website
             directory: Server/Website
             timeout_minutes: 35
@@ -450,6 +453,17 @@ jobs:
         if: matrix.name == 'ExerciseFeedWorker'
         working-directory: ${{ matrix.directory }}
         run: yarn test
+
+      - name: Check ShareWorker
+        if: matrix.name == 'ShareWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          yarn typecheck
+          yarn test
+          yarn test:integration
+          yarn deploy:dry-run
+          yarn deploy:dry-run:prod-staging
+          yarn deploy:dry-run:production
 
       - name: Verify Website
         if: matrix.name == 'Website'
