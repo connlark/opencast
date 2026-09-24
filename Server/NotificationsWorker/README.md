@@ -88,7 +88,10 @@ yarn wrangler d1 migrations apply your-notifications-db --remote
 A fresh database applies everything in one pass. An existing one must not:
 `0025` and `0026` are an expand/contract pair. Apply `0025` alone, deploy both
 Workers, let old invocations and leases drain, then apply `0026`. Current
-binaries need `0025` or later; registration confirmation needs `0027`.
+binaries need `0028` or later. `0027` adds registration confirmation (a
+column and a replacement `devices` trigger) and `0028` adds the feed-polling
+permit counters and dispatcher alert state. Neither rebuilds a table, so on a
+lane already past `0026` apply them in order, then deploy both Workers.
 
 Before running DDL of your own, inventory incoming foreign keys, indexes and
 triggers. `n_feed` has a cascading child table and must never be rebuilt.

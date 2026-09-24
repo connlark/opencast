@@ -321,6 +321,8 @@ jobs:
           node tests/lifecycle.mjs
           node tests/digest-runtime.mjs
           node tests/review-regressions.mjs
+          node tests/alerting.mjs
+          node tests/permit-reclaim.mjs
 
       - name: Run deterministic TranscriptAnalysis integration tests
         if: matrix.name == 'TranscriptAnalysisWorker'
