@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { harness } from './harness.mjs';
+import { ALERT_WEBHOOK_URL, harness } from './harness.mjs';
 
-const credential = 'pgk_production_fixture';
-const recipient = 'pgr_production_fixture';
+const credential = 'alert_credential_fixture';
+const recipient = 'alert_recipient_fixture';
 let responseStatus = 200;
 const h = await harness(request => {
-  if (request.url === 'https://alerts.example.com/v1/notifications') {
+  if (request.url === ALERT_WEBHOOK_URL) {
     const body = responseStatus === 200
       ? { aggregate_status: 'accepted' }
       : responseStatus === 409
@@ -14,7 +14,7 @@ const h = await harness(request => {
     return new Response(JSON.stringify(body), { status: responseStatus, headers: { 'content-type': 'application/json' } });
   }
   return new Response('<rss><channel><title>Fixture</title></channel></rss>', { headers: { 'content-type': 'application/rss+xml' } });
-}, { environment: 'production', alertSecrets: { ALERT_CREDENTIAL: credential, ALERT_RECIPIENT: recipient } });
+}, { environment: 'production', alertSecrets: { ALERT_WEBHOOK_URL, ALERT_CREDENTIAL: credential, ALERT_RECIPIENT: recipient } });
 
 try {
   let rollup = await h.invoke('test/dispatch');
@@ -31,6 +31,7 @@ try {
   assert.match(h.alerts[1].body.draft.title, /Feed polling stalled \(production\)/);
   assert.match(h.alerts[1].body.draft.body, /Healthy overdue: 50/);
   assert.equal(h.alerts[1].headers['idempotency-key'], `feed-polling-stall-production-${rollup.stall_since}`);
+  assert.match(h.alerts[1].body.draft.body, /Redeploy the feed-polling Worker \(production\)\./);
 
   responseStatus = 409;
   await h.invoke('clock', '60');
@@ -67,7 +68,23 @@ try {
   assert.equal(rollup.stall_state, 'clear');
   assert.equal(h.alerts.length, 8, 'recovery retries after a failed send');
   assert.match(h.alerts[7].body.draft.title, /Feed polling recovered \(production\)/);
-  console.log('PASS Alert webhook armed, onset, hourly and recovery transitions');
+  console.log('PASS alert webhook armed, onset, hourly and recovery transitions');
 } finally {
   await h.instance.dispose();
+}
+
+// A webhook URL that is not HTTPS would carry the bearer credential in clear,
+// so it leaves alerting off rather than sending.
+const plain = await harness(request => {
+  if (request.url.startsWith('http://alerts.example.com/')) throw new Error('sent over plain HTTP');
+  return new Response('<rss><channel><title>Fixture</title></channel></rss>', { headers: { 'content-type': 'application/rss+xml' } });
+}, { environment: 'production', alertSecrets: { ALERT_WEBHOOK_URL: 'http://alerts.example.com/v1/notifications', ALERT_CREDENTIAL: credential, ALERT_RECIPIENT: recipient } });
+try {
+  const rollup = await plain.invoke('test/dispatch');
+  assert.equal(rollup.alerting, false);
+  assert.equal(plain.alerts.length, 0);
+  assert.equal((await plain.invoke('test/stats')).alerting, false);
+  console.log('PASS a non-HTTPS alert webhook leaves alerting off');
+} finally {
+  await plain.instance.dispose();
 }

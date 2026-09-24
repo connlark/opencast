@@ -109,7 +109,36 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
     Ok(rollup)
 }
 
-const ALERT_WEBHOOK_URL: &str = "https://alerts.example.com/v1/notifications";
+/// The operator alert webhook. The endpoint is deployment configuration, not
+/// source: alerting is on only when all three secrets are set, and a
+/// non-HTTPS URL is refused so the bearer credential never travels in clear.
+struct AlertTarget {
+    url: String,
+    credential: String,
+    recipient: String,
+}
+
+fn alert_target(env: &Env) -> Option<AlertTarget> {
+    let secret = |name: &str| {
+        env.secret(name)
+            .ok()
+            .map(|v| v.to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let url = secret("ALERT_WEBHOOK_URL")?;
+    if !url.starts_with("https://") {
+        console_warn!(
+            "{}",
+            json!({"event":"poll_alert_misconfigured","reason":"webhook_url_not_https"})
+        );
+        return None;
+    }
+    Some(AlertTarget {
+        url,
+        credential: secret("ALERT_CREDENTIAL")?,
+        recipient: secret("ALERT_RECIPIENT")?,
+    })
+}
 
 #[derive(Clone, Copy)]
 enum AlertDraft<'a> {
@@ -159,7 +188,7 @@ impl AlertDraft<'_> {
     fn body(self) -> String {
         match self {
             Self::Armed { lane } => format!("Feed polling alerts are armed for {lane}."),
-            Self::Onset { lane, healthy_overdue, in_flight, oldest_due_seconds, .. } | Self::Hourly { lane, healthy_overdue, in_flight, oldest_due_seconds, .. } => format!("Healthy overdue: {healthy_overdue}; in flight: {in_flight}; oldest due: {oldest_due_seconds}s; 0 completions in 5 min. Redeploy opencast-feed-polling-{lane}."),
+            Self::Onset { lane, healthy_overdue, in_flight, oldest_due_seconds, .. } | Self::Hourly { lane, healthy_overdue, in_flight, oldest_due_seconds, .. } => format!("Healthy overdue: {healthy_overdue}; in flight: {in_flight}; oldest due: {oldest_due_seconds}s; 0 completions in 5 min. Redeploy the feed-polling Worker ({lane})."),
             Self::Recovery { lane, stall_since, completions } => format!("Feed polling recovered for {lane} after {}s; {completions} completions in 5 min.", now().saturating_sub(stall_since)),
         }
     }
@@ -191,17 +220,17 @@ impl AlertDraft<'_> {
     }
 }
 
-async fn send_alert(credential: &str, recipient: &str, draft: AlertDraft<'_>) -> Result<bool> {
-    let envelope = json!({"recipient":recipient,"draft":draft.payload()});
+async fn send_alert(target: &AlertTarget, draft: AlertDraft<'_>) -> Result<bool> {
+    let envelope = json!({"recipient":target.recipient,"draft":draft.payload()});
     let headers = Headers::new();
-    headers.set("authorization", &format!("Bearer {credential}"))?;
+    headers.set("authorization", &format!("Bearer {}", target.credential))?;
     headers.set("content-type", "application/json")?;
     headers.set("idempotency-key", &draft.idempotency_key())?;
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
         .with_headers(headers)
         .with_body(Some(envelope.to_string().into()));
-    let request = Request::new_with_init(ALERT_WEBHOOK_URL, &init)?;
+    let request = Request::new_with_init(&target.url, &init)?;
     let mut response = crate::deadline::fetch_with_deadline(
         Fetch::Request(request).send(),
         Delay::from(Duration::from_secs(10)),
@@ -215,7 +244,7 @@ async fn send_alert(credential: &str, recipient: &str, draft: AlertDraft<'_>) ->
         .as_str()
         .or_else(|| body["code"].as_str())
         .unwrap_or("");
-    // A replay after an uncertain response is settled by the alert service's
+    // A replay after an uncertain response is settled by the webhook's
     // idempotency ledger. The body is intentionally not compared here: live
     // counts change between retries, while the key identifies the alert.
     let delivered = (status == 409 && code == "idempotency_conflict")
@@ -245,8 +274,8 @@ async fn send_alert(credential: &str, recipient: &str, draft: AlertDraft<'_>) ->
     Ok(delivered)
 }
 
-async fn send_alert_safely(credential: &str, recipient: &str, draft: AlertDraft<'_>) -> bool {
-    match send_alert(credential, recipient, draft).await {
+async fn send_alert_safely(target: &AlertTarget, draft: AlertDraft<'_>) -> bool {
+    match send_alert(target, draft).await {
         Ok(delivered) => delivered,
         Err(error) => {
             console_warn!(
@@ -265,20 +294,7 @@ async fn alert_dispatch(
     t: i64,
 ) -> Result<(bool, Value)> {
     let state = first(db, "SELECT stall_state,stall_since,stall_alerted_at,alert_armed_at FROM n_poll_dispatch WHERE id=1", &[]).await?.unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0,"stall_alerted_at":0,"alert_armed_at":0}));
-    let Some(credential) = env
-        .secret("ALERT_CREDENTIAL")
-        .ok()
-        .map(|v| v.to_string())
-        .filter(|v| !v.is_empty())
-    else {
-        return Ok((false, state));
-    };
-    let Some(recipient) = env
-        .secret("ALERT_RECIPIENT")
-        .ok()
-        .map(|v| v.to_string())
-        .filter(|v| !v.is_empty())
-    else {
+    let Some(target) = alert_target(env) else {
         return Ok((false, state));
     };
     let stall_state = state["stall_state"].as_str().unwrap_or("clear");
@@ -300,12 +316,7 @@ async fn alert_dispatch(
     let lane_name = lane(env);
     let delivered = match transition {
         Some(super::policy::StallAlert::Armed) => {
-            let sent = send_alert_safely(
-                &credential,
-                &recipient,
-                AlertDraft::Armed { lane: &lane_name },
-            )
-            .await;
+            let sent = send_alert_safely(&target, AlertDraft::Armed { lane: &lane_name }).await;
             if sent {
                 run(
                     db,
@@ -326,8 +337,7 @@ async fn alert_dispatch(
                 false
             } else {
                 let sent = send_alert_safely(
-                    &credential,
-                    &recipient,
+                    &target,
                     AlertDraft::Onset {
                         lane: &lane_name,
                         stall_since: onset,
@@ -353,8 +363,7 @@ async fn alert_dispatch(
                 false
             } else {
                 let sent = send_alert_safely(
-                    &credential,
-                    &recipient,
+                    &target,
                     AlertDraft::Hourly {
                         lane: &lane_name,
                         stall_since: since,
@@ -375,8 +384,7 @@ async fn alert_dispatch(
         }
         Some(super::policy::StallAlert::Recovery { stall_since: since }) => {
             let sent = send_alert_safely(
-                &credential,
-                &recipient,
+                &target,
                 AlertDraft::Recovery {
                     lane: &lane_name,
                     stall_since: since,
@@ -509,14 +517,6 @@ pub async fn stats(env: &Env, db: &D1Database) -> Result<Value> {
     .unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0}));
     value["stall_state"] = json!(state["stall_state"].as_str().unwrap_or("clear"));
     value["stall_since"] = json!(state["stall_since"].as_i64().unwrap_or(0));
-    value["alerting"] = json!(
-        env.secret("ALERT_CREDENTIAL")
-            .ok()
-            .is_some_and(|secret| !secret.to_string().is_empty())
-            && env
-                .secret("ALERT_RECIPIENT")
-                .ok()
-                .is_some_and(|secret| !secret.to_string().is_empty())
-    );
+    value["alerting"] = json!(alert_target(env).is_some());
     Ok(value)
 }

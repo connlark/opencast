@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { migrate } from '../../NotificationsWorker/tests/migrations.mjs';
+// The fixture operator-alert webhook; tests bind it as ALERT_WEBHOOK_URL.
+export const ALERT_WEBHOOK_URL = 'https://alerts.example.com/v1/notifications';
 export const hash = parts => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 const root = fileURLToPath(new URL('../../', import.meta.url));
 // wrangler.jsonc is JSONC, not JSON: the public self-hosting template carries a
@@ -37,7 +39,7 @@ export async function harness(outbound, options = {}) {
         if (options.loseReceipt?.()) { await response.text(); return new Response('lost', { status: 503 }); }
         return response;
       } },
-      outboundService: async request => { fetches.push(request.url); if (request.url === 'https://alerts.example.com/v1/notifications') alerts.push({ headers: Object.fromEntries(request.headers), body: await request.clone().json() }); return outbound(request); },
+      outboundService: async request => { fetches.push(request.url); if (request.url === ALERT_WEBHOOK_URL) alerts.push({ headers: Object.fromEntries(request.headers), body: await request.clone().json() }); return outbound(request); },
     },
     { name: 'delivery-runtime', modulesRoot: root, modules: modules('NotificationsWorker', 'tests/observation-entry.mjs'),
       compatibilityDate: '2026-09-03', compatibilityFlags: ['enable_request_signal'],

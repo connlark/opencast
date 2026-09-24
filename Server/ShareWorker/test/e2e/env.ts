@@ -2,7 +2,7 @@
 import os from "node:os";
 import path from "node:path";
 
-// Not 8787 (wrangler's default) or other local rigs' 8931/8932/8941/8942.
+// Not 8787 (wrangler's default) or the local alerting rigs' 8931/8932/8941/8942.
 export const WORKER_PORT = 8951;
 export const BASE_URL = `https://127.0.0.1:${WORKER_PORT}`;
 
