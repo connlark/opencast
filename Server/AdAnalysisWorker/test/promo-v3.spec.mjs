@@ -424,7 +424,7 @@ it("retains validation failure on repeated polls/submits and accepts an explicit
   body.job_handle_version = 1;
   responses.push(reply([{...span, start_segment_id: 10}]), reply([]));
   const accepted = await (await analyze(body)).json();
-  expect(accepted.job_id).toBe(`a3.20260911b.${body.transcript.fingerprint}`);
+  expect(accepted.job_id).toBe(`a3.20260924a.${body.transcript.fingerprint}`);
   const poll = () => SELF.fetch(`${base}/v1/ad-analysis/jobs/${accepted.job_id}`, {
     method: "POST", headers, body: JSON.stringify({job_id: accepted.job_id})
   });
@@ -435,11 +435,11 @@ it("retains validation failure on repeated polls/submits and accepts an explicit
     await new Promise(resolve => setTimeout(resolve, 1));
   }
   expect(failed.status).toBe(422);
-  const failedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-09-11.2-recovery:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
+  const failedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-09-24.1-dai-budget:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
   const failedRecord = await runInDurableObject(failedStub, async (_instance, state) => JSON.parse(await state.storage.get("job")));
   expect(failedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(1795);
   expect(failedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(1800);
-  expect(await failed.json()).toMatchObject({failure: {category: "validation_exhausted", retry_disposition: "explicit_retry", policy_revision: "2026-09-11.2-recovery"}, accounting: {request_count: 1, dispatched_attempts: 2}});
+  expect(await failed.json()).toMatchObject({failure: {category: "validation_exhausted", retry_disposition: "explicit_retry", policy_revision: "2026-09-24.1-dai-budget"}, accounting: {request_count: 1, dispatched_attempts: 2}});
   expect((await poll()).status).toBe(422);
   expect((await analyze(body)).status).toBe(422);
   expect(payloads).toHaveLength(2);
@@ -453,7 +453,7 @@ it("retains validation failure on repeated polls/submits and accepts an explicit
   }
   expect(failed.status).toBe(200);
   expect(payloads).toHaveLength(3);
-  const completedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-09-11.2-recovery:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
+  const completedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-09-24.1-dai-budget:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
   const completedRecord = await runInDurableObject(completedStub, async (_instance, state) => JSON.parse(await state.storage.get("job")));
   expect(completedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(86395);
   expect(completedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(86400);
@@ -474,9 +474,9 @@ it("polls a retained revision-A record while new submissions select isolated rev
   expect((await (await poll(oldHandle)).json()).policy_revision).toBe("2026-09-11.1-word-boundaries");
   expect(payloads).toHaveLength(0);
   responses.push(reply([span]));
-  expect((await (await analyze(body)).json()).job_id).toBe(`a3.20260911b.${fingerprint}`);
+  expect((await (await analyze(body)).json()).job_id).toBe(`a3.20260924a.${fingerprint}`);
   for (let i = 0; i < 1000; i++) {
-    if ((await poll(`a3.20260911b.${fingerprint}`)).status !== 202) break;
+    if ((await poll(`a3.20260924a.${fingerprint}`)).status !== 202) break;
     await new Promise(resolve => setTimeout(resolve, 1));
   }
   expect((await (await poll(oldHandle)).json()).policy_revision).toBe("2026-09-11.1-word-boundaries");

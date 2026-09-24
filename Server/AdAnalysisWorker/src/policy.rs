@@ -5,7 +5,12 @@ use crate::{promo_v3, types::AdAnalysisRequest};
 pub const POLICY_ENV_VAR: &str = "AD_ANALYSIS_POLICY";
 pub const V3_MODEL: &str = "gemini-3.8-flash";
 /// Bump for any deployed prompt/validator change, even when schema stays v3.
-pub const V3_REVISION: &str = "2026-09-11.2-recovery";
+/// `2026-09-24.1`: declared-runtime-aware episode ad budget (validation.rs),
+/// after the 25 % cap rejected correct results on ad-heavy DAI inventory.
+pub const V3_REVISION: &str = "2026-09-24.1-dai-budget";
+/// Served production 2026-09-18 → next deploy; its `a3.20260911b` handles stay
+/// addressable for their lifetime.
+pub const V3_RECOVERY_REVISION: &str = "2026-09-11.2-recovery";
 pub const V3_PREVIOUS_REVISION: &str = "2026-09-11.1-word-boundaries";
 pub const V3_INITIAL_ATTEMPTS: usize = 2;
 pub const V3_REPAIR_ATTEMPTS: usize = 1;
@@ -44,7 +49,7 @@ impl AnalysisPolicy {
     pub fn job_handle(self, fingerprint: &str) -> String {
         match self {
             Self::V2 => fingerprint.to_string(),
-            Self::V3 => format!("a3.20260911b.{fingerprint}"),
+            Self::V3 => format!("a3.20260924a.{fingerprint}"),
         }
     }
 
@@ -78,13 +83,18 @@ impl AnalysisPolicy {
     }
 }
 
-/// Only known routing tags select bundles. Untagged polls probe the two
-/// pre-handle namespaces, never today's v3 selection. No arbitrary DO names.
+/// Only known routing tags select bundles: each tag maps to exactly one
+/// revision namespace, and old tags keep resolving for their jobs' lifetimes.
+/// Untagged polls probe the pre-handle namespaces. No arbitrary DO names.
 pub fn poll_object_names(handle: &str) -> Option<Vec<String>> {
+    if let Some(fingerprint) = handle.strip_prefix("a3.20260924a.") {
+        return crate::job::valid_fingerprint(fingerprint)
+            .then(|| vec![AnalysisPolicy::V3.job_object_name(fingerprint)]);
+    }
     if let Some(fingerprint) = handle.strip_prefix("a3.20260911b.") {
         return crate::job::valid_fingerprint(fingerprint).then(|| {
             vec![format!(
-                "ad-analysis:v3:2026-09-11.2-recovery:flash38-medium:w800:r1:job:{fingerprint}"
+                "ad-analysis:v3:{V3_RECOVERY_REVISION}:flash38-medium:w800:r1:job:{fingerprint}"
             )]
         });
     }

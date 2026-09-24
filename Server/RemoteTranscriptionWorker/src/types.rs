@@ -210,6 +210,10 @@ pub struct JobCreateRequest {
     pub episode_title: Option<String>,
     #[serde(default)]
     pub podcast_title: Option<String>,
+    /// Media request profile the app downloads with (`origin::MEDIA_PROFILE`);
+    /// absent from app versions that predate it, which keep the legacy UA.
+    #[serde(default)]
+    pub media_profile: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]

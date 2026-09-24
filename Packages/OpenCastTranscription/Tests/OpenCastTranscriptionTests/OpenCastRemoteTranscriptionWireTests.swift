@@ -202,7 +202,8 @@ struct OpenCastRemoteTranscriptionWireTests {
             sourceIdentity: OpenCastRemoteTranscriptionSourceIdentity(
                 sha256: "da26a00f",
                 byteCount: 16_328_368
-            )
+            ),
+            mediaProfile: 2
         )
         #expect(create.schemaVersion == OpenCastRemoteTranscriptionSchema.version)
         let encoder = JSONEncoder()
@@ -213,6 +214,12 @@ struct OpenCastRemoteTranscriptionWireTests {
         #expect(encoded.contains("\"enclosure_url\""))
         #expect(encoded.contains("\"schema_version\":1"))
         #expect(encoded.contains("\"byte_count\":16328368"))
+        #expect(encoded.contains("\"media_profile\":2"))
+        // Omitted, not null, when unset: the server reads absence as legacy.
+        var undeclared = create
+        undeclared.mediaProfile = nil
+        let undeclaredJSON = String(decoding: try encoder.encode(undeclared), as: UTF8.self)
+        #expect(!undeclaredJSON.contains("media_profile"))
 
         let bootstrap = OpenCastRemoteTranscriptionBootstrapRequest()
         let bootstrapJSON = String(decoding: try encoder.encode(bootstrap), as: UTF8.self)

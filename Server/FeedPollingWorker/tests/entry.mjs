@@ -2,7 +2,7 @@
 import Worker, { PollingControl } from '../adapter/index.js';
 const NativeDate = Date;
 // `frozen` pins the wall clock so two executions can share one integer second.
-let offset = 0, fault, frozen;
+let offset = 0, fault, frozen, releaseHang;
 globalThis.Date = class extends NativeDate {
   constructor(...args) { super(...(args.length ? args : [(frozen ?? NativeDate.now()) + offset])); }
   static now() { return (frozen ?? NativeDate.now()) + offset; }
@@ -59,7 +59,7 @@ function instrument(env, trace) {
   } });
   const bucket = new Proxy(env.FEED_SNAPSHOTS, { get(target, key) {
     if (key === 'constructor') return target.constructor;
-    if (['get', 'put', 'head', 'delete', 'list'].includes(key)) return async (...args) => { trace[key]++; if(key==='get'&&fault==='slow_get'){fault=undefined;await new Promise(resolve=>setTimeout(resolve,16000));} fail(`before_${key}`); const value = await target[key](...args); fail(`after_${key}`); return value; };
+    if (['get', 'put', 'head', 'delete', 'list'].includes(key)) return async (...args) => { trace[key]++; if(key==='get'&&fault==='slow_get'){fault=undefined;await new Promise(resolve=>setTimeout(resolve,16000));} if(key==='get'&&fault==='hang_get'){fault='hang_get_active';await new Promise(resolve=>releaseHang=resolve);} fail(`before_${key}`); const value = await target[key](...args); fail(`after_${key}`); return value; };
     // Scratch is one multipart upload: count every Class A call and its bytes.
     if (key === 'createMultipartUpload') return async (...args) => {
       trace.multipart++; const upload = await target.createMultipartUpload(...args); let bytes = 0;
@@ -107,6 +107,7 @@ export default class extends Worker {
     const path = new URL(request.url).pathname;
     if (path === '/clock') { offset = Number(await request.text()) * 1000; return new Response('ok'); }
     if (path === '/fault') { fault = await request.text(); return new Response('ok'); }
+    if (path === '/release-hang') { releaseHang?.(); releaseHang = undefined; fault = undefined; return new Response('ok'); }
     if (path === '/freeze') { const at = await request.text(); frozen = at ? Number(at) * 1000 : undefined; return new Response('ok'); }
     if (path === '/wakeups') {
       const due=wakeups.filter(w=>w.at<=Date.now());

@@ -390,8 +390,40 @@ pub fn validate_request(request: AdAnalysisRequest) -> Result<ValidatedRequest, 
 pub const MAX_SPAN_DURATION_SECONDS: f64 = 600.0;
 pub const MIN_BREAK_DURATION_SECONDS: f64 = 15.0;
 pub const MAX_SPAN_REQUEST_COVERAGE: f64 = 0.8;
-pub const AD_BUDGET_EPISODE_FRACTION: f64 = 0.25;
+/// Baked-in reads plus ordinary inserted pods fit a quarter of the runtime,
+/// but iHeart-style inventory measured on 2026-09-24 was 33 % of the served
+/// file (1,235 s of 3,714 s across four pods, every boundary verified), so
+/// the fraction is 0.40. Under v3 a tight budget fails the whole analysis
+/// closed instead of trimming; this bound guards against degenerate output,
+/// not spend.
+pub const AD_BUDGET_EPISODE_FRACTION: f64 = 0.40;
 pub const AD_BUDGET_FLOOR_SECONDS: f64 = 600.0;
+/// A declared runtime shorter than half the served audio is implausible (a
+/// wrong or placeholder `<itunes:duration>`) and earns no extra budget.
+pub const DECLARED_DURATION_MIN_FRACTION: f64 = 0.5;
+
+/// Episode ad-time budget in seconds. The fraction covers baked-in reads and
+/// ordinary inserted pods. When the client reports the feed's declared runtime
+/// and the served file is longer, the excess is dynamically inserted
+/// advertising by construction and is added on top:
+/// `max(fraction × declared, floor) + (audio − declared)`. Missing, non-finite,
+/// longer-than-audio, or implausibly short declared runtimes use
+/// `max(fraction × audio, floor)`.
+pub fn episode_ad_budget_seconds(transcript: &crate::types::TranscriptMetadata) -> f64 {
+    let audio = transcript.audio_duration;
+    let base = |runtime: f64| (AD_BUDGET_EPISODE_FRACTION * runtime).max(AD_BUDGET_FLOOR_SECONDS);
+    match transcript.declared_duration {
+        Some(declared)
+            if declared.is_finite()
+                && audio.is_finite()
+                && declared < audio
+                && declared >= DECLARED_DURATION_MIN_FRACTION * audio =>
+        {
+            base(declared) + (audio - declared)
+        }
+        _ => base(audio),
+    }
+}
 pub const EVIDENCE_PROBE_WORDS: usize = 6;
 pub const EVIDENCE_MIN_WORDS_ACCEPT: usize = 2;
 pub const EVIDENCE_MIN_WORDS_REANCHOR: usize = 3;
@@ -838,9 +870,8 @@ pub fn validate_model_output(
     }
 
     // Episode ad budget: drop lowest-confidence merged spans (largest first on
-    // ties) until total ad time fits max(25% of audio, 600 s).
-    let budget = (AD_BUDGET_EPISODE_FRACTION * request.transcript.audio_duration)
-        .max(AD_BUDGET_FLOOR_SECONDS);
+    // ties) until total ad time fits `episode_ad_budget_seconds`.
+    let budget = episode_ad_budget_seconds(&request.transcript);
     let mut total: f64 = survivors
         .iter()
         .map(|span| span.span.end_time - span.span.start_time)

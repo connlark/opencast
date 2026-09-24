@@ -81,6 +81,10 @@ pub struct WireAdAnalysisRequest {
 pub struct WireTranscriptMetadata {
     pub language_code: String,
     pub audio_duration: f64,
+    /// Feed-declared runtime from job creation. The ad worker sizes its
+    /// episode ad budget by the dynamically inserted excess over it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_duration: Option<f64>,
     pub model_identifier: Option<String>,
     pub fingerprint: String,
     pub updated_at: String,
@@ -232,6 +236,9 @@ pub fn build_request(
             transcript: WireTranscriptMetadata {
                 language_code: envelope.result.language_code.clone(),
                 audio_duration,
+                declared_duration: record
+                    .declared_duration_seconds
+                    .filter(|duration| duration.is_finite() && *duration > 0.0),
                 model_identifier: Some(model.to_string()),
                 fingerprint: ad_job_fingerprint(&record.job_id),
                 updated_at: job::iso8601(now),
@@ -486,7 +493,7 @@ mod tests {
             "acct-1".into(),
             "ep-1".into(),
             Some("en".into()),
-            Some(2040.0),
+            Some(1800.0),
             None,
             None,
             1_784_000_000,
@@ -618,6 +625,7 @@ mod tests {
         assert_eq!(inner.episode_title.as_deref(), Some("Episode 42"));
         assert_eq!(inner.transcript.language_code, "en");
         assert_eq!(inner.transcript.audio_duration, 2040.0);
+        assert_eq!(inner.transcript.declared_duration, Some(1800.0));
         assert_eq!(inner.transcript.fingerprint, ad_job_fingerprint("job-ad-1"));
         assert_eq!(inner.transcript.state, "completed");
         assert_eq!(inner.transcript.segment_count, 2);

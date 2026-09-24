@@ -12,7 +12,7 @@ One worker, two hostnames (Workers Custom Domains):
 | `opencast.mobile` | `/support`, `/privacy` | Served directly |
 | `opencast.mobile` | `/app-store` | 302 → App Store listing |
 | `opencast.mobile` | `/testflight` | TestFlight landing page |
-| `opencast.mobile` | anything else | 302 → `/` |
+| `opencast.mobile` | anything else | 404 with the designed not-found page (`src/app/not-found.tsx`) |
 | `support.opencast.mobile` | `/` | Support page body |
 | `support.opencast.mobile` | `/support`, `/privacy` | Served directly (App Store support/privacy URLs) |
 | `support.opencast.mobile` | `/health` | `200 ok` |

@@ -100,6 +100,9 @@ pub struct CreateMessage {
     pub episode_title: Option<String>,
     #[serde(default)]
     pub podcast_title: Option<String>,
+    /// The app's declared media request profile (`origin::media_user_agent`).
+    #[serde(default)]
+    pub media_profile: Option<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -372,6 +375,14 @@ impl TranscriptionJob {
         }
     }
 
+    /// Jobs from app versions that predate the `media_profile` declaration:
+    /// the signal for retiring `origin::LEGACY_MEDIA_USER_AGENT`.
+    async fn bump_legacy_media_profile(&self, legacy_media_profile: bool) {
+        if legacy_media_profile {
+            self.bump("jobs_created_legacy_media_profile", 1).await;
+        }
+    }
+
     // --- Route handlers ---
 
     async fn handle_create(&self, req: &mut Request) -> Result<Response> {
@@ -425,6 +436,8 @@ impl TranscriptionJob {
         record.podcast_id = message.podcast_id;
         record.episode_title = message.episode_title;
         record.podcast_title = message.podcast_title;
+        record.media_profile = message.media_profile;
+        let legacy_media_profile = crate::origin::uses_legacy_media_profile(message.media_profile);
         record.state_deadline_at = Some(now + config.staging_origin_deadline_seconds);
         self.write_record(&record).await?;
         // Arm the alarm before the counter bump: a reset between write_record
@@ -454,10 +467,12 @@ impl TranscriptionJob {
                 }
             };
             self.bump("jobs_created", 1).await;
+            self.bump_legacy_media_profile(legacy_media_profile).await;
             return self.status_response(&record, None);
         }
         self.schedule(Duration::from_secs(0)).await?;
         self.bump("jobs_created", 1).await;
+        self.bump_legacy_media_profile(legacy_media_profile).await;
         self.status_response(&record, None)
     }
 
@@ -1300,8 +1315,17 @@ impl TranscriptionJob {
                     "job {} origin staging failed ({code}); requesting exact upload",
                     record.job_id
                 );
-                self.enter_upload_path(config, job::STATE_STAGING_ORIGIN)
-                    .await?;
+                // `origin_staging_failed` splits this cause out of
+                // `exact_upload_required` (which also counts mismatches and
+                // policy-unsafe URLs). Counted only on the winning
+                // transition, after its deadline alarm is armed, so the
+                // telemetry changes nothing about the upload path.
+                if let StateUpdate::Applied(_) = self
+                    .enter_upload_path(config, job::STATE_STAGING_ORIGIN)
+                    .await?
+                {
+                    self.bump("origin_staging_failed", 1).await;
+                }
                 Ok(())
             }
         }
@@ -3812,7 +3836,10 @@ impl TranscriptionJob {
                 .set("accept-encoding", crate::origin::MEDIA_ACCEPT_ENCODING)
                 .ok();
             headers
-                .set("user-agent", crate::origin::MEDIA_USER_AGENT)
+                .set(
+                    "user-agent",
+                    crate::origin::media_user_agent(record.media_profile),
+                )
                 .ok();
             let mut init = RequestInit::new();
             init.with_method(Method::Get)

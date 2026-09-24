@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "test", "vite.config.ts", "alias.ts"]
+  "include": ["src", "test", "vite.config.ts", "playwright.config.ts", "alias.ts"]
 }

@@ -124,6 +124,13 @@ pub struct AdAnalysisRequest {
 pub struct TranscriptMetadata {
     pub language_code: String,
     pub audio_duration: f64,
+    /// RSS-declared runtime (`<itunes:duration>`) when the client knows it.
+    /// Dynamic ad insertion serves files longer than the declared runtime;
+    /// `validation::episode_ad_budget_seconds` counts that excess toward the
+    /// episode ad budget. Optional, absent from older clients, and untrusted:
+    /// implausible values fall back to the audio-only budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_duration: Option<f64>,
     #[serde(default)]
     pub model_identifier: Option<String>,
     #[serde(default)]

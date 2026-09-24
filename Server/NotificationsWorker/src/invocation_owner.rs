@@ -19,9 +19,16 @@ pub(crate) struct OwnedInvocation<F> {
     state: Rc<RefCell<State<F>>>,
 }
 
-#[derive(Clone)]
 pub(crate) struct InvocationCancellation<F> {
     state: Rc<RefCell<State<F>>>,
+}
+
+impl<F> Clone for InvocationCancellation<F> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+        }
+    }
 }
 
 impl<F> OwnedInvocation<F> {
@@ -125,11 +132,54 @@ pub(crate) async fn run_with_abort_signal<F: Future + 'static>(
         return None;
     }
     let previous_handler = signal.onabort();
+    let on_abort_cancellation = cancellation.clone();
     let on_abort = Closure::<dyn FnMut(worker::web_sys::Event)>::new(move |_| {
-        cancellation.cancel();
+        on_abort_cancellation.cancel();
     });
     signal.set_onabort(Some(on_abort.as_ref().unchecked_ref()));
     let output = owned.await;
+    signal.set_onabort(previous_handler.as_ref());
+    output
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn run_with_abort_signal_and_deadline<F: Future + 'static>(
+    signal: worker::web_sys::AbortSignal,
+    future: F,
+    deadline_seconds: u64,
+    step: u32,
+) -> Option<F::Output> {
+    use futures_util::future::{select, Either};
+    use std::pin::pin;
+    use worker::wasm_bindgen::closure::Closure;
+    use worker::wasm_bindgen::JsCast;
+
+    let (owned, cancellation) = OwnedInvocation::new(future);
+    if signal.aborted() {
+        cancellation.cancel();
+        return None;
+    }
+    let previous_handler = signal.onabort();
+    let on_abort_cancellation = cancellation.clone();
+    let on_abort = Closure::<dyn FnMut(worker::web_sys::Event)>::new(move |_| {
+        on_abort_cancellation.cancel();
+    });
+    signal.set_onabort(Some(on_abort.as_ref().unchecked_ref()));
+    let owned = pin!(owned);
+    let deadline = pin!(worker::Delay::from(std::time::Duration::from_secs(
+        deadline_seconds
+    )));
+    let output = match select(owned, deadline).await {
+        Either::Left((output, _)) => output,
+        Either::Right(((), _)) => {
+            worker::console_warn!(
+                "{}",
+                serde_json::json!({"event":"scan_step_deadline","step":step,"wall_seconds":deadline_seconds})
+            );
+            cancellation.cancel();
+            None
+        }
+    };
     signal.set_onabort(previous_handler.as_ref());
     output
 }
@@ -165,7 +215,7 @@ mod tests {
         let _ = FeedScanPermit::take_diagnostics();
         let dropped = Rc::new(Cell::new(false));
         let scan = PendingScan {
-            _permit: FeedScanPermit::try_acquire().unwrap(),
+            _permit: FeedScanPermit::try_acquire("scan").unwrap(),
             dropped: dropped.clone(),
         };
         let (mut owned, cancellation) = OwnedInvocation::new(scan);

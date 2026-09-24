@@ -139,9 +139,13 @@ pub(crate) async fn execute(
     let db = env.d1("APP_ATTEST_DB")?;
     match path {
         "/prepare" => {
-            let Some(_permit) = scan_permit(poll.is_some()).await else {
+            let Some(acquisition) = scan_permit(poll.is_some(), "prepare").await else {
                 return Response::error("scan_busy", 429);
             };
+            if acquisition.reclaimed > 0 {
+                crate::polling::stat(&db, "permit_reclaims").await?;
+            }
+            let _permit = acquisition.permits;
             let progress = super::prepare::step_fenced(
                 env.d1("APP_ATTEST_DB")?,
                 env.bucket("FEED_SNAPSHOTS")?,
@@ -185,9 +189,23 @@ pub(crate) async fn execute(
         "/scan" => {}
         _ => return Response::error("not_found", 404),
     }
-    let Some(_permit) = scan_permit(poll.is_some()).await else {
+    let Some(acquisition) = scan_permit(poll.is_some(), "scan").await else {
+        // Queue-owned polls add the outcome after this response so the
+        // refusal is counted once. Direct observation callers still get the
+        // isolate-local diagnostic here.
+        if poll.is_none() {
+            let view = crate::feed_scan_admission::FeedScanPermit::view();
+            console_log!(
+                "{}",
+                json!({"event":"poll_outcome","outcome":"scan_busy","active_permits":view.active_permits,"oldest_permit_age_seconds":view.oldest_permit_age_seconds,"holder_step":view.holder_step,"isolate":view.isolate})
+            );
+        }
         return Response::error("scan_busy", 429);
     };
+    if acquisition.reclaimed > 0 {
+        crate::polling::stat(&db, "permit_reclaims").await?;
+    }
+    let _permit = acquisition.permits;
     let Some(authority) = first(
         &db,
         "SELECT canonical_url,etag,last_modified FROM n_feed WHERE feed_id=?1",
@@ -383,10 +401,15 @@ async fn settled(db: &D1Database, feed_id: &str) -> Result<bool> {
 
 // Waiting futures own no scan buffers or cross-request I/O. Short contention
 // resolves within the invocation; long scans use a bounded queue retry.
-async fn scan_permit(wait: bool) -> Option<Vec<crate::feed_scan_admission::FeedScanPermit>> {
+async fn scan_permit(
+    wait: bool,
+    step: &'static str,
+) -> Option<crate::feed_scan_admission::ExclusiveAcquisition> {
     for attempt in 0..=30 {
-        if let Some(permit) = crate::feed_scan_admission::FeedScanPermit::try_acquire_exclusive() {
-            return Some(permit);
+        if let Some(acquisition) =
+            crate::feed_scan_admission::FeedScanPermit::try_acquire_exclusive(step)
+        {
+            return Some(acquisition);
         }
         if !wait || attempt == 30 {
             return None;

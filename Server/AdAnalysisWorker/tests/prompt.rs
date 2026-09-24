@@ -260,6 +260,7 @@ fn sample_request() -> AdAnalysisRequest {
         transcript: TranscriptMetadata {
             language_code: "en".to_string(),
             audio_duration: 8.0,
+            declared_duration: None,
             model_identifier: Some("large-v3".to_string()),
             model_version: Some("v1".to_string()),
             model_tree_sha256: Some("abc".to_string()),

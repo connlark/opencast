@@ -447,6 +447,7 @@ async fn handle_create_job(
         podcast_id: request.podcast_id.clone(),
         episode_title: request.episode_title.clone(),
         podcast_title: request.podcast_title.clone(),
+        media_profile: request.media_profile,
     };
     let internal = internal_post(
         "https://transcription-job.opencast.internal/create",

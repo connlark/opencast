@@ -27,6 +27,13 @@ const BEARER = "integration-test-bearer-token";
 // cases raise the accumulated spend by 120 s.
 const GRANT = 7400;
 const ORIGIN_HOST = "https://origin.example.com";
+// The origin-fetch UA per declared media profile; pinned against the Worker's
+// constants by scripts/check-media-ua-pins.sh.
+const MEDIA_PROFILE = 2;
+const MEDIA_USER_AGENT = "OpenCast-Media/2";
+const LEGACY_MEDIA_USER_AGENT = "OpenCast-Media/1 (+https://opencast.mobile)";
+// Every origin request the Worker sends, in order, with its media headers.
+const originRequests = [];
 const ORIGIN_URL = `${ORIGIN_HOST}/audio.mp3`;
 const ORIGIN_REDIRECT_URL = `${ORIGIN_HOST}/redirect/audio.mp3`;
 const LARGE_ORIGIN_URL = `${ORIGIN_HOST}/large.mp3`;
@@ -66,6 +73,14 @@ let originSha256 = null;
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input.url;
+  if (url.startsWith(ORIGIN_HOST)) {
+    const headers = new Headers(typeof input === "string" ? init?.headers : input.headers);
+    originRequests.push({
+      url,
+      userAgent: headers.get("user-agent"),
+      acceptEncoding: headers.get("accept-encoding"),
+    });
+  }
   if (url === PUSHOVER_URL) {
     const rawBody = init?.body
       ?? (typeof input === "string" ? "" : await input.clone().text());
@@ -250,6 +265,7 @@ async function createJob({
   podcastId,
   episodeTitle,
   podcastTitle,
+  mediaProfile,
 }) {
   const response = await post("/v1/remote-transcription/jobs", {
     schema_version: 1,
@@ -262,6 +278,7 @@ async function createJob({
     podcast_id: podcastId,
     episode_title: episodeTitle,
     podcast_title: podcastTitle,
+    media_profile: mediaProfile,
   });
   expect(response.status).toBe(200);
   const body = await response.json();
@@ -746,6 +763,8 @@ describe("remote transcription dev lane", () => {
   });
 
   it("requests exact upload when origin staging fails, spending nothing", async () => {
+    const stagingFailedBefore =
+      (await counterValues(["origin_staging_failed"])).origin_staging_failed ?? 0;
     const job = await createJob({
       clientRequestId: "e2e-originfail-1",
       episodeId: "ep-originfail-1",
@@ -754,6 +773,8 @@ describe("remote transcription dev lane", () => {
     });
     const required = await waitForState(job.job_id, ["exact_upload_required"]);
     expect(required.job.error).toBeFalsy();
+    // The staging-failure cause is counted apart from mismatches, once.
+    await waitForCounter("origin_staging_failed", stagingFailedBefore + 1);
     expect(await bucketKeys(`raw/${job.job_id}/`)).toEqual([]);
     const balance = (await bootstrapBalance()).balance;
     expect(balance.available_seconds).toBe(GRANT - 1200);
@@ -917,6 +938,50 @@ describe("remote transcription dev lane", () => {
     await post(`/v1/remote-transcription/jobs/${job.job_id}/cancel`, {
       schema_version: 1,
     });
+  });
+
+  it("fetches the origin with the declared media profile, legacy when undeclared", async () => {
+    // Apps declaring profile 2 download with the URL-free UA; older apps
+    // declare nothing and keep the legacy one, so the server copy mirrors
+    // whichever app created the job — on every redirect hop. Nothing spent.
+    const balanceBefore = (await bootstrapBalance()).balance;
+    const legacyBefore =
+      (await counterValues(["jobs_created_legacy_media_profile"]))
+        .jobs_created_legacy_media_profile ?? 0;
+    const cases = [
+      { mediaProfile: MEDIA_PROFILE, userAgent: MEDIA_USER_AGENT, legacy: 0 },
+      { mediaProfile: undefined, userAgent: LEGACY_MEDIA_USER_AGENT, legacy: 1 },
+    ];
+    let legacyExpected = legacyBefore;
+    for (const [index, expected] of cases.entries()) {
+      originRequests.length = 0;
+      const job = await createJob({
+        clientRequestId: `e2e-media-profile-${index}`,
+        episodeId: `ep-media-profile-${index}`,
+        durationSeconds: 300,
+        enclosureUrl: ORIGIN_REDIRECT_URL,
+        mediaProfile: expected.mediaProfile,
+      });
+      await waitForState(job.job_id, ["waiting_for_device_source"]);
+      expect(originRequests.map(({ url }) => url)).toEqual([ORIGIN_REDIRECT_URL, ORIGIN_URL]);
+      for (const request of originRequests) {
+        expect(request.userAgent).toBe(expected.userAgent);
+        expect(request.acceptEncoding).toBe("identity");
+      }
+      legacyExpected += expected.legacy;
+      await waitForCounter("jobs_created_legacy_media_profile", legacyExpected);
+
+      const cancelResponse = await post(
+        `/v1/remote-transcription/jobs/${job.job_id}/cancel`,
+        { schema_version: 1 },
+      );
+      expect((await cancelResponse.json()).job.state).toBe("cancelled");
+      await expectJobStorageEmpty(job.job_id);
+    }
+    expect(MEDIA_USER_AGENT).not.toContain("://");
+    const balanceAfter = (await bootstrapBalance()).balance;
+    expect(balanceAfter.available_seconds).toBe(balanceBefore.available_seconds);
+    expect(balanceAfter.reserved_seconds).toBe(0);
   });
 
   it("cancels during staging/waiting and cleans up", async () => {

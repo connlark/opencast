@@ -567,7 +567,9 @@ fn validate_scope(request: &AdAnalysisRequest, output: Output, entire_request: b
         covered_end = covered_end.max(span.end_time);
         total + uncovered
     });
-    if entire_request && duration > (request.transcript.audio_duration * 0.25).max(600.0) {
+    if entire_request
+        && duration > crate::validation::episode_ad_budget_seconds(&request.transcript)
+    {
         result.issues.push("v3_ad_budget_exceeded".into());
     }
     result

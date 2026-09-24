@@ -13,7 +13,7 @@ const jsonc = text => text
   .replace(/"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g, match => (match[0] === '"' ? match : ''));
 const config = JSON.parse(jsonc(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8')));
 export async function harness(outbound, options = {}) {
-  const sends = [], fetches = [], events = [];
+  const sends = [], fetches = [], events = [], alerts = [];
   let instance;
   const modules = (worker, entry) => [
     { type: 'ESModule', path: root + worker + '/' + entry },
@@ -29,7 +29,7 @@ export async function harness(outbound, options = {}) {
       ...(options.realQueues?{queueConsumers:{'isolated-poll':{maxBatchSize:1,maxConcurrency:2,maxBatchTimeout:0.1,maxRetries:3,retryDelay:1,deadLetterQueue:'isolated-poll-dlq'},'isolated-poll-dlq':{maxBatchSize:10,maxBatchTimeout:0.1}}}:{}),
       // Production shape: the five-minute switch stays off unless a bounded
       // fixture experiment asks for it.
-      bindings: { TEST_REAL_QUEUE: options.realQueues?'true':'false',NOTIFICATION_ENVIRONMENT: 'development', NOTIFICATION_DISPATCHER_ADMISSION: 'true', NOTIFICATION_FEED_OBSERVATION: 'true', NOTIFICATION_FIVE_MINUTE_POLLING: options.fiveMinute?'true':'false', NOTIFICATION_CLEANUP: 'true' },
+      bindings: { TEST_REAL_QUEUE: options.realQueues?'true':'false',NOTIFICATION_ENVIRONMENT: options.environment ?? 'development', NOTIFICATION_DISPATCHER_ADMISSION: 'true', NOTIFICATION_FEED_OBSERVATION: 'true', NOTIFICATION_FIVE_MINUTE_POLLING: options.fiveMinute?'true':'false', NOTIFICATION_CLEANUP: 'true', ...(options.alertSecrets ?? {}) },
       serviceBindings: { NOTIFICATION_EVENTS: options.realQueues?{name:'delivery-runtime',entrypoint:'FeedEvents'}:async request => {
         const body = await request.text(); events.push(JSON.parse(body));
         const worker = await instance.getWorker('delivery-runtime');
@@ -37,7 +37,7 @@ export async function harness(outbound, options = {}) {
         if (options.loseReceipt?.()) { await response.text(); return new Response('lost', { status: 503 }); }
         return response;
       } },
-      outboundService: async request => { fetches.push(request.url); return outbound(request); },
+      outboundService: async request => { fetches.push(request.url); if (request.url === 'https://alerts.example.com/v1/notifications') alerts.push({ headers: Object.fromEntries(request.headers), body: await request.clone().json() }); return outbound(request); },
     },
     { name: 'delivery-runtime', modulesRoot: root, modules: modules('NotificationsWorker', 'tests/observation-entry.mjs'),
       compatibilityDate: '2026-09-03', compatibilityFlags: ['enable_request_signal'],
@@ -122,7 +122,7 @@ export async function harness(outbound, options = {}) {
     if(settle && (await first("SELECT COUNT(*) AS n FROM n_delivery WHERE state IN('pending','uncertain')")).n)await new Promise(resolve=>setTimeout(resolve,1000));
     }
   }
-  return { instance, db, run, first, rows, invoke, add, consume, polls, drain, deliver, sends, fetches, events, now };
+  return { instance, db, run, first, rows, invoke, add, consume, polls, drain, deliver, sends, fetches, events, alerts, now };
 }
 export const item = (id, at, title = `Episode ${id}`) => `<item><guid>${id}</guid><title>${title}</title>${at == null ? '' : `<pubDate>${new Date(at * 1000).toUTCString()}</pubDate>`}<enclosure url="https://audio.example.com/${id}.mp3"/></item>`;
 export const rss = items => `<rss><channel><title>Fixture</title>${items.join('')}</channel></rss>`;

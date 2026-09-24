@@ -157,6 +157,20 @@ describe("Page edge cases", () => {
     expect(html).toContain("url(&quot;https://media.example.com/art.jpg?x=\\\\%22)&quot;)");
   });
 
+  it("offers the browser's own player when script is off, with its src escaped", () => {
+    const payload: SharePayload = {
+      ...vector("almanac-fixture").payload,
+      audioURL: "http://media.example.com/a.mp3?x=1&lt=2&quot=3",
+    };
+    const html = render(payload, "1AAAAAAAAAAAAAAAA");
+    expect(html).toContain("<noscript><style>[data-needs-script]{display:none!important}[data-actions]{display:flex!important}</style></noscript>");
+    expect(html).toContain(
+      '<noscript><audio controls preload="none" src="https://media.example.com/a.mp3?x=1&amp;lt=2&amp;quot=3" class="mt-6 w-full"></audio></noscript>',
+    );
+    // The style, then what it hides: speed, the seek bar, both skips, Play, Share.
+    expect(html.match(/data-needs-script/g)).toHaveLength(7);
+  });
+
   it("writes descriptions for every combination", () => {
     const base = vector("almanac-fixture").payload;
     expect(shareDescription(base, 0)).toBe("The Example Almanac · 40:00");

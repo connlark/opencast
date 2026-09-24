@@ -246,6 +246,7 @@ fn content_hash_is_deterministic_and_content_sensitive() {
     let transcript = TranscriptMetadata {
         language_code: "en-US".to_string(),
         audio_duration: 1234.56,
+        declared_duration: None,
         model_identifier: Some("model".to_string()),
         model_version: None,
         model_tree_sha256: None,
@@ -392,6 +393,21 @@ fn revision_handles_bind_old_completed_records_and_failures_stay_readable() {
     );
     assert!(policy::poll_object_names("a3.unknown.fingerprint-123").is_none());
     assert!(policy::poll_object_names("a3.20260911b.../escape").is_none());
+    assert!(handle.starts_with("a3.20260924a."));
+    assert_eq!(
+        policy::poll_object_names("a3.20260911b.fingerprint-123").unwrap(),
+        vec![
+            "ad-analysis:v3:2026-09-11.2-recovery:flash38-medium:w800:r1:job:fingerprint-123"
+                .to_string()
+        ]
+    );
+    assert_eq!(
+        policy::poll_object_names("a3.20260911a.fingerprint-123").unwrap(),
+        vec![
+            "ad-analysis:v3:2026-09-11.1-word-boundaries:flash38-medium:w800:r1:job:fingerprint-123"
+                .to_string()
+        ]
+    );
     let record = JobRecord::FailedUpstream {
         job_id: handle,
         status: 422,

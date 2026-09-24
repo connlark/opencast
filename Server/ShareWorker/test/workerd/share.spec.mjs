@@ -213,7 +213,7 @@ describe("download proxy", () => {
     const [{ request, init }] = upstream;
     expect(request.url).toBe(almanac.payload.audioURL);
     expect(request.method).toBe("GET");
-    expect(request.headers.get("user-agent")).toBe("opencast-share/1 (+https://opencast.mobile)");
+    expect(request.headers.get("user-agent")).toBe("opencast-share/1");
     expect([...request.headers.keys()].sort()).toEqual(["accept-encoding", "user-agent"]);
     expect(request.headers.get("accept-encoding")).toBe("identity");
     expect(init.redirect).toBe("follow");

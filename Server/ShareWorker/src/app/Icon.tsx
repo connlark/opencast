@@ -5,9 +5,11 @@ const PATHS = {
   forward: "M12 5V2l5 4-5 4V7a6 6 0 1 0 6 6h2a8 8 0 1 1-8-8Z",
   download: "M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 17v3h16v-3",
   share: "M12 3v12M12 3 7.5 7.5M12 3l4.5 4.5M6 11H5v10h14V11h-1",
+  more: "M5 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm7 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z",
+  gauge: "m12 14 4-4M3.34 19a10 10 0 1 1 17.32 0",
 } as const;
 
-const STROKED = new Set<keyof typeof PATHS>(["download", "share"]);
+const STROKED = new Set<keyof typeof PATHS>(["download", "share", "gauge"]);
 
 /** Decorative: every control that uses one also carries a text label. */
 export function Icon({ name, size = 22 }: { name: keyof typeof PATHS; size?: number }) {

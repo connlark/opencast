@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SharePayload } from "../shared/payload.ts";
 import { formatClock } from "../shared/start.ts";
 import { cssURL, downloadPath, playableAudioURL } from "../shared/urls.ts";
+import { ArtworkStage } from "./ArtworkStage.tsx";
 import { BrandMark } from "./Brand.tsx";
 import { Icon } from "./Icon.tsx";
 
@@ -13,7 +14,7 @@ export interface PlayerProps {
   canonical: string;
 }
 
-const RATES = [1, 1.25, 1.5, 1.75, 2, 0.75];
+const SPEED_PANEL_ID = "speed-panel";
 const BACK_SECONDS = 15;
 const FORWARD_SECONDS = 30;
 const HAVE_METADATA = 1;
@@ -30,6 +31,7 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const seekRef = useRef<HTMLInputElement>(null);
   const artworkRef = useRef<HTMLImageElement>(null);
+  const speedButtonRef = useRef<HTMLButtonElement>(null);
   const pendingSeek = useRef<number | null>(null);
   // Set by any seek the listener makes, so a later loadedmetadata (on iOS it
   // waits for the first play) does not jump back to ?t= or the saved spot.
@@ -39,6 +41,7 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
   const [time, setTime] = useState(start);
   const [duration, setDuration] = useState(payload.durationSeconds);
   const [rate, setRate] = useState(1);
+  const [speedOpen, setSpeedOpen] = useState(false);
   const [scrub, setScrub] = useState<number | null>(null);
   const [audioNotice, setAudioNotice] = useState<AudioNotice>(null);
   const [shareNotice, setShareNotice] = useState<ShareNotice>(null);
@@ -54,6 +57,25 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
       setShareLabel("Copy link");
     }
   }, []);
+
+  // Escape closes the speed panel, and hands focus back if it was inside.
+  useEffect(() => {
+    if (!speedOpen) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      const hadFocus = document.getElementById(SPEED_PANEL_ID)?.contains(document.activeElement) ?? false;
+      setSpeedOpen(false);
+      if (hadFocus) {
+        speedButtonRef.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [speedOpen]);
 
   useEffect(() => {
     if (shareNotice !== "copied") {
@@ -225,6 +247,13 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
     return () => input?.removeEventListener("change", commitSeek);
   }, [commitSeek]);
 
+  // The browser took the touch away mid-drag (a scroll, a system gesture): no
+  // pointerup or change follows, so drop the preview or the thumb stays frozen.
+  const cancelSeek = () => {
+    pendingSeek.current = null;
+    setScrub(null);
+  };
+
   const previewSeek = (event: { currentTarget: HTMLInputElement }) => {
     const value = Number(event.currentTarget.value);
     pendingSeek.current = value;
@@ -264,8 +293,7 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
     setTime(next);
   };
 
-  const cycleRate = () => {
-    const next = RATES[(RATES.indexOf(rate) + 1) % RATES.length] ?? 1;
+  const chooseRate = (next: number) => {
     if (audioRef.current) {
       audioRef.current.playbackRate = next;
     }
@@ -298,6 +326,21 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
 
   return (
     <div className="relative isolate flex flex-col items-center gap-6 pb-6 pt-4 md:flex-row md:items-center md:gap-10 md:pt-10">
+      {/* Sits in the header row (bottom-full of this box, which starts where
+          the header ends, on the same gutter) but belongs to the hydrated
+          player. Shows ⋯ at normal speed, the speed otherwise. */}
+      <button
+        ref={speedButtonRef}
+        type="button"
+        data-needs-script
+        aria-label={`Playback speed, ${rate}×`}
+        aria-expanded={speedOpen}
+        aria-controls={SPEED_PANEL_ID}
+        onClick={() => setSpeedOpen((open) => !open)}
+        className="absolute bottom-full right-0 flex min-h-11 min-w-11 items-center justify-center rounded-full px-2 text-sm font-semibold tabular-nums ring-1 ring-border"
+      >
+        {rate === 1 ? <Icon name="more" size={22} /> : `${rate}×`}
+      </button>
       {showArtwork && (
         <div
           aria-hidden="true"
@@ -306,30 +349,38 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
         />
       )}
       <div className="flex shrink-0 justify-center">
-        {showArtwork ? (
-          <img
-            ref={artworkRef}
-            src={payload.artworkURL}
-            alt=""
-            width={320}
-            height={320}
-            decoding="async"
-            className="aspect-square w-72 max-w-[80vw] rounded-2xl object-cover shadow-2xl ring-1 ring-black/10 md:w-80"
-          />
-        ) : (
-          <div className="flex aspect-square w-72 max-w-[80vw] items-center justify-center rounded-2xl bg-surface-secondary ring-1 ring-border md:w-80">
-            <BrandMark size={96} className="opacity-80" />
-          </div>
-        )}
+        <ArtworkStage open={speedOpen} onOpenChange={setSpeedOpen} rate={rate} onRate={chooseRate} panelID={SPEED_PANEL_ID}>
+          {showArtwork ? (
+            <img
+              ref={artworkRef}
+              src={payload.artworkURL}
+              alt=""
+              width={320}
+              height={320}
+              decoding="async"
+              draggable={false}
+              className="object-cover"
+            />
+          ) : (
+            <div className="flex items-center justify-center bg-surface-secondary">
+              <BrandMark size={96} className="opacity-80" />
+            </div>
+          )}
+        </ArtworkStage>
       </div>
 
       <div className="flex w-full min-w-0 flex-1 flex-col text-center md:text-left">
-        <h1 className="text-balance text-xl font-semibold leading-snug md:text-2xl">{payload.title}</h1>
-        {payload.podcastTitle !== "" && <p className="mt-1 text-sm text-muted">{payload.podcastTitle}</p>}
+        {/* Titles can be one unbroken run (a URL, a slug): break it rather than run off the screen. */}
+        <h1 className="text-balance wrap-break-word text-xl font-semibold leading-snug md:text-2xl">{payload.title}</h1>
+        {payload.podcastTitle !== "" && <p className="mt-1 wrap-break-word text-sm text-muted">{payload.podcastTitle}</p>}
 
         <audio ref={audioRef} src={playableAudioURL(payload.audioURL)} preload="metadata" playsInline />
+        {/* Without script the controls below are inert (Page hides them); the
+            browser's own player takes their place. Raw HTML, so hydration
+            leaves the noscript alone instead of building an audio inside it. */}
+        <noscript dangerouslySetInnerHTML={{ __html: noScriptPlayer(payload.audioURL) }} />
 
-        <div className="mt-6">
+        <div data-needs-script className="mt-6">
           <input
             ref={seekRef}
             type="range"
@@ -343,6 +394,7 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
             style={{ "--track": `linear-gradient(to right, var(--accent) ${progress}%, var(--border) ${progress}%)` } as Record<string, string>}
             onInput={previewSeek}
             onPointerUp={commitSeek}
+            onPointerCancel={cancelSeek}
             onKeyUp={commitSeek}
           />
           <div aria-hidden="true" className="-mt-2 flex justify-between text-xs tabular-nums text-muted">
@@ -351,19 +403,22 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-center gap-4 md:justify-start">
-          <button type="button" onClick={cycleRate} aria-label={`Playback speed, ${rate}×`} className={`${transportButton} px-2 text-sm font-semibold tabular-nums`}>
-            {rate}×
-          </button>
-          <button type="button" onClick={() => skip(-BACK_SECONDS)} className={transportButton}>
-            <Icon name="back" size={20} />
-            <span aria-hidden="true" className="text-[0.625rem] font-semibold leading-none">{BACK_SECONDS}</span>
-            <span className="sr-only">Back {BACK_SECONDS} seconds</span>
-          </button>
+        {/* One two-column grid for both rows, so the controls line up: each
+            skip button centres over the pill below it and Play (lifted out of
+            the flow, not the tab order) sits over the seam between them. */}
+        <div data-actions className="relative mx-auto mt-4 grid w-fit grid-cols-2 items-center gap-x-3 gap-y-5 md:mx-0">
+          <div data-needs-script className="flex h-16 items-center justify-center">
+            <button type="button" onClick={() => skip(-BACK_SECONDS)} className={transportButton}>
+              <Icon name="back" size={20} />
+              <span aria-hidden="true" className="text-[0.625rem] font-semibold leading-none">{BACK_SECONDS}</span>
+              <span className="sr-only">Back {BACK_SECONDS} seconds</span>
+            </button>
+          </div>
           <button
             type="button"
+            data-needs-script
             onClick={togglePlayback}
-            className="flex h-16 w-16 items-center justify-center rounded-full bg-cta text-cta-ink shadow-lg"
+            className="absolute left-1/2 top-0 flex h-16 w-16 -translate-x-1/2 items-center justify-center rounded-full bg-cta text-cta-ink shadow-lg"
           >
             {waiting && playing ? (
               <span className="h-6 w-6 animate-spin rounded-full border-2 border-current border-t-transparent motion-reduce:animate-none" />
@@ -372,19 +427,18 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
             )}
             <span className="sr-only">{playing ? "Pause" : "Play"}</span>
           </button>
-          <button type="button" onClick={() => skip(FORWARD_SECONDS)} className={transportButton}>
-            <Icon name="forward" size={20} />
-            <span aria-hidden="true" className="text-[0.625rem] font-semibold leading-none">{FORWARD_SECONDS}</span>
-            <span className="sr-only">Forward {FORWARD_SECONDS} seconds</span>
-          </button>
-        </div>
-
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-3 md:justify-start">
-          <a href={download} download className={actionButton}>
+          <div data-needs-script className="flex h-16 items-center justify-center">
+            <button type="button" onClick={() => skip(FORWARD_SECONDS)} className={transportButton}>
+              <Icon name="forward" size={20} />
+              <span aria-hidden="true" className="text-[0.625rem] font-semibold leading-none">{FORWARD_SECONDS}</span>
+              <span className="sr-only">Forward {FORWARD_SECONDS} seconds</span>
+            </button>
+          </div>
+          <a href={download} download className={`${actionButton} justify-center`}>
             <Icon name="download" size={18} />
             Download
           </a>
-          <button type="button" onClick={share} className={actionButton}>
+          <button type="button" data-needs-script onClick={share} className={`${actionButton} justify-center`}>
             <Icon name="share" size={18} />
             {shareLabel}
           </button>
@@ -420,6 +474,13 @@ export function Player({ payload, token, start, canonical }: PlayerProps) {
       </div>
     </div>
   );
+}
+
+function noScriptPlayer(audioURL: string): string {
+  // href never holds a quote or angle bracket (the URL parser encodes them);
+  // & still needs escaping so a query like &lt= is not read as an entity.
+  const src = playableAudioURL(audioURL).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  return `<audio controls preload="none" src="${src}" class="mt-6 w-full"></audio>`;
 }
 
 function readPosition(key: string): number {

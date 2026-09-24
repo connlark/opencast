@@ -10,6 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run -c vitest.unit.config.mjs",
     "test:integration": "yarn build && vitest run -c vitest.workerd.config.mjs",
+    "test:e2e": "yarn build && playwright test",
+    "test:e2e:webkit": "yarn build && playwright test --project=\"iphone*\"",
+    "test:e2e:ui": "yarn build && playwright test --ui",
     "deploy": "yarn build && wrangler deploy",
     "deploy:prod-staging": "yarn build:prod-staging && CLOUDFLARE_ENV=prod-staging wrangler deploy",
     "deploy:production": "yarn build:production && CLOUDFLARE_ENV=production wrangler deploy",
@@ -25,6 +28,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.54.4",
     "@cloudflare/vitest-pool-workers": "catalog:",
+    "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "^24",
     "@types/react": "^19.2.18",

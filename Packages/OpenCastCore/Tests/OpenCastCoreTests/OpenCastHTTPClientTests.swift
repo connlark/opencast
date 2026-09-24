@@ -1,6 +1,6 @@
 import CryptoKit
 import Foundation
-import OpenCastCore
+@testable import OpenCastCore
 import Testing
 
 @Suite("OpenCast HTTP client")
@@ -385,6 +385,23 @@ struct OpenCastHTTPClientTests {
         #expect(streamingRangeConfiguration.timeoutIntervalForResource == OpenCastURLSessionFactory.streamingRangeResourceTimeout)
         #expect(streamingRangeConfiguration.urlCache == nil)
         #expect(streamingRangeConfiguration.httpAdditionalHeaders?["User-Agent"] as? String == OpenCastURLSessionFactory.userAgent)
+    }
+
+    @Test("General user agent is URL-free and every session's default")
+    func generalUserAgentIsURLFreeSessionDefault() {
+        #expect(OpenCastURLSessionFactory.generalUserAgent(version: "2026.9.3") == "OpenCast/2026.9.3")
+        #expect(OpenCastURLSessionFactory.userAgent == OpenCastURLSessionFactory.generalUserAgent(version: "1.0"))
+        #expect(!OpenCastURLSessionFactory.userAgent.contains("://"))
+        // Downloads override this per request with the media profile; the
+        // session default underneath stays the general identity.
+        for configuration in [
+            OpenCastURLSessionFactory.sharedConfiguration(),
+            OpenCastURLSessionFactory.feedConfiguration(),
+            OpenCastURLSessionFactory.downloadConfiguration(),
+            OpenCastURLSessionFactory.streamingRangeConfiguration(),
+        ] {
+            #expect(configuration.httpAdditionalHeaders?["User-Agent"] as? String == OpenCastURLSessionFactory.userAgent)
+        }
     }
 
     @Test("Shared configurations for one cache directory share one URLCache")

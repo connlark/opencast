@@ -17,6 +17,59 @@ pub const RETRY_AFTER_MAX_SECONDS: i64 = 86400;
 // private observation deadlines remain unchanged.
 pub const SCAN_DEADLINE_SECONDS: u64 = 15;
 pub const INACTIVITY_SECONDS: u64 = 5;
+pub const STEP_DEADLINE_SECONDS: u64 = 200;
+pub const STALL_RECOVERY_COMPLETIONS: i64 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StallRollup {
+    pub completed_last_5min: i64,
+    pub healthy_overdue: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StallAlert {
+    Armed,
+    Onset { stall_since: i64 },
+    Hourly { stall_since: i64, hour: i64 },
+    Recovery { stall_since: i64 },
+}
+
+/// Pure state machine for dispatcher alerts. Durable state is written by the
+/// caller before sending; a failed send therefore retries the same idempotency
+/// key while `stall_alerted_at` remains zero.
+pub fn stall_transition(
+    rollup: StallRollup,
+    state: &str,
+    stall_since: i64,
+    stall_alerted_at: i64,
+    alert_armed_at: i64,
+    now: i64,
+    secrets_present: bool,
+) -> Option<StallAlert> {
+    if !secrets_present {
+        return None;
+    }
+    if alert_armed_at == 0 {
+        return Some(StallAlert::Armed);
+    }
+    let stalled = rollup.completed_last_5min == 0 && rollup.healthy_overdue >= 50;
+    if state == "stalled" {
+        if rollup.completed_last_5min >= STALL_RECOVERY_COMPLETIONS {
+            return Some(StallAlert::Recovery { stall_since });
+        }
+        if stall_alerted_at == 0 {
+            return Some(StallAlert::Onset { stall_since });
+        }
+        if now.saturating_sub(stall_alerted_at) >= 3600 {
+            return Some(StallAlert::Hourly {
+                stall_since,
+                hour: now.saturating_sub(stall_since).div_euclid(3600),
+            });
+        }
+        return None;
+    }
+    stalled.then_some(StallAlert::Onset { stall_since: now })
+}
 
 pub fn contention_delay(execution: &str) -> i64 {
     5 + (execution
@@ -292,5 +345,66 @@ mod tests {
         for id in ["a", "b", "uuid-123", "uuid-999"] {
             assert!((5..=15).contains(&contention_delay(id)));
         }
+    }
+
+    #[test]
+    fn stall_state_machine_has_onset_hourly_recovery_and_armed_hysteresis() {
+        let stalled = StallRollup {
+            completed_last_5min: 0,
+            healthy_overdue: 50,
+        };
+        assert_eq!(
+            stall_transition(stalled, "clear", 0, 0, 1, 100, true),
+            Some(StallAlert::Onset { stall_since: 100 })
+        );
+        assert_eq!(
+            stall_transition(stalled, "stalled", 100, 200, 1, 300, true),
+            None
+        );
+        assert_eq!(
+            stall_transition(stalled, "stalled", 100, 200, 1, 3800, true),
+            Some(StallAlert::Hourly {
+                stall_since: 100,
+                hour: 1
+            })
+        );
+        assert_eq!(
+            stall_transition(
+                StallRollup {
+                    completed_last_5min: 4,
+                    healthy_overdue: 50
+                },
+                "stalled",
+                100,
+                200,
+                1,
+                300,
+                true
+            ),
+            None
+        );
+        assert_eq!(
+            stall_transition(
+                StallRollup {
+                    completed_last_5min: 5,
+                    healthy_overdue: 50
+                },
+                "stalled",
+                100,
+                200,
+                1,
+                300,
+                true
+            ),
+            Some(StallAlert::Recovery { stall_since: 100 })
+        );
+        assert_eq!(
+            stall_transition(stalled, "clear", 0, 0, 0, 100, true),
+            Some(StallAlert::Armed)
+        );
+        assert_eq!(
+            stall_transition(stalled, "clear", 0, 0, 0, 100, false),
+            None
+        );
     }
 }

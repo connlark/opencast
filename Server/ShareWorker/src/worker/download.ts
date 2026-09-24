@@ -4,7 +4,8 @@ import { logEvent } from "./log.ts";
 
 const DEFAULT_MAX_BYTES = 1024 ** 3;
 const DEFAULT_HEADER_TIMEOUT_MS = 10_000;
-const USER_AGENT = "opencast-share/1 (+https://opencast.mobile)";
+// CBC's Akamai edge resets connections for URL-bearing User-Agent values.
+const USER_AGENT = "opencast-share/1";
 const FORWARDED_REQUEST_HEADERS = ["range", "if-range"];
 const PASSTHROUGH_IDENTITY_HEADERS = ["last-modified", "etag"];
 const PASSTHROUGH_RANGE_HEADERS = ["content-range", "accept-ranges"];

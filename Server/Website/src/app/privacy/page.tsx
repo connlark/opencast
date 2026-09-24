@@ -336,8 +336,9 @@ export default function PrivacyPage() {
                   </li>
                   <li>
                     Finished results, meaning ad spans with short evidence quotes,
-                    chapter titles, and summaries, are kept for at most 30 minutes
-                    so the app can collect them, then purged.
+                    chapter titles, and summaries, are kept for up to 24 hours so
+                    the app can collect them, then purged. Failed runs are cleared
+                    within 30 minutes.
                   </li>
                   <li>
                     Google processes the text under its Gemini API terms. opencast
@@ -469,7 +470,7 @@ export default function PrivacyPage() {
                     {supportEmail}
                   </Link>{" "}
                   with privacy questions. Effective date: June 21, 2026. Last
-                  updated: September 12, 2026. When this policy changes, the date
+                  updated: September 24, 2026. When this policy changes, the date
                   changes with it.
                 </p>
               </section>

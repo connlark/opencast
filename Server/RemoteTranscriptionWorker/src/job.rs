@@ -556,6 +556,12 @@ pub struct JobRecord {
     pub ad_analysis_attempts: u32,
     #[serde(default)]
     pub ad_analysis_submitted_at: Option<i64>,
+    /// Media request profile the app declared on create; `None` for app
+    /// versions that predate the declaration and for records created before
+    /// it existed. Selects the origin-fetch UA (`origin::media_user_agent`).
+    /// Additive `#[serde(default)]`: old records decode with `None`.
+    #[serde(default)]
+    pub media_profile: Option<u32>,
 }
 
 impl JobRecord {
@@ -633,6 +639,7 @@ impl JobRecord {
             ad_analysis_job_id: None,
             ad_analysis_attempts: 0,
             ad_analysis_submitted_at: None,
+            media_profile: None,
         }
     }
 
@@ -1337,6 +1344,13 @@ mod tests {
         let decoded: JobRecord = serde_json::from_value(minimal).expect("decode");
         assert!(!decoded.origin_unsafe);
         assert!(!decoded.upload_completed);
+        // A record created before the media-profile declaration keeps the
+        // legacy origin-fetch UA its app downloaded with.
+        assert_eq!(decoded.media_profile, None);
+        assert_eq!(
+            crate::origin::media_user_agent(decoded.media_profile),
+            crate::origin::LEGACY_MEDIA_USER_AGENT
+        );
         assert_eq!(decoded.upload_id, None);
         assert_eq!(decoded.upload_part_count, None);
         // RTW-5 backstop fields are additive: old records decode with the

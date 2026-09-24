@@ -1518,6 +1518,15 @@ struct EpisodeAdAnalysisStoreTests {
         #expect(AppAttestRequestBinding.hexString(hash) == "c079e99784a3722a3b90e2523920fcca7c99a429ec3ad37e192acc8a87458d0a")
     }
 
+    @Test("Ad-analysis request carries the feed's declared runtime only when known")
+    func adAnalysisRequestCarriesDeclaredDurationOnlyWhenKnown() throws {
+        var request = makeAPIRequest(requestID: "client-declared")
+        #expect(try EpisodeAdAnalysisJSONCoding.canonicalPayloadString(request).contains("declared_duration") == false)
+        request.transcript.declaredDuration = 2471
+        let payload = try EpisodeAdAnalysisJSONCoding.canonicalPayloadString(request)
+        #expect(payload.contains(#""audio_duration":30,"declared_duration":2471,"fingerprint":"fingerprint""#))
+    }
+
     private func makeAPIRequest(requestID: String) -> EpisodeAdAnalysisAPIRequest {
         EpisodeAdAnalysisAPIRequest(
             schemaVersion: 1,

@@ -90,7 +90,11 @@ try {
  for(const file of files.filter(file=>file>'0026_current_schema_contraction.sql'))await apply(db,file);
  const afterRegistrationMigration=await capture();
  for(const row of afterRegistrationMigration.n_install){assert.equal(row.registration_revision,1);delete row.registration_revision;}
- assert.deepEqual(afterRegistrationMigration,retained,'registration-trigger migration preserves retained values');
+ for(const row of afterRegistrationMigration.n_poll_dispatch){
+  assert.deepEqual({stall_state:row.stall_state,stall_since:row.stall_since,stall_alerted_at:row.stall_alerted_at,alert_armed_at:row.alert_armed_at},{stall_state:'clear',stall_since:0,stall_alerted_at:0,alert_armed_at:0});
+  delete row.stall_state;delete row.stall_since;delete row.stall_alerted_at;delete row.alert_armed_at;
+ }
+ assert.deepEqual(afterRegistrationMigration,retained,'registration and alerting migrations preserve retained values');
  for(const file of files)await apply(fresh,file);
  const finalSchema=(await schema()).filter(r=>!r.name.startsWith('_cf_'));
  assert.deepEqual((await fresh.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all()).results.filter(r=>!r.name.startsWith('_cf_')),finalSchema);

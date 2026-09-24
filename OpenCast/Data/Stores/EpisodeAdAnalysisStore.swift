@@ -563,7 +563,8 @@ final class EpisodeAdAnalysisStore {
         var relativePath: String?
         do {
             if !retryFailed, let blocked = try await automaticReplayError(for: document) { throw blocked }
-            let preparation = try await prepareAnalysis(transcript: document)
+            let declaredDuration = Self.declaredDuration(for: document.episodeID, modelContext: modelContext)
+            let preparation = try await prepareAnalysis(transcript: document, declaredDuration: declaredDuration)
             var request = preparation.request
             request.retryFailed = retryFailed
             relativePath = preparation.relativePath
@@ -675,9 +676,22 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
+    /// The feed's declared runtime for the episode, when the cache has one.
+    /// Dynamic ad insertion serves files longer than this; the server counts
+    /// the excess toward its episode ad budget instead of failing the
+    /// analysis closed on ad-heavy inventory.
+    private static func declaredDuration(for episodeID: String, modelContext: ModelContext) -> TimeInterval? {
+        let descriptor = FetchDescriptor<EpisodeCacheRecord>(predicate: #Predicate { $0.episodeID == episodeID })
+        guard let duration = try? modelContext.fetch(descriptor).first?.duration,
+              duration.isFinite, duration > 0
+        else { return nil }
+        return duration
+    }
+
     @concurrent
     private func prepareAnalysis(
-        transcript document: EpisodeTranscriptDocument
+        transcript document: EpisodeTranscriptDocument,
+        declaredDuration: TimeInterval? = nil
     ) async throws -> EpisodeAdAnalysisPreparation {
         try await preparationGate()
         try Task.checkCancellation()
@@ -702,7 +716,8 @@ final class EpisodeAdAnalysisStore {
             transcript: document,
             segments: segments,
             fingerprint: fingerprint,
-            requestID: UUID().uuidString
+            requestID: UUID().uuidString,
+            declaredDuration: declaredDuration
         )
         SoundLabResponsivenessDiagnostics.mark(
             "analysis-normalize-fingerprint-end",
@@ -761,7 +776,8 @@ final class EpisodeAdAnalysisStore {
             }
             var resubmit: (@Sendable () async throws -> EpisodeAdAnalysisSubmitOutcome)?
             if let transcript = resumedTranscript {
-                let preparation = try await prepareAnalysis(transcript: transcript)
+                let declaredDuration = Self.declaredDuration(for: episodeID, modelContext: modelContext)
+                let preparation = try await prepareAnalysis(transcript: transcript, declaredDuration: declaredDuration)
                 if preparation.fingerprint == context.transcriptFingerprint {
                     resubmit = { [client, fileStore] in
                         let outcome = try await client.analyze(preparation.request)
@@ -928,7 +944,8 @@ final class EpisodeAdAnalysisStore {
         transcript document: EpisodeTranscriptDocument,
         segments: [OpenCastTranscriptSegment],
         fingerprint: String,
-        requestID: String
+        requestID: String,
+        declaredDuration: TimeInterval?
     ) -> EpisodeAdAnalysisAPIRequest {
         EpisodeAdAnalysisAPIRequest(
             schemaVersion: EpisodeAdAnalysisContract.schemaVersion,
@@ -941,6 +958,7 @@ final class EpisodeAdAnalysisStore {
             transcript: EpisodeAdAnalysisAPITranscriptMetadata(
                 languageCode: document.languageCode,
                 audioDuration: document.audioDuration,
+                declaredDuration: declaredDuration,
                 modelIdentifier: document.modelIdentifier,
                 modelVersion: document.modelVersion,
                 modelTreeSHA256: document.modelTreeSHA256,

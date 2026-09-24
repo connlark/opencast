@@ -123,9 +123,12 @@ pub async fn consume(
     let step_env = env.clone();
     let step_fence = fence.clone();
     let step_wake = wake.clone();
-    let result = crate::invocation_owner::run_with_abort_signal(signal, async move {
-        step(step_env, step_fence, step_wake, row).await
-    })
+    let result = crate::invocation_owner::run_with_abort_signal_and_deadline(
+        signal,
+        async move { step(step_env, step_fence, step_wake, row).await },
+        policy::STEP_DEADLINE_SECONDS,
+        wake.step,
+    )
     .await;
     if result.is_none() {
         // A dropped scan cannot record its own failure. If it had sent a
@@ -235,8 +238,21 @@ async fn step(env: Env, fence: Fence, wake: dispatch::Wakeup, row: Value) -> Res
         200 => {}
         // Memory admission pressure is never a handling failure.
         429 => {
-            console_log!("{}", json!({"event":"poll_outcome","outcome":"scan_busy"}));
-            let delay = policy::contention_delay(&format!("{}{}", fence.feed, wake.step));
+            stat(&db, "scan_busy").await?;
+            let view = crate::feed_scan_admission::FeedScanPermit::view();
+            console_log!(
+                "{}",
+                json!({"event":"poll_outcome","outcome":"scan_busy","active_permits":view.active_permits,"oldest_permit_age_seconds":view.oldest_permit_age_seconds,"holder_step":view.holder_step,"isolate":view.isolate})
+            );
+            let delay = if view.oldest_permit_age_seconds >= 60 {
+                console_warn!(
+                    "{}",
+                    json!({"event":"scan_permit_stalled","owner_age_seconds":view.oldest_permit_age_seconds,"isolate":view.isolate})
+                );
+                60
+            } else {
+                policy::contention_delay(&format!("{}{}", fence.feed, wake.step))
+            };
             return proceed(&env, &db, &fence, &wake, delay, "scan_busy").await;
         }
         // Another scan owns the feed. Look again when its lease can end.

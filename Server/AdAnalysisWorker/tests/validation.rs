@@ -341,8 +341,15 @@ fn structural_constants_match_the_step4_contract() {
     assert_eq!(MAX_SPAN_DURATION_SECONDS, 600.0);
     assert_eq!(MIN_BREAK_DURATION_SECONDS, 15.0);
     assert_eq!(MAX_SPAN_REQUEST_COVERAGE, 0.8);
-    assert_eq!(AD_BUDGET_EPISODE_FRACTION, 0.25);
+    // 0.25 until 2026-09-24: DAI-heavy inventory (33 % measured) failed v3
+    // closed, so the fraction rose and a plausible declared runtime adds the
+    // served-file excess (`episode_ad_budget_counts_declared_runtime_excess_as_inserted_ads`).
+    assert_eq!(AD_BUDGET_EPISODE_FRACTION, 0.40);
     assert_eq!(AD_BUDGET_FLOOR_SECONDS, 600.0);
+    assert_eq!(
+        opencast_ad_analysis_worker::validation::DECLARED_DURATION_MIN_FRACTION,
+        0.5
+    );
     assert_eq!(EVIDENCE_PROBE_WORDS, 6);
     assert_eq!(EVIDENCE_MIN_WORDS_ACCEPT, 2);
     assert_eq!(EVIDENCE_MIN_WORDS_REANCHOR, 3);
@@ -785,15 +792,15 @@ fn sub_15_second_merged_spans_are_dropped_as_too_short() {
 
 #[test]
 fn episode_ad_budget_drops_lowest_confidence_spans_first() {
-    // 200 segments x 20s = 4000s audio => budget max(1000, 600) = 1000s.
-    // Four 300s spans total 1200s; the 0.7-confidence one must die.
-    let request = wide_request(200, 20.0);
+    // 200 segments x 10s = 2000s audio => budget max(40 % = 800, 600) = 800s.
+    // Four 240s spans total 960s; the 0.7-confidence one must die.
+    let request = wide_request(200, 10.0);
     let output = ModelOutput::from_spans(vec![
         span(
             AdSpanKind::HostReadAd,
             "First",
             0,
-            14,
+            23,
             0.9,
             "segment 0 unique pepper marker zero",
         ),
@@ -801,7 +808,7 @@ fn episode_ad_budget_drops_lowest_confidence_spans_first() {
             AdSpanKind::InsertedAd,
             "Second",
             50,
-            64,
+            73,
             0.95,
             "segment 50 unique pepper marker fifty",
         ),
@@ -809,7 +816,7 @@ fn episode_ad_budget_drops_lowest_confidence_spans_first() {
             AdSpanKind::HostReadAd,
             "Third",
             100,
-            114,
+            123,
             0.7,
             "segment 100 unique pepper marker hundred",
         ),
@@ -817,7 +824,7 @@ fn episode_ad_budget_drops_lowest_confidence_spans_first() {
             AdSpanKind::InsertedAd,
             "Fourth",
             150,
-            164,
+            173,
             0.99,
             "segment 150 unique pepper marker onefifty",
         ),
@@ -827,7 +834,55 @@ fn episode_ad_budget_drops_lowest_confidence_spans_first() {
 
     assert_eq!(spans.len(), 3);
     assert!(spans.iter().all(|span| span.start_segment_id != 100));
-    assert!(warnings.contains(&"ad_budget_exceeded:100-114".to_string()));
+    assert!(warnings.contains(&"ad_budget_exceeded:100-123".to_string()));
+}
+
+#[test]
+fn episode_ad_budget_counts_declared_runtime_excess_as_inserted_ads() {
+    use opencast_ad_analysis_worker::validation::{
+        episode_ad_budget_seconds, AD_BUDGET_EPISODE_FRACTION, AD_BUDGET_FLOOR_SECONDS,
+    };
+    assert_eq!(AD_BUDGET_EPISODE_FRACTION, 0.40);
+    assert_eq!(AD_BUDGET_FLOOR_SECONDS, 600.0);
+    // The 2026-09-24 Podlandia file: 3,714.22 s served against a 2,471 s
+    // declared runtime, so 1,243.22 s of it is inserted advertising.
+    let mut request = wide_request(10, 371.422);
+    let audio_only = episode_ad_budget_seconds(&request.transcript);
+    assert!((audio_only - 0.40 * request.transcript.audio_duration).abs() < 1e-6);
+    request.transcript.declared_duration = Some(2471.0);
+    let with_excess = episode_ad_budget_seconds(&request.transcript);
+    let expected = 0.40 * 2471.0 + (request.transcript.audio_duration - 2471.0);
+    assert!(
+        (with_excess - expected).abs() < 1e-6,
+        "{with_excess} vs {expected}"
+    );
+    assert!(
+        with_excess > 1235.2,
+        "the measured 1,235.2 s of pods must fit"
+    );
+    // Short files keep the floor and still add the excess.
+    let mut short = wide_request(10, 60.0);
+    short.transcript.declared_duration = Some(400.0);
+    assert!((episode_ad_budget_seconds(&short.transcript) - (600.0 + 200.0)).abs() < 1e-6);
+    // Declared runtimes at or above the audio, shorter than half of it, or
+    // non-finite earn nothing over the audio-only budget.
+    for declared in [
+        request.transcript.audio_duration,
+        4000.0,
+        1857.0,
+        100.0,
+        0.0,
+        -5.0,
+        f64::NAN,
+        f64::INFINITY,
+    ] {
+        request.transcript.declared_duration = Some(declared);
+        let budget = episode_ad_budget_seconds(&request.transcript);
+        assert!(
+            (budget - audio_only).abs() < 1e-6,
+            "declared {declared}: {budget}"
+        );
+    }
 }
 
 #[test]
@@ -1345,6 +1400,7 @@ fn request_with_segments(segments: Vec<TranscriptSegment>, duration: f64) -> AdA
         transcript: TranscriptMetadata {
             language_code: "en".to_string(),
             audio_duration: duration,
+            declared_duration: None,
             model_identifier: Some("large-v3".to_string()),
             model_version: Some("v1".to_string()),
             model_tree_sha256: Some("abc".to_string()),

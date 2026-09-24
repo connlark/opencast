@@ -57,7 +57,11 @@ BASE_URL = os.environ.get(
 ).rstrip("/")
 R2_BUCKET = os.environ.get("OPENCAST_REMOTE_TRANSCRIPTION_R2_BUCKET", "").strip()
 CACHE_DIR = Path("/private/tmp/remote-transcription-benchmark-cache")
-USER_AGENT = "OpenCast-Media/1 (+https://opencast.mobile)"
+# The shared media profile (declared on create, like the app), kept so
+# benchmark fetches reproduce the device and RTW requests. Not a listener
+# parity or upload-success gate.
+MEDIA_PROFILE = 2
+USER_AGENT = "OpenCast-Media/2"
 SCHEMA_VERSION = 1
 TERMINAL_STATES = {"acknowledged", "cancelled", "failed"}
 MICRO_USD_PER_AUDIO_MINUTE = 0.0005  # published whisper-large-v3-turbo rate
@@ -85,7 +89,7 @@ def api(bearer: str, path: str, body: dict) -> dict:
             "authorization": f"Bearer {bearer}",
             "content-type": "application/json",
             # Cloudflare's edge 403s the default Python-urllib user agent.
-            "user-agent": "OpenCast-Benchmark/0.5 (+https://opencast.mobile)",
+            "user-agent": "OpenCast-Benchmark/0.5",
         },
         method="POST",
     )
@@ -355,6 +359,7 @@ def run(args: argparse.Namespace) -> dict:
             "episode_id": f"bench-{sha256[:16]}",
             "enclosure_url": args.url,
             "declared_duration_seconds": duration_seconds,
+            "media_profile": MEDIA_PROFILE,
         },
     )
     job_id = created["job"]["job_id"]

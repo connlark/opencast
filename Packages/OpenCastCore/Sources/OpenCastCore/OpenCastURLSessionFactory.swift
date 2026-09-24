@@ -1,16 +1,24 @@
 import Foundation
 
 public enum OpenCastURLSessionFactory {
-    /// Set once at app startup (single-threaded launch window) before any
-    /// session configuration is built; the static default serves tests. The
-    /// media profile's user agent is a separate, byte-stable contract
-    /// (`OpenCastMediaRequestProfile`) and is never derived from this.
-    nonisolated(unsafe) public private(set) static var userAgent = "OpenCast/1.0 (+https://opencast.mobile)"
+    /// General app identity for feeds, artwork, and API calls. It carries no
+    /// URL: some CDN edges (CBC's Akamai) reset connections whose User-Agent
+    /// contains one. Set once at app startup (single-threaded launch window)
+    /// before any session configuration is built; the static default serves
+    /// tests. The media profile's user agent is a separate, byte-stable parity
+    /// contract (`OpenCastMediaRequestProfile`) that episode downloads set per
+    /// request over this default, and is never derived from this.
+    nonisolated(unsafe) public private(set) static var userAgent = generalUserAgent(version: "1.0")
 
     public static func setMarketingVersion(_ version: String) {
         FeedWorkspace.cleanAbandonedJobs()
-        userAgent = "OpenCast/\(version) (+https://opencast.mobile)"
+        userAgent = generalUserAgent(version: version)
     }
+
+    static func generalUserAgent(version: String) -> String {
+        "OpenCast/\(version)"
+    }
+
     public static let memoryCacheCapacity = 32 * 1_024 * 1_024
     public static let diskCacheCapacity = 128 * 1_024 * 1_024
     public static let requestTimeout: TimeInterval = 20

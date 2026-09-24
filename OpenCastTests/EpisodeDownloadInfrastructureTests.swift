@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastCore
 import os
 import Testing
 @testable import OpenCast
@@ -10,7 +11,7 @@ struct EpisodeDownloadInfrastructureTests {
     func urlSessionDownloaderRangeBehavior() async throws {
         let baseDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: baseDirectory) }
-        let configuration = URLSessionConfiguration.ephemeral
+        let configuration = OpenCastURLSessionFactory.downloadConfiguration()
         configuration.protocolClasses = [EpisodeDownloadTestURLProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
@@ -46,6 +47,11 @@ struct EpisodeDownloadInfrastructureTests {
 
         let appendRequest = try #require(EpisodeDownloadTestURLProtocol.requests.first)
         #expect(appendRequest.value(forHTTPHeaderField: "Accept-Encoding") == "identity")
+        // The media profile overrides the session's general identity per request.
+        #expect(appendRequest.value(forHTTPHeaderField: "User-Agent") == OpenCastMediaRequestProfile.userAgent)
+        #expect(OpenCastMediaRequestProfile.userAgent != OpenCastURLSessionFactory.userAgent)
+        #expect(OpenCastMediaRequestProfile.userAgent.hasSuffix("/\(OpenCastMediaRequestProfile.version)"))
+        #expect(!OpenCastMediaRequestProfile.userAgent.contains("://"))
         #expect(appendRequest.value(forHTTPHeaderField: "Range") == "bytes=3-")
         #expect(appendRequest.value(forHTTPHeaderField: "If-Range") == "\"version-1\"")
         #expect(appendMetadata?.entityTag == "\"version-1\"")

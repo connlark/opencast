@@ -66,12 +66,10 @@ const worker = {
     if (url.pathname === "/app-store") {
       return Response.redirect(APP_STORE_URL, 302);
     }
-    const res = await env.ASSETS.fetch(request);
-    // Legacy behavior: unknown marketing paths redirect home.
-    if (res.status === 404) {
-      return Response.redirect(new URL("/", url).toString(), 302);
-    }
-    return withHTMLCache(res);
+    // Unknown marketing paths get the designed 404 page (not_found_handling).
+    // They used to 302 home, which doubled the invocations every scanner
+    // probe cost once the scanner followed the redirect.
+    return withHTMLCache(await env.ASSETS.fetch(request));
   },
 };
 

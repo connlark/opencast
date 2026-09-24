@@ -17,6 +17,9 @@ public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Eq
     /// Prompt context only; never required, never echoed back.
     public var episodeTitle: String?
     public var podcastTitle: String?
+    /// The media request profile the device downloads with; the server's
+    /// origin fetch mirrors it. Absent means an app that predates it.
+    public var mediaProfile: Int?
 
     public init(
         schemaVersion: Int = OpenCastRemoteTranscriptionSchema.version,
@@ -29,7 +32,8 @@ public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Eq
         adAnalysisRequested: Bool? = nil,
         podcastID: String? = nil,
         episodeTitle: String? = nil,
-        podcastTitle: String? = nil
+        podcastTitle: String? = nil,
+        mediaProfile: Int? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.clientRequestID = clientRequestID
@@ -42,6 +46,7 @@ public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Eq
         self.podcastID = podcastID
         self.episodeTitle = episodeTitle
         self.podcastTitle = podcastTitle
+        self.mediaProfile = mediaProfile
     }
 
     enum CodingKeys: String, CodingKey {
@@ -56,5 +61,6 @@ public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Eq
         case podcastID = "podcast_id"
         case episodeTitle = "episode_title"
         case podcastTitle = "podcast_title"
+        case mediaProfile = "media_profile"
     }
 }

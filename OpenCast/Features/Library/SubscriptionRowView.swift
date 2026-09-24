@@ -70,7 +70,7 @@ struct SubscriptionRowView: View {
             Spacer(minLength: 8)
 
             if newEpisodeCount > 0 {
-                LibraryNewEpisodeCountLabel(count: newEpisodeCount)
+                LibraryNewEpisodeBadge(count: newEpisodeCount)
             }
 
             if isRefreshing {

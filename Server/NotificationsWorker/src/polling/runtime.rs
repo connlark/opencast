@@ -52,7 +52,7 @@ pub async fn handle(mut request: Request, env: Env) -> Result<Response> {
     let db = env.d1("APP_ATTEST_DB")?;
     match request.path().as_str() {
         "/dispatch" => Response::from_json(&super::dispatch::run_dispatch(&env).await?),
-        "/stats" => Response::from_json(&super::dispatch::stats(&db).await?),
+        "/stats" => Response::from_json(&super::dispatch::stats(&env, &db).await?),
         "/consume" => {
             let signal = request.inner().signal();
             // Set only by the private adapter from the Queue's own counter.

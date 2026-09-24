@@ -91,7 +91,8 @@ final class RemoteTranscriptionJobRunner {
                     adAnalysisRequested: adAnalysis != nil ? true : nil,
                     podcastID: adAnalysis?.podcastID,
                     episodeTitle: adAnalysis?.episodeTitle,
-                    podcastTitle: adAnalysis?.podcastTitle
+                    podcastTitle: adAnalysis?.podcastTitle,
+                    mediaProfile: OpenCastMediaRequestProfile.version
                 )
             )
             jobID = created.job.jobID

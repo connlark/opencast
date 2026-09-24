@@ -17,6 +17,7 @@ fn request() -> AdAnalysisRequest {
         transcript: TranscriptMetadata {
             language_code: "en".into(),
             audio_duration: 1500.0,
+            declared_duration: None,
             model_identifier: None,
             model_version: None,
             model_tree_sha256: None,
@@ -444,6 +445,55 @@ fn interleaved_confidence_tiers_cannot_bypass_the_merged_break_limit() {
         .issues
         .iter()
         .any(|i| i == "v3_merged_break_duration"));
+}
+
+#[test]
+fn dynamically_inserted_pods_fit_the_declared_runtime_excess_budget() {
+    // 180 x 20 s = 3,600 s served file carrying three 500 s pods (1,500 s).
+    let mut request = request();
+    request.transcript.audio_duration = 3600.0;
+    request.segments = (0..180)
+        .map(|id| TranscriptSegment {
+            id,
+            start: id as f64 * 20.0,
+            end: (id + 1) as f64 * 20.0,
+            text: "Listen to Harbor Stories wherever you get podcasts.".into(),
+        })
+        .collect();
+    request.transcript.segment_count = request.segments.len();
+    let pods = || {
+        [(0, 24), (60, 84), (120, 144)]
+            .into_iter()
+            .map(|(start, end)| {
+                let mut span = short_span(start);
+                span.end_segment_id = end;
+                span
+            })
+            .collect::<Vec<_>>()
+    };
+    // Audio-only budget: max(0.40 x 3,600, 600) = 1,440 s < 1,500 s.
+    let audio_only = promo_v3::validate(&request, Output { spans: pods() });
+    assert!(
+        audio_only
+            .issues
+            .iter()
+            .any(|i| i == "v3_ad_budget_exceeded"),
+        "{:?}",
+        audio_only.issues
+    );
+    // The feed declared 2,400 s, so 1,200 s of the file is inserted
+    // advertising: budget max(0.40 x 2,400, 600) + 1,200 = 2,160 s.
+    request.transcript.declared_duration = Some(2400.0);
+    let declared = promo_v3::validate(&request, Output { spans: pods() });
+    assert!(declared.is_complete(), "{:?}", declared.issues);
+    assert_eq!(declared.spans.len(), 3);
+    // An implausibly short declared runtime earns nothing.
+    request.transcript.declared_duration = Some(900.0);
+    let implausible = promo_v3::validate(&request, Output { spans: pods() });
+    assert!(implausible
+        .issues
+        .iter()
+        .any(|i| i == "v3_ad_budget_exceeded"));
 }
 
 #[test]

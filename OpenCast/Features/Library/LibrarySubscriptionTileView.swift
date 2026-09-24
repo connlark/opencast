@@ -54,7 +54,7 @@ struct LibrarySubscriptionTileView: View {
                 .overlay(alignment: .topTrailing) {
                     if newEpisodeCount > 0 {
                         LibraryNewEpisodeBadge(count: newEpisodeCount)
-                            .padding(6)
+                            .padding(4)
                     }
                 }
 

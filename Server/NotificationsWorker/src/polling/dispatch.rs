@@ -8,6 +8,7 @@ use crate::delivery::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 use worker::*;
 
 pub const SCHEMA_VERSION: u8 = 2;
@@ -97,11 +98,308 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
         .await?;
     }
     // The one-minute cost/lag rollup: no per-poll diagnostic rows exist.
-    let mut rollup = first(&db,&format!("SELECT (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1) AS overdue,(SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND f.poll_failures=0 AND f.handling_failures=0 AND f.retry_at<=?1) AS oldest_due_seconds,(SELECT COUNT(*) FROM n_feed f WHERE f.dispatch_until>?1) AS in_flight,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome IN('not_modified','unchanged')) AS unchanged_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome='published') AS published_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome NOT IN('not_modified','unchanged','published')) AS failed_last_minute"),&[json!(t)]).await?.unwrap_or_else(|| json!({}));
+    let mut rollup = first(&db,&format!("SELECT (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1) AS overdue,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND f.poll_failures=0 AND f.handling_failures=0 AND f.retry_at<=?1 AND NOT EXISTS(SELECT 1 FROM n_poll_origin h WHERE h.origin_key=f.origin_key AND h.cooldown_until>?1)) AS healthy_overdue,(SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND f.poll_failures=0 AND f.handling_failures=0 AND f.retry_at<=?1) AS oldest_due_seconds,(SELECT COUNT(*) FROM n_feed f WHERE f.dispatch_until>?1) AS in_flight,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome IN('not_modified','unchanged')) AS unchanged_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome='published') AS published_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome NOT IN('not_modified','unchanged','published')) AS failed_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-300 AND f.last_poll_outcome IN('not_modified','unchanged','published')) AS completed_last_5min"),&[json!(t)]).await?.unwrap_or_else(|| json!({}));
     rollup["admitted"] = json!(polls);
     rollup["maintenance_admitted"] = json!(maintained);
+    let (alerting, alert_state) = alert_dispatch(env, &db, &rollup, t).await?;
+    rollup["alerting"] = json!(alerting);
+    rollup["stall_state"] = json!(alert_state["stall_state"]);
+    rollup["stall_since"] = json!(alert_state["stall_since"]);
     console_log!("{}", json!({"event":"poll_dispatch","work":rollup}));
     Ok(rollup)
+}
+
+const ALERT_WEBHOOK_URL: &str = "https://alerts.example.com/v1/notifications";
+
+#[derive(Clone, Copy)]
+enum AlertDraft<'a> {
+    Armed {
+        lane: &'a str,
+    },
+    Onset {
+        lane: &'a str,
+        stall_since: i64,
+        healthy_overdue: i64,
+        in_flight: i64,
+        oldest_due_seconds: i64,
+    },
+    Hourly {
+        lane: &'a str,
+        stall_since: i64,
+        healthy_overdue: i64,
+        in_flight: i64,
+        oldest_due_seconds: i64,
+        hour: i64,
+    },
+    Recovery {
+        lane: &'a str,
+        stall_since: i64,
+        completions: i64,
+    },
+}
+
+impl AlertDraft<'_> {
+    fn idempotency_key(self) -> String {
+        match self {
+            Self::Armed { lane } => format!("feed-polling-alerts-armed-{lane}"),
+            Self::Onset {
+                lane, stall_since, ..
+            } => format!("feed-polling-stall-{lane}-{stall_since}"),
+            Self::Hourly {
+                lane,
+                stall_since,
+                hour,
+                ..
+            } => format!("feed-polling-stall-{lane}-{stall_since}-{hour}"),
+            Self::Recovery {
+                lane, stall_since, ..
+            } => format!("feed-polling-recovered-{lane}-{stall_since}"),
+        }
+    }
+    fn body(self) -> String {
+        match self {
+            Self::Armed { lane } => format!("Feed polling alerts are armed for {lane}."),
+            Self::Onset { lane, healthy_overdue, in_flight, oldest_due_seconds, .. } | Self::Hourly { lane, healthy_overdue, in_flight, oldest_due_seconds, .. } => format!("Healthy overdue: {healthy_overdue}; in flight: {in_flight}; oldest due: {oldest_due_seconds}s; 0 completions in 5 min. Redeploy opencast-feed-polling-{lane}."),
+            Self::Recovery { lane, stall_since, completions } => format!("Feed polling recovered for {lane} after {}s; {completions} completions in 5 min.", now().saturating_sub(stall_since)),
+        }
+    }
+    fn payload(self) -> Value {
+        let (title, interruption_level, expiration, priority, collapse_id) = match self {
+            Self::Armed { lane } => (
+                format!("Feed polling alerts armed ({lane})"),
+                "passive",
+                "one_day",
+                "immediate",
+                Value::Null,
+            ),
+            Self::Onset { lane, .. } | Self::Hourly { lane, .. } => (
+                format!("Feed polling stalled ({lane})"),
+                "time_sensitive",
+                "one_hour",
+                "immediate",
+                json!("feed-polling-stall"),
+            ),
+            Self::Recovery { lane, .. } => (
+                format!("Feed polling recovered ({lane})"),
+                "active",
+                "one_day",
+                "immediate",
+                Value::Null,
+            ),
+        };
+        json!({"schema_version":1,"title":title,"subtitle":"","body":self.body(),"sound":"default","badge":null,"interruption_level":interruption_level,"relevance_score":null,"category_id":null,"thread_id":null,"collapse_id":collapse_id,"expiration":expiration,"priority":priority,"custom_data":{}})
+    }
+}
+
+async fn send_alert(credential: &str, recipient: &str, draft: AlertDraft<'_>) -> Result<bool> {
+    let envelope = json!({"recipient":recipient,"draft":draft.payload()});
+    let headers = Headers::new();
+    headers.set("authorization", &format!("Bearer {credential}"))?;
+    headers.set("content-type", "application/json")?;
+    headers.set("idempotency-key", &draft.idempotency_key())?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(envelope.to_string().into()));
+    let request = Request::new_with_init(ALERT_WEBHOOK_URL, &init)?;
+    let mut response = crate::deadline::fetch_with_deadline(
+        Fetch::Request(request).send(),
+        Delay::from(Duration::from_secs(10)),
+        Error::RustError("poll_alert_timeout".into()),
+    )
+    .await?;
+    let status = response.status_code();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    let aggregate = body["aggregate_status"].as_str().unwrap_or("");
+    let code = body["error"]["code"]
+        .as_str()
+        .or_else(|| body["code"].as_str())
+        .unwrap_or("");
+    // A replay after an uncertain response is settled by the alert service's
+    // idempotency ledger. The body is intentionally not compared here: live
+    // counts change between retries, while the key identifies the alert.
+    let delivered = (status == 409 && code == "idempotency_conflict")
+        || (status == 200
+            && matches!(
+                aggregate,
+                "accepted"
+                    | "partially_accepted"
+                    | "recipient_muted"
+                    | "recipient_revoked"
+                    | "no_active_target"
+            ));
+    if !delivered {
+        console_warn!(
+            "{}",
+            json!({"event":"poll_alert_failed","status":status,"code":if code.is_empty() { aggregate } else { code }})
+        );
+    } else if matches!(
+        aggregate,
+        "recipient_muted" | "recipient_revoked" | "no_active_target"
+    ) {
+        console_warn!(
+            "{}",
+            json!({"event":"poll_alert_recipient_status","status":aggregate})
+        );
+    }
+    Ok(delivered)
+}
+
+async fn send_alert_safely(credential: &str, recipient: &str, draft: AlertDraft<'_>) -> bool {
+    match send_alert(credential, recipient, draft).await {
+        Ok(delivered) => delivered,
+        Err(error) => {
+            console_warn!(
+                "{}",
+                json!({"event":"poll_alert_failed","status":0,"code":error.to_string()})
+            );
+            false
+        }
+    }
+}
+
+async fn alert_dispatch(
+    env: &Env,
+    db: &D1Database,
+    rollup: &Value,
+    t: i64,
+) -> Result<(bool, Value)> {
+    let state = first(db, "SELECT stall_state,stall_since,stall_alerted_at,alert_armed_at FROM n_poll_dispatch WHERE id=1", &[]).await?.unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0,"stall_alerted_at":0,"alert_armed_at":0}));
+    let Some(credential) = env
+        .secret("ALERT_CREDENTIAL")
+        .ok()
+        .map(|v| v.to_string())
+        .filter(|v| !v.is_empty())
+    else {
+        return Ok((false, state));
+    };
+    let Some(recipient) = env
+        .secret("ALERT_RECIPIENT")
+        .ok()
+        .map(|v| v.to_string())
+        .filter(|v| !v.is_empty())
+    else {
+        return Ok((false, state));
+    };
+    let stall_state = state["stall_state"].as_str().unwrap_or("clear");
+    let stall_since = state["stall_since"].as_i64().unwrap_or(0);
+    let stall_alerted_at = state["stall_alerted_at"].as_i64().unwrap_or(0);
+    let alert_armed_at = state["alert_armed_at"].as_i64().unwrap_or(0);
+    let transition = super::policy::stall_transition(
+        super::policy::StallRollup {
+            completed_last_5min: rollup["completed_last_5min"].as_i64().unwrap_or(0),
+            healthy_overdue: rollup["healthy_overdue"].as_i64().unwrap_or(0),
+        },
+        stall_state,
+        stall_since,
+        stall_alerted_at,
+        alert_armed_at,
+        t,
+        true,
+    );
+    let lane_name = lane(env);
+    let delivered = match transition {
+        Some(super::policy::StallAlert::Armed) => {
+            let sent = send_alert_safely(
+                &credential,
+                &recipient,
+                AlertDraft::Armed { lane: &lane_name },
+            )
+            .await;
+            if sent {
+                run(
+                    db,
+                    "UPDATE n_poll_dispatch SET alert_armed_at=?1 WHERE id=1 AND alert_armed_at=0",
+                    &[json!(t)],
+                )
+                .await?;
+            }
+            sent
+        }
+        Some(super::policy::StallAlert::Onset { stall_since: onset }) => {
+            let entered = if stall_state == "stalled" {
+                true
+            } else {
+                run(db, "UPDATE n_poll_dispatch SET stall_state='stalled',stall_since=?1,stall_alerted_at=0 WHERE id=1 AND stall_state='clear'", &[json!(onset)]).await? > 0
+            };
+            if !entered {
+                false
+            } else {
+                let sent = send_alert_safely(
+                    &credential,
+                    &recipient,
+                    AlertDraft::Onset {
+                        lane: &lane_name,
+                        stall_since: onset,
+                        healthy_overdue: rollup["healthy_overdue"].as_i64().unwrap_or(0),
+                        in_flight: rollup["in_flight"].as_i64().unwrap_or(0),
+                        oldest_due_seconds: rollup["oldest_due_seconds"].as_i64().unwrap_or(0),
+                    },
+                )
+                .await;
+                if sent {
+                    run(db, "UPDATE n_poll_dispatch SET stall_alerted_at=?1 WHERE id=1 AND stall_state='stalled' AND stall_since=?2 AND stall_alerted_at=0", &[json!(t),json!(onset)]).await?;
+                }
+                sent
+            }
+        }
+        Some(super::policy::StallAlert::Hourly {
+            stall_since: since,
+            hour,
+        }) => {
+            let marker = -t.max(1);
+            let claimed = run(db, "UPDATE n_poll_dispatch SET stall_alerted_at=?1 WHERE id=1 AND stall_state='stalled' AND stall_since=?2 AND stall_alerted_at=?3", &[json!(marker),json!(since),json!(stall_alerted_at)]).await? > 0;
+            if !claimed {
+                false
+            } else {
+                let sent = send_alert_safely(
+                    &credential,
+                    &recipient,
+                    AlertDraft::Hourly {
+                        lane: &lane_name,
+                        stall_since: since,
+                        healthy_overdue: rollup["healthy_overdue"].as_i64().unwrap_or(0),
+                        in_flight: rollup["in_flight"].as_i64().unwrap_or(0),
+                        oldest_due_seconds: rollup["oldest_due_seconds"].as_i64().unwrap_or(0),
+                        hour,
+                    },
+                )
+                .await;
+                if sent {
+                    run(db, "UPDATE n_poll_dispatch SET stall_alerted_at=?1 WHERE id=1 AND stall_alerted_at=?2", &[json!(t),json!(marker)]).await?;
+                } else {
+                    run(db, "UPDATE n_poll_dispatch SET stall_alerted_at=?1 WHERE id=1 AND stall_alerted_at=?2", &[json!(stall_alerted_at),json!(marker)]).await?;
+                }
+                sent
+            }
+        }
+        Some(super::policy::StallAlert::Recovery { stall_since: since }) => {
+            let sent = send_alert_safely(
+                &credential,
+                &recipient,
+                AlertDraft::Recovery {
+                    lane: &lane_name,
+                    stall_since: since,
+                    completions: rollup["completed_last_5min"].as_i64().unwrap_or(0),
+                },
+            )
+            .await;
+            if sent {
+                run(db, "UPDATE n_poll_dispatch SET stall_state='clear',stall_since=0,stall_alerted_at=0 WHERE id=1 AND stall_state='stalled' AND stall_since=?1", &[json!(since)]).await?;
+            }
+            sent
+        }
+        None => false,
+    };
+    let current = first(
+        db,
+        "SELECT stall_state,stall_since FROM n_poll_dispatch WHERE id=1",
+        &[],
+    )
+    .await?
+    .unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0}));
+    let _ = delivered;
+    Ok((true, current))
 }
 fn record(row: &Value) -> Result<Value> {
     let url = url::Url::parse(string(row, "canonical_url"))
@@ -158,7 +456,7 @@ pub async fn send(env: &Env, messages: Vec<Wakeup>, delay: u32) -> Result<()> {
         )
         .await
 }
-pub async fn stats(db: &D1Database) -> Result<Value> {
+pub async fn stats(env: &Env, db: &D1Database) -> Result<Value> {
     let t = now();
     let cooling = "EXISTS(SELECT 1 FROM n_poll_origin h WHERE h.origin_key=f.origin_key AND h.cooldown_until>?1)";
     let healthy =
@@ -185,10 +483,40 @@ pub async fn stats(db: &D1Database) -> Result<Value> {
         (SELECT COALESCE(SUM(redeliveries),0) FROM n_poll_stat WHERE bucket>=?2) AS redelivery_total,
         (SELECT COALESCE(SUM(dead_letters),0) FROM n_poll_stat WHERE bucket>=?2) AS dead_letter_total,
         (SELECT COALESCE(SUM(stale_commits),0) FROM n_poll_stat WHERE bucket>=?2) AS stale_commit_total,
-        (SELECT COALESCE(SUM(retry_after_clamps),0) FROM n_poll_stat WHERE bucket>=?2) AS retry_after_clamped_total",crate::observation::gc::live("s")),&[json!(t),json!(t.div_euclid(3600)-24)]).await?.ok_or_else(||Error::RustError("poll_stats_missing".into()))?;
+        (SELECT COALESCE(SUM(retry_after_clamps),0) FROM n_poll_stat WHERE bucket>=?2) AS retry_after_clamped_total,
+        (SELECT COALESCE(SUM(scan_busy),0) FROM n_poll_stat WHERE bucket>=?2) AS scan_busy_total,
+        (SELECT COALESCE(SUM(permit_reclaims),0) FROM n_poll_stat WHERE bucket>=?2) AS permit_reclaim_total",crate::observation::gc::live("s")),&[json!(t),json!(t.div_euclid(3600)-24)]).await?.ok_or_else(||Error::RustError("poll_stats_missing".into()))?;
     // Failure, redelivery and rejected-commit totals are a rolling 24 hours.
     // Healthy polls leave only the feed's last outcome and sampled events.
     value["counter_window"] = json!("rolling_24_hours");
     value["wasm_memory_bytes"] = json!(crate::runtime_diagnostics::current().wasm_memory_bytes);
+    let permits = crate::feed_scan_admission::FeedScanPermit::view();
+    let diagnostics = crate::feed_scan_admission::FeedScanPermit::diagnostics();
+    value["active_permits"] = json!(permits.active_permits);
+    value["oldest_permit_age_seconds"] = json!(permits.oldest_permit_age_seconds);
+    value["holder_step"] = json!(permits.holder_step);
+    value["isolate"] = json!(permits.isolate);
+    value["permit_refused"] = json!(diagnostics.refused);
+    value["abandoned_recovered"] = json!(diagnostics.abandoned_recovered);
+    value["stale_releases"] = json!(diagnostics.stale_releases);
+    value["permit_reclaims"] = json!(diagnostics.reclaimed);
+    let state = first(
+        db,
+        "SELECT stall_state,stall_since FROM n_poll_dispatch WHERE id=1",
+        &[],
+    )
+    .await?
+    .unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0}));
+    value["stall_state"] = json!(state["stall_state"].as_str().unwrap_or("clear"));
+    value["stall_since"] = json!(state["stall_since"].as_i64().unwrap_or(0));
+    value["alerting"] = json!(
+        env.secret("ALERT_CREDENTIAL")
+            .ok()
+            .is_some_and(|secret| !secret.to_string().is_empty())
+            && env
+                .secret("ALERT_RECIPIENT")
+                .ok()
+                .is_some_and(|secret| !secret.to_string().is_empty())
+    );
     Ok(value)
 }

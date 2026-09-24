@@ -56,6 +56,12 @@ export function Page({ payload, token, start, canonical, assets }: PageProps) {
         <meta name="theme-color" media="(prefers-color-scheme: light)" content={THEME_COLOR_LIGHT} />
         <meta name="theme-color" media="(prefers-color-scheme: dark)" content={THEME_COLOR_DARK} />
         <BrandIcons />
+        {/* The player's controls need script; without it they are hidden and
+            the player's noscript fallback shows the browser's own audio controls.
+            Download is then alone in the controls grid, so it becomes a row. */}
+        <noscript>
+          <style dangerouslySetInnerHTML={{ __html: "[data-needs-script]{display:none!important}[data-actions]{display:flex!important}" }} />
+        </noscript>
         {assets.css !== null && <link rel="stylesheet" href={assets.css} />}
         <script type="module" src={assets.js} />
       </head>
@@ -116,4 +122,3 @@ export function shareDescription(payload: SharePayload, start: number): string {
   }
   return timing === "" ? payload.podcastTitle : `${payload.podcastTitle} · ${timing}`;
 }
-
