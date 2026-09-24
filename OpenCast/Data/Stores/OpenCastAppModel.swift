@@ -46,6 +46,7 @@ final class OpenCastAppModel {
     let appIcon: AppIconStore
     let podcastEpisodeListSettings: PodcastEpisodeListSettingsStore
     let libraryDisplaySettings: LibraryDisplaySettingsStore
+    let inboxSettings: InboxSettingsStore
     let recentSearches: RecentSearchesStore
     let playbackSettings: PlaybackSettingsStore
     let notificationSettings: NotificationSettingsStore
@@ -165,6 +166,7 @@ final class OpenCastAppModel {
         appIcon: AppIconStore = AppIconStore(),
         podcastEpisodeListSettings: PodcastEpisodeListSettingsStore = PodcastEpisodeListSettingsStore(),
         libraryDisplaySettings: LibraryDisplaySettingsStore = LibraryDisplaySettingsStore(),
+        inboxSettings: InboxSettingsStore = InboxSettingsStore(),
         recentSearches: RecentSearchesStore = RecentSearchesStore(),
         playbackSettings: PlaybackSettingsStore = PlaybackSettingsStore(),
         notificationSettings: NotificationSettingsStore = NotificationSettingsStore(),
@@ -315,6 +317,7 @@ final class OpenCastAppModel {
         self.appIcon = appIcon
         self.podcastEpisodeListSettings = podcastEpisodeListSettings
         self.libraryDisplaySettings = libraryDisplaySettings
+        self.inboxSettings = inboxSettings
         self.recentSearches = recentSearches
         self.playbackSettings = playbackSettings
         self.notificationSettings = notificationSettings
@@ -457,6 +460,7 @@ final class OpenCastAppModel {
             // Before the library publishes, so a stored layout doesn't
             // flash the default container first.
             libraryDisplaySettings.load(modelContext: modelContext)
+            inboxSettings.load(modelContext: modelContext)
             let didLoadLibrary = await library.load(modelContext: modelContext)
             await downloads.load(modelContext: modelContext)
             playbackSettings.load(modelContext: modelContext, playback: playback)
@@ -1913,6 +1917,7 @@ final class OpenCastAppModel {
         appIcon.load()
         podcastEpisodeListSettings.load(modelContext: modelContext)
         libraryDisplaySettings.load(modelContext: modelContext)
+        inboxSettings.load(modelContext: modelContext)
         recentSearches.load(modelContext: modelContext)
         playbackSettings.load(modelContext: modelContext, playback: playback)
         notificationSettings.resetAfterDataNuke()

@@ -13,7 +13,21 @@ struct InboxView: View {
     var onOpenAdDetectionQueue: () -> Void = {}
 
     var body: some View {
-        let inboxEpisodes = appModel.library.inboxEpisodes
+        let hidesPlayedEpisodes = appModel.inboxSettings.hidesPlayedEpisodes
+        let hidesQueuedEpisodes = appModel.inboxSettings.hidesQueuedEpisodes
+        let inboxEpisodes = appModel.library.inboxEpisodes.filter { episode in
+            if hidesPlayedEpisodes && appModel.library.progressSummary(for: episode).isCompleted {
+                return false
+            }
+            if hidesQueuedEpisodes {
+                let isQueued = appModel.upNextQueue.contains(episodeID: episode.episodeID)
+                let isCurrentEpisode = appModel.playback.currentEpisode?.id.rawValue == episode.episodeID
+                if isQueued || isCurrentEpisode {
+                    return false
+                }
+            }
+            return true
+        }
         let visibleEpisodes = inboxEpisodes.prefix(visibleEpisodeCount)
         let episodeIDs = visibleEpisodes.map(\.episodeID)
 
@@ -23,6 +37,12 @@ struct InboxView: View {
             } else if case .failed(let message) = appModel.library.state,
                       inboxEpisodes.isEmpty {
                 InboxFailedStateView(message: message)
+            } else if inboxEpisodes.isEmpty && (hidesPlayedEpisodes || hidesQueuedEpisodes) {
+                ContentUnavailableView {
+                    Label("No Episodes", systemImage: "checkmark.circle")
+                } description: {
+                    Text(filteredEmptyStateDescription(showsUnplayedOnly: hidesPlayedEpisodes, hidesQueuedEpisodes: hidesQueuedEpisodes))
+                }
             } else if inboxEpisodes.isEmpty {
                 InboxEmptyStateView(
                     syncActivity: appModel.syncStatus.libraryActivity,
@@ -56,6 +76,19 @@ struct InboxView: View {
 
     private var listAnimation: Animation? {
         reduceMotion ? nil : .default
+    }
+
+    private func filteredEmptyStateDescription(showsUnplayedOnly: Bool, hidesQueuedEpisodes: Bool) -> String {
+        switch (showsUnplayedOnly, hidesQueuedEpisodes) {
+        case (true, true):
+            "Every episode is either played or already in Up Next."
+        case (true, false):
+            "Every episode in your inbox is marked as played."
+        case (false, true):
+            "Every episode in your inbox is already in Up Next."
+        case (false, false):
+            ""
+        }
     }
 }
 
