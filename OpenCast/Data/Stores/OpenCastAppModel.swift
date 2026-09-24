@@ -418,8 +418,9 @@ final class OpenCastAppModel {
             return self.transcriptions.progressByEpisodeID[episodeID]
         }
         let playbackController = self.playback
-        upNextQueue.onQueueChanged = { [weak playbackController, weak upNextQueue] in
+        upNextQueue.onQueueChanged = { [weak self, weak playbackController, weak upNextQueue] modelContext in
             playbackController?.setHasQueuedNextEpisode(!(upNextQueue?.items.isEmpty ?? true))
+            self?.loadQueueHeadIfNeeded(modelContext: modelContext)
         }
         startSiriMediaUserContextObservation()
     }
@@ -1565,6 +1566,7 @@ final class OpenCastAppModel {
 
         guard let record = restorableEpisode(modelContext: modelContext) else {
             playbackRestorePreference.clear(modelContext: modelContext)
+            loadQueueHeadIfNeeded(modelContext: modelContext)
             return
         }
 
@@ -1907,7 +1909,7 @@ final class OpenCastAppModel {
         transcriptAnalyses.load(modelContext: modelContext)
         transcriptIntelligence.load(modelContext: modelContext)
         adFreePass.reset()
-        upNextQueue.resetAfterDataNuke()
+        upNextQueue.resetAfterDataNuke(modelContext: modelContext)
         adFreePassBackgroundSession.reset()
         transcriptGenerationBackgroundSession.reset()
         transcriptImprovement.resetForDataNuke()
@@ -2079,6 +2081,35 @@ final class OpenCastAppModel {
 
     private func isCurrentEpisode(_ episode: EpisodeListItemSnapshot) -> Bool {
         playback.currentEpisode?.id.rawValue == episode.episodeID
+    }
+
+    /// Loads the head of Up Next paused, so the mini player appears as soon
+    /// as the queue has something, without waiting for the user to tap play.
+    private func loadQueueHeadIfNeeded(modelContext: ModelContext) {
+        guard playback.currentEpisode == nil,
+              let nextItem = upNextQueue.items.first,
+              let snapshot = library.episode(with: nextItem.episodeID)
+        else {
+            return
+        }
+
+        do {
+            let episode = try resolvedPlaybackEpisode(
+                for: snapshot,
+                source: preferredPlaybackSource(for: snapshot.episodeID),
+                modelContext: modelContext
+            )
+            let boundaries = playbackEpisodeBoundaries(forPodcastID: snapshot.podcastID)
+            let startPosition = boundaries.ordinaryStartPosition(
+                library.resumePosition(for: snapshot.episodeID),
+                duration: episode.duration
+            )
+            try playback.load(episode, startPosition: startPosition, boundaries: boundaries)
+            refreshPlaybackSkipZonesForCurrentEpisode()
+        } catch {
+            // Leave the queue untouched; the mini player just stays hidden
+            // until the head episode is actually playable.
+        }
     }
 
     private func restorableEpisode(modelContext: ModelContext) -> EpisodeListItemSnapshot? {
