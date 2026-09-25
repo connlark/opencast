@@ -13,3 +13,10 @@ Package.resolved
 
 # macOS
 .DS_Store
+
+# Node
+node_modules/
+
+# Yarn 4 (node-modules linker; no cache, patches, or plugins committed)
+.yarn/
+.pnp.*
