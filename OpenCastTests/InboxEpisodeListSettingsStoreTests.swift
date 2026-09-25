@@ -57,6 +57,24 @@ struct InboxEpisodeListSettingsStoreTests {
         #expect(!reloadedStore(from: container).hidesQueuedEpisodes)
     }
 
+    @Test("Active filter titles name only the settings that differ from their defaults")
+    func activeFilterTitlesNameNonDefaultSettings() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = InboxEpisodeListSettingsStore()
+        store.load(modelContext: context)
+        #expect(store.activeFilterTitles.isEmpty)
+
+        store.setFilter(.unplayed, modelContext: context)
+        #expect(store.activeFilterTitles == ["Unplayed"])
+
+        store.setHidesQueuedEpisodes(true, modelContext: context)
+        #expect(store.activeFilterTitles == ["Unplayed", "Up Next hidden"])
+
+        store.setFilter(.all, modelContext: context)
+        #expect(store.activeFilterTitles == ["Up Next hidden"])
+    }
+
     @Test("Unknown stored values load as defaults without rewriting storage")
     func unknownStoredValuesLoadAsDefaults() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -112,7 +130,7 @@ struct InboxEpisodeListSettingsStoreTests {
         #expect(store.lastErrorMessage?.hasPrefix("Unable to update Inbox filter") == true)
         #expect(!store.setHidesQueuedEpisodes(true, modelContext: context))
         #expect(!store.hidesQueuedEpisodes)
-        #expect(store.lastErrorMessage?.hasPrefix("Unable to update Hide Up Next Episodes") == true)
+        #expect(store.lastErrorMessage?.hasPrefix("Unable to update Hide Up Next:") == true)
         // The seam saw the upserted rows, so each failure came after mutation.
         #expect(probe.pendingChangesAtCall == [true, true, true])
 
@@ -125,6 +143,35 @@ struct InboxEpisodeListSettingsStoreTests {
         let reloaded = reloadedStore(from: container)
         #expect(reloaded.filter == .inProgress)
         #expect(reloaded.hidesQueuedEpisodes)
+    }
+
+    @Test("Show All resets both settings in one save")
+    func resetToDefaultsIsAtomic() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let probe = InboxEpisodeListSettingsSaveProbe()
+        let store = InboxEpisodeListSettingsStore(save: probe.save)
+        store.load(modelContext: context)
+        #expect(store.setFilter(.downloaded, modelContext: context))
+        #expect(store.setHidesQueuedEpisodes(true, modelContext: context))
+
+        let callsBeforeReset = probe.callCount
+        probe.failsSaves = true
+        #expect(!store.resetToDefaults(modelContext: context))
+        #expect(store.filter == .downloaded)
+        #expect(store.hidesQueuedEpisodes)
+        #expect(probe.callCount == callsBeforeReset + 1)
+        #expect(store.lastErrorMessage?.hasPrefix("Unable to reset Inbox settings") == true)
+        #expect(try storedValues(forKey: filterKey, in: container) == ["downloaded"])
+        #expect(try storedValues(forKey: hidesQueuedKey, in: container) == ["true"])
+
+        probe.failsSaves = false
+        #expect(store.resetToDefaults(modelContext: context))
+        #expect(store.filter == .all)
+        #expect(!store.hidesQueuedEpisodes)
+        #expect(store.lastErrorMessage == nil)
+        #expect(try storedValues(forKey: filterKey, in: container) == ["all"])
+        #expect(try storedValues(forKey: hidesQueuedKey, in: container) == ["false"])
     }
 
     @Test("Loading after a data reset restores the defaults")

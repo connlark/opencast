@@ -19,6 +19,19 @@ final class InboxEpisodeListSettingsStore {
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
+    /// The settings that differ from their defaults, in display order; empty
+    /// while the Inbox shows everything.
+    var activeFilterTitles: [String] {
+        var titles: [String] = []
+        if filter != .all {
+            titles.append(filter.title)
+        }
+        if hidesQueuedEpisodes {
+            titles.append("Up Next hidden")
+        }
+        return titles
+    }
+
     /// `save` is the test seam for preference saves.
     init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.save = save
@@ -66,13 +79,45 @@ final class InboxEpisodeListSettingsStore {
             String(hidesQueuedEpisodes),
             forKey: Self.hidesQueuedEpisodesPreferenceKey,
             modelContext: modelContext,
-            failureDescription: "Unable to update Hide Up Next Episodes"
+            failureDescription: "Unable to update Hide Up Next"
         ) else {
             return false
         }
 
         self.hidesQueuedEpisodes = hidesQueuedEpisodes
         return true
+    }
+
+    /// Persists the state represented by the filtered-empty action in one
+    /// transaction, so a failed reset cannot leave one setting changed.
+    @discardableResult
+    func resetToDefaults(modelContext: ModelContext) -> Bool {
+        guard filter != .all || hidesQueuedEpisodes else {
+            return true
+        }
+
+        let context = ModelContext(modelContext.container)
+        context.autosaveEnabled = false
+        do {
+            try LocalPreferenceRecord.upsert(
+                key: Self.filterPreferenceKey,
+                value: PodcastEpisodeFilter.all.rawValue,
+                modelContext: context
+            )
+            try LocalPreferenceRecord.upsert(
+                key: Self.hidesQueuedEpisodesPreferenceKey,
+                value: String(false),
+                modelContext: context
+            )
+            try save(context)
+            filter = .all
+            hidesQueuedEpisodes = false
+            lastErrorMessage = nil
+            return true
+        } catch {
+            lastErrorMessage = "Unable to reset Inbox settings: \(error.localizedDescription)"
+            return false
+        }
     }
 
     private func persist(

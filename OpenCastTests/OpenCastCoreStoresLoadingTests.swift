@@ -39,6 +39,8 @@ struct OpenCastCoreStoresLoadingTests {
         let cache = CoreStoresLoadingProbeCacheStore(loadDelay: .milliseconds(100))
         let appModel = OpenCastAppModel(localLibraryCacheStore: cache)
 
+        #expect(!appModel.coreStoresHydrated)
+
         let firstLoad = Task {
             await appModel.ensureCoreStoresLoaded(modelContext: modelContext)
         }
@@ -52,6 +54,7 @@ struct OpenCastCoreStoresLoadingTests {
 
         #expect(await cache.recordedLoadCount() == 1)
         #expect(appModel.library.state == .idle)
+        #expect(appModel.coreStoresHydrated)
     }
 
     @Test("The one-shot hydrates the per-podcast episode list preferences")

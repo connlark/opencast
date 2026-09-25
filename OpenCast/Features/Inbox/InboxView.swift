@@ -16,20 +16,26 @@ struct InboxView: View {
         let inboxEpisodes = appModel.library.inboxEpisodes
         let filter = appModel.inboxEpisodeListSettings.filter
         let hidesQueuedEpisodes = appModel.inboxEpisodeListSettings.hidesQueuedEpisodes
-        let model = InboxEpisodeListModel.make(
-            episodes: inboxEpisodes,
-            filter: filter,
-            hidesQueuedEpisodes: hidesQueuedEpisodes,
-            library: appModel.library,
-            downloadRecords: appModel.downloads.records,
-            queuedEpisodeIDs: Set(appModel.upNextQueue.items.map(\.episodeID)),
-            playingEpisodeID: appModel.playback.currentEpisode?.id.rawValue
-        )
+        let model = appModel.coreStoresHydrated
+            ? InboxEpisodeListModel.make(
+                episodes: inboxEpisodes,
+                filter: filter,
+                hidesQueuedEpisodes: hidesQueuedEpisodes,
+                library: appModel.library,
+                downloadRecords: appModel.downloads.records,
+                queuedEpisodeIDs: Set(appModel.upNextQueue.items.map(\.episodeID)),
+                playingEpisodeID: appModel.playback.currentEpisode?.id.rawValue,
+                visibleEpisodeCount: visibleEpisodeCount
+            )
+            : InboxEpisodeListModel(episodes: [], totalEpisodeCount: 0, hasMore: false)
         let visibleEpisodes = model.episodes.prefix(visibleEpisodeCount)
         let episodeIDs = visibleEpisodes.map(\.episodeID)
+        // The filter applies only to a hydrated, populated Inbox, as the list
+        // branches below; a persisted filter never labels the loading state.
+        let showsFilter = appModel.coreStoresHydrated && !inboxEpisodes.isEmpty
 
         List {
-            if appModel.library.state == .loading && inboxEpisodes.isEmpty {
+            if !appModel.coreStoresHydrated {
                 InboxLoadingStateView()
             } else if case .failed(let message) = appModel.library.state,
                       inboxEpisodes.isEmpty {
@@ -39,39 +45,43 @@ struct InboxView: View {
                     syncActivity: appModel.syncStatus.libraryActivity,
                     onAdd: onAdd
                 )
-            } else {
-                InboxEpisodeListControlsView(
-                    filter: filterBinding,
-                    hidesQueuedEpisodes: hidesQueuedEpisodesBinding
+            } else if model.isFilteredEmpty {
+                InboxFilteredEmptyStateView(
+                    filter: filter,
+                    hidesQueuedEpisodes: hidesQueuedEpisodes,
+                    onShowAll: showAllEpisodes
                 )
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                if model.isFilteredEmpty {
-                    InboxFilteredEmptyStateView(
-                        filter: filter,
-                        hidesQueuedEpisodes: hidesQueuedEpisodes,
-                        onShowAll: showAllEpisodes
+            } else {
+                ForEach(visibleEpisodes) { episode in
+                    EpisodeRowButton(
+                        episode: episode,
+                        onOpenEpisode: onOpenEpisode
                     )
-                } else {
-                    ForEach(visibleEpisodes) { episode in
-                        EpisodeRowButton(
-                            episode: episode,
-                            onOpenEpisode: onOpenEpisode
-                        )
-                        .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode))
-                    }
-                    EpisodeCatalogContinuation(totalCount: model.episodes.count, visibleCount: $visibleEpisodeCount)
+                    .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode))
                 }
+                EpisodeCatalogContinuation(hasMore: model.hasMore, visibleCount: $visibleEpisodeCount)
             }
         }
         .contentMargins(.horizontal, horizontalSizeClass == .regular ? 32 : nil, for: .scrollContent)
         .animation(listAnimation, value: episodeIDs)
         .animation(listAnimation, value: appModel.library.state)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            SettingsErrorBanner(message: appModel.inboxEpisodeListSettings.lastErrorMessage)
+        }
         .navigationTitle("Inbox")
+        // An empty subtitle takes no space under the large title.
+        .navigationSubtitle(
+            showsFilter ? appModel.inboxEpisodeListSettings.activeFilterTitles.joined(separator: " · ") : ""
+        )
         .toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 InboxAdDetectionToolbarStatus(onOpen: onOpenAdDetectionQueue)
+            }
+            if showsFilter {
+                ToolbarItem(placement: .topBarTrailing) {
+                    InboxFilterMenu()
+                }
             }
         }
         .refreshable {
@@ -83,30 +93,8 @@ struct InboxView: View {
         reduceMotion ? nil : .default
     }
 
-    private var filterBinding: Binding<PodcastEpisodeFilter> {
-        Binding(
-            get: { appModel.inboxEpisodeListSettings.filter },
-            set: { filter in
-                appModel.inboxEpisodeListSettings.setFilter(filter, modelContext: modelContext)
-            }
-        )
-    }
-
-    private var hidesQueuedEpisodesBinding: Binding<Bool> {
-        Binding(
-            get: { appModel.inboxEpisodeListSettings.hidesQueuedEpisodes },
-            set: { hidesQueuedEpisodes in
-                appModel.inboxEpisodeListSettings.setHidesQueuedEpisodes(
-                    hidesQueuedEpisodes,
-                    modelContext: modelContext
-                )
-            }
-        )
-    }
-
     private func showAllEpisodes() {
-        appModel.inboxEpisodeListSettings.setFilter(.all, modelContext: modelContext)
-        appModel.inboxEpisodeListSettings.setHidesQueuedEpisodes(false, modelContext: modelContext)
+        appModel.inboxEpisodeListSettings.resetToDefaults(modelContext: modelContext)
     }
 }
 

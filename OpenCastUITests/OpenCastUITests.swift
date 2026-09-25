@@ -1322,11 +1322,12 @@ final class OpenCastUITests: XCTestCase {
         let completedRow = app.buttons.matching(identifier: Self.seededCompletedEpisodeRowIdentifier).firstMatch
         assertExists(inProgressRow, named: "seeded in-progress inbox row under All Episodes")
         assertExists(completedRow, named: "seeded completed inbox row under All Episodes")
-        assertExists(app.buttons["Filter Episodes, All Episodes"], named: "Inbox filter menu under All Episodes")
+        assertExists(inboxFilterMenu(showing: "All Episodes", in: app), named: "Inbox filter menu under All Episodes")
         attachSmokeScreenshot(named: "inbox_filter_all")
 
         chooseInboxFilter("Unplayed", in: app)
-        assertExists(app.buttons["Filter Episodes, Unplayed"], named: "Inbox filter menu under Unplayed")
+        assertExists(inboxFilterMenu(showing: "Unplayed", in: app), named: "Inbox filter menu under Unplayed")
+        assertExists(inboxSubtitle("Unplayed", in: app), named: "Inbox subtitle under Unplayed")
         assertExists(inProgressRow, named: "in-progress row under Unplayed")
         assertDoesNotExist(completedRow, named: "completed row under Unplayed")
         attachSmokeScreenshot(named: "inbox_filter_unplayed")
@@ -1344,6 +1345,7 @@ final class OpenCastUITests: XCTestCase {
         let filteredEmpty = app.descendants(matching: .any).matching(identifier: "Inbox Filtered Empty").firstMatch
         assertExists(filteredEmpty, named: "Inbox filtered-empty view under Downloaded")
         assertExists(app.staticTexts["No Downloaded Episodes"], named: "filtered-empty title under Downloaded")
+        assertExists(inboxSubtitle("Downloaded", in: app), named: "Inbox subtitle under Downloaded")
         assertDoesNotExist(inProgressRow, named: "in-progress row under Downloaded")
         assertDoesNotExist(completedRow, named: "completed row under Downloaded")
         attachSmokeScreenshot(named: "inbox_filter_downloaded_empty")
@@ -1351,7 +1353,15 @@ final class OpenCastUITests: XCTestCase {
         let showAllButton = app.buttons["Show All Episodes"]
         assertHittable(showAllButton, named: "Show All Episodes button")
         showAllButton.tap()
-        assertExists(app.buttons["Filter Episodes, All Episodes"], named: "Inbox filter menu after Show All Episodes")
+        assertExists(
+            inboxFilterMenu(showing: "All Episodes", in: app),
+            named: "Inbox filter menu after Show All Episodes"
+        )
+        assertDoesNotExist(
+            inboxSubtitle("Downloaded", in: app),
+            named: "Inbox subtitle after Show All Episodes",
+            timeout: 5
+        )
         assertExists(inProgressRow, named: "in-progress row after Show All Episodes")
         assertExists(completedRow, named: "completed row after Show All Episodes")
         assertDoesNotExist(filteredEmpty, named: "filtered-empty view after Show All Episodes")
@@ -1379,9 +1389,10 @@ final class OpenCastUITests: XCTestCase {
         }
         assertExists(unqueuedRow, named: "unqueued inbox row while hiding Up Next")
         assertExists(
-            app.buttons["Filter Episodes, All Episodes"],
-            named: "Inbox filter menu label while hiding Up Next"
+            inboxFilterMenu(showing: "Up Next hidden", in: app),
+            named: "Inbox filter menu while hiding Up Next"
         )
+        assertExists(inboxSubtitle("Up Next hidden", in: app), named: "Inbox subtitle while hiding Up Next")
         attachSmokeScreenshot(named: "inbox_hide_up_next_on")
 
         toggleInboxHidesUpNext(in: app)
@@ -1389,6 +1400,15 @@ final class OpenCastUITests: XCTestCase {
             assertExists(row, named: "queued inbox row \(index + 1) after showing Up Next again")
         }
         assertExists(unqueuedRow, named: "unqueued inbox row after showing Up Next again")
+        assertExists(
+            inboxFilterMenu(showing: "All Episodes", in: app),
+            named: "Inbox filter menu after showing Up Next again"
+        )
+        assertDoesNotExist(
+            inboxSubtitle("Up Next hidden", in: app),
+            named: "Inbox subtitle after showing Up Next again",
+            timeout: 5
+        )
     }
 
     @MainActor
@@ -5430,14 +5450,28 @@ final class OpenCastUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
-    /// The Inbox filter menu's label carries the current choice.
+    /// The Inbox filter's trailing toolbar menu. Its label names the
+    /// settings that differ from their defaults, or All Episodes.
+    @MainActor
+    private func inboxFilterMenu(showing summary: String, in app: XCUIApplication) -> XCUIElement {
+        app.navigationBars["Inbox"].buttons["Filter Episodes, \(summary)"]
+    }
+
+    /// The Inbox navigation subtitle, shown only while something is filtered.
+    @MainActor
+    private func inboxSubtitle(_ text: String, in app: XCUIApplication) -> XCUIElement {
+        app.navigationBars["Inbox"].staticTexts[text]
+    }
+
     @MainActor
     private func openInboxFilterMenu(
         in app: XCUIApplication,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let menu = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Filter Episodes,")).firstMatch
+        let menu = app.navigationBars["Inbox"].buttons
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Filter Episodes,"))
+            .firstMatch
         assertHittable(menu, named: "Inbox filter menu", file: file, line: line)
         menu.tap()
     }
@@ -5461,7 +5495,7 @@ final class OpenCastUITests: XCTestCase {
         )
     }
 
-    /// Flips the Hide Up Next Episodes toggle inside the Inbox filter menu.
+    /// Flips the Hide Up Next toggle inside the Inbox filter menu.
     /// The item's element type is not pinned, so the query is type-agnostic
     /// and a miss attaches the hierarchy.
     @MainActor
@@ -5472,14 +5506,14 @@ final class OpenCastUITests: XCTestCase {
     ) {
         openInboxFilterMenu(in: app, file: file, line: line)
         let item = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "Hide Up Next Episodes"))
+            .matching(NSPredicate(format: "label == %@", "Hide Up Next"))
             .firstMatch
         guard item.waitForExistence(timeout: 5) else {
             let attachment = XCTAttachment(string: app.debugDescription)
             attachment.name = "inbox_filter_menu_hierarchy"
             attachment.lifetime = .keepAlways
             add(attachment)
-            XCTFail("Hide Up Next Episodes menu item not found", file: file, line: line)
+            XCTFail("Hide Up Next menu item not found", file: file, line: line)
             return
         }
         attachSmokeScreenshot(named: "inbox_filter_menu_open")

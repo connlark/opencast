@@ -6,15 +6,18 @@ import Foundation
 struct InboxEpisodeListModel {
     let episodes: [EpisodeListItemSnapshot]
     let totalEpisodeCount: Int
+    let hasMore: Bool
 
     var isFilteredEmpty: Bool {
-        episodes.isEmpty && totalEpisodeCount > 0
+        episodes.isEmpty && totalEpisodeCount > 0 && !hasMore
     }
 
     /// The download, queue and playing-episode inputs are autoclosures: they
     /// are observed state, and reading one the filter does not need would
     /// subscribe the whole Inbox list to it. All Episodes with the toggle off
     /// returns the input untouched and reads nothing.
+    /// When `visibleEpisodeCount` is supplied, the scan stops after one extra
+    /// match and `hasMore` drives the continuation row.
     static func make(
         episodes: [EpisodeListItemSnapshot],
         filter: PodcastEpisodeFilter,
@@ -22,10 +25,20 @@ struct InboxEpisodeListModel {
         library: LibraryStore,
         downloadRecords: @autoclosure () -> [EpisodeDownloadRecord],
         queuedEpisodeIDs: @autoclosure () -> Set<String>,
-        playingEpisodeID: @autoclosure () -> String?
+        playingEpisodeID: @autoclosure () -> String?,
+        visibleEpisodeCount: Int? = nil
     ) -> InboxEpisodeListModel {
         guard filter != .all || hidesQueuedEpisodes else {
-            return InboxEpisodeListModel(episodes: episodes, totalEpisodeCount: episodes.count)
+            guard let visibleEpisodeCount else {
+                return InboxEpisodeListModel(episodes: episodes, totalEpisodeCount: episodes.count, hasMore: false)
+            }
+            let visibleCount = max(visibleEpisodeCount, 0)
+            let visibleEpisodes = Array(episodes.prefix(visibleCount))
+            return InboxEpisodeListModel(
+                episodes: visibleEpisodes,
+                totalEpisodeCount: episodes.count,
+                hasMore: visibleEpisodes.count < episodes.count
+            )
         }
 
         let downloadedEpisodeIDs = filter == .downloaded ? downloadRecords().completedEpisodeIDs : []
@@ -39,13 +52,29 @@ struct InboxEpisodeListModel {
             }
         }
 
-        let visibleEpisodes = episodes.filter { episode in
-            !hiddenEpisodeIDs.contains(episode.episodeID)
-                && filter.includes(
-                    progress: library.progressSummary(for: episode),
-                    isDownloaded: downloadedEpisodeIDs.contains(episode.episodeID)
-                )
+        let visibleCount = visibleEpisodeCount.map { max($0, 0) }
+        var visibleEpisodes: [EpisodeListItemSnapshot] = []
+        var hasMore = false
+        for episode in episodes {
+            guard !hiddenEpisodeIDs.contains(episode.episodeID),
+                  filter.includes(
+                      progress: library.progressSummary(for: episode),
+                      isDownloaded: downloadedEpisodeIDs.contains(episode.episodeID)
+                  )
+            else {
+                continue
+            }
+
+            if let visibleCount, visibleEpisodes.count >= visibleCount {
+                hasMore = true
+                break
+            }
+            visibleEpisodes.append(episode)
         }
-        return InboxEpisodeListModel(episodes: visibleEpisodes, totalEpisodeCount: episodes.count)
+        return InboxEpisodeListModel(
+            episodes: visibleEpisodes,
+            totalEpisodeCount: episodes.count,
+            hasMore: hasMore
+        )
     }
 }

@@ -33,7 +33,7 @@ struct LibraryView: View {
             .animation(reduceMotion ? nil : .default, value: subscriptions.map(\.feedURL))
             .animation(reduceMotion ? nil : .default, value: layout)
             .safeAreaInset(edge: .top, spacing: 0) {
-                displaySettingsError
+                SettingsErrorBanner(message: displaySettings.lastErrorMessage)
             }
             .navigationTitle("Library")
             .toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
@@ -104,19 +104,6 @@ struct LibraryView: View {
                 .accessibilityIdentifier("Library List")
                 .transition(.opacity)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var displaySettingsError: some View {
-        if let message = displaySettings.lastErrorMessage {
-            Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.footnote)
-                .foregroundStyle(.orange)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(.bar)
         }
     }
 

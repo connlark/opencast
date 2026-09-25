@@ -86,6 +86,9 @@ final class OpenCastAppModel {
     var dataNukeConfirmationPresentationRequest = 0
     var lastPlaybackError: String?
     var lastUpNextError: String?
+    /// The library, downloads, and Up Next snapshots are all ready for list
+    /// views to derive cross-store state without observing partial startup data.
+    private(set) var coreStoresHydrated = false
     /// Unsubscribe outcome surface, presented by the removal confirmation
     /// surfaces; unsubscribe failures never route through the playback error.
     var lastUnsubscribeErrorMessage: String?
@@ -456,6 +459,7 @@ final class OpenCastAppModel {
             return
         }
 
+        coreStoresHydrated = false
         let task = Task {
             // Before the library publishes, so a stored layout doesn't
             // flash the default container first, and a stored Inbox filter
@@ -476,6 +480,7 @@ final class OpenCastAppModel {
             if let message = upNextQueue.consumeLastErrorMessage() {
                 lastUpNextError = message
             }
+            coreStoresHydrated = true
         }
         coreStoresLoadTask = task
         await task.value
@@ -1909,6 +1914,7 @@ final class OpenCastAppModel {
         // the wipe deleted (DataNukeRunner.run names the same invariant).
         dismissNowPlayingAndDiscardFinishedPlayback()
         playback.unload()
+        coreStoresHydrated = false
         lastPlaybackError = nil
         lastUpNextError = nil
         lastUnsubscribeErrorMessage = nil
@@ -1936,6 +1942,7 @@ final class OpenCastAppModel {
         playbackSettings.load(modelContext: modelContext, playback: playback)
         notificationSettings.resetAfterDataNuke()
         onboardingState.load(modelContext: modelContext)
+        coreStoresHydrated = true
         #if DEBUG
         try? FileManager.default.removeItem(at: VoiceBoostDeviceProbe.reportURL)
         lastVoiceBoostDeviceProbeResult = nil

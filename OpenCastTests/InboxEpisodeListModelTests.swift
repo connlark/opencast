@@ -140,6 +140,31 @@ struct InboxEpisodeListModelTests {
         #expect(filteredToNothing.isFilteredEmpty)
     }
 
+    @Test("A page-limited model exposes continuation without returning later rows")
+    func pageLimit() {
+        let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let episodes = [
+            makeEpisode(id: "newest", publishedAt: 30),
+            makeEpisode(id: "middle", publishedAt: 20),
+            makeEpisode(id: "oldest", publishedAt: 10)
+        ]
+
+        let model = InboxEpisodeListModel.make(
+            episodes: episodes,
+            filter: .unplayed,
+            hidesQueuedEpisodes: false,
+            library: library,
+            downloadRecords: [],
+            queuedEpisodeIDs: [],
+            playingEpisodeID: nil,
+            visibleEpisodeCount: 1
+        )
+
+        #expect(model.episodes.map(\.id) == ["newest"])
+        #expect(model.hasMore)
+        #expect(!model.isFilteredEmpty)
+    }
+
     private func makeModel(
         _ filter: PodcastEpisodeFilter,
         _ episodes: [EpisodeListItemSnapshot],
