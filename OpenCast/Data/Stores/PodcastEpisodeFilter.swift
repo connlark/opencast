@@ -68,4 +68,36 @@ nonisolated enum PodcastEpisodeFilter: String, CaseIterable, Identifiable, Senda
             "Download an episode to listen to it offline."
         }
     }
+
+    var inboxEmptyStateDescription: String {
+        switch self {
+        case .all:
+            "Your Inbox does not have any episodes yet."
+        case .unplayed:
+            "Every episode in your Inbox is marked as played."
+        case .inProgress, .played, .downloaded:
+            emptyStateDescription
+        }
+    }
+
+    /// The one membership rule shared by every episode list. The inputs are
+    /// lazy so `.all` reads nothing and `.downloaded` never looks up progress.
+    @MainActor
+    func includes(
+        progress: @autoclosure () -> EpisodeProgressSummary,
+        isDownloaded: @autoclosure () -> Bool
+    ) -> Bool {
+        switch self {
+        case .all:
+            true
+        case .unplayed:
+            !progress().isCompleted
+        case .inProgress:
+            progress().hasVisibleProgress
+        case .played:
+            progress().isCompleted
+        case .downloaded:
+            isDownloaded()
+        }
+    }
 }

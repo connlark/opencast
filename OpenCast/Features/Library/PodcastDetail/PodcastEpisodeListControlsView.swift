@@ -27,21 +27,7 @@ struct PodcastEpisodeListControlsView: View {
                     .frame(maxWidth: .infinity)
                     .accessibilityLabel("Sort Episodes, \(sortOrder.title)")
 
-                    Menu {
-                        Picker("Filter Episodes", selection: $filter) {
-                            ForEach(PodcastEpisodeFilter.allCases) { option in
-                                Label(option.title, systemImage: option.systemImage)
-                                    .tag(option)
-                            }
-                        }
-                    } label: {
-                        Label(filter.title, systemImage: filter.systemImage)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.glass)
-                    .frame(maxWidth: .infinity)
-                    .accessibilityLabel("Filter Episodes, \(filter.title)")
+                    EpisodeFilterMenu(filter: $filter)
                 }
             }
 

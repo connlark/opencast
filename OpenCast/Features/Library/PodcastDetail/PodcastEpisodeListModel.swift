@@ -19,13 +19,10 @@ struct PodcastEpisodeListModel {
         filter: PodcastEpisodeFilter,
         sortOrder: PodcastEpisodeSortOrder,
         library: LibraryStore,
-        downloadRecords: [EpisodeDownloadRecord]
+        downloadRecords: @autoclosure () -> [EpisodeDownloadRecord]
     ) -> PodcastEpisodeListModel {
-        let downloadedEpisodeIDs = Set(
-            downloadRecords.compactMap { record in
-                record.state == .completed ? record.episodeID : nil
-            }
-        )
+        // Download records are observed state; only Downloaded reads them.
+        let downloadedEpisodeIDs = filter == .downloaded ? downloadRecords().completedEpisodeIDs : []
 
         var visibleEpisodes: [EpisodeListItemSnapshot] = []
         var unplayedEpisodeCount = 0
@@ -50,19 +47,10 @@ struct PodcastEpisodeListModel {
                 resumeUpdatedAt = record.updatedAt
             }
 
-            let isVisible = switch filter {
-            case .all:
-                true
-            case .unplayed:
-                !progress.isCompleted
-            case .inProgress:
-                progress.hasVisibleProgress
-            case .played:
-                progress.isCompleted
-            case .downloaded:
-                downloadedEpisodeIDs.contains(episode.episodeID)
-            }
-            if isVisible {
+            if filter.includes(
+                progress: progress,
+                isDownloaded: downloadedEpisodeIDs.contains(episode.episodeID)
+            ) {
                 visibleEpisodes.append(episode)
             }
         }

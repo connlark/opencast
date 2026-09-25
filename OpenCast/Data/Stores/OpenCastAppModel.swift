@@ -46,7 +46,7 @@ final class OpenCastAppModel {
     let appIcon: AppIconStore
     let podcastEpisodeListSettings: PodcastEpisodeListSettingsStore
     let libraryDisplaySettings: LibraryDisplaySettingsStore
-    let inboxSettings: InboxSettingsStore
+    let inboxEpisodeListSettings: InboxEpisodeListSettingsStore
     let recentSearches: RecentSearchesStore
     let playbackSettings: PlaybackSettingsStore
     let notificationSettings: NotificationSettingsStore
@@ -166,7 +166,7 @@ final class OpenCastAppModel {
         appIcon: AppIconStore = AppIconStore(),
         podcastEpisodeListSettings: PodcastEpisodeListSettingsStore = PodcastEpisodeListSettingsStore(),
         libraryDisplaySettings: LibraryDisplaySettingsStore = LibraryDisplaySettingsStore(),
-        inboxSettings: InboxSettingsStore = InboxSettingsStore(),
+        inboxEpisodeListSettings: InboxEpisodeListSettingsStore = InboxEpisodeListSettingsStore(),
         recentSearches: RecentSearchesStore = RecentSearchesStore(),
         playbackSettings: PlaybackSettingsStore = PlaybackSettingsStore(),
         notificationSettings: NotificationSettingsStore = NotificationSettingsStore(),
@@ -317,7 +317,7 @@ final class OpenCastAppModel {
         self.appIcon = appIcon
         self.podcastEpisodeListSettings = podcastEpisodeListSettings
         self.libraryDisplaySettings = libraryDisplaySettings
-        self.inboxSettings = inboxSettings
+        self.inboxEpisodeListSettings = inboxEpisodeListSettings
         self.recentSearches = recentSearches
         self.playbackSettings = playbackSettings
         self.notificationSettings = notificationSettings
@@ -418,9 +418,8 @@ final class OpenCastAppModel {
             return self.transcriptions.progressByEpisodeID[episodeID]
         }
         let playbackController = self.playback
-        upNextQueue.onQueueChanged = { [weak self, weak playbackController, weak upNextQueue] modelContext in
+        upNextQueue.onQueueChanged = { [weak playbackController, weak upNextQueue] in
             playbackController?.setHasQueuedNextEpisode(!(upNextQueue?.items.isEmpty ?? true))
-            self?.loadQueueHeadIfNeeded(modelContext: modelContext)
         }
         startSiriMediaUserContextObservation()
     }
@@ -459,9 +458,10 @@ final class OpenCastAppModel {
 
         let task = Task {
             // Before the library publishes, so a stored layout doesn't
-            // flash the default container first.
+            // flash the default container first, and a stored Inbox filter
+            // applies to the first render.
             libraryDisplaySettings.load(modelContext: modelContext)
-            inboxSettings.load(modelContext: modelContext)
+            inboxEpisodeListSettings.load(modelContext: modelContext)
             let didLoadLibrary = await library.load(modelContext: modelContext)
             await downloads.load(modelContext: modelContext)
             playbackSettings.load(modelContext: modelContext, playback: playback)
@@ -1579,7 +1579,6 @@ final class OpenCastAppModel {
 
         guard let record = restorableEpisode(modelContext: modelContext) else {
             playbackRestorePreference.clear(modelContext: modelContext)
-            loadQueueHeadIfNeeded(modelContext: modelContext)
             return
         }
 
@@ -1922,7 +1921,7 @@ final class OpenCastAppModel {
         transcriptAnalyses.load(modelContext: modelContext)
         transcriptIntelligence.load(modelContext: modelContext)
         adFreePass.reset()
-        upNextQueue.resetAfterDataNuke(modelContext: modelContext)
+        upNextQueue.resetAfterDataNuke()
         adFreePassBackgroundSession.reset()
         transcriptGenerationBackgroundSession.reset()
         transcriptImprovement.resetForDataNuke()
@@ -1932,7 +1931,7 @@ final class OpenCastAppModel {
         appIcon.load()
         podcastEpisodeListSettings.load(modelContext: modelContext)
         libraryDisplaySettings.load(modelContext: modelContext)
-        inboxSettings.load(modelContext: modelContext)
+        inboxEpisodeListSettings.load(modelContext: modelContext)
         recentSearches.load(modelContext: modelContext)
         playbackSettings.load(modelContext: modelContext, playback: playback)
         notificationSettings.resetAfterDataNuke()
@@ -2094,35 +2093,6 @@ final class OpenCastAppModel {
 
     private func isCurrentEpisode(_ episode: EpisodeListItemSnapshot) -> Bool {
         playback.currentEpisode?.id.rawValue == episode.episodeID
-    }
-
-    /// Loads the head of Up Next paused, so the mini player appears as soon
-    /// as the queue has something, without waiting for the user to tap play.
-    private func loadQueueHeadIfNeeded(modelContext: ModelContext) {
-        guard playback.currentEpisode == nil,
-              let nextItem = upNextQueue.items.first,
-              let snapshot = library.episode(with: nextItem.episodeID)
-        else {
-            return
-        }
-
-        do {
-            let episode = try resolvedPlaybackEpisode(
-                for: snapshot,
-                source: preferredPlaybackSource(for: snapshot.episodeID),
-                modelContext: modelContext
-            )
-            let boundaries = playbackEpisodeBoundaries(forPodcastID: snapshot.podcastID)
-            let startPosition = boundaries.ordinaryStartPosition(
-                library.resumePosition(for: snapshot.episodeID),
-                duration: episode.duration
-            )
-            try playback.load(episode, startPosition: startPosition, boundaries: boundaries)
-            refreshPlaybackSkipZonesForCurrentEpisode()
-        } catch {
-            // Leave the queue untouched; the mini player just stays hidden
-            // until the head episode is actually playable.
-        }
     }
 
     private func restorableEpisode(modelContext: ModelContext) -> EpisodeListItemSnapshot? {

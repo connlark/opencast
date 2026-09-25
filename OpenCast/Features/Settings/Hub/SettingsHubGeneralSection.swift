@@ -6,7 +6,6 @@ struct SettingsHubGeneralSection: View {
     var body: some View {
         Section {
             SettingsNavigationRow(title: "Playback", systemImage: "play.circle", route: .playback)
-            SettingsNavigationRow(title: "Inbox", systemImage: "tray.fill", route: .inbox)
             SettingsNavigationRow(
                 title: "Notifications",
                 systemImage: "bell",

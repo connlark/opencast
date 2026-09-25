@@ -1313,6 +1313,85 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededInboxFilterHidesPlayedEpisodes() throws {
+        let app = makeSeededApp(seedsEpisodeProgress: true)
+        app.launch()
+
+        openInbox(in: app)
+        let inProgressRow = seededEpisodeRow(in: app)
+        let completedRow = app.buttons.matching(identifier: Self.seededCompletedEpisodeRowIdentifier).firstMatch
+        assertExists(inProgressRow, named: "seeded in-progress inbox row under All Episodes")
+        assertExists(completedRow, named: "seeded completed inbox row under All Episodes")
+        assertExists(app.buttons["Filter Episodes, All Episodes"], named: "Inbox filter menu under All Episodes")
+        attachSmokeScreenshot(named: "inbox_filter_all")
+
+        chooseInboxFilter("Unplayed", in: app)
+        assertExists(app.buttons["Filter Episodes, Unplayed"], named: "Inbox filter menu under Unplayed")
+        assertExists(inProgressRow, named: "in-progress row under Unplayed")
+        assertDoesNotExist(completedRow, named: "completed row under Unplayed")
+        attachSmokeScreenshot(named: "inbox_filter_unplayed")
+
+        chooseInboxFilter("In Progress", in: app)
+        assertExists(inProgressRow, named: "in-progress row under In Progress")
+        assertDoesNotExist(completedRow, named: "completed row under In Progress")
+
+        chooseInboxFilter("Played", in: app)
+        assertExists(completedRow, named: "completed row under Played")
+        assertDoesNotExist(inProgressRow, named: "in-progress row under Played")
+        attachSmokeScreenshot(named: "inbox_filter_played")
+
+        chooseInboxFilter("Downloaded", in: app)
+        let filteredEmpty = app.descendants(matching: .any).matching(identifier: "Inbox Filtered Empty").firstMatch
+        assertExists(filteredEmpty, named: "Inbox filtered-empty view under Downloaded")
+        assertExists(app.staticTexts["No Downloaded Episodes"], named: "filtered-empty title under Downloaded")
+        assertDoesNotExist(inProgressRow, named: "in-progress row under Downloaded")
+        assertDoesNotExist(completedRow, named: "completed row under Downloaded")
+        attachSmokeScreenshot(named: "inbox_filter_downloaded_empty")
+
+        let showAllButton = app.buttons["Show All Episodes"]
+        assertHittable(showAllButton, named: "Show All Episodes button")
+        showAllButton.tap()
+        assertExists(app.buttons["Filter Episodes, All Episodes"], named: "Inbox filter menu after Show All Episodes")
+        assertExists(inProgressRow, named: "in-progress row after Show All Episodes")
+        assertExists(completedRow, named: "completed row after Show All Episodes")
+        assertDoesNotExist(filteredEmpty, named: "filtered-empty view after Show All Episodes")
+    }
+
+    @MainActor
+    func testSeededInboxHideUpNextToggleHidesQueuedRows() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launch()
+
+        openInbox(in: app)
+        let unqueuedRow = seededEpisodeRow(in: app)
+        let queuedRows = Self.seededQueuedEpisodeRowIdentifiers.map {
+            app.buttons.matching(identifier: $0).firstMatch
+        }
+        assertExists(unqueuedRow, named: "unqueued seeded inbox row")
+        for (index, row) in queuedRows.enumerated() {
+            assertExists(row, named: "queued inbox row \(index + 1) before hiding Up Next")
+        }
+        attachSmokeScreenshot(named: "inbox_hide_up_next_off")
+
+        toggleInboxHidesUpNext(in: app)
+        for (index, row) in queuedRows.enumerated() {
+            assertDoesNotExist(row, named: "queued inbox row \(index + 1) while hiding Up Next", timeout: 5)
+        }
+        assertExists(unqueuedRow, named: "unqueued inbox row while hiding Up Next")
+        assertExists(
+            app.buttons["Filter Episodes, All Episodes"],
+            named: "Inbox filter menu label while hiding Up Next"
+        )
+        attachSmokeScreenshot(named: "inbox_hide_up_next_on")
+
+        toggleInboxHidesUpNext(in: app)
+        for (index, row) in queuedRows.enumerated() {
+            assertExists(row, named: "queued inbox row \(index + 1) after showing Up Next again")
+        }
+        assertExists(unqueuedRow, named: "unqueued inbox row after showing Up Next again")
+    }
+
+    @MainActor
     func testSeededEpisodeProgressRestoresMiniPlayerAndShowsRows() throws {
         let app = makeSeededApp(seedsEpisodeProgress: true)
         app.launch()
@@ -5349,6 +5428,65 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     private func libraryContainer(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    /// The Inbox filter menu's label carries the current choice.
+    @MainActor
+    private func openInboxFilterMenu(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let menu = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Filter Episodes,")).firstMatch
+        assertHittable(menu, named: "Inbox filter menu", file: file, line: line)
+        menu.tap()
+    }
+
+    @MainActor
+    private func chooseInboxFilter(
+        _ title: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        openInboxFilterMenu(in: app, file: file, line: line)
+        let option = app.buttons.matching(NSPredicate(format: "label == %@", title)).firstMatch
+        assertHittable(option, named: "\(title) Inbox filter option", file: file, line: line)
+        option.tap()
+        XCTAssertTrue(
+            option.waitForNonExistence(timeout: 5),
+            "The Inbox filter menu should close after choosing \(title)",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Flips the Hide Up Next Episodes toggle inside the Inbox filter menu.
+    /// The item's element type is not pinned, so the query is type-agnostic
+    /// and a miss attaches the hierarchy.
+    @MainActor
+    private func toggleInboxHidesUpNext(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        openInboxFilterMenu(in: app, file: file, line: line)
+        let item = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Hide Up Next Episodes"))
+            .firstMatch
+        guard item.waitForExistence(timeout: 5) else {
+            let attachment = XCTAttachment(string: app.debugDescription)
+            attachment.name = "inbox_filter_menu_hierarchy"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            XCTFail("Hide Up Next Episodes menu item not found", file: file, line: line)
+            return
+        }
+        attachSmokeScreenshot(named: "inbox_filter_menu_open")
+        item.tap()
+        if !item.waitForNonExistence(timeout: 2) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+        }
     }
 
     /// Picks a Library View Options entry, opening `submenu` first for the

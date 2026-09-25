@@ -313,7 +313,7 @@ struct UpNextQueueStoreTests {
     func noOpMutationsStayHonest() throws {
         let fixture = try makeFixture()
         var changeCount = 0
-        fixture.store.onQueueChanged = { _ in changeCount += 1 }
+        fixture.store.onQueueChanged = { changeCount += 1 }
         #expect(!fixture.store.reorderVisibleEpisodeIDs(["missing"], modelContext: fixture.context))
         let error = fixture.store.lastErrorMessage
 

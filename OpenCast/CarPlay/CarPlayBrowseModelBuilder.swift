@@ -367,7 +367,7 @@ enum CarPlayBrowseModelBuilder {
     }
 
     private static func completedDownloadEpisodeIDs(in records: [EpisodeDownloadRecord]) -> Set<String> {
-        Set(records.compactMap { $0.state == .completed ? $0.episodeID : nil })
+        records.completedEpisodeIDs
     }
 
     private static func publishedText(_ publishedAt: Date) -> String {
