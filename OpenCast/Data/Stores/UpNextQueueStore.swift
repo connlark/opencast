@@ -8,7 +8,7 @@ final class UpNextQueueStore {
     private(set) var items: [UpNextQueueItem] = []
     private(set) var lastErrorMessage: String?
 
-    @ObservationIgnored var onQueueChanged: (() -> Void)?
+    @ObservationIgnored var onQueueChanged: ((ModelContext) -> Void)?
     @ObservationIgnored private let saveModelContext: (ModelContext) throws -> Void
 
     init(
@@ -64,7 +64,7 @@ final class UpNextQueueStore {
             }
             items = loadedItems
             lastErrorMessage = nil
-            onQueueChanged?()
+            onQueueChanged?(modelContext)
         } catch {
             modelContext.rollback()
             lastErrorMessage = "Unable to load Up Next: \(error.localizedDescription)"
@@ -113,7 +113,7 @@ final class UpNextQueueStore {
                     modelContext.delete(record)
                 }
                 try saveModelContext(modelContext)
-                didMutate()
+                didMutate(modelContext: modelContext)
                 return true
             } catch {
                 modelContext.rollback()
@@ -148,7 +148,7 @@ final class UpNextQueueStore {
                     modelContext.delete(record)
                 }
                 try saveModelContext(modelContext)
-                didMutate()
+                didMutate(modelContext: modelContext)
                 return true
             } catch {
                 modelContext.rollback()
@@ -197,7 +197,7 @@ final class UpNextQueueStore {
 
         do {
             try persistCurrentOrder(modelContext: modelContext)
-            didMutate()
+            didMutate(modelContext: modelContext)
             return true
         } catch {
             modelContext.rollback()
@@ -222,7 +222,7 @@ final class UpNextQueueStore {
                     modelContext.delete(record)
                 }
                 try saveModelContext(modelContext)
-                didMutate()
+                didMutate(modelContext: modelContext)
                 return true
             } catch {
                 modelContext.rollback()
@@ -245,7 +245,7 @@ final class UpNextQueueStore {
         do {
             try deleteRecords(episodeID: nextItem.episodeID, modelContext: modelContext)
             try saveModelContext(modelContext)
-            didMutate()
+            didMutate(modelContext: modelContext)
             return .item(nextItem)
         } catch {
             modelContext.rollback()
@@ -260,10 +260,10 @@ final class UpNextQueueStore {
         items.contains { $0.episodeID == episodeID }
     }
 
-    func resetAfterDataNuke() {
+    func resetAfterDataNuke(modelContext: ModelContext) {
         items = []
         lastErrorMessage = nil
-        onQueueChanged?()
+        onQueueChanged?(modelContext)
     }
 
     func consumeLastErrorMessage() -> String? {
@@ -304,7 +304,7 @@ final class UpNextQueueStore {
                 )
             )
             try saveModelContext(modelContext)
-            didMutate()
+            didMutate(modelContext: modelContext)
             return true
         } catch {
             modelContext.rollback()
@@ -362,9 +362,9 @@ final class UpNextQueueStore {
         }
     }
 
-    private func didMutate() {
+    private func didMutate(modelContext: ModelContext) {
         lastErrorMessage = nil
-        onQueueChanged?()
+        onQueueChanged?(modelContext)
     }
 
     private static func item(
