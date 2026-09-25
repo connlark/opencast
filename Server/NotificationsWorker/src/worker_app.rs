@@ -190,6 +190,14 @@ struct ApnsSendResult {
     apns_error: Option<String>,
 }
 
+struct PushSendAttempt<'a> {
+    install_id: &'a str,
+    device_token_hash: &'a str,
+    apns_environment: &'a str,
+    result: &'a ApnsSendResult,
+    now: i64,
+}
+
 #[derive(Serialize)]
 struct TestPushResponse {
     message: &'static str,
@@ -1131,13 +1139,13 @@ async fn send_apns_request(
     };
     record_push_send_attempt(
         db,
-        install_id,
-        &device.device_token_hash,
-        apns_environment.as_str(),
-        result.apns_status,
-        result.apns_id.as_deref(),
-        result.apns_error.as_deref(),
-        now,
+        PushSendAttempt {
+            install_id,
+            device_token_hash: &device.device_token_hash,
+            apns_environment: apns_environment.as_str(),
+            result: &result,
+            now,
+        },
     )
     .await?;
 
@@ -1157,13 +1165,7 @@ async fn send_apns_request(
 
 async fn record_push_send_attempt(
     db: &worker::D1Database,
-    install_id: &str,
-    device_token_hash: &str,
-    apns_environment: &str,
-    apns_status: Option<u16>,
-    apns_id: Option<&str>,
-    apns_error: Option<&str>,
-    now: i64,
+    attempt: PushSendAttempt<'_>,
 ) -> Result<()> {
     let attempt_id = random::random_urlsafe_token(16)
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
@@ -1171,13 +1173,13 @@ async fn record_push_send_attempt(
         db,
         storage::PushSendAttemptInsert {
             attempt_id: &attempt_id,
-            install_id: Some(install_id),
-            device_token_hash: Some(device_token_hash),
-            apns_environment,
-            apns_status: apns_status.map(i32::from),
-            apns_id,
-            apns_error,
-            created_at: now,
+            install_id: Some(attempt.install_id),
+            device_token_hash: Some(attempt.device_token_hash),
+            apns_environment: attempt.apns_environment,
+            apns_status: attempt.result.apns_status.map(i32::from),
+            apns_id: attempt.result.apns_id.as_deref(),
+            apns_error: attempt.result.apns_error.as_deref(),
+            created_at: attempt.now,
         },
     )
     .await

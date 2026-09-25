@@ -52,7 +52,7 @@ pub async fn page(db: &D1Database, env: &Env, source: &str, event_id: &str) -> R
             key,
             &generation.to_string(),
         ]);
-        let args = vec![
+        let args = [
             json!(delivery),
             json!(event_id),
             json!(install),

@@ -227,7 +227,7 @@ final class CarPlayInterfaceCoordinator {
                 return
             }
 
-            await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
+            await appModel.ensureCarPlaySurfaceHydratedAndRefreshed(modelContext: modelContext)
             guard let self, !Task.isCancelled else {
                 return
             }

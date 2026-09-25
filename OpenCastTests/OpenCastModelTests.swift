@@ -152,6 +152,40 @@ struct OpenCastModelTests {
         #expect(store.state == .idle)
     }
 
+    @Test("CarPlay hydration refreshes stale feeds after the local load")
+    func carPlayHydrationRefreshesStaleFeedsAfterLocalLoad() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/carplay-refresh.xml"
+        let snapshot = makeSnapshot(
+            feedURL: feedURL,
+            podcastTitle: "CarPlay Show",
+            episodeID: "carplay-refresh-episode",
+            episodeTitle: "CarPlay Episode"
+        )
+        let service = StubFeedService(responses: [feedURL: .success(snapshot)])
+        let library = LibraryStore(
+            feedService: service,
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        let appModel = OpenCastAppModel(library: library)
+        context.insert(SubscriptionRecord(
+            feedURL: feedURL,
+            title: "CarPlay Show",
+            lastRefreshAt: Date(timeIntervalSince1970: 1_700_000_000)
+        ))
+        try context.save()
+
+        await appModel.ensureCarPlaySurfaceHydratedAndRefreshed(modelContext: context)
+
+        #expect(await service.requestedURLStrings() == [feedURL])
+        #expect(appModel.library.episode(with: "carplay-refresh-episode") != nil)
+
+        await appModel.ensureCarPlaySurfaceHydratedAndRefreshed(modelContext: context)
+
+        #expect(await service.requestedURLStrings() == [feedURL])
+    }
+
     @Test("Subscribe cache write failure does not persist a subscription")
     func subscribeCacheWriteFailureDoesNotPersistSubscription() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

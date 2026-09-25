@@ -160,7 +160,7 @@ impl Preparation {
             if bytes.len() != page.count * 65 {
                 return Err(fault("item_key_size"));
             }
-            for key in bytes.chunks_exact(65) {
+            for key in bytes.as_chunks::<65>().0 {
                 let id: Hash = key[..32].try_into().expect("key");
                 first_ordinal.entry(id).or_insert(ordinal);
                 ordinal += 1;

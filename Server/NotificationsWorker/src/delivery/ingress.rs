@@ -353,9 +353,7 @@ async fn queue(db: &D1Database, env: &Env, v: Value) -> Result<Response> {
     }
     let suffix = format!("-{}", lane(env));
     if e.queue == format!("opencast-notification-event{suffix}") && m.generation == 1 {
-        if let Err(err) = fanout::page(db, env, &m.source, &m.id).await {
-            return Err(err);
-        }
+        fanout::page(db, env, &m.source, &m.id).await?;
     } else if e.queue
         == format!(
             "opencast-notification-{}{suffix}",
@@ -366,9 +364,7 @@ async fn queue(db: &D1Database, env: &Env, v: Value) -> Result<Response> {
             }
         )
     {
-        if let Err(err) = send::deliver(db, env, &m.source, &m.id, m.generation).await {
-            return Err(err);
-        }
+        send::deliver(db, env, &m.source, &m.id, m.generation).await?;
     } else {
         return error(400, "wrong_queue");
     }

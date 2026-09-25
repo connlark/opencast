@@ -512,6 +512,19 @@ final class OpenCastAppModel {
         await task.value
     }
 
+    /// CarPlay can be the first user-visible surface, so it needs the same
+    /// stale feed check the phone scene performs after its initial load. Keep
+    /// the network step out of playback hydration because Siri, App Intents,
+    /// and system actions share that short-lived path.
+    func ensureCarPlaySurfaceHydratedAndRefreshed(modelContext: ModelContext) async {
+        await ensurePlaybackSurfaceHydrated(modelContext: modelContext)
+        guard !Task.isCancelled else {
+            return
+        }
+
+        await refreshLibraryIfStale(modelContext: modelContext)
+    }
+
     func restorePlaybackSurfaceIfNeeded(modelContext: ModelContext) {
         guard !hasRestoredPlaybackSurface else {
             return
