@@ -6,7 +6,10 @@ import SwiftData
 /// Thin adapter for the plain Transcribe Remotely surface: owns the
 /// observable request store and maps `RemoteTranscriptionJobRunner` events
 /// and errors onto `RemoteTranscriptionRequestPhase`. The runner owns the
-/// whole job (download, identity, upload fallback, poll, import, ack).
+/// whole job (download, identity, upload fallback, poll, import, ack); this
+/// coordinator owns the user's decisions about it: start, Resume/Try Again
+/// (which re-attach the persisted reference), park, and the user cancel
+/// that is the only path to `/cancel`.
 @Observable
 final class EpisodeRemoteTranscriptionCoordinator {
     typealias UploadSessionFactory = RemoteTranscriptionJobRunner.UploadSessionFactory
@@ -18,6 +21,14 @@ final class EpisodeRemoteTranscriptionCoordinator {
 
     @ObservationIgnored private let runner: RemoteTranscriptionJobRunner
     @ObservationIgnored private let transcriptions: EpisodeTranscriptionStore
+    /// Set by `park(exit:)` before the local task is cancelled, so the run's
+    /// cancellation catch can tell a park from a user cancel.
+    @ObservationIgnored private var pendingParkExit: RemoteTranscriptionJobExit?
+    /// The in-flight user cancel, kept so a test or a later trigger can
+    /// await its resolution. While it runs for an episode, further taps for
+    /// that episode are no-ops: one tap burst sends at most one `/cancel`.
+    @ObservationIgnored private(set) var userCancelTask: Task<Void, Never>?
+    @ObservationIgnored private var userCancelEpisodeID: String?
     let store: RemoteTranscriptionJobStore
 
     init(
@@ -26,7 +37,8 @@ final class EpisodeRemoteTranscriptionCoordinator {
         transcriptions: EpisodeTranscriptionStore,
         store: RemoteTranscriptionJobStore = RemoteTranscriptionJobStore(),
         uploadSessionFactory: UploadSessionFactory? = nil,
-        transportRetryDelays: [Duration] = RemoteTranscriptionJobRunner.defaultTransportRetryDelays
+        transportRetryDelays: [Duration] = RemoteTranscriptionJobRunner.defaultTransportRetryDelays,
+        localRetryDelays: [Duration] = RemoteTranscriptionJobRunner.defaultLocalRetryDelays
     ) {
         self.store = store
         self.transcriptions = transcriptions
@@ -36,7 +48,8 @@ final class EpisodeRemoteTranscriptionCoordinator {
             transcriptions: transcriptions,
             store: store,
             uploadSessionFactory: uploadSessionFactory,
-            transportRetryDelays: transportRetryDelays
+            transportRetryDelays: transportRetryDelays,
+            localRetryDelays: localRetryDelays
         )
     }
 
@@ -47,6 +60,9 @@ final class EpisodeRemoteTranscriptionCoordinator {
         }
         guard !store.hasActiveRequest else {
             return .rejected("Another remote transcription is in progress.")
+        }
+        guard store.existingReference(for: episode.episodeID)?.userCancelRequestedAt == nil else {
+            return .rejected("The previous remote transcription is still being cancelled.")
         }
 
         let reservation: EpisodeTranscriptionWorkCoordinator.RemoteReservation
@@ -66,6 +82,7 @@ final class EpisodeRemoteTranscriptionCoordinator {
             return .started
         }
 
+        pendingParkExit = nil
         store.begin(episodeID: episode.episodeID, title: episode.title)
         store.activeTask = Task { [weak self] in
             await self?.run(
@@ -78,7 +95,63 @@ final class EpisodeRemoteTranscriptionCoordinator {
         return .started
     }
 
+    /// Resume and Try Again: re-runs the episode against its persisted
+    /// reference, so a parked or retryable job is re-attached by the same
+    /// client request ID and never minted twice. A cleared reference (a
+    /// terminal outcome) starts a fresh job.
+    @discardableResult
+    func resume(episode: EpisodeListItemSnapshot, modelContext: ModelContext) -> StartOutcome {
+        store.dismissTerminalPhase(for: episode.episodeID)
+        return start(episode: episode, modelContext: modelContext)
+    }
+
+    /// The user cancel. The intent is persisted before the local task is
+    /// cancelled, the runner's cancel path then resolves the job (letting an
+    /// in-flight create attach first) and sends at most one `/cancel`, and
+    /// the reference is cleared only after that attempt is recorded. A
+    /// repeated tap while that resolution is in flight does nothing.
     func cancel() {
+        guard let episodeID = store.activeEpisodeID,
+              let phase = store.phase,
+              !phase.isTerminal,
+              userCancelEpisodeID != episodeID
+        else {
+            return
+        }
+        store.recordUserCancelIntent(episodeID: episodeID, purpose: .transcription)
+        let runTask = store.activeTask
+        store.cancelActiveRequest()
+        userCancelEpisodeID = episodeID
+        userCancelTask = Task { [weak self, runner, store] in
+            await runTask?.value
+            _ = await runner.cancelServerJob(episodeID: episodeID, purpose: .transcription)
+            // A cancel that landed after the durable import stopped nothing:
+            // the run completed and the transcript is on this device, so the
+            // completed phase stands.
+            if store.activeEpisodeID == episodeID, store.phase != .completed {
+                store.finish(phase: .cancelled)
+            }
+            if self?.userCancelEpisodeID == episodeID {
+                self?.userCancelEpisodeID = nil
+            }
+        }
+    }
+
+    /// Stops local polling without any server decision: the reference keeps
+    /// its job and records the exit, and the phase becomes resumable.
+    func park(exit: RemoteTranscriptionJobExit) {
+        guard let episodeID = store.activeEpisodeID,
+              let phase = store.phase,
+              !phase.isTerminal, !phase.isParked
+        else {
+            return
+        }
+        store.recordExit(exit, episodeID: episodeID, purpose: .transcription)
+        guard store.activeTask != nil else {
+            store.finish(phase: .parkedOnServer(exit))
+            return
+        }
+        pendingParkExit = exit
         store.cancelActiveRequest()
     }
 
@@ -103,7 +176,12 @@ final class EpisodeRemoteTranscriptionCoordinator {
             )
             store.finish(phase: .completed)
         } catch is CancellationError {
-            store.finish(phase: .cancelled)
+            if let exit = pendingParkExit {
+                pendingParkExit = nil
+                store.finish(phase: .parkedOnServer(exit))
+            } else {
+                store.finish(phase: .cancelled)
+            }
         } catch let error as RemoteTranscriptionJobRunError {
             store.finish(phase: Self.terminalPhase(for: error))
         } catch {
@@ -140,6 +218,9 @@ final class EpisodeRemoteTranscriptionCoordinator {
             .mismatchLocalFallback
         case .remoteCancelled:
             .cancelled
+        case .connectionLost:
+            // The job is still running on the server; Resume re-attaches.
+            .parkedOnServer(.connectionLost)
         default:
             .failed(error.failureCategory)
         }

@@ -109,7 +109,7 @@ enum AdFreePassBackgroundProbe {
                 return
             }
 
-            cancellationSource.cancel()
+            cancellationSource.cancel(reason: .sessionExpiration)
             Task { @MainActor in
                 logger.log("probe expiration handler fired")
                 record("run \(run) expiration handler fired")

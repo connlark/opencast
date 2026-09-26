@@ -251,7 +251,7 @@ final class EpisodeAdFreePassBackgroundSession {
                 return
             }
 
-            cancellationSource.cancel()
+            cancellationSource.cancel(reason: .sessionExpiration)
             Task { @MainActor in
                 self?.expire(runSequence: launchRunSequence)
             }

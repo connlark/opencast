@@ -19,6 +19,12 @@ enum RemoteTranscriptionUIFixture: String, CaseIterable {
     case serverFailure = "failure"
     /// Poll timeout / unreachable backend mid-flow.
     case unreachableFailure = "unreachable"
+    /// Polling stopped by expiration while the server keeps working.
+    case parked
+    /// Transport gave up after attach; the job is still running remotely.
+    case connectionLost = "connection-lost"
+    /// A local request leg gave up on the attached job.
+    case localRequestFailed = "local-request-failed"
     case cancelled
 
     static let launchArgument = "-OPENCAST_REMOTE_TRANSCRIPTION_FIXTURE"
@@ -80,6 +86,15 @@ enum RemoteTranscriptionUIFixture: String, CaseIterable {
         case .unreachableFailure:
             store.begin(episodeID: episodeID, title: "Fixture Episode")
             store.finish(phase: .failed(.serviceUnavailable))
+        case .parked:
+            store.begin(episodeID: episodeID, title: "Fixture Episode")
+            store.finish(phase: .parkedOnServer(.parked))
+        case .connectionLost:
+            store.begin(episodeID: episodeID, title: "Fixture Episode")
+            store.finish(phase: .parkedOnServer(.connectionLost))
+        case .localRequestFailed:
+            store.begin(episodeID: episodeID, title: "Fixture Episode")
+            store.finish(phase: .failed(.localRequestFailed))
         case .cancelled:
             store.begin(episodeID: episodeID, title: "Fixture Episode")
             store.finish(phase: .cancelled)

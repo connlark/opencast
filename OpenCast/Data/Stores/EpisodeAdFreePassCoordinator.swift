@@ -562,7 +562,7 @@ final class EpisodeAdFreePassCoordinator {
     }
 
     func reset() {
-        cancellationSource.cancel()
+        cancellationSource.cancel(reason: .reset)
         passTask?.cancel()
         passTask = nil
         drainGeneration += 1
@@ -592,7 +592,7 @@ final class EpisodeAdFreePassCoordinator {
     }
 
     func cancelActivePass() {
-        cancellationSource.cancel()
+        cancellationSource.cancel(reason: .userRequest)
     }
 
     func removePendingItem(episodeID: String, modelContext: ModelContext) {
@@ -1166,9 +1166,17 @@ final class EpisodeAdFreePassCoordinator {
             setStage(.interrupted)
             return .interrupted(environmental: false)
         } catch is CancellationError {
-            // The runner already fired the server cancel; the charge stands
-            // once the job settled (documented server behavior).
-            deps.remoteJobStore?.clearReference(for: episode.episodeID, purpose: .adDetection)
+            // Local cancellation never cancels the server job by itself. A
+            // user request resolves it through the runner's user-cancel
+            // path; expiration and every other stop park the reference so
+            // the paid work re-attaches later.
+            if cancellationSource.lastCancellationReason == .userRequest, let runner = deps.remoteRunner {
+                Task {
+                    _ = await runner.cancelServerJob(episodeID: episode.episodeID, purpose: .adDetection)
+                }
+            } else {
+                deps.remoteJobStore?.recordExit(.parked, episodeID: episode.episodeID, purpose: .adDetection)
+            }
             setStage(.interrupted)
             return .interrupted(environmental: false)
         } catch let error as RemoteTranscriptionJobRunError {
@@ -1236,13 +1244,14 @@ final class EpisodeAdFreePassCoordinator {
     /// silent mode switch, always the explicit one-tap fallback.
     private static func isCloudUnavailableRunError(_ error: RemoteTranscriptionJobRunError) -> Bool {
         switch error {
-        case .serviceUnavailable:
+        case .serviceUnavailable, .connectionLost, .localRequestFailed:
             true
         case .serverRejected(let code):
             code == .featureDisabled
                 || code == .insufficientCredits
                 || code == .rateLimited
-        case .downloadFailed, .remoteCancelled, .mismatchLocalFallback, .resultInvalid:
+        case .downloadFailed, .remoteCancelled, .mismatchLocalFallback, .resultInvalid,
+             .acknowledgedWithoutLocalImport:
             false
         }
     }

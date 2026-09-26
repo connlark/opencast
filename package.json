@@ -17,7 +17,7 @@
     "nanoid@^3.3.17": "3.3.18",
     "postcss@^8.5.16": "8.5.26",
     "brace-expansion@^1.1.7": "1.1.18",
-    "@cloudflare/vitest-pool-workers/wrangler": "4.129.0",
-    "@cloudflare/vitest-pool-workers/miniflare": "5.20260903.0-alpha"
+    "@cloudflare/vitest-pool-workers/wrangler": "4.135.0",
+    "@cloudflare/vitest-pool-workers/miniflare": "5.20260918.0-alpha"
   }
 }

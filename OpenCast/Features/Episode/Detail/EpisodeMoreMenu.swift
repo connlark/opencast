@@ -99,6 +99,9 @@ struct EpisodeMoreMenu: View {
             if let phase = appModel.remoteTranscription.store.phase(for: episode.episodeID),
                !phase.isTerminal {
                 Label("Remote: \(phase.displayText)", systemImage: "cloud")
+                if phase.isParked {
+                    Button("Resume Remote Transcript", systemImage: "play.circle", action: resumeRemoteTranscript)
+                }
                 Button("Cancel Remote Transcript", systemImage: "xmark.circle", action: cancelRemoteTranscript)
             } else {
                 // Disabled while a cloud detect pass owns this episode — it
@@ -160,6 +163,15 @@ struct EpisodeMoreMenu: View {
             episodeID: episode.episodeID,
             durationSeconds: episode.duration
         )
+    }
+
+    private func resumeRemoteTranscript() {
+        switch appModel.remoteTranscription.resume(episode: episode, modelContext: modelContext) {
+        case .started:
+            break
+        case .rejected(let message):
+            onActionError(message)
+        }
     }
 
     private func cancelRemoteTranscript() {

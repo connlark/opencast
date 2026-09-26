@@ -810,8 +810,8 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         #expect(presentation.detail == RemoteTranscriptionFailureCategory.serverRejected(.transcriptionFailed).message)
     }
 
-    @Test("An unreachable backend mid-poll surfaces the service-unavailable terminal state")
-    func unreachableBackendMidPollSurfacesServiceUnavailable() async throws {
+    @Test("An unreachable backend mid-poll parks the job on the server with Resume, never a terminal failure")
+    func unreachableBackendMidPollParksWithResume() async throws {
         let api = FakeRemoteTranscriptionAPI(
             pollStates: [
                 OpenCastRemoteTranscriptionJobStatus(
@@ -826,14 +826,19 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
 
         environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
 
-        #expect(await waitUntil { environment.store.phase == .failed(.serviceUnavailable) })
+        #expect(await waitUntil { environment.store.phase == .parkedOnServer(.connectionLost) })
         let presentation = try #require(
             RemoteTranscriptionStatusPresentation.make(
                 phase: environment.store.phase(for: "ep-unreachable")
             )
         )
-        #expect(presentation.isTerminalFailure)
-        #expect(presentation.offersLocalFallback)
+        #expect(presentation.isParked)
+        #expect(presentation.offersResume)
+        #expect(!presentation.isTerminalFailure)
+        #expect(api.cancelledJobIDs.isEmpty)
+        let reference = try #require(environment.store.existingReference(for: "ep-unreachable"))
+        #expect(reference.jobID == "job-fake-1")
+        #expect(reference.lastExit == .connectionLost)
     }
 
     @Test("A detect run bails out of awaiting_credits as insufficient credits instead of parking")
@@ -928,8 +933,8 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         #expect(api.cancelledJobIDs.isEmpty)
     }
 
-    @Test("Transport give-up after create cancels a detect job and drops its reference")
-    func transportGiveUpAbandonsDetectJob() async throws {
+    @Test("Transport give-up after create keeps a detect job's reference and never cancels it")
+    func transportGiveUpKeepsDetectReferenceWithoutCancel() async throws {
         let api = FakeRemoteTranscriptionAPI(
             pollStates: [
                 OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .transcribing),
@@ -938,7 +943,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         )
         let environment = try await makeEnvironment(api: api, episodeID: "ep-detect-unreachable")
 
-        await #expect(throws: RemoteTranscriptionJobRunError.serviceUnavailable) {
+        await #expect(throws: RemoteTranscriptionJobRunError.connectionLost) {
             _ = try await environment.runner.run(
                 episode: environment.episode,
                 enclosureURL: environment.episode.audioURL!,
@@ -953,10 +958,13 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             )
         }
 
-        // The cancel is best-effort and detached; the reference drop is
-        // immediate so the offered device fallback never races a live job.
-        #expect(await waitUntil { api.cancelledJobIDs == ["job-fake-1"] })
-        #expect(environment.store.references().isEmpty)
+        // The paid job keeps running server-side; only a user cancel may end
+        // it, and the kept reference re-attaches by the same request ID.
+        #expect(api.cancelledJobIDs.isEmpty)
+        let reference = try #require(environment.store.existingReference(for: "ep-detect-unreachable", purpose: .adDetection))
+        #expect(reference.createState == .attached)
+        #expect(reference.jobID == "job-fake-1")
+        #expect(reference.lastExit == .connectionLost)
     }
 
     @Test("Transport give-up keeps a plain transcription reference for re-attach")
@@ -969,7 +977,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         )
         let environment = try await makeEnvironment(api: api, episodeID: "ep-plain-unreachable")
 
-        await #expect(throws: RemoteTranscriptionJobRunError.serviceUnavailable) {
+        await #expect(throws: RemoteTranscriptionJobRunError.connectionLost) {
             _ = try await environment.runner.run(
                 episode: environment.episode,
                 enclosureURL: environment.episode.audioURL!,
@@ -982,7 +990,9 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         // A retry re-attaches to the still-running job via the stable client
         // request ID, so the paid work is never abandoned.
         #expect(api.cancelledJobIDs.isEmpty)
-        #expect(environment.store.references().isEmpty == false)
+        let reference = try #require(environment.store.existingReference(for: "ep-plain-unreachable"))
+        #expect(reference.jobID == "job-fake-1")
+        #expect(reference.lastExit == .connectionLost)
     }
 
     @Test("Cancel reaches the server and ends in the cancelled phase")
@@ -1009,9 +1019,11 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         })
 
         environment.coordinator.cancel()
+        await environment.coordinator.userCancelTask?.value
 
-        #expect(await waitUntil { environment.store.phase == .cancelled })
-        #expect(await waitUntil { api.cancelledJobIDs == ["job-fake-1"] })
+        #expect(environment.store.phase == .cancelled)
+        #expect(api.cancelledJobIDs == ["job-fake-1"])
+        #expect(environment.store.existingReference(for: "ep-cancel") == nil)
 
         // Cancellation also ends visibly, with the on-device path offered.
         let presentation = try #require(
@@ -1163,6 +1175,8 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         #expect(await waitUntil { environment.store.phase == .failed(.downloadFailed) })
         #expect(environment.downloads.record(for: environment.episode.episodeID)?.state == .missing)
         #expect(api.resultCallCount == 0)
+        #expect(api.cancelledJobIDs.isEmpty)
+        #expect(environment.store.existingReference(for: "ep-missing-file")?.lastExit == .downloadFailed)
     }
 
     @Test("A completed transcript prevents a second remote transcription job")
@@ -1381,6 +1395,15 @@ struct RemoteTranscriptionUIFixtureTests {
                 #expect(!store.hasActiveRequest)
             case .unreachableFailure:
                 #expect(store.phase(for: "ep-fixture") == .failed(.serviceUnavailable))
+                #expect(!store.hasActiveRequest)
+            case .parked:
+                #expect(store.phase(for: "ep-fixture") == .parkedOnServer(.parked))
+                #expect(!store.hasActiveRequest)
+            case .connectionLost:
+                #expect(store.phase(for: "ep-fixture") == .parkedOnServer(.connectionLost))
+                #expect(!store.hasActiveRequest)
+            case .localRequestFailed:
+                #expect(store.phase(for: "ep-fixture") == .failed(.localRequestFailed))
                 #expect(!store.hasActiveRequest)
             case .cancelled:
                 #expect(store.phase(for: "ep-fixture") == .cancelled)

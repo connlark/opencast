@@ -196,6 +196,7 @@ struct NowPlayingView: View {
                         presentation: remoteTranscriptionPresentation,
                         canOpenEpisode: canOpenCurrentEpisode,
                         onOpenEpisode: openEpisode,
+                        onResume: resumeRemoteTranscription,
                         onCancel: appModel.remoteTranscription.cancel
                     )
                     .padding(.horizontal, 16)
@@ -527,6 +528,15 @@ struct NowPlayingView: View {
 
     private func startRemoteTranscription(for request: RemoteTranscriptionStartPreviewRequest) {
         switch appModel.confirmRemoteTranscriptionStart(request, modelContext: modelContext) {
+        case .started:
+            break
+        case .unavailable(let message):
+            remoteTranscriptionStartErrorMessage = message
+        }
+    }
+
+    private func resumeRemoteTranscription() {
+        switch appModel.resumeRemoteTranscriptionForCurrentEpisode(modelContext: modelContext) {
         case .started:
             break
         case .unavailable(let message):

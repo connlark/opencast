@@ -1,11 +1,13 @@
 import SwiftUI
 
 /// Glass status card for the remote transcription flow on episode detail:
-/// live phase with Cancel while a request runs, and a visible terminal state
-/// with the on-device fallback when it ends without a transcript.
+/// live phase with Cancel while a request runs, Resume (and Cancel) while
+/// the job is parked on the server, and a visible terminal state with Try
+/// Again and the on-device fallback when it ends without a transcript.
 struct RemoteTranscriptionStatusCard: View {
     let presentation: RemoteTranscriptionStatusPresentation
     let onTranscribeLocally: () -> Void
+    let onResume: () -> Void
     let onCancel: () -> Void
     let onDismiss: () -> Void
 
@@ -43,14 +45,34 @@ struct RemoteTranscriptionStatusCard: View {
                     .foregroundStyle(.secondary)
             }
 
-            if presentation.offersLocalFallback {
-                Button(
-                    RemoteTranscriptionStatusPresentation.localFallbackActionTitle,
-                    systemImage: "text.quote",
-                    action: onTranscribeLocally
-                )
+            if presentation.offersResume || presentation.offersRetry || presentation.offersLocalFallback {
+                HStack(spacing: 10) {
+                    if presentation.offersResume {
+                        Button(
+                            RemoteTranscriptionStatusPresentation.resumeActionTitle,
+                            systemImage: "play.circle",
+                            action: onResume
+                        )
+                        .buttonStyle(.glassProminent)
+                    } else if presentation.offersRetry {
+                        Button(
+                            RemoteTranscriptionStatusPresentation.retryActionTitle,
+                            systemImage: "arrow.clockwise",
+                            action: onResume
+                        )
+                        .buttonStyle(.glass)
+                    }
+
+                    if presentation.offersLocalFallback {
+                        Button(
+                            RemoteTranscriptionStatusPresentation.localFallbackActionTitle,
+                            systemImage: "text.quote",
+                            action: onTranscribeLocally
+                        )
+                        .buttonStyle(.glass)
+                    }
+                }
                 .font(.subheadline)
-                .buttonStyle(.glass)
             }
         }
         .padding(18)
@@ -66,6 +88,10 @@ struct RemoteTranscriptionStatusCard: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.headline)
                 .foregroundStyle(.orange)
+        } else if presentation.isParked {
+            Image(systemName: "pause.circle.fill")
+                .font(.headline)
+                .foregroundStyle(.secondary)
         } else {
             RemoteTranscriptionProgressIndicator(
                 progressFraction: presentation.progressFraction
@@ -75,13 +101,32 @@ struct RemoteTranscriptionStatusCard: View {
     }
 }
 
-#Preview("Failure") {
+#Preview("States") {
     VStack(spacing: 16) {
         RemoteTranscriptionStatusCard(
             presentation: RemoteTranscriptionStatusPresentation.make(
                 phase: .failed(.serverRejected(.transcriptionFailed))
             )!,
             onTranscribeLocally: {},
+            onResume: {},
+            onCancel: {},
+            onDismiss: {}
+        )
+        RemoteTranscriptionStatusCard(
+            presentation: RemoteTranscriptionStatusPresentation.make(
+                phase: .parkedOnServer(.connectionLost)
+            )!,
+            onTranscribeLocally: {},
+            onResume: {},
+            onCancel: {},
+            onDismiss: {}
+        )
+        RemoteTranscriptionStatusCard(
+            presentation: RemoteTranscriptionStatusPresentation.make(
+                phase: .failed(.localRequestFailed)
+            )!,
+            onTranscribeLocally: {},
+            onResume: {},
             onCancel: {},
             onDismiss: {}
         )
@@ -96,6 +141,7 @@ struct RemoteTranscriptionStatusCard: View {
                 ))
             )!,
             onTranscribeLocally: {},
+            onResume: {},
             onCancel: {},
             onDismiss: {}
         )

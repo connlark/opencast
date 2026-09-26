@@ -42,7 +42,7 @@ export async function harness(outbound, options = {}) {
       outboundService: async request => { fetches.push(request.url); if (request.url === ALERT_WEBHOOK_URL) alerts.push({ headers: Object.fromEntries(request.headers), body: await request.clone().json() }); return outbound(request); },
     },
     { name: 'delivery-runtime', modulesRoot: root, modules: modules('NotificationsWorker', 'tests/observation-entry.mjs'),
-      compatibilityDate: '2026-09-03', compatibilityFlags: ['enable_request_signal'],
+      compatibilityDate: '2026-09-18', compatibilityFlags: ['enable_request_signal'],
       d1Databases: { APP_ATTEST_DB: 'isolated-polling' }, r2Buckets: { FEED_SNAPSHOTS: 'isolated-snapshots' },
       queueProducers: { EVENT_QUEUE: 'isolated-event', EPISODE_DELIVERY_QUEUE: 'isolated-episode', JOB_DELIVERY_QUEUE: 'isolated-job' },
       bindings: { NOTIFICATION_ENVIRONMENT: 'development', NOTIFICATION_EPISODE_ACTIVATION: 'true', NOTIFICATION_EPISODE_SEND: 'true', APPLE_TEAM_ID: 'EXAMPLETEAM', APPLE_BUNDLE_ID: 'com.example.opencast', APP_ATTEST_ENVIRONMENT: 'development', APNS_ENVIRONMENT: 'development', PUBLIC_NOTIFICATIONS_ENABLED: 'false',...options.deliveryBindings },

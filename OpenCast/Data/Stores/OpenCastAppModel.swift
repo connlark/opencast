@@ -1061,6 +1061,26 @@ final class OpenCastAppModel {
         }
     }
 
+    /// Resume for a remote transcription parked on the server: re-attaches
+    /// the current episode's persisted reference without a new estimate
+    /// sheet, since no new job is created.
+    @discardableResult
+    func resumeRemoteTranscriptionForCurrentEpisode(
+        modelContext: ModelContext
+    ) -> RemoteTranscriptionStartConfirmationOutcome {
+        guard let episode = currentPlaybackEpisodeSnapshot else {
+            return .unavailable(
+                message: "This episode is no longer available. Refresh the podcast and try again."
+            )
+        }
+        switch remoteTranscription.resume(episode: episode, modelContext: modelContext) {
+        case .started:
+            return .started(episodeID: episode.episodeID)
+        case .rejected(let message):
+            return .unavailable(message: message)
+        }
+    }
+
     private func transcribeDownloadedEpisodeResolvingEngine(
         _ episode: EpisodeListItemSnapshot,
         downloadRecord: EpisodeDownloadRecord,

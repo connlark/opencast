@@ -181,6 +181,7 @@ struct EpisodeDetailView: View {
                     RemoteTranscriptionStatusCard(
                         presentation: remoteStatus,
                         onTranscribeLocally: { transcribeLocallyAfterRemote(episode) },
+                        onResume: { resumeRemoteTranscript(episode) },
                         onCancel: appModel.remoteTranscription.cancel,
                         onDismiss: { dismissRemoteOutcome(episode) }
                     )
@@ -391,6 +392,17 @@ struct EpisodeDetailView: View {
 
     private func dismissRemoteOutcome(_ episode: EpisodeListItemSnapshot) {
         appModel.remoteTranscription.store.dismissTerminalPhase(for: episode.episodeID)
+    }
+
+    /// Resume and Try Again both re-attach the persisted reference; only a
+    /// conclusively cleared reference starts a fresh job.
+    private func resumeRemoteTranscript(_ episode: EpisodeListItemSnapshot) {
+        switch appModel.remoteTranscription.resume(episode: episode, modelContext: modelContext) {
+        case .started:
+            break
+        case .rejected(let message):
+            showEpisodeActionError(message, title: "Couldn’t Resume Remote Transcript")
+        }
     }
 
     private func detectAds(_ episode: EpisodeListItemSnapshot) {

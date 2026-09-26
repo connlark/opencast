@@ -10,6 +10,10 @@ nonisolated enum RemoteTranscriptionRequestPhase: Equatable {
     case waitingForCredits
     case processing(RemoteTranscriptionActiveProgress)
     case saving
+    /// Local polling stopped while the server keeps working on the same
+    /// job. Not terminal: Resume re-attaches the persisted reference and a
+    /// user cancel is still available.
+    case parkedOnServer(RemoteTranscriptionJobExit)
     case completed
     /// The server proved it fetched different bytes; the existing local
     /// transcription path is the way forward.
@@ -22,9 +26,16 @@ nonisolated enum RemoteTranscriptionRequestPhase: Equatable {
         case .completed, .mismatchLocalFallback, .failed, .cancelled:
             true
         case .preparing, .downloadingBoth, .verifying, .uploadingExactCopy,
-             .waitingForCredits, .processing, .saving:
+             .waitingForCredits, .processing, .saving, .parkedOnServer:
             false
         }
+    }
+
+    var isParked: Bool {
+        if case .parkedOnServer = self {
+            return true
+        }
+        return false
     }
 
     var displayText: String {
@@ -39,6 +50,7 @@ nonisolated enum RemoteTranscriptionRequestPhase: Equatable {
         case .waitingForCredits: "Waiting for transcription time"
         case let .processing(progress): progress.stage.displayText
         case .saving: "Saving transcript"
+        case .parkedOnServer: "Still running on the server"
         case .completed: "Completed"
         case .mismatchLocalFallback: "Server audio differed — use on-device transcription"
         case let .failed(category): category.message
