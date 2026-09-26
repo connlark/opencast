@@ -1,0 +1,17 @@
+From: Jamie Rivera <jamie@example.com>
+To: support@example.org
+Subject: Downloads stuck at 0%
+Date: Fri, 25 Sep 2026 09:14:00 +0000
+Message-ID: <support-1@example.com>
+Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com; dmarc=pass header.from=example.com
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi,
+
+Since updating yesterday every episode I try to download sits at 0% on my
+iPhone. Streaming works fine. Any idea what is going on? See
+https://example.com/screenshot for a screenshot.
+
+Thanks,
+Jamie

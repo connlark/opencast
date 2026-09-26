@@ -1,0 +1,46 @@
+// MailTriageWorker: an Email Worker behind an Email Routing rule. Every message
+// is forwarded unchanged, plus X-Mail-Triage* headers. Jev (Workers AI, through
+// an AI Gateway) classifies it, and anything that is not marketing or spam also
+// sends one push to the operator alert webhook. It has no HTTP surface in
+// production and nothing is stored.
+//
+// Lanes: the top level runs only under local `wrangler dev` and is never
+// deployed. `production` is the one deployed Worker, reached through its
+// routing rule. ai, observability and vars are repeated in every lane so
+// environment inheritance cannot change them.
+//
+// Secrets (both lanes; `.dev.vars` locally): FORWARD_TO (a verified Email
+// Routing destination), and ALERT_WEBHOOK_URL, ALERT_CREDENTIAL and
+// ALERT_RECIPIENT for the push. Alerting is off unless all three are set.
+//
+// Privacy: invocation logs would record the envelope sender and recipient, so
+// they are off. The Worker logs one line per message that carries no subject,
+// body or address.
+{
+  "name": "your-mail-triage-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-18",
+  "workers_dev": false,
+  "ai": { "binding": "AI" },
+  "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "invocation_logs": false } },
+  "vars": {
+    "LANE": "development",
+    "AI_GATEWAY_ID": "mail-triage",
+    "INBOX_CONTEXT": "the support inbox of opencast, an iOS podcast app",
+    "JUNK_THRESHOLD": "0.7"
+  },
+  "env": {
+    "production": {
+      "name": "your-mail-triage-worker-production",
+      "workers_dev": false,
+      "ai": { "binding": "AI" },
+      "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "invocation_logs": false } },
+      "vars": {
+        "LANE": "production",
+        "AI_GATEWAY_ID": "mail-triage",
+        "INBOX_CONTEXT": "the support inbox of opencast, an iOS podcast app",
+        "JUNK_THRESHOLD": "0.7"
+      }
+    }
+  }
+}

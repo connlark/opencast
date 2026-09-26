@@ -1,0 +1,14 @@
+From: Mail Delivery Subsystem <mailer-daemon@example.org>
+To: support@example.org
+Subject: Undelivered Mail Returned to Sender
+Date: Fri, 25 Sep 2026 12:00:00 +0000
+Message-ID: <bounce-1@example.org>
+Return-Path: <>
+Auto-Submitted: auto-replied
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+
+This is the mail system at host mx.example.org.
+
+I'm sorry to have to inform you that your message could not
+be delivered to one or more recipients.

@@ -1,0 +1,11 @@
+From: Apple Support <security-alert@example.net>
+To: support@example.org
+Subject: Action required: your developer account will be suspended
+Date: Fri, 25 Sep 2026 10:00:00 +0000
+Message-ID: <eval-spam-phishing@example.net>
+Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=example.net; dkim=none; dmarc=fail header.from=example.net
+Content-Type: text/plain; charset=utf-8
+
+Dear developer, we detected unusual activity. Verify your account within 24
+hours or it will be permanently suspended: https://example.net/verify-login
+Enter your Apple ID password and payment details to continue.

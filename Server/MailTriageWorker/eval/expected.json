@@ -1,0 +1,16 @@
+{
+  "support-sync.eml": { "side": "ping", "label": "support" },
+  "support-purchase.eml": { "side": "ping", "label": "support" },
+  "support-terse.eml": { "side": "ping", "label": "support" },
+  "feedback-feature.eml": { "side": "ping", "label": "feedback" },
+  "outreach-podcaster.eml": { "side": "quiet" },
+  "outreach-press.eml": { "side": "quiet", "label": "outreach" },
+  "automated-appstore.eml": { "side": "ping", "label": "automated" },
+  "automated-code.eml": { "side": "ping", "label": "automated" },
+  "automated-autoreply.eml": { "side": "ping", "label": "automated" },
+  "marketing-coldpitch.eml": { "side": "quiet" },
+  "marketing-devshop.eml": { "side": "quiet" },
+  "marketing-newsletter.eml": { "side": "quiet" },
+  "spam-phishing.eml": { "side": "quiet" },
+  "spam-crypto.eml": { "side": "quiet" }
+}

@@ -1,0 +1,20 @@
+From: Sam <sam@example.com>
+To: support@example.org
+Subject: Crash log attached
+Date: Fri, 25 Sep 2026 14:00:00 +0000
+Message-ID: <attach-1@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="m1"
+
+--m1
+Content-Type: text/plain; charset=utf-8
+
+The app crashes when I open the Inbox. Log attached.
+
+--m1
+Content-Type: text/plain; name="crash.txt"
+Content-Disposition: attachment; filename="crash.txt"
+
+Exception Type: EXC_BREAKPOINT
+
+--m1--

@@ -1,0 +1,12 @@
+# Copy to .dev.vars for `wrangler dev`.
+#
+# Secrets: deployed lanes take these four through
+# `wrangler secret put NAME --env production`, never as vars.
+FORWARD_TO=you@example.com
+ALERT_WEBHOOK_URL=https://alerts.example.com/v1/notifications
+ALERT_CREDENTIAL=replace-with-webhook-bearer-credential
+ALERT_RECIPIENT=replace-with-recipient-key
+
+# Local only: a `wrangler login` token cannot reach AI Gateway, so local runs
+# call Jev without it. Deployed lanes keep the gateway id from wrangler.jsonc.
+AI_GATEWAY_ID=

@@ -5354,6 +5354,18 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"opencast-mail-triage-worker@workspace:Server/MailTriageWorker":
+  version: 0.0.0-use.local
+  resolution: "opencast-mail-triage-worker@workspace:Server/MailTriageWorker"
+  dependencies:
+    "@cloudflare/workers-types": "catalog:"
+    postal-mime: "npm:3.0.0"
+    typescript: "npm:^5.9.3"
+    vitest: "catalog:"
+    wrangler: "catalog:"
+  languageName: unknown
+  linkType: soft
+
 "opencast-podcast-directory-worker@workspace:Server/PodcastDirectoryWorker":
   version: 0.0.0-use.local
   resolution: "opencast-podcast-directory-worker@workspace:Server/PodcastDirectoryWorker"
@@ -5566,6 +5578,13 @@ __metadata:
   version: 1.1.0
   resolution: "possible-typed-array-names@npm:1.1.0"
   checksum: 10c0/c810983414142071da1d644662ce4caebce890203eb2bc7bf119f37f3fe5796226e117e6cca146b521921fa6531072674174a3325066ac66fce089a53e1e5196
+  languageName: node
+  linkType: hard
+
+"postal-mime@npm:3.0.0":
+  version: 3.0.0
+  resolution: "postal-mime@npm:3.0.0"
+  checksum: 10c0/e7385b3ceccba9e14a0c81d46961ab5198d8bf12ce7a43925349deb7d38d647d319555379c70d1bfc437bb0e765cae062cac3105a7092d5b676223749d0d9010
   languageName: node
   linkType: hard
 

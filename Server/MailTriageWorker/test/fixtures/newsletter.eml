@@ -1,0 +1,24 @@
+From: GrowthLab Weekly <news@example.com>
+To: support@example.org
+Subject: 10x your installs this quarter
+Date: Fri, 25 Sep 2026 13:00:00 +0000
+Message-ID: <news-1@example.com>
+List-Unsubscribe: <https://example.com/unsubscribe>
+List-Id: GrowthLab Weekly <weekly.example.com>
+Precedence: bulk
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset=utf-8
+
+This week: ASO tricks that tripled installs. Book a call: https://example.com/call
+Unsubscribe: https://example.com/unsubscribe
+
+--b1
+Content-Type: text/html; charset=utf-8
+
+<p>This week: <a href="https://example.com/aso">ASO tricks</a> that tripled installs.</p>
+<p><a href="https://example.com/call">Book a call</a> | <a href="https://example.com/unsubscribe">Unsubscribe</a></p>
+
+--b1--

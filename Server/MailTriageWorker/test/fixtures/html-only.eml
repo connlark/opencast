@@ -1,0 +1,12 @@
+From: "Priya N." <priya@example.com>
+To: support@example.org
+Subject: Love the app - one request
+Date: Fri, 25 Sep 2026 10:00:00 +0000
+Message-ID: <feedback-1@example.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><head><style>p { color: red; }</style><title>ignored</title></head>
+<body><p>Hi there,</p><p>I&rsquo;ve been using the app for a month and it&#39;s great.</p>
+<p>Could you add a sleep timer that stops at the end of an episode?<br>Thanks!</p>
+<script>alert(1)</script></body></html>
