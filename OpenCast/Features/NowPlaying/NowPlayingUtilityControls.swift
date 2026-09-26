@@ -42,19 +42,23 @@ struct NowPlayingUtilityControls: View {
     private var sleepTimerButton: some View {
         if appModel.playback.sleepTimerMode != .off {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                sleepTimerButton(value: sleepTimerText(at: context.date))
+                sleepTimerButton(
+                    value: sleepTimerText(at: context.date),
+                    progress: sleepTimerProgress(at: context.date)
+                )
             }
         } else {
-            sleepTimerButton(value: "Off")
+            sleepTimerButton(value: "Off", progress: nil)
         }
     }
 
-    private func sleepTimerButton(value: String) -> some View {
+    private func sleepTimerButton(value: String, progress: Double?) -> some View {
         let isActive = appModel.playback.sleepTimerMode != .off
         return PlayerUtilityCircleButton(
             title: "Sleep",
             systemImage: isActive ? "moon.zzz.fill" : "moon.zzz",
             isActive: isActive,
+            progress: progress,
             replacesSymbol: true,
             action: onShowSleepTimer
         )
@@ -79,6 +83,16 @@ struct NowPlayingUtilityControls: View {
         }
 
         return remaining > 0 ? "-\(remaining.formattedPlaybackDuration)" : "Off"
+    }
+
+    private func sleepTimerProgress(at date: Date) -> Double? {
+        guard case .duration(let duration) = appModel.playback.sleepTimerMode,
+              duration > 0,
+              let remaining = appModel.playback.sleepTimerRemaining(at: date) else {
+            return nil
+        }
+
+        return min(max(remaining / duration, 0), 1)
     }
 
     private func queueAccessibilityValue(count: Int) -> Text {

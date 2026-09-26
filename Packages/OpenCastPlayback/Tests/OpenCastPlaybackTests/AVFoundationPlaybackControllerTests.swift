@@ -830,6 +830,21 @@ struct AVFoundationPlaybackControllerTests {
     }
 
     @Test
+    func restartingSoonAfterSleepTimerExpiresRearmsItsDuration() async throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 60))
+        controller.setSleepTimer(mode: .duration(0.02))
+
+        try await waitUntil { controller.sleepTimerMode == .off }
+        controller.play()
+
+        #expect(controller.sleepTimerMode == .duration(0.02))
+    }
+
+    @Test
     func naturalEpisodeCompletionClearsEndOfEpisodeTimer() throws {
         let controller = AVFoundationPlaybackController()
         defer {
