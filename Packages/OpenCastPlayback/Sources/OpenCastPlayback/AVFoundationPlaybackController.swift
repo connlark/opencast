@@ -17,6 +17,7 @@ public typealias PlaybackNextTrackHandler = @MainActor () -> Void
 @Observable
 public final class AVFoundationPlaybackController {
     private static let autoSkipSettleTolerance: TimeInterval = 0.05
+    private static let sleepTimerRearmWindow: TimeInterval = 5 * 60
     private static let logger = Logger(
         subsystem: "OpenCastPlayback",
         category: "AVFoundationPlaybackController"
@@ -71,6 +72,8 @@ public final class AVFoundationPlaybackController {
     @ObservationIgnored private var isPlaybackRequested = false
     @ObservationIgnored private var shouldResumeAfterInterruption = false
     @ObservationIgnored private var sleepTimerTask: Task<Void, Never>?
+    @ObservationIgnored private var expiredSleepTimerMode: PlaybackSleepTimerMode?
+    @ObservationIgnored private var sleepTimerRearmDeadline: Date?
     @ObservationIgnored private var remotePlaybackRateChangeHandler: PlaybackRateChangeRequestHandler?
     @ObservationIgnored private var episodeFinishedHandler: PlaybackEpisodeFinishedHandler?
     @ObservationIgnored private var nextTrackHandler: PlaybackNextTrackHandler?
@@ -166,6 +169,7 @@ public final class AVFoundationPlaybackController {
         voiceBoostTrackLoadTask?.cancel()
         voiceBoostTrackLoadTask = nil
         isPlaybackRequested = false
+        clearExpiredSleepTimerRearm()
         playbackFailureRecoveryPolicy.reset()
         playbackAdSkipPolicy.setZones([])
         autoSkipEventSequence = 0
@@ -377,6 +381,8 @@ public final class AVFoundationPlaybackController {
             return
         }
 
+        rearmExpiredSleepTimerIfNeeded()
+
         guard !isAudioSessionActive else {
             requestPlaybackForCurrentItem()
             return
@@ -410,6 +416,7 @@ public final class AVFoundationPlaybackController {
         voiceBoostTrackLoadTask?.cancel()
         voiceBoostTrackLoadTask = nil
         clearSleepTimer()
+        clearExpiredSleepTimerRearm()
         player.pause()
         player.replaceCurrentItem(with: nil)
         currentVoiceBoostTap = nil
@@ -518,6 +525,7 @@ public final class AVFoundationPlaybackController {
     }
 
     func setSleepTimer(mode: PlaybackSleepTimerMode, now: Date) {
+        clearExpiredSleepTimerRearm()
         sleepTimerTask?.cancel()
 
         switch mode {
@@ -558,8 +566,13 @@ public final class AVFoundationPlaybackController {
                 return
             }
 
-            self?.pause(reason: "sleep timer")
-            self?.clearSleepTimer()
+            guard let self else {
+                return
+            }
+
+            self.pause(reason: "sleep timer")
+            self.clearSleepTimer()
+            self.rememberExpiredSleepTimer(mode: .duration(duration))
         }
     }
 
@@ -1804,6 +1817,29 @@ public final class AVFoundationPlaybackController {
         if self[keyPath: keyPath] != value {
             self[keyPath: keyPath] = value
         }
+    }
+
+    private func rememberExpiredSleepTimer(mode: PlaybackSleepTimerMode) {
+        expiredSleepTimerMode = mode
+        sleepTimerRearmDeadline = .now.addingTimeInterval(Self.sleepTimerRearmWindow)
+    }
+
+    private func rearmExpiredSleepTimerIfNeeded() {
+        guard let mode = expiredSleepTimerMode,
+              let deadline = sleepTimerRearmDeadline,
+              .now <= deadline
+        else {
+            clearExpiredSleepTimerRearm()
+            return
+        }
+
+        clearExpiredSleepTimerRearm()
+        setSleepTimer(mode: mode)
+    }
+
+    private func clearExpiredSleepTimerRearm() {
+        expiredSleepTimerMode = nil
+        sleepTimerRearmDeadline = nil
     }
 
     private func clearSleepTimer() {
