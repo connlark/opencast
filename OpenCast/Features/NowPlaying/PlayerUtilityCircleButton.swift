@@ -4,6 +4,7 @@ struct PlayerUtilityCircleButton: View {
     let title: String
     let systemImage: String
     var isActive = false
+    var progress: Double? = nil
     var replacesSymbol = false
     let action: () -> Void
 
@@ -20,6 +21,6 @@ struct PlayerUtilityCircleButton: View {
             .labelStyle(.iconOnly)
         }
             .buttonStyle(.plain)
-            .playerUtilityCircleChrome(isActive: isActive)
+            .playerUtilityCircleChrome(isActive: isActive, progress: progress)
     }
 }
