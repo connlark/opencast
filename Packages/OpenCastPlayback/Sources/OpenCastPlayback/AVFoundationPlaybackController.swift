@@ -381,7 +381,7 @@ public final class AVFoundationPlaybackController {
             return
         }
 
-        rearmExpiredSleepTimerIfNeeded()
+        rearmExpiredSleepTimerIfNeeded(now: .now)
 
         guard !isAudioSessionActive else {
             requestPlaybackForCurrentItem()
@@ -572,7 +572,7 @@ public final class AVFoundationPlaybackController {
 
             self.pause(reason: "sleep timer")
             self.clearSleepTimer()
-            self.rememberExpiredSleepTimer(mode: .duration(duration))
+            self.rememberExpiredSleepTimer(mode: .duration(duration), now: .now)
         }
     }
 
@@ -1819,22 +1819,25 @@ public final class AVFoundationPlaybackController {
         }
     }
 
-    private func rememberExpiredSleepTimer(mode: PlaybackSleepTimerMode) {
+    private func rememberExpiredSleepTimer(mode: PlaybackSleepTimerMode, now: Date) {
         expiredSleepTimerMode = mode
-        sleepTimerRearmDeadline = .now.addingTimeInterval(Self.sleepTimerRearmWindow)
+        sleepTimerRearmDeadline = now.addingTimeInterval(Self.sleepTimerRearmWindow)
     }
 
-    private func rearmExpiredSleepTimerIfNeeded() {
+    /// Re-arms the sleep timer that stopped playback if `now` is still inside
+    /// the re-arm window; otherwise forgets it. `play` passes the wall clock;
+    /// tests pass a shifted one.
+    func rearmExpiredSleepTimerIfNeeded(now: Date) {
         guard let mode = expiredSleepTimerMode,
               let deadline = sleepTimerRearmDeadline,
-              .now <= deadline
+              now <= deadline
         else {
             clearExpiredSleepTimerRearm()
             return
         }
 
         clearExpiredSleepTimerRearm()
-        setSleepTimer(mode: mode)
+        setSleepTimer(mode: mode, now: now)
     }
 
     private func clearExpiredSleepTimerRearm() {

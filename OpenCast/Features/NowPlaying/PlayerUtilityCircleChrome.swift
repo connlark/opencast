@@ -21,6 +21,7 @@ struct PlayerUtilityCircleChrome: ViewModifier {
                         .padding(3)
 
                     Circle()
+                        .inset(by: 1)
                         .trim(from: 0, to: progress)
                         .stroke(
                             .tint,

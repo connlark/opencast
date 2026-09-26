@@ -845,6 +845,78 @@ struct AVFoundationPlaybackControllerTests {
     }
 
     @Test
+    func restartingInsideTheRearmWindowSchedulesFromTheGivenClock() async throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 60))
+        controller.setSleepTimer(mode: .duration(0.02))
+        try await waitUntil { controller.sleepTimerMode == .off }
+
+        let later = Date.now.addingTimeInterval(4 * 60)
+        controller.rearmExpiredSleepTimerIfNeeded(now: later)
+
+        #expect(controller.sleepTimerMode == .duration(0.02))
+        #expect(controller.sleepTimerEndsAt == later.addingTimeInterval(0.02))
+    }
+
+    @Test
+    func restartingAfterTheRearmWindowLeavesTheSleepTimerOff() async throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 60))
+        controller.setSleepTimer(mode: .duration(0.02))
+        try await waitUntil { controller.sleepTimerMode == .off }
+
+        controller.rearmExpiredSleepTimerIfNeeded(now: .now.addingTimeInterval(5 * 60 + 1))
+        #expect(controller.sleepTimerMode == .off)
+
+        controller.play()
+        #expect(controller.sleepTimerMode == .off)
+        #expect(controller.sleepTimerEndsAt == nil)
+    }
+
+    @Test
+    func loadingAnotherEpisodeForgetsTheExpiredSleepTimer() async throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(id: "first", duration: 60))
+        controller.setSleepTimer(mode: .duration(0.02))
+        try await waitUntil { controller.sleepTimerMode == .off }
+
+        try controller.load(episode(id: "second", duration: 60))
+        controller.play()
+
+        #expect(controller.sleepTimerMode == .off)
+    }
+
+    @Test
+    func choosingASleepTimerAfterExpiryReplacesTheRearm() async throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 60))
+        controller.setSleepTimer(mode: .duration(0.02))
+        try await waitUntil { controller.sleepTimerMode == .off }
+
+        controller.setSleepTimer(mode: .off)
+        controller.play()
+        #expect(controller.sleepTimerMode == .off)
+
+        controller.setSleepTimer(mode: .duration(0.02))
+        try await waitUntil { controller.sleepTimerMode == .off }
+        controller.setSleepTimer(mode: .endOfEpisode)
+        controller.play()
+        #expect(controller.sleepTimerMode == .endOfEpisode)
+    }
+
+    @Test
     func naturalEpisodeCompletionClearsEndOfEpisodeTimer() throws {
         let controller = AVFoundationPlaybackController()
         defer {
