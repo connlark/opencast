@@ -366,6 +366,9 @@ jobs:
           - name: ShareWorker
             directory: Server/ShareWorker
             timeout_minutes: 20
+          - name: MailTriageWorker
+            directory: Server/MailTriageWorker
+            timeout_minutes: 15
           - name: Website
             directory: Server/Website
             timeout_minutes: 35
@@ -465,6 +468,15 @@ jobs:
           yarn test:integration
           yarn deploy:dry-run
           yarn deploy:dry-run:prod-staging
+          yarn deploy:dry-run:production
+
+      - name: Check MailTriageWorker
+        if: matrix.name == 'MailTriageWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          yarn typecheck
+          yarn test
+          yarn deploy:dry-run
           yarn deploy:dry-run:production
 
       - name: Verify Website
