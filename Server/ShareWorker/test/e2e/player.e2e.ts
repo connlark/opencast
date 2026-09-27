@@ -143,7 +143,10 @@ test.describe("start offset", () => {
   for (const [query, expected] of [
     ["t=30", 30],
     ["t=0", 0],
-    ["t=1m", 0], // 60 s is past duration − 2: out of range
+    // The server keeps any start under a day (dynamically inserted ads make
+    // files longer than the feed says); the 60 s file itself drops these
+    // once its metadata arrives.
+    ["t=1m", 0],
     ["t=999", 0],
     ["t=abc", 0],
     ["t=0h0m20s", 20],

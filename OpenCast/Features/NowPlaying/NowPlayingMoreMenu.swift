@@ -10,6 +10,7 @@ struct NowPlayingMoreMenu: View {
     let onTranscriptAction: () -> Void
     let onShowDescription: () -> Void
     let onShowShow: () -> Void
+    let onStopPlayback: () -> Void
 
     var body: some View {
         Menu {
@@ -27,6 +28,8 @@ struct NowPlayingMoreMenu: View {
                 .disabled(!canShowDescription)
             Button("Show Show", systemImage: "rectangle.stack", action: onShowShow)
                 .disabled(!canShowShow)
+            Divider()
+            Button("Stop Playback", systemImage: "stop.circle", action: onStopPlayback)
         } label: {
             Label("More Actions", systemImage: "ellipsis.circle")
                 .labelStyle(.iconOnly)

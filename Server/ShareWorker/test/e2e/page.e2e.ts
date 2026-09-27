@@ -180,6 +180,19 @@ test.describe("regressions", () => {
     for (const [name, px] of Object.entries(offsets!)) expect(Math.abs(px), `${name} is off by ${px}px`).toBeLessThanOrEqual(1);
   });
 
+  test("artwork from a hotlink-protected host renders and no request carries a referrer", async ({ page, share, battery, request }) => {
+    await page.goto(share.url("artwork-hotlinked"));
+    await page.waitForLoadState("networkidle");
+    const artwork = page.locator("main img").first();
+    expect(await artwork.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+    const { findings } = await battery();
+    expect(findings.filter((finding) => finding.kind === "broken-image")).toEqual([]);
+    // Artwork, glow and audio all go to the host; none may name this page.
+    const seen: { path: string; referer: string | null }[] = await (await request.get(`${share.media.https}/__log?probe=hotlinked`)).json();
+    expect(seen.map((entry) => entry.path)).toEqual(expect.arrayContaining([expect.stringContaining("/art/hotlinked/square.png")]));
+    for (const entry of seen) expect(entry.referer, `${entry.path} carried a referrer`).toBeNull();
+  });
+
   test("an unbreakable title wraps inside the column", async ({ page, share }) => {
     await page.goto(share.url("unbreakable"));
     for (const text of [page.locator("main h1"), page.locator("main h1 + p")]) {

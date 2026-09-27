@@ -171,11 +171,137 @@ pub struct GeminiUsage {
 /// What one `run_analysis` call cost regardless of how it ended: the
 /// outer attempts made and the summed Gemini usage across them. Populated on
 /// the failure arm too — a run that burns three full generations and then
-/// fails typed is spend the counters must see.
+/// fails typed is spend the counters must see. The ladder fields record the
+/// failure shape the same way: calls that timed out (and may have been
+/// billed upstream without ever reporting usage), payload resends, whether
+/// the run budget ended the run, and which class rejected each attempt.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnalysisRunStats {
     pub attempts: u32,
     pub usage: Option<GeminiUsage>,
+    /// Model calls that hit their deadline and were aborted.
+    pub gemini_call_timeouts: u32,
+    /// Identical-payload resends inside the transport ladder (after a
+    /// timeout or a fast failure); never the escalated analysis attempts.
+    pub transport_retries: u32,
+    /// The run budget ended the run before its attempts were used up.
+    pub budget_exhausted: bool,
+    pub rejected: RejectedAttempts,
+}
+
+/// Attempts whose model reply came back but was rejected, by the class of
+/// the rejection. One class per rejected attempt, chosen by precedence
+/// (`RejectionClass`), so the classes partition `total`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RejectedAttempts {
+    pub total: u32,
+    pub id_discipline: u32,
+    pub chapters: u32,
+    pub summary: u32,
+    pub claims: u32,
+    pub parse: u32,
+    pub truncated: u32,
+    pub other: u32,
+}
+
+impl RejectedAttempts {
+    /// A hard-validation rejection. A reply usually violates several rules
+    /// at once (seconds in an id field also breaks ordering and overlap),
+    /// so the attempt is counted once under its most diagnostic class.
+    pub fn record_validation(&mut self, rules: &[&str]) {
+        self.total = self.total.saturating_add(1);
+        let class = rules
+            .iter()
+            .map(|rule| RejectionClass::for_rule(rule))
+            .min()
+            .unwrap_or(RejectionClass::Other);
+        let slot = match class {
+            RejectionClass::IdDiscipline => &mut self.id_discipline,
+            RejectionClass::Chapters => &mut self.chapters,
+            RejectionClass::Summary => &mut self.summary,
+            RejectionClass::Claims => &mut self.claims,
+            RejectionClass::Other => &mut self.other,
+        };
+        *slot = slot.saturating_add(1);
+    }
+
+    /// A reply that produced no model output: truncation is its own class,
+    /// every other parse failure is `parse`.
+    pub fn record_parse(&mut self, error: &crate::gemini::GeminiParseError) {
+        self.total = self.total.saturating_add(1);
+        let slot = match error {
+            crate::gemini::GeminiParseError::MaxTokensTruncated => &mut self.truncated,
+            _ => &mut self.parse,
+        };
+        *slot = slot.saturating_add(1);
+    }
+
+    /// The per-class counts, in vocabulary order.
+    pub fn class_counts(&self) -> [u32; 7] {
+        [
+            self.id_discipline,
+            self.chapters,
+            self.summary,
+            self.claims,
+            self.parse,
+            self.truncated,
+            self.other,
+        ]
+    }
+}
+
+/// Validation rule classes in precedence order: the first class present in a
+/// rejection is the one recorded for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RejectionClass {
+    IdDiscipline,
+    Chapters,
+    Summary,
+    Claims,
+    Other,
+}
+
+impl RejectionClass {
+    pub fn for_rule(rule: &str) -> Self {
+        match rule {
+            "id_discipline" => RejectionClass::IdDiscipline,
+            "chapters_shape" | "chapter_count_cap" | "chapter_order" | "chapter_overlap"
+            | "chapter_title" | "chapter_confidence" => RejectionClass::Chapters,
+            "summary_text" | "summary_length" | "one_line_text" | "one_line_length" => {
+                RejectionClass::Summary
+            }
+            "claims_count" | "claim_text" => RejectionClass::Claims,
+            _ => RejectionClass::Other,
+        }
+    }
+}
+
+/// A typed failure to forward: the HTTP status the caller answers with and
+/// its content-free body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpstreamError {
+    pub status: u16,
+    pub body: ErrorResponse,
+}
+
+impl UpstreamError {
+    pub fn new(status: u16, code: impl Into<String>) -> Self {
+        Self {
+            status,
+            body: ErrorResponse::new(code),
+        }
+    }
+
+    pub fn with_detail(status: u16, code: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            status,
+            body: ErrorResponse::with_detail(code, detail),
+        }
+    }
+
+    pub fn code(&self) -> &str {
+        &self.body.error
+    }
 }
 
 /// Purchase-account balance snapshot (integer seconds), the shared currency

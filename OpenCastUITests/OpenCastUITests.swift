@@ -999,6 +999,66 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededSleepTimerSheetMarksActiveChoiceAndExtends() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+
+        let sleepTimerButton = app.buttons["Sleep Timer"]
+        assertHittable(sleepTimerButton, named: "Sleep Timer control")
+        sleepTimerButton.tap()
+
+        let fifteenMinutes = app.buttons["15 Minutes"]
+        assertHittable(fifteenMinutes, named: "15 Minutes sleep option")
+        XCTAssertFalse(fifteenMinutes.isSelected, "No preset should be marked while the timer is off.")
+        assertDoesNotExist(app.buttons["Add 15 Minutes"], named: "extend action while the timer is off")
+        fifteenMinutes.tap()
+        assertElementValueNotEqual(sleepTimerButton, "Off", named: "armed Sleep Timer control")
+
+        sleepTimerButton.tap()
+        assertExists(fifteenMinutes, named: "15 Minutes sleep option after reopening the sheet")
+        XCTAssertTrue(fifteenMinutes.isSelected, "The armed preset should be marked as selected.")
+        let addFifteenMinutes = app.buttons["Add 15 Minutes"]
+        assertHittable(addFifteenMinutes, named: "Add 15 Minutes action")
+        addFifteenMinutes.tap()
+
+        // Extending keeps the sheet open; the mode is now a non-preset
+        // duration, so no preset row stays marked.
+        let presetDeselected = NSPredicate { object, _ in
+            (object as? XCUIElement)?.isSelected == false
+        }
+        wait(for: [expectation(for: presetDeselected, evaluatedWith: fifteenMinutes)], timeout: 5)
+        assertExists(addFifteenMinutes, named: "Add 15 Minutes action after extending")
+    }
+
+    @MainActor
+    func testSeededStopPlaybackFromMoreMenuRemovesCardAndMiniPlayer() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+
+        app.buttons["More Actions"].tap()
+        let stopPlayback = app.buttons["Stop Playback"]
+        assertHittable(stopPlayback, named: "Stop Playback action")
+        stopPlayback.tap()
+
+        XCTAssertTrue(
+            nowPlayingOverlay(in: app).waitForNonExistence(timeout: 5),
+            "Stop Playback should collapse the Now Playing card."
+        )
+        XCTAssertTrue(
+            app.buttons["Open Now Playing"].waitForNonExistence(timeout: 5),
+            "Stop Playback should unload the episode and remove the mini-player."
+        )
+        assertDoesNotExist(
+            finishedPlayback(in: app),
+            named: "Finished presentation after stopping playback"
+        )
+    }
+
+    @MainActor
     func testSeededExpandedCompletionReplaysAndDismissesWithoutMiniPlayer() throws {
         let app = makeSeededApp(audioDurationSeconds: 15)
         app.launch()
@@ -4377,6 +4437,133 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededUpNextAccessoryPlaysQueueHeadWhenNothingIsPlaying() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true, extraFeedCount: 12)
+        app.launch()
+
+        openInbox(in: app)
+        let accessory = app.buttons["Open Up Next"]
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertExists(accessory, named: "Up Next accessory with nothing playing")
+        assertDoesNotExist(miniPlayer, named: "mini-player with nothing playing")
+        assertValue(of: accessory, contains: "Queued UI Episode 1", named: "Up Next accessory")
+        assertValue(of: accessory, contains: "3 episodes queued", named: "Up Next accessory")
+        let expanded = app.descendants(matching: .any)["up-next-accessory-expanded"].firstMatch
+        assertExists(expanded, named: "expanded Up Next accessory placement")
+        let playUpNext = app.buttons["Play Up Next"]
+        assertHittable(playUpNext, named: "Play Up Next")
+        attachSmokeScreenshot(named: "up_next_accessory_expanded")
+
+        scrollUntilExists(seededExtraEpisodeRow(in: app, index: 8), in: app, maxSwipes: 4)
+        let inline = app.descendants(matching: .any)["up-next-accessory-inline"].firstMatch
+        assertExists(inline, named: "inline Up Next accessory placement after scrolling")
+        assertHittable(playUpNext, named: "Play Up Next while inline")
+        attachSmokeScreenshot(named: "up_next_accessory_inline")
+
+        app.swipeDown()
+        assertExists(expanded, named: "expanded Up Next accessory restored on upward scroll")
+
+        playUpNext.tap()
+
+        assertExists(miniPlayer, named: "mini-player after Play Up Next")
+        assertValue(of: miniPlayer, contains: "Queued UI Episode 1", named: "mini-player after Play Up Next")
+        assertDoesNotExist(accessory, named: "Up Next accessory while playing", timeout: 5)
+        XCTAssertFalse(
+            nowPlayingOverlay(in: app).isHittable,
+            "Play Up Next should start the queue head without presenting Now Playing."
+        )
+        attachSmokeScreenshot(named: "up_next_accessory_became_mini_player")
+
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        openUpNextSheetFromNowPlaying(in: app)
+        assertQueuedRowsInUpNextSheet(remaining: [2, 3], in: app)
+    }
+
+    @MainActor
+    func testSeededUpNextAccessoryOpensQueueSheetAndPlaysARow() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launch()
+
+        let accessory = app.buttons["Open Up Next"]
+        assertHittable(accessory, named: "Up Next accessory")
+        accessory.tap()
+
+        assertExists(app.navigationBars["Up Next"], named: "Up Next sheet from the accessory")
+        assertQueuedRowsInUpNextSheet(remaining: [1, 2, 3], in: app)
+        attachSmokeScreenshot(named: "up_next_accessory_sheet")
+        let secondRow = try XCTUnwrap(hittableQueuedRow(2, in: app), "Queued episode 2 should be tappable in the sheet")
+        secondRow.tap()
+
+        XCTAssertTrue(
+            app.navigationBars["Up Next"].waitForNonExistence(timeout: 5),
+            "Playing a queued row should dismiss the Up Next sheet."
+        )
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertExists(miniPlayer, named: "mini-player after playing a queued row")
+        assertValue(of: miniPlayer, contains: "Queued UI Episode 2", named: "mini-player after playing a queued row")
+        assertDoesNotExist(accessory, named: "Up Next accessory while playing", timeout: 5)
+
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        openUpNextSheetFromNowPlaying(in: app)
+        assertQueuedRowsInUpNextSheet(remaining: [1, 3], in: app)
+    }
+
+    @MainActor
+    func testSeededRestoredPlaybackWinsOverQueuedAccessory() throws {
+        let app = makeSeededApp(seedsEpisodeProgress: true, seedsUpNextQueue: true)
+        app.launch()
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertExists(miniPlayer, named: "restored mini-player")
+        assertValue(of: miniPlayer, contains: "Deterministic UI Episode", named: "restored mini-player")
+        assertDoesNotExist(app.buttons["Open Up Next"], named: "Up Next accessory over a restored episode", timeout: 2)
+        assertDoesNotExist(app.buttons["Play Up Next"], named: "Play Up Next over a restored episode")
+
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        assertExists(nowPlayingOverlay(in: app).buttons["Play"].firstMatch, named: "restored paused playback control")
+        openUpNextSheetFromNowPlaying(in: app)
+        assertQueuedRowsInUpNextSheet(remaining: [1, 2, 3], in: app)
+    }
+
+    @MainActor
+    func testSeededHideUpNextKeepsQueueAccessoryAndPlaysHead() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launch()
+
+        openInbox(in: app)
+        let queuedRows = Self.seededQueuedEpisodeRowIdentifiers.map {
+            app.buttons.matching(identifier: $0).firstMatch
+        }
+        assertExists(queuedRows[0], named: "queued inbox row 1 before hiding Up Next")
+        toggleInboxHidesUpNext(in: app)
+        for (index, row) in queuedRows.enumerated() {
+            assertDoesNotExist(row, named: "queued inbox row \(index + 1) while hiding Up Next", timeout: 5)
+        }
+
+        let accessory = app.buttons["Open Up Next"]
+        let playUpNext = app.buttons["Play Up Next"]
+        assertExists(accessory, named: "Up Next accessory while queued rows are hidden")
+        assertValue(of: accessory, contains: "Queued UI Episode 1", named: "Up Next accessory while queued rows are hidden")
+        assertHittable(playUpNext, named: "Play Up Next while queued rows are hidden")
+        attachSmokeScreenshot(named: "inbox_hide_up_next_accessory")
+        playUpNext.tap()
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertExists(miniPlayer, named: "mini-player after starting the hidden queue")
+        assertValue(of: miniPlayer, contains: "Queued UI Episode 1", named: "mini-player after starting the hidden queue")
+        assertExists(queuedRows[0], named: "played episode back in the Inbox once it left the queue")
+        assertDoesNotExist(queuedRows[1], named: "queued inbox row 2 while hiding Up Next")
+        assertDoesNotExist(queuedRows[2], named: "queued inbox row 3 while hiding Up Next")
+        assertExists(
+            inboxFilterMenu(showing: "Up Next hidden", in: app),
+            named: "Inbox filter menu after starting the queue"
+        )
+    }
+
+    @MainActor
     func testSeededNowPlayingAirPlayPickerCanOpen() throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("AirPlay route-picker presentation is a physical-device check; see docs/simulator-limitations.md.")
@@ -6000,6 +6187,58 @@ final class OpenCastUITests: XCTestCase {
         let start = artwork.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.52))
         let end = start.withOffset(CGVector(dx: max(180, artwork.frame.width * 2.2), dy: 0))
         start.press(forDuration: 0.06, thenDragTo: end)
+    }
+
+    @MainActor
+    private func assertValue(
+        of element: XCUIElement,
+        contains expected: String,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let value = element.value as? String ?? ""
+        XCTAssertTrue(
+            value.contains(expected),
+            "\(name) value should contain \"\(expected)\"; got \"\(value)\"",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func openUpNextSheetFromNowPlaying(in app: XCUIApplication) {
+        let upNextButton = nowPlayingOverlay(in: app).buttons["Up Next"].firstMatch
+        assertNowPlayingControlIsReachable(upNextButton, named: "Up Next control", in: app)
+        upNextButton.tap()
+        assertExists(app.navigationBars["Up Next"], named: "Up Next sheet")
+    }
+
+    /// The Inbox and the Up Next sheet share row identifiers; while the sheet
+    /// is up only its copies are hittable, and behind the Now Playing card the
+    /// Inbox copies leave the accessibility tree altogether.
+    @MainActor
+    private func hittableQueuedRow(_ number: Int, in app: XCUIApplication) -> XCUIElement? {
+        app.buttons.matching(identifier: Self.seededQueuedEpisodeRowIdentifiers[number - 1])
+            .allElementsBoundByIndex
+            .first(where: \.isHittable)
+    }
+
+    @MainActor
+    private func assertQueuedRowsInUpNextSheet(
+        remaining: [Int],
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for number in 1...Self.seededQueuedEpisodeRowIdentifiers.count {
+            let row = hittableQueuedRow(number, in: app)
+            if remaining.contains(number) {
+                XCTAssertNotNil(row, "Queued episode \(number) should remain in the Up Next sheet", file: file, line: line)
+            } else {
+                XCTAssertNil(row, "Queued episode \(number) should have left the Up Next sheet", file: file, line: line)
+            }
+        }
     }
 
     @MainActor

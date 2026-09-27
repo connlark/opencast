@@ -12,6 +12,7 @@ struct NowPlayingOverlayView: View {
     let onDismissed: () -> Void
     let onOpenEpisode: () -> Void
     let onOpenPodcast: () -> Void
+    let onStopPlayback: () -> Void
 
     @State private var offsetY: CGFloat?
     @State private var isTrackingDismissDrag = false
@@ -45,7 +46,8 @@ struct NowPlayingOverlayView: View {
                     isTrackingDismissDrag: isTrackingDismissDrag,
                     onDismiss: { dismiss(containerHeight: proxy.size.height) },
                     onOpenEpisode: { openEpisode(containerHeight: proxy.size.height) },
-                    onOpenPodcast: { openPodcast(containerHeight: proxy.size.height) }
+                    onOpenPodcast: { openPodcast(containerHeight: proxy.size.height) },
+                    onStopPlayback: { stopPlayback(containerHeight: proxy.size.height) }
                 )
                 .frame(width: cardSize.width, height: cardSize.height)
                 .background(playerSurface)
@@ -265,6 +267,10 @@ struct NowPlayingOverlayView: View {
 
     private func openPodcast(containerHeight: CGFloat) {
         dismiss(containerHeight: containerHeight, completion: onOpenPodcast)
+    }
+
+    private func stopPlayback(containerHeight: CGFloat) {
+        dismiss(containerHeight: containerHeight, completion: onStopPlayback)
     }
 
     private func dismiss(containerHeight: CGFloat, completion: (() -> Void)?) {

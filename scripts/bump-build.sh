@@ -7,17 +7,24 @@
 #   scripts/bump-build.sh 42        # set explicitly to 42
 set -euo pipefail
 
+if [[ $# -gt 1 ]]; then
+  echo "usage: scripts/bump-build.sh [build-number]" >&2
+  exit 64
+fi
+
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "${script_dir}/.." && pwd)
-pbxproj="${repo_root}/opencast.xcodeproj/project.pbxproj"
+pbxproj=${OPENCAST_PBXPROJ_PATH:-"${repo_root}/opencast.xcodeproj/project.pbxproj"}
 
 if [[ ! -f "${pbxproj}" ]]; then
   echo "error: ${pbxproj} not found" >&2
   exit 1
 fi
 
-mapfile -t versions < <(grep -E '^[[:space:]]*CURRENT_PROJECT_VERSION = [0-9]+;' "${pbxproj}" \
-  | sed -E 's/.*CURRENT_PROJECT_VERSION = ([0-9]+);.*/\1/')
+versions=()
+while IFS= read -r version; do
+  versions+=("${version}")
+done < <(sed -nE 's/^[[:space:]]*CURRENT_PROJECT_VERSION = ([0-9]+);[[:space:]]*$/\1/p' "${pbxproj}")
 
 if [[ ${#versions[@]} -eq 0 ]]; then
   echo "error: no CURRENT_PROJECT_VERSION entries found in ${pbxproj}" >&2
@@ -40,15 +47,26 @@ if [[ $# -ge 1 ]]; then
     exit 1
   fi
 else
-  next=$((current + 1))
+  next=$((10#${current} + 1))
 fi
 
-# In-place edit; matches both leading-tab and leading-space indentation.
-sed -i '' -E "s/^([[:space:]]*)CURRENT_PROJECT_VERSION = ${current};/\1CURRENT_PROJECT_VERSION = ${next};/" "${pbxproj}"
+# Stage and verify the edit before replacing the project. Avoid sed -i, whose
+# arguments differ between BSD sed and GNU sed (including Homebrew's version).
+temporary=$(mktemp "${pbxproj}.XXXXXX")
+trap 'rm -f "${temporary}"' EXIT
+cp -p "${pbxproj}" "${temporary}"
+sed -E "s/^([[:space:]]*)CURRENT_PROJECT_VERSION = ${current};/\1CURRENT_PROJECT_VERSION = ${next};/" "${pbxproj}" > "${temporary}"
 
 # Verify every occurrence was updated.
-mapfile -t after < <(grep -E '^[[:space:]]*CURRENT_PROJECT_VERSION = [0-9]+;' "${pbxproj}" \
-  | sed -E 's/.*CURRENT_PROJECT_VERSION = ([0-9]+);.*/\1/')
+after=()
+while IFS= read -r version; do
+  after+=("${version}")
+done < <(sed -nE 's/^[[:space:]]*CURRENT_PROJECT_VERSION = ([0-9]+);[[:space:]]*$/\1/p' "${temporary}")
+
+if [[ ${#after[@]} -ne ${#versions[@]} ]]; then
+  echo "error: CURRENT_PROJECT_VERSION entry count changed during edit" >&2
+  exit 1
+fi
 
 for v in "${after[@]}"; do
   if [[ "${v}" != "${next}" ]]; then
@@ -57,4 +75,5 @@ for v in "${after[@]}"; do
   fi
 done
 
+mv "${temporary}" "${pbxproj}"
 echo "build: ${current} -> ${next} (${#after[@]} configurations updated)"

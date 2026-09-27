@@ -29,6 +29,7 @@ struct NowPlayingView: View {
     let onDismiss: () -> Void
     let onOpenEpisode: () -> Void
     let onOpenPodcast: () -> Void
+    let onStopPlayback: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -181,7 +182,8 @@ struct NowPlayingView: View {
                         canShowShow: canOpenCurrentPodcast,
                         onTranscriptAction: performTranscriptAction,
                         onShowDescription: openEpisode,
-                        onShowShow: openPodcast
+                        onShowShow: openPodcast,
+                        onStopPlayback: stopPlayback
                     )
                     .padding(.top, moreMenuTopPadding)
                     .padding(.trailing, 20)
@@ -598,6 +600,13 @@ struct NowPlayingView: View {
 
     private func openPodcast() {
         onOpenPodcast()
+    }
+
+    /// The unload, and so the audio stop, lands in the exit animation's
+    /// completion. Pausing on the tap held the first frame of the exit for
+    /// well over 100 ms, so audio trails the tap by the animation instead.
+    private func stopPlayback() {
+        onStopPlayback()
     }
 
     private func syncVoiceBoostEnabledFromStore() {

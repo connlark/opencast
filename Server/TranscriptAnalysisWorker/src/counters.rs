@@ -58,7 +58,66 @@ pub const SETTLED_JOBS: &str = "settled_jobs";
 pub const CHARGED_CREDIT_SECONDS: &str = "charged_credit_seconds";
 pub const RELEASED_CREDIT_SECONDS: &str = "released_credit_seconds";
 
-/// One D1 write covering every counter of a run's model spend.
+// Ladder shape, per run (folded through `spend_deltas`, so they land in the
+// same D1 write as the attempt and token counters).
+/// Model calls that hit their deadline and were aborted. Such a call reports
+/// no usage, so it is invisible to the token counters even when the
+/// upstream billed the generation it abandoned.
+pub const GEMINI_CALL_TIMEOUTS: &str = "gemini_call_timeouts";
+/// Identical-payload resends inside the transport ladder.
+pub const TRANSPORT_RETRIES: &str = "transport_retries";
+/// Runs the run budget ended before their attempts were used up.
+pub const ANALYSIS_BUDGET_EXHAUSTED: &str = "analysis_budget_exhausted";
+/// Attempts whose reply came back and was rejected, then one class per
+/// rejected attempt (the classes partition `rejected_attempts`).
+pub const REJECTED_ATTEMPTS: &str = "rejected_attempts";
+pub const REJECTED_ID_DISCIPLINE: &str = "rejected_id_discipline";
+pub const REJECTED_CHAPTERS: &str = "rejected_chapters";
+pub const REJECTED_SUMMARY: &str = "rejected_summary";
+pub const REJECTED_CLAIMS: &str = "rejected_claims";
+pub const REJECTED_PARSE: &str = "rejected_parse";
+pub const REJECTED_TRUNCATED: &str = "rejected_truncated";
+pub const REJECTED_OTHER: &str = "rejected_other";
+
+// Terminal failure codes, bumped beside `jobs_failed_upstream` (async) or
+// `sync_analyses` (inline) so the dashboard sees which code ended a run.
+// The codes themselves live only in the purged job record and the poll
+// body; this is the only durable per-code record.
+pub const FAILED_GEMINI_TIMEOUT: &str = "failed_gemini_timeout";
+pub const FAILED_GEMINI_HTTP_ERROR: &str = "failed_gemini_http_error";
+pub const FAILED_GEMINI_RETRY_EXHAUSTED: &str = "failed_gemini_retry_exhausted";
+pub const FAILED_GEMINI_QUOTA_EXHAUSTED: &str = "failed_gemini_quota_exhausted";
+pub const FAILED_WORKER_FETCH_ERROR: &str = "failed_worker_fetch_error";
+pub const FAILED_INVALID_MODEL_OUTPUT: &str = "failed_invalid_model_output";
+pub const FAILED_MODEL_OUTPUT_TRUNCATED: &str = "failed_model_output_truncated";
+pub const FAILED_RESULT_OVERSIZED: &str = "failed_result_oversized";
+pub const FAILED_JOB_TASK_FAILED: &str = "failed_job_task_failed";
+/// Every other terminal code (`worker_secret_missing`, `gemini_payload_error`,
+/// `gemini_response_oversized`, `gemini_response_encoding`,
+/// `transcript_too_long`, ...): rare local or configuration failures that
+/// need the logs, not their own row.
+pub const FAILED_OTHER: &str = "failed_other";
+
+/// The counter a terminal failure code bumps, with `failed_other` as the
+/// fallback for every code without a row of its own.
+pub fn failure_code_counter(code: &str) -> &'static str {
+    match code {
+        "gemini_timeout" => FAILED_GEMINI_TIMEOUT,
+        "gemini_http_error" => FAILED_GEMINI_HTTP_ERROR,
+        "gemini_retry_exhausted" => FAILED_GEMINI_RETRY_EXHAUSTED,
+        "gemini_quota_exhausted" => FAILED_GEMINI_QUOTA_EXHAUSTED,
+        "worker_fetch_error" => FAILED_WORKER_FETCH_ERROR,
+        "invalid_model_output" => FAILED_INVALID_MODEL_OUTPUT,
+        "model_output_truncated" => FAILED_MODEL_OUTPUT_TRUNCATED,
+        "result_oversized" => FAILED_RESULT_OVERSIZED,
+        "job_task_failed" => FAILED_JOB_TASK_FAILED,
+        _ => FAILED_OTHER,
+    }
+}
+
+/// One D1 write covering every counter of a run's model spend and ladder
+/// shape. The ladder counters are appended only when non-zero: a clean run
+/// writes exactly the rows it always did.
 pub fn spend_deltas(stats: &AnalysisRunStats) -> Vec<(&'static str, i64)> {
     let mut deltas = vec![(ANALYSIS_ATTEMPTS, i64::from(stats.attempts))];
     if let Some(usage) = &stats.usage {
@@ -66,6 +125,25 @@ pub fn spend_deltas(stats: &AnalysisRunStats) -> Vec<(&'static str, i64)> {
         deltas.push((CANDIDATES_TOKENS, clamp_u64(usage.candidates_token_count)));
         deltas.push((THOUGHTS_TOKENS, clamp_u64(usage.thoughts_token_count)));
         deltas.push((TOTAL_TOKENS, clamp_u64(usage.total_token_count)));
+    }
+    let rejected = &stats.rejected;
+    let ladder: [(&'static str, u32); 11] = [
+        (GEMINI_CALL_TIMEOUTS, stats.gemini_call_timeouts),
+        (TRANSPORT_RETRIES, stats.transport_retries),
+        (ANALYSIS_BUDGET_EXHAUSTED, u32::from(stats.budget_exhausted)),
+        (REJECTED_ATTEMPTS, rejected.total),
+        (REJECTED_ID_DISCIPLINE, rejected.id_discipline),
+        (REJECTED_CHAPTERS, rejected.chapters),
+        (REJECTED_SUMMARY, rejected.summary),
+        (REJECTED_CLAIMS, rejected.claims),
+        (REJECTED_PARSE, rejected.parse),
+        (REJECTED_TRUNCATED, rejected.truncated),
+        (REJECTED_OTHER, rejected.other),
+    ];
+    for (name, value) in ladder {
+        if value > 0 {
+            deltas.push((name, i64::from(value)));
+        }
     }
     deltas
 }
@@ -159,6 +237,7 @@ mod tests {
                 thoughts_token_count: 300,
                 total_token_count: 460,
             }),
+            ..Default::default()
         };
         assert_eq!(
             spend_deltas(&stats),
@@ -179,6 +258,7 @@ mod tests {
         let stats = AnalysisRunStats {
             attempts: 1,
             usage: None,
+            ..Default::default()
         };
         assert_eq!(spend_deltas(&stats), vec![(ANALYSIS_ATTEMPTS, 1)]);
     }
@@ -193,6 +273,7 @@ mod tests {
                 thoughts_token_count: 0,
                 total_token_count: u64::MAX,
             }),
+            ..Default::default()
         };
         let deltas = spend_deltas(&stats);
         assert!(deltas.contains(&(PROMPT_TOKENS, i64::MAX)));
@@ -236,11 +317,124 @@ mod tests {
             SETTLED_JOBS,
             CHARGED_CREDIT_SECONDS,
             RELEASED_CREDIT_SECONDS,
+            GEMINI_CALL_TIMEOUTS,
+            TRANSPORT_RETRIES,
+            ANALYSIS_BUDGET_EXHAUSTED,
+            REJECTED_ATTEMPTS,
+            REJECTED_ID_DISCIPLINE,
+            REJECTED_CHAPTERS,
+            REJECTED_SUMMARY,
+            REJECTED_CLAIMS,
+            REJECTED_PARSE,
+            REJECTED_TRUNCATED,
+            REJECTED_OTHER,
+            FAILED_GEMINI_TIMEOUT,
+            FAILED_GEMINI_HTTP_ERROR,
+            FAILED_GEMINI_RETRY_EXHAUSTED,
+            FAILED_GEMINI_QUOTA_EXHAUSTED,
+            FAILED_WORKER_FETCH_ERROR,
+            FAILED_INVALID_MODEL_OUTPUT,
+            FAILED_MODEL_OUTPUT_TRUNCATED,
+            FAILED_RESULT_OVERSIZED,
+            FAILED_JOB_TASK_FAILED,
+            FAILED_OTHER,
         ];
+        assert_eq!(names.len(), 44);
         let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
         assert_eq!(unique.len(), names.len());
         for name in names {
             assert!(name.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+        }
+    }
+
+    #[test]
+    fn spend_deltas_cover_every_ladder_field_and_omit_zeros() {
+        let mut stats = AnalysisRunStats {
+            attempts: 3,
+            usage: None,
+            gemini_call_timeouts: 2,
+            transport_retries: 4,
+            budget_exhausted: true,
+            ..Default::default()
+        };
+        stats
+            .rejected
+            .record_validation(&["chapter_order", "id_discipline"]);
+        stats.rejected.record_validation(&["summary_length"]);
+        stats
+            .rejected
+            .record_parse(&crate::gemini::GeminiParseError::MaxTokensTruncated);
+        stats
+            .rejected
+            .record_parse(&crate::gemini::GeminiParseError::MalformedModelJson);
+        stats.rejected.record_validation(&["claims_count"]);
+        stats.rejected.record_validation(&["no_urls"]);
+        stats.rejected.record_validation(&["chapter_title"]);
+        assert_eq!(
+            spend_deltas(&stats),
+            vec![
+                (ANALYSIS_ATTEMPTS, 3),
+                (GEMINI_CALL_TIMEOUTS, 2),
+                (TRANSPORT_RETRIES, 4),
+                (ANALYSIS_BUDGET_EXHAUSTED, 1),
+                (REJECTED_ATTEMPTS, 7),
+                (REJECTED_ID_DISCIPLINE, 1),
+                (REJECTED_CHAPTERS, 1),
+                (REJECTED_SUMMARY, 1),
+                (REJECTED_CLAIMS, 1),
+                (REJECTED_PARSE, 1),
+                (REJECTED_TRUNCATED, 1),
+                (REJECTED_OTHER, 1),
+            ]
+        );
+        // The classes partition the rejected attempts, delta by delta.
+        let deltas = spend_deltas(&stats);
+        let total = deltas
+            .iter()
+            .find(|(name, _)| *name == REJECTED_ATTEMPTS)
+            .map_or(0, |(_, value)| *value);
+        let classes: i64 = deltas
+            .iter()
+            .filter(|(name, _)| name.starts_with("rejected_") && *name != REJECTED_ATTEMPTS)
+            .map(|(_, value)| *value)
+            .sum();
+        assert_eq!(total, classes);
+
+        // A clean run writes exactly the rows it always did.
+        let clean = AnalysisRunStats {
+            attempts: 1,
+            usage: None,
+            ..Default::default()
+        };
+        assert_eq!(spend_deltas(&clean), vec![(ANALYSIS_ATTEMPTS, 1)]);
+    }
+
+    #[test]
+    fn every_terminal_code_maps_to_a_failure_counter() {
+        let named = [
+            ("gemini_timeout", FAILED_GEMINI_TIMEOUT),
+            ("gemini_http_error", FAILED_GEMINI_HTTP_ERROR),
+            ("gemini_retry_exhausted", FAILED_GEMINI_RETRY_EXHAUSTED),
+            ("gemini_quota_exhausted", FAILED_GEMINI_QUOTA_EXHAUSTED),
+            ("worker_fetch_error", FAILED_WORKER_FETCH_ERROR),
+            ("invalid_model_output", FAILED_INVALID_MODEL_OUTPUT),
+            ("model_output_truncated", FAILED_MODEL_OUTPUT_TRUNCATED),
+            ("result_oversized", FAILED_RESULT_OVERSIZED),
+            ("job_task_failed", FAILED_JOB_TASK_FAILED),
+        ];
+        for (code, counter) in named {
+            assert_eq!(failure_code_counter(code), counter, "{code}");
+            assert_eq!(counter, format!("failed_{code}"));
+        }
+        for code in [
+            "worker_secret_missing",
+            "gemini_payload_error",
+            "gemini_response_oversized",
+            "gemini_response_encoding",
+            "transcript_too_long",
+            "",
+        ] {
+            assert_eq!(failure_code_counter(code), FAILED_OTHER, "{code}");
         }
     }
 }

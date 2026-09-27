@@ -22,7 +22,9 @@ use crate::job::{
 };
 use crate::route::JSON_CONTENT_TYPE;
 use crate::types::{resolve_gemini_model, ErrorResponse, GEMINI_MODEL_ENV_VAR};
-use crate::worker_app::{admit_spend_caps, mint_billing_id, reserve_failure_response, AppConfig};
+use crate::worker_app::{
+    admit_spend_caps, ladder_config, mint_billing_id, reserve_failure_response, AppConfig,
+};
 
 const JOB_STORAGE_KEY: &str = "job";
 const GEMINI_API_KEY: &str = "GEMINI_API_KEY";
@@ -85,7 +87,7 @@ impl DurableObject for TranscriptAnalysisJob {
                     &self.state.storage(),
                     record.clone(),
                     *purge_at,
-                    counters::JOBS_FAILED_TRANSIENT,
+                    &[(counters::JOBS_FAILED_TRANSIENT, 1)],
                 )
                 .await?;
             }
@@ -502,7 +504,20 @@ async fn run_job(
                 .ok()
                 .map(|value| value.to_string());
             let model = resolve_gemini_model(model_value.as_deref());
-            let (result, stats) = run_analysis(&gemini_api_key, model, request).await;
+            // The run budget is anchored to the persisted start (whole
+            // seconds), the same instant the alarm watchdog counts from, so
+            // the ladder ends inside the deadline by construction.
+            let run_started_ms = u64::try_from(started_at)
+                .unwrap_or_default()
+                .saturating_mul(1_000);
+            let (result, stats) = run_analysis(
+                &gemini_api_key,
+                model,
+                request,
+                ladder_config(&env),
+                run_started_ms,
+            )
+            .await;
             let outcome = match result {
                 Ok(response) => {
                     let result_json = serde_json::to_string(&response)?;
@@ -571,9 +586,14 @@ async fn run_job(
         return Ok(());
     }
 
-    let outcome_counter = match outcome {
-        RunOutcome::Completed { .. } => counters::JOBS_COMPLETED,
-        RunOutcome::FailedUpstream { .. } => counters::JOBS_FAILED_UPSTREAM,
+    // Computed before `outcome` moves into the record: the terminal outcome
+    // plus, for a failure, its per-code counter, in one D1 write.
+    let outcome_counters: Vec<(&'static str, i64)> = match &outcome {
+        RunOutcome::Completed { .. } => vec![(counters::JOBS_COMPLETED, 1)],
+        RunOutcome::FailedUpstream { code, .. } => vec![
+            (counters::JOBS_FAILED_UPSTREAM, 1),
+            (counters::failure_code_counter(code), 1),
+        ],
     };
     let retention = match outcome {
         RunOutcome::Completed { .. } => JOB_SUCCESS_TTL_SECONDS,
@@ -599,7 +619,7 @@ async fn run_job(
             billing,
         },
     };
-    apply_terminal_billing(&env, &state.storage(), record, purge_at, outcome_counter).await
+    apply_terminal_billing(&env, &state.storage(), record, purge_at, &outcome_counters).await
 }
 
 /// Turn a still-Running record whose run task errored into a terminal
@@ -640,7 +660,10 @@ async fn terminalize_failed_run(
         &state.storage(),
         record,
         purge_at,
-        counters::JOBS_FAILED_UPSTREAM,
+        &[
+            (counters::JOBS_FAILED_UPSTREAM, 1),
+            (counters::FAILED_JOB_TASK_FAILED, 1),
+        ],
     )
     .await
 }
@@ -653,20 +676,21 @@ async fn terminalize_failed_run(
 /// record. The first attempt then runs through the shared attempt path
 /// (retry alarm on failure, purge alarm on success).
 ///
-/// `outcome_counter` is bumped once the terminal record is durable — after
-/// the record write (so the D1 await cannot open the input gate between a
-/// guard re-read and the write) and before the alarm write or the
-/// gate-opening billing await that follows.
+/// `outcome_counters` (the terminal outcome and, for a failure, its
+/// per-code counter) are bumped in one write once the terminal record is
+/// durable — after the record write (so the D1 await cannot open the input
+/// gate between a guard re-read and the write) and before the alarm write
+/// or the gate-opening billing await that follows.
 async fn apply_terminal_billing(
     env: &Env,
     storage: &Storage,
     mut record: JobRecord,
     purge_at: i64,
-    outcome_counter: &'static str,
+    outcome_counters: &[(&'static str, i64)],
 ) -> Result<()> {
     let Some(action) = terminal_billing_action(&record) else {
         write_record(storage, &record).await?;
-        counters::bump(env, &[(outcome_counter, 1)]).await;
+        counters::bump(env, outcome_counters).await;
         return set_alarm_at(storage, purge_at).await;
     };
     if let Some(billing) = record.billing_mut() {
@@ -675,7 +699,7 @@ async fn apply_terminal_billing(
             Some(purge_at.min(now_seconds().saturating_add(BILLING_RETRY_WINDOW_SECONDS)));
     }
     write_record(storage, &record).await?;
-    counters::bump(env, &[(outcome_counter, 1)]).await;
+    counters::bump(env, outcome_counters).await;
     let billing = record.billing().expect("action implies billing");
     let account_id = billing.account_id.clone();
     let billing_id = billing.billing_id.clone();

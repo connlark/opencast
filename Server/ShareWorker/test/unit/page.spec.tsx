@@ -70,6 +70,13 @@ describe("Page head", () => {
     expect(html).not.toMatch(/twitter:player|og:video/);
   });
 
+  it("asks for no referrer before anything in the head can fetch", () => {
+    const referrer = html.indexOf('<meta name="referrer" content="no-referrer"/>');
+    expect(referrer).toBeGreaterThan(-1);
+    expect(referrer).toBeLessThan(html.indexOf("<link"));
+    expect(html.match(/<meta name="referrer"/g)).toHaveLength(1);
+  });
+
   it("links the feed as an RSS alternate", () => {
     expect(html).toContain(`<link rel="alternate" type="application/rss+xml" title="The Example Almanac" href="${almanac.payload.feedURL}"/>`);
   });
@@ -177,6 +184,11 @@ describe("Page edge cases", () => {
     expect(shareDescription({ ...base, durationSeconds: 0 }, 754)).toBe("The Example Almanac · starts at 12:34");
     expect(shareDescription({ ...base, podcastTitle: "" }, 754)).toBe("Starts at 12:34 of 40:00");
     expect(shareDescription({ ...base, podcastTitle: "", durationSeconds: 0 }, 0)).toBe(base.title);
+    // Dynamically inserted ads lengthen the served file past the feed's figure.
+    expect(shareDescription(base, 2399)).toBe("The Example Almanac · starts at 39:59 of 40:00");
+    expect(shareDescription(base, 2400)).toBe("The Example Almanac · starts at 40:00");
+    expect(shareDescription(base, 4080)).toBe("The Example Almanac · starts at 1:08:00");
+    expect(shareDescription({ ...base, podcastTitle: "" }, 4080)).toBe("Starts at 1:08:00");
   });
 });
 

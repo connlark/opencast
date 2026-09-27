@@ -40,8 +40,11 @@ export function renderHTML(document: ReactElement, options: RenderOptions): Resp
     "cache-control": "public, max-age=300",
     "x-robots-tag": "noindex",
     "x-content-type-options": "nosniff",
-    // Hosts get our origin for their stats, never the token path.
-    "referrer-policy": "strict-origin-when-cross-origin",
+    // Hosts get neither the token nor our origin. This American Life's host
+    // refuses artwork to any cross-site referrer (Cloudflare Hotlink
+    // Protection, 403 with vary: referer), and IAB counting never needed the
+    // origin; the download proxy already sends none.
+    "referrer-policy": "no-referrer",
   });
   if (options.contentSecurityPolicy) {
     headers.set("content-security-policy", CONTENT_SECURITY_POLICY);

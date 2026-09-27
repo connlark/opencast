@@ -41,6 +41,10 @@ struct SheetDestinationView: View {
             TranscriptAskSheet(episodeID: episodeID)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        case .upNext:
+            UpNextQueueView()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
     }
 }

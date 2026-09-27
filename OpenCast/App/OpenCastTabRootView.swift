@@ -9,6 +9,7 @@ struct OpenCastTabRootView: View {
     @Binding var navigationPaths: AppNavigationPaths
     let isNowPlayingPresented: Bool
     let onAdd: () -> Void
+    let onOpenUpNext: () -> Void
     let onPresentNowPlaying: () -> Void
 
     var body: some View {
@@ -86,13 +87,8 @@ struct OpenCastTabRootView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(tabBarMinimizeBehavior)
-        .tabViewBottomAccessory(
-            isEnabled: appModel.playback.currentEpisode != nil
-        ) {
-            MiniPlayerView(
-                isNowPlayingPresented: isNowPlayingPresented,
-                onExpand: onPresentNowPlaying
-            )
+        .tabViewBottomAccessory(isEnabled: showsTabAccessory) {
+            tabAccessory
         }
         .sensoryFeedback(.success, trigger: appModel.library.subscriptionAddedToken)
         .sensoryFeedback(.success, trigger: appModel.library.refreshCompletedToken)
@@ -105,6 +101,27 @@ struct OpenCastTabRootView: View {
     private func openEpisode(on section: AppSection) -> (String) -> Void {
         { episodeID in
             navigationPaths[section].append(.episodeDetail(id: episodeID))
+        }
+    }
+
+    private var showsTabAccessory: Bool {
+        appModel.playback.currentEpisode != nil || appModel.showsUpNextAccessory
+    }
+
+    /// One system accessory, two contents: the mini player while an episode
+    /// is loaded, otherwise the queue head with a play control.
+    @ViewBuilder
+    private var tabAccessory: some View {
+        if appModel.playback.currentEpisode != nil {
+            MiniPlayerView(
+                isNowPlayingPresented: isNowPlayingPresented,
+                onExpand: onPresentNowPlaying
+            )
+        } else {
+            UpNextAccessoryView(
+                isNowPlayingPresented: isNowPlayingPresented,
+                onOpenQueue: onOpenUpNext
+            )
         }
     }
 

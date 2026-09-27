@@ -46,7 +46,7 @@ const worker = {
         return await handleDownload(request, env, payload);
       }
 
-      const start = parseStart(url.searchParams.get("t"), payload.durationSeconds);
+      const start = parseStart(url.searchParams.get("t"));
       const canonical = canonicalURL(url.origin, token, start);
       logEvent("page", { status: 200 });
       return renderHTML(

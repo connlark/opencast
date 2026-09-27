@@ -44,13 +44,15 @@ struct OpenCastRootView: View {
             isNowPlayingPresented: appModel.isNowPlayingPresented,
             onDismissNowPlaying: dismissNowPlaying,
             onOpenCurrentEpisode: openCurrentEpisodeFromNowPlaying,
-            onOpenCurrentPodcast: openCurrentPodcastFromNowPlaying
+            onOpenCurrentPodcast: openCurrentPodcastFromNowPlaying,
+            onStopPlayback: stopPlayback
         ) {
             OpenCastTabRootView(
                 selectedTab: $selectedTab,
                 navigationPaths: $navigationPaths,
                 isNowPlayingPresented: appModel.isNowPlayingPresented,
                 onAdd: presentAddPodcast,
+                onOpenUpNext: presentUpNextQueue,
                 onPresentNowPlaying: presentNowPlaying
             )
         }
@@ -177,6 +179,10 @@ struct OpenCastRootView: View {
         sheetDestination = .addPodcast
     }
 
+    private func presentUpNextQueue() {
+        sheetDestination = .upNext
+    }
+
     private func presentOnboardingIfNeeded() {
         guard appModel.onboardingState.shouldPresentOnboarding else {
             return
@@ -230,6 +236,10 @@ struct OpenCastRootView: View {
 
     private func dismissNowPlaying() {
         appModel.dismissNowPlayingAndDiscardFinishedPlayback()
+    }
+
+    private func stopPlayback() {
+        appModel.dismissCurrentPlayback(modelContext: modelContext)
     }
 
     private func openCurrentEpisodeFromNowPlaying() {

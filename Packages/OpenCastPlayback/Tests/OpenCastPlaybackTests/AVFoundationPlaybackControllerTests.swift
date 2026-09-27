@@ -780,6 +780,47 @@ struct AVFoundationPlaybackControllerTests {
     }
 
     @Test
+    func fixedDurationTimerExtendsFromItsRemainingTime() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 600))
+
+        let armedAt = Date(timeIntervalSince1970: 1_000)
+        controller.setSleepTimer(mode: .duration(600), now: armedAt)
+
+        let extendedAt = armedAt.addingTimeInterval(60)
+        controller.extendSleepTimer(by: 900, now: extendedAt)
+
+        #expect(controller.sleepTimerMode == .duration(1_440))
+        #expect(controller.sleepTimerEndsAt == armedAt.addingTimeInterval(1_500))
+        #expect(controller.sleepTimerRemaining(at: extendedAt) == 1_440)
+    }
+
+    @Test
+    func extendSleepTimerIgnoresOffAndEndOfEpisode() throws {
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+        }
+        try controller.load(episode(duration: 600))
+        let now = Date(timeIntervalSince1970: 1_000)
+
+        controller.extendSleepTimer(by: 900, now: now)
+
+        #expect(controller.sleepTimerMode == .off)
+        #expect(controller.sleepTimerEndsAt == nil)
+
+        controller.setSleepTimer(mode: .endOfEpisode, now: now)
+        controller.extendSleepTimer(by: 900, now: now)
+
+        #expect(controller.sleepTimerMode == .endOfEpisode)
+        #expect(controller.sleepTimerEndsAt == nil)
+        #expect(controller.sleepTimerRemaining(at: now) == 600)
+    }
+
+    @Test
     func endOfEpisodeRemainsArmedWhilePausedPastItsInitialEstimate() async throws {
         let controller = AVFoundationPlaybackController()
         defer {

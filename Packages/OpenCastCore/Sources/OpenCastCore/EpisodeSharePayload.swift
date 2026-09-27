@@ -64,8 +64,14 @@ public struct EpisodeSharePayload: Hashable, Sendable {
     }
 
     /// The latest start the page honours: it treats a `?t=` past this as 0.
+    /// A day, whatever the feed's duration says. Dynamic ad insertion makes
+    /// the served file longer or shorter than the RSS figure on every request
+    /// (This American Life 897 is listed at 4052 s and has served 3946 s and
+    /// 4173 s), so a position in the tail of a longer file is real and stays
+    /// shareable; the page drops a resume the actual file cannot hold once
+    /// its metadata arrives.
     public var maximumStartSeconds: Int {
-        durationSeconds > 0 ? durationSeconds - 2 : Self.maximumStartWithoutDuration
+        Self.maximumStartWithoutDuration
     }
 
     static let maximumStartWithoutDuration = 86_400

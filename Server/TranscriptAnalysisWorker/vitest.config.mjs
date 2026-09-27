@@ -30,6 +30,13 @@ export default defineConfig(async () => {
             // end: the env var is ignored, the outbound URL targets the
             // default, and the response reports the default.
             TRANSCRIPT_ANALYSIS_GEMINI_MODEL: "gemini-2.5-flash",
+            // Model-call ladder at 10 ms per ladder second (development lane
+            // only; `retry::LADDER_OVERRIDE_VAR`): medium cap 1.2 s, high
+            // 3 s, run budget 5.4 s, floor 0.3 s, backoffs 20-160 ms. The
+            // "transport ladder" suite drives real deadlines and aborts at
+            // this scale; the deferred-mock tests stay well inside the
+            // medium cap. Billing suites keep production time.
+            ANALYSIS_LADDER_MILLIS_PER_SECOND: "10",
           },
         },
       }),

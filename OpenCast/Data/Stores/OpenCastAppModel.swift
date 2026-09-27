@@ -80,6 +80,25 @@ final class OpenCastAppModel {
     var hasNowPlayingPresentationContent: Bool {
         playback.currentEpisode != nil || finishedPlaybackPresentation != nil
     }
+    /// The queue head the tab accessory offers while nothing is loaded. Nil
+    /// until the launch restore has run and while the Finished card is
+    /// retained; skips unresolvable items so a stale head never renders a
+    /// blank accessory.
+    var upNextAccessoryEpisode: EpisodeListItemSnapshot? {
+        guard hasRestoredPlaybackSurface, !hasNowPlayingPresentationContent else {
+            return nil
+        }
+
+        for item in upNextQueue.items {
+            if let episode = episodeSnapshot(for: item.episodeID) {
+                return episode
+            }
+        }
+        return nil
+    }
+    var showsUpNextAccessory: Bool {
+        upNextAccessoryEpisode != nil
+    }
     var onboardingPresentationRequest = 0
     /// The nuke sheet stays hoisted at the root so `resetAfterDataNuke()` can
     /// swap it for onboarding in one transaction; Delete Data requests it here.
@@ -121,7 +140,9 @@ final class OpenCastAppModel {
     @ObservationIgnored private var coreStoresLoadTask: Task<Void, Never>?
     @ObservationIgnored private var playbackDependenciesLoadTask: Task<Void, Never>?
     @ObservationIgnored private var playbackSurfaceHydrationTask: Task<Void, Never>?
-    @ObservationIgnored private var hasRestoredPlaybackSurface = false
+    /// Flips in the same turn that loads the restorable episode, so the
+    /// queue accessory can key off it without ever preceding a restore.
+    private(set) var hasRestoredPlaybackSurface = false
     @ObservationIgnored private(set) var playbackSurfaceRestorationCount = 0
     @ObservationIgnored var playbackSurfaceRestorationObserver: ((Float) -> Void)?
     @ObservationIgnored var playbackProgressFlushObserver: (() -> Void)?

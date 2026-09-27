@@ -1664,6 +1664,14 @@ section {
   max-width: 40rem;
 }
 
+.policy-hero__meta {
+  margin: 0.9rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+}
+
 .policy-callout {
   position: relative;
   max-width: 70ch;
@@ -1727,15 +1735,23 @@ section {
   color: var(--accent);
 }
 
+/* Mobile jump list: one scrolling row of pills under the short version. */
+
 .policy-toc-mobile {
   margin: 2.5rem 0 0;
+}
+
+.policy-toc-mobile__list {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0;
   padding: 0 0 0.35rem;
   overflow-x: auto;
   list-style: none;
   scrollbar-width: none;
 }
 
-.policy-toc-mobile::-webkit-scrollbar {
+.policy-toc-mobile__list::-webkit-scrollbar {
   display: none;
 }
 
@@ -1768,6 +1784,8 @@ section {
 .policy-layout {
   margin-top: clamp(2.75rem, 6vw, 4rem);
 }
+
+/* Sidebar table of contents: sticky, with the section being read marked. */
 
 .policy-toc {
   position: sticky;
@@ -1816,6 +1834,12 @@ section {
   outline: none;
 }
 
+.policy-toc__link[aria-current] {
+  border-left-color: var(--accent);
+  color: var(--foreground);
+  font-weight: 640;
+}
+
 .policy-article {
   max-width: 70ch;
 }
@@ -1832,6 +1856,7 @@ section {
 
 .policy-section__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
 }
@@ -1860,14 +1885,104 @@ section {
   letter-spacing: 0.13em;
 }
 
+/* Who handles the data, as chips at the end of the head row. On narrow
+   screens the row wraps and the chips take a line of their own. */
+
+.policy-section__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0 auto;
+  padding: 0;
+  list-style: none;
+}
+
+.policy-section__title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 1rem;
+}
+
 .policy-section__title {
-  margin: 1rem 0 0;
+  margin: 0;
   max-width: 34ch;
   color: var(--foreground);
   font-size: clamp(1.35rem, 3vw, 1.65rem);
   font-weight: 660;
   letter-spacing: -0.015em;
   line-height: 1.15;
+}
+
+/* Section permalink: a real anchor beside the heading. Hidden until the
+   section is hovered or holds focus on pointer devices; always visible,
+   quietly, where there is no hover. */
+
+.policy-section__link-slot {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  align-self: center;
+  gap: 0.2rem;
+}
+
+.policy-section__link {
+  display: inline-grid;
+  width: 1.9rem;
+  height: 1.9rem;
+  place-items: center;
+  border-radius: 0.6rem;
+  color: var(--muted);
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    opacity 150ms ease;
+}
+
+.policy-section__link svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.policy-section__link:hover,
+.policy-section__link:focus-visible {
+  background: var(--nav-hover-bg);
+  color: var(--foreground);
+}
+
+.policy-section__link-slot[data-copied="true"] .policy-section__link {
+  color: var(--accent);
+}
+
+/* Inline copy feedback: the tooltip closes on press, so this label carries
+   the confirmation for pointer and touch users alike. */
+
+.policy-section__copied {
+  display: inline-block;
+  margin-left: 0.15rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-soft-foreground);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  pointer-events: none;
+}
+
+.policy-section__link-slot[data-copied="true"] .policy-section__copied {
+  opacity: 1;
+  transform: none;
+}
+
+.policy-section__tooltip {
+  font-size: 0.78rem;
 }
 
 .policy-section__body {
@@ -1903,30 +2018,104 @@ section {
   content: "";
 }
 
-.policy-closing {
-  margin-top: clamp(2.75rem, 6vw, 3.5rem);
-  padding-top: 2rem;
+/* The app's own words, quoted verbatim. */
+
+.policy-quote {
+  margin: 0.25rem 0;
+  padding: 1.1rem 1.25rem 1.1rem 1.35rem;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 1rem 1rem 0;
+  background: var(--surface);
+}
+
+.policy-quote blockquote {
+  margin: 0;
+}
+
+.policy-quote blockquote p {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 1.02rem;
+  font-weight: 540;
+  line-height: 1.6;
+}
+
+.policy-quote figcaption {
+  margin-top: 0.6rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* At-a-glance answers under each cloud section. */
+
+.policy-facts {
+  display: grid;
+  gap: 0;
+  margin: 0.35rem 0 0;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.policy-facts__item {
+  padding: 0.95rem 1.1rem;
+}
+
+.policy-facts__item + .policy-facts__item {
   border-top: 1px solid var(--separator);
 }
 
-.policy-closing__title {
-  margin: 0 0 0.75rem;
-  color: var(--foreground);
-  font-size: 1.05rem;
-  font-weight: 650;
+.policy-facts dt {
+  margin: 0 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
-.policy-closing p {
-  max-width: 60ch;
-  color: var(--muted);
-  font-size: 0.95rem;
-  line-height: 1.7;
+.policy-facts dd {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 0.9rem;
+  line-height: 1.55;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .screenshot-card:hover {
     border-color: color-mix(in oklab, var(--deep-accent) 55%, transparent);
     transform: translateY(-6px);
+  }
+}
+
+@media (min-width: 560px) {
+  .policy-facts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .policy-facts__item + .policy-facts__item {
+    border-top: none;
+    border-left: 1px solid var(--separator);
+  }
+}
+
+@media (max-width: 559px) {
+  .policy-section__tags {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .policy-section__link {
+    opacity: 0;
+  }
+
+  .policy-section:hover .policy-section__link,
+  .policy-section:focus-within .policy-section__link,
+  .policy-section__link-slot[data-copied="true"] .policy-section__link {
+    opacity: 1;
   }
 }
 

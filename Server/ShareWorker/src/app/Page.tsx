@@ -31,6 +31,9 @@ export function Page({ payload, token, start, canonical, assets }: PageProps) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        {/* Mirrors the Referrer-Policy header for clients that parse the HTML
+            without honouring it; must precede every fetch the head starts. */}
+        <meta name="referrer" content="no-referrer" />
         <title>{payload.podcastTitle ? `${payload.title} — ${payload.podcastTitle}` : payload.title}</title>
         <meta name="description" content={description} />
         <meta name="robots" content="noindex" />
@@ -113,10 +116,16 @@ export function PageHeader() {
   );
 }
 
-/** "Podcast · starts at 12:34 of 1:00:00", or "Podcast · 1:00:00" without a start time. */
+/**
+ * "Podcast · starts at 12:34 of 1:00:00", or "Podcast · 1:00:00" without a
+ * start time. A start at or past the feed's duration (dynamically inserted ads
+ * lengthen the served file) is just "starts at 1:08:00": "of 1:07:32" would
+ * read as a contradiction.
+ */
 export function shareDescription(payload: SharePayload, start: number): string {
   const total = payload.durationSeconds > 0 ? formatClock(payload.durationSeconds) : "";
-  const timing = start > 0 ? `starts at ${formatClock(start)}${total ? ` of ${total}` : ""}` : total;
+  const inside = total !== "" && start < payload.durationSeconds;
+  const timing = start > 0 ? `starts at ${formatClock(start)}${inside ? ` of ${total}` : ""}` : total;
   if (payload.podcastTitle === "") {
     return timing === "" ? payload.title : timing.charAt(0).toUpperCase() + timing.slice(1);
   }

@@ -1,6 +1,6 @@
 import { Chip, Link, Typography } from "@heroui/react";
 import type { Metadata } from "next";
-import { Cloud, LifeBuoy, Mail, Rss } from "lucide-react";
+import { Cloud, LifeBuoy, Mail, Rss, WandSparkles } from "lucide-react";
 import { ActionLink } from "@/components/ActionLink";
 import { PolicySection } from "@/components/PolicySection";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -90,6 +90,33 @@ export default function SupportPage() {
                 email support with your opencast version and an approximate
                 time of the event. Do not send App Store credentials or signed
                 transaction data.
+              </p>
+            </PolicySection>
+            <PolicySection
+              icon={<WandSparkles aria-hidden="true" />}
+              title="Recap and Ask"
+              wide
+            >
+              <p>
+                Recap and Ask appear in the transcript&apos;s Transcript Options
+                menu on devices that support Apple Intelligence, once an
+                episode has a transcript. Passages from this episode&apos;s
+                transcript are sent to Apple&apos;s Private Cloud Compute to
+                answer. Apple does not store them. Your audio is never sent.
+                Results stay on this device. No opencast server is involved,
+                and neither feature uses transcription minutes.
+              </p>
+              <p>
+                Apple&apos;s model may decline a passage; opencast shows a
+                short notice and does not retry. Turning off Apple
+                Intelligence in iOS Settings stops both features. The{" "}
+                <Link
+                  href="/privacy#recap-and-ask"
+                  className="font-semibold text-foreground"
+                >
+                  privacy policy
+                </Link>{" "}
+                has the full data path.
               </p>
             </PolicySection>
           </div>

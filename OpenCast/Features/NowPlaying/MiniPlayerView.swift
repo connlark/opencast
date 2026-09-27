@@ -79,7 +79,7 @@ struct MiniPlayerView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(isInline ? "mini-player-inline" : "mini-player-expanded")
             .accessibilityHidden(isNowPlayingPresented)
-            .accessibilityAction(named: "Dismiss Player", dismissPlayer)
+            .accessibilityAction(named: "Stop Playback", stopPlayback)
         }
     }
 
@@ -100,7 +100,7 @@ struct MiniPlayerView: View {
         onExpand()
     }
 
-    private func dismissPlayer() {
+    private func stopPlayback() {
         appModel.dismissCurrentPlayback(modelContext: modelContext)
     }
 

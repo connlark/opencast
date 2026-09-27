@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-22T00:00:00Z",
+  "updatedAt": "2026-09-26T00:00:00Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -193,6 +193,43 @@
         {
           "type": "paragraph",
           "text": "Transcribe Remotely and cloud ad detection send the episode audio to Cloudflare Workers AI, which runs Whisper on opencast's behalf. They use transcription credits and are the only way audio leaves your device."
+        }
+      ]
+    },
+    {
+      "id": "recap-and-ask",
+      "title": "Recap and Ask",
+      "symbol": "apple.intelligence",
+      "summary": "Summaries and answers from an episode's transcript, on Apple Intelligence.",
+      "updatedAt": "2026-09-26T00:00:00Z",
+      "minAppBuild": 270,
+      "related": [
+        "transcription-engines",
+        "storage"
+      ],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Recap** and **Ask** are in the transcript's **Transcript Options** menu once an episode has a transcript, on devices that support Apple Intelligence. Recap summarizes the last five minutes or everything so far; Ask answers questions about the episode, with citations you can tap to jump to that moment."
+        },
+        {
+          "type": "callout",
+          "symbol": "lock.shield",
+          "title": "Where the passages go",
+          "text": "Passages from this episode's transcript are sent to Apple's Private Cloud Compute to answer. Apple does not store them. Your audio is never sent. Results stay on this device. No opencast server is involved, and neither feature uses transcription minutes."
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Apple's model may decline a passage. opencast shows a short notice, does not retry, and an Ask conversation keeps going.",
+            "Recaps are cached on this device so a repeat tap answers at once; Ask conversations are not saved. **Delete Data** clears the cache and the one-time notice.",
+            "Nothing runs until you tap Recap or Ask. Turning off Apple Intelligence in iOS Settings stops both."
+          ]
+        },
+        {
+          "type": "link",
+          "title": "Privacy Policy: Recap and Ask",
+          "url": "https://support.opencast.mobile/privacy#recap-and-ask"
         }
       ]
     },

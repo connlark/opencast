@@ -22,6 +22,7 @@ import {
   BOOTSTRAP_PATH,
   EXPECTED_MODEL,
   GEMINI_TRUNCATED_RESPONSE,
+  abortedGeminiCalls,
   analysisFor,
   bytesToBase64,
   geminiResponse,
@@ -32,7 +33,11 @@ import {
   makeRequest,
   makeSyntheticAppAttestIdentity,
   mockGeminiDeferred,
+  mockGeminiHang,
   mockGeminiOnce,
+  mockGeminiReject,
+  mockGeminiStatus,
+  observedGeminiCallTimes,
   observedGeminiPayloads,
   pendingGeminiResponses,
   postAnalyze,
@@ -64,6 +69,8 @@ afterEach(() => {
   const leftover = pendingGeminiResponses.length;
   pendingGeminiResponses.length = 0;
   observedGeminiPayloads.length = 0;
+  observedGeminiCallTimes.length = 0;
+  abortedGeminiCalls.count = 0;
   expect(leftover).toBe(0);
 });
 
@@ -499,17 +506,22 @@ describe("model output resilience", () => {
     expect((await response.json()).error).toBe("model_output_truncated");
     // The failure arm still records what the three attempts consumed (the
     // truncated fixture carries no thoughts, so that counter is never
-    // written rather than written as zero).
+    // written rather than written as zero), which class rejected each
+    // attempt, and the terminal code.
     expect(counterDiff(countersBefore, await readCounters())).toEqual({
       analysis_attempts: 3,
       candidates_tokens: 3 * 32768,
+      failed_model_output_truncated: 1,
       prompt_tokens: 3 * 120,
+      rejected_attempts: 3,
+      rejected_truncated: 3,
       sync_analyses: 1,
       total_tokens: 3 * 32888,
     });
   });
 
   it("fails typed when id-discipline violations survive all three attempts", async () => {
+    const countersBefore = await readCounters();
     const broken = analysisFor(12);
     // Seconds in an id field — the DQ class the validator must catch.
     broken.chapters[1].end_segment_id = 240;
@@ -524,6 +536,20 @@ describe("model output resilience", () => {
 
     expect(response.status).toBe(502);
     expect((await response.json()).error).toBe("invalid_model_output");
+    // Every rejected attempt is classed (id discipline takes precedence
+    // over the ordering/overlap rules it drags along) and the terminal
+    // code gets its own row.
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      analysis_attempts: 3,
+      candidates_tokens: 3 * 40,
+      failed_invalid_model_output: 1,
+      prompt_tokens: 3 * 120,
+      rejected_attempts: 3,
+      rejected_id_discipline: 3,
+      sync_analyses: 1,
+      thoughts_tokens: 3 * 300,
+      total_tokens: 3 * 460,
+    });
   });
 
   it("escalates a medium retry to high thinking and recovers", async () => {
@@ -621,6 +647,7 @@ describe("model output resilience", () => {
       },
     };
     mockGeminiOnce(geminiResponse(oversized));
+    const countersBefore = await readCounters();
 
     const submitted = await postAnalyze(JSON.stringify(request), {
       authorization: `Bearer ${BEARER}`,
@@ -630,6 +657,336 @@ describe("model output resilience", () => {
     const failed = await waitForTerminalPoll(request.transcript.fingerprint);
     expect(failed.status).toBe(502);
     expect((await failed.json()).error).toBe("result_oversized");
+    // The terminal code lands beside jobs_failed_upstream in one write.
+    expect(await waitForCounterDelta(countersBefore, "failed_result_oversized", 1)).toEqual({
+      analysis_attempts: 1,
+      candidates_tokens: 40,
+      failed_result_oversized: 1,
+      jobs_failed_upstream: 1,
+      jobs_started: 1,
+      prompt_tokens: 120,
+      thoughts_tokens: 300,
+      total_tokens: 460,
+    });
+  });
+});
+
+describe("transport ladder", () => {
+  // The suite runs the ladder at 10 ms per ladder second (vitest.config):
+  // medium cap 1.2 s, high 3 s, budget 5.4 s. Real deadlines, real aborts.
+  const LADDER_TEST_TIMEOUT = 30_000;
+  const MEDIUM_CAP_MS = 1_200;
+  const SUCCESS_SYNC_COUNTERS = {
+    analysis_attempts: 1,
+    candidates_tokens: 40,
+    prompt_tokens: 120,
+    sync_analyses: 1,
+    thoughts_tokens: 300,
+    total_tokens: 460,
+  };
+  const levels = () =>
+    observedGeminiPayloads.map(
+      (payload) => payload.generationConfig.thinkingConfig.thinkingLevel,
+    );
+  const rateLimitBody = () => ({
+    error: {
+      code: 429,
+      message: "Too many requests, try again later.",
+      status: "RESOURCE_EXHAUSTED",
+    },
+  });
+  const hardQuotaBody = () => ({
+    error: {
+      code: 429,
+      message: "You exceeded your current quota, please check your plan and billing details.",
+      status: "RESOURCE_EXHAUSTED",
+    },
+  });
+
+  it("times out a stalled header exchange, aborts it, resends once at the same level, and succeeds", async () => {
+    const countersBefore = await readCounters();
+    mockGeminiHang({ phase: "headers" });
+    mockGeminiOnce(geminiResponse(analysisFor(12)));
+
+    const started = performance.now();
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "9a".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(200);
+    // The deadline released the ladder, not the mock.
+    expect(performance.now() - started).toBeGreaterThanOrEqual(MEDIUM_CAP_MS - 100);
+    expect(abortedGeminiCalls.count).toBe(1);
+    expect(levels()).toEqual(["medium", "medium"]);
+    expect((await response.json()).chapters).toHaveLength(2);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      ...SUCCESS_SYNC_COUNTERS,
+      gemini_call_timeouts: 1,
+      transport_retries: 1,
+    });
+  }, LADDER_TEST_TIMEOUT);
+
+  it("times out a stalled body, aborts it, resends once at the same level, and succeeds", async () => {
+    const countersBefore = await readCounters();
+    mockGeminiHang({ phase: "body" });
+    mockGeminiOnce(geminiResponse(analysisFor(12)));
+
+    const started = performance.now();
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "9b".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(200);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(MEDIUM_CAP_MS - 100);
+    expect(abortedGeminiCalls.count).toBe(1);
+    expect(levels()).toEqual(["medium", "medium"]);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      ...SUCCESS_SYNC_COUNTERS,
+      gemini_call_timeouts: 1,
+      transport_retries: 1,
+    });
+  }, LADDER_TEST_TIMEOUT);
+
+  it("moves to a high attempt after two timeouts and reports the transport warning", async () => {
+    const countersBefore = await readCounters();
+    mockGeminiHang({ phase: "headers" });
+    mockGeminiHang({ phase: "body" });
+    mockGeminiOnce(geminiResponse(analysisFor(12)));
+
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "9c".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).warnings).toContain("gemini_timeout_retried_high");
+    expect(abortedGeminiCalls.count).toBe(2);
+    expect(levels()).toEqual(["medium", "medium", "high"]);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      ...SUCCESS_SYNC_COUNTERS,
+      analysis_attempts: 2,
+      gemini_call_timeouts: 2,
+      transport_retries: 1,
+    });
+  }, LADDER_TEST_TIMEOUT);
+
+  it("fails with gemini_timeout and the budget counter when every call stalls", async () => {
+    const countersBefore = await readCounters();
+    const request = makeRequest({
+      fingerprint: "9d".repeat(32),
+      asyncSupported: true,
+    });
+    // Attempt 1 (medium): timeout, resend, timeout. Attempt 2 (high) gets
+    // the remaining budget, times out, and the resend is refused: the run
+    // budget, not the attempt count, ends the run.
+    mockGeminiHang({ phase: "headers" });
+    mockGeminiHang({ phase: "headers" });
+    mockGeminiHang({ phase: "body" });
+
+    const submitted = await postAnalyze(JSON.stringify(request), {
+      authorization: `Bearer ${BEARER}`,
+    });
+    expect(submitted.status).toBe(202);
+
+    const failed = await waitForTerminalPoll(request.transcript.fingerprint);
+    expect(failed.status).toBe(503);
+    expect((await failed.json()).error).toBe("gemini_timeout");
+    expect(abortedGeminiCalls.count).toBe(3);
+    expect(levels()).toEqual(["medium", "medium", "high"]);
+    expect(await waitForCounterDelta(countersBefore, "jobs_failed_upstream", 1)).toEqual({
+      analysis_attempts: 2,
+      analysis_budget_exhausted: 1,
+      failed_gemini_timeout: 1,
+      gemini_call_timeouts: 3,
+      jobs_failed_upstream: 1,
+      jobs_started: 1,
+      transport_retries: 1,
+    });
+  }, LADDER_TEST_TIMEOUT);
+
+  it("backs off through a 503, a fetch rejection and a rate-limit 429 inside one attempt", async () => {
+    const countersBefore = await readCounters();
+    mockGeminiStatus(503);
+    mockGeminiReject();
+    mockGeminiStatus(429, { retryAfter: 1, body: rateLimitBody() });
+    mockGeminiOnce(geminiResponse(analysisFor(12)));
+
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "9e".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(200);
+    expect(abortedGeminiCalls.count).toBe(0);
+    expect(levels()).toEqual(["medium", "medium", "medium", "medium"]);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      ...SUCCESS_SYNC_COUNTERS,
+      transport_retries: 3,
+    });
+  }, LADDER_TEST_TIMEOUT);
+
+  it("continues to a high attempt after five fast failures", async () => {
+    const countersBefore = await readCounters();
+    for (let index = 0; index < 5; index += 1) {
+      mockGeminiStatus(503);
+    }
+    mockGeminiOnce(geminiResponse(analysisFor(12)));
+
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "9f".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).warnings).toContain(
+      "gemini_retry_exhausted_retried_high",
+    );
+    expect(levels()).toEqual(["medium", "medium", "medium", "medium", "medium", "high"]);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      ...SUCCESS_SYNC_COUNTERS,
+      analysis_attempts: 2,
+      transport_retries: 4,
+    });
+  }, LADDER_TEST_TIMEOUT);
+
+  it("honours the spent ladder's last Retry-After before the escalated attempt sends", async () => {
+    const countersBefore = await readCounters();
+    // Five rate-limit 429s asking for 30 s (300 ms at the suite's scale):
+    // four pauses inside the ladder, then the fifth is honoured across the
+    // attempt boundary rather than dropped with the spent ladder.
+    for (let index = 0; index < 5; index += 1) {
+      mockGeminiStatus(429, { retryAfter: 30, body: rateLimitBody() });
+    }
+    mockGeminiOnce(geminiResponse(analysisFor(12)));
+
+    const started = performance.now();
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "7a".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).warnings).toContain(
+      "gemini_retry_exhausted_retried_high",
+    );
+    expect(levels()).toEqual(["medium", "medium", "medium", "medium", "medium", "high"]);
+    expect(observedGeminiCallTimes).toHaveLength(6);
+    const gaps = observedGeminiCallTimes
+      .slice(1)
+      .map((time, index) => time - observedGeminiCallTimes[index]);
+    // Every gap, the boundary one included, waited the requested 300 ms.
+    for (const gap of gaps) {
+      expect(gap).toBeGreaterThanOrEqual(280);
+    }
+    expect(performance.now() - started).toBeGreaterThanOrEqual(5 * 280);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      ...SUCCESS_SYNC_COUNTERS,
+      analysis_attempts: 2,
+      transport_retries: 4,
+    });
+  }, LADDER_TEST_TIMEOUT);
+
+  it("fails typed with gemini_retry_exhausted after fifteen fast failures", async () => {
+    const countersBefore = await readCounters();
+    for (let index = 0; index < 15; index += 1) {
+      mockGeminiStatus(503);
+    }
+
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "8a".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe("gemini_retry_exhausted");
+    expect(observedGeminiPayloads).toHaveLength(15);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      analysis_attempts: 3,
+      failed_gemini_retry_exhausted: 1,
+      sync_analyses: 1,
+      transport_retries: 12,
+    });
+  }, LADDER_TEST_TIMEOUT);
+
+  it("stops at a hard-quota 429 after one call", async () => {
+    const countersBefore = await readCounters();
+    mockGeminiStatus(429, { body: hardQuotaBody() });
+
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "8b".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe("gemini_quota_exhausted");
+    expect(observedGeminiPayloads).toHaveLength(1);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      analysis_attempts: 1,
+      failed_gemini_quota_exhausted: 1,
+      sync_analyses: 1,
+    });
+  });
+
+  it("treats a non-retryable 400 as terminal after one call", async () => {
+    const countersBefore = await readCounters();
+    mockGeminiStatus(400, { body: { error: { code: 400, message: "bad", status: "INVALID_ARGUMENT" } } });
+
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "8c".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: "gemini_http_error",
+      detail: "status 400",
+    });
+    expect(observedGeminiPayloads).toHaveLength(1);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      analysis_attempts: 1,
+      failed_gemini_http_error: 1,
+      sync_analyses: 1,
+    });
+  });
+
+  it("treats an oversized reply as terminal after one call", async () => {
+    const countersBefore = await readCounters();
+    mockGeminiStatus(200, { rawBody: " ".repeat(600 * 1024) });
+
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "8d".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe("gemini_response_oversized");
+    expect(observedGeminiPayloads).toHaveLength(1);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      analysis_attempts: 1,
+      failed_other: 1,
+      sync_analyses: 1,
+    });
+  });
+
+  it("treats a reply that is not UTF-8 as terminal after one call", async () => {
+    const countersBefore = await readCounters();
+    mockGeminiStatus(200, { rawBody: new Uint8Array([0xff, 0xfe, 0x7b, 0x7d]) });
+
+    const response = await postAnalyze(
+      JSON.stringify(makeRequest({ fingerprint: "8e".repeat(32) })),
+      { authorization: `Bearer ${BEARER}` },
+    );
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe("gemini_response_encoding");
+    expect(observedGeminiPayloads).toHaveLength(1);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      analysis_attempts: 1,
+      failed_other: 1,
+      sync_analyses: 1,
+    });
   });
 });
 

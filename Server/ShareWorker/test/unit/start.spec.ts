@@ -3,34 +3,35 @@ import { formatClock, parseStart } from "../../src/shared/start.ts";
 
 describe("parseStart", () => {
   it.each([
-    [null, 3600, 0],
-    ["", 3600, 0],
-    ["754", 3600, 754],
-    ["0", 3600, 0],
-    ["1h2m3s", 7200, 3723],
-    ["2m", 3600, 120],
-    ["45s", 3600, 45],
-    ["1h", 7200, 3600],
-    ["h", 3600, 0],
-    ["abc", 3600, 0],
-    ["-1", 3600, 0],
-    ["1.5", 3600, 0],
-    ["999999999", 0, 0],
-    ["1000h", 0, 0],
-  ])("%s with duration %i → %i", (value, duration, expected) => {
-    expect(parseStart(value, duration)).toBe(expected);
+    [null, 0],
+    ["", 0],
+    ["754", 754],
+    ["0", 0],
+    ["1h2m3s", 3723],
+    ["2m", 120],
+    ["45s", 45],
+    ["1h", 3600],
+    ["h", 0],
+    ["abc", 0],
+    ["-1", 0],
+    ["1.5", 0],
+    ["999999999", 0],
+    ["1000h", 0],
+  ])("%s → %i", (value, expected) => {
+    expect(parseStart(value)).toBe(expected);
   });
 
-  it("keeps starts within the duration less two seconds", () => {
-    expect(parseStart("3598", 3600)).toBe(3598);
-    expect(parseStart("3599", 3600)).toBe(0);
-    expect(parseStart("59m59s", 3600)).toBe(0);
-  });
-
-  it("allows up to a day when the duration is unknown", () => {
-    expect(parseStart("86400", 0)).toBe(86400);
-    expect(parseStart("86401", 0)).toBe(0);
-    expect(parseStart("24h", 0)).toBe(86400);
+  it("honours any start under a day, past the feed's duration included", () => {
+    // Dynamic ad insertion makes the served file longer or shorter than the
+    // RSS figure on every request, so the feed's duration is not a bound.
+    expect(parseStart("3598")).toBe(3598);
+    expect(parseStart("3599")).toBe(3599);
+    expect(parseStart("4173")).toBe(4173);
+    expect(parseStart("59m59s")).toBe(3599);
+    expect(parseStart("86400")).toBe(86400);
+    expect(parseStart("24h")).toBe(86400);
+    expect(parseStart("86401")).toBe(0);
+    expect(parseStart("24h1s")).toBe(0);
   });
 });
 

@@ -457,11 +457,113 @@ struct OpenCastAppModelUpNextTests {
         #expect(fixture.appModel.upNextQueue.items.isEmpty)
     }
 
+    @Test("The Up Next accessory shows only after restore with a queue and nothing loaded")
+    func upNextAccessoryShowsOnlyAfterRestoreWithAQueueAndNothingLoaded() async throws {
+        let fixture = try await makeFixture(queuedEpisodeID: "first")
+        defer { fixture.appModel.playback.pause() }
+        #expect(!fixture.appModel.hasRestoredPlaybackSurface)
+        #expect(!fixture.appModel.showsUpNextAccessory)
+
+        fixture.appModel.restorePlaybackSurfaceIfNeeded(modelContext: fixture.context)
+
+        #expect(fixture.appModel.hasRestoredPlaybackSurface)
+        #expect(fixture.appModel.playback.currentEpisode == nil)
+        #expect(fixture.appModel.showsUpNextAccessory)
+        #expect(fixture.appModel.upNextAccessoryEpisode?.episodeID == "first")
+
+        #expect(fixture.appModel.advanceToNextQueuedEpisode(modelContext: fixture.context))
+
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "first")
+        #expect(fixture.appModel.upNextQueue.items.isEmpty)
+        #expect(!fixture.appModel.showsUpNextAccessory)
+        #expect(fixture.appModel.nowPlayingPresentationRequest == 0)
+
+        #expect(fixture.appModel.dismissCurrentPlayback(modelContext: fixture.context))
+
+        #expect(fixture.appModel.playback.currentEpisode == nil)
+        #expect(!fixture.appModel.showsUpNextAccessory)
+    }
+
+    @Test("The Up Next accessory follows enqueue and clear after restore")
+    func upNextAccessoryTracksQueueChangesAfterRestore() async throws {
+        let fixture = try await makeFixture()
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        fixture.appModel.restorePlaybackSurfaceIfNeeded(modelContext: fixture.context)
+        #expect(!fixture.appModel.showsUpNextAccessory)
+
+        #expect(fixture.appModel.upNextQueue.enqueueLast(first, modelContext: fixture.context))
+        #expect(fixture.appModel.showsUpNextAccessory)
+        #expect(fixture.appModel.upNextAccessoryEpisode?.episodeID == "first")
+
+        #expect(fixture.appModel.upNextQueue.clear(modelContext: fixture.context))
+        #expect(!fixture.appModel.showsUpNextAccessory)
+    }
+
+    @Test("The Up Next accessory needs a resolvable queue item and skips a stale head")
+    func upNextAccessoryNeedsAResolvableQueueItem() async throws {
+        let fixture = try await makeFixture()
+        let stale = episodeSnapshot(id: "stale", podcastID: Self.podcastID)
+        let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
+        fixture.appModel.restorePlaybackSurfaceIfNeeded(modelContext: fixture.context)
+
+        #expect(fixture.appModel.upNextQueue.enqueueLast(stale, modelContext: fixture.context))
+        #expect(fixture.appModel.upNextQueue.items.map(\.episodeID) == ["stale"])
+        #expect(!fixture.appModel.showsUpNextAccessory)
+
+        #expect(fixture.appModel.upNextQueue.enqueueLast(second, modelContext: fixture.context))
+        #expect(fixture.appModel.showsUpNextAccessory)
+        #expect(fixture.appModel.upNextAccessoryEpisode?.episodeID == "second")
+    }
+
+    @Test("A restored episode wins over the queued accessory on cold launch")
+    func restoredEpisodeWinsOverTheQueuedAccessoryOnColdLaunch() async throws {
+        let fixture = try await makeFixture(queuedEpisodeID: "second", restorableEpisodeID: "first")
+        #expect(!fixture.appModel.showsUpNextAccessory)
+
+        fixture.appModel.restorePlaybackSurfaceIfNeeded(modelContext: fixture.context)
+
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "first")
+        #expect(fixture.appModel.playback.state != .playing)
+        #expect(!fixture.appModel.showsUpNextAccessory)
+        #expect(fixture.appModel.upNextQueue.items.map(\.episodeID) == ["second"])
+        #expect(try lastPlaybackEpisodeIDs(in: fixture.context) == ["first"])
+    }
+
+    @Test("A retained Finished card hides the queued accessory until it is dismissed")
+    func finishedCardKeepsTheQueuedAccessoryHiddenUntilDismissed() async throws {
+        let fixture = try await makeFixture()
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
+        fixture.appModel.restorePlaybackSurfaceIfNeeded(modelContext: fixture.context)
+        try playWithoutAutoplay(first, fixture: fixture)
+        fixture.appModel.isNowPlayingPresented = true
+        fixture.appModel.playback.handleCurrentItemDidPlayToEnd()
+        #expect(fixture.appModel.playback.currentEpisode == nil)
+        #expect(fixture.appModel.finishedPlaybackPresentation != nil)
+
+        #expect(fixture.appModel.upNextQueue.enqueueLast(second, modelContext: fixture.context))
+        #expect(!fixture.appModel.showsUpNextAccessory)
+
+        fixture.appModel.dismissNowPlayingAndDiscardFinishedPlayback()
+
+        #expect(fixture.appModel.showsUpNextAccessory)
+        #expect(fixture.appModel.upNextAccessoryEpisode?.episodeID == "second")
+    }
+
+    @Test("Up Next accessory copy inflects the queued count")
+    func upNextAccessoryCopyInflects() {
+        #expect(UpNextAccessoryText.subtitle(queuedCount: 1) == "Up Next · 1 episode")
+        #expect(UpNextAccessoryText.subtitle(queuedCount: 3) == "Up Next · 3 episodes")
+        #expect(UpNextAccessoryText.queuedEpisodes(1) == "1 episode queued")
+        #expect(UpNextAccessoryText.queuedEpisodes(3) == "3 episodes queued")
+    }
+
     private func makeFixture(
         skipIntroSeconds: TimeInterval = 0,
         skipOutroSeconds: TimeInterval = 0,
         upNextQueue: UpNextQueueStore = UpNextQueueStore(),
-        queuedEpisodeID: String? = nil
+        queuedEpisodeID: String? = nil,
+        restorableEpisodeID: String? = nil
     ) async throws -> (
         appModel: OpenCastAppModel,
         context: ModelContext
@@ -484,6 +586,22 @@ struct OpenCastAppModelUpNextTests {
                     episodeID: queuedEpisodeID,
                     podcastID: Self.podcastID,
                     sequence: 0
+                )
+            )
+        }
+        if let restorableEpisodeID {
+            context.insert(
+                EpisodeProgressRecord(
+                    episodeID: restorableEpisodeID,
+                    podcastID: Self.podcastID,
+                    position: 30,
+                    duration: 60
+                )
+            )
+            context.insert(
+                LocalPreferenceRecord(
+                    key: PlaybackRestorePreferenceStore.episodeIDKey,
+                    value: restorableEpisodeID
                 )
             )
         }

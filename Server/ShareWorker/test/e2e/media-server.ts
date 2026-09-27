@@ -121,6 +121,19 @@ async function route(url: URL, request: http.IncomingMessage, response: http.Ser
     return;
   }
 
+  // Hotlink protection as This American Life's host does it: any Referer at
+  // all is refused, whatever its origin. The page must send none.
+  if (path === "/art/hotlinked/square.png") {
+    if (request.headers.referer !== undefined) {
+      response.writeHead(403, { "content-type": "text/plain", vary: "referer", "cache-control": "no-store" }).end("hotlinking forbidden\n");
+      return;
+    }
+    const square = ART["/art/square.png"]!;
+    response.writeHead(200, { "content-type": square.type, "content-length": square.body.length, vary: "referer", "cache-control": "no-store" });
+    response.end(request.method === "HEAD" ? undefined : square.body);
+    return;
+  }
+
   const art = ART[path];
   if (art) {
     response.writeHead(200, { "content-type": art.type, "content-length": art.body.length, "cache-control": "no-store" });

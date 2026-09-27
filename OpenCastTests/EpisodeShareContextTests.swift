@@ -54,17 +54,26 @@ struct EpisodeShareContextTests {
         }
     }
 
-    @Test("No start link past what the page honours, and no crash on absurd positions")
+    @Test("A start past the feed's duration is offered up to a day, and absurd positions never crash")
     func startBeyondTheEpisode() throws {
-        // The snapshot says 4000 s, so the page accepts starts up to 3998.
-        let atLimit = try #require(make(isCurrentEpisode: true, livePosition: 3_998.7, progress: progress(position: 0)))
-        #expect(atLimit.startURL?.query() == "t=3998")
+        // The snapshot says 4000 s, but dynamically inserted ads make the
+        // served file longer or shorter, so a playhead past that figure is
+        // real and the page honours any start under a day.
+        let nearRSSDuration = try #require(make(isCurrentEpisode: true, livePosition: 3_998.7, progress: progress(position: 0)))
+        #expect(nearRSSDuration.startURL?.query() == "t=3998")
 
-        let pastLimit = try #require(make(isCurrentEpisode: true, livePosition: 3_999, progress: progress(position: 0)))
-        #expect(pastLimit.startURL == nil)
+        let pastRSSDuration = try #require(make(isCurrentEpisode: true, livePosition: 4_120.2, progress: progress(position: 0)))
+        #expect(pastRSSDuration.startURL?.query() == "t=4120")
+        #expect(pastRSSDuration.startLabel == "1:08:40")
 
-        let savedPastLimit = try #require(make(isCurrentEpisode: false, livePosition: 0, progress: progress(position: 3_999.5)))
-        #expect(savedPastLimit.startURL == nil)
+        let savedPastRSSDuration = try #require(make(isCurrentEpisode: false, livePosition: 0, progress: progress(position: 4_120.5)))
+        #expect(savedPastRSSDuration.startURL?.query() == "t=4120")
+
+        let atDay = try #require(make(isCurrentEpisode: true, livePosition: 86_400.9, progress: progress(position: 0)))
+        #expect(atDay.startURL?.query() == "t=86400")
+
+        let pastDay = try #require(make(isCurrentEpisode: true, livePosition: 86_401, progress: progress(position: 0)))
+        #expect(pastDay.startURL == nil)
 
         let absurd = try #require(make(isCurrentEpisode: false, livePosition: 0, progress: progress(position: 1e19)))
         #expect(absurd.startURL == nil)

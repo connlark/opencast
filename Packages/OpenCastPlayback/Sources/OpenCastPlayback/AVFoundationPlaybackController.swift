@@ -555,6 +555,24 @@ public final class AVFoundationPlaybackController {
         }
     }
 
+    public func extendSleepTimer(by interval: TimeInterval) {
+        extendSleepTimer(by: interval, now: .now)
+    }
+
+    /// Pushes a running fixed-duration timer's deadline out by `interval`,
+    /// measured from what is left at `now`. Off and end-of-episode timers
+    /// have no deadline to extend.
+    func extendSleepTimer(by interval: TimeInterval, now: Date) {
+        guard case .duration = sleepTimerMode,
+              let endsAt = snapshot.sleepTimerEndsAt
+        else {
+            return
+        }
+
+        let remaining = max(0, endsAt.timeIntervalSince(now))
+        setSleepTimer(mode: .duration(remaining + interval), now: now)
+    }
+
     private func scheduleSleepTimer(after duration: TimeInterval, now: Date) {
         let endsAt = now.addingTimeInterval(duration)
         snapshot.sleepTimerEndsAt = endsAt

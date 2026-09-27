@@ -93,7 +93,7 @@ describe("share page", () => {
     expect(response.headers.get("cache-control")).toBe("public, max-age=300");
     expect(response.headers.get("x-robots-tag")).toBe("noindex");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(response.headers.get("content-security-policy")).toBe(CSP);
     expect(response.headers.has("set-cookie")).toBe(false);
     expect(response.headers.has("server-timing")).toBe(false);
@@ -114,9 +114,13 @@ describe("share page", () => {
     expect(meta(body, "og:description")).toEqual(["The Example Almanac · starts at 12:34 of 40:00"]);
   });
 
-  it("drops a start time past the episode", async () => {
-    const body = await (await SELF.fetch(`${BASE}/e/${almanac.token}?t=2399`)).text();
-    expect(meta(body, "og:url")).toEqual([`${BASE}/e/${almanac.token}`]);
+  it("keeps a start past the feed's duration (dynamic ad insertion lengthens files) and drops one past a day", async () => {
+    const tail = await (await SELF.fetch(`${BASE}/e/${almanac.token}?t=2400`)).text();
+    expect(meta(tail, "og:url")).toEqual([`${BASE}/e/${almanac.token}?t=2400`]);
+    expect(meta(tail, "og:description")).toEqual(["The Example Almanac · starts at 40:00"]);
+
+    const day = await (await SELF.fetch(`${BASE}/e/${almanac.token}?t=86401`)).text();
+    expect(meta(day, "og:url")).toEqual([`${BASE}/e/${almanac.token}`]);
   });
 
   // SELF drops HEAD bodies in the runtime; test/unit/render.spec.tsx checks

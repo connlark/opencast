@@ -32,9 +32,73 @@ export const EXPECTED_MODEL = "gemini-3.5-flash";
 const realFetch = globalThis.fetch;
 export const pendingGeminiResponses = [];
 export const observedGeminiPayloads = [];
+/// `performance.now()` at each Gemini call, index-aligned with the payloads,
+/// so a test can measure the pause the ladder kept between two sends.
+export const observedGeminiCallTimes = [];
+/// Gemini calls whose `AbortSignal` fired: the worker aborts a call whose
+/// deadline elapsed, so this proves the timeout cancelled the upstream
+/// request rather than merely stopping to wait for it.
+export const abortedGeminiCalls = { count: 0 };
 
 export function mockGeminiOnce(body) {
   pendingGeminiResponses.push(body);
+}
+
+/// A call that never completes on its own. `headers`: the fetch promise
+/// stays pending until the signal aborts it. `body`: the headers arrive at
+/// once (200) and the body stream never ends until the signal aborts it.
+export function mockGeminiHang({ phase = "headers" } = {}) {
+  pendingGeminiResponses.push((input, init) => {
+    const signal = init?.signal ?? input.signal;
+    if (phase === "headers") {
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            abortedGeminiCalls.count += 1;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+    }
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          signal.addEventListener(
+            "abort",
+            () => {
+              abortedGeminiCalls.count += 1;
+              controller.error(new Error("aborted"));
+            },
+            { once: true },
+          );
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+}
+
+/// A reply with an explicit status. `body` is JSON-encoded; `rawBody` (a
+/// string or bytes) is sent as is, for oversized or non-UTF-8 replies.
+export function mockGeminiStatus(status, { retryAfter, body, rawBody } = {}) {
+  pendingGeminiResponses.push(() => {
+    const headers = { "content-type": "application/json" };
+    if (retryAfter !== undefined) {
+      headers["retry-after"] = String(retryAfter);
+    }
+    const payload =
+      rawBody !== undefined ? rawBody : body === undefined ? "" : JSON.stringify(body);
+    return new Response(payload, { status, headers });
+  });
+}
+
+/// The fetch itself rejects (network failure before any reply).
+export function mockGeminiReject() {
+  pendingGeminiResponses.push(() => {
+    throw new Error("mocked fetch rejection");
+  });
 }
 
 export function mockGeminiDeferred(body) {
@@ -68,9 +132,14 @@ export function installFetchStub() {
         typeof input === "string" ? init?.body : await input.clone().text();
       if (rawBody) {
         observedGeminiPayloads.push(JSON.parse(rawBody));
+        observedGeminiCallTimes.push(performance.now());
       }
       const pending = pendingGeminiResponses.shift();
-      const body = typeof pending === "function" ? await pending() : pending;
+      const body =
+        typeof pending === "function" ? await pending(input, init) : pending;
+      if (body instanceof Response) {
+        return body;
+      }
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -372,8 +441,10 @@ export const GEMINI_TRUNCATED_RESPONSE = {
   },
 };
 
+/// The iteration cap covers the ladder suite's budget-exhaustion runs
+/// (~5.5 s at the suite's 10 ms/s scale), not just instant mocks.
 export async function waitForTerminalPoll(jobID) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < 3000; attempt += 1) {
     const response = await postPoll(jobID, {
       authorization: `Bearer ${BEARER}`,
     });
@@ -388,7 +459,7 @@ export async function waitForTerminalPoll(jobID) {
 /// Envelope-authenticated terminal poll: a billed job's subject set holds
 /// the submitting App Attest key, so the bearer poll helper would see 404s.
 export async function waitForTerminalPollAs(identity, jobID) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < 3000; attempt += 1) {
     const response = await postEnvelope(
       identity,
       `/v1/transcript-analysis/jobs/${jobID}`,

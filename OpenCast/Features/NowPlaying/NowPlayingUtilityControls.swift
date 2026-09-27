@@ -78,11 +78,7 @@ struct NowPlayingUtilityControls: View {
     }
 
     private func sleepTimerText(at date: Date) -> String {
-        guard let remaining = appModel.playback.sleepTimerRemaining(at: date) else {
-            return appModel.playback.sleepTimerMode == .endOfEpisode ? "End of Episode" : "Off"
-        }
-
-        return remaining > 0 ? "-\(remaining.formattedPlaybackDuration)" : "Off"
+        SleepTimerRemainingText.text(for: appModel.playback, at: date)
     }
 
     private func sleepTimerProgress(at date: Date) -> Double? {

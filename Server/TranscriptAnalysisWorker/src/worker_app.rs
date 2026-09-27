@@ -29,6 +29,7 @@ use crate::job::{
     app_attest_subject, bearer_subject, job_object_name, valid_job_id, JobDoPollRequest,
     JobPollRequest, JobSubmitRequest, JOB_BINDING,
 };
+use crate::retry::{LadderConfig, LADDER_OVERRIDE_VAR};
 use crate::route::{
     json_response as static_json_response, route_request, Header as StaticHeader, RouteAction,
     StaticResponse, ACCOUNT_BOOTSTRAP_PATH, ANALYZE_TRANSCRIPT_PATH, INSTALL_DELETE_PATH,
@@ -175,6 +176,19 @@ impl AppConfig {
             self.dev_credit_grant_seconds,
         )
     }
+}
+
+/// The model-call ladder for this lane, read directly from the lane var and
+/// the development-only time-scale override: never through
+/// `AppConfig::from_env`, so a billing/config error can neither block nor
+/// reshape a run. Every lane but development gets production time.
+pub(crate) fn ladder_config(env: &Env) -> LadderConfig {
+    let lane = env.var(LANE).ok().map(|value| value.to_string());
+    let override_value = env
+        .var(LADDER_OVERRIDE_VAR)
+        .ok()
+        .map(|value| value.to_string());
+    LadderConfig::resolve(lane.as_deref(), override_value.as_deref())
 }
 
 #[derive(serde::Deserialize)]
@@ -375,17 +389,22 @@ async fn handle_register(
 }
 
 async fn analyze_transcript(req: &mut Request, env: &Env) -> Result<Response> {
+    // Route entry anchors the inline lane's run budget: the whole exchange,
+    // authentication included, is what the caller waits on.
+    let route_entry_ms = Date::now().as_millis();
     let authorization = req.headers().get(AUTHORIZATION_HEADER)?;
     if authorization.is_some() {
-        return analyze_transcript_with_bearer(req, env, authorization.as_deref()).await;
+        return analyze_transcript_with_bearer(req, env, authorization.as_deref(), route_entry_ms)
+            .await;
     }
-    analyze_transcript_with_envelope(req, env).await
+    analyze_transcript_with_envelope(req, env, route_entry_ms).await
 }
 
 async fn analyze_transcript_with_bearer(
     req: &mut Request,
     env: &Env,
     authorization: Option<&str>,
+    route_entry_ms: u64,
 ) -> Result<Response> {
     let Some(provided_token) = bearer_token(authorization) else {
         return json_error_code(401, "unauthorized");
@@ -417,11 +436,16 @@ async fn analyze_transcript_with_bearer(
         UsageLimitProfile::Bearer,
         &bearer_subject(&token_hash(provided_token)),
         None,
+        route_entry_ms,
     )
     .await
 }
 
-async fn analyze_transcript_with_envelope(req: &mut Request, env: &Env) -> Result<Response> {
+async fn analyze_transcript_with_envelope(
+    req: &mut Request,
+    env: &Env,
+    route_entry_ms: u64,
+) -> Result<Response> {
     let db = match required_d1(env, TRANSCRIPT_ANALYSIS_DB) {
         Ok(db) => db,
         Err(error) => return json_error(503, error),
@@ -463,6 +487,7 @@ async fn analyze_transcript_with_envelope(req: &mut Request, env: &Env) -> Resul
         UsageLimitProfile::AppAttestKey,
         &subject,
         billing,
+        route_entry_ms,
     )
     .await
 }
@@ -474,6 +499,7 @@ async fn analyze_validated_request(
     usage_profile: UsageLimitProfile,
     subject: &str,
     billing: Option<BillingContext>,
+    route_entry_ms: u64,
 ) -> Result<Response> {
     let gemini_api_key = match required_secret(env, GEMINI_API_KEY) {
         Ok(key) => key,
@@ -522,9 +548,19 @@ async fn analyze_validated_request(
             .map(|value| value.to_string())
             .as_deref(),
     );
-    let (result, stats) = run_analysis(&gemini_api_key, model, validated.request).await;
+    let (result, stats) = run_analysis(
+        &gemini_api_key,
+        model,
+        validated.request,
+        ladder_config(env),
+        route_entry_ms,
+    )
+    .await;
     let mut deltas = counters::spend_deltas(&stats);
     deltas.push((counters::SYNC_ANALYSES, 1));
+    if let Err(error) = &result {
+        deltas.push((counters::failure_code_counter(error.code()), 1));
+    }
     counters::bump(env, &deltas).await;
     match result {
         Ok(response) => json_success(200, &response),

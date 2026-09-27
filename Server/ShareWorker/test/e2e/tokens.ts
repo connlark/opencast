@@ -104,6 +104,11 @@ export function fixtureTokens(media: string): Record<string, FixtureToken> {
     "artwork-wide": [{ ...happy, artworkURL: `${media}/art/wide.png` }],
     "artwork-tall": [{ ...happy, artworkURL: `${media}/art/tall.png` }],
     "artwork-svg": [{ ...happy, artworkURL: `${media}/art/cover.svg` }],
+    // The host refuses any request that carries a Referer; the probe lets the
+    // test read back what the host saw for both the artwork and the audio.
+    "artwork-hotlinked": [
+      { ...happy, audioURL: `${media}/audio/60.mp3?probe=hotlinked`, artworkURL: `${media}/art/hotlinked/square.png?probe=hotlinked` },
+    ],
     "no-duration": [{ ...happy, durationSeconds: 0 }],
     "huge-duration": [{ ...happy, durationSeconds: 360000 }],
     "long-audio": [{ ...happy, audioURL: `${media}/audio/10800.mp3`, durationSeconds: 10800 }],

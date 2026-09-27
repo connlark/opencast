@@ -18,7 +18,7 @@ struct EpisodeShareURLTests {
             == "https://opencast.mobile/e/\(token)?t=754")
     }
 
-    @Test("A start the page would ignore is left off: past duration minus two seconds, or a day")
+    @Test("A start the page would ignore is left off: past a day, whatever the feed's duration")
     func startBeyondTheEpisodeIsDropped() throws {
         let base = try #require(URL(string: "https://opencast.mobile/e/"))
         let payload = try samplePayload()
@@ -33,9 +33,14 @@ struct EpisodeShareURLTests {
             publishedAt: nil
         ))
 
-        #expect(payload.maximumStartSeconds == 3598)
+        // The sample payload says 3600 s; dynamically inserted ads make the
+        // served file longer, so a start past the feed's figure is kept.
+        #expect(payload.maximumStartSeconds == 86_400)
         #expect(try EpisodeShareURL.url(base: base, payload: payload, startSeconds: 3598).query() == "t=3598")
-        #expect(try EpisodeShareURL.url(base: base, payload: payload, startSeconds: 3599).query() == nil)
+        #expect(try EpisodeShareURL.url(base: base, payload: payload, startSeconds: 3599).query() == "t=3599")
+        #expect(try EpisodeShareURL.url(base: base, payload: payload, startSeconds: 4173).query() == "t=4173")
+        #expect(try EpisodeShareURL.url(base: base, payload: payload, startSeconds: 86_400).query() == "t=86400")
+        #expect(try EpisodeShareURL.url(base: base, payload: payload, startSeconds: 86_401).query() == nil)
         #expect(noDuration.maximumStartSeconds == 86_400)
         #expect(try EpisodeShareURL.url(base: base, payload: noDuration, startSeconds: 86_400).query() == "t=86400")
         #expect(try EpisodeShareURL.url(base: base, payload: noDuration, startSeconds: 86_401).query() == nil)
