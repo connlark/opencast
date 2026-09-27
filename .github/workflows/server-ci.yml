@@ -138,6 +138,7 @@ jobs:
             --test counters_migration \
             --test prompt \
             --test routing \
+            --test run_stats \
             --test validation
 
       - name: Check the Worker WebAssembly target

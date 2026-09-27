@@ -18,16 +18,17 @@ with Tailwind v4 and the system font stack.
 
 | Path | Behaviour |
 |---|---|
-| `GET/HEAD /e/<token>` | Decodes the token and renders the page (200), or a branded 404 when the token is invalid. `?t=` is the start time in seconds or `1h2m3s` form. |
+| `GET/HEAD /e/<token>` | Decodes the token and renders the page (200), or a branded 404 when the token is invalid. `?t=` is the start time in seconds or `1h2m3s` form, honoured up to a day whatever the feed's duration says (dynamically inserted ads make the served file longer or shorter); the player drops a resume the actual file cannot hold. |
 | `GET/HEAD /e/<token>/download` | Streams the enclosure back with `Content-Disposition: attachment` so browsers save it. Range passthrough, audio/octet-stream only, 1 GiB cap, 10 s header timeout, 20 downloads per minute per client (IPv6 counted per /64). |
 | `/e/_/*` | Client assets (`entry.js`, `entry.css`), served by the assets binding before the Worker runs. |
 | `/e/` | 302 to the marketing site. |
 | anything else | 404. Only GET and HEAD are allowed (405 otherwise). |
 
 Every response carries `x-robots-tag: noindex`. Pages send a strict
-`Content-Security-Policy`, `Referrer-Policy: strict-origin-when-cross-origin`
-(podcast hosts see the origin, never the token), and `Cache-Control:
-public, max-age=300`.
+`Content-Security-Policy`, `Referrer-Policy: no-referrer` (also as a `<meta>`
+in the head: podcast hosts get neither the token nor the origin, because
+hotlink-protected image hosts refuse artwork to any cross-site referrer), and
+`Cache-Control: public, max-age=300`.
 
 ## Wire format (version `1`)
 
