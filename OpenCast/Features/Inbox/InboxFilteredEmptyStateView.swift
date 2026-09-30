@@ -21,11 +21,11 @@ struct InboxFilteredEmptyStateView: View {
     private var description: String {
         switch (filter, hidesQueuedEpisodes) {
         case (.all, _):
-            "Every episode in your Inbox is in Up Next."
+            "Every episode in your Inbox is playing or in Up Next."
         case (_, false):
             filter.inboxEmptyStateDescription
         case (_, true):
-            "\(filter.inboxEmptyStateDescription) Episodes in Up Next are hidden."
+            "\(filter.inboxEmptyStateDescription) Episodes playing or in Up Next are hidden."
         }
     }
 }

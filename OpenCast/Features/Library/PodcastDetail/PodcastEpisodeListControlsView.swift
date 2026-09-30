@@ -35,7 +35,7 @@ struct PodcastEpisodeListControlsView: View {
             }
 
             if hidesQueuedEpisodes {
-                Label("Episodes in Up Next are hidden", systemImage: "text.line.first.and.arrowtriangle.forward")
+                Label("Episodes playing or in Up Next are hidden", systemImage: "text.line.first.and.arrowtriangle.forward")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

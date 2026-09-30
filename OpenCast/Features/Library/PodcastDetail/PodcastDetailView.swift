@@ -44,16 +44,15 @@ struct PodcastDetailView: View {
         episodeListOverride?.hidesQueuedEpisodes ?? false
     }
 
-    /// Up Next, minus the playing episode: a stale queue entry for the episode
-    /// that is playing must not hide the row the listener is on, as in the
-    /// Inbox. Reads the queue only while hiding it.
+    /// Up Next plus the playing episode, as the Inbox hides them. Reads the
+    /// queue and player only while hiding them.
     private var hiddenEpisodeIDs: Set<String> {
         guard hidesQueuedEpisodes else {
             return []
         }
         var hiddenEpisodeIDs = Set(appModel.upNextQueue.items.map(\.episodeID))
         if let playingEpisodeID = appModel.playback.currentEpisode?.id.rawValue {
-            hiddenEpisodeIDs.remove(playingEpisodeID)
+            hiddenEpisodeIDs.insert(playingEpisodeID)
         }
         return hiddenEpisodeIDs
     }
@@ -350,9 +349,9 @@ struct PodcastDetailView: View {
         case (_, false):
             filter.emptyStateDescription
         case (.all, true):
-            "Every episode in this podcast is in Up Next."
+            "Every episode in this podcast is playing or in Up Next."
         case (_, true):
-            "\(filter.emptyStateDescription) Episodes in Up Next are hidden."
+            "\(filter.emptyStateDescription) Episodes playing or in Up Next are hidden."
         }
     }
 
