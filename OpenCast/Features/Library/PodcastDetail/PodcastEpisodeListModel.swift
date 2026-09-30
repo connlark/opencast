@@ -14,12 +14,16 @@ struct PodcastEpisodeListModel {
     /// One pass over the show's episodes derives the filtered list, the
     /// unplayed count, and the primary action together — each episode's
     /// progress summary is looked up exactly once per evaluation.
+    /// `hiddenEpisodeIDs` (Up Next, when a Group by Podcast visit hides it)
+    /// leave the list only; the unplayed count and primary action still see
+    /// every episode.
     static func make(
         episodes: [EpisodeListItemSnapshot],
         filter: PodcastEpisodeFilter,
         sortOrder: PodcastEpisodeSortOrder,
         library: LibraryStore,
-        downloadRecords: @autoclosure () -> [EpisodeDownloadRecord]
+        downloadRecords: @autoclosure () -> [EpisodeDownloadRecord],
+        hiddenEpisodeIDs: Set<String> = []
     ) -> PodcastEpisodeListModel {
         // Download records are observed state; only Downloaded reads them.
         let downloadedEpisodeIDs = filter == .downloaded ? downloadRecords().completedEpisodeIDs : []
@@ -47,10 +51,11 @@ struct PodcastEpisodeListModel {
                 resumeUpdatedAt = record.updatedAt
             }
 
-            if filter.includes(
-                progress: progress,
-                isDownloaded: downloadedEpisodeIDs.contains(episode.episodeID)
-            ) {
+            if !hiddenEpisodeIDs.contains(episode.episodeID),
+               filter.includes(
+                   progress: progress,
+                   isDownloaded: downloadedEpisodeIDs.contains(episode.episodeID)
+               ) {
                 visibleEpisodes.append(episode)
             }
         }

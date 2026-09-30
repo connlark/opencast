@@ -20,6 +20,10 @@ struct LibraryView: View {
         displaySettings.layout.resolved(isRegularWidth: horizontalSizeClass == .regular)
     }
 
+    private var badge: LibrarySubscriptionBadge {
+        displaySettings.showsNewEpisodeBadges ? .newEpisodes : .hidden
+    }
+
     var body: some View {
         // Sorting reads release dates, never progress, so playback cannot
         // reorder the Library.
@@ -87,18 +91,13 @@ struct LibraryView: View {
                     )
                 }
             } else if layout == .grid {
-                LibrarySubscriptionGridView(
-                    subscriptions: subscriptions,
-                    showsNewEpisodeCount: displaySettings.showsNewEpisodeBadges
-                )
-                .transition(.opacity)
+                let badge = badge
+                LibrarySubscriptionGridView(subscriptions: subscriptions) { _ in badge }
+                    .transition(.opacity)
             } else {
                 List {
                     ForEach(subscriptions) { subscription in
-                        LibrarySubscriptionRowView(
-                            subscription: subscription,
-                            showsNewEpisodeCount: displaySettings.showsNewEpisodeBadges
-                        )
+                        LibrarySubscriptionRowView(subscription: subscription, badge: badge)
                     }
                 }
                 .accessibilityIdentifier("Library List")

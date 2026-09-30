@@ -9,11 +9,15 @@ struct InboxEpisodeListSettingsStoreTests {
     // Stored keys are a storage contract; the literals pin them.
     private let filterKey = "inbox.filter"
     private let hidesQueuedKey = "inbox.hidesQueuedEpisodes"
+    private let groupsByPodcastKey = "inbox.groupsByPodcast"
+    private let groupedLayoutKey = "inbox.groupedLayout"
 
     @Test("Preference keys stay stable")
     func preferenceKeysStayStable() {
         #expect(InboxEpisodeListSettingsStore.filterPreferenceKey == filterKey)
         #expect(InboxEpisodeListSettingsStore.hidesQueuedEpisodesPreferenceKey == hidesQueuedKey)
+        #expect(InboxEpisodeListSettingsStore.groupsByPodcastPreferenceKey == groupsByPodcastKey)
+        #expect(InboxEpisodeListSettingsStore.groupedLayoutPreferenceKey == groupedLayoutKey)
     }
 
     @Test("Settings default to All Episodes with Up Next shown")
@@ -25,7 +29,41 @@ struct InboxEpisodeListSettingsStoreTests {
 
         #expect(store.filter == .all)
         #expect(!store.hidesQueuedEpisodes)
+        #expect(!store.groupsByPodcast)
+        #expect(store.groupedLayout == .automatic)
         #expect(store.lastErrorMessage == nil)
+    }
+
+    @Test("Group by Podcast and its layout persist, reload, and stay out of the filter titles")
+    func groupingPersistsAndReloads() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = InboxEpisodeListSettingsStore()
+        store.load(modelContext: context)
+
+        #expect(store.setGroupsByPodcast(true, modelContext: context))
+        #expect(store.setGroupedLayout(.grid, modelContext: context))
+
+        #expect(store.groupsByPodcast)
+        #expect(store.groupedLayout == .grid)
+        #expect(store.activeFilterTitles.isEmpty)
+        #expect(try storedValues(forKey: groupsByPodcastKey, in: container) == ["true"])
+        #expect(try storedValues(forKey: groupedLayoutKey, in: container) == ["grid"])
+        let reloaded = reloadedStore(from: container)
+        #expect(reloaded.groupsByPodcast)
+        #expect(reloaded.groupedLayout == .grid)
+
+        // Automatic is the absence of a choice: its row is deleted, not written.
+        #expect(store.setGroupedLayout(.automatic, modelContext: context))
+        #expect(try storedValues(forKey: groupedLayoutKey, in: container).isEmpty)
+        #expect(reloadedStore(from: container).groupedLayout == .automatic)
+
+        // Show All Episodes resets the filters and leaves the view choice alone.
+        #expect(store.setFilter(.unplayed, modelContext: context))
+        #expect(store.resetToDefaults(modelContext: context))
+        #expect(store.filter == .all)
+        #expect(store.groupsByPodcast)
+        #expect(reloadedStore(from: container).groupsByPodcast)
     }
 
     @Test("Both settings persist and reload in a fresh store")
@@ -81,6 +119,8 @@ struct InboxEpisodeListSettingsStoreTests {
         let context = ModelContext(container)
         context.insert(LocalPreferenceRecord(key: filterKey, value: "queued"))
         context.insert(LocalPreferenceRecord(key: hidesQueuedKey, value: "maybe"))
+        context.insert(LocalPreferenceRecord(key: groupsByPodcastKey, value: "sometimes"))
+        context.insert(LocalPreferenceRecord(key: groupedLayoutKey, value: "carousel"))
         try context.save()
         let probe = InboxEpisodeListSettingsSaveProbe()
         let store = InboxEpisodeListSettingsStore(save: probe.save)
@@ -89,10 +129,14 @@ struct InboxEpisodeListSettingsStoreTests {
 
         #expect(store.filter == .all)
         #expect(!store.hidesQueuedEpisodes)
+        #expect(!store.groupsByPodcast)
+        #expect(store.groupedLayout == .automatic)
         #expect(store.lastErrorMessage == nil)
         #expect(probe.callCount == 0)
         #expect(try storedValues(forKey: filterKey, in: container) == ["queued"])
         #expect(try storedValues(forKey: hidesQueuedKey, in: container) == ["maybe"])
+        #expect(try storedValues(forKey: groupsByPodcastKey, in: container) == ["sometimes"])
+        #expect(try storedValues(forKey: groupedLayoutKey, in: container) == ["carousel"])
     }
 
     @Test("Choosing the current value skips the save")
@@ -105,6 +149,8 @@ struct InboxEpisodeListSettingsStoreTests {
 
         #expect(store.setFilter(.all, modelContext: context))
         #expect(store.setHidesQueuedEpisodes(false, modelContext: context))
+        #expect(store.setGroupsByPodcast(false, modelContext: context))
+        #expect(store.setGroupedLayout(.automatic, modelContext: context))
         #expect(probe.callCount == 0)
         #expect(try ModelContext(container).fetch(FetchDescriptor<LocalPreferenceRecord>()).isEmpty)
 
@@ -131,8 +177,14 @@ struct InboxEpisodeListSettingsStoreTests {
         #expect(!store.setHidesQueuedEpisodes(true, modelContext: context))
         #expect(!store.hidesQueuedEpisodes)
         #expect(store.lastErrorMessage?.hasPrefix("Unable to update Hide Up Next:") == true)
+        #expect(!store.setGroupsByPodcast(true, modelContext: context))
+        #expect(!store.groupsByPodcast)
+        #expect(store.lastErrorMessage?.hasPrefix("Unable to update Group by Podcast:") == true)
+        #expect(!store.setGroupedLayout(.list, modelContext: context))
+        #expect(store.groupedLayout == .automatic)
+        #expect(store.lastErrorMessage?.hasPrefix("Unable to update Inbox layout:") == true)
         // The seam saw the upserted rows, so each failure came after mutation.
-        #expect(probe.pendingChangesAtCall == [true, true, true])
+        #expect(probe.pendingChangesAtCall == [true, true, true, true, true])
 
         probe.failsSaves = false
         #expect(store.setHidesQueuedEpisodes(true, modelContext: context))

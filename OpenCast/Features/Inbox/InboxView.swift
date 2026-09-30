@@ -12,10 +12,17 @@ struct InboxView: View {
     let onOpenEpisode: (String) -> Void
     var onOpenAdDetectionQueue: () -> Void = {}
 
+    private var groupedLayout: LibraryLayout {
+        appModel.inboxEpisodeListSettings.groupedLayout.resolved(isRegularWidth: horizontalSizeClass == .regular)
+    }
+
     var body: some View {
         let inboxEpisodes = appModel.library.inboxEpisodes
         let filter = appModel.inboxEpisodeListSettings.filter
         let hidesQueuedEpisodes = appModel.inboxEpisodeListSettings.hidesQueuedEpisodes
+        let groupsByPodcast = appModel.inboxEpisodeListSettings.groupsByPodcast
+        // Grouping counts every matching episode, so it reads the whole
+        // filtered list instead of a page.
         let model = appModel.coreStoresHydrated
             ? InboxEpisodeListModel.make(
                 episodes: inboxEpisodes,
@@ -25,46 +32,32 @@ struct InboxView: View {
                 downloadRecords: appModel.downloads.records,
                 queuedEpisodeIDs: Set(appModel.upNextQueue.items.map(\.episodeID)),
                 playingEpisodeID: appModel.playback.currentEpisode?.id.rawValue,
-                visibleEpisodeCount: visibleEpisodeCount
+                visibleEpisodeCount: groupsByPodcast ? nil : visibleEpisodeCount
             )
             : InboxEpisodeListModel(episodes: [], totalEpisodeCount: 0, hasMore: false)
-        let visibleEpisodes = model.episodes.prefix(visibleEpisodeCount)
-        let episodeIDs = visibleEpisodes.map(\.episodeID)
+        let groups = groupsByPodcast
+            ? InboxPodcastGroup.make(episodes: model.episodes, subscriptions: appModel.library.subscriptions)
+            : []
+        let visibleEpisodes = groupsByPodcast ? [] : Array(model.episodes.prefix(visibleEpisodeCount))
+        let rowIDs = groupsByPodcast ? groups.map(\.id) : visibleEpisodes.map(\.episodeID)
         // The filter applies only to a hydrated, populated Inbox, as the list
         // branches below; a persisted filter never labels the loading state.
         let showsFilter = appModel.coreStoresHydrated && !inboxEpisodes.isEmpty
+        let layout = groupedLayout
 
-        List {
-            if !appModel.coreStoresHydrated {
-                InboxLoadingStateView()
-            } else if case .failed(let message) = appModel.library.state,
-                      inboxEpisodes.isEmpty {
-                InboxFailedStateView(message: message)
-            } else if inboxEpisodes.isEmpty {
-                InboxEmptyStateView(
-                    syncActivity: appModel.syncStatus.libraryActivity,
-                    onAdd: onAdd
-                )
-            } else if model.isFilteredEmpty {
-                InboxFilteredEmptyStateView(
-                    filter: filter,
-                    hidesQueuedEpisodes: hidesQueuedEpisodes,
-                    onShowAll: showAllEpisodes
-                )
-            } else {
-                ForEach(visibleEpisodes) { episode in
-                    EpisodeRowButton(
-                        episode: episode,
-                        onOpenEpisode: onOpenEpisode
-                    )
-                    .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode))
-                }
-                EpisodeCatalogContinuation(hasMore: model.hasMore, visibleCount: $visibleEpisodeCount)
-            }
-        }
-        .contentMargins(.horizontal, horizontalSizeClass == .regular ? 32 : nil, for: .scrollContent)
-        .animation(listAnimation, value: episodeIDs)
+        content(
+            model: model,
+            inboxEpisodes: inboxEpisodes,
+            filter: filter,
+            hidesQueuedEpisodes: hidesQueuedEpisodes,
+            groups: groupsByPodcast ? groups : nil,
+            visibleEpisodes: visibleEpisodes,
+            layout: layout
+        )
+        .animation(listAnimation, value: rowIDs)
         .animation(listAnimation, value: appModel.library.state)
+        .animation(listAnimation, value: groupsByPodcast)
+        .animation(listAnimation, value: layout)
         .safeAreaInset(edge: .top, spacing: 0) {
             SettingsErrorBanner(message: appModel.inboxEpisodeListSettings.lastErrorMessage)
         }
@@ -79,6 +72,11 @@ struct InboxView: View {
                 InboxAdDetectionToolbarStatus(onOpen: onOpenAdDetectionQueue)
             }
             if showsFilter {
+                if groupsByPodcast {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        InboxGroupedLayoutMenu(resolvedLayout: layout)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     InboxFilterMenu()
                 }
@@ -87,6 +85,91 @@ struct InboxView: View {
         .refreshable {
             await appModel.library.refreshAll(modelContext: modelContext)
         }
+    }
+
+    /// `groups` is nil while the Inbox lists episodes.
+    @ViewBuilder
+    private func content(
+        model: InboxEpisodeListModel,
+        inboxEpisodes: [EpisodeListItemSnapshot],
+        filter: PodcastEpisodeFilter,
+        hidesQueuedEpisodes: Bool,
+        groups: [InboxPodcastGroup]?,
+        visibleEpisodes: [EpisodeListItemSnapshot],
+        layout: LibraryLayout
+    ) -> some View {
+        if !appModel.coreStoresHydrated {
+            inboxList {
+                InboxLoadingStateView()
+            }
+        } else if case .failed(let message) = appModel.library.state,
+                  inboxEpisodes.isEmpty {
+            inboxList {
+                InboxFailedStateView(message: message)
+            }
+        } else if inboxEpisodes.isEmpty {
+            inboxList {
+                InboxEmptyStateView(
+                    syncActivity: appModel.syncStatus.libraryActivity,
+                    onAdd: onAdd
+                )
+            }
+        } else if model.isFilteredEmpty {
+            inboxList {
+                InboxFilteredEmptyStateView(
+                    filter: filter,
+                    hidesQueuedEpisodes: hidesQueuedEpisodes,
+                    onShowAll: showAllEpisodes
+                )
+            }
+        } else if let groups {
+            // The show opens under the Inbox settings, so its list holds the
+            // episodes the badge counted.
+            let override = PodcastEpisodeListOverride(filter: filter, hidesQueuedEpisodes: hidesQueuedEpisodes)
+            if layout == .grid {
+                let countsByFeedURL = Dictionary(
+                    groups.map { ($0.id, $0.episodeCount) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                LibrarySubscriptionGridView(
+                    subscriptions: groups.map(\.subscription),
+                    episodeListOverride: override
+                ) { subscription in
+                    .episodeCount(countsByFeedURL[subscription.feedURL] ?? 0)
+                }
+                .transition(.opacity)
+            } else {
+                inboxList {
+                    ForEach(groups) { group in
+                        LibrarySubscriptionRowView(
+                            subscription: group.subscription,
+                            badge: .episodeCount(group.episodeCount),
+                            episodeListOverride: override
+                        )
+                    }
+                }
+                .accessibilityIdentifier("Inbox Podcast List")
+                .transition(.opacity)
+            }
+        } else {
+            inboxList {
+                ForEach(visibleEpisodes) { episode in
+                    EpisodeRowButton(
+                        episode: episode,
+                        onOpenEpisode: onOpenEpisode
+                    )
+                    .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode))
+                }
+                EpisodeCatalogContinuation(hasMore: model.hasMore, visibleCount: $visibleEpisodeCount)
+            }
+        }
+    }
+
+    private func inboxList<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        List {
+            content()
+        }
+        .contentMargins(.horizontal, horizontalSizeClass == .regular ? 32 : nil, for: .scrollContent)
     }
 
     private var listAnimation: Animation? {

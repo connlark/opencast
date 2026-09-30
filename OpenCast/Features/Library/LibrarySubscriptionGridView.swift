@@ -7,7 +7,10 @@ struct LibrarySubscriptionGridView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     let subscriptions: [SubscriptionRecord]
-    let showsNewEpisodeCount: Bool
+    /// Opens every show under these Inbox settings instead of its stored filter.
+    var episodeListOverride: PodcastEpisodeListOverride? = nil
+    /// The badge each tile shows; the grouped Inbox varies it per show.
+    let badge: (SubscriptionRecord) -> LibrarySubscriptionBadge
 
     var body: some View {
         // Reads the width in the same layout pass, so the first frame
@@ -25,7 +28,8 @@ struct LibrarySubscriptionGridView: View {
                         LibrarySubscriptionTileView(
                             subscription: subscription,
                             metrics: metrics,
-                            showsNewEpisodeCount: showsNewEpisodeCount
+                            badge: badge(subscription),
+                            episodeListOverride: episodeListOverride
                         )
                     }
                 }
