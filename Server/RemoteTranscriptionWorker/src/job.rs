@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ai::AiFailureClass;
 use crate::types::SourceIdentity;
 
 pub const JOB_BINDING: &str = "TRANSCRIPTION_JOB";
@@ -254,9 +255,15 @@ pub struct ChunkWork {
     pub index: u32,
     #[serde(default)]
     pub completed: bool,
-    /// Failed AI attempts so far; a success never increments this.
+    /// Total failed AI attempts, retained for telemetry and fake-AI sequencing.
     #[serde(default)]
     pub failed_attempts: u32,
+    /// Legacy records have no per-class history. Start fresh class budgets
+    /// instead of attributing their mixed total to either failure class.
+    #[serde(default)]
+    pub retryable_failed_attempts: u32,
+    #[serde(default)]
+    pub decode_rejected_attempts: u32,
     /// First AI attempt start / successful attempt end, epoch seconds.
     #[serde(default)]
     pub ai_started_at: Option<i64>,
@@ -266,6 +273,20 @@ pub struct ChunkWork {
     /// without blocking its siblings.
     #[serde(default)]
     pub retry_not_before: Option<i64>,
+}
+
+impl ChunkWork {
+    /// Record one failure and return the count for its class's attempt cap.
+    pub fn record_ai_failure(&mut self, class: AiFailureClass) -> u32 {
+        self.failed_attempts = self.failed_attempts.saturating_add(1);
+        let attempts = match class {
+            AiFailureClass::Retryable => &mut self.retryable_failed_attempts,
+            AiFailureClass::DecodeRejected => &mut self.decode_rejected_attempts,
+            AiFailureClass::Fatal => return self.failed_attempts,
+        };
+        *attempts = attempts.saturating_add(1);
+        *attempts
+    }
 }
 
 /// Overlap-driver selection: chunks the container has
@@ -307,6 +328,8 @@ pub fn init_chunk_work(chunk_count: u32, completed_below: u32) -> Vec<ChunkWork>
             index,
             completed: index < completed_below,
             failed_attempts: 0,
+            retryable_failed_attempts: 0,
+            decode_rejected_attempts: 0,
             ai_started_at: None,
             ai_ended_at: None,
             retry_not_before: None,
@@ -1125,10 +1148,53 @@ mod tests {
             index,
             completed,
             failed_attempts: 0,
+            retryable_failed_attempts: 0,
+            decode_rejected_attempts: 0,
             ai_started_at: None,
             ai_ended_at: None,
             retry_not_before,
         }
+    }
+
+    #[test]
+    fn mixed_ai_failures_keep_independent_counts_across_record_round_trips() {
+        use AiFailureClass::{DecodeRejected, Fatal, Retryable};
+
+        let mut chunk = work(0, false, None);
+        for (class, expected) in [
+            (DecodeRejected, 1),
+            (DecodeRejected, 2),
+            (Retryable, 1),
+            (DecodeRejected, 3),
+            (Retryable, 2),
+        ] {
+            assert_eq!(chunk.record_ai_failure(class), expected);
+            let json = serde_json::to_string(&chunk).expect("serialize chunk");
+            chunk = serde_json::from_str(&json).expect("restore chunk");
+        }
+        assert_eq!(chunk.failed_attempts, 5);
+        assert_eq!(chunk.retryable_failed_attempts, 2);
+        assert_eq!(chunk.decode_rejected_attempts, 3);
+        assert_eq!(chunk.record_ai_failure(Fatal), 6);
+        assert_eq!(chunk.retryable_failed_attempts, 2);
+        assert_eq!(chunk.decode_rejected_attempts, 3);
+    }
+
+    #[test]
+    fn legacy_chunk_totals_do_not_consume_either_class_budget() {
+        let mut chunk: ChunkWork = serde_json::from_value(serde_json::json!({
+            "index": 0,
+            "failed_attempts": 2,
+            "retry_not_before": 100,
+        }))
+        .expect("decode legacy chunk");
+        assert_eq!(chunk.failed_attempts, 2);
+        assert_eq!(chunk.retryable_failed_attempts, 0);
+        assert_eq!(chunk.decode_rejected_attempts, 0);
+        assert_eq!(chunk.retry_not_before, Some(100));
+        assert_eq!(chunk.record_ai_failure(AiFailureClass::DecodeRejected), 1);
+        assert_eq!(chunk.record_ai_failure(AiFailureClass::Retryable), 1);
+        assert_eq!(chunk.failed_attempts, 4);
     }
 
     #[test]

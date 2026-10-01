@@ -76,8 +76,10 @@ final class DataNukeRunner {
             try await downloads.nukeAllDownloads(modelContext: modelContext)
             try transcriptionModels.deleteInstalledModelImmediately()
             let siriPodcastIDs = library.activePodcastIDs
+            let siriPlaylistIDs = Set(try modelContext.fetch(FetchDescriptor<PlaylistRecord>()).map(\.playlistID))
             try deleteAllModelRows(modelContext: modelContext)
             siriMediaDiscovery.deleteDonations(forPodcastIDs: siriPodcastIDs)
+            siriMediaDiscovery.deleteDonations(forPlaylistIDs: siriPlaylistIDs)
             // Nothing that suspends may sit between the row wipe above and
             // the playback unload at the top of resetRuntime: playback keeps
             // flushing progress through every earlier await, and a flush that
@@ -120,6 +122,8 @@ final class DataNukeRunner {
         try Self.deleteAll(EpisodeTranscriptAnalysisRecord.self, modelContext: modelContext)
         try Self.deleteAll(AdFreePassQueueItemRecord.self, modelContext: modelContext)
         try Self.deleteAll(UpNextQueueItemRecord.self, modelContext: modelContext)
+        try Self.deleteAll(PlaylistRecord.self, modelContext: modelContext)
+        try Self.deleteAll(PlaylistItemRecord.self, modelContext: modelContext)
         if deletedSyncedRowCount > 0 {
             try library.saveSyncedStore(modelContext)
         } else {

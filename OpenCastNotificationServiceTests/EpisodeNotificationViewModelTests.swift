@@ -81,17 +81,16 @@ struct EpisodeNotificationViewModelTests {
 
         let viewModel = EpisodeNotificationViewModel(content: content)
 
-        #expect(viewModel.summaryText == "Summary & context.")
+        #expect(viewModel.summaryText == "Summary & context. example.com")
     }
 
-    @Test("Legacy body summary strips tags after double entity decoding")
-    func legacyBodySummaryStripsTagsAfterDoubleEntityDecoding() throws {
+    @Test("Legacy body summary keeps double-escaped markup out")
+    func legacyBodySummaryKeepsDoubleEscapedMarkupOut() {
+        // A script element renders nothing, so nothing is left to show.
         let scriptContent = UNMutableNotificationContent()
         scriptContent.body = "44 min\n\n&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;"
 
-        let scriptSummary = try #require(EpisodeNotificationViewModel(content: scriptContent).summaryText)
-        #expect(!scriptSummary.contains("<"))
-        #expect(!scriptSummary.contains(">"))
+        #expect(EpisodeNotificationViewModel(content: scriptContent).summaryText == nil)
 
         let formattedContent = UNMutableNotificationContent()
         formattedContent.body = "44 min\n\n&amp;lt;b&amp;gt;Bold&amp;lt;/b&amp;gt;"
@@ -99,25 +98,57 @@ struct EpisodeNotificationViewModelTests {
         #expect(EpisodeNotificationViewModel(content: formattedContent).summaryText == "Bold")
     }
 
-    @Test("Legacy body summary strips malformed tag debris")
-    func legacyBodySummaryStripsMalformedTagDebris() {
-        let content = UNMutableNotificationContent()
-        content.body = "44 min\n\npWe spend the hour in deep time. /pVisit a href=https://example.com"
+    @Test("Legacy body summary drops unterminated markup and attribute debris")
+    func legacyBodySummaryDropsUnterminatedMarkupAndAttributeDebris() {
+        let unterminated = UNMutableNotificationContent()
+        unterminated.body = "44 min\n\nIntro <a href=\"https://example.com/very-long"
 
-        let viewModel = EpisodeNotificationViewModel(content: content)
+        #expect(EpisodeNotificationViewModel(content: unterminated).durationText == "44 MIN")
+        #expect(EpisodeNotificationViewModel(content: unterminated).summaryText == "Intro")
 
-        #expect(viewModel.durationText == "44 MIN")
-        #expect(viewModel.summaryText == "We spend the hour in deep time.")
+        let debris = UNMutableNotificationContent()
+        debris.body = "We spend the hour. Visit a href=https://example.com target=_blank now"
+
+        #expect(EpisodeNotificationViewModel(content: debris).summaryText == "We spend the hour. Visit now")
     }
 
-    @Test("Legacy body summary keeps legitimate p-prefixed prose")
-    func legacyBodySummaryKeepsLegitimatePPrefixedProse() {
+    @Test("Legacy body summary renders inline and block elements like a browser")
+    func legacyBodySummaryRendersInlineAndBlockElementsLikeABrowser() {
         let content = UNMutableNotificationContent()
-        content.body = "pH balance and p5 protocol matter. Please Subscribe"
+        content.body = "<p>Talk with <strong>Sam</strong>, <em>Ann</em> and <a href=\"/x\">Lee</a>.</p><p>Then</p><ul><li>A</li><li>B</li></ul>"
 
-        let viewModel = EpisodeNotificationViewModel(content: content)
+        #expect(EpisodeNotificationViewModel(content: content).summaryText == "Talk with Sam, Ann and Lee. Then A B")
 
-        #expect(viewModel.summaryText == "pH balance and p5 protocol matter. Please Subscribe")
+        let spaced = UNMutableNotificationContent()
+        spaced.body = "parents , and then ; done ."
+
+        #expect(EpisodeNotificationViewModel(content: spaced).summaryText == "parents, and then; done.")
+    }
+
+    @Test("Legacy body summary decodes entities to real characters and keeps a lone angle bracket")
+    func legacyBodySummaryDecodesEntitiesToRealCharacters() {
+        let content = UNMutableNotificationContent()
+        content.body = "Ben &amp; Jerry&rsquo;s &ldquo;show&rdquo; &mdash; caf&eacute; &#8217;&#146; &unknown; 1 &lt; 2 and <3"
+
+        #expect(
+            EpisodeNotificationViewModel(content: content).summaryText
+                == "Ben & Jerry\u{2019}s \u{201C}show\u{201D} \u{2014} caf\u{E9} \u{2019}\u{2019} &unknown; 1 < 2 and <3"
+        )
+    }
+
+    @Test("Patreon-wrapped description becomes the whole sentence")
+    func patreonWrappedDescriptionBecomesTheWholeSentence() {
+        // A 2026-09-29 production push carried only "The hosts discuss the"
+        // after a byte cut of markup shaped like this; the cleaner must yield
+        // the full prose.
+        let content = UNMutableNotificationContent()
+        content.subtitle = "Episode Title"
+        content.body = "44 min\n\n<div> <div class=\"patreon-post-content\"> <div class=\"PaddingTop-module__FYUbOa__paddingTopSpaceX32\"> <div class=\"CollapsibleContent-module__7CXqlq__singleColumnMargin\"> <div class=\"TokenOverrides-module__yhJOLG__tokensPostPage\"> <div class= \"RichText-module__5kju5G__root RichText-module__5kju5G__additionalStylesPostContentWrapper\"> <p>The hosts discuss the <a href= \"https://www.globe.example.com/2026/09/22/magazine/small-town-bar-backlash/?utm_campaign=Globe_Twitter&arch=example%3Asocialflow%3Atwitter\" target=\"_blank\" rel=\"noopener\">small-town bar masking debacle,</a> the hot new trend of <a href= \"https://www.journal.example.com/health/wellness/why-are-so-many-adults-cutting-off-their-parents-d4e1190c\" target=\"_blank\" rel=\"noopener\">adults cutting off their parents</a>, and <a href= \"https://www.times.example.com/2026/09/20/magazine/public-schools-segregation.html\" target=\"_blank\" rel=\"noopener\">a columnist's schooling mea culpa to her daughter.</a></p> </div> </div> </div> </div> </div> </div>"
+
+        #expect(
+            EpisodeNotificationViewModel(content: content).summaryText
+                == "The hosts discuss the small-town bar masking debacle, the hot new trend of adults cutting off their parents, and a columnist's schooling mea culpa to her daughter."
+        )
     }
 
     @Test("Title-only and URL-only summaries are hidden")

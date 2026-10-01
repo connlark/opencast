@@ -6,7 +6,8 @@ enum EpisodeMetadataChips {
         duration: TimeInterval?,
         progress: EpisodeProgressSummary?,
         isDownloaded: Bool,
-        downloadedByteCount: Int64?
+        downloadedByteCount: Int64?,
+        playlistCount: Int = 0
     ) -> [EpisodeMetadataChip] {
         var chips: [EpisodeMetadataChip] = []
 
@@ -17,7 +18,7 @@ enum EpisodeMetadataChips {
         if let progress, !progress.isCompleted, progress.hasVisibleProgress, let remaining = progress.remaining {
             chips.append(.remaining(remaining.formattedEpisodeRemaining, fractionCompleted: progress.fractionCompleted))
         } else if let duration, duration > 0 {
-            chips.append(.duration(formattedDuration(duration)))
+            chips.append(.duration(PlaylistDurationFormat.short(duration)))
         }
 
         if isDownloaded {
@@ -31,20 +32,10 @@ enum EpisodeMetadataChips {
             chips.append(.played)
         }
 
+        if playlistCount >= 1 {
+            chips.append(.playlists(count: playlistCount))
+        }
+
         return chips
-    }
-
-    private static func formattedDuration(_ duration: TimeInterval) -> String {
-        let totalMinutes = max(Int((duration / 60).rounded()), 1)
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-
-        if hours > 0, minutes > 0 {
-            return "\(hours)h \(minutes)m"
-        }
-        if hours > 0 {
-            return "\(hours)h"
-        }
-        return "\(minutes)m"
     }
 }

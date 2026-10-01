@@ -4,6 +4,7 @@ struct EpisodeHeroHeaderView: View {
     let episode: EpisodeListItemSnapshot
     let chips: [EpisodeMetadataChip]
     let onPreviewResolved: (ArtworkPreview) -> Void
+    var onOpenPlaylists: () -> Void = {}
 
     @State private var artworkLength: CGFloat = 220
 
@@ -42,7 +43,7 @@ struct EpisodeHeroHeaderView: View {
             }
 
             if !chips.isEmpty {
-                EpisodeMetadataChipsRow(chips: chips)
+                EpisodeMetadataChipsRow(chips: chips, onOpenPlaylists: onOpenPlaylists)
             }
         }
         .frame(maxWidth: .infinity)

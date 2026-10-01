@@ -64,6 +64,18 @@ struct CarPlayTemplateRenderer {
             makeEpisodeItem(episodeRow, row: row, onSelect: onSelect)
         case .podcast(let podcastRow):
             makePodcastItem(podcastRow, row: row, onSelect: onSelect)
+        case .playlists:
+            (
+                makeItem(
+                    text: CarPlayListRow.playlistsTitle,
+                    image: UIImage(systemName: "music.note.list"),
+                    row: row,
+                    onSelect: onSelect
+                ),
+                nil
+            )
+        case .playlist(let playlistRow):
+            makePlaylistItem(playlistRow, row: row, onSelect: onSelect)
         case .showMore:
             (makeItem(text: CarPlayListRow.showMoreTitle, row: row, onSelect: onSelect), nil)
         }
@@ -109,15 +121,40 @@ struct CarPlayTemplateRenderer {
         })
     }
 
+    private func makePlaylistItem(
+        _ playlistRow: CarPlayPlaylistRow,
+        row: CarPlayListRow,
+        onSelect: @escaping (CarPlayListRow) -> Void
+    ) -> (item: CPListItem, artworkTarget: CarPlayArtworkTarget?) {
+        let artwork = artwork(for: playlistRow.artworkURL, cacheKind: .show)
+        // A symbol row has no URL to patch; an unknown stored symbol falls back
+        // to the playlist glyph so the slot is never empty.
+        let image = playlistRow.artworkURL == nil
+            ? UIImage(systemName: playlistRow.symbolName ?? "music.note.list") ?? UIImage(systemName: "music.note.list")
+            : artwork.image
+        let item = CPListItem(
+            text: playlistRow.title,
+            detailText: playlistRow.detailText,
+            image: image,
+            accessoryImage: nil,
+            accessoryType: .disclosureIndicator
+        )
+        item.handler = handler(for: row, onSelect: onSelect)
+        return (item, artwork.pendingURL.map { url in
+            CarPlayArtworkTarget(item: item, artworkURL: url, cacheKind: .show)
+        })
+    }
+
     private func makeItem(
         text: String,
+        image: UIImage? = nil,
         row: CarPlayListRow,
         onSelect: @escaping (CarPlayListRow) -> Void
     ) -> CPListItem {
         let item = CPListItem(
             text: text,
             detailText: nil,
-            image: nil,
+            image: image,
             accessoryImage: nil,
             accessoryType: .disclosureIndicator
         )

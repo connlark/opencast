@@ -2,8 +2,10 @@ import SwiftUI
 
 struct OpenCastTabRootView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var isSearchPresented = false
+    @State private var showsPlaylistsTab = false
 
     @Binding var selectedTab: AppSection
     @Binding var navigationPaths: AppNavigationPaths
@@ -17,11 +19,33 @@ struct OpenCastTabRootView: View {
             Tab(AppSection.library.title, systemImage: AppSection.library.systemImage, value: AppSection.library) {
                 NavigationStack(path: $navigationPaths[.library]) {
                     LibraryView(
-                        onAdd: onAdd
+                        onAdd: onAdd,
+                        onOpenUpNext: onOpenUpNext
                     )
                     .withOpenCastDestinations(
-                        onOpenEpisode: openEpisode(on: .library)
+                        onOpenEpisode: openEpisode(on: .library),
+                        onOpenPlaylist: openPlaylist(on: .library)
                     )
+                }
+            }
+
+            // `defaultVisibility(.hidden, for: .tabBar)` never leaves the compact
+            // bar on iOS 27 (six tabs fold Settings and Search into More), so the
+            // tab exists only in regular width; `updatePlaylistsTab` explains
+            // why that switch is deferred.
+            if showsPlaylistsTab {
+                Tab(
+                    AppSection.playlists.title,
+                    systemImage: AppSection.playlists.systemImage,
+                    value: AppSection.playlists
+                ) {
+                    NavigationStack(path: $navigationPaths[.playlists]) {
+                        PlaylistsView(onOpenPlaylist: openPlaylist(on: .playlists))
+                            .withOpenCastDestinations(
+                                onOpenEpisode: openEpisode(on: .playlists),
+                                onOpenPlaylist: openPlaylist(on: .playlists)
+                            )
+                    }
                 }
             }
 
@@ -94,13 +118,45 @@ struct OpenCastTabRootView: View {
         .sensoryFeedback(.success, trigger: appModel.library.refreshCompletedToken)
         .onChange(of: selectedTab, initial: true) { _, selectedTab in
             isSearchPresented = selectedTab == .search
+            leavePlaylistsTabIfCompact()
+        }
+        .onChange(of: horizontalSizeClass, initial: true) { _, sizeClass in
+            updatePlaylistsTab(isRegularWidth: sizeClass == .regular)
         }
         .focusedSceneValue(\.openCastCommandActions, commandActions)
+    }
+
+    /// A size-class change reaches SwiftUI inside UIKit's trait transition,
+    /// and rebuilding the tab set there aborts in UITabBarController; the
+    /// next update is safe.
+    private func updatePlaylistsTab(isRegularWidth: Bool) {
+        guard showsPlaylistsTab != isRegularWidth else {
+            return
+        }
+        Task { @MainActor in
+            showsPlaylistsTab = isRegularWidth
+            leavePlaylistsTabIfCompact()
+        }
+    }
+
+    /// The compact bar has no Playlists button; if the tab is selected when
+    /// the width turns compact, the Library, whose Playlists row reaches the
+    /// same screen, takes over.
+    private func leavePlaylistsTabIfCompact() {
+        if selectedTab == .playlists, horizontalSizeClass == .compact {
+            selectedTab = .library
+        }
     }
 
     private func openEpisode(on section: AppSection) -> (String) -> Void {
         { episodeID in
             navigationPaths[section].append(.episodeDetail(id: episodeID))
+        }
+    }
+
+    private func openPlaylist(on section: AppSection) -> (String) -> Void {
+        { playlistID in
+            navigationPaths[section].append(.playlistDetail(id: playlistID))
         }
     }
 

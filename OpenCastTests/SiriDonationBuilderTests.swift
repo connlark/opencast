@@ -24,6 +24,20 @@ struct SiriDonationBuilderTests {
         #expect(firstShow.artist == nil)
     }
 
+    @Test("A playlist donation names the playlist as the container and the group")
+    func playlistInteractionCarriesContainerAndGroup() throws {
+        let interaction = SiriDonationBuilder.interaction(forPlaylistID: "playlist-commute", name: "Commute")
+        let intent = try #require(interaction.intent as? INPlayMediaIntent)
+        let playlist = try #require(intent.mediaContainer)
+
+        #expect(interaction.groupIdentifier == "playlist-commute")
+        #expect(intent.mediaItems == nil)
+        #expect(playlist.identifier == "playlist-commute")
+        #expect(playlist.title == "Commute")
+        #expect(playlist.type == .podcastPlaylist)
+        #expect(playlist.artist == nil)
+    }
+
     private func episode(id: String) -> EpisodeListItemSnapshot {
         EpisodeListItemSnapshot(
             episodeID: id,

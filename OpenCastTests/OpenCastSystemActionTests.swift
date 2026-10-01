@@ -117,4 +117,136 @@ struct OpenCastSystemActionTests {
         // Fresh progress resumes through the tier-1 smart rewind (3 s).
         #expect(fixture.model.playback.position == 37)
     }
+
+    @Test func playPlaylistReplacesQueueAndStartsSilently() async throws {
+        let fixture = try await OpenCastSystemActionFixture.make(episodeCount: 4)
+        let playlists = try await fixture.seedPlaylists()
+        try await fixture.model.systemActions.perform(.enqueue("episode-3"), modelContext: fixture.context)
+        try await fixture.model.systemActions.perform(.playPlaylist(playlists.commuteID), modelContext: fixture.context)
+        defer { fixture.model.playback.pause() }
+        #expect(fixture.model.playback.currentEpisode?.id.rawValue == "episode-1")
+        #expect(fixture.model.upNextQueue.items.map(\.episodeID) == ["episode-2"])
+        #expect(fixture.model.upNextQueue.items.map(\.sourcePlaylistID) == [playlists.commuteID])
+        #expect(fixture.model.currentPlaylistSourceID == playlists.commuteID)
+        // The phone sheet request is posted from a Task after a yield.
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(fixture.model.nowPlayingPresentationRequest == 0)
+    }
+
+    @Test func playPlaylistMissingThrowsUnavailable() async throws {
+        let fixture = try await OpenCastSystemActionFixture.make()
+        _ = try await fixture.seedPlaylists()
+        await #expect(throws: OpenCastSystemActionError.unavailable) {
+            try await fixture.model.systemActions.perform(.playPlaylist("missing-playlist"), modelContext: fixture.context)
+        }
+        #expect(fixture.model.playback.currentEpisode == nil)
+    }
+
+    @Test func playPlaylistEmptyOrAllPlayedThrowsNoUnplayed() async throws {
+        let fixture = try await OpenCastSystemActionFixture.make()
+        let playlists = try await fixture.seedPlaylists()
+        await #expect(throws: OpenCastSystemActionError.playlistHasNoUnplayedEpisodes) {
+            try await fixture.model.systemActions.perform(.playPlaylist(playlists.emptyID), modelContext: fixture.context)
+        }
+        await #expect(throws: OpenCastSystemActionError.playlistHasNoUnplayedEpisodes) {
+            try await fixture.model.systemActions.perform(.playPlaylist(playlists.allPlayedID), modelContext: fixture.context)
+        }
+        #expect(fixture.model.playback.currentEpisode == nil)
+        #expect(fixture.model.upNextQueue.items.isEmpty)
+    }
+
+    @Test func addToPlaylistSaveFailureIsAnIntentFailure() async throws {
+        let playlists = PlaylistStore(saveModelContext: { _ in throw CocoaError(.fileWriteOutOfSpace) })
+        let fixture = try await OpenCastSystemActionFixture.make(playlists: playlists)
+        let seeded = try await fixture.seedPlaylists()
+        await #expect(throws: OpenCastSystemActionError.playlistFailed) {
+            try await fixture.model.systemActions.perform(
+                .addToPlaylist(episodeID: "episode-1", playlistID: seeded.emptyID),
+                modelContext: fixture.context
+            )
+        }
+        #expect(fixture.model.playlists.itemsByPlaylistID[seeded.emptyID]?.isEmpty != false)
+    }
+
+    @Test func addToPlaylistIsIdempotent() async throws {
+        let fixture = try await OpenCastSystemActionFixture.make()
+        let playlists = try await fixture.seedPlaylists()
+        for _ in 0..<2 {
+            try await fixture.model.systemActions.perform(
+                .addToPlaylist(episodeID: "episode-1", playlistID: playlists.emptyID),
+                modelContext: fixture.context
+            )
+        }
+        #expect(fixture.model.playlists.itemsByPlaylistID[playlists.emptyID]?.count == 1)
+        #expect(fixture.model.playlists.itemsByPlaylistID[playlists.emptyID]?.map(\.episodeID) == ["episode-1"])
+        #expect(fixture.model.playback.currentEpisode == nil)
+    }
+
+    @Test func addToSmartPlaylistThrows() async throws {
+        let fixture = try await OpenCastSystemActionFixture.make()
+        let playlists = try await fixture.seedPlaylists()
+        await #expect(throws: OpenCastSystemActionError.smartPlaylistRejectsEpisodes) {
+            try await fixture.model.systemActions.perform(
+                .addToPlaylist(episodeID: "episode-1", playlistID: playlists.smartID),
+                modelContext: fixture.context
+            )
+        }
+        #expect(fixture.model.playlists.itemsByPlaylistID[playlists.smartID, default: []].isEmpty)
+    }
+
+    @Test func addMissingEpisodeOrPlaylistThrowsUnavailable() async throws {
+        let fixture = try await OpenCastSystemActionFixture.make()
+        let playlists = try await fixture.seedPlaylists()
+        await #expect(throws: OpenCastSystemActionError.unavailable) {
+            try await fixture.model.systemActions.perform(
+                .addToPlaylist(episodeID: "deleted", playlistID: playlists.emptyID),
+                modelContext: fixture.context
+            )
+        }
+        await #expect(throws: OpenCastSystemActionError.unavailable) {
+            try await fixture.model.systemActions.perform(
+                .addToPlaylist(episodeID: "episode-1", playlistID: "missing-playlist"),
+                modelContext: fixture.context
+            )
+        }
+        #expect(fixture.model.playlists.itemsByPlaylistID[playlists.emptyID, default: []].isEmpty)
+    }
+
+    @Test func playlistQueryRejectsOversizedIdentifierBatch() async {
+        await #expect(throws: OpenCastSystemActionError.queryTooLarge) {
+            _ = try await OpenCastPlaylistQuery().entities(for: (0..<101).map(String.init))
+        }
+    }
+
+    @Test func playlistEntitiesSortNewestUpdatedFirstWithInflectedCounts() async throws {
+        let fixture = try await OpenCastSystemActionFixture.make()
+        let playlists = try await fixture.seedPlaylists()
+        await fixture.model.ensurePlaybackSurfaceHydrated(modelContext: fixture.context)
+        let model = fixture.model
+        // The store follows the collection's sort preference; the entities must not.
+        model.playlists.sortOrder = .name
+        #expect(model.playlists.playlists.map(\.playlistID).first == playlists.allPlayedID)
+
+        let entities = OpenCastPlaylistEntity.entities(for: model.playlists.playlists) { model.playlistEpisodeCount(for: $0) }
+
+        #expect(entities.map(\.id) == [playlists.commuteID, playlists.allPlayedID, playlists.emptyID, playlists.smartID])
+        #expect(entities.prefix(3).map(\.episodeCountText) == ["2 episodes", "1 episode", "No episodes"])
+        #expect(entities.prefix(3).map(\.episodeCount) == [2, 1, 0])
+        #expect(entities.map(\.isSmart) == [false, false, false, true])
+        #expect(entities.first?.name == "Commute")
+    }
+
+    @Test func playPlaylistQueueFailureAfterStartIsAQueueError() async throws {
+        let queue = UpNextQueueStore { _ in throw CocoaError(.fileWriteOutOfSpace) }
+        let fixture = try await OpenCastSystemActionFixture.make(queue: queue)
+        let playlists = try await fixture.seedPlaylists()
+        await #expect(throws: OpenCastSystemActionError.queueFailed) {
+            try await fixture.model.systemActions.perform(.playPlaylist(playlists.commuteID), modelContext: fixture.context)
+        }
+        defer { fixture.model.playback.pause() }
+        #expect(fixture.model.playback.currentEpisode?.id.rawValue == "episode-1")
+        #expect(fixture.model.upNextQueue.items.isEmpty)
+    }
 }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Red glass count ball on Library grid tiles and list rows. Decorative: the
+/// Red glass count ball on show grid tiles and list rows. Decorative: the
 /// link carries the spoken value, so the badge stays out of the accessibility
 /// tree instead of reading the number twice.
 struct LibraryNewEpisodeBadge: View {

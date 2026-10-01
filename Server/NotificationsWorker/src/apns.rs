@@ -1,3 +1,4 @@
+use crate::notification_text;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -9,7 +10,6 @@ const PRODUCTION_BASE_URL: &str = "https://api.push.apple.com";
 const MIN_TOKEN_HEX_LENGTH: usize = 32;
 const MAX_TOKEN_HEX_LENGTH: usize = 512;
 const MAX_APNS_PAYLOAD_BYTES: usize = 3_800;
-const MAX_SUMMARY_SOURCE_BYTES: usize = 16 * 1024;
 const MAX_ALERT_BODY_BYTES: usize = 520;
 const MAX_CUSTOM_SUMMARY_BYTES: usize = 700;
 const MAX_CUSTOM_VALUE_BYTES: usize = 512;
@@ -364,20 +364,13 @@ fn push_request(
 }
 
 fn normalized_alert_text(value: Option<&str>, fallback: &'static str) -> String {
-    let value = value.unwrap_or(fallback).trim();
-    if value.is_empty() {
-        return fallback.to_string();
-    }
-    // Titles arrive as the parser's verbatim text, which preserves named
-    // entities it doesn't predefine (`&rsquo;`, `&mdash;`, `&nbsp;`, …). Unlike
-    // the summary, the title is not run through the HTML cleaner, so decode the
-    // entities here — otherwise raw entity codes ship in the alert title.
-    let decoded = decode_html_entities_until_stable(value);
-    let decoded = decoded.trim();
-    if decoded.is_empty() {
+    // Titles arrive as the parser's verbatim text, entities included; the
+    // shared cleaner decodes them and drops any markup.
+    let text = value.map(notification_text::plain_text).unwrap_or_default();
+    if text.is_empty() {
         fallback.to_string()
     } else {
-        truncated_chars(decoded, 180)
+        truncated_chars(&text, 180)
     }
 }
 
@@ -386,261 +379,22 @@ fn normalized_custom_value(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| truncated_utf8(value, MAX_CUSTOM_VALUE_BYTES))
 }
 
+/// The candidate summary already arrives as bounded prose from the observation
+/// scan; cleaning again is idempotent and still covers direct callers.
 fn notification_summary(
     summary: Option<&str>,
     show_notes_html: Option<&str>,
     episode_title: &str,
 ) -> Option<String> {
-    [summary, show_notes_html]
-        .into_iter()
-        .flatten()
-        .map(|value| collapsed_plain_text(&truncated_utf8(value, MAX_SUMMARY_SOURCE_BYTES)))
-        .find(|candidate| is_useful_summary(candidate.as_str(), episode_title))
-        .map(|candidate| truncated_utf8(candidate.as_str(), MAX_CUSTOM_SUMMARY_BYTES))
+    notification_text::summary(summary, show_notes_html, episode_title)
+        .map(|prose| notification_text::bounded(&prose, MAX_CUSTOM_SUMMARY_BYTES))
 }
 
 fn notification_body(summary: Option<&str>) -> String {
     match summary {
-        Some(summary) => truncated_utf8(summary, MAX_ALERT_BODY_BYTES),
+        Some(summary) => notification_text::bounded(summary, MAX_ALERT_BODY_BYTES),
         None => "New episode available".to_string(),
     }
-}
-
-fn is_useful_summary(candidate: &str, episode_title: &str) -> bool {
-    !candidate.is_empty() && !titles_match(candidate, episode_title)
-}
-
-fn titles_match(lhs: &str, rhs: &str) -> bool {
-    normalized_text_for_match(lhs) == normalized_text_for_match(rhs)
-}
-
-fn normalized_text_for_match(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
-fn collapsed_plain_text(value: &str) -> String {
-    let decoded = decode_html_entities_until_stable(value);
-    let without_tags = strip_html_tags(&decoded);
-    let without_url_debris = remove_url_and_attribute_debris(&without_tags);
-    trim_orphan_punctuation(&collapse_whitespace(&without_url_debris)).to_string()
-}
-
-fn strip_html_tags(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut in_tag = false;
-    for character in value.chars() {
-        match character {
-            '<' => {
-                in_tag = true;
-                output.push(' ');
-            }
-            '>' => {
-                in_tag = false;
-                output.push(' ');
-            }
-            _ if !in_tag => output.push(character),
-            _ => {}
-        }
-    }
-    output
-}
-
-fn decode_html_entities(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut rest = value;
-    while let Some(start) = rest.find('&') {
-        output.push_str(&rest[..start]);
-        let after_ampersand = &rest[start + 1..];
-        let Some(end) = after_ampersand.find(';') else {
-            output.push('&');
-            rest = after_ampersand;
-            continue;
-        };
-        let entity = &after_ampersand[..end];
-        if let Some(decoded) = decode_entity(entity) {
-            output.push(decoded);
-        } else {
-            output.push('&');
-            output.push_str(entity);
-            output.push(';');
-        }
-        rest = &after_ampersand[end + 1..];
-    }
-    output.push_str(rest);
-    output
-}
-
-fn decode_html_entities_until_stable(value: &str) -> String {
-    let mut current = value.to_string();
-    for _ in 0..2 {
-        let decoded = decode_html_entities(&current);
-        if decoded == current {
-            break;
-        }
-        current = decoded;
-    }
-    current
-}
-
-fn decode_entity(entity: &str) -> Option<char> {
-    match entity {
-        "amp" => Some('&'),
-        "quot" => Some('"'),
-        "apos" => Some('\''),
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "nbsp" => Some(' '),
-        "ndash" | "mdash" => Some('-'),
-        "lsquo" | "rsquo" => Some('\''),
-        "ldquo" | "rdquo" => Some('"'),
-        "hellip" => Some('.'),
-        _ => decode_numeric_entity(entity),
-    }
-}
-
-fn decode_numeric_entity(entity: &str) -> Option<char> {
-    let value = entity
-        .strip_prefix("#x")
-        .or_else(|| entity.strip_prefix("#X"))
-        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-        .or_else(|| {
-            entity
-                .strip_prefix('#')
-                .and_then(|decimal| decimal.parse::<u32>().ok())
-        })?;
-    char::from_u32(value)
-}
-
-fn collapse_whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn remove_url_and_attribute_debris(value: &str) -> String {
-    let tokens = value.split_whitespace().collect::<Vec<_>>();
-    let mut output = Vec::new();
-    let mut removed_link_debris = false;
-    let mut index = 0;
-    while index < tokens.len() {
-        let token = strip_malformed_paragraph_prefix(tokens[index]);
-        let normalized = token.trim_matches(orphan_punctuation);
-        let next = tokens
-            .get(index + 1)
-            .map(|token| strip_malformed_paragraph_prefix(token).trim_matches(orphan_punctuation));
-
-        if is_html_tag_marker(normalized) {
-            index += 1;
-            continue;
-        }
-        if is_attribute_token(normalized)
-            || is_url_like(normalized)
-            || (normalized == "a" && next.is_some_and(is_attribute_token))
-        {
-            removed_link_debris = true;
-            index += 1;
-            continue;
-        }
-
-        output.push(token);
-        index += 1;
-    }
-
-    let output = output.join(" ");
-    if removed_link_debris {
-        trim_trailing_link_prompt(&output)
-    } else {
-        output.trim().to_string()
-    }
-}
-
-fn strip_malformed_paragraph_prefix(token: &str) -> &str {
-    for prefix in ["/p", "p"] {
-        if let Some(rest) = token.strip_prefix(prefix) {
-            let mut characters = rest.chars();
-            if let Some(first) = characters.next() {
-                if first.is_uppercase()
-                    && characters
-                        .next()
-                        .is_some_and(|character| character.is_lowercase())
-                {
-                    return rest;
-                }
-            }
-        }
-    }
-    token
-}
-
-fn is_html_tag_marker(value: &str) -> bool {
-    matches!(value, "p" | "/p" | "br" | "/br" | "/a")
-}
-
-fn is_attribute_token(value: &str) -> bool {
-    let value = value.trim_matches(orphan_punctuation).to_ascii_lowercase();
-    value.starts_with("href=")
-        || value.starts_with("src=")
-        || value.starts_with("target=")
-        || value.starts_with("rel=")
-}
-
-fn is_url_like(value: &str) -> bool {
-    let value = value.trim_matches(orphan_punctuation).to_ascii_lowercase();
-    value.starts_with("http://")
-        || value.starts_with("https://")
-        || value.starts_with("www.")
-        || value.contains("://")
-}
-
-fn trim_trailing_link_prompt(value: &str) -> String {
-    let mut value = value.trim().to_string();
-    for prompt in [
-        "Visit",
-        "Read more",
-        "Learn more",
-        "Listen now",
-        "Subscribe",
-    ] {
-        if value == prompt {
-            value.clear();
-            break;
-        }
-
-        let suffix = format!(" {prompt}");
-        if value.ends_with(&suffix) {
-            value.truncate(value.len() - suffix.len());
-            break;
-        }
-    }
-    value
-}
-
-fn trim_orphan_punctuation(value: &str) -> &str {
-    value.trim_matches(orphan_punctuation)
-}
-
-fn orphan_punctuation(character: char) -> bool {
-    character.is_whitespace()
-        || matches!(
-            character,
-            '"' | '\''
-                | ','
-                | ';'
-                | ':'
-                | '-'
-                | '_'
-                | '|'
-                | '/'
-                | '\\'
-                | '('
-                | ')'
-                | '['
-                | ']'
-                | '{'
-                | '}'
-        )
 }
 
 fn format_duration_for_notification(seconds: i64) -> Option<String> {
@@ -1124,27 +878,19 @@ mod tests {
     }
 
     #[test]
-    fn summary_cleaner_decodes_escaped_html_before_stripping_tags() {
+    fn summary_cleaner_keeps_escaped_markup_out_of_alert_text() {
         assert_eq!(
-            collapsed_plain_text("&lt;p&gt;We spend the hour in deep time.&lt;/p&gt;"),
+            notification_text::plain_text("&lt;p&gt;We spend the hour in deep time.&lt;/p&gt;"),
             "We spend the hour in deep time."
         );
         assert_eq!(
-            collapsed_plain_text("AT&amp;T explains the network."),
+            notification_text::plain_text("AT&amp;T explains the network."),
             "AT&T explains the network."
         );
-    }
-
-    #[test]
-    fn summary_cleaner_strips_tags_after_double_entity_decoding() {
-        let script = collapsed_plain_text("&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;");
+        let script =
+            notification_text::plain_text("&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;");
         assert!(!script.contains('<'));
         assert!(!script.contains('>'));
-
-        assert_eq!(
-            collapsed_plain_text("&amp;lt;b&amp;gt;Bold&amp;lt;/b&amp;gt;"),
-            "Bold"
-        );
     }
 
     #[test]
@@ -1171,13 +917,12 @@ mod tests {
         let alert_body = payload["aps"]["alert"]["body"]
             .as_str()
             .expect("alert body should be a string");
+        // A script element renders nothing, so no summary ships at all.
         let summary = payload["opencast"]["episode_summary"]
             .as_str()
-            .expect("summary should be a string");
-        assert!(!alert_body.contains('<'));
-        assert!(!alert_body.contains('>'));
-        assert!(!summary.contains('<'));
-        assert!(!summary.contains('>'));
+            .unwrap_or_default();
+        assert_eq!(alert_body, "New episode available");
+        assert!(!summary.contains('<') && !summary.contains('>'));
     }
 
     #[test]
@@ -1256,8 +1001,8 @@ mod tests {
         let payload = json_payload(&request);
         let podcast_title = payload["opencast"]["podcast_title"].as_str().unwrap();
         let subtitle = payload["aps"]["alert"]["subtitle"].as_str().unwrap();
-        assert_eq!(podcast_title, "Ben & Jerry's Show");
-        assert_eq!(subtitle, "It's a Trap - Part 2");
+        assert_eq!(podcast_title, "Ben & Jerry\u{2019}s Show");
+        assert_eq!(subtitle, "It\u{2019}s a Trap \u{2014} Part 2");
         for raw in ["&rsquo;", "&mdash;", "&nbsp;", "&amp;"] {
             assert!(
                 !podcast_title.contains(raw) && !subtitle.contains(raw),
@@ -1267,45 +1012,25 @@ mod tests {
     }
 
     #[test]
-    fn summary_cleaner_drops_urls_and_keeps_useful_link_text() {
+    fn summary_cleaner_keeps_link_text_and_shortens_bare_urls_to_hosts() {
         assert_eq!(
-            collapsed_plain_text(
+            notification_text::plain_text(
                 r#"<p>Visit <a href="https://example.com/path?utm=1">this link</a></p>"#
             ),
             "Visit this link"
         );
         assert_eq!(
-            collapsed_plain_text("Listen at https://example.com/track?utm=1 for more."),
-            "Listen at for more."
+            notification_text::plain_text("Listen at https://example.com/track?utm=1 for more."),
+            "Listen at example.com for more."
         );
-    }
-
-    #[test]
-    fn summary_cleaner_removes_malformed_html_debris() {
         assert_eq!(
-            collapsed_plain_text(
-                "pWe spend the hour in deep time. /pVisit a href=https://example.com"
-            ),
-            "We spend the hour in deep time."
+            notification_text::plain_text("Read more https://example.com"),
+            "Read more example.com"
         );
-    }
-
-    #[test]
-    fn summary_cleaner_keeps_legitimate_p_prefixed_prose() {
         assert_eq!(
-            collapsed_plain_text("pH balance and p5 protocol matter."),
-            "pH balance and p5 protocol matter."
-        );
-    }
-
-    #[test]
-    fn summary_cleaner_does_not_trim_legitimate_subscribe_endings() {
-        assert_eq!(collapsed_plain_text("Please Subscribe"), "Please Subscribe");
-        assert_eq!(
-            collapsed_plain_text("We discuss why you should Subscribe"),
+            notification_text::plain_text("We discuss why you should Subscribe"),
             "We discuss why you should Subscribe"
         );
-        assert_eq!(collapsed_plain_text("Read more https://example.com"), "");
     }
 
     #[test]

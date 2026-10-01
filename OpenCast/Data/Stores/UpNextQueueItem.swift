@@ -7,4 +7,5 @@ struct UpNextQueueItem: Identifiable, Equatable {
     let podcastID: String
     var sequence: Int
     let enqueuedAt: Date
+    var sourcePlaylistID: String?
 }

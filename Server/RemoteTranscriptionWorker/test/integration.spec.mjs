@@ -24,8 +24,10 @@ const BEARER = "integration-test-bearer-token";
 // awaiting_credits test's 7000 s job stays unaffordable at its point in the
 // suite (GRANT - 1200 < 7000) while the late stranded-job and release tests
 // can still settle/reserve their 60 s jobs; the two deferred-settle charging
-// cases raise the accumulated spend by 120 s.
-const GRANT = 7400;
+// cases raise the accumulated spend by 120 s, the two decode-rejection jobs
+// at the end of the file need 352 s settled plus a 60 s reservation (+412),
+// and mixed-error recovery adds two more 60 s settlements.
+const GRANT = 7932;
 const ORIGIN_HOST = "https://origin.example.com";
 // The origin-fetch UA per declared media profile; pinned against the Worker's
 // constants by scripts/check-media-ua-pins.sh.
@@ -2467,5 +2469,188 @@ describe("remote transcription dev lane", () => {
     // The reservation stays held — abandoned, not silently forgotten.
     expect((await bootstrapBalance()).balance.reserved_seconds).toBe(60);
     expect((await pollJob(job.job_id)).job.state).toBe("cancelled");
+  });
+
+  // --- 2026-09-30: Workers AI returned 3030 "Failed to decode audio file"
+  // at random for valid audio (the same bytes succeeded on the next call).
+  // Decode rejections retry under their own cap (4 in this suite) and never
+  // spend retry-audio budget. ---
+
+  const DECODE_REJECTED =
+    "AiError: 3030: Failed to decode audio file. Ensure it is a valid audio format.";
+
+  it("retries decode rejections past the retry-audio ceiling and completes", async () => {
+    // Two chunks (300 s + 52 s): the ceiling is max(1.2 × 352, 352 + 600) + 2
+    // = 954 s, so three 300 s chunk-0 attempts charged against it (plus the
+    // first pass) would end the job at the ceiling, and three failures also
+    // exceed the ordinary MAX_CHUNK_ATTEMPTS of 3. The job must still finish.
+    const before = (await bootstrapBalance()).balance;
+    const rejectedBefore =
+      (await counterValues(["ai_errors_decode_rejected"]))
+        .ai_errors_decode_rejected ?? 0;
+    const job = await createJob({
+      clientRequestId: "e2e-decode-reject-1",
+      episodeId: "ep-decode-reject-1",
+      durationSeconds: 352,
+      languageCode: `fake:fail=0:3:${DECODE_REJECTED}`,
+    });
+    await reportSource(job.job_id, await deviceIdentity(352));
+    const ready = await waitForState(job.job_id, ["result_ready"], 50_000);
+    expect(ready.job.progress.chunks_completed).toBe(2);
+    const spans = [...ready.job.phase_timestamps.chunks].sort(
+      (a, b) => a.index - b.index,
+    );
+    expect(spans.map((span) => span.failed_attempts)).toEqual([3, 0]);
+    const counters = await counterValues(["ai_errors_decode_rejected"]);
+    expect(counters.ai_errors_decode_rejected).toBe(rejectedBefore + 3);
+
+    await post(`/v1/remote-transcription/jobs/${job.job_id}/ack`, {
+      schema_version: 1,
+    });
+    await expectJobStorageEmpty(job.job_id);
+    const after = (await bootstrapBalance()).balance;
+    expect(after.reserved_seconds).toBe(before.reserved_seconds);
+    // Charged once for the episode; rejected attempts cost the customer nothing.
+    expect(after.available_seconds).toBe(before.available_seconds - 352);
+  }, 60_000);
+
+  it("fails closed once decode rejections exhaust their own cap", async () => {
+    const before = (await bootstrapBalance()).balance;
+    const job = await createJob({
+      clientRequestId: "e2e-decode-reject-2",
+      episodeId: "ep-decode-reject-2",
+      durationSeconds: 60,
+      languageCode: `fake:fail=0:always:${DECODE_REJECTED}`,
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+    const failed = await waitForState(job.job_id, ["failed"], 50_000);
+    expect(failed.job.error.code).toBe("transcription_failed");
+    expect(failed.job.phase_timestamps.chunks[0].failed_attempts).toBe(4);
+    await expectJobStorageEmpty(job.job_id);
+    const after = (await bootstrapBalance()).balance;
+    expect(after.reserved_seconds).toBe(before.reserved_seconds);
+    expect(after.available_seconds).toBe(before.available_seconds);
+  }, 60_000);
+
+  it.each([
+    {
+      id: "wave-recovery",
+      name: "wave retries a transient error after decode rejections",
+      settings: "conc=1",
+      firstError: DECODE_REJECTED,
+      nextError: "429 rate limited",
+      nextCount: "3",
+      expectedState: "result_ready",
+      decodeAttempts: 2,
+      retryableAttempts: 1,
+    },
+    {
+      id: "overlap-recovery",
+      name: "overlap retains decode counts when handing off to the wave driver",
+      settings: "conc=4;mlat=700",
+      firstError: DECODE_REJECTED,
+      nextError: "429 rate limited",
+      nextCount: "3",
+      expectedState: "result_ready",
+      decodeAttempts: 2,
+      retryableAttempts: 1,
+    },
+    {
+      id: "retryable-cap",
+      name: "ordinary cap counts only transient errors after decode rejections",
+      settings: "conc=1",
+      firstError: DECODE_REJECTED,
+      nextError: "429 rate limited",
+      nextCount: "always",
+      expectedState: "failed",
+      decodeAttempts: 2,
+      retryableAttempts: 3,
+    },
+    {
+      id: "decode-cap",
+      name: "decode cap counts only rejections after ordinary errors",
+      settings: "conc=4;mlat=700",
+      firstError: "429 rate limited",
+      nextError: DECODE_REJECTED,
+      nextCount: "always",
+      expectedState: "failed",
+      decodeAttempts: 4,
+      retryableAttempts: 2,
+    },
+  ])("mixed AI failures: $name", async ({
+    id, settings, firstError, nextError, nextCount, expectedState,
+    decodeAttempts, retryableAttempts,
+  }) => {
+    const before = (await bootstrapBalance()).balance;
+    const job = await createJob({
+      clientRequestId: `mixed-${id}`,
+      episodeId: `mixed-${id}`,
+      durationSeconds: 60,
+      languageCode: `fake:${settings};fail=0:2:${firstError}`,
+    });
+    await reportSource(job.job_id, await deviceIdentity(60));
+    await waitForJob(job.job_id,
+      (job) => job.phase_timestamps.chunks?.[0]?.failed_attempts === 2,
+      "two initial AI failures", 30_000);
+
+    // Change the fake response during the persisted retry backoff, leaving
+    // the actual attempt counts intact across alarm turns and driver handoff.
+    await runInDurableObject(jobStub(job.job_id), async (_, state) => {
+      const record = JSON.parse(await state.storage.get("job"));
+      expect(record.chunk_work[0].failed_attempts).toBe(2);
+      record.language_code = `fake:${settings};fail=0:${nextCount}:${nextError}`;
+      await state.storage.put("job", JSON.stringify(record));
+    });
+    const result = await waitForState(job.job_id, ["failed", "result_ready"], 45_000);
+    expect(result.job.state).toBe(expectedState);
+    expect(result.job.phase_timestamps.chunks[0].failed_attempts)
+      .toBe(decodeAttempts + retryableAttempts);
+    const persisted = await runInDurableObject(jobStub(job.job_id), async (_, state) =>
+      JSON.parse(await state.storage.get("job")),
+    );
+    expect(persisted.chunk_work[0]).toMatchObject({
+      decode_rejected_attempts: decodeAttempts,
+      retryable_failed_attempts: retryableAttempts,
+    });
+    if (expectedState === "result_ready") {
+      expect(persisted.requested_audio_seconds).toBe(120);
+      await post(`/v1/remote-transcription/jobs/${job.job_id}/ack`, { schema_version: 1 });
+    } else {
+      expect(result.job.error.code).toBe("transcription_failed");
+    }
+    await expectJobStorageEmpty(job.job_id);
+    const after = (await bootstrapBalance()).balance;
+    expect(after.reserved_seconds).toBe(before.reserved_seconds);
+    expect(after.available_seconds)
+      .toBe(before.available_seconds - (expectedState === "result_ready" ? 60 : 0));
+  }, 60_000);
+
+  it("scheduled sweeper alerts on job failures since the last alert", async () => {
+    const before = await counterValues(["jobs_failed", "jobs_failed_alerted"]);
+    const unalerted = (before.jobs_failed ?? 0) - (before.jobs_failed_alerted ?? 0);
+    expect(unalerted).toBeGreaterThan(0);
+    const alertsBefore = pushoverAlerts.length;
+
+    const ctx = createExecutionContext();
+    const worker = new RemoteTranscriptionWorker(ctx, env);
+    await worker.scheduled(createScheduledController());
+    await waitOnExecutionContext(ctx);
+
+    const alert = pushoverAlerts
+      .slice(alertsBefore)
+      .find(({ message }) => message?.includes("failed_jobs="));
+    expect(alert.message).toContain(`failed_jobs=${unalerted} `);
+    const after = await counterValues(["jobs_failed", "jobs_failed_alerted"]);
+    expect(after.jobs_failed_alerted).toBe(after.jobs_failed);
+
+    // The marker advanced: a second sweep carries no new failures.
+    const repeatCtx = createExecutionContext();
+    await new RemoteTranscriptionWorker(repeatCtx, env).scheduled(
+      createScheduledController(),
+    );
+    await waitOnExecutionContext(repeatCtx);
+    for (const { message } of pushoverAlerts.slice(alertsBefore + 1)) {
+      expect(message).toContain("failed_jobs=0 ");
+    }
   });
 });

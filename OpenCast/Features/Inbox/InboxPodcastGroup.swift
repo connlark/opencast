@@ -17,30 +17,23 @@ struct InboxPodcastGroup: Identifiable {
         episodes: [EpisodeListItemSnapshot],
         subscriptions: [SubscriptionRecord]
     ) -> [InboxPodcastGroup] {
-        var subscriptionsByFeedURL: [String: SubscriptionRecord] = [:]
-        for subscription in subscriptions where subscriptionsByFeedURL[subscription.feedURL] == nil {
-            subscriptionsByFeedURL[subscription.feedURL] = subscription
-        }
-
         var orderedPodcastIDs: [String] = []
         var countsByPodcastID: [String: Int] = [:]
         for episode in episodes {
-            guard subscriptionsByFeedURL[episode.podcastID] != nil else {
-                continue
-            }
             if countsByPodcastID[episode.podcastID] == nil {
                 orderedPodcastIDs.append(episode.podcastID)
             }
             countsByPodcastID[episode.podcastID, default: 0] += 1
         }
 
+        let subscriptionsByFeedURL = Dictionary(
+            subscriptions.map { ($0.feedURL, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         return orderedPodcastIDs.compactMap { podcastID in
-            guard let subscription = subscriptionsByFeedURL[podcastID],
-                  let episodeCount = countsByPodcastID[podcastID]
-            else {
-                return nil
+            subscriptionsByFeedURL[podcastID].map { subscription in
+                InboxPodcastGroup(subscription: subscription, episodeCount: countsByPodcastID[podcastID, default: 0])
             }
-            return InboxPodcastGroup(subscription: subscription, episodeCount: episodeCount)
         }
     }
 }

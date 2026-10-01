@@ -279,6 +279,58 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(showNotes == ["ep-noted": "<p>Noted body</p>"])
     }
 
+    @Test("Episode summaries prefer the summary, fall back to show notes, cut to length and stay within one feed")
+    func episodeSummariesPreferSummaryOverShowNotes() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        let longSummary = "A summary that runs well past the cut."
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeSummaryEpisode(id: "ep-summary", summary: "Plain summary text", showNotesHTML: "<p>Notes</p>"),
+                makeSummaryEpisode(id: "ep-empty-summary", summary: "", showNotesHTML: "<p>Fallback notes</p>"),
+                makeSummaryEpisode(id: "ep-notes-only", summary: nil, showNotesHTML: "<p>Only notes</p>"),
+                makeSummaryEpisode(id: "ep-neither", summary: nil, showNotesHTML: nil),
+                makeSummaryEpisode(id: "ep-blank", summary: "", showNotesHTML: ""),
+                makeSummaryEpisode(id: "ep-long", summary: longSummary, showNotesHTML: "<p>Ignored notes</p>")
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
+        )
+        try await store.upsertCache(
+            from: makeFeedSnapshot(
+                feedURL: Self.otherFeedURL,
+                title: "Other Show",
+                episodes: [
+                    makeSummaryEpisode(
+                        id: "ep-other",
+                        feedURL: Self.otherFeedURL,
+                        summary: "Other summary",
+                        showNotesHTML: "<p>Other notes</p>"
+                    )
+                ]
+            ),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
+        )
+
+        let summaries = try await store.episodeSummaries(forPodcastID: Self.feedURL, maximumCharacters: 24)
+        let otherSummaries = try await store.episodeSummaries(forPodcastID: Self.otherFeedURL, maximumCharacters: 24)
+        let unknownSummaries = try await store.episodeSummaries(forPodcastID: "https://example.com/unknown.xml", maximumCharacters: 24)
+
+        #expect(
+            summaries == [
+                "ep-summary": "Plain summary text",
+                "ep-empty-summary": "<p>Fallback notes</p>",
+                "ep-notes-only": "<p>Only notes</p>",
+                "ep-long": String(longSummary.prefix(24))
+            ]
+        )
+        #expect(summaries["ep-long"] == "A summary that runs well")
+        // The library reaches the store through the protocol, so the query must be its witness.
+        let erasedStore: any LocalLibraryCacheStore = store
+        let erasedSummaries = try await erasedStore.episodeSummaries(forPodcastID: Self.feedURL, maximumCharacters: 24)
+        #expect(erasedSummaries == summaries)
+        #expect(otherSummaries == ["ep-other": "Other summary"])
+        #expect(unknownSummaries.isEmpty)
+    }
+
     @Test("Library load filters episodes to active feeds but lists every cached podcast")
     func loadLibraryFiltersEpisodesByActiveFeeds() async throws {
         let store = SQLiteLocalLibraryCacheStore.inMemory()
@@ -1744,6 +1796,26 @@ struct SQLiteLocalLibraryCacheStoreTests {
             duration: 120,
             audioURL: URL(string: audioURL ?? "https://example.com/audio/\(id).mp3"),
             artworkURL: artworkURL.flatMap { URL(string: $0) },
+            guid: id
+        )
+    }
+
+    private func makeSummaryEpisode(
+        id: String,
+        feedURL: String = SQLiteLocalLibraryCacheStoreTests.feedURL,
+        summary: String?,
+        showNotesHTML: String?
+    ) -> Episode {
+        Episode(
+            id: EpisodeID(rawValue: id),
+            podcastID: PodcastID(rawValue: feedURL),
+            podcastTitle: "Cached Show",
+            title: "Episode \(id)",
+            summary: summary,
+            showNotesHTML: showNotesHTML,
+            publishedAt: Date(timeIntervalSince1970: 1_700_000_100),
+            duration: 120,
+            audioURL: URL(string: "https://example.com/audio/\(id).mp3"),
             guid: id
         )
     }

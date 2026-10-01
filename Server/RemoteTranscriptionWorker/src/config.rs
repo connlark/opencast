@@ -31,6 +31,11 @@ pub struct AppConfig {
     pub max_source_bytes: i64,
     pub max_active_jobs_per_account: i64,
     pub max_chunk_attempts: u32,
+    /// Attempt cap for `AiFailureClass::DecodeRejected` chunk failures,
+    /// separate from `max_chunk_attempts`: rejections are free and return in
+    /// about a second, and at the 2026-09-30 rejection rate (~70 % of calls)
+    /// three attempts failed nearly every long episode.
+    pub max_decode_reject_attempts: u32,
     /// Bounded chunk fan-out: chunks in flight per wave. `1` reproduces the
     /// sequential walk — the rollback story.
     pub chunk_ai_concurrency: u32,
@@ -143,6 +148,8 @@ impl AppConfig {
             max_source_bytes: int_var(env, "MAX_SOURCE_BYTES", 268_435_456),
             max_active_jobs_per_account: int_var(env, "MAX_ACTIVE_JOBS_PER_ACCOUNT", 1),
             max_chunk_attempts: int_var(env, "MAX_CHUNK_ATTEMPTS", 3) as u32,
+            max_decode_reject_attempts: int_var(env, "MAX_DECODE_REJECT_ATTEMPTS", 20)
+                .clamp(1, i64::from(u32::MAX)) as u32,
             chunk_ai_concurrency,
             global_inference_concurrency,
             queue_default_remaining_seconds: int_var(env, "QUEUE_DEFAULT_REMAINING_SECONDS", 90)

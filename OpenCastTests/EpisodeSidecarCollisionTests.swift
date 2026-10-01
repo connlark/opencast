@@ -524,6 +524,113 @@ struct EpisodeSidecarCollisionTests {
         #expect(subscriptions.map(\.feedURL) == [Self.canonicalFeedURL])
     }
 
+    @Test("Moved-feed migration re-keys playlist items and drops per-playlist collisions")
+    func movedFeedMigrationRekeysPlaylistItemsPerPlaylist() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let oldFeedSnapshot = makeSnapshot(feedURL: Self.oldFeedURL, guid: "stable-guid")
+        let newFeedSnapshot = makeSnapshot(feedURL: Self.canonicalFeedURL, guid: "stable-guid")
+        let oldEpisodeID = oldFeedSnapshot.episodes[0].id.rawValue
+        let newEpisodeID = newFeedSnapshot.episodes[0].id.rawValue
+        #expect(oldEpisodeID != newEpisodeID)
+
+        let cache = SQLiteLocalLibraryCacheStore.inMemory()
+        try await cache.upsertCache(from: oldFeedSnapshot, refreshedAt: .now)
+        let library = LibraryStore(
+            feedService: SingleSnapshotStubFeedService(
+                snapshotsByURL: [Self.canonicalFeedURL: newFeedSnapshot]
+            ),
+            localCache: cache
+        )
+        context.insert(SubscriptionRecord(feedURL: Self.oldFeedURL, title: "Show"))
+
+        let itemUpdatedAt = Date(timeIntervalSince1970: 1_700_000_200)
+        context.insert(
+            PlaylistItemRecord(
+                itemID: "rekeyed-item",
+                playlistID: "departed-only-playlist",
+                episodeID: oldEpisodeID,
+                podcastID: Self.oldFeedURL,
+                sortKey: "i",
+                addedAt: itemUpdatedAt,
+                updatedAt: itemUpdatedAt,
+                episodeTitle: "Episode One",
+                podcastTitle: "Show"
+            )
+        )
+        context.insert(
+            PlaylistItemRecord(
+                itemID: "departed-item",
+                playlistID: "both-episodes-playlist",
+                episodeID: oldEpisodeID,
+                podcastID: Self.oldFeedURL,
+                sortKey: "9",
+                addedAt: itemUpdatedAt,
+                updatedAt: itemUpdatedAt,
+                episodeTitle: "Episode One",
+                podcastTitle: "Show"
+            )
+        )
+        context.insert(
+            PlaylistItemRecord(
+                itemID: "successor-item",
+                playlistID: "both-episodes-playlist",
+                episodeID: newEpisodeID,
+                podcastID: Self.canonicalFeedURL,
+                sortKey: "r",
+                addedAt: itemUpdatedAt,
+                updatedAt: itemUpdatedAt,
+                episodeTitle: "Episode One",
+                podcastTitle: "Show"
+            )
+        )
+        context.insert(
+            AdFreePassQueueItemRecord(
+                episodeID: oldEpisodeID,
+                podcastID: Self.oldFeedURL,
+                originRawValue: "manual",
+                sequence: 1
+            )
+        )
+        context.insert(
+            AdFreePassQueueItemRecord(
+                episodeID: newEpisodeID,
+                podcastID: Self.canonicalFeedURL,
+                originRawValue: "manual",
+                sequence: 2
+            )
+        )
+        try context.save()
+
+        try await library.migrateSubscription(
+            from: Self.oldFeedURL,
+            toFeedURL: URL(string: Self.canonicalFeedURL)!,
+            modelContext: context
+        )
+
+        let playlistItems = try context.fetch(FetchDescriptor<PlaylistItemRecord>())
+        #expect(playlistItems.map(\.itemID).sorted() == ["rekeyed-item", "successor-item"])
+
+        let rekeyed = try #require(playlistItems.first(where: { $0.itemID == "rekeyed-item" }))
+        #expect(rekeyed.playlistID == "departed-only-playlist")
+        #expect(rekeyed.episodeID == newEpisodeID)
+        #expect(rekeyed.podcastID == Self.canonicalFeedURL)
+        #expect(rekeyed.sortKey == "i")
+        #expect(rekeyed.updatedAt == itemUpdatedAt)
+
+        let successor = try #require(playlistItems.first(where: { $0.itemID == "successor-item" }))
+        #expect(successor.playlistID == "both-episodes-playlist")
+        #expect(successor.episodeID == newEpisodeID)
+        #expect(successor.podcastID == Self.canonicalFeedURL)
+        #expect(successor.sortKey == "r")
+
+        let queueItems = try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
+        #expect(queueItems.map(\.episodeID) == [newEpisodeID])
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.map(\.feedURL) == [Self.canonicalFeedURL])
+    }
+
     // MARK: - Helpers
 
     @MainActor
@@ -656,20 +763,5 @@ struct EpisodeSidecarCollisionTests {
 private struct EmptyStubFeedService: FeedService {
     func fetchFeed(at url: URL) async throws -> FeedSnapshot {
         throw CancellationError()
-    }
-}
-
-private actor SingleSnapshotStubFeedService: FeedService {
-    private let snapshotsByURL: [String: FeedSnapshot]
-
-    init(snapshotsByURL: [String: FeedSnapshot]) {
-        self.snapshotsByURL = snapshotsByURL
-    }
-
-    func fetchFeed(at url: URL) async throws -> FeedSnapshot {
-        guard let snapshot = snapshotsByURL[url.absoluteString] else {
-            throw CancellationError()
-        }
-        return snapshot
     }
 }

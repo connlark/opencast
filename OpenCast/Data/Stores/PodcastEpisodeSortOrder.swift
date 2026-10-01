@@ -1,4 +1,6 @@
-nonisolated enum PodcastEpisodeSortOrder: String, CaseIterable, Identifiable, Sendable {
+/// Raw values are durable storage keys (episode list preferences and smart
+/// playlist rules).
+nonisolated enum PodcastEpisodeSortOrder: String, CaseIterable, Codable, Identifiable, Sendable {
     case newestFirst
     case oldestFirst
     case longestFirst

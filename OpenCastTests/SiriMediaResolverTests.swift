@@ -149,6 +149,148 @@ struct SiriMediaResolverTests {
         #expect(second == first)
     }
 
+    @Test("A playlist whose name matches exactly beats a show it only prefixes")
+    func playlistNameWinsOverSimilarShow() async {
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Commute",
+                mediaType: .unknown,
+                subscriptions: [SiriMediaSubscription(podcastID: "commute-radio", title: "Commute Radio")],
+                episodes: [],
+                playlists: [SiriMediaPlaylist(playlistID: "commute", name: "Commute")]
+            ) == .playlist(playlistID: "commute")
+        )
+    }
+
+    @Test("An untyped query scores the playlist against the best show: a tie goes to the playlist")
+    func untypedTieGoesToThePlaylist() async {
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Commute",
+                mediaType: .unknown,
+                subscriptions: [SiriMediaSubscription(podcastID: "commute-show", title: "Commute")],
+                episodes: [],
+                playlists: [SiriMediaPlaylist(playlistID: "commute", name: "Commute")]
+            ) == .playlist(playlistID: "commute")
+        )
+    }
+
+    @Test("An untyped query keeps an exact show title over a playlist it only prefixes")
+    func untypedExactShowBeatsPrefixPlaylist() async {
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Daily",
+                mediaType: .unknown,
+                subscriptions: [SiriMediaSubscription(podcastID: "daily", title: "Daily")],
+                episodes: [],
+                playlists: [SiriMediaPlaylist(playlistID: "daily-commute", name: "Daily Commute")]
+            ) == .show(podcastID: "daily")
+        )
+        // The playlist type asks for the playlist first regardless of the show's score.
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Daily",
+                mediaType: .podcastPlaylist,
+                subscriptions: [SiriMediaSubscription(podcastID: "daily", title: "Daily")],
+                episodes: [],
+                playlists: [SiriMediaPlaylist(playlistID: "daily-commute", name: "Daily Commute")]
+            ) == .playlist(playlistID: "daily-commute")
+        )
+    }
+
+    @Test("The trailing word is cut from the spoken string, so punctuation keeps its exact-title rank")
+    func trailingPlaylistTokenCutKeepsPunctuation() async {
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Mom's Mix playlist",
+                mediaType: .unknown,
+                subscriptions: [],
+                episodes: [],
+                playlists: [
+                    SiriMediaPlaylist(playlistID: "moms-mix", name: "Mom's Mix"),
+                    SiriMediaPlaylist(playlistID: "moms-mixes", name: "Mom's Mixes")
+                ]
+            ) == .playlist(playlistID: "moms-mix")
+        )
+    }
+
+    @Test("A trailing \"playlist\" is dropped when the name as spoken finds nothing")
+    func trailingPlaylistTokenIsStripped() async {
+        let playlists = [SiriMediaPlaylist(playlistID: "commute", name: "Commute")]
+
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Commute playlist",
+                mediaType: .unknown,
+                subscriptions: [],
+                episodes: [],
+                playlists: playlists
+            ) == .playlist(playlistID: "commute")
+        )
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Commute Playlist",
+                mediaType: .podcastPlaylist,
+                subscriptions: [],
+                episodes: [],
+                playlists: playlists
+            ) == .playlist(playlistID: "commute")
+        )
+    }
+
+    @Test("A playlist-typed request with no playlist match still finds the show")
+    func podcastPlaylistTypeWithoutMatchFallsBackToShow() async {
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Commute Radio",
+                mediaType: .podcastPlaylist,
+                subscriptions: [SiriMediaSubscription(podcastID: "commute-radio", title: "Commute Radio")],
+                episodes: [],
+                playlists: [SiriMediaPlaylist(playlistID: "weekend", name: "Weekend")]
+            ) == .show(podcastID: "commute-radio")
+        )
+    }
+
+    @Test("Two equally good playlists match neither, and the show search continues")
+    func tiedPlaylistsFallThrough() async {
+        let playlists = [
+            SiriMediaPlaylist(playlistID: "commute-a", name: "Commute"),
+            SiriMediaPlaylist(playlistID: "commute-b", name: "Commute")
+        ]
+
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Commute",
+                mediaType: .unknown,
+                subscriptions: [],
+                episodes: [],
+                playlists: playlists
+            ) == .noMatch
+        )
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Commute",
+                mediaType: .unknown,
+                subscriptions: [SiriMediaSubscription(podcastID: "commute-radio", title: "Commute Radio")],
+                episodes: [],
+                playlists: playlists
+            ) == .show(podcastID: "commute-radio")
+        )
+    }
+
+    @Test("A show-typed request never considers playlists")
+    func showTypeIgnoresPlaylists() async {
+        #expect(
+            await SiriMediaResolver.resolve(
+                mediaName: "Commute",
+                mediaType: .podcastShow,
+                subscriptions: [],
+                episodes: [],
+                playlists: [SiriMediaPlaylist(playlistID: "commute", name: "Commute")]
+            ) == .noMatch
+        )
+    }
+
     private func resolve(_ name: String?) async -> SiriMediaResolution {
         await SiriMediaResolver.resolve(
             mediaName: name,

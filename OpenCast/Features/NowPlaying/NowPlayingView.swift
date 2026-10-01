@@ -7,6 +7,7 @@ struct NowPlayingView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.modelContext) private var modelContext
     @Environment(\.pinsAppStoreAutoSkipPill) private var pinsAutoSkipPill
     @State private var playPauseFeedback = 0
@@ -29,6 +30,7 @@ struct NowPlayingView: View {
     let onDismiss: () -> Void
     let onOpenEpisode: () -> Void
     let onOpenPodcast: () -> Void
+    let onOpenPlaylist: () -> Void
     let onStopPlayback: () -> Void
 
     var body: some View {
@@ -66,6 +68,11 @@ struct NowPlayingView: View {
                         }
 
                         VStack(spacing: metrics.metadataSpacing) {
+                            if showsSourcePill, let source = appModel.currentPlaylistSource {
+                                NowPlayingSourcePill(name: source.name, action: openPlaylist)
+                                    .padding(.bottom, 4)
+                            }
+
                             Button(action: openEpisode) {
                                 Text(episode.title)
                                     .font(metrics.titleFont)
@@ -180,9 +187,12 @@ struct NowPlayingView: View {
                         hasTranscript: hasCompletedTranscript,
                         canShowDescription: canOpenCurrentEpisode,
                         canShowShow: canOpenCurrentPodcast,
+                        playlistSourceName: appModel.currentPlaylistSource?.name,
                         onTranscriptAction: performTranscriptAction,
                         onShowDescription: openEpisode,
                         onShowShow: openPodcast,
+                        onShowPlaylist: openPlaylist,
+                        onAddToPlaylist: addCurrentEpisodeToPlaylist,
                         onStopPlayback: stopPlayback
                     )
                     .padding(.top, moreMenuTopPadding)
@@ -372,6 +382,12 @@ struct NowPlayingView: View {
             return false
         }
         return appModel.library.isActivelySubscribed(to: currentPodcastID)
+    }
+
+    /// At accessibility sizes and in compact height the More menu's
+    /// "Show <playlist>" item is the route back to the source instead.
+    private var showsSourcePill: Bool {
+        !dynamicTypeSize.isAccessibilitySize && verticalSizeClass != .compact
     }
 
     private var hasCompletedTranscript: Bool {
@@ -600,6 +616,17 @@ struct NowPlayingView: View {
 
     private func openPodcast() {
         onOpenPodcast()
+    }
+
+    private func openPlaylist() {
+        onOpenPlaylist()
+    }
+
+    private func addCurrentEpisodeToPlaylist() {
+        guard let currentEpisodeID else {
+            return
+        }
+        appModel.requestAddToPlaylist(episodeID: currentEpisodeID)
     }
 
     /// The unload, and so the audio stop, lands in the exit animation's

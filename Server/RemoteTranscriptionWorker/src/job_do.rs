@@ -2099,14 +2099,8 @@ impl TranscriptionJob {
                     };
                     if let Some(outcome) = outcome {
                         in_flight_count -= 1;
-                        self.apply_overlap_outcome(
-                            outcome,
-                            config,
-                            &mut completed,
-                            &mut prior_attempts,
-                            &mut fatal,
-                        )
-                        .await?;
+                        self.apply_overlap_outcome(outcome, config, &mut completed, &mut fatal)
+                            .await?;
                     }
                 } else {
                     worker::Delay::from(Duration::from_millis(750)).await;
@@ -2135,15 +2129,14 @@ impl TranscriptionJob {
     }
 
     /// Per-completion bookkeeping for the overlap driver: successes and AI
-    /// failures persist immediately (spend counted on every attempt, at the
-    /// requested-duration estimate); busy/transport/missing outcomes leave
-    /// the chunk pending for the wave driver.
+    /// failures persist immediately (decode rejections spend no audio budget;
+    /// other attempts use the requested-duration estimate). Transport/missing
+    /// outcomes leave the chunk pending for the wave driver.
     async fn apply_overlap_outcome(
         &self,
         outcome: ChunkOutcome,
         config: &AppConfig,
         completed: &mut std::collections::BTreeSet<u32>,
-        prior_attempts: &mut std::collections::BTreeMap<u32, u32>,
         fatal: &mut Option<&'static str>,
     ) -> Result<()> {
         match outcome.result {
@@ -2173,22 +2166,28 @@ impl TranscriptionJob {
             ChunkCallResult::AiError { sanitized, class } => {
                 let backoff = 5 + (Date::now().as_millis() % 3_000) / 1_000;
                 let retry_at = now_seconds() + backoff as i64;
-                let attempts = prior_attempts
-                    .entry(outcome.index)
-                    .and_modify(|count| *count += 1)
-                    .or_insert(1);
-                let attempts = *attempts;
-                self.update_record(|record| {
-                    record.requested_audio_seconds += outcome.attempt_seconds;
-                    record.error_message = Some(sanitized);
-                    upsert_chunk_work(record, outcome.index, |work| {
-                        work.failed_attempts = attempts;
-                        work.ai_started_at.get_or_insert(outcome.ai_started_at);
-                        work.retry_not_before = Some(retry_at);
-                    });
-                })
-                .await?;
-                if class == AiFailureClass::Fatal || attempts >= config.max_chunk_attempts {
+                let mut class_attempts = 0;
+                let spends_retry_budget = class.counts_toward_retry_ceiling();
+                let job_id = self
+                    .update_record(|record| {
+                        if spends_retry_budget {
+                            record.requested_audio_seconds += outcome.attempt_seconds;
+                        }
+                        record.error_message = Some(sanitized);
+                        upsert_chunk_work(record, outcome.index, |work| {
+                            class_attempts = work.record_ai_failure(class);
+                            work.ai_started_at.get_or_insert(outcome.ai_started_at);
+                            work.retry_not_before = Some(retry_at);
+                        });
+                    })
+                    .await?
+                    .map(|record| record.job_id)
+                    .unwrap_or_default();
+                if chunk_attempts_exhausted(class, class_attempts, config) {
+                    worker::console_error!(
+                        "chunk attempts exhausted: job {job_id} chunk {} class {class:?} class_failed_attempts {class_attempts}",
+                        outcome.index
+                    );
                     *fatal = Some(types::ERROR_TRANSCRIPTION_FAILED);
                 }
             }
@@ -2266,6 +2265,12 @@ impl TranscriptionJob {
             job::WaveSelection::ExceedsRetryCeiling => {
                 // Retry-audio ceiling: service spend cap, never a customer
                 // charge (same rule and error as the pass-0 walk).
+                worker::console_error!(
+                    "retry-audio ceiling reached: job {} requested {:.0} s ceiling {:.0} s",
+                    record.job_id,
+                    record.requested_audio_seconds,
+                    ceiling
+                );
                 self.release_and_fail(record, config, types::ERROR_TRANSCRIPTION_FAILED)
                     .await?;
                 return Ok(());
@@ -2348,25 +2353,30 @@ impl TranscriptionJob {
                     // Jittered per-chunk retry backoff, same shape as the sequential path.
                     let backoff = 5 + (Date::now().as_millis() % 3_000) / 1_000;
                     let retry_at = now_seconds() + backoff as i64;
-                    let mut failed_attempts = 0;
+                    let mut class_attempts = 0;
+                    let spends_retry_budget = class.counts_toward_retry_ceiling();
                     self.update_record(|record| {
-                        record.requested_audio_seconds += outcome.attempt_seconds;
+                        if spends_retry_budget {
+                            record.requested_audio_seconds += outcome.attempt_seconds;
+                        }
                         record.error_message = Some(sanitized);
                         if let Some(work) = record
                             .chunk_work
                             .iter_mut()
                             .find(|work| work.index == outcome.index)
                         {
-                            work.failed_attempts += 1;
+                            class_attempts = work.record_ai_failure(class);
                             work.ai_started_at.get_or_insert(outcome.ai_started_at);
                             work.retry_not_before = Some(retry_at);
-                            failed_attempts = work.failed_attempts;
                         }
                     })
                     .await?;
-                    if class == AiFailureClass::Fatal
-                        || failed_attempts >= config.max_chunk_attempts
-                    {
+                    if chunk_attempts_exhausted(class, class_attempts, config) {
+                        worker::console_error!(
+                            "chunk attempts exhausted: job {} chunk {} class {class:?} class_failed_attempts {class_attempts}",
+                            record.job_id,
+                            outcome.index
+                        );
                         fatal = Some(types::ERROR_TRANSCRIPTION_FAILED);
                     }
                 }
@@ -2598,6 +2608,17 @@ impl TranscriptionJob {
             }
             Err(sanitized) => {
                 let class = ai::classify_ai_error(&sanitized);
+                // Main-pass AI errors used to survive only in the record's
+                // error_message (2026-09-30 incident): log and count each.
+                worker::console_error!(
+                    "chunk ai error: job {} chunk {} failed_attempts {} class {:?}: {}",
+                    record.job_id,
+                    chunk.index,
+                    prior_failed_attempts + 1,
+                    class,
+                    sanitized
+                );
+                self.bump(class.counter_name(), 1).await;
                 outcome.result = ChunkCallResult::AiError { sanitized, class };
             }
         }
@@ -4987,6 +5008,20 @@ struct ChunkOutcome {
 enum GapRepairMode {
     Real,
     Fake(ai::FakeGapRule),
+}
+
+/// Whether an AI failure ends the job, counting only that class's failures
+/// (including this one). Fatal errors end it immediately.
+fn chunk_attempts_exhausted(
+    class: AiFailureClass,
+    class_attempts: u32,
+    config: &AppConfig,
+) -> bool {
+    match class {
+        AiFailureClass::Fatal => true,
+        AiFailureClass::DecodeRejected => class_attempts >= config.max_decode_reject_attempts,
+        AiFailureClass::Retryable => class_attempts >= config.max_chunk_attempts,
+    }
 }
 
 enum ChunkCallResult {

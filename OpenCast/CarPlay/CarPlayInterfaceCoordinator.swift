@@ -18,6 +18,7 @@ final class CarPlayInterfaceCoordinator {
     private let artworkPatcher = CarPlayArtworkPatcher()
 
     private var interfaceController: CPInterfaceController?
+    private var templateNavigator: CarPlayTemplateNavigator?
     private var renderer = CarPlayTemplateRenderer(artworkSizing: .fallback)
     private var limits = CarPlayListLimits.fallback
     private var inboxTemplate: CPListTemplate?
@@ -37,6 +38,7 @@ final class CarPlayInterfaceCoordinator {
 
     func start(interfaceController: CPInterfaceController) {
         self.interfaceController = interfaceController
+        templateNavigator = CarPlayTemplateNavigator(interfaceController: interfaceController)
         limits = CarPlayListLimits(
             maximumItemCount: Int(CPListTemplate.maximumItemCount),
             maximumSectionCount: Int(CPListTemplate.maximumSectionCount)
@@ -61,6 +63,8 @@ final class CarPlayInterfaceCoordinator {
     }
 
     func stop() {
+        templateNavigator?.invalidate()
+        templateNavigator = nil
         observationTask?.cancel()
         observationTask = nil
         buttonStateTask?.cancel()
@@ -273,6 +277,7 @@ final class CarPlayInterfaceCoordinator {
             library: CarPlayBrowseModelBuilder.library(
                 subscriptions: library.subscriptions,
                 library: library,
+                showsPlaylistsRow: !appModel.playlists.playlists.isEmpty,
                 isLoading: isLoading,
                 limits: limits
             ),
@@ -326,6 +331,10 @@ final class CarPlayInterfaceCoordinator {
             play(episodeRow, returnsToNowPlaying: returnsToNowPlaying)
         case .podcast(let podcastRow):
             pushEpisodes(for: podcastRow)
+        case .playlists:
+            pushPlaylists()
+        case .playlist(let playlistRow):
+            pushPlaylistEpisodes(for: playlistRow, limits: limits)
         case .showMore:
             pushContinuation(snapshot.continuation)
         }
@@ -336,6 +345,18 @@ final class CarPlayInterfaceCoordinator {
         if playback.currentEpisode?.id.rawValue == row.episodeID {
             if playback.state != .playing {
                 playback.play()
+            }
+            showNowPlaying(returningToIt: returnsToNowPlaying)
+            return
+        }
+
+        if let playlistID = row.sourcePlaylistID {
+            if !appModel.playPlaylistEpisode(row.episodeID, in: playlistID, presentsNowPlaying: false, modelContext: modelContext),
+               playback.currentEpisode?.id.rawValue != row.episodeID {
+                // A false return after the start succeeded means the pour failed;
+                // audio is playing, so the car goes to it instead of an alert.
+                presentPlaybackFailure()
+                return
             }
             showNowPlaying(returningToIt: returnsToNowPlaying)
             return
@@ -362,6 +383,76 @@ final class CarPlayInterfaceCoordinator {
                 library: appModel.library,
                 downloadRecords: appModel.downloads.records,
                 episodeListSettings: appModel.podcastEpisodeListSettings,
+                nowPlaying: Self.nowPlayingState(appModel: appModel),
+                limits: limits
+            )
+        )
+    }
+
+    /// The playlists list routes its own taps: an episodes list pushed from
+    /// the "More Playlists" page is the fourth template, so it spends no
+    /// slot on Show More (the five-template ceiling counts Now Playing).
+    private func pushPlaylists() {
+        let appModel = appModel
+        let snapshot = CarPlayBrowseModelBuilder.playlists(
+            appModel.playlists.playlists,
+            episodeCount: { appModel.playlistEpisodeCount(for: $0) },
+            artworkURL: { summary in
+                PlaylistCoverSources.make(
+                    summary: summary,
+                    items: appModel.playlists.itemsByPlaylistID[summary.playlistID] ?? []
+                ) { appModel.library.podcastCache(for: $0)?.artworkURL.flatMap(URL.init(string:)) }
+                    .artworkURLs.first?.absoluteString
+            },
+            limits: limits
+        )
+        push(snapshot) { [weak self] row in
+            guard let self else {
+                return
+            }
+
+            switch row {
+            case .playlist(let playlistRow):
+                pushPlaylistEpisodes(for: playlistRow, limits: limits)
+            case .showMore:
+                guard let continuation = snapshot.continuation else {
+                    return
+                }
+
+                push(continuation.snapshot) { [weak self] row in
+                    guard let self, case .playlist(let playlistRow) = row else {
+                        return
+                    }
+
+                    pushPlaylistEpisodes(for: playlistRow, limits: limits.withoutContinuation)
+                }
+            case .episode, .podcast, .playlists:
+                return
+            }
+        }
+    }
+
+    private func pushPlaylistEpisodes(for row: CarPlayPlaylistRow, limits: CarPlayListLimits) {
+        // Nil when the phone deleted the playlist after this list was pushed:
+        // an empty list reads better than an alert about an episode.
+        let summary = appModel.playlist(row.playlistID)
+        let episodes: [EpisodeListItemSnapshot] = switch summary?.kind {
+        case .manual:
+            appModel.playlists.resolvedItems(in: row.playlistID) { appModel.episodeSnapshot(for: $0) }
+                .compactMap(\.snapshot)
+        case .smart:
+            summary.map { appModel.smartPlaylistEvaluation(for: $0).episodes } ?? []
+        case nil:
+            []
+        }
+        push(
+            CarPlayBrowseModelBuilder.playlistEpisodes(
+                playlistID: row.playlistID,
+                title: row.title,
+                episodes: episodes,
+                hidesPlayed: summary?.kind == .manual && summary?.hidesPlayed == true,
+                library: appModel.library,
+                downloadRecords: appModel.downloads.records,
                 nowPlaying: Self.nowPlayingState(appModel: appModel),
                 limits: limits
             )
@@ -430,19 +521,32 @@ final class CarPlayInterfaceCoordinator {
     }
 
     private func push(_ snapshot: CarPlayBrowseSnapshot, returnsToNowPlaying: Bool = false) {
-        guard let interfaceController else {
-            return
-        }
-
-        let rendered = renderer.makeTemplate(for: snapshot) { [weak self] row in
+        push(snapshot, returnsToNowPlaying: returnsToNowPlaying) { [weak self] row in
             self?.handleSelection(
                 of: row,
                 in: snapshot,
                 returnsToNowPlaying: returnsToNowPlaying
             )
         }
-        interfaceController.pushTemplate(rendered.template, animated: true) { didPush, error in
+    }
+
+    private func push(
+        _ snapshot: CarPlayBrowseSnapshot,
+        returnsToNowPlaying: Bool = false,
+        onSelect: @escaping (CarPlayListRow) -> Void
+    ) {
+        guard let interfaceController else {
+            return
+        }
+
+        let rendered = renderer.makeTemplate(for: snapshot, onSelect: onSelect)
+        let completion: CarPlayTemplateNavigator.Completion = { didPush, error in
             Self.logTemplateFailure("push list", didSucceed: didPush, error: error)
+        }
+        if returnsToNowPlaying {
+            templateNavigator?.pushNowPlayingList(rendered.template, completion: completion)
+        } else {
+            interfaceController.pushTemplate(rendered.template, animated: true, completion: completion)
         }
         artworkPatcher.patch(rendered.artworkTargets, sizing: renderer.artworkSizing, scope: .pushed)
     }

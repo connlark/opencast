@@ -39,6 +39,7 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
                 action: enqueueLast
             )
             .disabled(isCurrentlyPlaying)
+            Button("Add to Playlist…", systemImage: "music.note.list", action: addToPlaylist)
             Button(
                 isPlayed ? "Mark Unplayed" : "Mark Played",
                 systemImage: isPlayed ? "arrow.uturn.backward.circle" : "checkmark.circle",
@@ -91,6 +92,10 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
         appModel.performUpNextQueueMutation {
             appModel.upNextQueue.enqueueLast(episode, modelContext: modelContext)
         }
+    }
+
+    private func addToPlaylist() {
+        appModel.requestAddToPlaylist(episodeID: episode.episodeID)
     }
 
     private func detectAds() {

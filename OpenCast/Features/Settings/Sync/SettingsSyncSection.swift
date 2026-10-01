@@ -18,7 +18,10 @@ struct SettingsSyncSection: View {
                     .foregroundStyle(statusForegroundStyle)
             }
         } footer: {
-            HelpFooterLink(title: "How iCloud sync works", topicID: HelpTopicID.iCloudSync)
+            VStack(alignment: .leading, spacing: 4) {
+                HelpFooterLink(title: "How iCloud sync works", topicID: HelpTopicID.iCloudSync)
+                Text("Playlists stay on this device for now.")
+            }
         }
     }
 

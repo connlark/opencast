@@ -10,5 +10,18 @@ enum AppRoute: Hashable {
     case episodeArtwork(id: String)
     case episodeTranscript(id: String)
     case adDetectionQueue
+    case playlists
+    case playlistDetail(id: String)
     case settings(SettingsRoute)
+
+    /// Whether `other` leads to the screen this route does. A show is the
+    /// same screen whichever list settings it was opened under.
+    func opensSameScreen(as other: AppRoute) -> Bool {
+        switch (self, other) {
+        case (.podcastDetail(let feedURL, _), .podcastDetail(let otherFeedURL, _)):
+            feedURL == otherFeedURL
+        default:
+            self == other
+        }
+    }
 }

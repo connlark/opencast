@@ -258,6 +258,36 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         return showNotesByEpisodeID
     }
 
+    // `async` so a call on the concrete store resolves here; a synchronous
+    // member loses overload ranking to the protocol's async default.
+    func episodeSummaries(forPodcastID podcastID: String, maximumCharacters: Int) async throws -> [String: String] {
+        let operation = "episode summaries load"
+        let db = try database()
+        var summariesByEpisodeID: [String: String] = [:]
+        try query(
+            """
+            SELECT episode_id, substr(COALESCE(NULLIF(summary, ''), show_notes_html), 1, ?)
+            FROM episode_cache
+            WHERE podcast_id = ?
+            """,
+            operation: operation,
+            db: db,
+            bindings: { statement in
+                try bind(maximumCharacters, at: 1, statement: statement, db: db, operation: operation)
+                try bind(podcastID, at: 2, statement: statement, db: db, operation: operation)
+            }
+        ) { statement in
+            guard let episodeID = columnText(statement, 0),
+                  let summary = columnText(statement, 1),
+                  !summary.isEmpty
+            else {
+                return
+            }
+            summariesByEpisodeID[episodeID] = summary
+        }
+        return summariesByEpisodeID
+    }
+
     func prepareEpisodeSearchIndex() async throws {
         let db = try database()
         guard episodeSearchIndexState != .unavailable else {

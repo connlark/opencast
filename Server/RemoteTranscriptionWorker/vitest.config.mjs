@@ -31,7 +31,7 @@ export async function workerTestConfig(overrides = {}) {
             // sized so the fan-out, exact-device upload, and stranded-job
             // tests can still settle real spends afterwards (cumulative
             // suite). Must match GRANT in test/integration.spec.mjs.
-            DEV_CREDIT_GRANT_SECONDS: "7400",
+            DEV_CREDIT_GRANT_SECONDS: "7932",
             // Exact-device upload: presigned URLs point at a fake
             // S3 host the spec's fetch mock maps onto the R2 binding's real
             // multipart machinery. 5 MiB parts (the R2 non-final minimum)
@@ -48,6 +48,9 @@ export async function workerTestConfig(overrides = {}) {
             // Fan-out default under test; individual jobs pin their own
             // concurrency through the FAKE_AI language-code hooks.
             CHUNK_AI_CONCURRENCY: "4",
+            // Decode rejections (Workers AI 3030) retry under their own cap;
+            // small here so the exhaustion test runs inside its timeout.
+            MAX_DECODE_REJECT_ATTEMPTS: "4",
             // Serialize jobs so the integration suite can prove FIFO queue
             // status while still allowing two jobs for the test account.
             GLOBAL_INFERENCE_CONCURRENCY: "1",

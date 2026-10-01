@@ -21,6 +21,7 @@ pub mod feed_admission;
 mod feed_fetch;
 pub mod feed_identity;
 pub mod feed_resource;
+pub mod notification_text;
 pub mod observation;
 #[cfg(any(target_arch = "wasm32", test))]
 mod poll_scheduling;

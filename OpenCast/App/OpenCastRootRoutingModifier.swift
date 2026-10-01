@@ -18,6 +18,9 @@ struct OpenCastRootRoutingModifier: ViewModifier {
             .onChange(of: appModel.library.visibleEpisodeIDs) { _, _ in
                 pruneNavigationPaths()
             }
+            .onChange(of: appModel.playlists.playlists.map(\.id)) { _, _ in
+                pruneNavigationPaths()
+            }
             .onChange(of: appModel.nowPlayingPresentationRequest) { _, _ in
                 presentNowPlaying()
             }
@@ -26,6 +29,11 @@ struct OpenCastRootRoutingModifier: ViewModifier {
             }
             .onChange(of: appModel.dataNukeConfirmationPresentationRequest) { _, _ in
                 sheetDestination = .nukeConfirmation
+            }
+            .onChange(of: appModel.addToPlaylistPresentationRequest) { _, request in
+                if let request {
+                    sheetDestination = .addToPlaylist(episodeID: request.episodeID)
+                }
             }
             .onChange(of: appModel.hasNowPlayingPresentationContent, initial: true) { _, hasContent in
                 if !hasContent {

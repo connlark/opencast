@@ -56,6 +56,143 @@ struct OpenCastModelTests {
         }
     }
 
+    @Test("Playlist records are shaped for sync")
+    func playlistRecordsAreSyncShaped() throws {
+        let schema = OpenCastModelContainerFactory.localSchema
+        let playlistEntities = [
+            try #require(schema.entity(for: PlaylistRecord.self)),
+            try #require(schema.entity(for: PlaylistItemRecord.self))
+        ]
+        #expect(OpenCastModelContainerFactory.fullSchema.entity(for: PlaylistRecord.self) != nil)
+        #expect(OpenCastModelContainerFactory.fullSchema.entity(for: PlaylistItemRecord.self) != nil)
+
+        for entity in playlistEntities {
+            let uniqueAttributeNames = entity.attributes
+                .filter(\.isUnique)
+                .map(\.name)
+                .sorted()
+            let undefaultedAttributeNames = entity.attributes
+                .filter { !$0.isOptional && $0.defaultValue == nil }
+                .map(\.name)
+                .sorted()
+
+            #expect(
+                uniqueAttributeNames.isEmpty,
+                "\(entity.name) has unique attributes: \(uniqueAttributeNames.joined(separator: ", "))"
+            )
+            #expect(
+                entity.uniquenessConstraints.isEmpty,
+                "\(entity.name) has uniqueness constraints: \(entity.uniquenessConstraints)"
+            )
+            #expect(entity.relationships.isEmpty, "\(entity.name) has relationships")
+            #expect(
+                undefaultedAttributeNames.isEmpty,
+                "\(entity.name) has attributes without defaults: \(undefaultedAttributeNames.joined(separator: ", "))"
+            )
+        }
+    }
+
+    @Test("Playlist records round-trip with typed kind and origin")
+    func playlistRecordsRoundTrip() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let createdAt = Date(timeIntervalSince1970: 1_775_000_000)
+        let publishedAt = Date(timeIntervalSince1970: 1_774_000_000)
+        let playlist = PlaylistRecord(
+            name: "Model Fixture Playlist",
+            kind: .smart,
+            ruleJSON: "{\"version\":1}",
+            hidesPlayed: true,
+            tintKey: PlaylistTint.teal.rawValue,
+            origin: .ai,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        let item = PlaylistItemRecord(
+            playlistID: playlist.playlistID,
+            episodeID: "model-fixture-episode",
+            podcastID: Self.modelFixtureFeedURL,
+            sortKey: PlaylistSortKey.between(nil, nil),
+            addedAt: createdAt,
+            updatedAt: createdAt,
+            episodeTitle: "Fixture Episode",
+            podcastTitle: "Model Fixture Podcast",
+            artworkURL: "https://example.com/art.jpg",
+            audioURL: "https://example.com/episode.mp3",
+            duration: 1_800,
+            publishedAt: publishedAt
+        )
+
+        context.insert(playlist)
+        context.insert(item)
+        try context.save()
+
+        let readContext = ModelContext(container)
+        let fetchedPlaylist = try #require(try readContext.fetch(FetchDescriptor<PlaylistRecord>()).first)
+        let fetchedItem = try #require(try readContext.fetch(FetchDescriptor<PlaylistItemRecord>()).first)
+
+        #expect(UUID(uuidString: fetchedPlaylist.playlistID) != nil)
+        #expect(fetchedPlaylist.name == "Model Fixture Playlist")
+        #expect(fetchedPlaylist.kind == .smart)
+        #expect(fetchedPlaylist.kindRawValue == "smart")
+        #expect(fetchedPlaylist.origin == .ai)
+        #expect(fetchedPlaylist.originRawValue == "ai")
+        #expect(fetchedPlaylist.ruleJSON == "{\"version\":1}")
+        #expect(fetchedPlaylist.hidesPlayed)
+        #expect(fetchedPlaylist.tintKey == "teal")
+        #expect(fetchedPlaylist.symbolName == nil)
+        #expect(fetchedPlaylist.createdAt == createdAt)
+        #expect(!fetchedPlaylist.dedupeUUID.isEmpty)
+
+        #expect(UUID(uuidString: fetchedItem.itemID) != nil)
+        #expect(fetchedItem.playlistID == fetchedPlaylist.playlistID)
+        #expect(fetchedItem.episodeID == "model-fixture-episode")
+        #expect(fetchedItem.podcastID == Self.modelFixtureFeedURL)
+        #expect(fetchedItem.sortKey == "i")
+        #expect(fetchedItem.episodeTitle == "Fixture Episode")
+        #expect(fetchedItem.podcastTitle == "Model Fixture Podcast")
+        #expect(fetchedItem.artworkURL == "https://example.com/art.jpg")
+        #expect(fetchedItem.audioURL == "https://example.com/episode.mp3")
+        #expect(fetchedItem.duration == 1_800)
+        #expect(fetchedItem.publishedAt == publishedAt)
+        #expect(!fetchedItem.dedupeUUID.isEmpty)
+        #expect(fetchedItem.dedupeUUID != fetchedPlaylist.dedupeUUID)
+
+        fetchedPlaylist.kind = .manual
+        fetchedPlaylist.origin = .user
+        #expect(fetchedPlaylist.kindRawValue == "manual")
+        #expect(fetchedPlaylist.originRawValue == "user")
+
+        fetchedPlaylist.kindRawValue = "unknown-kind"
+        fetchedPlaylist.originRawValue = "unknown-origin"
+        #expect(fetchedPlaylist.kind == .manual)
+        #expect(fetchedPlaylist.origin == .user)
+    }
+
+    @Test("Stored playlist raw values stay stable")
+    func playlistRawValuesStayStable() {
+        #expect(PlaylistKind.manual.rawValue == "manual")
+        #expect(PlaylistKind.smart.rawValue == "smart")
+        #expect(PlaylistOrigin.user.rawValue == "user")
+        #expect(PlaylistOrigin.ai.rawValue == "ai")
+        #expect(PlaylistSortOrder.name.rawValue == "name")
+        #expect(PlaylistSortOrder.recentlyUpdated.rawValue == "recentlyUpdated")
+        #expect(
+            PlaylistTint.allCases.map(\.rawValue)
+                == ["red", "orange", "yellow", "green", "teal", "blue", "indigo", "purple"]
+        )
+    }
+
+    @Test("Smart playlist tints go to the least-used key first")
+    func playlistTintPicksLeastUsed() {
+        #expect(PlaylistTint.next(after: []) == .red)
+        #expect(PlaylistTint.next(after: ["red"]) == .orange)
+        #expect(PlaylistTint.next(after: ["red", "orange", "unknown"]) == .yellow)
+        #expect(PlaylistTint.next(after: PlaylistTint.allCases.map(\.rawValue)) == .red)
+        #expect(PlaylistTint.next(after: ["red", "red", "orange", "yellow", "green", "teal", "blue", "indigo"]) == .purple)
+        #expect(PlaylistTint.next(after: ["red", "red", "orange", "yellow", "green", "teal", "blue", "indigo", "purple"]) == .orange)
+    }
+
     @Test("Playback episode snapshot converter preserves fallback fields")
     func playbackEpisodeSnapshotConverterPreservesFallbackFields() throws {
         let publishedAt = Date(timeIntervalSince1970: 1_775_000_000)

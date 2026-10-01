@@ -37,6 +37,7 @@ struct OpenCastRootView: View {
     @State private var hasStartedPCCBackgroundProbe = false
     @State private var hasStartedTranscriptIntelligenceToolProbe = false
     @State private var hasStartedTranscriptIntelligenceEvaluation = false
+    @State private var hasStartedPlaylistOrganizerEvaluation = false
     #endif
 
     var body: some View {
@@ -45,6 +46,7 @@ struct OpenCastRootView: View {
             onDismissNowPlaying: dismissNowPlaying,
             onOpenCurrentEpisode: openCurrentEpisodeFromNowPlaying,
             onOpenCurrentPodcast: openCurrentPodcastFromNowPlaying,
+            onOpenCurrentPlaylist: openCurrentPlaylistFromNowPlaying,
             onStopPlayback: stopPlayback
         ) {
             OpenCastTabRootView(
@@ -158,6 +160,9 @@ struct OpenCastRootView: View {
             await runTranscriptIntelligenceEvaluationIfRequested()
         }
         .task {
+            await runPlaylistOrganizerEvaluationIfRequested()
+        }
+        .task {
             await runAdFreePassAutoStartIfRequested()
         }
         .task {
@@ -258,12 +263,20 @@ struct OpenCastRootView: View {
         openRouteFromNowPlaying(.podcastDetail(feedURL: feedURL))
     }
 
+    private func openCurrentPlaylistFromNowPlaying() {
+        guard let source = appModel.currentPlaylistSource else {
+            return
+        }
+
+        openRouteFromNowPlaying(.playlistDetail(id: source.playlistID))
+    }
+
     private func openRouteFromNowPlaying(_ route: AppRoute) {
         guard selectedTab != .settings else {
             openRouteInLibrary(route)
             return
         }
-        if navigationPaths[selectedTab].last != route {
+        if navigationPaths[selectedTab].last?.opensSameScreen(as: route) != true {
             navigationPaths[selectedTab].append(route)
         }
     }
@@ -402,6 +415,15 @@ struct OpenCastRootView: View {
 
         hasStartedTranscriptIntelligenceEvaluation = true
         await TranscriptIntelligenceEvaluationRunner.runIfRequested()
+    }
+
+    private func runPlaylistOrganizerEvaluationIfRequested() async {
+        guard !hasStartedPlaylistOrganizerEvaluation else {
+            return
+        }
+
+        hasStartedPlaylistOrganizerEvaluation = true
+        await PlaylistOrganizerEvaluationRunner.runIfRequested()
     }
 
     private func runAdFreePassAutoStartIfRequested() async {
@@ -739,7 +761,9 @@ struct OpenCastRootView: View {
             !appModel.library.isActivelySubscribed(to: feedURL)
         case .episodeDetail(let id), .episodeTranscript(let id), .episodeArtwork(let id):
             appModel.library.episode(with: id) == nil && appModel.downloads.record(for: id) == nil
-        case .adDetectionQueue, .settings:
+        case .playlistDetail(let id):
+            !appModel.playlists.playlists.contains { $0.playlistID == id }
+        case .adDetectionQueue, .playlists, .settings:
             false
         }
     }

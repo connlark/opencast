@@ -2,11 +2,13 @@ import Foundation
 
 enum SheetDestination: Identifiable {
     case addPodcast
+    case addToPlaylist(episodeID: String)
     case episodeDiagnostics(episodeID: String)
     case helpTopic(id: String)
     case importOPMLFile(URL)
     case nukeConfirmation
     case onboarding
+    case playlistOrganizer(podcastID: String)
     case podcastPlaybackSettings(feedURL: String)
     case transcriptRecap(episodeID: String, kind: TranscriptRecapWindowKind, playhead: TimeInterval)
     case transcriptAsk(episodeID: String)
@@ -16,6 +18,8 @@ enum SheetDestination: Identifiable {
         switch self {
         case .addPodcast:
             "addPodcast"
+        case .addToPlaylist(let episodeID):
+            "addToPlaylist-\(episodeID)"
         case .episodeDiagnostics(let episodeID):
             "episodeDiagnostics-\(episodeID)"
         case .helpTopic(let id):
@@ -26,6 +30,8 @@ enum SheetDestination: Identifiable {
             "nukeConfirmation"
         case .onboarding:
             "onboarding"
+        case .playlistOrganizer(let podcastID):
+            "playlistOrganizer-\(podcastID)"
         case .podcastPlaybackSettings(let feedURL):
             "podcastPlaybackSettings-\(feedURL)"
         case .transcriptRecap(let episodeID, let kind, let playhead):

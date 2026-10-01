@@ -6,6 +6,7 @@ enum EpisodeMetadataChip: Equatable, Identifiable {
     case remaining(String, fractionCompleted: Double)
     case downloaded(fileSize: String?)
     case played
+    case playlists(count: Int)
 
     var id: String {
         switch self {
@@ -19,6 +20,8 @@ enum EpisodeMetadataChip: Equatable, Identifiable {
             "downloaded"
         case .played:
             "played"
+        case .playlists:
+            "playlists"
         }
     }
 }

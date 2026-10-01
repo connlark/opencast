@@ -51,6 +51,26 @@ struct SiriMediaDiscoveryTests {
         #expect(Set(recorder.deletedGroupIdentifiers) == ["show-a", "show-b"])
     }
 
+    @Test("Playlist donations are deduplicated until the playlist's group is deleted")
+    func playlistDonationDedupesUntilDeleted() {
+        let recorder = SiriMediaDiscoveryRecorder()
+        let discovery = makeDiscovery(recorder: recorder)
+        discovery.donatePlaybackIfNeeded(for: episode(id: "one", podcastID: "show-a"))
+
+        discovery.donatePlaylistPlaybackIfNeeded(playlistID: "playlist-a", name: "Commute")
+        discovery.donatePlaylistPlaybackIfNeeded(playlistID: "playlist-a", name: "Commute")
+
+        #expect(recorder.donatedGroupIdentifiers == ["show-a", "playlist-a"])
+
+        discovery.deleteDonations(forPlaylistID: "playlist-a")
+        discovery.donatePlaylistPlaybackIfNeeded(playlistID: "playlist-a", name: "Commute")
+        // The show's dedupe key survives a playlist deletion.
+        discovery.donatePlaybackIfNeeded(for: episode(id: "two", podcastID: "show-a"))
+
+        #expect(recorder.deletedGroupIdentifiers == ["playlist-a"])
+        #expect(recorder.donatedGroupIdentifiers == ["show-a", "playlist-a", "playlist-a"])
+    }
+
     private func makeDiscovery(recorder: SiriMediaDiscoveryRecorder) -> SiriMediaDiscovery {
         SiriMediaDiscovery(
             userContextPublisher: { recorder.publishedCounts.append($0) },

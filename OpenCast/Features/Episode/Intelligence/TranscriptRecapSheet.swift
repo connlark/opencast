@@ -22,7 +22,7 @@ struct TranscriptRecapSheet: View {
         NavigationStack {
             content
                 .navigationTitle("Recap")
-                .navigationSubtitle(kind.title)
+                .navigationSubtitle("\(kind.title) · Beta")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {

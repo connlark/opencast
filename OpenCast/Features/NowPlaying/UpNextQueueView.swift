@@ -10,6 +10,10 @@ struct UpNextQueueView: View {
 
     var body: some View {
         let episodes = resolvedEpisodes()
+        let playlistSource = appModel.currentPlaylistSource
+        let playlistRemainingCount = playlistSource.map {
+            appModel.remainingQueuedCount(forPlaylist: $0.playlistID)
+        } ?? 0
 
         NavigationStack {
             Group {
@@ -21,25 +25,40 @@ struct UpNextQueueView: View {
                     )
                 } else {
                     List {
-                        ForEach(episodes) { episode in
-                            UpNextQueueRowButton(episode: episode) {
-                                play(episode)
+                        Section {
+                            ForEach(episodes) { episode in
+                                UpNextQueueRowButton(episode: episode) {
+                                    play(episode)
+                                }
                             }
-                        }
-                        .onMove { source, destination in
-                            moveItems(
-                                fromOffsets: source,
-                                toOffset: destination,
-                                episodes: episodes
-                            )
-                        }
-                        .onDelete { offsets in
-                            removeItems(atOffsets: offsets, episodes: episodes)
+                            .onMove { source, destination in
+                                moveItems(
+                                    fromOffsets: source,
+                                    toOffset: destination,
+                                    episodes: episodes
+                                )
+                            }
+                            .onDelete { offsets in
+                                removeItems(atOffsets: offsets, episodes: episodes)
+                            }
+                        } footer: {
+                            if let playlistSource, playlistRemainingCount >= 1 {
+                                Text(PlaylistPlaybackSourceText.upNextFooter(name: playlistSource.name))
+                            }
                         }
                     }
                 }
             }
             .navigationTitle("Up Next")
+            // An empty subtitle takes no space under the large title.
+            .navigationSubtitle(
+                playlistSource.map {
+                    PlaylistPlaybackSourceText.upNextSubtitle(
+                        name: $0.name,
+                        remainingCount: playlistRemainingCount
+                    )
+                } ?? ""
+            )
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     EditButton()

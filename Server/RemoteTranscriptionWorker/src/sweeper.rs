@@ -20,11 +20,18 @@ pub struct SweepReport {
     /// Stale jobs whose Durable Object was sent a `/nudge` this run
     /// (bounded by `ORPHAN_SWEEP_MAX_NUDGES`; not an anomaly, an action).
     pub nudged_job_count: usize,
+    /// `jobs_failed` increases not yet carried by an alert (2026-09-30:
+    /// three failures in an hour went unnoticed until the user reported
+    /// them). The `jobs_failed_alerted` marker advances only after a send.
+    pub failed_jobs_unalerted: i64,
 }
 
 impl SweepReport {
     pub fn anomaly_count(&self) -> usize {
-        self.orphan_object_count + self.stale_job_ids.len() + usize::from(self.scan_truncated)
+        self.orphan_object_count
+            + self.stale_job_ids.len()
+            + usize::from(self.scan_truncated)
+            + usize::try_from(self.failed_jobs_unalerted).unwrap_or(0)
     }
 
     pub fn alert_job_ids(&self) -> Vec<String> {
@@ -40,11 +47,12 @@ impl SweepReport {
     pub fn alert_message(&self) -> String {
         let ids = self.alert_job_ids();
         format!(
-            "orphan_objects={} stale_jobs={} nudged={} scan_truncated={} job_ids={}",
+            "orphan_objects={} stale_jobs={} nudged={} scan_truncated={} failed_jobs={} job_ids={}",
             self.orphan_object_count,
             self.stale_job_ids.len(),
             self.nudged_job_count,
             usize::from(self.scan_truncated),
+            self.failed_jobs_unalerted.max(0),
             if ids.is_empty() {
                 "none".to_string()
             } else {
@@ -136,7 +144,11 @@ mod runtime {
             object_job_ids,
             scan_truncated: stale_truncated || r2_truncated,
             nudged_job_count: 0,
+            failed_jobs_unalerted: 0,
         };
+        let jobs_failed = storage::counter_value(&db, "jobs_failed").await?;
+        let jobs_failed_alerted = storage::counter_value(&db, "jobs_failed_alerted").await?;
+        report.failed_jobs_unalerted = jobs_failed.saturating_sub(jobs_failed_alerted).max(0);
 
         storage::increment_counter(&db, "orphan_sweeper_runs", 1, now_seconds).await?;
         storage::increment_counter(
@@ -185,6 +197,15 @@ mod runtime {
             match send_pushover(env, &title, &report.alert_message()).await {
                 Ok(()) => {
                     storage::increment_counter(&db, "orphan_alerts_sent", 1, now_seconds).await?;
+                    if report.failed_jobs_unalerted > 0 {
+                        storage::increment_counter(
+                            &db,
+                            "jobs_failed_alerted",
+                            report.failed_jobs_unalerted,
+                            now_seconds,
+                        )
+                        .await?;
+                    }
                 }
                 Err(error) => {
                     storage::increment_counter(&db, "orphan_alert_failures", 1, now_seconds)
@@ -381,13 +402,29 @@ mod tests {
             object_job_ids: vec!["job-a".to_string(), "bad/id".to_string()],
             scan_truncated: false,
             nudged_job_count: 2,
+            failed_jobs_unalerted: 0,
         };
         assert_eq!(
             report.alert_message(),
-            "orphan_objects=3 stale_jobs=2 nudged=2 scan_truncated=0 job_ids=job-a,job-b"
+            "orphan_objects=3 stale_jobs=2 nudged=2 scan_truncated=0 failed_jobs=0 job_ids=job-a,job-b"
         );
         // Nudges are an action, not an anomaly: they never trip the alert
         // on their own.
         assert_eq!(report.anomaly_count(), 5);
+
+        // Unalerted job failures are anomalies on their own.
+        let failures = SweepReport {
+            orphan_object_count: 0,
+            stale_job_ids: Vec::new(),
+            object_job_ids: Vec::new(),
+            scan_truncated: false,
+            nudged_job_count: 0,
+            failed_jobs_unalerted: 4,
+        };
+        assert_eq!(failures.anomaly_count(), 4);
+        assert_eq!(
+            failures.alert_message(),
+            "orphan_objects=0 stale_jobs=0 nudged=0 scan_truncated=0 failed_jobs=4 job_ids=none"
+        );
     }
 }

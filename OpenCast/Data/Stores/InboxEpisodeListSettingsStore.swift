@@ -4,11 +4,11 @@ import SwiftData
 
 /// Device-local Inbox list preferences: the episode filter, whether
 /// episodes in Up Next are hidden, and the Group by Podcast view with its
-/// layout. Every load and save runs in its own
-/// short-lived context, as in `LibraryDisplaySettingsStore`: a failed save
-/// is discarded with that context instead of lingering as a dirty row, and
-/// a preference save never flushes another context's pending synced edits.
-/// Published values change only after a save succeeds.
+/// layout. Every load and save runs in its own short-lived context, as in
+/// `LibraryDisplaySettingsStore`: a failed save is discarded with that
+/// context instead of lingering as a dirty row, and a preference save never
+/// flushes another context's pending synced edits. Published values change
+/// only after a save succeeds.
 @Observable
 final class InboxEpisodeListSettingsStore {
     static let filterPreferenceKey = "inbox.filter"

@@ -21,6 +21,7 @@ struct EpisodeMoreMenu: View {
                 EpisodeShareMenu(episode: episode)
             }
             progressActions
+            Button("Add to Playlist…", systemImage: "music.note.list", action: addToPlaylist)
             Divider()
             downloadActions
             transcriptActions
@@ -125,6 +126,10 @@ struct EpisodeMoreMenu: View {
 
     private func markPlayed() {
         appModel.markEpisodePlayed(episode, modelContext: modelContext)
+    }
+
+    private func addToPlaylist() {
+        appModel.requestAddToPlaylist(episodeID: episode.episodeID)
     }
 
     private func download() {

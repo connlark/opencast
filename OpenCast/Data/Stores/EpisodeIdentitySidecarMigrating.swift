@@ -18,6 +18,34 @@ protocol EpisodeIdentitySidecarMigrating: AnyObject {
         canonicalPodcastID: String,
         modelContext: ModelContext
     ) throws
+
+    /// Called once per subscription migration, after every episode re-key
+    /// and before the save, for records keyed on the feed itself rather than
+    /// on an episode (a smart playlist rule's shows). Same contract as the
+    /// episode hook: mutate, never save.
+    func migrateFeedSidecars(
+        from oldCanonicalFeedURL: String,
+        to newCanonicalFeedURL: String,
+        modelContext: ModelContext
+    ) throws
+
+    /// Called once after the reconciliation's save on every path:
+    /// `committed` is false when the migration or its save threw and the
+    /// context still holds the re-keys as unsaved changes. Stores whose
+    /// memory is the `@Model` rows need nothing; a store that mirrors rows
+    /// into value copies publishes what it staged only on commit and drops
+    /// it otherwise, so memory never runs ahead of storage.
+    func finishEpisodeSidecarMigration(committed: Bool)
+}
+
+extension EpisodeIdentitySidecarMigrating {
+    func migrateFeedSidecars(
+        from oldCanonicalFeedURL: String,
+        to newCanonicalFeedURL: String,
+        modelContext: ModelContext
+    ) throws {}
+
+    func finishEpisodeSidecarMigration(committed: Bool) {}
 }
 
 extension DownloadStore: EpisodeIdentitySidecarMigrating {}

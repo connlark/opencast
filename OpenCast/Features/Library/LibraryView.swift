@@ -9,8 +9,10 @@ struct LibraryView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var sampleSubscriptionErrorMessage: String?
     @State private var isSubscribingSample = false
+    @State private var namePromptRequest: PlaylistNamePromptRequest?
 
     let onAdd: () -> Void
+    let onOpenUpNext: () -> Void
 
     private var displaySettings: LibraryDisplaySettingsStore {
         appModel.libraryDisplaySettings
@@ -18,10 +20,6 @@ struct LibraryView: View {
 
     private var layout: LibraryLayout {
         displaySettings.layout.resolved(isRegularWidth: horizontalSizeClass == .regular)
-    }
-
-    private var badge: LibrarySubscriptionBadge {
-        displaySettings.showsNewEpisodeBadges ? .newEpisodes : .hidden
     }
 
     var body: some View {
@@ -53,9 +51,16 @@ struct LibraryView: View {
                 }
 
                 ToolbarItem(placement: .topBarPinnedTrailing) {
-                    Button("Add", systemImage: "plus", action: onAdd)
+                    Menu {
+                        Button("Add Podcast", systemImage: "antenna.radiowaves.left.and.right", action: onAdd)
+                        Button("New Playlist…", systemImage: "text.badge.plus", action: promptNewPlaylist)
+                            .accessibilityIdentifier("New Playlist")
+                    } label: {
+                        Label("Add", systemImage: "plus")
+                    }
                 }
             }
+            .playlistNamePrompt($namePromptRequest, onCommit: createPlaylist)
             .onAppear(perform: appModel.library.advanceNewEpisodeReferenceDate)
             .onChange(of: scenePhase) { _, scenePhase in
                 if scenePhase == .active {
@@ -82,6 +87,13 @@ struct LibraryView: View {
         default:
             if subscriptions.isEmpty {
                 List {
+                    // Playlists outlive their shows and the Playlists tab is
+                    // hidden on iPhone, so the rows stay while they lead
+                    // somewhere; they are absent only when both are empty.
+                    if hasCollections {
+                        collectionsSection
+                    }
+
                     LibraryEmptyStateView(
                         syncActivity: appModel.syncStatus.libraryActivity,
                         isSubscribingSample: isSubscribingSample,
@@ -91,18 +103,68 @@ struct LibraryView: View {
                     )
                 }
             } else if layout == .grid {
-                let badge = badge
-                LibrarySubscriptionGridView(subscriptions: subscriptions) { _ in badge }
-                    .transition(.opacity)
+                LibrarySubscriptionGridView(
+                    subscriptions: subscriptions,
+                    showsNewEpisodeCount: displaySettings.showsNewEpisodeBadges
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        collectionsHeader
+
+                        Text("Shows")
+                            .font(.title3)
+                            .bold()
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    .padding(.top, 4)
+                }
+                .transition(.opacity)
             } else {
                 List {
-                    ForEach(subscriptions) { subscription in
-                        LibrarySubscriptionRowView(subscription: subscription, badge: badge)
+                    collectionsSection
+
+                    Section("Shows") {
+                        ForEach(subscriptions) { subscription in
+                            LibrarySubscriptionRowView(
+                                subscription: subscription,
+                                showsNewEpisodeCount: displaySettings.showsNewEpisodeBadges
+                            )
+                        }
                     }
                 }
                 .accessibilityIdentifier("Library List")
                 .transition(.opacity)
             }
+        }
+    }
+
+    private var hasCollections: Bool {
+        !appModel.playlists.playlists.isEmpty || !appModel.upNextQueue.items.isEmpty
+    }
+
+    private var collectionsSection: some View {
+        Section {
+            collectionsHeader
+                .listRowInsets(.vertical, 0)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+        }
+    }
+
+    private var collectionsHeader: some View {
+        LibraryCollectionsHeader(
+            playlistCount: appModel.playlists.playlists.count,
+            upNextCount: appModel.upNextQueue.items.count,
+            onOpenUpNext: onOpenUpNext
+        )
+    }
+
+    private func promptNewPlaylist() {
+        namePromptRequest = .create()
+    }
+
+    private func createPlaylist(_ request: PlaylistNamePromptRequest, name: String) {
+        appModel.performPlaylistMutation {
+            appModel.playlists.create(name: name, kind: .manual, modelContext: modelContext)
         }
     }
 

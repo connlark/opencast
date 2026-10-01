@@ -16,6 +16,7 @@ final class LibraryStore {
 
     static let refreshLogRetentionLimit = 50
     static let foregroundRefreshInterval: TimeInterval = 60 * 60
+    static let episodeSummaryMaximumCharacters = 2_000
 
     // Forwarders for the progress rules' established call sites.
     static let trivialProgressPrunableMinAge = EpisodeProgressRules.trivialProgressPrunableMinAge
@@ -43,6 +44,9 @@ final class LibraryStore {
     /// flow shell; nothing else assigns it.
     var state: State = .idle
     private(set) var subscriptions: [SubscriptionRecord] = []
+    /// Active subscriptions' episodes in `EpisodeListItemSnapshot.newestFirst`
+    /// order with ties by ascending episode ID, as the cache loads them.
+    /// The smart playlist evaluator relies on this to stop at a limit.
     private(set) var episodes: [EpisodeListItemSnapshot] = []
     var progressRecords: [EpisodeProgressRecord] {
         progressWriter.records
@@ -135,6 +139,15 @@ final class LibraryStore {
     /// `EpisodeProgressWriter.revision` tracks only index membership, so the
     /// derived per-show readers (new-episode counts) read this too.
     private(set) var progressRefetchRevision = 0
+    /// Moves whenever a played-state filter may read a different answer: a
+    /// write through the writer that can change one (in-place edits
+    /// included; a position-only playback flush is not one), an index
+    /// membership change, or a refetch. Each counter only increases, so the
+    /// sum moves whenever any does. Smart playlist evaluations key on it;
+    /// rows keep observing their own records.
+    var progressChangeRevision: Int {
+        progressWriter.statusRevision &+ progressWriter.revision &+ progressRefetchRevision
+    }
     /// Each active feed's newest follow date — the new-episode cutoff —
     /// copied out of the subscription records so a synced reload can compare
     /// values: a refetch refreshes a live record's `subscribedAt` without an
@@ -617,7 +630,8 @@ final class LibraryStore {
         }
     }
 
-    /// Library entry and scene activation call this. Sub-minute movement
+    /// Library entry, the Playlists collection, smart playlist detail and
+    /// scene activation call this. Sub-minute movement
     /// cannot meaningfully change a 30-day window, so it is skipped rather
     /// than invalidating every row on each tab switch.
     func advanceNewEpisodeReferenceDate() {
@@ -740,6 +754,28 @@ final class LibraryStore {
             // user-initiated operation, so it must not raise the modal alert.
             Self.backgroundFailureLogger.error(
                 "Show-notes fetch failed: \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    /// Raw episode descriptions for one active feed, on demand: list
+    /// snapshots never carry them. Returns nil on a store failure.
+    func episodeSummaries(forPodcastID podcastID: String) async -> [String: String]? {
+        guard activePodcastIDs.contains(podcastID) else {
+            return [:]
+        }
+
+        do {
+            return try await localCache.episodeSummaries(
+                forPodcastID: podcastID,
+                maximumCharacters: Self.episodeSummaryMaximumCharacters
+            )
+        } catch {
+            // Background preparation for an optional feature, so it must
+            // not raise the modal alert.
+            Self.backgroundFailureLogger.error(
+                "Episode-summary fetch failed: \(error.localizedDescription, privacy: .public)"
             )
             return nil
         }

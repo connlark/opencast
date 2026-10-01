@@ -74,17 +74,41 @@ final class UpNextQueueStore {
     @discardableResult
     func enqueueNext(
         _ episode: EpisodeListItemSnapshot,
+        source: String? = nil,
         modelContext: ModelContext
     ) -> Bool {
-        enqueue(episode, atFront: true, modelContext: modelContext)
+        enqueue([episode], atFront: true, source: source, modelContext: modelContext)
     }
 
     @discardableResult
     func enqueueLast(
         _ episode: EpisodeListItemSnapshot,
+        source: String? = nil,
         modelContext: ModelContext
     ) -> Bool {
-        enqueue(episode, atFront: false, modelContext: modelContext)
+        enqueue([episode], atFront: false, source: source, modelContext: modelContext)
+    }
+
+    /// Inserts the whole batch at the front in array order, so `episodes[0]`
+    /// becomes the new head. One save; a failure leaves the queue untouched.
+    @discardableResult
+    func enqueueNext(
+        _ episodes: [EpisodeListItemSnapshot],
+        source: String?,
+        modelContext: ModelContext
+    ) -> Bool {
+        enqueue(episodes, atFront: true, source: source, modelContext: modelContext)
+    }
+
+    /// Appends the whole batch in array order. One save; a failure leaves the
+    /// queue untouched.
+    @discardableResult
+    func enqueueLast(
+        _ episodes: [EpisodeListItemSnapshot],
+        source: String?,
+        modelContext: ModelContext
+    ) -> Bool {
+        enqueue(episodes, atFront: false, source: source, modelContext: modelContext)
     }
 
     @discardableResult
@@ -271,45 +295,65 @@ final class UpNextQueueStore {
         return lastErrorMessage
     }
 
+    /// Already-queued episodes move into the batch's slot and take its
+    /// source; a repeat inside the batch keeps its first occurrence. The
+    /// batch's sequences continue from its neighbour, so untouched rows keep
+    /// their stored order without a rewrite.
     private func enqueue(
-        _ episode: EpisodeListItemSnapshot,
+        _ episodes: [EpisodeListItemSnapshot],
         atFront: Bool,
+        source: String?,
         modelContext: ModelContext
     ) -> Bool {
-        let previousItems = items
-        items.removeAll { $0.episodeID == episode.episodeID }
-        let sequence = atFront
-            ? (items.first?.sequence ?? 1) - 1
-            : (items.last?.sequence ?? -1) + 1
-        let item = UpNextQueueItem(
-            episodeID: episode.episodeID,
-            podcastID: episode.podcastID,
-            sequence: sequence,
-            enqueuedAt: .now
-        )
-        if atFront {
-            items.insert(item, at: 0)
-        } else {
-            items.append(item)
+        var batchEpisodeIDs: Set<String> = []
+        let batch = episodes.filter { batchEpisodeIDs.insert($0.episodeID).inserted }
+        guard !batch.isEmpty else {
+            return true
         }
 
-        do {
-            try deleteRecords(episodeID: episode.episodeID, modelContext: modelContext)
-            modelContext.insert(
-                UpNextQueueItemRecord(
-                    episodeID: item.episodeID,
-                    podcastID: item.podcastID,
-                    sequence: item.sequence,
-                    enqueuedAt: item.enqueuedAt
-                )
+        let previousItems = items
+        let remainingItems = items.filter { !batchEpisodeIDs.contains($0.episodeID) }
+        let firstSequence = atFront
+            ? (remainingItems.first?.sequence ?? batch.count) - batch.count
+            : (remainingItems.last?.sequence ?? -1) + 1
+        let enqueuedAt = Date.now
+        let addedItems = batch.enumerated().map { offset, episode in
+            UpNextQueueItem(
+                episodeID: episode.episodeID,
+                podcastID: episode.podcastID,
+                sequence: firstSequence + offset,
+                enqueuedAt: enqueuedAt,
+                sourcePlaylistID: source
             )
+        }
+        items = atFront ? addedItems + remainingItems : remainingItems + addedItems
+
+        do {
+            let records = try modelContext.fetch(FetchDescriptor<UpNextQueueItemRecord>())
+            for record in records where batchEpisodeIDs.contains(record.episodeID) {
+                modelContext.delete(record)
+            }
+            for item in addedItems {
+                modelContext.insert(
+                    UpNextQueueItemRecord(
+                        episodeID: item.episodeID,
+                        podcastID: item.podcastID,
+                        sequence: item.sequence,
+                        enqueuedAt: item.enqueuedAt,
+                        sourcePlaylistID: item.sourcePlaylistID
+                    )
+                )
+            }
             try saveModelContext(modelContext)
             didMutate()
             return true
         } catch {
             modelContext.rollback()
             items = previousItems
-            lastErrorMessage = "Unable to add the episode to Up Next: \(error.localizedDescription)"
+            let operation = batch.count == 1
+                ? "Unable to add the episode to Up Next"
+                : "Unable to add episodes to Up Next"
+            lastErrorMessage = "\(operation): \(error.localizedDescription)"
             return false
         }
     }
@@ -327,13 +371,17 @@ final class UpNextQueueStore {
                         episodeID: item.episodeID,
                         podcastID: item.podcastID,
                         sequence: item.sequence,
-                        enqueuedAt: item.enqueuedAt
+                        enqueuedAt: item.enqueuedAt,
+                        sourcePlaylistID: item.sourcePlaylistID
                     )
                 )
                 continue
             }
 
             record.sequence = item.sequence
+            if record.sourcePlaylistID != item.sourcePlaylistID {
+                record.sourcePlaylistID = item.sourcePlaylistID
+            }
             for duplicate in matches.dropFirst() {
                 modelContext.delete(duplicate)
             }
@@ -375,7 +423,8 @@ final class UpNextQueueStore {
             episodeID: record.episodeID,
             podcastID: record.podcastID,
             sequence: sequence,
-            enqueuedAt: record.enqueuedAt
+            enqueuedAt: record.enqueuedAt,
+            sourcePlaylistID: record.sourcePlaylistID
         )
     }
 }

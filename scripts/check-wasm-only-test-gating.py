@@ -62,8 +62,11 @@ def has_positive_test_cfg(attr_norm: str) -> bool:
 
 
 def strip_noise(line: str) -> str:
-    """Remove string literals and line comments before counting braces."""
+    """Remove string and char literals and line comments before counting braces."""
     line = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
+    # A char literal such as '{' or '\u{7B}' is not a brace (lifetimes never
+    # close with a quote, so they are untouched).
+    line = re.sub(r"'(?:[^'\\]|\\u\{[0-9A-Fa-f]+\}|\\.)'", "''", line)
     return line.split("//", 1)[0]
 
 

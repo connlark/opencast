@@ -37,7 +37,7 @@ struct EpisodeTranscriptMenu: View {
             }
 
             if recapMenuState != nil || showsAsk {
-                Section {
+                Section(PlaylistOrganizerCopy.menuSectionTitle) {
                     if let recapMenuState {
                         Button(
                             TranscriptRecapWindowKind.lastFiveMinutes.menuTitle,

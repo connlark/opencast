@@ -22,12 +22,15 @@ nonisolated final class ScriptedTranscriptIntelligenceClient: TranscriptIntellig
     /// Token count charged per session for each prompt, so tests can push a
     /// session past the Ask input budget deterministically.
     var inputTokensPerPrompt: ((String) -> Int) = { $0.count / 4 }
+    /// Replaces the `count / 4` token counter when set, so a test can make
+    /// the budget arithmetic weigh some characters more than others.
+    var tokenCounter: (@Sendable (String) -> Int)?
     private(set) var sessions: [ScriptedTranscriptIntelligenceSession] = []
 
     private(set) var limitIncreaseSuggestionShowCount = 0
 
     func tokenCount(for text: String) async throws -> Int {
-        text.count / 4
+        tokenCounter?(text) ?? text.count / 4
     }
 
     func showLimitIncreaseSuggestion() {
@@ -53,6 +56,8 @@ nonisolated final class ScriptedTranscriptIntelligenceSession: TranscriptIntelli
     let instructions: String
     let toolNames: [String]
     private(set) var prompts: [String] = []
+    /// The generation options of every turn, in turn order.
+    private(set) var options: [TranscriptIntelligenceGenerationOptions] = []
     private(set) var inputTokenCount = 0
     private(set) var partialUpdateCounts: [Int] = []
     private unowned let client: ScriptedTranscriptIntelligenceClient
@@ -67,7 +72,7 @@ nonisolated final class ScriptedTranscriptIntelligenceSession: TranscriptIntelli
         to prompt: String,
         options: TranscriptIntelligenceGenerationOptions
     ) async throws -> TranscriptIntelligenceResponse<String> {
-        let text = switch try await consume(prompt) {
+        let text = switch try await consume(prompt, options: options) {
         case .text(let text), .json(let text): text
         case .answer(let json, _): json
         case .failure, .hang: ""
@@ -91,7 +96,7 @@ nonisolated final class ScriptedTranscriptIntelligenceSession: TranscriptIntelli
     ) async throws -> TranscriptIntelligenceResponse<Content> {
         let json: String
         let exchanges: [TranscriptIntelligenceToolExchange]
-        switch try await consume(prompt) {
+        switch try await consume(prompt, options: options) {
         case .json(let scripted):
             json = scripted
             exchanges = []
@@ -124,8 +129,12 @@ nonisolated final class ScriptedTranscriptIntelligenceSession: TranscriptIntelli
         return TranscriptIntelligenceResponse(content: content, usage: usage(prompt, json), toolExchanges: exchanges)
     }
 
-    private func consume(_ prompt: String) async throws -> ScriptedTranscriptIntelligenceClient.Turn {
+    private func consume(
+        _ prompt: String,
+        options turnOptions: TranscriptIntelligenceGenerationOptions
+    ) async throws -> ScriptedTranscriptIntelligenceClient.Turn {
         prompts.append(prompt)
+        options.append(turnOptions)
         guard let turn = client.nextTurn() else {
             throw TranscriptIntelligenceFailure.unknown("no scripted turn")
         }

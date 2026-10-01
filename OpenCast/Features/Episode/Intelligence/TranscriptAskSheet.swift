@@ -25,7 +25,7 @@ struct TranscriptAskSheet: View {
         NavigationStack {
             content
                 .navigationTitle("Ask")
-                .navigationSubtitle("About This Episode")
+                .navigationSubtitle("About This Episode · Beta")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {

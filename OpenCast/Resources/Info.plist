@@ -53,6 +53,15 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Open Cast</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>open cast</string>
+		</dict>
+	</array>
 	<key>INIntentsSupported</key>
 	<array>
 		<string>INPlayMediaIntent</string>

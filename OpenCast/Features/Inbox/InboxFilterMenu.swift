@@ -1,14 +1,14 @@
 import SwiftData
 import SwiftUI
 
-/// The Inbox filter, Hide Up Next and Group by Podcast toggles as a trailing
-/// toolbar menu. While the filter or Hide Up Next differs from its default
-/// the icon takes the tint and the Inbox subtitle names what is hidden
-/// (`InboxView`), so a filtered Inbox never passes for the whole Inbox.
-/// Grouping hides nothing, so it leaves the icon alone. The label carries the state the way
-/// podcast detail's filter menu does ("Filter Episodes, All Episodes"): the
-/// toolbar keeps the icon only, and a toolbar menu drops a custom
-/// accessibility value.
+/// The Inbox filter, Hide Up Next and Group by Podcast as a trailing toolbar
+/// menu. While the filter or Hide Up Next differs from its default the icon
+/// takes the tint and the Inbox subtitle names what is hidden (`InboxView`),
+/// so a filtered Inbox never passes for the whole Inbox. Grouping hides
+/// nothing, so it sits in its own section and leaves the icon alone. The
+/// label carries the state the way podcast detail's filter menu does
+/// ("Filter Episodes, All Episodes"): the toolbar keeps the icon only, and a
+/// toolbar menu drops a custom accessibility value.
 struct InboxFilterMenu: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -24,8 +24,10 @@ struct InboxFilterMenu: View {
             Toggle(isOn: hidesQueuedEpisodesBinding) {
                 Label("Hide Up Next", systemImage: "text.line.first.and.arrowtriangle.forward")
             }
+            Divider()
+            // Not the Automatic layout's glyph, which sits in the next menu.
             Toggle(isOn: groupsByPodcastBinding) {
-                Label("Group by Podcast", systemImage: "rectangle.3.group")
+                Label("Group by Podcast", systemImage: "square.stack")
             }
         } label: {
             Label("Filter Episodes, \(summary)", systemImage: "line.3.horizontal.decrease")

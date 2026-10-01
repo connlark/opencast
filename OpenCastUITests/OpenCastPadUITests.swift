@@ -61,6 +61,40 @@ final class OpenCastPadUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededPadPlaylistsSidebarRowOpensCollection() throws {
+        try skipUnlessPad()
+
+        let app = makeSeededApp(seedsPlaylists: true)
+        app.launch()
+
+        // Launch lands on Inbox, where no Library row can share the label.
+        assertExists(app.navigationBars["Inbox"], named: "Inbox navigation title")
+        // A narrow window left by an earlier resize test has no sidebar and,
+        // by design, no Playlists tab; a double tap on the top edge restores it.
+        let window = app.windows.firstMatch
+        if window.frame.width < 700 {
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.005)).doubleTap()
+            let regularWidth = NSPredicate { _, _ in window.frame.width >= 700 }
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: regularWidth, object: app)], timeout: 5),
+                .completed,
+                "The window should return to regular width before the sidebar is used"
+            )
+        }
+        let playlistsEntry = revealPlaylistsSidebarEntry(in: app)
+        assertHittable(playlistsEntry, named: "Playlists sidebar entry")
+        attachSmokeScreenshot(named: "pad_playlists_sidebar")
+        playlistsEntry.tap()
+
+        assertExists(app.navigationBars["Playlists"], named: "Playlists navigation title")
+        assertExists(libraryContainer("Playlists Grid", in: app), named: "Playlists grid at regular width")
+        attachSmokeScreenshot(named: "pad_playlists_collection")
+
+        openLibrary(in: app)
+        assertExists(app.navigationBars["Library"], named: "Library navigation title after Playlists")
+    }
+
+    @MainActor
     func testSeededPadLibraryGridTileOpensPodcastDetailPush() throws {
         try skipUnlessPad()
 
@@ -276,6 +310,43 @@ final class OpenCastPadUITests: XCTestCase {
         assertExists(miniPlayer, named: "mini-player after returning to Inbox")
         miniPlayer.tap()
         assertNowPlayingOverlay(in: app)
+    }
+
+    @MainActor
+    func testSeededPadInboxGroupByPodcastShowsGridAndOpensShow() throws {
+        try skipUnlessPad()
+        let app = makeSeededApp(seedsLibraryNewEpisodes: true)
+        app.launch()
+
+        openInbox(in: app)
+        let filterMenu = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Filter Episodes,")
+        ).firstMatch
+        assertHittable(filterMenu, named: "Inbox filter menu")
+        filterMenu.tap()
+        let groupToggle = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Group by Podcast"))
+            .firstMatch
+        assertExists(groupToggle, named: "Group by Podcast toggle")
+        groupToggle.tap()
+
+        // Automatic resolves to the grid at regular width.
+        let grid = libraryContainer("Inbox Podcast Grid", in: app)
+        let mainShow = app.buttons.matching(
+            identifier: "inbox-podcast-group-https://example.com/ui-test-feed.xml"
+        ).firstMatch
+        assertExists(grid, named: "grouped Inbox grid under Automatic")
+        assertDoesNotExist(libraryContainer("Inbox Podcast List", in: app), named: "grouped Inbox list under Automatic")
+        assertExists(mainShow, named: "UI Test Show group tile")
+        XCTAssertEqual(mainShow.value as? String, "7 episodes")
+        attachSmokeScreenshot(named: "pad_inbox_grouped_grid")
+
+        mainShow.tap()
+        assertExists(app.staticTexts["Episodes"], named: "podcast detail opened from an Inbox group tile")
+        attachSmokeScreenshot(named: "pad_inbox_group_podcast_detail")
+
+        tapBackButton(in: app)
+        assertExists(grid, named: "grouped Inbox grid after Back")
     }
 
     @MainActor
@@ -612,7 +683,10 @@ final class OpenCastPadUITests: XCTestCase {
     }
 
     @MainActor
-    private func makeSeededApp(seedsLibraryNewEpisodes: Bool = false) -> XCUIApplication {
+    private func makeSeededApp(
+        seedsLibraryNewEpisodes: Bool = false,
+        seedsPlaylists: Bool = false
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "--opencast-ui-testing",
@@ -624,6 +698,9 @@ final class OpenCastPadUITests: XCTestCase {
         app.launchEnvironment["OPENCAST_FORCE_DARK_MODE"] = "1"
         if seedsLibraryNewEpisodes {
             app.launchEnvironment["OPENCAST_SEED_LIBRARY_NEW_EPISODES"] = "1"
+        }
+        if seedsPlaylists {
+            app.launchEnvironment["OPENCAST_SEED_PLAYLISTS"] = "1"
         }
         return app
     }
@@ -763,6 +840,35 @@ final class OpenCastPadUITests: XCTestCase {
     @MainActor
     private func tapBackButton(in app: XCUIApplication) {
         app.navigationBars.buttons.firstMatch.tap()
+    }
+
+    /// Playlists is hidden from the tab bar, so it lives only in the
+    /// sidebar, which portrait keeps closed until its toggle is tapped.
+    @MainActor
+    private func revealPlaylistsSidebarEntry(in app: XCUIApplication) -> XCUIElement {
+        if let entry = visibleTabButton("Playlists", in: app) {
+            return entry
+        }
+        let candidates = [app.buttons, app.cells].map {
+            $0.matching(NSPredicate(format: "label == %@", "Playlists")).firstMatch
+        }
+        let sidebarToggle = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] %@ OR identifier CONTAINS[c] %@", "sidebar", "sidebar")
+        ).firstMatch
+        if sidebarToggle.waitForExistence(timeout: 5) {
+            sidebarToggle.tap()
+        }
+        let entryIsHittable = NSPredicate { _, _ in
+            candidates.contains { $0.exists && $0.isHittable }
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: entryIsHittable, object: app)
+        guard XCTWaiter.wait(for: [expectation], timeout: 5) == .completed,
+              let entry = candidates.first(where: { $0.exists && $0.isHittable })
+        else {
+            attachHierarchyDump(named: "pad_playlists_sidebar_miss", in: app)
+            return candidates[0]
+        }
+        return entry
     }
 
     @MainActor

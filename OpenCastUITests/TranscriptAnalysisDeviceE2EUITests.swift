@@ -520,6 +520,7 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         for candidate in candidates {
             if candidate.waitForExistence(timeout: 3), candidate.isHittable {
                 candidate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                tapAddPodcastMenuItemIfPresented(in: app)
                 return
             }
         }

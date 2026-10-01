@@ -11,6 +11,7 @@ final class SiriMediaDiscovery {
     private let interactionDonator: @MainActor (INInteraction) -> Void
     private let interactionGroupDeleter: @MainActor (String) -> Void
     private var lastDonatedPodcastID: String?
+    private var lastDonatedPlaylistID: String?
 
     init(
         userContextPublisher: @escaping @MainActor (Int) -> Void = SiriMediaDiscovery.publishUserContext,
@@ -45,6 +46,28 @@ final class SiriMediaDiscovery {
     func deleteDonations(forPodcastIDs podcastIDs: Set<String>) {
         for podcastID in podcastIDs {
             deleteDonations(forPodcastID: podcastID)
+        }
+    }
+
+    func donatePlaylistPlaybackIfNeeded(playlistID: String, name: String) {
+        guard lastDonatedPlaylistID != playlistID else {
+            return
+        }
+
+        lastDonatedPlaylistID = playlistID
+        interactionDonator(SiriDonationBuilder.interaction(forPlaylistID: playlistID, name: name))
+    }
+
+    func deleteDonations(forPlaylistID playlistID: String) {
+        if lastDonatedPlaylistID == playlistID {
+            lastDonatedPlaylistID = nil
+        }
+        interactionGroupDeleter(playlistID)
+    }
+
+    func deleteDonations(forPlaylistIDs playlistIDs: Set<String>) {
+        for playlistID in playlistIDs {
+            deleteDonations(forPlaylistID: playlistID)
         }
     }
 

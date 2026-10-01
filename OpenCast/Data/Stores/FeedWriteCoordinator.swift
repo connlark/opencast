@@ -212,15 +212,34 @@ final class FeedWriteCoordinator {
         // The callers' awaits all precede this point; the apply-and-save
         // pair below is synchronous, so one check covers the save.
         try writeGeneration.ensureCurrent(generation)
-        try EpisodeIdentityMigrationApplier.apply(
-            matches,
-            canonicalFeedURL: canonicalFeedURL,
-            sidecarMigrators: sidecarMigrators,
-            modelContext: modelContext
-        )
-        try ledger.save(modelContext)
+        try commitIdentityMigration {
+            try EpisodeIdentityMigrationApplier.apply(
+                matches,
+                canonicalFeedURL: canonicalFeedURL,
+                sidecarMigrators: sidecarMigrators,
+                modelContext: modelContext
+            )
+            try ledger.save(modelContext)
+        }
         try await localCache.deleteEpisodes(episodeIDs: matches.map(\.departedEpisodeID))
         return matches.count
+    }
+
+    /// Runs one identity migration and its save as a unit and tells every
+    /// sidecar migrator whether it committed, so a store that mirrors rows
+    /// into value copies never publishes a re-key the save did not land.
+    private func commitIdentityMigration(_ migrate: () throws -> Void) throws {
+        do {
+            try migrate()
+        } catch {
+            for migrator in sidecarMigrators {
+                migrator.finishEpisodeSidecarMigration(committed: false)
+            }
+            throw error
+        }
+        for migrator in sidecarMigrators {
+            migrator.finishEpisodeSidecarMigration(committed: true)
+        }
     }
 
     func handleFeedRelocation(
@@ -312,7 +331,8 @@ final class FeedWriteCoordinator {
 
     /// Moves a subscription onto a new canonical feed URL: fetches the new
     /// URL (the migration only commits when that fetch succeeds), re-keys
-    /// episode identities through the reconciliation machinery, writes the
+    /// episode identities through the reconciliation machinery and the
+    /// feed-keyed sidecars (smart playlist shows) onto the new URL, writes the
     /// old URL's subscription tombstone and the fresh SubscriptionRecord in
     /// the same save, then drops the old URL's local cache.
     ///
@@ -369,62 +389,71 @@ final class FeedWriteCoordinator {
             try await localCache.deleteCache(forPodcastID: newCanonicalFeedURL)
             throw error
         }
-        try EpisodeIdentityMigrationApplier.apply(
-            matches,
-            canonicalFeedURL: newCanonicalFeedURL,
-            sidecarMigrators: sidecarMigrators,
-            modelContext: modelContext
-        )
-
-        let deletedAt = now()
-        modelContext.insert(
-            SyncTombstoneRecord(scope: .subscription, feedURL: oldCanonicalFeedURL, deletedAt: deletedAt)
-        )
-        let hasNewSubscription = allSubscriptions.contains { record in
-            URLCanonicalizer.canonicalString(forRawString: record.feedURL) == newCanonicalFeedURL
-        }
-        let migrationSkipSettings = PodcastPlaybackSkipSettings.greatestValid(
-            in: oldSubscriptionRecords.map {
-                PodcastPlaybackSkipSettings(
-                    skipIntroSeconds: $0.skipIntroSeconds,
-                    skipOutroSeconds: $0.skipOutroSeconds
-                )
-            }
-        )
-        if !hasNewSubscription {
-            // subscribedAt must postdate the old URL's tombstone only if the
-            // keys collided — they don't — but a strictly newer stamp keeps
-            // the record safe under any future canonicalization drift.
-            modelContext.insert(
-                SubscriptionRecord(
-                    feedURL: newCanonicalFeedURL,
-                    title: snapshot.podcast.title,
-                    author: snapshot.podcast.author,
-                    artworkURL: snapshot.podcast.artworkURL?.absoluteString,
-                    subscribedAt: deletedAt.addingTimeInterval(1),
-                    lastRefreshAt: now(),
-                    isArchived: template.isArchived,
-                    isVoiceBoostEnabled: template.isVoiceBoostEnabled,
-                    isAdAutoDetectEnabled: template.isAdAutoDetectEnabled,
-                    isTranscriptAnalysisEnabled: template.isTranscriptAnalysisEnabled,
-                    skipIntroSeconds: migrationSkipSettings.skipIntroSeconds,
-                    skipOutroSeconds: migrationSkipSettings.skipOutroSeconds
-                )
+        try commitIdentityMigration {
+            try EpisodeIdentityMigrationApplier.apply(
+                matches,
+                canonicalFeedURL: newCanonicalFeedURL,
+                sidecarMigrators: sidecarMigrators,
+                modelContext: modelContext
             )
-        } else {
-            for record in allSubscriptions where
-                URLCanonicalizer.canonicalString(forRawString: record.feedURL) == newCanonicalFeedURL
-            {
-                Self.mergePodcastPlaybackSkipSettings(
-                    migrationSkipSettings,
-                    into: record
+            for migrator in sidecarMigrators {
+                try migrator.migrateFeedSidecars(
+                    from: oldCanonicalFeedURL,
+                    to: newCanonicalFeedURL,
+                    modelContext: modelContext
                 )
             }
+
+            let deletedAt = now()
+            modelContext.insert(
+                SyncTombstoneRecord(scope: .subscription, feedURL: oldCanonicalFeedURL, deletedAt: deletedAt)
+            )
+            let hasNewSubscription = allSubscriptions.contains { record in
+                URLCanonicalizer.canonicalString(forRawString: record.feedURL) == newCanonicalFeedURL
+            }
+            let migrationSkipSettings = PodcastPlaybackSkipSettings.greatestValid(
+                in: oldSubscriptionRecords.map {
+                    PodcastPlaybackSkipSettings(
+                        skipIntroSeconds: $0.skipIntroSeconds,
+                        skipOutroSeconds: $0.skipOutroSeconds
+                    )
+                }
+            )
+            if !hasNewSubscription {
+                // subscribedAt must postdate the old URL's tombstone only if the
+                // keys collided — they don't — but a strictly newer stamp keeps
+                // the record safe under any future canonicalization drift.
+                modelContext.insert(
+                    SubscriptionRecord(
+                        feedURL: newCanonicalFeedURL,
+                        title: snapshot.podcast.title,
+                        author: snapshot.podcast.author,
+                        artworkURL: snapshot.podcast.artworkURL?.absoluteString,
+                        subscribedAt: deletedAt.addingTimeInterval(1),
+                        lastRefreshAt: now(),
+                        isArchived: template.isArchived,
+                        isVoiceBoostEnabled: template.isVoiceBoostEnabled,
+                        isAdAutoDetectEnabled: template.isAdAutoDetectEnabled,
+                        isTranscriptAnalysisEnabled: template.isTranscriptAnalysisEnabled,
+                        skipIntroSeconds: migrationSkipSettings.skipIntroSeconds,
+                        skipOutroSeconds: migrationSkipSettings.skipOutroSeconds
+                    )
+                )
+            } else {
+                for record in allSubscriptions where
+                    URLCanonicalizer.canonicalString(forRawString: record.feedURL) == newCanonicalFeedURL
+                {
+                    Self.mergePodcastPlaybackSkipSettings(
+                        migrationSkipSettings,
+                        into: record
+                    )
+                }
+            }
+            for record in oldSubscriptionRecords {
+                modelContext.delete(record)
+            }
+            try ledger.save(modelContext)
         }
-        for record in oldSubscriptionRecords {
-            modelContext.delete(record)
-        }
-        try ledger.save(modelContext)
 
         try await localCache.deleteCache(forPodcastID: oldCanonicalFeedURL)
         relocationAdvisor.clearDivergence(oldFeedURLString)

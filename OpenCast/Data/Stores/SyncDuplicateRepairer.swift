@@ -70,6 +70,12 @@ enum SyncDuplicateRepairer {
                         continue
                     }
                     merge(&progressClearsByEpisodeID, key: episodeID, deletedAt: tombstone.deletedAt)
+                case .playlist, .playlistItem:
+                    // Reserved for playlist sync: known so hygiene never deletes
+                    // them as unknown, but their key field is not defined yet,
+                    // so nothing indexes, matches or supersedes them; only the
+                    // retention horizon collects them.
+                    continue
                 case nil:
                     continue
                 }
@@ -88,7 +94,7 @@ enum SyncDuplicateRepairer {
                     return nil
                 }
                 return progressClearsByEpisodeID[episodeID]
-            case nil:
+            case .playlist, .playlistItem, nil:
                 return nil
             }
         }

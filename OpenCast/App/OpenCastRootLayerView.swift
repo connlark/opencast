@@ -7,6 +7,7 @@ struct OpenCastRootLayerView<Content: View>: View {
     let onDismissNowPlaying: () -> Void
     let onOpenCurrentEpisode: () -> Void
     let onOpenCurrentPodcast: () -> Void
+    let onOpenCurrentPlaylist: () -> Void
     let onStopPlayback: () -> Void
     let content: () -> Content
 
@@ -15,6 +16,7 @@ struct OpenCastRootLayerView<Content: View>: View {
         onDismissNowPlaying: @escaping () -> Void,
         onOpenCurrentEpisode: @escaping () -> Void,
         onOpenCurrentPodcast: @escaping () -> Void,
+        onOpenCurrentPlaylist: @escaping () -> Void,
         onStopPlayback: @escaping () -> Void,
         @ViewBuilder content: @escaping () -> Content
     ) {
@@ -22,6 +24,7 @@ struct OpenCastRootLayerView<Content: View>: View {
         self.onDismissNowPlaying = onDismissNowPlaying
         self.onOpenCurrentEpisode = onOpenCurrentEpisode
         self.onOpenCurrentPodcast = onOpenCurrentPodcast
+        self.onOpenCurrentPlaylist = onOpenCurrentPlaylist
         self.onStopPlayback = onStopPlayback
         self.content = content
     }
@@ -41,6 +44,7 @@ struct OpenCastRootLayerView<Content: View>: View {
                     onDismissed: onDismissNowPlaying,
                     onOpenEpisode: onOpenCurrentEpisode,
                     onOpenPodcast: onOpenCurrentPodcast,
+                    onOpenPlaylist: onOpenCurrentPlaylist,
                     onStopPlayback: onStopPlayback
                 )
                 .zIndex(1)

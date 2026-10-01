@@ -275,6 +275,107 @@ struct SyncTombstoneRepairTests {
         #expect(!result.hasIssues)
     }
 
+    @Test("Playlist tombstones survive repair and shadow no record")
+    func playlistTombstonesSurviveRepairAndShadowNoRecord() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let now = Self.clearInstant
+
+        context.insert(
+            SyncTombstoneRecord(
+                scope: .playlist,
+                feedURL: Self.feedURL,
+                deletedAt: now.addingTimeInterval(-10)
+            )
+        )
+        context.insert(
+            SyncTombstoneRecord(
+                scope: .playlistItem,
+                feedURL: Self.feedURL,
+                episodeID: "episode",
+                deletedAt: now.addingTimeInterval(-10)
+            )
+        )
+        context.insert(
+            SubscriptionRecord(
+                feedURL: Self.feedURL,
+                title: "Show",
+                subscribedAt: now.addingTimeInterval(-100)
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "episode",
+                podcastID: Self.feedURL,
+                position: 30,
+                updatedAt: now.addingTimeInterval(-100)
+            )
+        )
+        try context.save()
+
+        let result = try SyncDuplicateRepairer.repair(modelContext: context, now: now, save: { try $0.save() })
+
+        let scopes = try context.fetch(FetchDescriptor<SyncTombstoneRecord>()).map(\.scope).sorted()
+        #expect(
+            scopes == [
+                SyncTombstoneScope.playlist.rawValue,
+                SyncTombstoneScope.playlistItem.rawValue
+            ]
+        )
+        #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).count == 1)
+        #expect(result.expiredTombstonesDeleted == 0)
+        #expect(result.tombstonedRecordsDeleted == 0)
+        #expect(!result.hasChanges)
+    }
+
+    @Test("Playlist tombstones are never superseded, only expired")
+    func playlistTombstonesAreNeverSupersededOnlyExpired() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let now = Self.clearInstant
+        let older = now.addingTimeInterval(-100)
+        let newer = now.addingTimeInterval(-50)
+
+        // Same scope and same stored key twice: the key field for these scopes
+        // is not defined yet, so a build in the field must not pick a winner.
+        context.insert(SyncTombstoneRecord(scope: .playlist, feedURL: Self.feedURL, deletedAt: older))
+        context.insert(SyncTombstoneRecord(scope: .playlist, feedURL: Self.feedURL, deletedAt: newer))
+        context.insert(SyncTombstoneRecord(scope: .playlist, feedURL: "", deletedAt: older))
+        context.insert(SyncTombstoneRecord(scope: .playlist, feedURL: "", deletedAt: newer))
+        context.insert(SyncTombstoneRecord(scope: .playlistItem, feedURL: Self.feedURL, deletedAt: older))
+        context.insert(
+            SyncTombstoneRecord(
+                scope: .playlistItem,
+                feedURL: Self.otherFeedURL,
+                deletedAt: now.addingTimeInterval(-SyncDuplicateRepairer.tombstoneRetentionPeriod - 60)
+            )
+        )
+        try context.save()
+
+        let result = try SyncDuplicateRepairer.repair(modelContext: context, now: now, save: { try $0.save() })
+
+        let remaining = try context.fetch(FetchDescriptor<SyncTombstoneRecord>())
+        let playlistScope = SyncTombstoneScope.playlist.rawValue
+        let playlistItemScope = SyncTombstoneScope.playlistItem.rawValue
+        #expect(remaining.count == 5)
+        #expect(remaining.count(where: { $0.scope == playlistScope }) == 4)
+        #expect(
+            remaining.count(where: { $0.scope == playlistScope && $0.feedURL == Self.feedURL }) == 2
+        )
+        #expect(remaining.count(where: { $0.scope == playlistScope && $0.feedURL.isEmpty }) == 2)
+        #expect(
+            remaining.contains { tombstone in
+                tombstone.scope == playlistItemScope
+                    && tombstone.feedURL == Self.feedURL
+                    && tombstone.deletedAt == older
+            }
+        )
+        #expect(!remaining.contains { $0.feedURL == Self.otherFeedURL })
+        #expect(result.expiredTombstonesDeleted == 1)
+        #expect(!result.hasIssues)
+    }
+
     @Test("Unsubscribe writes a subscription tombstone only by default")
     func unsubscribeWritesASubscriptionTombstoneOnlyByDefault() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

@@ -23,6 +23,10 @@ nonisolated struct UITestDelayedLocalLibraryCacheStore: LocalLibraryCacheStore {
         try await base.showNotesHTMLByEpisodeID(activePodcastIDs: activePodcastIDs)
     }
 
+    func episodeSummaries(forPodcastID podcastID: String, maximumCharacters: Int) async throws -> [String: String] {
+        try await base.episodeSummaries(forPodcastID: podcastID, maximumCharacters: maximumCharacters)
+    }
+
     func prepareEpisodeSearchIndex() async throws {
         try await base.prepareEpisodeSearchIndex()
     }

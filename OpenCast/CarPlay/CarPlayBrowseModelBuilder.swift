@@ -104,10 +104,11 @@ enum CarPlayBrowseModelBuilder {
     static func library(
         subscriptions: [SubscriptionRecord],
         library: LibraryStore,
+        showsPlaylistsRow: Bool,
         isLoading: Bool,
         limits: CarPlayListLimits
     ) -> CarPlayBrowseSnapshot {
-        let rows = subscriptions.prefix(limits.maximumItemCount * 2).map { subscription in
+        let showRows = subscriptions.prefix(limits.maximumItemCount * 2 - (showsPlaylistsRow ? 1 : 0)).map { subscription in
             CarPlayListRow.podcast(
                 CarPlayPodcastRow(
                     feedURL: subscription.feedURL,
@@ -117,6 +118,7 @@ enum CarPlayBrowseModelBuilder {
                 )
             )
         }
+        let rows = (showsPlaylistsRow ? [CarPlayListRow.playlists] : []) + showRows
 
         return makeSnapshot(
             title: "Library",
@@ -197,6 +199,87 @@ enum CarPlayBrowseModelBuilder {
             continuationTitle: "More Episodes",
             emptyTitleVariants: ["No Episodes", "None"],
             emptySubtitleVariants: ["No episodes match this show's filter."],
+            isLoading: false,
+            limits: limits
+        )
+    }
+
+    /// Input order is kept: the store already sorts by the collection
+    /// preference the phone shows.
+    static func playlists(
+        _ summaries: [PlaylistSummary],
+        episodeCount: (PlaylistSummary) -> Int,
+        artworkURL: (PlaylistSummary) -> String?,
+        limits: CarPlayListLimits
+    ) -> CarPlayBrowseSnapshot {
+        let rows = summaries.prefix(limits.maximumItemCount * 2).map { summary -> CarPlayListRow in
+            let url: String?
+            let symbol: String?
+            switch summary.kind {
+            case .manual:
+                url = artworkURL(summary)
+                symbol = url == nil ? "music.note.list" : nil
+            case .smart:
+                url = nil
+                symbol = summary.symbolName ?? PlaylistSymbolCover.defaultSymbolName
+            }
+            return .playlist(
+                CarPlayPlaylistRow(
+                    playlistID: summary.playlistID,
+                    title: summary.name,
+                    detailText: PlaylistSummaryText.line(itemCount: episodeCount(summary), totalDuration: 0),
+                    artworkURL: url,
+                    symbolName: symbol
+                )
+            )
+        }
+
+        return makeSnapshot(
+            title: "Playlists",
+            sections: [CarPlayListSection(header: nil, rows: rows)],
+            continuationTitle: "More Playlists",
+            emptyTitleVariants: ["No Playlists", "None"],
+            emptySubtitleVariants: ["Create playlists from OpenCast on your phone."],
+            isLoading: false,
+            limits: limits
+        )
+    }
+
+    /// Hide Played uses the phone's playlist predicate, the stored played
+    /// flag, not the completion the smart candidate rule reads.
+    static func playlistEpisodes(
+        playlistID: String,
+        title: String,
+        episodes: [EpisodeListItemSnapshot],
+        hidesPlayed: Bool,
+        library: LibraryStore,
+        downloadRecords: [EpisodeDownloadRecord],
+        nowPlaying: CarPlayNowPlayingState,
+        limits: CarPlayListLimits
+    ) -> CarPlayBrowseSnapshot {
+        let visible = hidesPlayed
+            ? episodes.filter { library.progressRecord(for: $0.episodeID)?.isPlayed != true }
+            : episodes
+        let downloadedEpisodeIDs = completedDownloadEpisodeIDs(in: downloadRecords)
+        let rows = visible.prefix(limits.maximumItemCount * 2).map { episode in
+            CarPlayListRow.episode(
+                episodeRow(
+                    for: episode,
+                    detailText: episode.podcastTitle,
+                    library: library,
+                    downloadedEpisodeIDs: downloadedEpisodeIDs,
+                    nowPlaying: nowPlaying,
+                    sourcePlaylistID: playlistID
+                )
+            )
+        }
+
+        return makeSnapshot(
+            title: title,
+            sections: [CarPlayListSection(header: nil, rows: rows)],
+            continuationTitle: "More Episodes",
+            emptyTitleVariants: ["Nothing to Play", "Empty"],
+            emptySubtitleVariants: ["This playlist has no episodes to play."],
             isLoading: false,
             limits: limits
         )
@@ -323,7 +406,8 @@ enum CarPlayBrowseModelBuilder {
         detailText: String?,
         library: LibraryStore,
         downloadedEpisodeIDs: Set<String>,
-        nowPlaying: CarPlayNowPlayingState
+        nowPlaying: CarPlayNowPlayingState,
+        sourcePlaylistID: String? = nil
     ) -> CarPlayEpisodeRow {
         CarPlayEpisodeRow(
             episodeID: episode.episodeID,
@@ -338,7 +422,8 @@ enum CarPlayBrowseModelBuilder {
                 ? nil
                 : visibleProgress(for: episode, library: library),
             isPlaying: nowPlaying.isActivelyPlaying(episode.episodeID),
-            isDownloaded: downloadedEpisodeIDs.contains(episode.episodeID)
+            isDownloaded: downloadedEpisodeIDs.contains(episode.episodeID),
+            sourcePlaylistID: sourcePlaylistID
         )
     }
 
@@ -354,7 +439,8 @@ enum CarPlayBrowseModelBuilder {
             artworkURL: episode.artworkURL?.absoluteString,
             playbackProgress: nil,
             isPlaying: nowPlaying.isActivelyPlaying(episode.id.rawValue),
-            isDownloaded: downloadedEpisodeIDs.contains(episode.id.rawValue)
+            isDownloaded: downloadedEpisodeIDs.contains(episode.id.rawValue),
+            sourcePlaylistID: nil
         )
     }
 

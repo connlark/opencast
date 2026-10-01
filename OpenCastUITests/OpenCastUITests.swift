@@ -14,6 +14,22 @@ final class OpenCastUITests: XCTestCase {
     private static let aardvarkSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-aardvark.xml"
     private static let zephyrSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-zephyr.xml"
     private static let firstExtraSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-extra-1.xml"
+    private static let commutePlaylistID = "ui-test-playlist-commute"
+    private static let emptyPlaylistID = "ui-test-playlist-empty"
+    private static let smartPlaylistID = "ui-test-playlist-smart-unplayed"
+    private static let playedPlaylistEpisodeID = "ui-test-playlist-episode-2"
+    private static let seededQueuedEpisodeIDs = (1...3).map { "ui-test-queued-episode-\($0)" }
+    /// The chips of a smart playlist on the default rule, as "<Clause>, <Value>".
+    private static let defaultSmartRuleChipLabels = [
+        (clause: "Episodes", value: "Unplayed"),
+        (clause: "Shows", value: "All Shows"),
+        (clause: "Sort", value: "Newest First"),
+        (clause: "Length", value: "Any Length"),
+        (clause: "Age", value: "Any Time"),
+        (clause: "Limit", value: "25 episodes")
+    ]
+    private static let commutePlaylistItemIDs = (1...3).map { "ui-test-playlist-commute-item-\($0)" }
+    private static let nowPlayingSourceIdentifier = "Now Playing Source"
     private static let soundLabTranscriptActionIdentifier = "Now Playing Sound Lab Transcript Action"
     private static let seedVoiceBoostModeEnvironmentKey = "OPENCAST_SEED_VOICE_BOOST_MODE"
     private static let seedAdDetectionModeEnvironmentKey = "OPENCAST_SEED_AD_DETECTION_MODE"
@@ -70,6 +86,8 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["Downloads"].exists)
         XCTAssertTrue(app.tabBars.buttons["Settings"].exists)
         XCTAssertTrue(app.tabBars.buttons["Search"].exists)
+        // Playlists is a sidebar-only tab; compact width reaches it from Library.
+        XCTAssertFalse(app.tabBars.buttons["Playlists"].exists)
     }
 
     @MainActor
@@ -1469,6 +1487,91 @@ final class OpenCastUITests: XCTestCase {
             named: "Inbox subtitle after showing Up Next again",
             timeout: 5
         )
+    }
+
+    @MainActor
+    func testSeededInboxGroupByPodcastCountsShowsAndOpensThemFiltered() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true, seedsLibraryNewEpisodes: true)
+        app.launch()
+
+        openInbox(in: app)
+        let episodeRow = app.buttons.matching(identifier: "episode-row-ui-test-new-episode-1").firstMatch
+        let mainShow = inboxPodcastGroup("https://example.com/ui-test-feed.xml", in: app)
+        let aardvark = inboxPodcastGroup("https://example.com/ui-test-aardvark.xml", in: app)
+        let list = libraryContainer("Inbox Podcast List", in: app)
+        let grid = libraryContainer("Inbox Podcast Grid", in: app)
+        let layoutMenu = app.navigationBars["Inbox"].buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "Inbox Layout Options", "Layout")
+        ).firstMatch
+        assertExists(episodeRow, named: "Inbox episode row before grouping")
+        assertDoesNotExist(layoutMenu, named: "Inbox layout menu before grouping")
+
+        toggleInboxMenuItem("Group by Podcast", in: app)
+        assertExists(list, named: "grouped Inbox list")
+        assertDoesNotExist(episodeRow, named: "Inbox episode row while grouping", timeout: 5)
+        assertValue(of: mainShow, becomes: "10 episodes", named: "UI Test Show group under All Episodes")
+        assertValue(of: aardvark, becomes: "1 episode", named: "Aardvark group under All Episodes")
+        // Grouping is a view choice: nothing is filtered, so the menu and the
+        // subtitle still read as the whole Inbox.
+        assertExists(inboxFilterMenu(showing: "All Episodes", in: app), named: "Inbox filter menu while grouping")
+        assertExists(layoutMenu, named: "Inbox layout menu while grouping")
+        attachSmokeScreenshot(named: "inbox_grouped_list")
+
+        // A group counts what the Inbox would list: three queued episodes
+        // leave with Hide Up Next, and the played one with Unplayed.
+        toggleInboxHidesUpNext(in: app)
+        assertValue(of: mainShow, becomes: "7 episodes", named: "UI Test Show group while hiding Up Next")
+        chooseInboxFilter("Unplayed", in: app)
+        assertValue(of: mainShow, becomes: "6 episodes", named: "UI Test Show group under Unplayed")
+        assertExists(inboxSubtitle("Unplayed · Up Next hidden", in: app), named: "Inbox subtitle while grouping")
+
+        // The show opens under the Inbox's settings without storing them.
+        mainShow.tap()
+        assertExists(
+            app.descendants(matching: .any)["Podcast Hero Header"],
+            named: "podcast detail opened from an Inbox group"
+        )
+        // The hero header's identifier replaces its children's, so the
+        // caption is found by label.
+        let showHidden = app.buttons["Episodes playing or in Up Next are hidden, Show"]
+        let showFilter = app.buttons["Filter Episodes, Unplayed"]
+        let queuedRow = app.buttons.matching(identifier: Self.seededQueuedEpisodeRowIdentifiers[0]).firstMatch
+        assertExists(showFilter, named: "show filter under the Inbox's Unplayed")
+        assertHittable(showHidden, named: "hidden Up Next caption on the show")
+        attachSmokeScreenshot(named: "inbox_group_podcast_detail")
+        // The queued episodes are the show's oldest, so they would sit just
+        // past the oldest row that is listed.
+        scrollUntilExists(seededEpisodeRow(in: app), in: app)
+        app.swipeUp()
+        assertDoesNotExist(queuedRow, named: "queued row on the show while Up Next is hidden")
+
+        // Leaving and coming back applies the Inbox's settings again; Show
+        // keeps the filter and returns the queued rows.
+        tapBackButton(in: app)
+        assertExists(mainShow, named: "UI Test Show group after Back")
+        mainShow.tap()
+        assertHittable(showHidden, named: "hidden Up Next caption on the second visit")
+        showHidden.tap()
+        assertDoesNotExist(showHidden, named: "hidden Up Next caption after Show", timeout: 5)
+        assertExists(showFilter, named: "show filter after Show")
+        scrollUntilExists(queuedRow, in: app)
+
+        tapBackButton(in: app)
+        assertExists(list, named: "grouped Inbox list after Back")
+        assertHittable(layoutMenu, named: "Inbox layout menu after Back")
+        layoutMenu.tap()
+        let gridOption = app.buttons.matching(NSPredicate(format: "label == %@", "Grid")).firstMatch
+        assertHittable(gridOption, named: "Grid layout option")
+        gridOption.tap()
+        assertExists(grid, named: "grouped Inbox grid")
+        assertDoesNotExist(list, named: "grouped Inbox list after choosing Grid", timeout: 5)
+        assertValue(of: mainShow, becomes: "6 episodes", named: "UI Test Show tile")
+        attachSmokeScreenshot(named: "inbox_grouped_grid")
+
+        toggleInboxMenuItem("Group by Podcast", in: app)
+        assertDoesNotExist(grid, named: "grouped Inbox grid after ungrouping", timeout: 5)
+        assertDoesNotExist(layoutMenu, named: "Inbox layout menu after ungrouping")
+        assertExists(episodeRow, named: "Inbox episode row after ungrouping")
     }
 
     @MainActor
@@ -5141,6 +5244,890 @@ final class OpenCastUITests: XCTestCase {
         add(note)
     }
 
+    // MARK: - Make a Playlist (Private Cloud Compute)
+
+    /// Ineligible hardware hides Make a Playlist rather than disabling it.
+    /// The seeded show holds four episodes, so the three-episode minimum is
+    /// not what hides the entry.
+    @MainActor
+    func testSeededMakePlaylistEntryHiddenWhenDeviceIneligible() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.playlistOrganizerEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "deviceNotEligible"
+        app.launch()
+
+        openSeededShowActionsMenu(in: app)
+        assertDoesNotExist(
+            labeledButton(Self.makePlaylistTitle, in: app),
+            named: "Make a Playlist entry on ineligible hardware"
+        )
+        attachSmokeScreenshot(named: "Make a Playlist hidden entry")
+    }
+
+    /// Available: a typed request comes back as two canned proposals over
+    /// the show's four episodes. A rename, a swipe removal and both sorts
+    /// edit them in place, and Save writes both as ordinary playlists.
+    @MainActor
+    func testSeededMakePlaylistRequestProposalsAndSave() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.playlistOrganizerEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "available"
+        app.launchEnvironment[Self.playlistOrganizerResponseEnvironmentKey] = "proposals"
+        app.launch()
+
+        openMakePlaylistSheet(in: app)
+        waitForOrganizerElement(
+            organizerElement("Playlist Organizer Disclosure", in: app),
+            named: "Private Cloud Compute disclosure",
+            timeout: 10,
+            in: app
+        )
+        assertExists(organizerElement("Playlist Organizer Suggest Toggle", in: app), named: "Suggest groups toggle")
+        let ask = organizerAskButton(in: app)
+        assertExists(ask, named: "Ask button")
+        XCTAssertFalse(ask.isEnabled, "Ask should stay disabled while the request is empty")
+        attachSmokeScreenshot(named: "Make a Playlist form")
+        askOrganizer("Queued episodes", in: app)
+
+        let firstTitle = app.textFields["playlist-proposal-1-title"]
+        waitForOrganizerElement(firstTitle, named: "first proposal title field", timeout: 15, in: app)
+        assertExists(organizerElement("Playlist Organizer Proposals", in: app), named: "proposals list")
+        assertExists(organizerElement("Playlist Organizer Result Scope", in: app), named: "result scope line")
+        assertExists(
+            elementContaining(label: "Looked through all \(Self.organizerEpisodeIDs.count) episodes.", in: app),
+            named: "result scope covering the whole show"
+        )
+        XCTAssertTrue(
+            waitUntil { (firstTitle.value as? String) == "First Seeded Playlist" },
+            "The first proposal should carry the model's title; got \"\(firstTitle.value as? String ?? "nil")\""
+        )
+        XCTAssertTrue(
+            waitUntil { proposalEpisodeIdentifiers(1, in: app).count == Self.organizerEpisodeIDs.count },
+            "The first proposal should list every seeded episode; got \(proposalEpisodeIdentifiers(1, in: app).sorted())"
+        )
+        attachSmokeScreenshot(named: "Make a Playlist proposals")
+
+        replaceProposalTitle(firstTitle, with: "Renamed Seeded Playlist", in: app)
+
+        let removedRow = proposalEpisodeRow(1, Self.seededQueuedEpisodeIDs[0], in: app)
+        assertExists(removedRow, named: "first proposal row to remove")
+        XCTAssertTrue(waitForStableFrame(of: removedRow), "The row should settle before it is swiped")
+        removedRow.swipeLeft()
+        let removeAction = labeledButton("Remove", in: app)
+        assertHittable(removeAction, named: "proposal row Remove swipe action")
+        removeAction.tap()
+        assertDoesNotExist(removedRow, named: "removed proposal row", timeout: 5)
+        let savedEpisodeCount = Self.organizerEpisodeIDs.count - 1
+        XCTAssertTrue(
+            waitUntil { proposalEpisodeIdentifiers(1, in: app).count == savedEpisodeCount },
+            "The first proposal should list \(savedEpisodeCount) episodes after the removal; got \(proposalEpisodeIdentifiers(1, in: app).sorted())"
+        )
+
+        scrollOrganizerProposals(
+            toReveal: organizerElement("playlist-proposal-2-add", in: app),
+            named: "second proposal Add Episodes row",
+            in: app
+        )
+        let secondTitle = app.textFields["playlist-proposal-2-title"]
+        assertExists(secondTitle, named: "second proposal title field")
+        XCTAssertEqual(secondTitle.value as? String, "Second Seeded Playlist")
+        // Every seeded episode has its own publish date, so each sort has
+        // exactly one outcome. Newest First goes first so that Oldest First
+        // has an order to undo.
+        let secondOptions = organizerElement("playlist-proposal-2-options", in: app)
+        let newestRow = proposalEpisodeRow(2, Self.organizerEpisodeIDs[0], in: app)
+        let oldestRow = proposalEpisodeRow(2, Self.organizerEpisodeIDs[Self.organizerEpisodeIDs.count - 1], in: app)
+        chooseProposalOption("Newest First", from: secondOptions, in: app)
+        XCTAssertTrue(
+            waitUntil { newestRow.exists && oldestRow.exists && newestRow.frame.minY < oldestRow.frame.minY },
+            "Newest First should put the newest episode above the oldest"
+        )
+        chooseProposalOption("Oldest First", from: secondOptions, in: app)
+        XCTAssertTrue(
+            waitUntil { newestRow.exists && oldestRow.exists && oldestRow.frame.minY < newestRow.frame.minY },
+            "Oldest First should put the oldest episode above the newest"
+        )
+
+        // A toolbar button may not carry its identifier, so its title counts too.
+        let save = app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "Playlist Organizer Save", "Save 2 Playlists")
+        ).firstMatch
+        assertHittable(save, named: "Save button")
+        XCTAssertTrue(waitUntil { save.isEnabled }, "Save should be enabled with two saveable proposals")
+        save.tap()
+        if !waitUntil(timeout: 10, { !isOrganizerSheetPresented(in: app) }) {
+            attachOrganizerHierarchy(named: "make_playlist_after_save_hierarchy", in: app)
+            XCTFail("Saving should close the Make a Playlist sheet")
+        }
+
+        // A second tap on the Library tab pops the show; Back covers a stack
+        // that stayed put.
+        openLibrary(in: app)
+        if !app.navigationBars["Library"].waitForExistence(timeout: 3) {
+            tapBackButton(in: app)
+        }
+        openPlaylistsCollection(in: app)
+        let renamed = playlistCollectionItem(named: "Renamed Seeded Playlist", in: app)
+        assertExists(renamed, named: "renamed saved playlist")
+        assertExists(playlistCollectionItem(named: "Second Seeded Playlist", in: app), named: "second saved playlist")
+        assertDoesNotExist(
+            playlistCollectionItem(named: "First Seeded Playlist", in: app),
+            named: "first proposal saved under the model's title"
+        )
+        assertHittable(renamed, named: "renamed saved playlist")
+        renamed.tap()
+        assertExists(app.descendants(matching: .any)["Playlist Hero Header"], named: "renamed playlist hero header")
+        assertPlaylistCountLine(reads: "\(savedEpisodeCount) episodes", in: app)
+        _ = waitUntil { distinctIdentifiers(withPrefix: "playlist-item-", in: app).count >= savedEpisodeCount }
+        var savedItemIdentifiers = distinctIdentifiers(withPrefix: "playlist-item-", in: app)
+        if savedItemIdentifiers.count < savedEpisodeCount {
+            app.swipeUp()
+            _ = waitUntil { distinctIdentifiers(withPrefix: "playlist-item-", in: app).count >= savedEpisodeCount }
+            savedItemIdentifiers.formUnion(distinctIdentifiers(withPrefix: "playlist-item-", in: app))
+        }
+        XCTAssertEqual(
+            savedItemIdentifiers.count,
+            savedEpisodeCount,
+            "The renamed playlist should hold the proposal's episodes minus the removed one"
+        )
+    }
+
+    /// Apple's model declining every turn (the app retries once on its own)
+    /// ends in the decline message with both ways forward.
+    @MainActor
+    func testSeededMakePlaylistGuardrailShowsDeclineAndTryAgain() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.playlistOrganizerEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "available"
+        app.launchEnvironment[Self.playlistOrganizerResponseEnvironmentKey] = "guardrail"
+        app.launch()
+
+        openMakePlaylistSheet(in: app)
+        askOrganizer("Queued episodes", in: app)
+        waitForOrganizerElement(
+            organizerElement("Playlist Organizer Outcome", in: app),
+            named: "decline outcome",
+            timeout: 15,
+            in: app
+        )
+        assertExists(
+            elementContaining(
+                label: "Apple\u{2019}s model declined this request. Try different words, or suggest groups instead.",
+                in: app
+            ),
+            named: "prompted decline message"
+        )
+        assertExists(labeledButton("Try Again", in: app), named: "Try Again action")
+        assertExists(labeledButton("Suggest Groups Instead", in: app), named: "Suggest Groups Instead action")
+        assertDoesNotExist(app.textFields["playlist-proposal-1-title"], named: "proposals after a decline")
+        attachSmokeScreenshot(named: "Make a Playlist decline")
+    }
+
+    /// Visible but not ready: the request is kept and the calm state offers
+    /// Try Again instead of ending the sheet.
+    @MainActor
+    func testSeededMakePlaylistShowsUnavailableStateWithTryAgainWhenModelNotReady() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.playlistOrganizerEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "systemNotReady"
+        app.launch()
+
+        openMakePlaylistSheet(in: app)
+        askOrganizer("Queued episodes", in: app)
+        waitForOrganizerElement(
+            organizerElement("Transcript Intelligence Unavailable", in: app),
+            named: "unavailable state",
+            timeout: 15,
+            in: app
+        )
+        assertExists(labeledButton("Try Again", in: app), named: "Try Again action")
+        assertDoesNotExist(app.textFields["playlist-proposal-1-title"], named: "proposals while the model is not ready")
+        attachSmokeScreenshot(named: "Make a Playlist unavailable")
+    }
+
+    /// Opt-in real Private Cloud Compute round trip from the simulator
+    /// (`TEST_RUNNER_OPENCAST_PCC_E2E=1`): eligibility follows the host Mac,
+    /// so this is a local smoke, never a gate.
+    @MainActor
+    func testSeededMakePlaylistFromPrivateCloudComputeOnSimulator() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["OPENCAST_PCC_E2E"] == "1" || environment["TEST_RUNNER_OPENCAST_PCC_E2E"] == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_OPENCAST_PCC_E2E=1 to run the real PCC playlist smoke.")
+        }
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.playlistOrganizerEnableArgument]
+        app.launch()
+
+        openMakePlaylistSheet(in: app)
+        askOrganizer("queued episodes", in: app)
+        let ended = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier IN %@",
+                ["Playlist Organizer Proposals", "Playlist Organizer Outcome", "Transcript Intelligence Unavailable"]
+            )
+        ).firstMatch
+        let outcome = XCTWaiter.wait(for: [
+            XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true"), object: ended)
+        ], timeout: 120)
+        attachSmokeScreenshot(named: "Make a Playlist PCC result")
+        attachOrganizerHierarchy(named: "make_playlist_pcc_simulator_hierarchy", in: app)
+        XCTAssertEqual(
+            outcome,
+            .completed,
+            "a real PCC turn should end in proposals, a calm outcome, or the unavailable state"
+        )
+    }
+
+    @MainActor
+    func testSeededLibraryPlaylistsRowOpensCollectionAndDetail() throws {
+        let app = makeSeededApp(seedsPlaylists: true)
+        app.launch()
+
+        walkSeededPlaylistsFromLibrary(in: app, screenshotSuffix: "")
+    }
+
+    @MainActor
+    func testSeededPlaylistCreateRenameReorderRemoveDelete() throws {
+        let app = makeSeededApp(seedsPlaylists: true)
+        app.launch()
+
+        openPlaylistsCollection(in: app)
+        choosePlaylistsAddMenuItem("New Playlist", in: app)
+        submitPlaylistNamePrompt("New Playlist", confirming: "Create", name: "UI Test Playlist", in: app)
+        let created = playlistCollectionItem(named: "UI Test Playlist", in: app)
+        assertExists(created, named: "created playlist")
+        // Creating stays on the collection rather than opening the new playlist.
+        assertExists(app.navigationBars["Playlists"], named: "Playlists collection after creating")
+        attachSmokeScreenshot(named: "playlists_created")
+
+        created.press(forDuration: 1.2)
+        let renameAction = app.buttons["Rename"].firstMatch
+        assertHittable(renameAction, named: "created playlist Rename context action")
+        renameAction.tap()
+        submitPlaylistNamePrompt("Rename Playlist", confirming: "Rename", name: "UI Test Renamed", in: app)
+        assertExists(playlistCollectionItem(named: "UI Test Renamed", in: app), named: "renamed playlist")
+        assertDoesNotExist(
+            playlistCollectionItem(named: "UI Test Playlist", in: app),
+            named: "playlist under its old name",
+            timeout: 5
+        )
+
+        openSeededCommutePlaylist(in: app)
+        let firstItem = playlistDetailItem(Self.commutePlaylistItemIDs[0], in: app)
+        let secondItem = playlistDetailItem(Self.commutePlaylistItemIDs[1], in: app)
+        let unavailableItem = playlistDetailItem(Self.commutePlaylistItemIDs[2], in: app)
+        assertExists(firstItem, named: "first playlist item")
+        assertExists(secondItem, named: "second playlist item")
+        XCTAssertLessThan(firstItem.frame.midY, secondItem.frame.midY, "Seeded items should start in order.")
+
+        choosePlaylistAction("Edit", in: app)
+        let reorderHandles = app.images.matching(NSPredicate(format: "label == %@", "drag"))
+        XCTAssertTrue(
+            waitUntil { reorderHandles.count >= 2 },
+            "Edit should expose a reorder handle on every visible playlist item"
+        )
+        let reorderStart = reorderHandles.element(boundBy: 1)
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let reorderEnd = reorderHandles.element(boundBy: 0)
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
+        reorderStart.press(
+            forDuration: 1,
+            thenDragTo: reorderEnd,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.4
+        )
+        XCTAssertTrue(
+            waitUntil { firstItem.exists && secondItem.exists && secondItem.frame.midY < firstItem.frame.midY },
+            "Dragging the second item above the first should persist the new order"
+        )
+        attachSmokeScreenshot(named: "playlists_detail_reordered")
+        choosePlaylistAction("Done", in: app)
+
+        // The last row starts under the tab bar, which XCUITest still reports
+        // as hittable, so scroll the list to its end before swiping the row.
+        app.swipeUp()
+        XCTAssertTrue(
+            waitUntil { unavailableItem.frame.maxY < app.tabBars.firstMatch.frame.minY },
+            "The unavailable row should settle above the tab bar before it is swiped"
+        )
+        unavailableItem.swipeLeft()
+        let removeAction = app.buttons["Remove"].firstMatch
+        assertHittable(removeAction, named: "unavailable item Remove swipe action")
+        removeAction.tap()
+        assertDoesNotExist(unavailableItem, named: "removed unavailable item", timeout: 5)
+
+        choosePlaylistAction("Delete Playlist", closesMenuIfStillOpen: false, in: app)
+        assertExists(
+            elementContaining(label: "Delete \u{201C}Seeded Commute\u{201D}?", in: app),
+            named: "Delete Playlist confirmation"
+        )
+        let confirmDelete = app.buttons["Delete Playlist"].firstMatch
+        assertHittable(confirmDelete, named: "Delete Playlist confirmation button")
+        confirmDelete.tap()
+
+        // One pop: the collection, not the Library behind it.
+        assertExists(app.navigationBars["Playlists"], named: "Playlists collection after deleting")
+        assertDoesNotExist(
+            playlistCollectionItem(Self.commutePlaylistID, in: app),
+            named: "deleted Seeded Commute playlist",
+            timeout: 5
+        )
+        assertExists(playlistCollectionItem(Self.emptyPlaylistID, in: app), named: "Seeded Empty playlist")
+        attachSmokeScreenshot(named: "playlists_after_delete")
+    }
+
+    @MainActor
+    func testSeededAddToPlaylistFromContextMenuShowsDetailChip() throws {
+        // The extra show's episode is in no seeded playlist.
+        let app = makeSeededApp(seedsPlaylists: true, extraFeedCount: 1)
+        app.launch()
+
+        openInbox(in: app)
+        let episodeRow = seededExtraEpisodeRow(in: app, index: 1)
+        openAddToPlaylistSheet(fromContextMenuOf: episodeRow, named: "extra Inbox episode", in: app)
+        assertExists(
+            app.buttons.matching(identifier: "Add to Playlist New Playlist").firstMatch,
+            named: "Add to Playlist New Playlist row"
+        )
+        let emptyPlaylistRow = addToPlaylistRow(Self.emptyPlaylistID, in: app)
+        let commutePlaylistRow = addToPlaylistRow(Self.commutePlaylistID, in: app)
+        assertHittable(emptyPlaylistRow, named: "Seeded Empty picker row")
+        assertExists(commutePlaylistRow, named: "Seeded Commute picker row")
+        assertDoesNotExist(addToPlaylistRow(Self.smartPlaylistID, in: app), named: "smart playlist picker row")
+        XCTAssertFalse(emptyPlaylistRow.isSelected, "The episode should start in no playlist")
+        XCTAssertFalse(commutePlaylistRow.isSelected, "The episode should start in no playlist")
+
+        emptyPlaylistRow.tap()
+        XCTAssertTrue(
+            waitUntil { emptyPlaylistRow.isSelected },
+            "Tapping a picker row should add the episode and mark the row selected"
+        )
+        XCTAssertFalse(commutePlaylistRow.isSelected)
+        attachSmokeScreenshot(named: "playlists_add_sheet")
+        dismissAddToPlaylistSheet(in: app)
+
+        openEpisodeDetailFromContextMenu(episodeRow, in: app, named: "extra Inbox episode")
+        let chip = app.buttons.matching(identifier: "Episode Playlists Chip").firstMatch
+        assertHittable(chip, named: "Episode Playlists chip")
+        XCTAssertTrue(
+            waitUntil { chip.label.contains("1 Playlist") },
+            "The chip should read 1 Playlist, got \"\(chip.label)\""
+        )
+        attachSmokeScreenshot(named: "playlists_episode_chip")
+
+        chip.tap()
+        assertExists(addToPlaylistSheet(in: app), named: "Add to Playlist sheet from the chip")
+        XCTAssertTrue(
+            waitUntil { emptyPlaylistRow.isSelected },
+            "The chip's sheet should show Seeded Empty selected"
+        )
+        dismissAddToPlaylistSheet(in: app)
+    }
+
+    @MainActor
+    func testSeededNewPlaylistFromLibraryAddMenu() throws {
+        let app = makeSeededApp(seedsPlaylists: true)
+        app.launch()
+
+        openLibrary(in: app)
+        let playlistsRow = libraryPlaylistsRow(in: app)
+        assertLibraryCollectionRowValue(of: playlistsRow, is: "3", named: "Library Playlists row")
+
+        let addMenu = app.navigationBars["Library"].buttons["Add"]
+        assertHittable(addMenu, named: "Library Add menu")
+        addMenu.tap()
+        // A toolbar menu item may not carry its identifier, so the label counts too.
+        let newPlaylistItem = app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "New Playlist", "New Playlist…")
+        ).firstMatch
+        assertHittable(newPlaylistItem, named: "Library Add menu New Playlist item")
+        assertExists(app.buttons["Add Podcast"].firstMatch, named: "Library Add menu Add Podcast item")
+        assertDoesNotExist(
+            app.buttons.matching(
+                NSPredicate(format: "identifier == %@ OR label == %@", "New Smart Playlist", "New Smart Playlist\u{2026}")
+            ).firstMatch,
+            named: "Library Add menu New Smart Playlist item"
+        )
+        attachSmokeScreenshot(named: "playlists_library_add_menu")
+        newPlaylistItem.tap()
+
+        submitPlaylistNamePrompt("New Playlist", confirming: "Create", name: "UI Test Playlist", in: app)
+        // Creating from Library stays on Library; the row count moves.
+        assertExists(app.navigationBars["Library"], named: "Library after creating a playlist")
+        assertLibraryCollectionRowValue(of: playlistsRow, is: "4", named: "Library Playlists row")
+        attachSmokeScreenshot(named: "playlists_library_rows_after_create")
+    }
+
+    @MainActor
+    func testSeededPlaylistUnavailableRowShowsPlaceholder() throws {
+        let app = makeSeededApp(seedsPlaylists: true)
+        app.launch()
+
+        openPlaylistsCollection(in: app)
+        openSeededCommutePlaylist(in: app)
+        // One of three items is played, so the hero shows the listening line.
+        assertExists(elementContaining(label: "unplayed of", in: app), named: "hero unplayed count line")
+
+        let playedItem = playlistDetailItem(Self.commutePlaylistItemIDs[1], in: app)
+        let unavailableItem = playlistDetailItem(Self.commutePlaylistItemIDs[2], in: app)
+        assertExists(playedItem, named: "played Playlist UI Episode 2 item")
+        scrollUntilExists(unavailableItem, in: app)
+        assertExists(elementContaining(label: "Removed Show Episode", in: app), named: "unavailable item fallback title")
+        assertExists(
+            elementContaining(label: "No longer in your library", in: app),
+            named: "unavailable item caption"
+        )
+        attachSmokeScreenshot(named: "playlists_detail_unavailable")
+
+        unavailableItem.tap()
+        assertDoesNotExist(nowPlayingOverlay(in: app), named: "Now Playing after tapping an unavailable item", timeout: 2)
+        assertDoesNotExist(
+            app.buttons["Open Now Playing"],
+            named: "mini player after tapping an unavailable item",
+            timeout: 2
+        )
+
+        choosePlaylistAction("Hide Played", in: app)
+        assertDoesNotExist(playedItem, named: "played item under Hide Played", timeout: 5)
+        assertExists(unavailableItem, named: "unavailable item under Hide Played")
+        assertExists(
+            playlistDetailItem(Self.commutePlaylistItemIDs[0], in: app),
+            named: "unplayed item under Hide Played"
+        )
+        app.swipeDown()
+        assertExists(elementContaining(label: "unplayed of", in: app), named: "hero unplayed count line under Hide Played")
+        attachSmokeScreenshot(named: "playlists_detail_hide_played")
+    }
+
+    @MainActor
+    func testSeededPlaylistsLightModeScreenshots() throws {
+        let app = makeSeededApp(forcesDarkMode: false, forcesLightMode: true, seedsPlaylists: true)
+        app.launch()
+
+        walkSeededPlaylistsFromLibrary(in: app, screenshotSuffix: "_light")
+
+        openInbox(in: app)
+        openAddToPlaylistSheet(fromContextMenuOf: seededEpisodeRow(in: app), named: "seeded Inbox episode", in: app)
+        let commutePlaylistRow = addToPlaylistRow(Self.commutePlaylistID, in: app)
+        assertExists(commutePlaylistRow, named: "Seeded Commute picker row")
+        XCTAssertTrue(
+            waitUntil { commutePlaylistRow.isSelected },
+            "The seeded episode is in Seeded Commute, so its row should show selected"
+        )
+        attachSmokeScreenshot(named: "playlists_add_sheet_light")
+        dismissAddToPlaylistSheet(in: app)
+    }
+
+    @MainActor
+    func testSeededPlaylistPlayWithEmptyQueueLoadsUpNext() throws {
+        let app = makeSeededApp(seedsPlaylists: true, seedsPlaylistQueueItems: true)
+        app.launch()
+
+        openPlaylistsCollection(in: app)
+        openSeededCommutePlaylist(in: app)
+        tapPlaylistPlay(in: app)
+
+        // Replace presents the card, so the card appearing is the proof that
+        // an empty Up Next skipped the confirmation.
+        assertNowPlayingOverlay(in: app)
+        assertDoesNotExist(
+            elementContaining(label: "Replace Up Next?", in: app),
+            named: "Replace Up Next confirmation with an empty queue"
+        )
+        dismissNowPlayingOverlay(in: app)
+
+        assertExists(
+            app.descendants(matching: .any)["mini-player-expanded"].firstMatch,
+            named: "expanded mini player"
+        )
+        assertValue(
+            of: app.buttons["Open Now Playing"].firstMatch,
+            becomes: "Deterministic UI Episode, playing from Seeded Commute, 3 left",
+            named: "mini player"
+        )
+        attachSmokeScreenshot(named: "playlists_mini_player_source_line")
+
+        // Popping the Library stack leaves the pill as the only way a Seeded
+        // Commute detail can appear later.
+        swipeBack(in: app)
+        assertExists(app.navigationBars["Playlists"], named: "Playlists collection after Back")
+
+        openInbox(in: app)
+        let miniPlayer = app.buttons["Open Now Playing"].firstMatch
+        assertHittable(miniPlayer, named: "mini player on Inbox")
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+
+        let pill = nowPlayingSourcePill(in: app)
+        assertNowPlayingSourcePill(pill, reads: "Playing from Seeded Commute")
+        assertValue(
+            of: nowPlayingOverlay(in: app).buttons["Up Next"].firstMatch,
+            becomes: "3 episodes left in Seeded Commute",
+            named: "Now Playing Up Next control"
+        )
+        attachSmokeScreenshot(named: "playlists_now_playing_source_pill")
+
+        pill.tap()
+        XCTAssertTrue(
+            nowPlayingOverlay(in: app).waitForNonExistence(timeout: 5),
+            "Tapping the source pill should dismiss Now Playing"
+        )
+        assertExists(app.navigationBars["Seeded Commute"], named: "Seeded Commute detail from the source pill")
+        assertExists(
+            app.descendants(matching: .any)["Playlist Hero Header"],
+            named: "Seeded Commute hero header from the source pill"
+        )
+        let inboxTab = app.tabBars.buttons["Inbox"]
+        assertExists(inboxTab, named: "Inbox tab")
+        XCTAssertTrue(inboxTab.isSelected, "The source pill should push onto the current tab")
+        attachSmokeScreenshot(named: "playlists_source_pill_opens_detail")
+    }
+
+    @MainActor
+    func testSeededPlaylistPlayWithQueuedEpisodesOffersReplaceOrAddAfter() throws {
+        // The queued episodes are not playlist items, so Seeded Commute's only
+        // candidate is the Deterministic UI Episode.
+        let app = makeSeededApp(seedsUpNextQueue: true, seedsPlaylists: true)
+        app.launch()
+
+        openPlaylistsCollection(in: app)
+        openSeededCommutePlaylist(in: app)
+        tapPlaylistPlay(in: app)
+
+        assertExists(elementContaining(label: "Replace Up Next?", in: app), named: "Replace Up Next confirmation")
+        assertExists(
+            elementContaining(label: "Up Next has 3 episodes.", in: app),
+            named: "Replace Up Next confirmation message"
+        )
+        let replace = app.buttons["Replace Up Next"].firstMatch
+        let addAfter = app.buttons["Add After Up Next"].firstMatch
+        assertHittable(replace, named: "Replace Up Next button")
+        assertHittable(addAfter, named: "Add After Up Next button")
+        attachSmokeScreenshot(named: "playlists_replace_up_next_dialog")
+        addAfter.tap()
+
+        // Nothing was loaded, so the queue head starts without presenting the card.
+        let miniPlayer = app.buttons["Open Now Playing"].firstMatch
+        assertExists(miniPlayer, named: "mini player after Add After Up Next", timeout: 10)
+        assertValue(of: miniPlayer, becomes: "Queued UI Episode 1, UI Test Show", named: "mini player")
+        assertDoesNotExist(nowPlayingOverlay(in: app), named: "Now Playing after Add After Up Next", timeout: 2)
+
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        assertNowPlayingTitle(reads: "Queued UI Episode 1", in: app)
+        assertDoesNotExist(
+            nowPlayingSourcePill(in: app),
+            named: "source pill for a hand-queued episode",
+            timeout: 2
+        )
+        assertValue(
+            of: nowPlayingOverlay(in: app).buttons["Up Next"].firstMatch,
+            becomes: "3 episodes queued",
+            named: "Now Playing Up Next control"
+        )
+
+        openUpNextSheetFromNowPlaying(in: app)
+        assertQueuedRowsInUpNextSheet(remaining: [2, 3], in: app)
+        var deterministicRow = hittableUpNextRow(Self.seededEpisodeRowIdentifier, in: app)
+        if deterministicRow == nil {
+            // The third row can sit below the medium detent's fold.
+            app.navigationBars["Up Next"].swipeUp()
+            deterministicRow = hittableUpNextRow(Self.seededEpisodeRowIdentifier, in: app)
+        }
+        let secondQueuedRow = try XCTUnwrap(hittableQueuedRow(2, in: app), "Queued UI Episode 2 in the Up Next sheet")
+        let thirdQueuedRow = try XCTUnwrap(hittableQueuedRow(3, in: app), "Queued UI Episode 3 in the Up Next sheet")
+        let appendedRow = try XCTUnwrap(deterministicRow, "Deterministic UI Episode in the Up Next sheet")
+        XCTAssertLessThan(
+            secondQueuedRow.frame.midY,
+            thirdQueuedRow.frame.midY,
+            "The existing queue should keep its order"
+        )
+        XCTAssertLessThan(
+            thirdQueuedRow.frame.midY,
+            appendedRow.frame.midY,
+            "Add After Up Next should append the playlist after the existing queue"
+        )
+        assertDoesNotExist(
+            app.navigationBars["Up Next"].staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "From ")).firstMatch,
+            named: "Up Next playlist subtitle while playing a hand-queued episode"
+        )
+        assertDoesNotExist(
+            elementContaining(label: "ahead of the rest of", in: app),
+            named: "Up Next playlist footer while playing a hand-queued episode"
+        )
+        attachSmokeScreenshot(named: "playlists_add_after_up_next_sheet")
+
+        // The in-memory store reseeds the same queue on relaunch.
+        app.terminate()
+        app.launch()
+
+        openPlaylistsCollection(in: app)
+        openSeededCommutePlaylist(in: app)
+        tapPlaylistPlay(in: app)
+        let replaceAfterRelaunch = app.buttons["Replace Up Next"].firstMatch
+        assertHittable(replaceAfterRelaunch, named: "Replace Up Next button after relaunch")
+        replaceAfterRelaunch.tap()
+
+        assertNowPlayingOverlay(in: app)
+        assertNowPlayingTitle(reads: "Deterministic UI Episode", in: app)
+        assertNowPlayingSourcePill(nowPlayingSourcePill(in: app), reads: "Playing from Seeded Commute")
+        assertValue(
+            of: nowPlayingOverlay(in: app).buttons["Up Next"].firstMatch,
+            becomes: "Empty",
+            named: "Now Playing Up Next control after Replace Up Next"
+        )
+        openUpNextSheetFromNowPlaying(in: app)
+        assertExists(app.staticTexts["Nothing Up Next"], named: "empty Up Next after Replace Up Next")
+        attachSmokeScreenshot(named: "playlists_replace_up_next_empty_sheet")
+    }
+
+    @MainActor
+    func testSeededPlaylistSourceShowsInMiniPlayerNowPlayingAndUpNextSheet() throws {
+        let app = makeSeededApp(
+            seedsEpisodeProgress: true,
+            seedsUpNextQueue: true,
+            seedsPlaylists: true,
+            seedsPlaylistQueueItems: true,
+            seedsPlaylistPlaybackSource: true
+        )
+        app.launch()
+
+        let miniPlayer = app.buttons["Open Now Playing"].firstMatch
+        assertExists(miniPlayer, named: "restored mini player", timeout: 10)
+        assertValue(
+            of: miniPlayer,
+            becomes: "Deterministic UI Episode, playing from Seeded Commute, 3 left",
+            named: "restored mini player",
+            timeout: 10
+        )
+        attachSmokeScreenshot(named: "playlists_source_restored_mini_player")
+
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        assertNowPlayingSourcePill(nowPlayingSourcePill(in: app), reads: "Playing from Seeded Commute")
+        let upNextControl = nowPlayingOverlay(in: app).buttons["Up Next"].firstMatch
+        assertValue(of: upNextControl, becomes: "3 episodes left in Seeded Commute", named: "Now Playing Up Next control")
+        attachSmokeScreenshot(named: "playlists_source_now_playing")
+
+        openUpNextSheetFromNowPlaying(in: app)
+        assertExists(
+            app.navigationBars["Up Next"].staticTexts["From Seeded Commute \u{00B7} 3 left"],
+            named: "Up Next playlist subtitle"
+        )
+        // The sheet opens at the medium detent, where the section footer can
+        // sit below the fold and out of the accessibility tree.
+        let footer = elementContaining(
+            label: "Play Next puts an episode ahead of the rest of Seeded Commute.",
+            in: app
+        )
+        if !footer.waitForExistence(timeout: 2) {
+            app.navigationBars["Up Next"].swipeUp()
+        }
+        assertExists(footer, named: "Up Next playlist footer")
+        attachSmokeScreenshot(named: "playlists_up_next_sheet_source")
+
+        let secondQueuedRow = try XCTUnwrap(hittableQueuedRow(2, in: app), "Queued UI Episode 2 in the Up Next sheet")
+        secondQueuedRow.tap()
+        XCTAssertTrue(
+            app.navigationBars["Up Next"].waitForNonExistence(timeout: 5),
+            "Playing a row should dismiss the Up Next sheet"
+        )
+        // The sheet belonged to Now Playing, so the card stays up.
+        assertNowPlayingTitle(reads: "Queued UI Episode 2", in: app)
+        assertValue(of: upNextControl, becomes: "2 episodes left in Seeded Commute", named: "Now Playing Up Next control")
+
+        let moreActions = app.buttons["More Actions"].firstMatch
+        assertHittable(moreActions, named: "Now Playing More Actions menu")
+        moreActions.tap()
+        let showPlaylist = app.buttons["Show Seeded Commute"].firstMatch
+        assertHittable(showPlaylist, named: "Show Seeded Commute More item")
+        attachSmokeScreenshot(named: "playlists_source_more_menu")
+        showPlaylist.tap()
+
+        XCTAssertTrue(
+            nowPlayingOverlay(in: app).waitForNonExistence(timeout: 5),
+            "Show Seeded Commute should dismiss Now Playing"
+        )
+        assertExists(app.navigationBars["Seeded Commute"], named: "Seeded Commute detail from the More menu")
+        assertExists(
+            app.descendants(matching: .any)["Playlist Hero Header"],
+            named: "Seeded Commute hero header from the More menu"
+        )
+        assertValue(
+            of: app.buttons["Open Now Playing"].firstMatch,
+            becomes: "Queued UI Episode 2, playing from Seeded Commute, 2 left",
+            named: "mini player after playing a row from the sheet"
+        )
+        attachSmokeScreenshot(named: "playlists_source_mini_player_after_row")
+    }
+
+    @MainActor
+    func testSeededPlaylistDownloadAllStartsForegroundDownloads() throws {
+        let app = makeSeededApp(seedsPlaylists: true, seedsPlaylistQueueItems: true)
+        app.launch()
+
+        openPlaylistsCollection(in: app)
+        openSeededCommutePlaylist(in: app)
+        // A stray tap to close the menu would cancel the confirmation.
+        choosePlaylistAction("Download All", closesMenuIfStillOpen: false, in: app)
+        assertExists(
+            elementContaining(label: "Download 4 Episodes?", in: app),
+            named: "Download All confirmation"
+        )
+        let confirm = app.buttons["Download 4 Episodes"].firstMatch
+        assertHittable(confirm, named: "Download 4 Episodes button")
+        attachSmokeScreenshot(named: "playlists_download_all_dialog")
+        confirm.tap()
+        assertDoesNotExist(confirm, named: "Download All confirmation after confirming", timeout: 5)
+        XCTAssertFalse(app.alerts["Playlist Error"].exists, "Download All should not report a playlist error")
+
+        let downloadsTab = app.tabBars.buttons["Downloads"]
+        assertHittable(downloadsTab, named: "Downloads tab")
+        downloadsTab.tap()
+        assertExists(app.navigationBars["Downloads"], named: "Downloads navigation bar")
+
+        // The seeded audio is a local file, so each download is a quick copy;
+        // an in-progress row carries no identifier, so its title counts too.
+        let completedRow = app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
+        let anyDeterministicRow = elementContaining(label: "Deterministic UI Episode", in: app)
+        XCTAssertTrue(
+            waitUntil(timeout: 30) { completedRow.exists || anyDeterministicRow.exists },
+            "Deterministic UI Episode should be downloading or downloaded"
+        )
+        assertExists(
+            elementContaining(label: "4 episodes,", in: app),
+            named: "four completed downloads in the storage summary",
+            timeout: 30
+        )
+        assertExists(completedRow, named: "completed Deterministic UI Episode download", timeout: 10)
+        attachSmokeScreenshot(named: "playlists_download_all_downloads_tab")
+    }
+
+    /// Seeded Unplayed runs the default rule over the library. With the queue
+    /// items seeded every episode is 600 s, so Unplayed matches Deterministic
+    /// UI Episode and Queued UI Episode 1–3, newest first, and Played matches
+    /// only Playlist UI Episode 2.
+    @MainActor
+    func testSeededSmartPlaylistChipsEditRulesInPlaceAndPlay() throws {
+        let app = makeSeededApp(seedsPlaylists: true, seedsPlaylistQueueItems: true)
+        app.launch()
+
+        let unplayedEpisodeIDs = ["ui-test-episode-1"] + Self.seededQueuedEpisodeIDs
+        openPlaylistsCollection(in: app)
+        assertExists(playlistCollectionItem(Self.smartPlaylistID, in: app), named: "Seeded Unplayed tile")
+        attachSmokeScreenshot(named: "playlists_smart_collection_grid")
+
+        openSeededSmartPlaylist(in: app)
+        assertSmartRuleChips(Self.defaultSmartRuleChipLabels, in: app)
+        assertExists(smartPlaylistMetaLine(in: app), named: "Smart Playlist meta line")
+        assertDoesNotExist(app.buttons["Playlist Shuffle"], named: "Shuffle on a smart playlist")
+        assertPlaylistCountLine(reads: "4 episodes", in: app)
+        assertExists(smartPlaylistRow(unplayedEpisodeIDs[0], in: app), named: "Deterministic UI Episode row")
+        attachSmokeScreenshot(named: "playlists_smart_detail_default")
+        assertSmartPlaylistRows(unplayedEpisodeIDs, in: app)
+        scrollToSmartRuleChips(in: app)
+
+        chooseSmartRuleOption(
+            "Played",
+            forClause: "Episodes",
+            screenshotName: "playlists_smart_episodes_menu",
+            in: app
+        )
+        assertPlaylistCountLine(reads: "1 episode", in: app)
+        assertExists(smartPlaylistRow(Self.playedPlaylistEpisodeID, in: app), named: "Playlist UI Episode 2 row")
+        for episodeID in unplayedEpisodeIDs {
+            assertDoesNotExist(smartPlaylistRow(episodeID, in: app), named: "\(episodeID) row under Played", timeout: 5)
+        }
+        // A Played rule has nothing to play, and a disabled button still
+        // reports hittable, so the enabled state is read directly.
+        let play = app.buttons["Playlist Play"].firstMatch
+        assertExists(play, named: "Playlist Play button")
+        XCTAssertTrue(waitUntil { !play.isEnabled }, "Play should be disabled under the Played rule")
+        attachSmokeScreenshot(named: "playlists_smart_detail_played")
+
+        // The store reseeds on relaunch, so reopening is how the saved rule shows.
+        tapBackButton(in: app)
+        assertExists(app.navigationBars["Playlists"], named: "Playlists collection after the rule change")
+        openSeededSmartPlaylist(in: app)
+        let episodesChip = smartRuleChip("Episodes", in: app)
+        assertExists(episodesChip, named: "Smart Rule Episodes chip after reopening")
+        XCTAssertTrue(
+            waitUntil { episodesChip.label == "Episodes, Played" },
+            "The saved rule should still read Played; got \"\(episodesChip.label)\""
+        )
+
+        chooseSmartRuleOption("Unplayed", forClause: "Episodes", in: app)
+        assertPlaylistCountLine(reads: "4 episodes", in: app)
+        assertExists(smartPlaylistRow(unplayedEpisodeIDs[0], in: app), named: "Deterministic UI Episode row under Unplayed")
+        assertDoesNotExist(
+            smartPlaylistRow(Self.playedPlaylistEpisodeID, in: app),
+            named: "Playlist UI Episode 2 row under Unplayed",
+            timeout: 5
+        )
+        XCTAssertTrue(waitUntil { play.isEnabled }, "Play should be enabled under the Unplayed rule")
+
+        tapPlaylistPlay(in: app)
+        // Replace presents the card, so the card appearing is the proof that
+        // an empty Up Next skipped the confirmation.
+        assertNowPlayingOverlay(in: app)
+        assertDoesNotExist(
+            elementContaining(label: "Replace Up Next?", in: app),
+            named: "Replace Up Next confirmation with an empty queue"
+        )
+        assertNowPlayingTitle(reads: "Deterministic UI Episode", in: app)
+        assertNowPlayingSourcePill(nowPlayingSourcePill(in: app), reads: "Playing from Seeded Unplayed")
+        assertValue(
+            of: nowPlayingOverlay(in: app).buttons["Up Next"].firstMatch,
+            becomes: "3 episodes left in Seeded Unplayed",
+            named: "Now Playing Up Next control"
+        )
+        dismissNowPlayingOverlay(in: app)
+        assertValue(
+            of: app.buttons["Open Now Playing"].firstMatch,
+            becomes: "Deterministic UI Episode, playing from Seeded Unplayed, 3 left",
+            named: "mini player"
+        )
+        attachSmokeScreenshot(named: "playlists_smart_mini_player_source_line")
+    }
+
+    @MainActor
+    func testSeededNewSmartPlaylistOpensDetailWithDefaultRules() throws {
+        let app = makeSeededApp(seedsPlaylists: true)
+        app.launch()
+
+        openPlaylistsCollection(in: app)
+        openPlaylistsAddMenu(in: app)
+        assertExists(playlistsAddMenuItem("New Playlist", in: app), named: "Playlists Add menu New Playlist item")
+        let newSmartPlaylist = playlistsAddMenuItem("New Smart Playlist", in: app)
+        assertHittable(newSmartPlaylist, named: "Playlists Add menu New Smart Playlist item")
+        attachSmokeScreenshot(named: "playlists_smart_add_menu")
+        newSmartPlaylist.tap()
+        submitPlaylistNamePrompt("New Smart Playlist", confirming: "Create", name: "UI Test Smart", in: app)
+
+        // Unlike a manual playlist, a new smart playlist opens at once.
+        assertExists(app.navigationBars["UI Test Smart"], named: "UI Test Smart detail", timeout: 10)
+        assertExists(app.descendants(matching: .any)["Playlist Hero Header"], named: "UI Test Smart hero header")
+        assertSmartRuleChips(Self.defaultSmartRuleChipLabels, in: app)
+        assertExists(smartPlaylistMetaLine(in: app), named: "Smart Playlist meta line")
+        // Without the queue items the library holds one unplayed episode.
+        assertPlaylistCountLine(reads: "1 episode", in: app)
+        assertExists(smartPlaylistRow("ui-test-episode-1", in: app), named: "Deterministic UI Episode row")
+        assertDoesNotExist(
+            smartPlaylistRow(Self.playedPlaylistEpisodeID, in: app),
+            named: "played Playlist UI Episode 2 row"
+        )
+        let play = app.buttons["Playlist Play"].firstMatch
+        assertExists(play, named: "Playlist Play button")
+        XCTAssertTrue(waitUntil { play.isEnabled }, "Play should be enabled with an unplayed episode")
+        assertDoesNotExist(app.buttons["Playlist Shuffle"], named: "Shuffle on a smart playlist")
+        attachSmokeScreenshot(named: "playlists_smart_created")
+
+        tapBackButton(in: app)
+        assertExists(app.navigationBars["Playlists"], named: "Playlists collection after leaving the new detail")
+        assertExists(playlistCollectionItem(named: "UI Test Smart", in: app), named: "UI Test Smart tile")
+        attachSmokeScreenshot(named: "playlists_smart_created_collection")
+    }
+
     private static let transcriptIntelligenceAskEnableArgument = "--transcript-intelligence-ask-enabled"
     private static let askTitle = "Ask About This Episode"
 
@@ -5148,6 +6135,286 @@ final class OpenCastUITests: XCTestCase {
     private static let transcriptIntelligenceAvailabilityEnvironmentKey = "OPENCAST_UI_TEST_TRANSCRIPT_INTELLIGENCE_AVAILABILITY"
     private static let recapLastFiveMinutesTitle = "Recap the Last 5 Minutes"
     private static let recapSoFarTitle = "Recap So Far"
+
+    private static let playlistOrganizerEnableArgument = "--playlist-organizer-enabled"
+    private static let playlistOrganizerResponseEnvironmentKey = "OPENCAST_UI_TEST_PLAYLIST_ORGANIZER_RESPONSE"
+    private static let makePlaylistTitle = "Make a Playlist\u{2026}"
+    private static let appleIntelligenceBetaSectionTitle = "Apple Intelligence \u{00B7} Beta"
+    private static let makePlaylistSheetTitle = "Make a Playlist"
+    /// The seeded show under `seedsUpNextQueue`, newest first; every episode
+    /// has its own publish date.
+    private static let organizerEpisodeIDs = ["ui-test-episode-1"] + seededQueuedEpisodeIDs
+
+    /// Library → the seeded show → its actions menu, open.
+    @MainActor
+    private func openSeededShowActionsMenu(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        openLibrary(in: app, file: file, line: line)
+        let show = seededSubscriptionRow(in: app)
+        assertExists(show, named: "seeded library podcast", file: file, line: line)
+        show.tap()
+        let actionsButton = app.buttons["Podcast Actions"]
+        assertHittable(actionsButton, named: "podcast actions menu", timeout: 10, file: file, line: line)
+        // The push may still be sliding the toolbar in.
+        XCTAssertTrue(
+            waitForStableFrame(of: actionsButton),
+            "The podcast actions menu should settle before it is tapped",
+            file: file,
+            line: line
+        )
+        actionsButton.tap()
+        assertExists(
+            labeledButton("Skip Intro & Outro\u{2026}", in: app),
+            named: "podcast actions menu content",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func openMakePlaylistSheet(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        openSeededShowActionsMenu(in: app, file: file, line: line)
+        assertExists(
+            app.staticTexts[Self.appleIntelligenceBetaSectionTitle],
+            named: "Apple Intelligence Beta section header",
+            file: file,
+            line: line
+        )
+        let entry = labeledButton(Self.makePlaylistTitle, in: app)
+        assertHittable(entry, named: "Make a Playlist menu action", file: file, line: line)
+        entry.tap()
+        if !waitUntil(timeout: 10, { isOrganizerSheetPresented(in: app) }) {
+            attachOrganizerHierarchy(named: "make_playlist_sheet_hierarchy", in: app)
+            XCTFail("Make a Playlist should present its sheet", file: file, line: line)
+        }
+        waitForOrganizerElement(
+            app.textFields["Playlist Organizer Request Field"],
+            named: "request field",
+            timeout: 10,
+            in: app,
+            file: file,
+            line: line
+        )
+    }
+
+    /// The sheet carries no root identifier: one on the container replaces
+    /// the identifiers of the list and the outcome view inside it.
+    @MainActor
+    private func isOrganizerSheetPresented(in app: XCUIApplication) -> Bool {
+        app.navigationBars[Self.makePlaylistSheetTitle].exists
+    }
+
+    /// By identifier across element types: a form footer, a list or a
+    /// content-unavailable view can surface as different types.
+    @MainActor
+    private func organizerElement(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    @MainActor
+    private func labeledButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+    }
+
+    @MainActor
+    private func organizerAskButton(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "Playlist Organizer Ask", "Ask")
+        ).firstMatch
+    }
+
+    /// Types a request and asks. The field's return key asks as well, and
+    /// stands in for the button only when the keyboard covers it.
+    @MainActor
+    private func askOrganizer(
+        _ request: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let field = app.textFields["Playlist Organizer Request Field"]
+        assertHittable(field, named: "request field", timeout: 10, file: file, line: line)
+        field.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(
+            waitUntil { keyboard.exists },
+            "The request field should take the keyboard",
+            file: file,
+            line: line
+        )
+        field.typeText(request)
+        let ask = organizerAskButton(in: app)
+        assertExists(ask, named: "Ask button", file: file, line: line)
+        XCTAssertTrue(
+            waitUntil { ask.isEnabled },
+            "Ask should enable once the request has text",
+            file: file,
+            line: line
+        )
+        if keyboard.exists, ask.frame.maxY > keyboard.frame.minY {
+            field.typeText("\n")
+            return
+        }
+        assertHittable(ask, named: "Ask button", file: file, line: line)
+        XCTAssertTrue(waitForStableFrame(of: ask), "Ask should settle before it is tapped", file: file, line: line)
+        ask.tap()
+    }
+
+    /// Waits for an organizer element; a miss attaches the hierarchy so the
+    /// identifiers actually on screen can be read from the result bundle.
+    @MainActor
+    private func waitForOrganizerElement(
+        _ element: XCUIElement,
+        named name: String,
+        timeout: TimeInterval,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard !element.waitForExistence(timeout: timeout) else {
+            return
+        }
+        attachOrganizerHierarchy(named: "make_playlist_hierarchy_\(name)", in: app)
+        XCTFail("\(name) should exist", file: file, line: line)
+    }
+
+    @MainActor
+    private func attachOrganizerHierarchy(named name: String, in app: XCUIApplication) {
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = name
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+    }
+
+    @MainActor
+    private func proposalEpisodeRow(_ proposal: Int, _ episodeID: String, in app: XCUIApplication) -> XCUIElement {
+        organizerElement("playlist-proposal-\(proposal)-episode-\(episodeID)", in: app)
+    }
+
+    @MainActor
+    private func proposalEpisodeIdentifiers(_ proposal: Int, in app: XCUIApplication) -> Set<String> {
+        distinctIdentifiers(withPrefix: "playlist-proposal-\(proposal)-episode-", in: app)
+    }
+
+    /// One snapshot of the whole tree, so a row that surfaces as a cell and
+    /// again as the elements inside it counts once, and a row leaving
+    /// mid-read cannot fail the query. A failed snapshot reads as nothing;
+    /// callers poll.
+    @MainActor
+    private func distinctIdentifiers(withPrefix prefix: String, in app: XCUIApplication) -> Set<String> {
+        guard let root = try? app.snapshot() else {
+            return []
+        }
+        var identifiers = Set<String>()
+        var pending = [root]
+        while let snapshot = pending.popLast() {
+            if snapshot.identifier.hasPrefix(prefix) {
+                identifiers.insert(snapshot.identifier)
+            }
+            pending.append(contentsOf: snapshot.children)
+        }
+        return identifiers
+    }
+
+    /// Clears a proposal's title from its end and types the new one. Return
+    /// ends the edit, so the keyboard stops covering the rows below.
+    @MainActor
+    private func replaceProposalTitle(
+        _ field: XCUIElement,
+        with title: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertHittable(field, named: "proposal title field", file: file, line: line)
+        XCTAssertTrue(waitForStableFrame(of: field), "The title field should settle before the tap", file: file, line: line)
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(
+            waitUntil { keyboard.exists },
+            "The title field should take the keyboard",
+            file: file,
+            line: line
+        )
+        let existingValue = (field.value as? String) ?? ""
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existingValue.count + 2))
+        field.typeText(title)
+        XCTAssertTrue(
+            waitUntil { (field.value as? String) == title },
+            "The title field should read \"\(title)\"; got \"\(field.value as? String ?? "nil")\"",
+            file: file,
+            line: line
+        )
+        field.typeText("\n")
+        if !waitUntil(timeout: 3, { !keyboard.exists }) {
+            let scopeLine = organizerElement("Playlist Organizer Result Scope", in: app)
+            if scopeLine.exists, scopeLine.isHittable {
+                scopeLine.tap()
+            }
+        }
+        XCTAssertTrue(
+            waitUntil { !keyboard.exists },
+            "The keyboard should close after renaming a proposal",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Scrolls the proposals until `element` is on screen and has stopped
+    /// moving: a tap during the deceleration only stops the scroll.
+    @MainActor
+    private func scrollOrganizerProposals(
+        toReveal element: XCUIElement,
+        named name: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for _ in 0..<4 where !(element.exists && element.isHittable && element.frame.maxY < app.frame.maxY) {
+            app.swipeUp()
+        }
+        waitForOrganizerElement(element, named: name, timeout: 5, in: app, file: file, line: line)
+        assertHittable(element, named: name, file: file, line: line)
+        XCTAssertTrue(waitForStableFrame(of: element), "\(name) should settle after scrolling", file: file, line: line)
+    }
+
+    /// Opens a proposal's options menu and picks an item. The menu sits in a
+    /// list section header, so the tap waits for the header to settle.
+    @MainActor
+    private func chooseProposalOption(
+        _ title: String,
+        from menu: XCUIElement,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        waitForOrganizerElement(menu, named: "proposal options menu", timeout: 5, in: app, file: file, line: line)
+        assertHittable(menu, named: "proposal options menu", file: file, line: line)
+        XCTAssertTrue(waitForStableFrame(of: menu), "The options menu should settle before the tap", file: file, line: line)
+        menu.tap()
+        let item = labeledButton(title, in: app)
+        guard item.waitForExistence(timeout: 5) else {
+            attachOrganizerHierarchy(named: "make_playlist_options_menu_hierarchy", in: app)
+            XCTFail("\(title) proposal option not found", file: file, line: line)
+            return
+        }
+        // The glass menu morphs in, so wait for the item to settle.
+        assertHittable(item, named: "\(title) proposal option", file: file, line: line)
+        item.tap()
+        XCTAssertTrue(
+            item.waitForNonExistence(timeout: 5),
+            "The options menu should close after choosing \(title)",
+            file: file,
+            line: line
+        )
+    }
 
     /// Detail route, never playback: the recap playhead then comes from the
     /// seeded progress record (90 s), which clears the five-minute entry's
@@ -5191,6 +6458,9 @@ final class OpenCastUITests: XCTestCase {
         seedsPerEpisodeVoiceBoost: Bool = false,
         seedsLongShowNotes: Bool = false,
         seedsUpNextQueue: Bool = false,
+        seedsPlaylists: Bool = false,
+        seedsPlaylistQueueItems: Bool = false,
+        seedsPlaylistPlaybackSource: Bool = false,
         seedsLibraryNewEpisodes: Bool = false,
         seededLibraryLayout: String? = nil,
         audioDurationSeconds: Int? = nil,
@@ -5279,13 +6549,22 @@ final class OpenCastUITests: XCTestCase {
         if seedsUpNextQueue {
             app.launchEnvironment["OPENCAST_SEED_UP_NEXT_QUEUE"] = "1"
         }
+        if seedsPlaylists {
+            app.launchEnvironment["OPENCAST_SEED_PLAYLISTS"] = "1"
+        }
+        if seedsPlaylistQueueItems {
+            app.launchEnvironment["OPENCAST_SEED_PLAYLIST_QUEUE_ITEMS"] = "1"
+        }
+        if seedsPlaylistPlaybackSource {
+            app.launchEnvironment["OPENCAST_SEED_PLAYLIST_PLAYBACK_SOURCE"] = "1"
+        }
         if seedsLibraryNewEpisodes {
             app.launchEnvironment["OPENCAST_SEED_LIBRARY_NEW_EPISODES"] = "1"
         }
         if let seededLibraryLayout {
             app.launchEnvironment["OPENCAST_SEED_LIBRARY_LAYOUT"] = seededLibraryLayout
         }
-        if let audioDurationSeconds = audioDurationSeconds ?? (seedsUpNextQueue ? 600 : nil) {
+        if let audioDurationSeconds = audioDurationSeconds ?? ((seedsUpNextQueue || seedsPlaylistQueueItems) ? 600 : nil) {
             app.launchEnvironment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] = String(audioDurationSeconds)
         }
         if let skipIntroSeconds {
@@ -5639,6 +6918,13 @@ final class OpenCastUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
+    /// A show in the Group by Podcast Inbox, as a list row or grid tile; its
+    /// value carries the show's count of matching episodes.
+    @MainActor
+    private func inboxPodcastGroup(_ feedURL: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: "inbox-podcast-group-\(feedURL)").firstMatch
+    }
+
     /// The Inbox filter's trailing toolbar menu. Its label names the
     /// settings that differ from their defaults, or All Episodes.
     @MainActor
@@ -5684,25 +6970,35 @@ final class OpenCastUITests: XCTestCase {
         )
     }
 
-    /// Flips the Hide Up Next toggle inside the Inbox filter menu.
-    /// The item's element type is not pinned, so the query is type-agnostic
-    /// and a miss attaches the hierarchy.
     @MainActor
     private func toggleInboxHidesUpNext(
         in app: XCUIApplication,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
+        toggleInboxMenuItem("Hide Up Next", in: app, file: file, line: line)
+    }
+
+    /// Flips a toggle inside the Inbox filter menu. The item's element type
+    /// is not pinned, so the query is type-agnostic and a miss attaches the
+    /// hierarchy.
+    @MainActor
+    private func toggleInboxMenuItem(
+        _ title: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
         openInboxFilterMenu(in: app, file: file, line: line)
         let item = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "Hide Up Next"))
+            .matching(NSPredicate(format: "label == %@", title))
             .firstMatch
         guard item.waitForExistence(timeout: 5) else {
             let attachment = XCTAttachment(string: app.debugDescription)
             attachment.name = "inbox_filter_menu_hierarchy"
             attachment.lifetime = .keepAlways
             add(attachment)
-            XCTFail("Hide Up Next menu item not found", file: file, line: line)
+            XCTFail("\(title) menu item not found", file: file, line: line)
             return
         }
         attachSmokeScreenshot(named: "inbox_filter_menu_open")
@@ -6559,25 +7855,17 @@ final class OpenCastUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let libraryAddButton = app.navigationBars["Library"].buttons["Add"]
-        if libraryAddButton.waitForExistence(timeout: 2) {
-            libraryAddButton.tap()
+        let addButtons = [
+            app.navigationBars["Library"].buttons["Add"],
+            app.navigationBars["opencast"].buttons["Add"],
+            app.buttons["Add"].firstMatch
+        ]
+        guard let addButton = addButtons.first(where: { $0.waitForExistence(timeout: 2) }) else {
+            XCTFail("Add Podcast button should exist", file: file, line: line)
             return
         }
-
-        let rootAddButton = app.navigationBars["opencast"].buttons["Add"]
-        if rootAddButton.waitForExistence(timeout: 2) {
-            rootAddButton.tap()
-            return
-        }
-
-        let addButton = app.buttons["Add"].firstMatch
-        if addButton.waitForExistence(timeout: 2) {
-            addButton.tap()
-            return
-        }
-
-        XCTFail("Add Podcast button should exist", file: file, line: line)
+        addButton.tap()
+        tapAddPodcastMenuItemIfPresented(in: app)
     }
 
     @MainActor
@@ -6894,5 +8182,606 @@ final class OpenCastUITests: XCTestCase {
         }
 
         XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
+    }
+
+    /// Library rows → collection (grid under Automatic, then list) → the
+    /// seeded Commute detail, attaching the representative screenshots.
+    @MainActor
+    private func walkSeededPlaylistsFromLibrary(
+        in app: XCUIApplication,
+        screenshotSuffix: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        openLibrary(in: app, file: file, line: line)
+        let playlistsRow = libraryPlaylistsRow(in: app)
+        let upNextRow = app.buttons.matching(identifier: "Library Up Next Row").firstMatch
+        assertLibraryCollectionRowValue(of: playlistsRow, is: "3", named: "Library Playlists row", file: file, line: line)
+        // Nothing is queued, so the Up Next count is hidden.
+        assertLibraryCollectionRowValue(of: upNextRow, is: "", named: "Library Up Next row", file: file, line: line)
+        attachSmokeScreenshot(named: "playlists_library_rows\(screenshotSuffix)")
+        openAndDismissUpNextFromLibrary(upNextRow, in: app, file: file, line: line)
+
+        let grid = libraryContainer("Playlists Grid", in: app)
+        let list = libraryContainer("Playlists List", in: app)
+        playlistsRow.tap()
+        assertExists(app.navigationBars["Playlists"], named: "Playlists collection", file: file, line: line)
+        assertExists(grid, named: "Playlists grid under Automatic", file: file, line: line)
+        assertDoesNotExist(list, named: "Playlists list under Automatic", file: file, line: line)
+        attachSmokeScreenshot(named: "playlists_collection_grid\(screenshotSuffix)")
+
+        tapBackButton(in: app)
+        assertExists(app.navigationBars["Library"], named: "Library after leaving Playlists", file: file, line: line)
+        chooseLibraryViewOption("List", in: app, file: file, line: line)
+        openAndDismissUpNextFromLibrary(upNextRow, in: app, file: file, line: line)
+        assertHittable(playlistsRow, named: "Library Playlists row in the list", file: file, line: line)
+        playlistsRow.tap()
+        assertExists(list, named: "Playlists list after choosing List", file: file, line: line)
+        assertDoesNotExist(grid, named: "Playlists grid after choosing List", timeout: 5, file: file, line: line)
+        attachSmokeScreenshot(named: "playlists_collection_list\(screenshotSuffix)")
+
+        openSeededCommutePlaylist(in: app, file: file, line: line)
+        assertExists(app.buttons["Playlist Play"], named: "Playlist Play button", file: file, line: line)
+        assertExists(app.buttons["Playlist Shuffle"], named: "Playlist Shuffle button", file: file, line: line)
+        for itemID in Self.commutePlaylistItemIDs {
+            scrollUntilExists(playlistDetailItem(itemID, in: app), in: app, file: file, line: line)
+        }
+        assertExists(
+            elementContaining(label: "No longer in your library", in: app),
+            named: "unavailable item caption",
+            file: file,
+            line: line
+        )
+        app.swipeDown()
+        attachSmokeScreenshot(named: "playlists_detail\(screenshotSuffix)")
+    }
+
+    /// The Up Next row shares a list row with the Playlists link, so a tap on
+    /// it must open the queue sheet without also pushing the collection.
+    @MainActor
+    private func openAndDismissUpNextFromLibrary(
+        _ upNextRow: XCUIElement,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertHittable(upNextRow, named: "Library Up Next row", file: file, line: line)
+        upNextRow.tap()
+        let upNextBar = app.navigationBars["Up Next"]
+        assertExists(upNextBar, named: "Up Next sheet from the Library", file: file, line: line)
+        assertDoesNotExist(app.navigationBars["Playlists"], named: "Playlists collection behind Up Next", file: file, line: line)
+
+        let dismissalStart = upNextBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let dismissalEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        dismissalStart.press(forDuration: 0.05, thenDragTo: dismissalEnd)
+        assertDoesNotExist(upNextBar, named: "Up Next sheet after dismissal", timeout: 10, file: file, line: line)
+        assertExists(app.navigationBars["Library"], named: "Library after closing Up Next", file: file, line: line)
+        assertDoesNotExist(app.navigationBars["Playlists"], named: "Playlists collection after closing Up Next", file: file, line: line)
+    }
+
+    @MainActor
+    private func libraryPlaylistsRow(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: "Library Playlists Row").firstMatch
+    }
+
+    /// The Library collection rows expose their count as the value, empty at zero.
+    @MainActor
+    private func assertLibraryCollectionRowValue(
+        of row: XCUIElement,
+        is expected: String,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertExists(row, named: name, file: file, line: line)
+        XCTAssertTrue(
+            waitUntil { (row.value as? String ?? "") == expected },
+            "\(name) should read \"\(expected)\", got \"\(row.value as? String ?? "nil")\"",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func openPlaylistsCollection(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        openLibrary(in: app, file: file, line: line)
+        let playlistsRow = libraryPlaylistsRow(in: app)
+        assertHittable(playlistsRow, named: "Library Playlists row", file: file, line: line)
+        playlistsRow.tap()
+        assertExists(app.navigationBars["Playlists"], named: "Playlists collection", file: file, line: line)
+    }
+
+    @MainActor
+    private func openSeededCommutePlaylist(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let commute = playlistCollectionItem(Self.commutePlaylistID, in: app)
+        assertHittable(commute, named: "Seeded Commute playlist", file: file, line: line)
+        commute.tap()
+        assertExists(
+            app.descendants(matching: .any)["Playlist Hero Header"],
+            named: "Seeded Commute hero header",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func openSeededSmartPlaylist(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let smart = playlistCollectionItem(Self.smartPlaylistID, in: app)
+        assertHittable(smart, named: "Seeded Unplayed playlist", file: file, line: line)
+        smart.tap()
+        assertExists(app.navigationBars["Seeded Unplayed"], named: "Seeded Unplayed detail", file: file, line: line)
+        assertExists(
+            app.descendants(matching: .any)["Playlist Hero Header"],
+            named: "Seeded Unplayed hero header",
+            file: file,
+            line: line
+        )
+    }
+
+    /// The Playlists collection's toolbar Add menu. A toolbar menu may not
+    /// carry its identifier, so its label counts too.
+    @MainActor
+    private func openPlaylistsAddMenu(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let menu = app.navigationBars["Playlists"].buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "Playlists Add Menu", "Add")
+        ).firstMatch
+        assertHittable(menu, named: "Playlists Add menu", file: file, line: line)
+        menu.tap()
+    }
+
+    /// An item of the open Playlists Add menu, by identifier or by its
+    /// ellipsis title.
+    @MainActor
+    private func playlistsAddMenuItem(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", identifier, "\(identifier)\u{2026}")
+        ).firstMatch
+    }
+
+    @MainActor
+    private func choosePlaylistsAddMenuItem(
+        _ identifier: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        openPlaylistsAddMenu(in: app, file: file, line: line)
+        let item = playlistsAddMenuItem(identifier, in: app)
+        assertHittable(item, named: "Playlists Add menu \(identifier) item", file: file, line: line)
+        item.tap()
+    }
+
+    @MainActor
+    private func smartRuleChip(_ clause: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: "Smart Rule \(clause)").firstMatch
+    }
+
+    @MainActor
+    private func smartPlaylistRow(_ episodeID: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "playlist-episode-\(episodeID)").firstMatch
+    }
+
+    /// The hero's "Smart Playlist" line, scoped to the hero so the Add menu
+    /// item and the name prompt's title cannot stand in for it.
+    @MainActor
+    private func smartPlaylistMetaLine(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["Playlist Hero Header"]
+            .descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Smart Playlist"))
+            .firstMatch
+    }
+
+    /// Each chip exists, reads "<Clause>, <Value>" and keeps a 44-point tap
+    /// target.
+    @MainActor
+    private func assertSmartRuleChips(
+        _ expected: [(clause: String, value: String)],
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for (clause, value) in expected {
+            let chip = smartRuleChip(clause, in: app)
+            assertExists(chip, named: "Smart Rule \(clause) chip", file: file, line: line)
+            XCTAssertTrue(
+                waitUntil { chip.label == "\(clause), \(value)" },
+                "The \(clause) chip should read \"\(clause), \(value)\"; got \"\(chip.label)\"",
+                file: file,
+                line: line
+            )
+            XCTAssertGreaterThanOrEqual(
+                chip.frame.height,
+                43.99,
+                "The \(clause) chip should keep the 44-point tap target",
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    /// The hero's count line is labelled with the unprefixed spoken line
+    /// ("4 episodes, 40 minutes"; the meta line above already says Smart
+    /// Playlist), so the count must be a whole clause: a CONTAINS match would
+    /// let "14 episodes" pass for "4 episodes".
+    @MainActor
+    private func assertPlaylistCountLine(
+        reads count: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let countLine = app.descendants(matching: .any).matching(identifier: "Playlist Count Line").firstMatch
+        assertExists(countLine, named: "Playlist Count Line", file: file, line: line)
+        XCTAssertTrue(
+            waitUntil { countLine.label.components(separatedBy: ", ").contains(count) },
+            "The count line should read \(count); got \"\(countLine.label)\"",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Scrolls through the lazily built rows, checking each appears below the
+    /// one before it whenever both are in the tree.
+    @MainActor
+    private func assertSmartPlaylistRows(
+        _ episodeIDs: [String],
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for (index, episodeID) in episodeIDs.enumerated() {
+            let row = smartPlaylistRow(episodeID, in: app)
+            scrollUntilExists(row, in: app, maxSwipes: 4, file: file, line: line)
+            guard index > 0 else {
+                continue
+            }
+            let previousRow = smartPlaylistRow(episodeIDs[index - 1], in: app)
+            if previousRow.exists, row.exists {
+                XCTAssertLessThan(
+                    previousRow.frame.midY,
+                    row.frame.midY,
+                    "\(episodeIDs[index - 1]) should sort above \(episodeID)",
+                    file: file,
+                    line: line
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private func scrollToSmartRuleChips(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let chip = smartRuleChip("Episodes", in: app)
+        for _ in 0..<4 where !(chip.exists && chip.isHittable) {
+            app.swipeDown()
+        }
+        assertHittable(chip, named: "Smart Rule Episodes chip after scrolling back", file: file, line: line)
+        // A tap while the list still decelerates only stops the scroll.
+        XCTAssertTrue(waitForStableFrame(of: chip), "The chips should settle after scrolling back", file: file, line: line)
+    }
+
+    /// Opens a rule chip's glass menu and picks an inline option. There is no
+    /// fallback tap to close the menu: in a smart detail a tap that lands
+    /// after the menu closed hits a row and plays from there.
+    @MainActor
+    private func chooseSmartRuleOption(
+        _ option: String,
+        forClause clause: String,
+        screenshotName: String? = nil,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let chip = smartRuleChip(clause, in: app)
+        assertHittable(chip, named: "Smart Rule \(clause) chip", file: file, line: line)
+        // A push or scroll still in flight would take the tap instead.
+        XCTAssertTrue(waitForStableFrame(of: chip), "The \(clause) chip should settle before the tap", file: file, line: line)
+        chip.tap()
+        let item = app.buttons.matching(NSPredicate(format: "label == %@", option)).firstMatch
+        guard item.waitForExistence(timeout: 5) else {
+            let attachment = XCTAttachment(string: app.debugDescription)
+            attachment.name = "smart_rule_menu_hierarchy"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            XCTFail("\(option) \(clause) option not found", file: file, line: line)
+            return
+        }
+        // The glass menu morphs in, so wait for the option to settle.
+        assertHittable(item, named: "\(option) \(clause) option", file: file, line: line)
+        if let screenshotName {
+            attachSmokeScreenshot(named: screenshotName)
+        }
+        item.tap()
+        XCTAssertTrue(
+            item.waitForNonExistence(timeout: 5),
+            "The \(clause) menu should close after choosing \(option)",
+            file: file,
+            line: line
+        )
+        let expectedLabel = "\(clause), \(option)"
+        XCTAssertTrue(
+            waitUntil { chip.label == expectedLabel },
+            "The \(clause) chip should read \"\(expectedLabel)\"; got \"\(chip.label)\"",
+            file: file,
+            line: line
+        )
+    }
+
+    /// A Playlists collection list row or grid tile.
+    @MainActor
+    private func playlistCollectionItem(_ playlistID: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "playlist-row-\(playlistID)").firstMatch
+    }
+
+    /// A collection entry found by name, for playlists whose ID the app generates.
+    @MainActor
+    private func playlistCollectionItem(named name: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "playlist-row-", name))
+            .firstMatch
+    }
+
+    @MainActor
+    private func playlistDetailItem(_ itemID: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "playlist-item-\(itemID)").firstMatch
+    }
+
+    /// Fills the New Playlist or Rename Playlist alert and confirms it. The
+    /// confirm button must stay disabled until the field holds a name.
+    @MainActor
+    private func submitPlaylistNamePrompt(
+        _ title: String,
+        confirming confirmTitle: String,
+        name: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let alert = app.alerts[title]
+        assertExists(alert, named: "\(title) alert", file: file, line: line)
+        let field = alert.textFields.firstMatch
+        let confirmButton = alert.buttons[confirmTitle]
+        assertExists(confirmButton, named: "\(title) \(confirmTitle) button", file: file, line: line)
+
+        // The alert focuses its field, so keys go straight to it. A tap at the
+        // field's trailing edge opens the edit callout and bounces the
+        // keyboard, which moves the alert under the Create tap.
+        _ = waitUntil { app.keyboards.firstMatch.exists }
+        if (field.value(forKey: "hasKeyboardFocus") as? Bool) != true {
+            field.tap()
+        }
+        // An empty field reports its placeholder as the value; deleting that
+        // many characters from an empty field is a no-op.
+        let existingValue = (field.value as? String) ?? ""
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existingValue.count))
+        field.typeText(" ")
+        XCTAssertFalse(confirmButton.isEnabled, "\(confirmTitle) should stay disabled for a blank name", file: file, line: line)
+        field.typeText(XCUIKeyboardKey.delete.rawValue)
+        field.typeText(name)
+        XCTAssertTrue(
+            waitUntil { confirmButton.isEnabled },
+            "\(confirmTitle) should enable once the name has a character",
+            file: file,
+            line: line
+        )
+        // Enabling the button re-focuses the field, which slides the keyboard
+        // back and shifts the alert up; a tap during that slide misses.
+        _ = waitUntil(timeout: 2) { app.keyboards.firstMatch.exists }
+        usleep(800_000)
+        XCTAssertTrue(
+            waitForStableFrame(of: confirmButton),
+            "\(confirmTitle) should stop moving before it is tapped",
+            file: file,
+            line: line
+        )
+        confirmButton.tap()
+        if !alert.waitForNonExistence(timeout: 3), confirmButton.exists {
+            confirmButton.tap()
+        }
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 5), "\(title) alert should close", file: file, line: line)
+    }
+
+    /// True once two frame reads 300 ms apart agree, so a tap is not aimed
+    /// at a control that a keyboard or sheet animation is still moving.
+    @MainActor
+    private func waitForStableFrame(of element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date.now.addingTimeInterval(timeout)
+        var frame = element.frame
+        while Date.now < deadline {
+            usleep(300_000)
+            let nextFrame = element.frame
+            if nextFrame == frame {
+                return true
+            }
+            frame = nextFrame
+        }
+        return false
+    }
+
+    /// Picks an item from the playlist detail's Playlist Actions menu. The
+    /// query is type-agnostic because Hide Played is a toggle, and a miss
+    /// attaches the hierarchy.
+    @MainActor
+    private func choosePlaylistAction(
+        _ title: String,
+        closesMenuIfStillOpen: Bool = true,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let menu = app.buttons.matching(identifier: "Playlist Actions").firstMatch
+        assertHittable(menu, named: "Playlist Actions menu", file: file, line: line)
+        menu.tap()
+        let item = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", title))
+            .firstMatch
+        guard item.waitForExistence(timeout: 5) else {
+            let attachment = XCTAttachment(string: app.debugDescription)
+            attachment.name = "playlist_actions_menu_hierarchy"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            XCTFail("\(title) Playlist Actions item not found", file: file, line: line)
+            return
+        }
+        item.tap()
+        // Delete Playlist's confirmation reuses the item's label, so it must
+        // not be mistaken for a menu that stayed open.
+        if closesMenuIfStillOpen, !item.waitForNonExistence(timeout: 2) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+        }
+    }
+
+    @MainActor
+    private func addToPlaylistSheet(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "Add to Playlist Sheet").firstMatch
+    }
+
+    @MainActor
+    private func addToPlaylistRow(_ playlistID: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: "add-to-playlist-row-\(playlistID)").firstMatch
+    }
+
+    @MainActor
+    private func openAddToPlaylistSheet(
+        fromContextMenuOf row: XCUIElement,
+        named name: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertExists(row, named: "\(name) row", file: file, line: line)
+        row.press(forDuration: 1.2)
+        let addAction = app.buttons["Add to Playlist\u{2026}"].firstMatch
+        assertHittable(addAction, named: "\(name) Add to Playlist context action", file: file, line: line)
+        addAction.tap()
+        assertExists(addToPlaylistSheet(in: app), named: "Add to Playlist sheet", file: file, line: line)
+    }
+
+    @MainActor
+    private func dismissAddToPlaylistSheet(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let doneButton = app.navigationBars["Add to Playlist"].buttons["Done"]
+        assertHittable(doneButton, named: "Add to Playlist Done button", file: file, line: line)
+        doneButton.tap()
+        XCTAssertTrue(
+            addToPlaylistSheet(in: app).waitForNonExistence(timeout: 5),
+            "The Add to Playlist sheet should close",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func nowPlayingSourcePill(in app: XCUIApplication) -> XCUIElement {
+        nowPlayingOverlay(in: app).buttons.matching(identifier: Self.nowPlayingSourceIdentifier).firstMatch
+    }
+
+    @MainActor
+    private func assertNowPlayingSourcePill(
+        _ pill: XCUIElement,
+        reads expectedLabel: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertHittable(pill, named: "Now Playing source pill", file: file, line: line)
+        XCTAssertEqual(pill.label, expectedLabel, "Now Playing source pill label", file: file, line: line)
+    }
+
+    @MainActor
+    private func assertNowPlayingTitle(
+        reads expectedTitle: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let title = nowPlayingOverlay(in: app).buttons["Now Playing Episode Title"].firstMatch
+        assertExists(title, named: "Now Playing episode title", file: file, line: line)
+        XCTAssertTrue(
+            waitUntil { title.label == expectedTitle },
+            "Now Playing title should read \"\(expectedTitle)\"; got \"\(title.label)\"",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Polls, unlike `assertValue(of:contains:named:)`: the source values
+    /// follow the queue and playlist stores after the element already exists.
+    @MainActor
+    private func assertValue(
+        of element: XCUIElement,
+        becomes expected: String,
+        named name: String,
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(
+            waitUntil(timeout: timeout) { (element.value as? String) == expected },
+            "\(name) value should read \"\(expected)\"; got \"\(element.value as? String ?? "nil")\"",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func tapPlaylistPlay(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        // Queried by identifier: the label reads Resume once the first
+        // playable episode has progress.
+        let play = app.buttons["Playlist Play"].firstMatch
+        assertHittable(play, named: "Playlist Play button", file: file, line: line)
+        play.tap()
+    }
+
+    /// Up Next sheet rows share identifiers with the Inbox rows behind it.
+    @MainActor
+    private func hittableUpNextRow(_ identifier: String, in app: XCUIApplication) -> XCUIElement? {
+        app.buttons.matching(identifier: identifier)
+            .allElementsBoundByIndex
+            .first(where: \.isHittable)
+    }
+}
+
+extension XCTestCase {
+    /// The Library's Add is a menu whose Add Podcast item opens the sheet, so
+    /// the item is tapped when it appears. The empty states carry their own
+    /// Add Podcast buttons, which are excluded.
+    @MainActor
+    func tapAddPodcastMenuItemIfPresented(in app: XCUIApplication) {
+        let addPodcastMenuItem = app.buttons.matching(
+            NSPredicate(
+                format: "label == %@ AND NOT (identifier IN %@)",
+                "Add Podcast",
+                ["Library Empty Add Podcast", "Inbox Empty Add Podcast"]
+            )
+        ).firstMatch
+        if addPodcastMenuItem.waitForExistence(timeout: 2) {
+            addPodcastMenuItem.tap()
+        }
     }
 }

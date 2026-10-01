@@ -122,13 +122,45 @@ impl WhisperResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiFailureClass {
     Retryable,
+    /// Workers AI rejected the request before decoding the audio (code 3030,
+    /// "Failed to decode audio file"). From 2026-09-30 the platform returned
+    /// it at random for valid input — the same bytes succeed on the next
+    /// call and the rejected call bills zero neurons — so it retries under
+    /// its own attempt cap and never spends retry-audio budget.
+    DecodeRejected,
     Fatal,
+}
+
+impl AiFailureClass {
+    /// Content-free D1 counter bumped once per classified chunk error.
+    pub fn counter_name(self) -> &'static str {
+        match self {
+            Self::Retryable => "ai_errors_retryable",
+            Self::DecodeRejected => "ai_errors_decode_rejected",
+            Self::Fatal => "ai_errors_fatal",
+        }
+    }
+
+    /// Whether a failed attempt of this class spends retry-audio budget. A
+    /// decode rejection never reaches inference (measured: zero neurons),
+    /// and charging it a chunk's worth of audio would end a long episode at
+    /// the ceiling after two or three rejections.
+    pub fn counts_toward_retry_ceiling(self) -> bool {
+        !matches!(self, Self::DecodeRejected)
+    }
 }
 
 /// Classify a sanitized binding error. Fails closed: anything unrecognized is
 /// fatal so an unknown failure mode can never burn the retry budget blindly.
 pub fn classify_ai_error(sanitized: &str) -> AiFailureClass {
     let lowered = sanitized.to_ascii_lowercase();
+    const DECODE_REJECTED_MARKERS: [&str; 2] = ["3030", "failed to decode audio"];
+    if DECODE_REJECTED_MARKERS
+        .iter()
+        .any(|marker| lowered.contains(marker))
+    {
+        return AiFailureClass::DecodeRejected;
+    }
     const RETRYABLE_MARKERS: [&str; 12] = [
         "429",
         "rate limit",
@@ -173,12 +205,12 @@ pub fn sanitize_ai_error(raw: &str) -> String {
 /// Test hooks carried in the job's language code (development lane, FAKE_AI
 /// only — real AI calls never see these). Two grammars:
 /// - legacy `fake-fail:<message>`: chunk 0 fails its first attempt.
-/// - `fake:key=value;…[;fail=<index>:<first|always>:<message>]` with keys
+/// - `fake:key=value;…[;fail=<index>:<first|always|N>:<message>]` with keys
 ///   `conc` (per-job concurrency override), `latency` (per-call fake AI
 ///   latency, milliseconds), and `mlat` (fake-media per-chunk write latency,
 ///   milliseconds — makes chunk production progressive so overlap is
 ///   observable). `fail` consumes the remainder of the string so messages
-///   may contain any character.
+///   may contain any character; `N` fails the chunk's first N attempts.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FakeAiHooks {
     pub concurrency_override: Option<u32>,
@@ -295,13 +327,14 @@ impl FakeStrandRule {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FakeAiFailureRule {
     pub chunk_index: u32,
-    pub every_attempt: bool,
+    /// Attempts that fail before the chunk succeeds; `u32::MAX` = always.
+    pub fail_count: u32,
     pub message: String,
 }
 
 impl FakeAiFailureRule {
     pub fn applies(&self, chunk_index: u32, prior_failed_attempts: u32) -> bool {
-        self.chunk_index == chunk_index && (self.every_attempt || prior_failed_attempts == 0)
+        self.chunk_index == chunk_index && prior_failed_attempts < self.fail_count
     }
 }
 
@@ -313,7 +346,7 @@ pub fn parse_fake_hooks(language_code: Option<&str>) -> FakeAiHooks {
     if let Some(message) = language_code.strip_prefix("fake-fail:") {
         hooks.failure = Some(FakeAiFailureRule {
             chunk_index: 0,
-            every_attempt: false,
+            fail_count: 1,
             message: message.to_string(),
         });
         return hooks;
@@ -323,15 +356,21 @@ pub fn parse_fake_hooks(language_code: Option<&str>) -> FakeAiHooks {
     };
     while !rest.is_empty() {
         if let Some(fail_spec) = rest.strip_prefix("fail=") {
-            // fail consumes the remainder: <index>:<first|always>:<message>
+            // fail consumes the remainder: <index>:<first|always|N>:<message>
             let mut parts = fail_spec.splitn(3, ':');
             let index = parts.next().and_then(|part| part.parse().ok());
-            let mode = parts.next();
+            let fail_count = parts.next().and_then(|mode| match mode {
+                "first" => Some(1),
+                "always" => Some(u32::MAX),
+                count => count.parse().ok().filter(|count| *count > 0),
+            });
             let message = parts.next();
-            if let (Some(chunk_index), Some(mode), Some(message)) = (index, mode, message) {
+            if let (Some(chunk_index), Some(fail_count), Some(message)) =
+                (index, fail_count, message)
+            {
                 hooks.failure = Some(FakeAiFailureRule {
                     chunk_index,
-                    every_attempt: mode == "always",
+                    fail_count,
                     message: message.to_string(),
                 });
             }
@@ -469,6 +508,25 @@ mod tests {
     }
 
     #[test]
+    fn classification_retries_decode_rejections_under_their_own_class() {
+        // Observed 2026-09-30: returned at random for valid audio, the same
+        // bytes succeeding on the next call, zero neurons billed.
+        assert_eq!(
+            classify_ai_error(
+                "AiError: 3030: Failed to decode audio file. Ensure it is a valid audio format."
+            ),
+            AiFailureClass::DecodeRejected
+        );
+        assert!(!AiFailureClass::DecodeRejected.counts_toward_retry_ceiling());
+        assert!(AiFailureClass::Retryable.counts_toward_retry_ceiling());
+        assert!(AiFailureClass::Fatal.counts_toward_retry_ceiling());
+        assert_eq!(
+            AiFailureClass::DecodeRejected.counter_name(),
+            "ai_errors_decode_rejected"
+        );
+    }
+
+    #[test]
     fn classification_recognizes_retryable_markers() {
         for message in [
             "AiError: 429 Too Many Requests",
@@ -529,7 +587,7 @@ mod tests {
         let legacy = parse_fake_hooks(Some("fake-fail:429 rate limited"));
         let rule = legacy.failure.expect("legacy rule");
         assert_eq!(rule.chunk_index, 0);
-        assert!(!rule.every_attempt);
+        assert_eq!(rule.fail_count, 1);
         assert_eq!(rule.message, "429 rate limited");
         assert!(rule.applies(0, 0));
         assert!(!rule.applies(0, 1));
@@ -543,10 +601,22 @@ mod tests {
         assert_eq!(combined.media_chunk_latency_ms, Some(700));
         let rule = combined.failure.expect("combined rule");
         assert_eq!(rule.chunk_index, 2);
-        assert!(rule.every_attempt);
+        assert_eq!(rule.fail_count, u32::MAX);
         // The fail spec consumed everything after the mode, semicolons included.
         assert_eq!(rule.message, "AiError: 5006: bad; input");
         assert!(rule.applies(2, 5));
+
+        let counted = parse_fake_hooks(Some("fake:fail=0:3:AiError: 3030: no"))
+            .failure
+            .expect("counted rule");
+        assert_eq!(counted.fail_count, 3);
+        assert_eq!(counted.message, "AiError: 3030: no");
+        assert!(counted.applies(0, 0));
+        assert!(counted.applies(0, 2));
+        assert!(!counted.applies(0, 3));
+        assert!(!counted.applies(1, 0));
+        assert_eq!(parse_fake_hooks(Some("fake:fail=0:0:x")).failure, None);
+        assert_eq!(parse_fake_hooks(Some("fake:fail=0:later:x")).failure, None);
 
         let latency_only = parse_fake_hooks(Some("fake:latency=1500"));
         assert_eq!(latency_only.latency_ms, Some(1500));

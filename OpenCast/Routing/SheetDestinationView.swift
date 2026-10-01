@@ -13,6 +13,10 @@ struct SheetDestinationView: View {
                 directoryService: appModel.podcastDirectoryService,
                 directoryResolver: appModel.podcastDirectoryResolver
             )
+        case .addToPlaylist(let episodeID):
+            AddToPlaylistSheet(episodeID: episodeID)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         case .episodeDiagnostics(let episodeID):
             EpisodeDiagnosticsSheet(episodeID: episodeID)
         case .helpTopic(let id):
@@ -29,6 +33,10 @@ struct SheetDestinationView: View {
                 directoryResolver: appModel.podcastDirectoryResolver,
                 onCompleted: onDismiss
             )
+        case .playlistOrganizer(let podcastID):
+            PlaylistOrganizerSheet(podcastID: podcastID)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         case .podcastPlaybackSettings(let feedURL):
             PodcastPlaybackSettingsView(feedURL: feedURL)
                 .presentationDetents([.medium, .large])

@@ -14,6 +14,21 @@ final class EpisodeProgressWriter {
     /// Existing rows observe their SwiftData model directly. This revision
     /// is reserved for index membership changes and out-of-band reloads.
     private(set) var revision = 0
+    /// Advances after every write here that can change what a played-state
+    /// filter reads (completed, has a position, or a duration that falls
+    /// back to the episode's), including an in-place edit `revision`
+    /// ignores, for derived readers that cannot observe each record (smart
+    /// playlist evaluations). A playback flush that only moves the position
+    /// leaves it alone, so listening does not re-evaluate every list. It
+    /// also advances when the save of an in-place edit fails, because the
+    /// live row keeps the edit. A save with `refreshObservableProgress:
+    /// false` leaves its status change pending instead, and the next
+    /// observable write or refetch publishes it: that write compares against
+    /// the already-updated row, so it cannot see the change on its own.
+    private(set) var statusRevision = 0
+    /// Set by a suppressed save that changed a status; drained into
+    /// `statusRevision` when suppression ends.
+    @ObservationIgnored private var hasPendingStatusChange = false
     @ObservationIgnored private var index = EpisodeProgressIndex()
     @ObservationIgnored private let ledger: SyncedStoreSelfSaveLedger
 
@@ -37,6 +52,7 @@ final class EpisodeProgressWriter {
     /// Refetches the whole table; store reloads that follow other writes.
     func reload(modelContext: ModelContext) throws {
         replaceAll(try modelContext.fetch(EpisodeProgressIndex.allRecordsDescriptor()))
+        publishStatusChange(false)
     }
 
     /// Refetches and republishes only when the stored rows differ from the
@@ -44,6 +60,7 @@ final class EpisodeProgressWriter {
     @discardableResult
     func reloadIfChanged(modelContext: ModelContext) throws -> Bool {
         let fetchedRecords = try modelContext.fetch(EpisodeProgressIndex.allRecordsDescriptor())
+        publishStatusChange(false)
         guard !EpisodeProgressIndex.records(index.records, match: fetchedRecords) else {
             return false
         }
@@ -59,6 +76,7 @@ final class EpisodeProgressWriter {
 
     func reset() {
         index = EpisodeProgressIndex()
+        hasPendingStatusChange = false
         revision &+= 1
     }
 
@@ -66,8 +84,10 @@ final class EpisodeProgressWriter {
 
     /// Returns false when nothing meaningful changed: no save, no credit.
     /// `refreshObservableProgress: false` saves without touching the
-    /// projection (flushes from a scene that is not on screen); the next
-    /// `reloadIfChanged` publishes the row.
+    /// projection (flushes from a scene that is not on screen, or with Now
+    /// Playing presented); the next `reloadIfChanged` publishes the row, and
+    /// a status change it carried waits for that or the next observable
+    /// write.
     func update(
         episodeID: String,
         podcastID: String,
@@ -78,6 +98,7 @@ final class EpisodeProgressWriter {
         refreshObservableProgress: Bool
     ) throws -> Bool {
         let updatedRecord: EpisodeProgressRecord
+        let changesStatus: Bool
         if let existing = try latestStoredRecord(
             episodeID: episodeID,
             podcastID: podcastID,
@@ -92,6 +113,12 @@ final class EpisodeProgressWriter {
                 return false
             }
 
+            changesStatus = Self.changesStatus(
+                existing,
+                position: position,
+                duration: duration,
+                isPlayed: isPlayed
+            )
             existing.position = position
             existing.duration = duration
             existing.isPlayed = isPlayed
@@ -107,8 +134,16 @@ final class EpisodeProgressWriter {
             )
             modelContext.insert(record)
             updatedRecord = record
+            changesStatus = true
         }
 
+        defer {
+            if refreshObservableProgress {
+                publishStatusChange(changesStatus)
+            } else if changesStatus {
+                hasPendingStatusChange = true
+            }
+        }
         try ledger.save(modelContext)
         if refreshObservableProgress, index.apply(updatedRecord) {
             revision &+= 1
@@ -170,6 +205,7 @@ final class EpisodeProgressWriter {
             return false
         }
 
+        defer { publishStatusChange() }
         try ledger.save(modelContext)
         try reload(modelContext: modelContext)
         return true
@@ -210,6 +246,7 @@ final class EpisodeProgressWriter {
             }
         }
 
+        defer { publishStatusChange() }
         try ledger.save(modelContext)
         try reloadIfChanged(modelContext: modelContext)
         return prunableRecords.count
@@ -234,9 +271,58 @@ final class EpisodeProgressWriter {
             )
         )
 
+        defer { publishStatusChange() }
         try ledger.save(modelContext)
         try reloadIfChanged(modelContext: modelContext)
         return true
+    }
+
+    /// Advances `statusRevision` for a change that can move a played-state
+    /// answer, folding in any change a suppressed save left pending.
+    private func publishStatusChange(_ changesStatus: Bool = true) {
+        guard changesStatus || hasPendingStatusChange else {
+            return
+        }
+        hasPendingStatusChange = false
+        statusRevision &+= 1
+    }
+
+    private static func changesStatus(
+        _ existing: EpisodeProgressRecord,
+        position: TimeInterval,
+        duration: TimeInterval?,
+        isPlayed: Bool
+    ) -> Bool {
+        guard let previous = statusInputs(
+            position: existing.position,
+            duration: existing.duration,
+            isPlayed: existing.isPlayed
+        ),
+            let updated = statusInputs(position: position, duration: duration, isPlayed: isPlayed)
+        else {
+            return true
+        }
+        return previous != updated
+    }
+
+    /// What `LibraryStore.progressSummary` feeds the played-state filters
+    /// from a row: completed, and a position of at least a second. Nil when
+    /// the row has no duration, because the summary then falls back to the
+    /// episode's own duration, which this writer cannot see.
+    private static func statusInputs(
+        position: TimeInterval,
+        duration: TimeInterval?,
+        isPlayed: Bool
+    ) -> (isCompleted: Bool, hasPosition: Bool)? {
+        guard let duration else {
+            return nil
+        }
+        let validDuration = sanitizedDuration(duration)
+        let validPosition = sanitizedPosition(position, duration: validDuration)
+        return (
+            isCompleted: isPlayed || EpisodeProgressRules.isPlayed(position: validPosition, duration: validDuration),
+            hasPosition: validPosition >= 1
+        )
     }
 
     // MARK: - Fetches

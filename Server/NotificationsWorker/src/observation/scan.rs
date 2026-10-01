@@ -4,7 +4,7 @@ use super::{
     store::{fault, Store},
 };
 use crate::{
-    feed_identity,
+    feed_identity, notification_text,
     rss::{self, scan::EpisodeSink, ParsedEpisode, RSSParseError},
 };
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
@@ -96,11 +96,9 @@ impl Candidate {
                 },
             ),
             title: bounded(&episode.title, 512),
-            summary: episode
-                .summary
-                .as_deref()
-                .map(|s| bounded(s, 512))
-                .filter(|s| !s.is_empty()),
+            // Prose first, budget second: bounding the raw markup let a long
+            // `<a href>` swallow the summary (see `notification_text`).
+            summary: notification_text::candidate_summary(episode),
             artwork: episode
                 .artwork_url
                 .as_deref()

@@ -27,8 +27,10 @@ final class DownloadStore {
     // Pairs the ignored index with a tracked revision so `record(for:)`
     // registers a dependency even when it returns nil — a body that saw no
     // record must still invalidate when one appears (house pattern:
-    // LibraryStore.progressIndexRevision).
-    private var recordsRevision = 0
+    // LibraryStore.progressIndexRevision). Readable so a memo key (smart
+    // playlist evaluations) can track record changes without observing
+    // `records` itself.
+    private(set) var recordsRevision = 0
     private(set) var lastErrorMessage: String?
     private(set) var autoDeletesPlayedDownloads = false
     /// Episode-ID groups that held more than one record and were collapsed to
@@ -219,13 +221,18 @@ final class DownloadStore {
         try commit(episodeID: record.episodeID, modelContext: modelContext, resort: true)
     }
 
-    func startDownload(for episode: EpisodeListItemSnapshot, modelContext: ModelContext) {
+    /// Returns whether the download is now in flight. A `false` leaves the
+    /// reason in `lastErrorMessage(for:)`, so a bulk caller can report the
+    /// failures that a later successful start would otherwise clear.
+    @discardableResult
+    func startDownload(for episode: EpisodeListItemSnapshot, modelContext: ModelContext) -> Bool {
         do {
             if let record = record(for: episode.episodeID),
                record.state == .paused || record.state == .failed {
                 applyDisplayMetadata(from: episode, to: record)
                 if try resumePreservedPartialIfAvailable(record, modelContext: modelContext) {
-                    return
+                    // A resume setup failure leaves the record paused or failed.
+                    return record.state == .downloading
                 }
             }
 
@@ -237,7 +244,7 @@ final class DownloadStore {
                     message: EpisodeDownloadError.invalidAudioURL.localizedDescription,
                     modelContext: modelContext
                 )
-                return
+                return false
             }
 
             let record = try startDownload(
@@ -250,8 +257,10 @@ final class DownloadStore {
             try commit(episodeID: episode.episodeID, modelContext: modelContext, resort: true)
             lastErrorMessage = nil
             lastErrorEpisodeID = nil
+            return true
         } catch {
             recordFailure(error, episodeID: episode.episodeID)
+            return false
         }
     }
 

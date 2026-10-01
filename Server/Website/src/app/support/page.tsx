@@ -1,6 +1,13 @@
 import { Chip, Link, Typography } from "@heroui/react";
 import type { Metadata } from "next";
-import { Cloud, LifeBuoy, Mail, Rss, WandSparkles } from "lucide-react";
+import {
+  Cloud,
+  LifeBuoy,
+  ListMusic,
+  Mail,
+  Rss,
+  WandSparkles,
+} from "lucide-react";
 import { ActionLink } from "@/components/ActionLink";
 import { PolicySection } from "@/components/PolicySection";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -112,6 +119,38 @@ export default function SupportPage() {
                 Intelligence in iOS Settings stops both features. The{" "}
                 <Link
                   href="/privacy#recap-and-ask"
+                  className="font-semibold text-foreground"
+                >
+                  privacy policy
+                </Link>{" "}
+                has the full data path.
+              </p>
+            </PolicySection>
+            <PolicySection
+              icon={<ListMusic aria-hidden="true" />}
+              title="Make a Playlist"
+              wide
+            >
+              <p>
+                Make a Playlist drafts playlists from one show&apos;s episodes.
+                Ask for a playlist in your own words, or let it suggest groups.
+                You review the drafts first: rename, reorder, or remove
+                playlists and episodes, then save the ones you want as ordinary
+                playlists. To find it, open a show&apos;s page, open the Podcast
+                Actions menu, and choose Make a Playlist… under Apple
+                Intelligence · Beta. It appears on devices that support Apple
+                Intelligence.
+              </p>
+              <p>
+                The show&apos;s name, its episode titles, dates, lengths and
+                short descriptions, and your request are sent to Apple&apos;s
+                Private Cloud Compute. Your audio and transcripts are never
+                sent, and no opencast server is involved. The feature is
+                labelled Beta. If Apple&apos;s model declines a request,
+                opencast tries once more before telling you, and you can try
+                again. The{" "}
+                <Link
+                  href="/privacy#ai-playlists"
                   className="font-semibold text-foreground"
                 >
                   privacy policy

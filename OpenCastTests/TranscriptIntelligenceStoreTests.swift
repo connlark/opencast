@@ -1,4 +1,5 @@
 import Foundation
+import FoundationModels
 import SwiftData
 import Testing
 @testable import OpenCast
@@ -220,5 +221,17 @@ struct TranscriptIntelligenceStoreTests {
             }
         }
         #expect(store.availability == .notEntitled)
+    }
+
+    @Test("An answer that does not parse is malformed output and keeps the feature available")
+    func parsingErrorsAreMalformedOutput() async {
+        let store = makeStore()
+
+        await #expect(throws: TranscriptIntelligenceFailure.malformedOutput) {
+            try await store.perform {
+                throw GeneratedContent.ParsingError(rawContent: "{\"playlists\":[", debugDescription: "truncated")
+            }
+        }
+        #expect(store.availability == .available)
     }
 }

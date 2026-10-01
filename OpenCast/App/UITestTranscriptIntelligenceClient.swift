@@ -4,13 +4,16 @@ import FoundationModels
 
 /// UI-test stand-in for the PCC client: eligibility comes from the launch
 /// environment, and an available client answers every structured turn with
-/// canned content that cites the seeded transcript's two lines (a recap, or
-/// an answer with a scripted tool exchange), so the sheets can render on a
-/// simulator whose own eligibility follows the host Mac.
+/// canned content: a recap or an answer (with a scripted tool exchange) that
+/// cites the seeded transcript's two lines, or playlist proposals over the
+/// episodes the prompt lists, so the sheets can render on a simulator whose
+/// own eligibility follows the host Mac.
 nonisolated final class UITestTranscriptIntelligenceClient: TranscriptIntelligenceModelClient {
     static let availabilityEnvironmentKey = "OPENCAST_UI_TEST_TRANSCRIPT_INTELLIGENCE_AVAILABILITY"
     /// `answerable` (default), `unanswerable`, or `unverified`.
     static let askAnswerEnvironmentKey = "OPENCAST_UI_TEST_TRANSCRIPT_ASK_ANSWER"
+    /// `proposals` (default), `empty`, or `guardrail` (every turn declines).
+    static let playlistOrganizerResponseEnvironmentKey = "OPENCAST_UI_TEST_PLAYLIST_ORGANIZER_RESPONSE"
 
     let modelIdentifier = "ui-test"
     let modelAvailability: TranscriptIntelligenceModelAvailability
@@ -78,6 +81,8 @@ nonisolated final class UITestTranscriptIntelligenceSession: TranscriptIntellige
             """
     )
 
+    private static let emptyPlaylistProposalsJSON = #"{"playlists":[]}"#
+
     func respond(
         to prompt: String,
         options: TranscriptIntelligenceGenerationOptions
@@ -101,6 +106,9 @@ nonisolated final class UITestTranscriptIntelligenceSession: TranscriptIntellige
         onPartialContent: @escaping @MainActor (GeneratedContent) -> Void
     ) async throws -> TranscriptIntelligenceResponse<Content> {
         inputTokenCount += prompt.count / 4
+        if type == PlaylistProposalSet.self {
+            return try await playlistProposals(for: prompt, onPartialContent: onPartialContent)
+        }
         let isAnswer = type == TranscriptAnswer.self
         let json = isAnswer ? Self.cannedAnswerJSON : Self.cannedRecapJSON
         let content: Content
@@ -123,6 +131,64 @@ nonisolated final class UITestTranscriptIntelligenceSession: TranscriptIntellige
             usage: TranscriptIntelligenceUsage(inputTokens: inputTokenCount, outputTokens: 60),
             toolExchanges: isAnswer ? [Self.cannedToolExchange] : []
         )
+    }
+
+    private func playlistProposals<Content: Generable>(
+        for prompt: String,
+        onPartialContent: @escaping @MainActor (GeneratedContent) -> Void
+    ) async throws -> TranscriptIntelligenceResponse<Content> {
+        let variant = ProcessInfo.processInfo.environment[
+            UITestTranscriptIntelligenceClient.playlistOrganizerResponseEnvironmentKey
+        ]
+        let json: String
+        switch variant {
+        case "guardrail":
+            throw TranscriptIntelligenceFailure.guardrailViolation
+        case "empty":
+            json = Self.emptyPlaylistProposalsJSON
+        default:
+            json = Self.cannedPlaylistProposalsJSON(indices: Self.listedEpisodeIndices(in: prompt))
+        }
+        let content: Content
+        do {
+            let generated = try GeneratedContent(json: json)
+            await onPartialContent(generated)
+            content = try Content(generated)
+        } catch {
+            throw TranscriptIntelligenceFailure.malformedOutput
+        }
+        return TranscriptIntelligenceResponse(
+            content: content,
+            usage: TranscriptIntelligenceUsage(inputTokens: inputTokenCount, outputTokens: 60),
+            toolExchanges: []
+        )
+    }
+
+    /// Two proposals over every listed episode: one in the prompt's order,
+    /// one reversed.
+    private static func cannedPlaylistProposalsJSON(indices: [Int]) -> String {
+        guard !indices.isEmpty else {
+            return emptyPlaylistProposalsJSON
+        }
+        let listed = indices.map { String($0) }.joined(separator: ",")
+        let listedBackwards = indices.reversed().map { String($0) }.joined(separator: ",")
+        return #"{"playlists":[{"title":"First Seeded Playlist","rationale":"Every listed episode in feed order.","episodeIndices":[\#(listed)],"confidence":0.9},{"title":"Second Seeded Playlist","rationale":"The same episodes, newest last.","episodeIndices":[\#(listedBackwards)],"confidence":0.6}]}"#
+    }
+
+    /// The index that opens each numbered episode line ("12. …"), ascending.
+    private static func listedEpisodeIndices(in prompt: String) -> [Int] {
+        var indices = Set<Int>()
+        for line in prompt.split(separator: "\n") {
+            let digits = line.prefix { $0.isASCII && $0.isNumber }
+            guard !digits.isEmpty,
+                  line.dropFirst(digits.count).hasPrefix(". "),
+                  let index = Int(digits)
+            else {
+                continue
+            }
+            indices.insert(index)
+        }
+        return indices.sorted()
     }
 }
 #endif

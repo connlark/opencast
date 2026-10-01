@@ -250,6 +250,7 @@ struct CarPlayBrowseModelBuilderTests {
         let snapshot = CarPlayBrowseModelBuilder.library(
             subscriptions: fixture.library.subscriptions,
             library: fixture.library,
+            showsPlaylistsRow: false,
             isLoading: false,
             limits: Self.roomyLimits
         )
@@ -410,6 +411,186 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(first != afterDownload)
     }
 
+    @Test("Library leads with the Playlists row only when asked, inside the same cap")
+    func libraryLeadsWithPlaylistsRowOnlyWhenRequested() async throws {
+        let fixture = try await makeFixture(episodeCount: 1)
+        let subscriptions = fixture.library.subscriptions + (1..<14).map { index in
+            SubscriptionRecord(
+                feedURL: "https://example.com/extra-\(index).xml",
+                title: "Extra Show \(index)",
+                artworkURL: "https://example.com/extra-\(index).jpg"
+            )
+        }
+
+        let withPlaylists = CarPlayBrowseModelBuilder.library(
+            subscriptions: subscriptions,
+            library: fixture.library,
+            showsPlaylistsRow: true,
+            isLoading: false,
+            limits: .fallback
+        )
+        let withoutPlaylists = CarPlayBrowseModelBuilder.library(
+            subscriptions: subscriptions,
+            library: fixture.library,
+            showsPlaylistsRow: false,
+            isLoading: false,
+            limits: .fallback
+        )
+
+        #expect(withPlaylists.sections.count == 1)
+        let rows = withPlaylists.sections[0].rows
+        #expect(rows.first == .playlists)
+        #expect(rows.last == .showMore)
+        #expect(withPlaylists.rowCount == 12)
+        #expect(podcastRow(rows[1])?.feedURL == Self.podcastID)
+        #expect(withPlaylists.continuation?.title == "More Shows")
+        #expect(withPlaylists.continuation?.sections.flatMap(\.rows).contains(.playlists) == false)
+
+        #expect(!withoutPlaylists.sections.flatMap(\.rows).contains(.playlists))
+        #expect(withoutPlaylists.continuation?.sections.flatMap(\.rows).contains(.playlists) == false)
+        #expect(podcastRow(withoutPlaylists.sections[0].rows[0])?.feedURL == Self.podcastID)
+    }
+
+    @Test("The playlists list keeps the store's order and pages at the floor limits")
+    func playlistsListRespectsFloorLimitsWithContinuation() throws {
+        let summaries = (0..<13).map { index in
+            makePlaylistSummary(playlistID: "playlist-\(index)", name: "Playlist \(index)", kind: .manual)
+        }
+
+        let snapshot = CarPlayBrowseModelBuilder.playlists(
+            summaries,
+            episodeCount: { _ in 2 },
+            artworkURL: { _ in nil },
+            limits: .fallback
+        )
+
+        #expect(snapshot.title == "Playlists")
+        #expect(snapshot.sections.count == 1)
+        #expect(snapshot.sections[0].header == nil)
+        #expect(snapshot.rowCount == 12)
+        let rows = snapshot.sections[0].rows
+        #expect(rows.compactMap(playlistRow).map(\.playlistID) == (0..<11).map { "playlist-\($0)" })
+        #expect(rows.last == .showMore)
+        let continuation = try #require(snapshot.continuation)
+        #expect(continuation.title == "More Playlists")
+        #expect(continuation.sections.flatMap(\.rows).compactMap(playlistRow).map(\.playlistID) == ["playlist-11", "playlist-12"])
+        #expect(continuation.snapshot.continuation == nil)
+    }
+
+    @Test("Playlist rows carry the cover show's artwork or the smart symbol, with an inflected count")
+    func playlistRowsCarryShowArtworkOrSmartSymbol() throws {
+        let summaries = [
+            makePlaylistSummary(playlistID: "manual-cover", name: "Commute", kind: .manual),
+            makePlaylistSummary(playlistID: "manual-bare", name: "Bare", kind: .manual),
+            makePlaylistSummary(playlistID: "smart-default", name: "Fresh", kind: .smart),
+            makePlaylistSummary(playlistID: "smart-star", name: "Starred", kind: .smart, symbolName: "star")
+        ]
+        let counts = ["manual-cover": 3, "manual-bare": 0, "smart-default": 1, "smart-star": 12]
+
+        // The closure offers a cover to every playlist but the bare one, so the
+        // smart rows prove they keep their symbol instead.
+        let snapshot = CarPlayBrowseModelBuilder.playlists(
+            summaries,
+            episodeCount: { counts[$0.playlistID] ?? -1 },
+            artworkURL: { $0.playlistID == "manual-bare" ? nil : "https://example.com/cover.jpg" },
+            limits: Self.roomyLimits
+        )
+
+        let rows = snapshot.sections.flatMap(\.rows).compactMap(playlistRow)
+        try #require(rows.map(\.playlistID) == summaries.map(\.playlistID))
+        #expect(rows.map(\.title) == ["Commute", "Bare", "Fresh", "Starred"])
+        #expect(rows[0].artworkURL == "https://example.com/cover.jpg")
+        #expect(rows[0].symbolName == nil)
+        #expect(rows[0].detailText == "3 episodes")
+        #expect(rows[1].artworkURL == nil)
+        #expect(rows[1].symbolName == "music.note.list")
+        #expect(rows[1].detailText == "No episodes")
+        #expect(rows[2].artworkURL == nil)
+        #expect(rows[2].symbolName == "sparkles")
+        #expect(rows[2].detailText == "1 episode")
+        #expect(rows[3].artworkURL == nil)
+        #expect(rows[3].symbolName == "star")
+        #expect(rows[3].detailText == "12 episodes")
+    }
+
+    @Test("A playlist's episodes keep input order, carry the playlist and show title, and page like any list")
+    func playlistEpisodesKeepOrderTagAndShowTitle() async throws {
+        let fixture = try await makeFixture(episodeCount: 13)
+        let orderedIDs = [episodeID(4), episodeID(0)] + (0..<13).filter { $0 != 0 && $0 != 4 }.map(episodeID)
+        let episodes = try orderedIDs.map { try #require(fixture.library.episode(with: $0)) }
+
+        let snapshot = CarPlayBrowseModelBuilder.playlistEpisodes(
+            playlistID: "playlist-commute",
+            title: "Commute",
+            episodes: episodes,
+            hidesPlayed: false,
+            library: fixture.library,
+            downloadRecords: [],
+            nowPlaying: .idle,
+            limits: Self.floorLimits
+        )
+        let empty = CarPlayBrowseModelBuilder.playlistEpisodes(
+            playlistID: "playlist-empty",
+            title: "Empty",
+            episodes: [],
+            hidesPlayed: false,
+            library: fixture.library,
+            downloadRecords: [],
+            nowPlaying: .idle,
+            limits: Self.floorLimits
+        )
+
+        #expect(snapshot.title == "Commute")
+        #expect(snapshot.rowCount == 12)
+        #expect(episodeIDs(in: snapshot) == Array(orderedIDs.prefix(11)))
+        #expect(snapshot.sections.last?.rows.last == .showMore)
+        let visibleRows = snapshot.sections.flatMap(\.rows).compactMap(episodeRow)
+        #expect(visibleRows.allSatisfy { $0.sourcePlaylistID == "playlist-commute" })
+        #expect(visibleRows.allSatisfy { $0.detailText == Self.podcastTitle })
+        let continuation = try #require(snapshot.continuation)
+        #expect(continuation.title == "More Episodes")
+        #expect(episodeIDs(in: continuation.snapshot) == Array(orderedIDs.dropFirst(11)))
+        #expect(continuation.sections.flatMap(\.rows).compactMap(episodeRow).allSatisfy { $0.sourcePlaylistID == "playlist-commute" })
+
+        #expect(empty.title == "Empty")
+        #expect(empty.sections.isEmpty)
+        #expect(empty.rowCount == 0)
+        #expect(empty.continuation == nil)
+        #expect(empty.emptyTitleVariants.first == "Nothing to Play")
+        #expect(empty.emptySubtitleVariants == ["This playlist has no episodes to play."])
+    }
+
+    @Test("A playlist's episodes drop played rows only when it hides played")
+    func playlistEpisodesHonourHidesPlayed() async throws {
+        let fixture = try await makeFixture(episodeCount: 3)
+        let episodes = try (0..<3).map { try #require(fixture.library.episode(with: episodeID($0))) }
+        #expect(fixture.library.markEpisodePlayed(episodes[1], modelContext: fixture.context))
+
+        let hiding = CarPlayBrowseModelBuilder.playlistEpisodes(
+            playlistID: "playlist-commute",
+            title: "Commute",
+            episodes: episodes,
+            hidesPlayed: true,
+            library: fixture.library,
+            downloadRecords: [],
+            nowPlaying: .idle,
+            limits: Self.roomyLimits
+        )
+        let showing = CarPlayBrowseModelBuilder.playlistEpisodes(
+            playlistID: "playlist-commute",
+            title: "Commute",
+            episodes: episodes,
+            hidesPlayed: false,
+            library: fixture.library,
+            downloadRecords: [],
+            nowPlaying: .idle,
+            limits: Self.roomyLimits
+        )
+
+        #expect(episodeIDs(in: hiding) == [episodeID(0), episodeID(2)])
+        #expect(episodeIDs(in: showing) == (0..<3).map(episodeID))
+    }
+
     private func makeFixture(
         episodeCount: Int
     ) async throws -> (library: LibraryStore, context: ModelContext) {
@@ -483,7 +664,7 @@ struct CarPlayBrowseModelBuilderTests {
             switch row {
             case .episode(let episodeRow):
                 episodeRow.episodeID
-            case .podcast, .showMore:
+            case .podcast, .playlists, .playlist, .showMore:
                 nil
             }
         }
@@ -501,5 +682,34 @@ struct CarPlayBrowseModelBuilderTests {
             return nil
         }
         return podcastRow
+    }
+
+    private func playlistRow(_ row: CarPlayListRow) -> CarPlayPlaylistRow? {
+        guard case .playlist(let playlistRow) = row else {
+            return nil
+        }
+        return playlistRow
+    }
+
+    private func makePlaylistSummary(
+        playlistID: String,
+        name: String,
+        kind: PlaylistKind,
+        symbolName: String? = nil
+    ) -> PlaylistSummary {
+        PlaylistSummary(
+            playlistID: playlistID,
+            name: name,
+            kind: kind,
+            rule: kind == .smart ? PlaylistRule.default : nil,
+            hidesPlayed: false,
+            symbolName: symbolName,
+            origin: .user,
+            itemCount: 0,
+            totalDuration: 0,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0),
+            coverPodcastIDs: []
+        )
     }
 }

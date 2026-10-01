@@ -1,4 +1,6 @@
-nonisolated enum PodcastEpisodeFilter: String, CaseIterable, Identifiable, Sendable {
+/// Raw values are durable storage keys (episode list preferences and smart
+/// playlist rules).
+nonisolated enum PodcastEpisodeFilter: String, CaseIterable, Codable, Identifiable, Sendable {
     case all
     case unplayed
     case inProgress

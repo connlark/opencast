@@ -34,12 +34,22 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
     func handle(intent: INPlayMediaIntent) async -> INPlayMediaIntentResponse {
         await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
         let resolution = await resolution(for: intent)
-        guard let episode = episode(for: resolution) else {
-            return Self.response(code: failureCode(for: resolution))
+        let action: OpenCastSystemAction
+        switch resolution {
+        case .playlist(let playlistID):
+            guard appModel.hasPlaylistPlaybackCandidates(playlistID) else {
+                return Self.response(code: failureCode(for: resolution))
+            }
+            action = .playPlaylist(playlistID)
+        default:
+            guard let episode = episode(for: resolution) else {
+                return Self.response(code: failureCode(for: resolution))
+            }
+            action = .playEpisode(episode.episodeID)
         }
 
         do {
-            try await appModel.systemActions.perform(.playEpisode(episode.episodeID), modelContext: modelContext)
+            try await appModel.systemActions.perform(action, modelContext: modelContext)
             if let playbackSpeed = intent.playbackSpeed {
                 appModel.setPlaybackRate(
                     Float(playbackSpeed),
@@ -77,11 +87,15 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
             SiriMediaSubscription(podcastID: $0.feedURL, title: $0.title)
         }
         let episodes = appModel.library.episodes
+        let playlists = appModel.playlists.playlists.map {
+            SiriMediaPlaylist(playlistID: $0.playlistID, name: $0.name)
+        }
         return await SiriMediaResolver.resolve(
             mediaName: requestedMediaName(for: intent),
             mediaType: requestedMediaType(for: intent),
             subscriptions: subscriptions,
-            episodes: episodes
+            episodes: episodes,
+            playlists: playlists
         )
     }
 
@@ -91,7 +105,16 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
         }
 
         switch item.type {
-        case .podcastShow, .podcastPlaylist, .podcastStation:
+        case .podcastPlaylist:
+            // A donation saved before playlists existed can carry a feed URL
+            // under the playlist type; it still plays the show.
+            if appModel.playlist(identifier) != nil {
+                return .playlist(playlistID: identifier)
+            }
+            return appModel.library.isActivelySubscribed(to: identifier)
+                ? .show(podcastID: identifier)
+                : nil
+        case .podcastShow, .podcastStation:
             return appModel.library.isActivelySubscribed(to: identifier)
                 ? .show(podcastID: identifier)
                 : nil
@@ -102,6 +125,9 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
         default:
             if appModel.library.isActivelySubscribed(to: identifier) {
                 return .show(podcastID: identifier)
+            }
+            if appModel.playlist(identifier) != nil {
+                return .playlist(playlistID: identifier)
             }
             return appModel.episodeSnapshot(for: identifier) == nil
                 ? nil
@@ -157,6 +183,18 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
                 artist: episode.podcastTitle
             )
             return [.success(with: item)]
+        case .playlist(let playlistID):
+            guard let playlist = appModel.playlist(playlistID) else {
+                return [.unsupported(forReason: .serviceUnavailable)]
+            }
+            let item = INMediaItem(
+                identifier: playlistID,
+                title: playlist.name,
+                type: .podcastPlaylist,
+                artwork: nil,
+                artist: nil
+            )
+            return [.success(with: item)]
         case .resume:
             return [.notRequired()]
         case .noMatch:
@@ -167,14 +205,19 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
     private func confirmationCode(
         for resolution: SiriMediaResolution
     ) -> INPlayMediaIntentResponseCode {
-        episode(for: resolution) == nil ? failureCode(for: resolution) : .ready
+        switch resolution {
+        case .playlist(let playlistID):
+            appModel.hasPlaylistPlaybackCandidates(playlistID) ? .ready : .failureNoUnplayedContent
+        default:
+            episode(for: resolution) == nil ? failureCode(for: resolution) : .ready
+        }
     }
 
     private func failureCode(
         for resolution: SiriMediaResolution
     ) -> INPlayMediaIntentResponseCode {
         switch resolution {
-        case .show, .resume:
+        case .show, .playlist, .resume:
             .failureNoUnplayedContent
         case .episode, .noMatch:
             .failure
@@ -190,6 +233,8 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
             )?.episode
         case .episode(let episodeID):
             appModel.episodeSnapshot(for: episodeID)
+        case .playlist:
+            nil
         case .resume:
             restoredEpisode() ?? appModel.library.inboxEpisodes.first
         case .noMatch:

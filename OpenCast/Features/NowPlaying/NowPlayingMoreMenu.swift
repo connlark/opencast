@@ -7,9 +7,13 @@ struct NowPlayingMoreMenu: View {
     let hasTranscript: Bool
     let canShowDescription: Bool
     let canShowShow: Bool
+    /// The name of the playlist playback came from; nil when there is none.
+    let playlistSourceName: String?
     let onTranscriptAction: () -> Void
     let onShowDescription: () -> Void
     let onShowShow: () -> Void
+    let onShowPlaylist: () -> Void
+    let onAddToPlaylist: () -> Void
     let onStopPlayback: () -> Void
 
     var body: some View {
@@ -28,6 +32,16 @@ struct NowPlayingMoreMenu: View {
                 .disabled(!canShowDescription)
             Button("Show Show", systemImage: "rectangle.stack", action: onShowShow)
                 .disabled(!canShowShow)
+            if let playlistSourceName {
+                Button(
+                    PlaylistPlaybackSourceText.showPlaylistMenuTitle(name: playlistSourceName),
+                    systemImage: "music.note.list",
+                    action: onShowPlaylist
+                )
+            }
+            if episode != nil {
+                Button("Add to Playlist…", systemImage: "music.note.list", action: onAddToPlaylist)
+            }
             Divider()
             Button("Stop Playback", systemImage: "stop.circle", action: onStopPlayback)
         } label: {

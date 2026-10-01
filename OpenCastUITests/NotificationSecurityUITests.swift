@@ -367,25 +367,17 @@ final class NotificationSecurityUITests: XCTestCase {
 
     @MainActor
     private func tapAddPodcastButton(in app: XCUIApplication) {
-        let libraryAddButton = app.navigationBars["Library"].buttons["Add"]
-        if libraryAddButton.waitForExistence(timeout: 2) {
-            libraryAddButton.tap()
+        let addButtons = [
+            app.navigationBars["Library"].buttons["Add"],
+            app.navigationBars["opencast"].buttons["Add"],
+            app.buttons["Add"].firstMatch
+        ]
+        guard let addButton = addButtons.first(where: { $0.waitForExistence(timeout: 2) }) else {
+            XCTFail("Add Podcast button should exist")
             return
         }
-
-        let rootAddButton = app.navigationBars["opencast"].buttons["Add"]
-        if rootAddButton.waitForExistence(timeout: 2) {
-            rootAddButton.tap()
-            return
-        }
-
-        let addButton = app.buttons["Add"].firstMatch
-        if addButton.waitForExistence(timeout: 2) {
-            addButton.tap()
-            return
-        }
-
-        XCTFail("Add Podcast button should exist")
+        addButton.tap()
+        tapAddPodcastMenuItemIfPresented(in: app)
     }
 
     @MainActor

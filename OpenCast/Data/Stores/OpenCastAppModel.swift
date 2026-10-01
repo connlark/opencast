@@ -38,6 +38,8 @@ final class OpenCastAppModel {
     let transcriptIntelligence: TranscriptIntelligenceStore
     let adFreePass: EpisodeAdFreePassCoordinator
     let upNextQueue: UpNextQueueStore
+    let playlists: PlaylistStore
+    let playlistDisplaySettings: PlaylistDisplaySettingsStore
     let adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession
     let transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession
     let transcriptImprovement: EpisodeTranscriptImprovementCoordinator
@@ -74,6 +76,7 @@ final class OpenCastAppModel {
         }
     }
     var nowPlayingPresentationRequest = 0
+    private(set) var addToPlaylistPresentationRequest: AddToPlaylistPresentationRequest?
     /// Single source of truth for Now Playing presentation; the root layer
     /// and tab views read this directly.
     var isNowPlayingPresented = false
@@ -105,8 +108,23 @@ final class OpenCastAppModel {
     var dataNukeConfirmationPresentationRequest = 0
     var lastPlaybackError: String?
     var lastUpNextError: String?
-    /// The library, downloads, and Up Next snapshots are all ready for list
-    /// views to derive cross-store state without observing partial startup data.
+    var lastPlaylistError: String?
+    /// The playlist the loaded episode was started from, or derived from the
+    /// queue row it was popped from; nil for any untagged start.
+    private(set) var currentPlaylistSourceID: String?
+    /// Joined with the live playlist summary: a rename shows at once, and a
+    /// deleted playlist hides the source without touching the queue.
+    var currentPlaylistSource: PlaylistPlaybackSource? {
+        guard let currentPlaylistSourceID,
+              let summary = playlists.playlists.first(where: { $0.playlistID == currentPlaylistSourceID })
+        else {
+            return nil
+        }
+        return PlaylistPlaybackSource(playlistID: summary.playlistID, name: summary.name)
+    }
+    /// The library, downloads, Up Next, and playlist snapshots are all ready
+    /// for list views to derive cross-store state without observing partial
+    /// startup data.
     private(set) var coreStoresHydrated = false
     /// Unsubscribe outcome surface, presented by the removal confirmation
     /// surfaces; unsubscribe failures never route through the playback error.
@@ -183,6 +201,8 @@ final class OpenCastAppModel {
         transcriptIntelligence: TranscriptIntelligenceStore = TranscriptIntelligenceStore(),
         adFreePass: EpisodeAdFreePassCoordinator = EpisodeAdFreePassCoordinator(),
         upNextQueue: UpNextQueueStore = UpNextQueueStore(),
+        playlists: PlaylistStore = PlaylistStore(),
+        playlistDisplaySettings: PlaylistDisplaySettingsStore = PlaylistDisplaySettingsStore(),
         adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession = EpisodeAdFreePassBackgroundSession(),
         transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession = EpisodeTranscriptGenerationBackgroundSession(),
         playback: AVFoundationPlaybackController? = nil,
@@ -296,7 +316,7 @@ final class OpenCastAppModel {
             transcriptions: transcriptions,
             library: resolvedLibrary
         )
-        resolvedLibrary.episodeSidecarMigrators = [downloads, transcriptions, adAnalyses, transcriptAnalyses]
+        resolvedLibrary.episodeSidecarMigrators = [downloads, transcriptions, adAnalyses, transcriptAnalyses, playlists]
         notificationSettings.feedHealthRecorder = { [weak resolvedLibrary] records in
             await resolvedLibrary?.recordNotificationFeedHealth(records)
         }
@@ -312,6 +332,8 @@ final class OpenCastAppModel {
         )
         self.adFreePass = adFreePass
         self.upNextQueue = upNextQueue
+        self.playlists = playlists
+        self.playlistDisplaySettings = playlistDisplaySettings
         self.adFreePassBackgroundSession = adFreePassBackgroundSession
         self.transcriptGenerationBackgroundSession = transcriptGenerationBackgroundSession
         self.transcriptImprovement = EpisodeTranscriptImprovementCoordinator(
@@ -486,6 +508,7 @@ final class OpenCastAppModel {
             // flash the default container first, and a stored Inbox filter
             // applies to the first render.
             libraryDisplaySettings.load(modelContext: modelContext)
+            playlistDisplaySettings.load(modelContext: modelContext)
             inboxEpisodeListSettings.load(modelContext: modelContext)
             let didLoadLibrary = await library.load(modelContext: modelContext)
             await downloads.load(modelContext: modelContext)
@@ -500,6 +523,11 @@ final class OpenCastAppModel {
             )
             if let message = upNextQueue.consumeLastErrorMessage() {
                 lastUpNextError = message
+            }
+            playlists.sortOrder = playlistDisplaySettings.sortOrder
+            playlists.load(modelContext: modelContext)
+            if let message = playlists.consumeLastErrorMessage() {
+                lastPlaylistError = message
             }
             coreStoresHydrated = true
         }
@@ -614,6 +642,7 @@ final class OpenCastAppModel {
         _ episode: EpisodeListItemSnapshot,
         at startPosition: TimeInterval? = nil,
         presentsNowPlaying: Bool = true,
+        sourcePlaylistID: String? = nil,
         modelContext: ModelContext
     ) throws {
         try play(
@@ -621,6 +650,7 @@ final class OpenCastAppModel {
             source: preferredPlaybackSource(for: episode.episodeID),
             startPosition: startPosition,
             presentsNowPlaying: presentsNowPlaying,
+            sourcePlaylistID: sourcePlaylistID,
             modelContext: modelContext
         )
     }
@@ -657,6 +687,7 @@ final class OpenCastAppModel {
                 try playEpisode(
                     episode,
                     presentsNowPlaying: false,
+                    sourcePlaylistID: item.sourcePlaylistID,
                     modelContext: modelContext
                 )
                 return true
@@ -748,6 +779,7 @@ final class OpenCastAppModel {
         // its restore key must survive.
         if playback.currentEpisode == nil {
             playbackRestorePreference.clear(modelContext: modelContext)
+            currentPlaylistSourceID = nil
         }
         sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
     }
@@ -757,6 +789,435 @@ final class OpenCastAppModel {
             return
         }
         lastUpNextError = upNextQueue.consumeLastErrorMessage()
+    }
+
+    /// Generic so `create` and `add` still hand back their summary and count.
+    /// A successful mutation clears the store's message, so consuming after
+    /// every call is safe.
+    @discardableResult
+    func performPlaylistMutation<Value>(_ mutation: () -> Value) -> Value {
+        let value = mutation()
+        if let message = playlists.consumeLastErrorMessage() {
+            lastPlaylistError = message
+        }
+        return value
+    }
+
+    /// Deletes through the store, then the playlist's Siri donation group;
+    /// a failed delete leaves the donations alone.
+    @discardableResult
+    func deletePlaylist(_ playlistID: String, modelContext: ModelContext) -> Bool {
+        let didDelete = performPlaylistMutation { playlists.delete(playlistID, modelContext: modelContext) }
+        if didDelete {
+            siriMediaDiscovery.deleteDonations(forPlaylistID: playlistID)
+        }
+        return didDelete
+    }
+
+    /// Renames through the store, then drops the donation group that carries
+    /// the old name; the next play from the playlist donates the new one.
+    @discardableResult
+    func renamePlaylist(_ playlistID: String, to name: String, modelContext: ModelContext) -> Bool {
+        let didRename = performPlaylistMutation { playlists.rename(playlistID, to: name, modelContext: modelContext) }
+        if didRename {
+            siriMediaDiscovery.deleteDonations(forPlaylistID: playlistID)
+        }
+        return didRename
+    }
+
+    /// Persists the collection order first, so the store only re-sorts to an
+    /// order that will survive a relaunch.
+    @discardableResult
+    func setPlaylistSortOrder(_ sortOrder: PlaylistSortOrder, modelContext: ModelContext) -> Bool {
+        guard playlistDisplaySettings.setSortOrder(sortOrder, modelContext: modelContext) else {
+            lastPlaylistError = playlistDisplaySettings.lastErrorMessage
+            playlistDisplaySettings.clearLastError()
+            return false
+        }
+        playlists.sortOrder = sortOrder
+        return true
+    }
+
+    /// Copies the playlist's unplayed, resolvable episodes into Up Next (a
+    /// smart playlist's first `smartPlaylistQueueLimit`); the playlist
+    /// itself is never consumed. `replace` starts the first episode before
+    /// touching the queue, so a failed start leaves the listener's queue as
+    /// it was. `addAfter` skips the episode already playing. Shuffle applies
+    /// to manual playlists only.
+    @discardableResult
+    func playPlaylist(
+        _ playlistID: String,
+        mode: PlaylistPlayMode = .replace,
+        shuffle: Bool = false,
+        presentsNowPlaying: Bool = true,
+        modelContext: ModelContext
+    ) -> Bool {
+        var episodes = playlistPlaybackCandidates(playlistID, smartLimit: Self.smartPlaylistQueueLimit)
+        if shuffle, playlists.playlists.first(where: { $0.playlistID == playlistID })?.kind == .manual {
+            episodes.shuffle()
+        }
+        guard let first = episodes.first else {
+            lastPlaylistError = Self.nothingToPlayMessage
+            return false
+        }
+
+        switch mode {
+        case .replace:
+            do {
+                try playEpisode(
+                    first,
+                    presentsNowPlaying: presentsNowPlaying,
+                    sourcePlaylistID: playlistID,
+                    modelContext: modelContext
+                )
+            } catch {
+                lastPlaybackError = error.localizedDescription
+                return false
+            }
+            guard upNextQueue.clear(modelContext: modelContext),
+                  upNextQueue.enqueueLast(Array(episodes.dropFirst()), source: playlistID, modelContext: modelContext)
+            else {
+                lastUpNextError = upNextQueue.consumeLastErrorMessage()
+                return false
+            }
+            return true
+        case .addAfter:
+            // The playing episode never joins the queue behind itself: it
+            // would replay from the start once the queue reached it, the
+            // same reason Play Next / Play Last are disabled for it.
+            let remainder = episodes.filter { !isCurrentEpisode($0) }
+            guard upNextQueue.enqueueLast(remainder, source: playlistID, modelContext: modelContext) else {
+                lastUpNextError = upNextQueue.consumeLastErrorMessage()
+                return false
+            }
+            guard playback.currentEpisode == nil else {
+                return true
+            }
+            return advanceToNextQueuedEpisode(modelContext: modelContext)
+        }
+    }
+
+    /// "Play from here" for a manual playlist row: starts the tapped row,
+    /// even a played one, then puts the unplayed, resolvable rows after it
+    /// at the front of Up Next, ahead of anything queued by hand. Nothing is
+    /// cleared.
+    @discardableResult
+    func playPlaylistItem(
+        _ itemID: String,
+        in playlistID: String,
+        presentsNowPlaying: Bool = true,
+        modelContext: ModelContext
+    ) -> Bool {
+        let resolvedItems = playlists.resolvedItems(in: playlistID) { episodeSnapshot(for: $0) }
+        guard let index = resolvedItems.firstIndex(where: { $0.item.itemID == itemID }) else {
+            lastPlaylistError = Self.unavailablePlaylistEpisodeMessage
+            return false
+        }
+        return playManualPlaylist(
+            from: index,
+            of: resolvedItems,
+            in: playlistID,
+            presentsNowPlaying: presentsNowPlaying,
+            modelContext: modelContext
+        )
+    }
+
+    /// "Play from here" by episode, for either kind: a manual playlist's
+    /// rows in playlist order, or a smart playlist's evaluation in rule
+    /// order, where the tapped episode and those queued after it stay within
+    /// `smartPlaylistQueueLimit`. The tapped episode must still be listed.
+    @discardableResult
+    func playPlaylistEpisode(
+        _ episodeID: String,
+        in playlistID: String,
+        presentsNowPlaying: Bool = true,
+        modelContext: ModelContext
+    ) -> Bool {
+        if let summary = playlist(playlistID), summary.kind == .smart {
+            let episodes = smartPlaylistEvaluation(for: summary).episodes
+            guard let index = episodes.firstIndex(where: { $0.episodeID == episodeID }) else {
+                lastPlaylistError = Self.unavailablePlaylistEpisodeMessage
+                return false
+            }
+            let tapped = episodes[index]
+            return playPlaylistEpisodes(
+                tapped,
+                in: playlistID,
+                presentsNowPlaying: presentsNowPlaying,
+                modelContext: modelContext
+            ) {
+                var following: [EpisodeListItemSnapshot] = []
+                for episode in episodes[(index + 1)...]
+                    where episode.episodeID != tapped.episodeID && isSmartPlaylistCandidate(episode) {
+                    following.append(episode)
+                    if following.count == Self.smartPlaylistQueueLimit - 1 {
+                        break
+                    }
+                }
+                return following
+            }
+        }
+
+        let resolvedItems = playlists.resolvedItems(in: playlistID) { episodeSnapshot(for: $0) }
+        guard let index = resolvedItems.firstIndex(where: { $0.item.episodeID == episodeID }) else {
+            lastPlaylistError = Self.unavailablePlaylistEpisodeMessage
+            return false
+        }
+        return playManualPlaylist(
+            from: index,
+            of: resolvedItems,
+            in: playlistID,
+            presentsNowPlaying: presentsNowPlaying,
+            modelContext: modelContext
+        )
+    }
+
+    private func playManualPlaylist(
+        from index: Int,
+        of resolvedItems: [PlaylistResolvedItem],
+        in playlistID: String,
+        presentsNowPlaying: Bool,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard let tapped = resolvedItems[index].snapshot else {
+            lastPlaylistError = Self.unavailablePlaylistEpisodeMessage
+            return false
+        }
+        return playPlaylistEpisodes(
+            tapped,
+            in: playlistID,
+            presentsNowPlaying: presentsNowPlaying,
+            modelContext: modelContext
+        ) {
+            resolvedItems[(index + 1)...]
+                .compactMap(\.snapshot)
+                .filter { $0.episodeID != tapped.episodeID && isPlaylistCandidate($0) }
+        }
+    }
+
+    /// Starts `tapped`, then queues the episodes `following` returns next,
+    /// both tagged with the playlist. `following` runs after the start, so
+    /// played state reflects the previous episode's final flush. A failed
+    /// start leaves the queue untouched.
+    private func playPlaylistEpisodes(
+        _ tapped: EpisodeListItemSnapshot,
+        in playlistID: String,
+        presentsNowPlaying: Bool,
+        modelContext: ModelContext,
+        following: () -> [EpisodeListItemSnapshot]
+    ) -> Bool {
+        do {
+            try playEpisode(
+                tapped,
+                presentsNowPlaying: presentsNowPlaying,
+                sourcePlaylistID: playlistID,
+                modelContext: modelContext
+            )
+        } catch {
+            lastPlaybackError = error.localizedDescription
+            return false
+        }
+
+        guard upNextQueue.enqueueNext(following(), source: playlistID, modelContext: modelContext) else {
+            lastUpNextError = upNextQueue.consumeLastErrorMessage()
+            return false
+        }
+        return true
+    }
+
+    /// Play Next / Play Last for a whole playlist (a smart playlist's first
+    /// `smartPlaylistQueueLimit` candidates); never starts playback.
+    @discardableResult
+    func enqueuePlaylist(
+        _ playlistID: String,
+        position: UpNextQueuePosition,
+        modelContext: ModelContext
+    ) -> Bool {
+        let candidates = playlistPlaybackCandidates(playlistID, smartLimit: Self.smartPlaylistQueueLimit)
+        guard !candidates.isEmpty else {
+            lastPlaylistError = Self.nothingToPlayMessage
+            return false
+        }
+        // The playing episode never joins the queue behind itself, as in
+        // `.addAfter`. When it was the only candidate there is nothing left
+        // to queue, which is a no-op rather than an error: it is neither
+        // played nor unavailable.
+        let episodes = candidates.filter { !isCurrentEpisode($0) }
+        guard !episodes.isEmpty else {
+            return true
+        }
+
+        let didEnqueue = switch position {
+        case .next:
+            upNextQueue.enqueueNext(episodes, source: playlistID, modelContext: modelContext)
+        case .last:
+            upNextQueue.enqueueLast(episodes, source: playlistID, modelContext: modelContext)
+        }
+        guard didEnqueue else {
+            lastUpNextError = upNextQueue.consumeLastErrorMessage()
+            return false
+        }
+        return true
+    }
+
+    func remainingQueuedCount(forPlaylist playlistID: String) -> Int {
+        upNextQueue.items.count(where: { $0.sourcePlaylistID == playlistID })
+    }
+
+    /// Unplayed, resolvable episodes a Download All would start. The download
+    /// menu's state is the truth: an in-flight download is excluded, since
+    /// restarting it would discard its progress, while paused, failed, and
+    /// missing-file downloads resume.
+    func playlistDownloadAllCandidates(_ playlistID: String) -> [EpisodeListItemSnapshot] {
+        playlistPlaybackCandidates(playlistID).filter { downloadMenuState(for: $0) == .available }
+    }
+
+    /// The Download All item's enabled state, without touching the disk: any
+    /// unplayed, resolvable episode with no download in flight or completed.
+    /// The tap-time list above also re-checks completed files on disk.
+    /// A smart playlist stops at its first candidate instead of building
+    /// the list, which a No Limit rule can make as long as the library.
+    func hasPlaylistDownloadAllCandidates(_ playlistID: String) -> Bool {
+        if let summary = playlist(playlistID), summary.kind == .smart {
+            return smartPlaylistEvaluation(for: summary).episodes.contains { episode in
+                canStartDownloadAll(episode) && isSmartPlaylistCandidate(episode)
+            }
+        }
+        return playlistPlaybackCandidates(playlistID).contains { canStartDownloadAll($0) }
+    }
+
+    private func canStartDownloadAll(_ episode: EpisodeListItemSnapshot) -> Bool {
+        switch downloads.record(for: episode.episodeID)?.state {
+        case nil, .paused, .failed, .missing:
+            true
+        case .downloading, .completed:
+            false
+        }
+    }
+
+    /// Starts every Download All candidate. `DownloadStore` keeps only the
+    /// latest start failure, and a later successful start clears it, so the
+    /// failures are counted here and reported through the playlist alert.
+    @discardableResult
+    func downloadAllPlaylistEpisodes(_ playlistID: String, modelContext: ModelContext) -> Bool {
+        let candidates = playlistDownloadAllCandidates(playlistID)
+        var failureCount = 0
+        var firstFailureMessage: String?
+        for episode in candidates where !downloads.startDownload(for: episode, modelContext: modelContext) {
+            failureCount += 1
+            if firstFailureMessage == nil {
+                firstFailureMessage = downloads.lastErrorMessage(for: episode.episodeID)
+            }
+        }
+        guard failureCount > 0 else {
+            return true
+        }
+        lastPlaylistError = Self.downloadAllFailureMessage(
+            failureCount: failureCount,
+            candidateCount: candidates.count,
+            reason: firstFailureMessage
+        )
+        return false
+    }
+
+    static func downloadAllFailureMessage(failureCount: Int, candidateCount: Int, reason: String?) -> String {
+        // Grammar agreement resolves only on the attributed localization path.
+        let subject = failureCount == candidateCount
+            ? String(AttributedString(localized: "^[\(failureCount) episode](inflect: true)").characters)
+            : "\(failureCount) of \(candidateCount) episodes"
+        let sentence = "\(subject) could not be downloaded."
+        guard let reason else {
+            return sentence
+        }
+        return "\(sentence) \(reason)"
+    }
+
+    /// A smart playlist's episodes, memoized per playlist in the store. The
+    /// key reads only the tokens the rule depends on — progress only for a
+    /// played-state clause, downloads only for Downloaded Only, the
+    /// reference date only for an age clause — so a view calling this
+    /// observes nothing else. Empty for a manual playlist or an unreadable
+    /// rule.
+    func smartPlaylistEvaluation(for summary: PlaylistSummary) -> SmartPlaylistEvaluation {
+        guard summary.kind == .smart, let rule = summary.rule else {
+            return .empty
+        }
+
+        let key = SmartPlaylistEvaluationKey(
+            ruleJSON: summary.ruleJSON ?? rule.encodedJSON(),
+            episodeRevision: library.episodeSearchCorpusRevision,
+            progressRevision: rule.readsProgress ? library.progressChangeRevision : nil,
+            downloadsRevision: rule.downloadedOnly ? downloads.recordsRevision : nil,
+            referenceDate: rule.maximumAgeDays == nil ? nil : library.newEpisodeReferenceDate
+        )
+        return playlists.smartEvaluations.evaluation(for: summary.playlistID, key: key) {
+            SmartPlaylistEvaluator.make(
+                rule: rule,
+                library: library,
+                downloadRecords: downloads.records,
+                now: library.newEpisodeReferenceDate
+            )
+        }
+    }
+
+    /// The most episodes one Play, Play Next, Play Last or play-from-here
+    /// takes from a smart playlist (the largest Limit preset): a No Limit
+    /// rule can list the whole library, and every Up Next edit refetches
+    /// every queued row. The list itself and Download All stay uncapped.
+    static let smartPlaylistQueueLimit = 100
+
+    private static let nothingToPlayMessage = "Nothing to play. Every episode in this playlist is played or unavailable."
+    private static let unavailablePlaylistEpisodeMessage = "This episode is no longer available."
+
+    func playlist(_ playlistID: String) -> PlaylistSummary? {
+        playlists.playlists.first { $0.playlistID == playlistID }
+    }
+
+    /// The playlist's resolvable, unplayed episodes: a manual playlist's in
+    /// playlist order, a smart playlist's in rule order, stopping after
+    /// `smartLimit` of them.
+    private func playlistPlaybackCandidates(
+        _ playlistID: String,
+        smartLimit: Int? = nil
+    ) -> [EpisodeListItemSnapshot] {
+        if let summary = playlist(playlistID), summary.kind == .smart {
+            var candidates: [EpisodeListItemSnapshot] = []
+            for episode in smartPlaylistEvaluation(for: summary).episodes where isSmartPlaylistCandidate(episode) {
+                candidates.append(episode)
+                if candidates.count == smartLimit {
+                    break
+                }
+            }
+            return candidates
+        }
+        return playlists.resolvedItems(in: playlistID) { episodeSnapshot(for: $0) }
+            .compactMap(\.snapshot)
+            .filter { isPlaylistCandidate($0) }
+    }
+
+    /// Whether Play would start anything, without starting it: the router and
+    /// the Siri handler answer "nothing to play" before touching playback.
+    func hasPlaylistPlaybackCandidates(_ playlistID: String) -> Bool {
+        if let summary = playlist(playlistID), summary.kind == .smart {
+            return smartPlaylistEvaluation(for: summary).episodes.contains { isSmartPlaylistCandidate($0) }
+        }
+        return !playlistPlaybackCandidates(playlistID).isEmpty
+    }
+
+    /// The count a collection row shows: a manual playlist's items, a smart
+    /// playlist's memoized evaluation.
+    func playlistEpisodeCount(for summary: PlaylistSummary) -> Int {
+        summary.kind == .smart ? smartPlaylistEvaluation(for: summary).count : summary.itemCount
+    }
+
+    private func isPlaylistCandidate(_ episode: EpisodeListItemSnapshot) -> Bool {
+        library.progressRecord(for: episode.episodeID)?.isPlayed != true
+    }
+
+    /// The Episodes chip's definition of unplayed, which also counts a
+    /// position at the end as played, so a Played rule has nothing to play.
+    private func isSmartPlaylistCandidate(_ episode: EpisodeListItemSnapshot) -> Bool {
+        !library.progressSummary(for: episode).isCompleted
     }
 
     /// A completed download is the preferred source for any playback: it is
@@ -846,6 +1307,7 @@ final class OpenCastAppModel {
             dismissNowPlayingAndDiscardFinishedPlayback()
             playback.unload()
             playbackRestorePreference.clear(modelContext: modelContext)
+            currentPlaylistSourceID = nil
         }
 
         // Captured before the authoritative delete clears the feed's cache;
@@ -1613,7 +2075,11 @@ final class OpenCastAppModel {
         if LibraryStore.isPlayed(position: position, duration: duration) {
             playbackRestorePreference.clear(modelContext: modelContext)
         } else {
-            playbackRestorePreference.remember(episode.id.rawValue, modelContext: modelContext)
+            playbackRestorePreference.remember(
+                episode.id.rawValue,
+                sourcePlaylistID: currentPlaylistSourceID,
+                modelContext: modelContext
+            )
         }
         return didSave
     }
@@ -1625,9 +2091,11 @@ final class OpenCastAppModel {
 
         guard let record = restorableEpisode(modelContext: modelContext) else {
             playbackRestorePreference.clear(modelContext: modelContext)
+            currentPlaylistSourceID = nil
             return
         }
 
+        let storedSourcePlaylistID = playbackRestorePreference.storedSourcePlaylistID(modelContext: modelContext)
         do {
             let episode = try resolvedPlaybackEpisode(
                 for: record,
@@ -1647,14 +2115,24 @@ final class OpenCastAppModel {
             )
             restoredUnplayedPlayback = (episodeID: record.episodeID, position: startPosition)
             refreshPlaybackSkipZonesForCurrentEpisode()
-            playbackRestorePreference.remember(record.episodeID, modelContext: modelContext)
+            currentPlaylistSourceID = storedSourcePlaylistID
+            playbackRestorePreference.remember(
+                record.episodeID,
+                sourcePlaylistID: storedSourcePlaylistID,
+                modelContext: modelContext
+            )
         } catch {
             playbackRestorePreference.clear(modelContext: modelContext)
+            currentPlaylistSourceID = nil
         }
     }
 
     func requestNowPlayingPresentation() {
         nowPlayingPresentationRequest += 1
+    }
+
+    func requestAddToPlaylist(episodeID: String) {
+        addToPlaylistPresentationRequest = AddToPlaylistPresentationRequest(episodeID: episodeID, token: UUID())
     }
 
     @discardableResult
@@ -1746,6 +2224,7 @@ final class OpenCastAppModel {
             dismissNowPlayingAndDiscardFinishedPlayback()
             playback.unload()
             playbackRestorePreference.clear(modelContext: modelContext)
+            currentPlaylistSourceID = nil
         }
         sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         return didSave
@@ -1791,6 +2270,7 @@ final class OpenCastAppModel {
             dismissNowPlayingAndDiscardFinishedPlayback()
             playback.unload()
             playbackRestorePreference.clear(modelContext: modelContext)
+            currentPlaylistSourceID = nil
         }
         sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         return didSave
@@ -1958,8 +2438,10 @@ final class OpenCastAppModel {
         coreStoresHydrated = false
         lastPlaybackError = nil
         lastUpNextError = nil
+        lastPlaylistError = nil
         lastUnsubscribeErrorMessage = nil
         playbackRestorePreference.resetAfterDataNuke()
+        currentPlaylistSourceID = nil
         library.resetAfterDataNuke()
         await downloads.load(modelContext: modelContext)
         transcriptions.load(modelContext: modelContext)
@@ -1969,6 +2451,7 @@ final class OpenCastAppModel {
         transcriptIntelligence.load(modelContext: modelContext)
         adFreePass.reset()
         upNextQueue.resetAfterDataNuke()
+        playlists.resetAfterDataNuke()
         adFreePassBackgroundSession.reset()
         transcriptGenerationBackgroundSession.reset()
         transcriptImprovement.resetForDataNuke()
@@ -1978,6 +2461,8 @@ final class OpenCastAppModel {
         appIcon.load()
         podcastEpisodeListSettings.load(modelContext: modelContext)
         libraryDisplaySettings.load(modelContext: modelContext)
+        playlistDisplaySettings.load(modelContext: modelContext)
+        playlists.sortOrder = playlistDisplaySettings.sortOrder
         inboxEpisodeListSettings.load(modelContext: modelContext)
         recentSearches.load(modelContext: modelContext)
         playbackSettings.load(modelContext: modelContext, playback: playback)
@@ -2017,6 +2502,7 @@ final class OpenCastAppModel {
         startPosition: TimeInterval? = nil,
         presentsNowPlaying: Bool = true,
         autoplay: Bool = true,
+        sourcePlaylistID: String? = nil,
         modelContext: ModelContext
     ) throws {
         let episode = try resolvedPlaybackEpisode(for: snapshot, source: source, modelContext: modelContext)
@@ -2034,15 +2520,26 @@ final class OpenCastAppModel {
             boundaries: boundaries
         )
         finishedPlaybackPresentation = nil
+        // Assigned only once the load succeeds: the flush above remembered
+        // the previous episode's pair, and a failed start keeps it.
+        currentPlaylistSourceID = sourcePlaylistID
+            ?? upNextQueue.items.first { $0.episodeID == snapshot.episodeID }?.sourcePlaylistID
         _ = upNextQueue.remove(episodeID: snapshot.episodeID, modelContext: modelContext)
         downloadCleanup.deferPlayedSweep(modelContext: modelContext)
         refreshPlaybackSkipZonesForCurrentEpisode()
         nowPlayingProbeMark("play-loaded")
-        playbackRestorePreference.remember(snapshot.episodeID, modelContext: modelContext)
+        playbackRestorePreference.remember(
+            snapshot.episodeID,
+            sourcePlaylistID: currentPlaylistSourceID,
+            modelContext: modelContext
+        )
         if autoplay {
             playback.play()
             nowPlayingProbeMark("play-started")
             siriMediaDiscovery.donatePlaybackIfNeeded(for: snapshot)
+            if let currentPlaylistSourceID, let playlist = playlist(currentPlaylistSourceID) {
+                siriMediaDiscovery.donatePlaylistPlaybackIfNeeded(playlistID: playlist.playlistID, name: playlist.name)
+            }
         }
         if presentsNowPlaying {
             requestNowPlayingPresentationAfterPrewarm(for: episode.id)

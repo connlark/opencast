@@ -8,6 +8,7 @@ import {
   Cloud,
   CodeXml,
   CreditCard,
+  ListMusic,
   Lock,
   Mail,
   Rss,
@@ -32,13 +33,19 @@ export const metadata: Metadata = createPageMetadata({
 });
 
 const effectiveDate = "June 21, 2026";
-const lastUpdated = "September 26, 2026";
+const lastUpdated = "October 1, 2026";
 
 // The in-app notice shown once before the first Recap or Ask request. The
 // sentences below are the app's own words and the section repeats them
 // verbatim, so the two never drift apart.
 const recapDisclosure =
   "Passages from this episode’s transcript are sent to Apple’s Private Cloud Compute to answer. Apple does not store them. Your audio is never sent. Results stay on this device.";
+
+// The in-app notice on the Make a Playlist form, shown every time before a
+// request is sent. The sentences below are the app's own words and the
+// section repeats them verbatim, so the two never drift apart.
+const playlistDisclosure =
+  "This show’s name, its episode titles, dates, lengths and short descriptions, and your request are sent to Apple’s Private Cloud Compute to answer. Apple does not store them. Your audio and transcripts are never sent. Results stay on this device.";
 
 const tocItems = [
   { id: "short-version", label: "The short version" },
@@ -49,6 +56,7 @@ const tocItems = [
   { id: "cloud-transcription", label: "Cloud transcription" },
   { id: "ad-detection-and-chapters", label: "Ad detection and Chapters & Summary" },
   { id: "recap-and-ask", label: "Recap and Ask on Apple Intelligence" },
+  { id: "ai-playlists", label: "Make a Playlist on Apple Intelligence" },
   { id: "purchases", label: "Purchases" },
   { id: "how-services-verify-the-app", label: "How services verify the app" },
   { id: "your-choices-and-deletion", label: "Your choices and deletion" },
@@ -445,8 +453,87 @@ export default function PrivacyPage() {
               </PolicyArticleSection>
 
               <PolicyArticleSection
-                id="purchases"
+                id="ai-playlists"
                 index="08"
+                icon={<ListMusic aria-hidden="true" />}
+                title="Make a Playlist on Apple Intelligence"
+                tags={[
+                  optIn,
+                  { label: "Apple Private Cloud Compute" },
+                  { label: "Beta" },
+                ]}
+              >
+                <p>
+                  Make a Playlist drafts playlists from one show&apos;s episode
+                  list, either for a request you type or as suggested groups,
+                  and you choose which ones to save. It runs on Apple&apos;s
+                  Private Cloud Compute through Apple&apos;s Foundation Models,
+                  exists only on devices that support Apple Intelligence, and
+                  is labelled Beta in the app. Nothing is sent until you tap
+                  Ask on the Make a Playlist form, and the form tells you what
+                  happens every time, in these words:
+                </p>
+                <figure className="policy-quote">
+                  <blockquote>
+                    <p>{playlistDisclosure}</p>
+                  </blockquote>
+                  <figcaption>
+                    The notice on the Make a Playlist form, shown every time.
+                  </figcaption>
+                </figure>
+                <ul className="policy-list">
+                  <li>
+                    Apple receives the show&apos;s name, the request you type,
+                    and for each listed episode its title, date, length, and a
+                    short description of at most 200 characters. On a long
+                    show, only part of the list may be sent: the episodes that
+                    best match your request, chosen on your device by word
+                    matching and on-device word vectors, or the newest
+                    episodes that fit. Suggest groups instead sends the list
+                    without a request, and on a long show only its newest 150
+                    episodes.
+                  </li>
+                  <li>
+                    Your audio, transcripts, the feed URL, your listening
+                    history, your other subscriptions, and account identifiers
+                    are never sent. No opencast server is involved, and
+                    nothing reaches Google or Cloudflare.
+                  </li>
+                  <li>
+                    Apple does not store the request or the list. The drafts
+                    live only in the open sheet. Playlists you save are
+                    ordinary playlists stored on your device, which do not
+                    sync, and you delete them like any other playlist or with
+                    Delete Data.
+                  </li>
+                  <li>
+                    Apple&apos;s model may decline a request or return an
+                    answer opencast cannot read. When it does, opencast sends
+                    the same request once more before telling you, and you can
+                    try again. If the list is too long for Apple&apos;s model,
+                    opencast sends a shorter one.
+                  </li>
+                  <li>
+                    It shares the Apple Intelligence allowance that Recap and
+                    Ask use. It uses no transcription minutes, and there is
+                    nothing to buy.
+                  </li>
+                  <li>
+                    To stop using it, leave Make a Playlist untapped; opencast
+                    never runs it on its own. Turning off Apple Intelligence in
+                    iOS Settings means it cannot send anything.
+                  </li>
+                </ul>
+                <DataPathFacts
+                  leaves="The show's name, its episode titles, dates, lengths and short descriptions, and your request."
+                  receiver="Apple's Private Cloud Compute. No opencast server is in the path."
+                  kept="Not stored by Apple. Results live only on your device."
+                />
+              </PolicyArticleSection>
+
+              <PolicyArticleSection
+                id="purchases"
+                index="09"
                 icon={<CreditCard aria-hidden="true" />}
                 title="Purchases"
                 tags={[{ label: "App Store" }]}
@@ -484,7 +571,7 @@ export default function PrivacyPage() {
 
               <PolicyArticleSection
                 id="how-services-verify-the-app"
-                index="09"
+                index="10"
                 icon={<ShieldCheck aria-hidden="true" />}
                 title="How services verify the app"
                 tags={[{ label: "Apple App Attest" }, { label: "Cloudflare" }]}
@@ -511,16 +598,16 @@ export default function PrivacyPage() {
 
               <PolicyArticleSection
                 id="your-choices-and-deletion"
-                index="10"
+                index="11"
                 icon={<Lock aria-hidden="true" />}
                 title="Your choices and deletion"
               >
                 <p>
                   Every cloud feature is opt-in and has an on-device
                   alternative. Turn notifications off in Settings, keep
-                  transcription on the device, leave Recap and Ask untapped, or
-                  use Delete Data to erase local data and deregister this
-                  install from every service.
+                  transcription on the device, leave Recap, Ask, and Make a
+                  Playlist untapped, or use Delete Data to erase local data
+                  and deregister this install from every service.
                 </p>
                 <p>
                   Email the privacy contact to have service-side records
@@ -531,7 +618,7 @@ export default function PrivacyPage() {
 
               <PolicyArticleSection
                 id="what-opencast-never-does"
-                index="11"
+                index="12"
                 icon={<Ban aria-hidden="true" />}
                 title="What opencast never does"
               >
@@ -546,7 +633,7 @@ export default function PrivacyPage() {
 
               <PolicyArticleSection
                 id="open-source"
-                index="12"
+                index="13"
                 icon={<CodeXml aria-hidden="true" />}
                 title="Open source"
               >
@@ -562,7 +649,7 @@ export default function PrivacyPage() {
 
               <PolicyArticleSection
                 id="changes-and-contact"
-                index="13"
+                index="14"
                 icon={<Mail aria-hidden="true" />}
                 title="Changes and contact"
               >

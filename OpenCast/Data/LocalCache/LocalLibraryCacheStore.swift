@@ -14,6 +14,10 @@ nonisolated protocol LocalLibraryCacheStore: Sendable {
     func allRefreshLogs() async throws -> [RefreshLogSnapshot]
     func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot?
     func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String]
+    /// One feed's raw episode descriptions, the summary preferred over the
+    /// show notes, each cut to `maximumCharacters`. Rows with neither are
+    /// omitted.
+    func episodeSummaries(forPodcastID podcastID: String, maximumCharacters: Int) async throws -> [String: String]
     /// Builds or validates the derived lexical index without blocking the
     /// initial library load. Search falls back while this is in progress.
     func prepareEpisodeSearchIndex() async throws
@@ -80,6 +84,15 @@ nonisolated protocol LocalLibraryCacheStore: Sendable {
 extension LocalLibraryCacheStore {
     func upsertCache(from prepared: PreparedFeed, refreshedAt: Date) async throws {
         try await upsertCache(from: prepared.materialized(), refreshedAt: refreshedAt)
+    }
+
+    /// Show notes only: stores without a summary column fall back to them.
+    func episodeSummaries(forPodcastID podcastID: String, maximumCharacters: Int) async throws -> [String: String] {
+        try await showNotesHTMLByEpisodeID(activePodcastIDs: [podcastID])
+            .compactMapValues { showNotes in
+                let summary = String(showNotes.prefix(max(maximumCharacters, 0)))
+                return summary.isEmpty ? nil : summary
+            }
     }
 
     func prepareEpisodeSearchIndex() async throws {}

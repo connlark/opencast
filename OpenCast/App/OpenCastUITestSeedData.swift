@@ -16,6 +16,29 @@ enum OpenCastUITestSeedData {
         "ui-test-queued-episode-2",
         "ui-test-queued-episode-3"
     ]
+    static let playedPlaylistEpisodeID = "ui-test-playlist-episode-2"
+    static let playedPlaylistEpisodeTitle = "Playlist UI Episode 2"
+    /// Never in any seeded feed or download, so the item renders from its
+    /// stored fallbacks.
+    static let missingPlaylistEpisodeID = "ui-test-playlist-missing-episode"
+    static let missingPlaylistEpisodeTitle = "Removed Show Episode"
+    static let missingPlaylistPodcastTitle = "Removed UI Show"
+    static let commutePlaylistID = "ui-test-playlist-commute"
+    static let commutePlaylistName = "Seeded Commute"
+    static let commutePlaylistItemIDs = [
+        "ui-test-playlist-commute-item-1",
+        "ui-test-playlist-commute-item-2",
+        "ui-test-playlist-commute-item-3"
+    ]
+    static let commutePlaylistQueueItemIDs = [
+        "ui-test-playlist-commute-item-4",
+        "ui-test-playlist-commute-item-5",
+        "ui-test-playlist-commute-item-6"
+    ]
+    static let emptyPlaylistID = "ui-test-playlist-empty"
+    static let emptyPlaylistName = "Seeded Empty"
+    static let smartPlaylistID = "ui-test-playlist-smart-unplayed"
+    static let smartPlaylistName = "Seeded Unplayed"
     private static let adDetectionModeEnvironmentKey = "OPENCAST_SEED_AD_DETECTION_MODE"
     private static let liveAdAnalysisTranscriptPathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_TRANSCRIPT_PATH"
     private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
@@ -26,6 +49,10 @@ enum OpenCastUITestSeedData {
     private static let episodeProgressPositionEnvironmentKey = "OPENCAST_SEED_EPISODE_PROGRESS_POSITION"
     private static let libraryNewEpisodesEnvironmentKey = "OPENCAST_SEED_LIBRARY_NEW_EPISODES"
     private static let libraryLayoutEnvironmentKey = "OPENCAST_SEED_LIBRARY_LAYOUT"
+    private static let playlistsEnvironmentKey = "OPENCAST_SEED_PLAYLISTS"
+    private static let playlistQueueItemsEnvironmentKey = "OPENCAST_SEED_PLAYLIST_QUEUE_ITEMS"
+    private static let playlistPlaybackSourceEnvironmentKey = "OPENCAST_SEED_PLAYLIST_PLAYBACK_SOURCE"
+    private static let missingPlaylistPodcastID = "https://example.com/ui-test-removed-show.xml"
     private static let libraryRecentCompletedEpisodeID = "ui-test-recent-completed-episode"
     private static let secondsPerHour: TimeInterval = 60 * 60
     private static let secondsPerDay: TimeInterval = 24 * secondsPerHour
@@ -70,6 +97,15 @@ enum OpenCastUITestSeedData {
         let shouldSeedLibraryNewEpisodes = ProcessInfo.processInfo.environment[
             libraryNewEpisodesEnvironmentKey
         ] == "1"
+        let shouldSeedPlaylists = ProcessInfo.processInfo.environment[playlistsEnvironmentKey] == "1"
+        let shouldSeedPlaylistQueueItems = shouldSeedPlaylists
+            && ProcessInfo.processInfo.environment[playlistQueueItemsEnvironmentKey] == "1"
+        // The restored source needs tagged queue rows to count and a restored
+        // episode to play from, so it only applies on top of those seeds.
+        let shouldSeedPlaylistPlaybackSource = shouldSeedPlaylistQueueItems
+            && shouldSeedUpNextQueue
+            && includesEpisodeProgress
+            && ProcessInfo.processInfo.environment[playlistPlaybackSourceEnvironmentKey] == "1"
         // Badge fixtures date everything from one instant so each episode
         // stays on its side of the subscription and 30-day boundaries.
         let seedNow = Date.now
@@ -101,21 +137,20 @@ enum OpenCastUITestSeedData {
                 skipIntroSeconds: overriddenSkipIntroSeconds ?? 0
             )
         )
-        var episodes = [
-            Episode(
-                id: EpisodeID(rawValue: episodeID),
-                podcastID: PodcastID(rawValue: feedURL),
-                podcastTitle: podcastTitle,
-                title: episodeTitle,
-                summary: "A deterministic episode seeded for UI tests.",
-                showNotesHTML: showNotesHTML,
-                publishedAt: publishedAt,
-                duration: episodeDuration,
-                audioURL: URL(string: audioURL),
-                artworkURL: artworkURL.flatMap(URL.init(string:)),
-                guid: episodeID
-            )
-        ]
+        let seededEpisode = Episode(
+            id: EpisodeID(rawValue: episodeID),
+            podcastID: PodcastID(rawValue: feedURL),
+            podcastTitle: podcastTitle,
+            title: episodeTitle,
+            summary: "A deterministic episode seeded for UI tests.",
+            showNotesHTML: showNotesHTML,
+            publishedAt: publishedAt,
+            duration: episodeDuration,
+            audioURL: URL(string: audioURL),
+            artworkURL: artworkURL.flatMap(URL.init(string:)),
+            guid: episodeID
+        )
+        var episodes = [seededEpisode]
         if includesEpisodeProgress {
             episodes.append(
                 Episode(
@@ -133,8 +168,8 @@ enum OpenCastUITestSeedData {
                 )
             )
         }
-        if shouldSeedUpNextQueue {
-            episodes.append(contentsOf: queuedEpisodeIDs.enumerated().map { index, episodeID in
+        let queuedEpisodes: [Episode] = if shouldSeedUpNextQueue || shouldSeedPlaylistQueueItems {
+            queuedEpisodeIDs.enumerated().map { index, episodeID in
                 Episode(
                     id: EpisodeID(rawValue: episodeID),
                     podcastID: PodcastID(rawValue: feedURL),
@@ -147,7 +182,27 @@ enum OpenCastUITestSeedData {
                     artworkURL: artworkURL.flatMap(URL.init(string:)),
                     guid: episodeID
                 )
-            })
+            }
+        } else {
+            []
+        }
+        episodes.append(contentsOf: queuedEpisodes)
+        var playedPlaylistEpisode: Episode?
+        if shouldSeedPlaylists {
+            let episode = Episode(
+                id: EpisodeID(rawValue: playedPlaylistEpisodeID),
+                podcastID: PodcastID(rawValue: feedURL),
+                podcastTitle: podcastTitle,
+                title: playedPlaylistEpisodeTitle,
+                summary: "A deterministic playlist episode seeded for UI tests.",
+                publishedAt: completedPublishedAt.addingTimeInterval(-11),
+                duration: episodeDuration,
+                audioURL: URL(string: audioURL),
+                artworkURL: artworkURL.flatMap(URL.init(string:)),
+                guid: playedPlaylistEpisodeID
+            )
+            episodes.append(episode)
+            playedPlaylistEpisode = episode
         }
         if shouldSeedLibraryNewEpisodes {
             episodes.append(contentsOf: libraryNewEpisodeFixtures(
@@ -217,10 +272,28 @@ enum OpenCastUITestSeedData {
                         episodeID: episodeID,
                         podcastID: feedURL,
                         sequence: sequence,
-                        enqueuedAt: refreshedAt.addingTimeInterval(Double(sequence))
+                        enqueuedAt: refreshedAt.addingTimeInterval(Double(sequence)),
+                        sourcePlaylistID: shouldSeedPlaylistPlaybackSource ? commutePlaylistID : nil
                     )
                 )
             }
+        }
+
+        if let playedPlaylistEpisode {
+            seedPlaylists(
+                seededEpisode: seededEpisode,
+                playedEpisode: playedPlaylistEpisode,
+                queuedEpisodes: shouldSeedPlaylistQueueItems ? queuedEpisodes : [],
+                context: context,
+                createdAt: refreshedAt
+            )
+        }
+
+        if shouldSeedPlaylistPlaybackSource {
+            context.insert(LocalPreferenceRecord(
+                key: PlaybackRestorePreferenceStore.sourcePlaylistIDKey,
+                value: commutePlaylistID
+            ))
         }
 
         if includesEpisodeProgress {
@@ -375,6 +448,114 @@ enum OpenCastUITestSeedData {
         }
 
         try context.save()
+    }
+
+    /// Inserts rows directly, as the Up Next seed does, so the fixture needs no
+    /// store. The commute playlist holds an unplayed item, a played item and
+    /// one whose episode resolves nowhere, then any queued episodes passed in;
+    /// the second playlist stays empty; the third is a smart playlist on the
+    /// default rule, so it has no item rows.
+    private static func seedPlaylists(
+        seededEpisode: Episode,
+        playedEpisode: Episode,
+        queuedEpisodes: [Episode],
+        context: ModelContext,
+        createdAt: Date
+    ) {
+        context.insert(
+            PlaylistRecord(
+                playlistID: commutePlaylistID,
+                name: commutePlaylistName,
+                createdAt: createdAt,
+                updatedAt: createdAt
+            )
+        )
+        context.insert(
+            PlaylistRecord(
+                playlistID: emptyPlaylistID,
+                name: emptyPlaylistName,
+                createdAt: createdAt.addingTimeInterval(-60),
+                updatedAt: createdAt.addingTimeInterval(-60)
+            )
+        )
+        // Oldest and last by name, so the manual fixtures keep their places
+        // under either collection sort.
+        context.insert(
+            PlaylistRecord(
+                playlistID: smartPlaylistID,
+                name: smartPlaylistName,
+                kind: .smart,
+                ruleJSON: PlaylistRule.default.encodedJSON(),
+                tintKey: PlaylistTint.indigo.rawValue,
+                createdAt: createdAt.addingTimeInterval(-120),
+                updatedAt: createdAt.addingTimeInterval(-120)
+            )
+        )
+
+        let sortKeys = PlaylistSortKey.renumbered(count: commutePlaylistItemIDs.count + queuedEpisodes.count)
+        let resolvableItems = [seededEpisode, playedEpisode].enumerated().map { index, episode in
+            PlaylistItemRecord(
+                itemID: commutePlaylistItemIDs[index],
+                playlistID: commutePlaylistID,
+                episodeID: episode.id.rawValue,
+                podcastID: episode.podcastID.rawValue,
+                sortKey: sortKeys[index],
+                addedAt: createdAt.addingTimeInterval(Double(index)),
+                updatedAt: createdAt.addingTimeInterval(Double(index)),
+                episodeTitle: episode.title,
+                podcastTitle: episode.podcastTitle,
+                artworkURL: episode.artworkURL?.absoluteString,
+                audioURL: episode.audioURL?.absoluteString,
+                duration: episode.duration,
+                publishedAt: episode.publishedAt
+            )
+        }
+        let missingItem = PlaylistItemRecord(
+            itemID: commutePlaylistItemIDs[2],
+            playlistID: commutePlaylistID,
+            episodeID: missingPlaylistEpisodeID,
+            podcastID: missingPlaylistPodcastID,
+            sortKey: sortKeys[2],
+            addedAt: createdAt.addingTimeInterval(2),
+            updatedAt: createdAt.addingTimeInterval(2),
+            episodeTitle: missingPlaylistEpisodeTitle,
+            podcastTitle: missingPlaylistPodcastTitle,
+            duration: 900,
+            publishedAt: Date(timeIntervalSince1970: 1_777_000_000)
+        )
+        let queuedItems: [PlaylistItemRecord] = queuedEpisodes.enumerated().map { index, episode in
+            let position = commutePlaylistItemIDs.count + index
+            return PlaylistItemRecord(
+                itemID: commutePlaylistQueueItemIDs[index],
+                playlistID: commutePlaylistID,
+                episodeID: episode.id.rawValue,
+                podcastID: episode.podcastID.rawValue,
+                sortKey: sortKeys[position],
+                addedAt: createdAt.addingTimeInterval(Double(position)),
+                updatedAt: createdAt.addingTimeInterval(Double(position)),
+                episodeTitle: episode.title,
+                podcastTitle: episode.podcastTitle,
+                artworkURL: episode.artworkURL?.absoluteString,
+                audioURL: episode.audioURL?.absoluteString,
+                duration: episode.duration,
+                publishedAt: episode.publishedAt
+            )
+        }
+        for item in resolvableItems + [missingItem] + queuedItems {
+            context.insert(item)
+        }
+
+        let playedDuration = playedEpisode.duration ?? 180
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: playedEpisode.id.rawValue,
+                podcastID: playedEpisode.podcastID.rawValue,
+                position: playedDuration,
+                duration: playedDuration,
+                isPlayed: true,
+                updatedAt: createdAt
+            )
+        )
     }
 
     private static func seedCompletedTranscript(

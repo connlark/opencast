@@ -21,8 +21,8 @@ struct InboxView: View {
         let filter = appModel.inboxEpisodeListSettings.filter
         let hidesQueuedEpisodes = appModel.inboxEpisodeListSettings.hidesQueuedEpisodes
         let groupsByPodcast = appModel.inboxEpisodeListSettings.groupsByPodcast
-        // Grouping counts every matching episode, so it reads the whole
-        // filtered list instead of a page.
+        // A group counts every matching episode of its show, so grouping
+        // reads the whole filtered list instead of a page.
         let model = appModel.coreStoresHydrated
             ? InboxEpisodeListModel.make(
                 episodes: inboxEpisodes,
@@ -35,11 +35,12 @@ struct InboxView: View {
                 visibleEpisodeCount: groupsByPodcast ? nil : visibleEpisodeCount
             )
             : InboxEpisodeListModel(episodes: [], totalEpisodeCount: 0, hasMore: false)
+        // Nil while the Inbox lists episodes.
         let groups = groupsByPodcast
             ? InboxPodcastGroup.make(episodes: model.episodes, subscriptions: appModel.library.subscriptions)
-            : []
-        let visibleEpisodes = groupsByPodcast ? [] : Array(model.episodes.prefix(visibleEpisodeCount))
-        let rowIDs = groupsByPodcast ? groups.map(\.id) : visibleEpisodes.map(\.episodeID)
+            : nil
+        let visibleEpisodes = groups == nil ? Array(model.episodes.prefix(visibleEpisodeCount)) : []
+        let rowIDs = groups?.map(\.id) ?? visibleEpisodes.map(\.episodeID)
         // The filter applies only to a hydrated, populated Inbox, as the list
         // branches below; a persisted filter never labels the loading state.
         let showsFilter = appModel.coreStoresHydrated && !inboxEpisodes.isEmpty
@@ -47,10 +48,10 @@ struct InboxView: View {
 
         content(
             model: model,
-            inboxEpisodes: inboxEpisodes,
+            hasInboxEpisodes: !inboxEpisodes.isEmpty,
             filter: filter,
             hidesQueuedEpisodes: hidesQueuedEpisodes,
-            groups: groupsByPodcast ? groups : nil,
+            groups: groups,
             visibleEpisodes: visibleEpisodes,
             layout: layout
         )
@@ -87,11 +88,12 @@ struct InboxView: View {
         }
     }
 
-    /// `groups` is nil while the Inbox lists episodes.
+    /// The grid is its own scroll view, so each branch brings its container
+    /// instead of sharing one `List`.
     @ViewBuilder
     private func content(
         model: InboxEpisodeListModel,
-        inboxEpisodes: [EpisodeListItemSnapshot],
+        hasInboxEpisodes: Bool,
         filter: PodcastEpisodeFilter,
         hidesQueuedEpisodes: Bool,
         groups: [InboxPodcastGroup]?,
@@ -103,11 +105,11 @@ struct InboxView: View {
                 InboxLoadingStateView()
             }
         } else if case .failed(let message) = appModel.library.state,
-                  inboxEpisodes.isEmpty {
+                  !hasInboxEpisodes {
             inboxList {
                 InboxFailedStateView(message: message)
             }
-        } else if inboxEpisodes.isEmpty {
+        } else if !hasInboxEpisodes {
             inboxList {
                 InboxEmptyStateView(
                     syncActivity: appModel.syncStatus.libraryActivity,
@@ -123,29 +125,19 @@ struct InboxView: View {
                 )
             }
         } else if let groups {
-            // The show opens under the Inbox settings, so its list holds the
-            // episodes the badge counted.
-            let override = PodcastEpisodeListOverride(filter: filter, hidesQueuedEpisodes: hidesQueuedEpisodes)
+            let episodeListOverride = PodcastEpisodeListOverride(
+                filter: filter,
+                hidesQueuedEpisodes: hidesQueuedEpisodes
+            )
             if layout == .grid {
-                let countsByFeedURL = Dictionary(
-                    groups.map { ($0.id, $0.episodeCount) },
-                    uniquingKeysWith: { first, _ in first }
-                )
-                LibrarySubscriptionGridView(
-                    subscriptions: groups.map(\.subscription),
-                    episodeListOverride: override
-                ) { subscription in
-                    .episodeCount(countsByFeedURL[subscription.feedURL] ?? 0)
-                }
-                .transition(.opacity)
+                InboxPodcastGroupGrid(groups: groups, episodeListOverride: episodeListOverride)
+                    .transition(.opacity)
             } else {
                 inboxList {
                     ForEach(groups) { group in
-                        LibrarySubscriptionRowView(
-                            subscription: group.subscription,
-                            badge: .episodeCount(group.episodeCount),
-                            episodeListOverride: override
-                        )
+                        InboxPodcastGroupLink(group: group, episodeListOverride: episodeListOverride) {
+                            SubscriptionRowView(subscription: group.subscription, badgeCount: group.episodeCount)
+                        }
                     }
                 }
                 .accessibilityIdentifier("Inbox Podcast List")

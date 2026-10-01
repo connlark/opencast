@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-26T00:00:00Z",
+  "updatedAt": "2026-10-01T00:00:00Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -234,11 +234,56 @@
       ]
     },
     {
+      "id": "ai-playlists",
+      "title": "Make a Playlist with Apple Intelligence",
+      "symbol": "sparkles",
+      "summary": "Playlists drafted from one show's episode list, on Apple Intelligence.",
+      "updatedAt": "2026-10-01T00:00:00Z",
+      "minAppBuild": 284,
+      "related": [
+        "recap-and-ask"
+      ],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "**Make a Playlist** drafts playlists from one show's episodes, for a request you type or as suggested groups, and you choose which ones to save. On a show's page, open the **Podcast Actions** menu and choose **Make a Playlist…** under **Apple Intelligence · Beta**. It appears on devices that support Apple Intelligence, for shows with at least three episodes."
+        },
+        {
+          "type": "heading",
+          "text": "Using it"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "Describe the playlist you want in your own words and tap **Ask**, or turn on **Suggest groups instead** to have it propose groups by topic, series, or story arc. On a long show, suggestions look at the newest 150 episodes.",
+            "Nothing is saved until you choose. Rename a draft, swipe an episode to remove it, use **Edit** to reorder, or open the draft's options menu to sort it **Oldest First** or **Newest First** or remove the whole playlist.",
+            "**Add Episodes…** lists the show's other episodes, best matches first, so you can add ones the draft missed.",
+            "**Save** keeps the drafts as ordinary playlists on this device. **Cancel** asks before it discards them."
+          ]
+        },
+        {
+          "type": "callout",
+          "symbol": "lock.shield",
+          "title": "What is sent",
+          "text": "This show's name, its episode titles, dates, lengths and short descriptions, and your request are sent to Apple's Private Cloud Compute to answer. On a long show only part of the list may be sent: the episodes that best match your request, or the newest ones that fit. Your audio, transcripts, feed address, and listening history are never sent; Apple does not store any of it, and no opencast server is involved."
+        },
+        {
+          "type": "paragraph",
+          "text": "Make a Playlist is labelled Beta. Apple's model may decline a request; opencast tries once more before telling you, and you can then try again. It uses the same Apple Intelligence allowance as Recap and Ask, with nothing to buy, and turning off Apple Intelligence in iOS Settings stops it."
+        },
+        {
+          "type": "link",
+          "title": "Privacy Policy: Make a Playlist",
+          "url": "https://support.opencast.mobile/privacy#ai-playlists"
+        }
+      ]
+    },
+    {
       "id": "icloud-sync",
       "title": "iCloud sync",
       "symbol": "icloud",
       "summary": "Subscriptions and listening progress follow your Apple account.",
-      "updatedAt": "2026-09-12T00:00:00Z",
+      "updatedAt": "2026-09-28T00:00:00Z",
       "related": [
         "storage"
       ],
@@ -251,6 +296,7 @@
           "type": "bullets",
           "items": [
             "Downloads, transcripts, caches, and settings stay on each device.",
+            "Playlists stay on this device for now.",
             "If iCloud is off or unavailable, everything keeps working locally on this device.",
             "If sync ever leaves duplicate entries behind, Settings › Diagnostics › Repair Sync Duplicates merges them."
           ]

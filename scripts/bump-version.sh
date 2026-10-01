@@ -98,16 +98,22 @@ esac
 next="${year}.${month}.${build}"
 entry_count=$(printf '%s\n' "${versions}" | wc -l | tr -d '[:space:]')
 
-# macOS sed syntax; matches both leading-tab and leading-space indentation.
-sed -i '' -E \
-  "s/^([[:space:]]*)MARKETING_VERSION = ${current};/\\1MARKETING_VERSION = ${next};/" \
-  "${pbxproj}"
+# Stage and verify the edit before replacing the project. Avoid sed -i, whose
+# arguments differ between BSD sed and GNU sed (including Homebrew's version).
+temporary=$(mktemp "${pbxproj}.XXXXXX")
+trap 'rm -f "${temporary}"' EXIT
+cp -p "${pbxproj}" "${temporary}"
+current_pattern=${current//./[.]}
+sed -E \
+  "s/^([[:space:]]*)MARKETING_VERSION = ${current_pattern};/\\1MARKETING_VERSION = ${next};/" \
+  "${pbxproj}" > "${temporary}"
 
-after=$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);[[:space:]]*$/\1/p' "${pbxproj}")
+after=$(sed -nE 's/^[[:space:]]*MARKETING_VERSION = ([^;]+);[[:space:]]*$/\1/p' "${temporary}")
 after_count=$(printf '%s\n' "${after}" | wc -l | tr -d '[:space:]')
 if [[ "${after_count}" -ne "${entry_count}" ]] || printf '%s\n' "${after}" | grep -Fvxq "${next}"; then
   echo "error: post-edit MARKETING_VERSION values are not all ${next}" >&2
   exit 1
 fi
 
+mv "${temporary}" "${pbxproj}"
 echo "marketing version: ${current} -> ${next} (${entry_count} configurations updated)"

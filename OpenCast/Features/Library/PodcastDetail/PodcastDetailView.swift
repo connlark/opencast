@@ -23,17 +23,22 @@ struct PodcastDetailView: View {
     @State private var searchMode: EpisodeSearchMode = .episodes
     @State private var searchSession = EpisodeSearchSession()
     @State private var sheetDestination: SheetDestination?
-    /// Cleared by the first filter pick here; until then the route's Inbox
-    /// settings win over the show's stored filter without being written to it.
-    @State private var followsRouteEpisodeListOverride = true
+    /// The Inbox settings a Group by Podcast tap opened this visit under.
+    /// They win over the show's stored filter without being written to it,
+    /// and end with the first filter pick here.
+    @State private var episodeListOverride: PodcastEpisodeListOverride?
 
     let feedURL: String
-    /// The Inbox settings the route asked for, or nil for the show's stored filter.
-    var routeEpisodeListOverride: PodcastEpisodeListOverride? = nil
-    var onOpenEpisode: (String) -> Void = { _ in }
+    let onOpenEpisode: (String) -> Void
 
-    private var episodeListOverride: PodcastEpisodeListOverride? {
-        followsRouteEpisodeListOverride ? routeEpisodeListOverride : nil
+    init(
+        feedURL: String,
+        episodeListOverride: PodcastEpisodeListOverride? = nil,
+        onOpenEpisode: @escaping (String) -> Void = { _ in }
+    ) {
+        self.feedURL = feedURL
+        self.onOpenEpisode = onOpenEpisode
+        _episodeListOverride = State(initialValue: episodeListOverride)
     }
 
     private var filter: PodcastEpisodeFilter {
@@ -158,7 +163,7 @@ struct PodcastDetailView: View {
                                     sortOrder: sortOrderBinding,
                                     filter: filterBinding,
                                     podcastID: feedURL,
-                                    hidesQueuedEpisodes: hidesQueuedEpisodes
+                                    onShowHiddenEpisodes: showHiddenEpisodesAction
                                 )
                             }
                             .frame(maxWidth: 600)
@@ -299,6 +304,7 @@ struct PodcastDetailView: View {
                         downloadCount: downloadCount,
                         onSearch: showSearch,
                         onPlaybackSettings: showPlaybackSettings,
+                        onMakePlaylist: makePlaylistAction(episodeCount: allEpisodes.count),
                         adAutoDetectBinding: adAutoDetectBinding,
                         isConfirmingAdAutoDetect: $isConfirmingAdAutoDetect,
                         isConfirmingMarkAllPlayed: $isConfirmingMarkAllPlayed,
@@ -316,6 +322,20 @@ struct PodcastDetailView: View {
 
     private func showPlaybackSettings() {
         sheetDestination = .podcastPlaybackSettings(feedURL: feedURL)
+    }
+
+    private func makePlaylistAction(episodeCount: Int) -> (() -> Void)? {
+        guard appModel.transcriptIntelligence.isVisible,
+              PlaylistOrganizerFeatureFlags.isEnabledForProcess,
+              episodeCount >= PlaylistOrganizerFeatureFlags.minimumEpisodeCount
+        else {
+            return nil
+        }
+        return showPlaylistOrganizer
+    }
+
+    private func showPlaylistOrganizer() {
+        sheetDestination = .playlistOrganizer(podcastID: feedURL)
     }
 
     private func dismissSheet() {
@@ -355,9 +375,9 @@ struct PodcastDetailView: View {
         }
     }
 
-    /// A pick here ends the route's Inbox settings, Hide Up Next included.
+    /// A pick here ends the visit's Inbox settings, Hide Up Next included.
     private func setFilter(_ filter: PodcastEpisodeFilter) {
-        followsRouteEpisodeListOverride = false
+        episodeListOverride = nil
         appModel.podcastEpisodeListSettings.setFilter(
             filter,
             forPodcastID: feedURL,
@@ -418,6 +438,19 @@ struct PodcastDetailView: View {
 
     private func showAllEpisodes() {
         setFilter(.all)
+    }
+
+    /// Non-nil while the visit hides Up Next.
+    private var showHiddenEpisodesAction: (() -> Void)? {
+        guard hidesQueuedEpisodes else {
+            return nil
+        }
+        return showHiddenEpisodes
+    }
+
+    /// Keeps the visit's filter and brings back the rows Hide Up Next took.
+    private func showHiddenEpisodes() {
+        episodeListOverride?.hidesQueuedEpisodes = false
     }
 
     private func updatePodcastArtworkPreview(_ preview: ArtworkPreview) {

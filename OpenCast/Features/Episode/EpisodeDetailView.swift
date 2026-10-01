@@ -143,7 +143,8 @@ struct EpisodeDetailView: View {
             duration: episode.duration,
             progress: progressSummary,
             isDownloaded: downloadRecord?.state == .completed,
-            downloadedByteCount: downloadRecord?.bytesReceived
+            downloadedByteCount: downloadRecord?.bytesReceived,
+            playlistCount: appModel.playlists.playlistIDs(containing: episode.episodeID).count
         )
 
         return ScrollView {
@@ -151,7 +152,8 @@ struct EpisodeDetailView: View {
                 EpisodeHeroHeaderView(
                     episode: episode,
                     chips: chips,
-                    onPreviewResolved: updateArtworkPreview
+                    onPreviewResolved: updateArtworkPreview,
+                    onOpenPlaylists: { openPlaylists(for: episode) }
                 )
                 .animation(.easeOut(duration: 0.2), value: progressSummary)
 
@@ -271,6 +273,10 @@ struct EpisodeDetailView: View {
             EpisodeArtworkGlowBackground(preview: episode.artworkPreview)
         }
         .contentMargins(.bottom, 72, for: .scrollContent)
+    }
+
+    private func openPlaylists(for episode: EpisodeListItemSnapshot) {
+        appModel.requestAddToPlaylist(episodeID: episode.episodeID)
     }
 
     private func togglePlayback(_ episode: EpisodeListItemSnapshot) {

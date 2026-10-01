@@ -2,53 +2,71 @@ import Foundation
 import SwiftData
 import os
 
-/// Device-local memory of the last-played episode — the key launch restore
-/// reads. Lives in `LocalPreferenceRecord` with the rest of the wipeable
-/// local state.
+/// Device-local memory of the last-played episode and the playlist it was
+/// playing from — the keys launch restore reads. Lives in
+/// `LocalPreferenceRecord` with the rest of the wipeable local state.
 final class PlaybackRestorePreferenceStore {
     private static let logger = Logger(subsystem: "com.connor.opencast", category: "PlaybackRestoreState")
     static let episodeIDKey = "playback.lastEpisodeID"
-    // The periodic flush calls remember every tick; the cached record makes
-    // the unchanged-episode tick a pure no-op instead of a refetch plus a
-    // guaranteed dirty save.
-    private var recordCache: LocalPreferenceRecord?
+    static let sourcePlaylistIDKey = "playback.currentSourcePlaylistID"
+    // The periodic flush calls remember every tick; the remembered pair makes
+    // the unchanged tick a pure no-op instead of a refetch plus a guaranteed
+    // dirty save. A nil source inside the pair means its row is known absent.
+    private var rememberedPair: (episodeID: String, sourcePlaylistID: String?)?
+    // A failed save leaves its edits pending in the shared context, so the
+    // next tick's upsert sees them as current and reports no change; this
+    // flag makes that tick retry the save instead of marking the pair saved.
+    private var hasUnsavedChanges = false
 
     func storedEpisodeID(modelContext: ModelContext) -> String? {
-        preference(modelContext: modelContext)?.value.trimmedNonEmpty
+        preferences(forKey: Self.episodeIDKey, modelContext: modelContext).first?.value.trimmedNonEmpty
     }
 
-    func remember(_ episodeID: String, modelContext: ModelContext) {
-        if recordCache?.value == episodeID {
+    func storedSourcePlaylistID(modelContext: ModelContext) -> String? {
+        preferences(forKey: Self.sourcePlaylistIDKey, modelContext: modelContext).first?.value.trimmedNonEmpty
+    }
+
+    /// Writes both keys; a nil source deletes its row rather than storing an
+    /// empty value.
+    func remember(_ episodeID: String, sourcePlaylistID: String?, modelContext: ModelContext) {
+        let sourcePlaylistID = sourcePlaylistID?.trimmedNonEmpty
+        if let rememberedPair,
+           rememberedPair.episodeID == episodeID,
+           rememberedPair.sourcePlaylistID == sourcePlaylistID {
             return
         }
 
-        let record: LocalPreferenceRecord
-        if let cachedRecord = recordCache {
-            record = cachedRecord
-        } else if let existingRecord = preference(modelContext: modelContext) {
-            recordCache = existingRecord
-            guard existingRecord.value != episodeID else {
-                return
-            }
-            record = existingRecord
+        var changed = upsert(Self.episodeIDKey, value: episodeID, modelContext: modelContext)
+        if let sourcePlaylistID {
+            changed = upsert(Self.sourcePlaylistIDKey, value: sourcePlaylistID, modelContext: modelContext) || changed
         } else {
-            record = LocalPreferenceRecord(key: Self.episodeIDKey, value: episodeID)
-            modelContext.insert(record)
-            recordCache = record
+            let sourceRecords = preferences(forKey: Self.sourcePlaylistIDKey, modelContext: modelContext)
+            for record in sourceRecords {
+                modelContext.delete(record)
+            }
+            changed = changed || !sourceRecords.isEmpty
         }
 
-        record.value = episodeID
-        record.updatedAt = .now
+        guard changed || hasUnsavedChanges else {
+            rememberedPair = (episodeID: episodeID, sourcePlaylistID: sourcePlaylistID)
+            return
+        }
+
         do {
             try modelContext.save()
+            hasUnsavedChanges = false
+            rememberedPair = (episodeID: episodeID, sourcePlaylistID: sourcePlaylistID)
         } catch {
+            hasUnsavedChanges = true
+            rememberedPair = nil
             Self.logger.error("Unable to persist the last-playback episode: \(error.localizedDescription)")
         }
     }
 
     func clear(modelContext: ModelContext) {
-        recordCache = nil
-        let records = preferences(modelContext: modelContext)
+        rememberedPair = nil
+        let records = preferences(forKey: Self.episodeIDKey, modelContext: modelContext)
+            + preferences(forKey: Self.sourcePlaylistIDKey, modelContext: modelContext)
         guard !records.isEmpty else {
             return
         }
@@ -58,21 +76,32 @@ final class PlaybackRestorePreferenceStore {
         }
         do {
             try modelContext.save()
+            hasUnsavedChanges = false
         } catch {
             Self.logger.error("Unable to clear the last-playback episode: \(error.localizedDescription)")
         }
     }
 
     func resetAfterDataNuke() {
-        recordCache = nil
+        rememberedPair = nil
+        hasUnsavedChanges = false
     }
 
-    private func preference(modelContext: ModelContext) -> LocalPreferenceRecord? {
-        preferences(modelContext: modelContext).first
+    /// Returns whether the context now holds an unsaved change for the key.
+    private func upsert(_ key: String, value: String, modelContext: ModelContext) -> Bool {
+        if let record = preferences(forKey: key, modelContext: modelContext).first {
+            guard record.value != value else {
+                return false
+            }
+            record.value = value
+            record.updatedAt = .now
+        } else {
+            modelContext.insert(LocalPreferenceRecord(key: key, value: value))
+        }
+        return true
     }
 
-    private func preferences(modelContext: ModelContext) -> [LocalPreferenceRecord] {
-        let key = Self.episodeIDKey
+    private func preferences(forKey key: String, modelContext: ModelContext) -> [LocalPreferenceRecord] {
         let descriptor = FetchDescriptor<LocalPreferenceRecord>(
             predicate: #Predicate<LocalPreferenceRecord> { record in
                 record.key == key

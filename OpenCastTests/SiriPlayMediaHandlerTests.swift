@@ -227,7 +227,124 @@ struct SiriPlayMediaHandlerTests {
         #expect(await fixture.handler.confirm(intent: missing).code == .failure)
     }
 
+    @Test("An identified playlist plays its first unplayed episode silently and tags the rest")
+    func identifiedPlaylistPlaysSilentlyAndTagsTheQueue() async throws {
+        let fixture = try await makeFixture()
+        let playlistID = try await createPlaylist(
+            "Commute",
+            episodeIDs: ["older", "newest", "shared-one"],
+            playedEpisodeIDs: ["older"],
+            fixture: fixture
+        )
+        let intent = SiriPlayMediaIntentFactory.make(
+            mediaContainer: SiriPlayMediaIntentFactory.mediaItem(
+                identifier: playlistID,
+                title: "Commute",
+                type: .podcastPlaylist
+            )
+        )
+
+        let response = await fixture.handler.handle(intent: intent)
+
+        #expect(response.code == .success)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "newest")
+        #expect(fixture.appModel.upNextQueue.items.map(\.episodeID) == ["shared-one"])
+        #expect(fixture.appModel.upNextQueue.items.map(\.sourcePlaylistID) == [playlistID])
+        #expect(fixture.appModel.currentPlaylistSourceID == playlistID)
+        // The phone sheet request is posted from a Task after a yield.
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(fixture.appModel.nowPlayingPresentationRequest == 0)
+    }
+
+    @Test("Confirming a playlist with nothing unplayed reports no unplayed content")
+    func confirmOnAllPlayedPlaylistReturnsNoUnplayedContent() async throws {
+        let fixture = try await makeFixture()
+        let playlistID = try await createPlaylist(
+            "Done",
+            episodeIDs: ["older"],
+            playedEpisodeIDs: ["older"],
+            fixture: fixture
+        )
+        let intent = SiriPlayMediaIntentFactory.make(
+            mediaContainer: SiriPlayMediaIntentFactory.mediaItem(
+                identifier: playlistID,
+                title: "Done",
+                type: .podcastPlaylist
+            )
+        )
+
+        #expect(await fixture.handler.resolution(for: intent) == .playlist(playlistID: playlistID))
+        #expect(await fixture.handler.confirm(intent: intent).code == .failureNoUnplayedContent)
+        #expect(await fixture.handler.handle(intent: intent).code == .failureNoUnplayedContent)
+        #expect(fixture.appModel.playback.currentEpisode == nil)
+    }
+
+    @Test("A playlist-typed donation carrying a feed URL still plays the show")
+    func feedURLPodcastPlaylistIdentifierStillPlaysTheShow() async throws {
+        let fixture = try await makeFixture()
+        let intent = SiriPlayMediaIntentFactory.make(
+            mediaContainer: SiriPlayMediaIntentFactory.mediaItem(
+                identifier: Self.feedURL,
+                title: "Example Show",
+                type: .podcastPlaylist
+            )
+        )
+
+        // Resolution reads the library, which only hydration loads.
+        let results = await fixture.handler.resolveMediaItems(for: intent)
+
+        #expect(results.count == 1)
+        #expect(await fixture.handler.resolution(for: intent) == .show(podcastID: Self.feedURL))
+        #expect(await fixture.handler.handle(intent: intent).code == .success)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "newest")
+        #expect(fixture.appModel.currentPlaylistSourceID == nil)
+    }
+
+    @Test("A spoken playlist name resolves to a playlist media item")
+    func spokenPlaylistNameResolvesToAPlaylistMediaItem() async throws {
+        let fixture = try await makeFixture()
+        let playlistID = try await createPlaylist("Commute", episodeIDs: ["newest"], fixture: fixture)
+        let intent = SiriPlayMediaIntentFactory.make(mediaName: "Commute", mediaType: .unknown)
+
+        let results = await fixture.handler.resolveMediaItems(for: intent)
+
+        #expect(await fixture.handler.resolution(for: intent) == .playlist(playlistID: playlistID))
+        #expect(results.count == 1)
+        let result = try #require(results.first)
+        // Resolution results expose no public accessor for their value; the
+        // responds(to:) guard turns a renamed private key into a failure
+        // instead of an exception that takes the test host down.
+        try #require(result.responds(to: NSSelectorFromString("resolvedValue")))
+        let item = try #require(result.value(forKey: "resolvedValue") as? INMediaItem)
+        #expect(item.identifier == playlistID)
+        #expect(item.title == "Commute")
+        #expect(item.type == .podcastPlaylist)
+    }
+
     private static let feedURL = "https://example.com/siri-handler.xml"
+
+    /// Hydrates first, as the handler would, so the new rows are not replaced
+    /// by a later load and the episodes resolve.
+    private func createPlaylist(
+        _ name: String,
+        episodeIDs: [String],
+        playedEpisodeIDs: [String] = [],
+        fixture: (handler: SiriPlayMediaHandler, appModel: OpenCastAppModel, modelContext: ModelContext)
+    ) async throws -> String {
+        let appModel = fixture.appModel
+        let context = fixture.modelContext
+        await appModel.ensurePlaybackSurfaceHydrated(modelContext: context)
+        let playlist = try #require(appModel.playlists.create(name: name, kind: .manual, modelContext: context))
+        let episodes = try episodeIDs.map { try #require(appModel.episodeSnapshot(for: $0)) }
+        #expect(appModel.playlists.add(episodes, to: playlist.playlistID, modelContext: context) == episodes.count)
+        for episodeID in playedEpisodeIDs {
+            let episode = try #require(appModel.episodeSnapshot(for: episodeID))
+            #expect(appModel.markEpisodePlayed(episode, modelContext: context))
+        }
+        return playlist.playlistID
+    }
 
     private func makeFixture() async throws -> (
         handler: SiriPlayMediaHandler,

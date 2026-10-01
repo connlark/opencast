@@ -37,6 +37,21 @@ struct InboxPodcastGroupTests {
         #expect(groups.map(\.episodeCount) == [1])
     }
 
+    @Test("A show subscribed twice still gets one group")
+    func duplicateSubscriptionsShareOneGroup() {
+        let first = SubscriptionRecord(feedURL: "https://example.com/feed.xml", title: "First")
+        let twin = SubscriptionRecord(feedURL: "https://example.com/feed.xml", title: "Twin")
+        let episodes = [
+            makeEpisode(id: "one", podcastID: first.feedURL),
+            makeEpisode(id: "two", podcastID: first.feedURL)
+        ]
+
+        let groups = InboxPodcastGroup.make(episodes: episodes, subscriptions: [first, twin])
+
+        #expect(groups.map(\.subscription.title) == ["First"])
+        #expect(groups.map(\.episodeCount) == [2])
+    }
+
     @Test("An empty episode list yields no groups")
     func emptyEpisodes() {
         let subscription = SubscriptionRecord(feedURL: "https://example.com/feed.xml", title: "Show")

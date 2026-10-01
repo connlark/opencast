@@ -150,6 +150,8 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<RefreshLogRecord>()).count == 1)
         #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).count == 1)
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<PlaylistRecord>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<PlaylistItemRecord>()).count == 1)
         #expect(FileManager.default.fileExists(atPath: cacheController.feedCacheDirectory.appending(path: "feed.cache").path))
         #expect(FileManager.default.fileExists(atPath: cacheController.artworkCacheDirectory.appending(path: "artwork.cache").path))
         #expect(fileStore.fileExists(relativePath: downloadPath))
@@ -612,6 +614,18 @@ struct DataNukeTests {
                 sequence: 0
             )
         )
+        context.insert(PlaylistRecord(playlistID: "nuke-playlist", name: "Nuke Playlist"))
+        context.insert(
+            PlaylistItemRecord(
+                itemID: "nuke-playlist-item",
+                playlistID: "nuke-playlist",
+                episodeID: episode.episodeID,
+                podcastID: feedURL,
+                sortKey: PlaylistSortKey.last(after: nil),
+                episodeTitle: episode.title,
+                podcastTitle: "Nuke Show"
+            )
+        )
         try fileStore.prepareDownloadsDirectory()
         try Data("downloaded audio".utf8).write(
             to: fileStore.fileURL(relativePath: downloadPath),
@@ -653,6 +667,8 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<EpisodeAdAnalysisRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeTranscriptAnalysisRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<PlaylistRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<PlaylistItemRecord>()).isEmpty)
     }
 
     private func seedTranscriptAndAdAnalysis(

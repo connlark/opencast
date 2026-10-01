@@ -15,6 +15,11 @@ extension TranscriptIntelligenceFailure {
         if let toolError = error as? LanguageModelSession.ToolCallError {
             return failure(mapping: toolError.underlyingError)
         }
+        // A structured turn whose answer does not parse (cut off at the
+        // response cap, say) is the same outcome as a failed decode.
+        if error is GeneratedContent.ParsingError {
+            return .malformedOutput
+        }
         if let modelError = error as? LanguageModelError {
             return failure(modelError)
         }

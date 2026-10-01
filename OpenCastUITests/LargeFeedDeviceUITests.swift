@@ -25,6 +25,7 @@ final class LargeFeedDeviceUITests: XCTestCase {
         let add = app.buttons["Add"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 15))
         add.tap()
+        tapAddPodcastMenuItemIfPresented(in: app)
         let subscribe = app.buttons["Subscribe"]
         XCTAssertTrue(subscribe.waitForExistence(timeout: 10))
         subscribe.tap()

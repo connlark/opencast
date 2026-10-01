@@ -6,32 +6,23 @@ struct LibrarySubscriptionRowView: View {
     @State private var isConfirmingRemoval = false
 
     let subscription: SubscriptionRecord
-    let badge: LibrarySubscriptionBadge
-    /// Opens the show under these Inbox settings instead of its stored filter.
-    var episodeListOverride: PodcastEpisodeListOverride? = nil
+    let showsNewEpisodeCount: Bool
 
     static func accessibilityIdentifier(for feedURL: String) -> String {
         "subscription-row-\(feedURL)"
     }
 
-    private var badgeCount: Int {
-        switch badge {
-        case .hidden:
-            0
-        case .newEpisodes:
-            appModel.library.newEpisodeCount(for: subscription)
-        case .episodeCount(let count):
-            count
-        }
+    private var newEpisodeCount: Int {
+        showsNewEpisodeCount ? appModel.library.newEpisodeCount(for: subscription) : 0
     }
 
     var body: some View {
-        let badgeCount = badgeCount
+        let newEpisodeCount = newEpisodeCount
 
-        NavigationLink(value: AppRoute.podcastDetail(feedURL: subscription.feedURL, episodeListOverride: episodeListOverride)) {
-            SubscriptionRowView(subscription: subscription, newEpisodeCount: badgeCount)
+        NavigationLink(value: AppRoute.podcastDetail(feedURL: subscription.feedURL)) {
+            SubscriptionRowView(subscription: subscription, badgeCount: newEpisodeCount)
         }
-        .accessibilityValue(badge.accessibilityValue(count: badgeCount))
+        .accessibilityValue(LibraryNewEpisodeBadge.accessibilityValue(count: newEpisodeCount))
         .accessibilityIdentifier(Self.accessibilityIdentifier(for: subscription.feedURL))
         .modifier(
             SubscriptionRemovalModifier(

@@ -539,6 +539,16 @@ pub async fn increment_counter(db: &D1Database, name: &str, delta: i64, now: i64
     Ok(())
 }
 
+/// Current value of a content-free counter; 0 when it has never moved.
+pub async fn counter_value(db: &D1Database, name: &str) -> Result<i64> {
+    count(
+        db,
+        "SELECT value AS count FROM counters WHERE name = ?1",
+        &[D1Type::Text(name)],
+    )
+    .await
+}
+
 async fn count(db: &D1Database, sql: &str, args: &[D1Type<'_>]) -> Result<i64> {
     let row = db
         .prepare(sql)

@@ -20,6 +20,11 @@ struct MiniPlayerView: View {
         let showsPauseButton = state.showsPauseButton
 
         if let episode = appModel.playback.currentEpisode {
+            let playlistSource = appModel.currentPlaylistSource
+            let playlistRemainingCount = playlistSource.map {
+                appModel.remainingQueuedCount(forPlaylist: $0.playlistID)
+            } ?? 0
+
             HStack(spacing: isInline ? 4 : 8) {
                 Button(action: expand) {
                     HStack(spacing: 10) {
@@ -33,7 +38,9 @@ struct MiniPlayerView: View {
 
                         MiniPlayerMetadataView(
                             title: episode.title,
-                            podcastTitle: episode.podcastTitle
+                            podcastTitle: episode.podcastTitle,
+                            playlistSource: isInline ? nil : playlistSource,
+                            playlistRemainingCount: playlistRemainingCount
                         )
                     }
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -41,7 +48,13 @@ struct MiniPlayerView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Open Now Playing")
-                .accessibilityValue("\(episode.title), \(episode.podcastTitle)")
+                .accessibilityValue(
+                    openNowPlayingValue(
+                        for: episode,
+                        playlistSource: playlistSource,
+                        remainingCount: playlistRemainingCount
+                    )
+                )
 
                 Button(action: togglePlayPause) {
                     Group {
@@ -85,6 +98,21 @@ struct MiniPlayerView: View {
 
     private var isInline: Bool {
         tabAccessoryPlacement == .inline
+    }
+
+    private func openNowPlayingValue(
+        for episode: Episode,
+        playlistSource: PlaylistPlaybackSource?,
+        remainingCount: Int
+    ) -> String {
+        guard let playlistSource else {
+            return "\(episode.title), \(episode.podcastTitle)"
+        }
+        return PlaylistPlaybackSourceText.miniPlayerAccessibilityValue(
+            title: episode.title,
+            name: playlistSource.name,
+            remainingCount: remainingCount
+        )
     }
 
     private var skipForwardSeconds: Int {

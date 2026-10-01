@@ -12,6 +12,7 @@ nonisolated enum HelpTopicID {
     static let storage = "storage"
     static let notifications = "notifications"
     static let siri = "siri"
+    static let playlistOrganizer = "ai-playlists"
 
     static let all = [
         whyWeCharge,
@@ -23,5 +24,6 @@ nonisolated enum HelpTopicID {
         storage,
         notifications,
         siri,
+        playlistOrganizer,
     ]
 }

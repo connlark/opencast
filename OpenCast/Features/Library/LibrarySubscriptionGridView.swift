@@ -1,16 +1,24 @@
 import SwiftData
 import SwiftUI
 
-struct LibrarySubscriptionGridView: View {
+struct LibrarySubscriptionGridView<Header: View>: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     let subscriptions: [SubscriptionRecord]
-    /// Opens every show under these Inbox settings instead of its stored filter.
-    var episodeListOverride: PodcastEpisodeListOverride? = nil
-    /// The badge each tile shows; the grouped Inbox varies it per show.
-    let badge: (SubscriptionRecord) -> LibrarySubscriptionBadge
+    let showsNewEpisodeCount: Bool
+    private let header: Header
+
+    init(
+        subscriptions: [SubscriptionRecord],
+        showsNewEpisodeCount: Bool,
+        @ViewBuilder header: () -> Header
+    ) {
+        self.subscriptions = subscriptions
+        self.showsNewEpisodeCount = showsNewEpisodeCount
+        self.header = header()
+    }
 
     var body: some View {
         // Reads the width in the same layout pass, so the first frame
@@ -23,17 +31,20 @@ struct LibrarySubscriptionGridView: View {
             )
 
             ScrollView {
-                LazyVGrid(columns: metrics.columns, spacing: metrics.rowSpacing) {
-                    ForEach(subscriptions) { subscription in
-                        LibrarySubscriptionTileView(
-                            subscription: subscription,
-                            metrics: metrics,
-                            badge: badge(subscription),
-                            episodeListOverride: episodeListOverride
-                        )
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+
+                    LazyVGrid(columns: metrics.columns, spacing: metrics.rowSpacing) {
+                        ForEach(subscriptions) { subscription in
+                            LibrarySubscriptionTileView(
+                                subscription: subscription,
+                                metrics: metrics,
+                                showsNewEpisodeCount: showsNewEpisodeCount
+                            )
+                        }
                     }
+                    .padding(.vertical, 8)
                 }
-                .padding(.vertical, 8)
             }
             .swipeActionsContainer()
             .accessibilityIdentifier("Library Grid")

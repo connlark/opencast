@@ -92,7 +92,13 @@ struct NowPlayingUtilityControls: View {
     }
 
     private func queueAccessibilityValue(count: Int) -> Text {
-        count == 0
+        if let source = appModel.currentPlaylistSource {
+            let remaining = appModel.remainingQueuedCount(forPlaylist: source.playlistID)
+            if remaining >= 1 {
+                return Text(PlaylistPlaybackSourceText.utilityValue(name: source.name, remainingCount: remaining))
+            }
+        }
+        return count == 0
             ? Text("Empty")
             : Text("^[\(count) episode](inflect: true) queued")
     }
