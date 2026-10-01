@@ -239,6 +239,19 @@ payload. The app's Notification Service Extension downloads the HTTPS
 expanded card. Proofs need a physical device: the simulator has no App Attest
 and does not render remote pushes.
 
+Notification text comes from one pipeline, `src/notification_text.rs`. It runs
+when the observation scan builds a release candidate and again, idempotently,
+when delivery renders the APNs alert. It cleans the whole feed description (or
+the `content:encoded` show notes when the description is empty or repeats the
+title) into single-line prose the way a browser would read the markup: inline
+elements add no whitespace, other element boundaries become a space, comments
+and script or style bodies vanish, entities decode to their real characters,
+and bare URLs shrink to their host. Only then is the prose bounded to 512
+bytes at a word boundary with an ellipsis. Never bound the raw markup: a long
+`<a href>` inside the first 512 bytes can swallow all but the first words of a
+summary. The content extension applies the same rules for the rare payload
+that had to drop `episode_summary`.
+
 ## Feed resource policy
 
 The app and both Workers share explicit ceilings. A scan accepts at most
