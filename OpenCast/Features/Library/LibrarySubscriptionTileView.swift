@@ -8,7 +8,9 @@ struct LibrarySubscriptionTileView: View {
 
     let subscription: SubscriptionRecord
     let metrics: LibraryGridMetrics
-    let showsNewEpisodeCount: Bool
+    let badge: LibrarySubscriptionBadge
+    /// Opens the show under these Inbox settings instead of its stored filter.
+    var episodeListOverride: PodcastEpisodeListOverride? = nil
 
     private var podcastCache: PodcastCacheSnapshot? {
         appModel.library.podcastCache(for: subscription.feedURL)
@@ -32,14 +34,21 @@ struct LibrarySubscriptionTileView: View {
         return errorMessage
     }
 
-    private var newEpisodeCount: Int {
-        showsNewEpisodeCount ? appModel.library.newEpisodeCount(for: subscription) : 0
+    private var badgeCount: Int {
+        switch badge {
+        case .hidden:
+            0
+        case .newEpisodes:
+            appModel.library.newEpisodeCount(for: subscription)
+        case .episodeCount(let count):
+            count
+        }
     }
 
     var body: some View {
-        let newEpisodeCount = newEpisodeCount
+        let badgeCount = badgeCount
 
-        NavigationLink(value: AppRoute.podcastDetail(feedURL: subscription.feedURL)) {
+        NavigationLink(value: AppRoute.podcastDetail(feedURL: subscription.feedURL, episodeListOverride: episodeListOverride)) {
             VStack(alignment: .leading, spacing: metrics.isCompact ? 6 : 10) {
                 ArtworkPlaceholder(
                     title: subscription.title,
@@ -52,8 +61,8 @@ struct LibrarySubscriptionTileView: View {
                     refreshStatusOverlay
                 }
                 .overlay(alignment: .topTrailing) {
-                    if newEpisodeCount > 0 {
-                        LibraryNewEpisodeBadge(count: newEpisodeCount)
+                    if badgeCount > 0 {
+                        LibraryNewEpisodeBadge(count: badgeCount)
                             .padding(4)
                     }
                 }
@@ -68,7 +77,7 @@ struct LibrarySubscriptionTileView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityValue(LibraryNewEpisodeBadge.accessibilityValue(count: newEpisodeCount))
+        .accessibilityValue(badge.accessibilityValue(count: badgeCount))
         .accessibilityIdentifier(LibrarySubscriptionRowView.accessibilityIdentifier(for: subscription.feedURL))
         .modifier(
             SubscriptionRemovalModifier(

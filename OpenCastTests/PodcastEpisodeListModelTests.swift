@@ -102,6 +102,40 @@ struct PodcastEpisodeListModelTests {
         #expect(model.episodes.map(\.id) == ["older", "newer"])
     }
 
+    @Test("Hidden episodes leave the list but still count as unplayed and drive the primary action")
+    func hiddenEpisodesLeaveOnlyTheList() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let queued = makeEpisode(id: "queued", publishedAt: 30)
+        let shown = makeEpisode(id: "shown", publishedAt: 20)
+        let queuedPlayed = makeEpisode(id: "queued-played", publishedAt: 10)
+        #expect(library.markEpisodePlayed(queuedPlayed, modelContext: context))
+
+        let model = PodcastEpisodeListModel.make(
+            episodes: [queued, shown, queuedPlayed],
+            filter: .unplayed,
+            sortOrder: .newestFirst,
+            library: library,
+            downloadRecords: [],
+            hiddenEpisodeIDs: ["queued", "queued-played"]
+        )
+        let allHidden = PodcastEpisodeListModel.make(
+            episodes: [queued, shown],
+            filter: .all,
+            sortOrder: .newestFirst,
+            library: library,
+            downloadRecords: [],
+            hiddenEpisodeIDs: ["queued", "shown"]
+        )
+
+        #expect(model.episodes.map(\.id) == ["shown"])
+        #expect(model.unplayedEpisodeCount == 2)
+        #expect(model.primaryAction == .playLatest(queued))
+        #expect(allHidden.episodes.isEmpty)
+        #expect(allHidden.isFilteredEmpty)
+    }
+
     private func makeModel(
         _ filter: PodcastEpisodeFilter,
         _ episodes: [EpisodeListItemSnapshot],

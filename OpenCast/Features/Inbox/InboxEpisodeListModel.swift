@@ -44,11 +44,11 @@ struct InboxEpisodeListModel {
         let downloadedEpisodeIDs = filter == .downloaded ? downloadRecords().completedEpisodeIDs : []
         var hiddenEpisodeIDs: Set<String> = []
         if hidesQueuedEpisodes {
+            // Hide Up Next hides what the player already holds: the queue
+            // and the playing episode, queued or not.
             hiddenEpisodeIDs = queuedEpisodeIDs()
-            // A stale queue entry for the episode that is playing must not
-            // hide the row the listener is on.
             if let playingEpisodeID = playingEpisodeID() {
-                hiddenEpisodeIDs.remove(playingEpisodeID)
+                hiddenEpisodeIDs.insert(playingEpisodeID)
             }
         }
 

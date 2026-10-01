@@ -23,9 +23,39 @@ struct PodcastDetailView: View {
     @State private var searchMode: EpisodeSearchMode = .episodes
     @State private var searchSession = EpisodeSearchSession()
     @State private var sheetDestination: SheetDestination?
+    /// Cleared by the first filter pick here; until then the route's Inbox
+    /// settings win over the show's stored filter without being written to it.
+    @State private var followsRouteEpisodeListOverride = true
 
     let feedURL: String
+    /// The Inbox settings the route asked for, or nil for the show's stored filter.
+    var routeEpisodeListOverride: PodcastEpisodeListOverride? = nil
     var onOpenEpisode: (String) -> Void = { _ in }
+
+    private var episodeListOverride: PodcastEpisodeListOverride? {
+        followsRouteEpisodeListOverride ? routeEpisodeListOverride : nil
+    }
+
+    private var filter: PodcastEpisodeFilter {
+        episodeListOverride?.filter ?? appModel.podcastEpisodeListSettings.filter(forPodcastID: feedURL)
+    }
+
+    private var hidesQueuedEpisodes: Bool {
+        episodeListOverride?.hidesQueuedEpisodes ?? false
+    }
+
+    /// Up Next plus the playing episode, as the Inbox hides them. Reads the
+    /// queue and player only while hiding them.
+    private var hiddenEpisodeIDs: Set<String> {
+        guard hidesQueuedEpisodes else {
+            return []
+        }
+        var hiddenEpisodeIDs = Set(appModel.upNextQueue.items.map(\.episodeID))
+        if let playingEpisodeID = appModel.playback.currentEpisode?.id.rawValue {
+            hiddenEpisodeIDs.insert(playingEpisodeID)
+        }
+        return hiddenEpisodeIDs
+    }
 
     private var subscription: SubscriptionRecord? {
         appModel.library.subscriptions.first { $0.feedURL == feedURL }
@@ -66,13 +96,15 @@ struct PodcastDetailView: View {
     var body: some View {
         let allEpisodes = appModel.library.episodes(forPodcastID: feedURL)
         let sortOrder = appModel.podcastEpisodeListSettings.sortOrder(forPodcastID: feedURL)
-        let filter = appModel.podcastEpisodeListSettings.filter(forPodcastID: feedURL)
+        let filter = filter
+        let hidesQueuedEpisodes = hidesQueuedEpisodes
         let model = PodcastEpisodeListModel.make(
             episodes: allEpisodes,
             filter: filter,
             sortOrder: sortOrder,
             library: appModel.library,
-            downloadRecords: appModel.downloads.records
+            downloadRecords: appModel.downloads.records,
+            hiddenEpisodeIDs: hiddenEpisodeIDs
         )
         let downloadCount = appModel.downloads.records.count { $0.podcastID == feedURL }
         let searchTaskKey = EpisodeSearchRequestKey(
@@ -125,7 +157,8 @@ struct PodcastDetailView: View {
                                 PodcastEpisodeListControlsView(
                                     sortOrder: sortOrderBinding,
                                     filter: filterBinding,
-                                    podcastID: feedURL
+                                    podcastID: feedURL,
+                                    hidesQueuedEpisodes: hidesQueuedEpisodes
                                 )
                             }
                             .frame(maxWidth: 600)
@@ -169,7 +202,7 @@ struct PodcastDetailView: View {
                             ContentUnavailableView {
                                 Label(filter.emptyStateTitle, systemImage: filter.systemImage)
                             } description: {
-                                Text(filter.emptyStateDescription)
+                                Text(filteredEmptyDescription(filter: filter, hidesQueuedEpisodes: hidesQueuedEpisodes))
                             } actions: {
                                 Button("Show All Episodes", action: showAllEpisodes)
                             }
@@ -304,14 +337,31 @@ struct PodcastDetailView: View {
 
     private var filterBinding: Binding<PodcastEpisodeFilter> {
         Binding(
-            get: { appModel.podcastEpisodeListSettings.filter(forPodcastID: feedURL) },
+            get: { filter },
             set: { filter in
-                appModel.podcastEpisodeListSettings.setFilter(
-                    filter,
-                    forPodcastID: feedURL,
-                    modelContext: modelContext
-                )
+                setFilter(filter)
             }
+        )
+    }
+
+    private func filteredEmptyDescription(filter: PodcastEpisodeFilter, hidesQueuedEpisodes: Bool) -> String {
+        switch (filter, hidesQueuedEpisodes) {
+        case (_, false):
+            filter.emptyStateDescription
+        case (.all, true):
+            "Every episode in this podcast is playing or in Up Next."
+        case (_, true):
+            "\(filter.emptyStateDescription) Episodes playing or in Up Next are hidden."
+        }
+    }
+
+    /// A pick here ends the route's Inbox settings, Hide Up Next included.
+    private func setFilter(_ filter: PodcastEpisodeFilter) {
+        followsRouteEpisodeListOverride = false
+        appModel.podcastEpisodeListSettings.setFilter(
+            filter,
+            forPodcastID: feedURL,
+            modelContext: modelContext
         )
     }
 
@@ -367,11 +417,7 @@ struct PodcastDetailView: View {
     }
 
     private func showAllEpisodes() {
-        appModel.podcastEpisodeListSettings.setFilter(
-            .all,
-            forPodcastID: feedURL,
-            modelContext: modelContext
-        )
+        setFilter(.all)
     }
 
     private func updatePodcastArtworkPreview(_ preview: ArtworkPreview) {

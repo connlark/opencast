@@ -6,9 +6,10 @@ struct RouteDestinationView: View {
 
     var body: some View {
         switch route {
-        case .podcastDetail(let feedURL):
+        case .podcastDetail(let feedURL, let episodeListOverride):
             PodcastDetailView(
                 feedURL: feedURL,
+                routeEpisodeListOverride: episodeListOverride,
                 onOpenEpisode: onOpenEpisode
             )
         case .episodeDetail(let id):

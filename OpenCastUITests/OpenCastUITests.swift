@@ -4554,7 +4554,9 @@ final class OpenCastUITests: XCTestCase {
         let miniPlayer = app.buttons["Open Now Playing"]
         assertExists(miniPlayer, named: "mini-player after starting the hidden queue")
         assertValue(of: miniPlayer, contains: "Queued UI Episode 1", named: "mini-player after starting the hidden queue")
-        assertExists(queuedRows[0], named: "played episode back in the Inbox once it left the queue")
+        // Hide Up Next hides the playing episode too, so leaving the queue
+        // for the player keeps the row out of the Inbox.
+        assertDoesNotExist(queuedRows[0], named: "playing episode while hiding Up Next", timeout: 5)
         assertDoesNotExist(queuedRows[1], named: "queued inbox row 2 while hiding Up Next")
         assertDoesNotExist(queuedRows[2], named: "queued inbox row 3 while hiding Up Next")
         assertExists(

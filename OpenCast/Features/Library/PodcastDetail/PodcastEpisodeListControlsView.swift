@@ -6,6 +6,9 @@ struct PodcastEpisodeListControlsView: View {
     @Binding var sortOrder: PodcastEpisodeSortOrder
     @Binding var filter: PodcastEpisodeFilter
     let podcastID: String
+    /// Set while a Group by Podcast visit hides Up Next; the filter chip
+    /// cannot show it, so a caption says why rows are missing.
+    var hidesQueuedEpisodes = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -29,6 +32,13 @@ struct PodcastEpisodeListControlsView: View {
 
                     EpisodeFilterMenu(filter: $filter)
                 }
+            }
+
+            if hidesQueuedEpisodes {
+                Label("Episodes playing or in Up Next are hidden", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
             if let errorMessage = appModel.podcastEpisodeListSettings.errorMessage(forPodcastID: podcastID) {

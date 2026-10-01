@@ -735,7 +735,7 @@ struct OpenCastRootView: View {
 
     private func isRouteInvalid(_ route: AppRoute) -> Bool {
         switch route {
-        case .podcastDetail(let feedURL):
+        case .podcastDetail(let feedURL, _):
             !appModel.library.isActivelySubscribed(to: feedURL)
         case .episodeDetail(let id), .episodeTranscript(let id), .episodeArtwork(let id):
             appModel.library.episode(with: id) == nil && appModel.downloads.record(for: id) == nil

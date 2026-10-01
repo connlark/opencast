@@ -68,8 +68,8 @@ struct InboxEpisodeListModelTests {
         #expect(unplayedModel.totalEpisodeCount == 4)
     }
 
-    @Test("Hiding Up Next drops queued rows under any filter except the playing episode")
-    func hidesQueuedEpisodesExceptThePlayingOne() throws {
+    @Test("Hiding Up Next drops queued rows and the playing episode under any filter")
+    func hidesQueuedAndPlayingEpisodes() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
@@ -86,8 +86,8 @@ struct InboxEpisodeListModelTests {
             sourceAudioURL: queuedDownloaded.audioURL ?? "",
             state: .completed
         )
-        // The playing episode still has a stale queue entry.
-        let queuedIDs: Set<String> = ["playing", "queued", "queued-played", "queued-downloaded"]
+        // The playing episode is not in the queue; playing alone hides it.
+        let queuedIDs: Set<String> = ["queued", "queued-played", "queued-downloaded"]
 
         let allModel = makeModel(
             .all, episodes, library,
@@ -105,8 +105,8 @@ struct InboxEpisodeListModelTests {
             downloads: [downloadRecord]
         )
 
-        #expect(allModel.episodes.map(\.id) == ["playing", "unqueued"])
-        #expect(unplayedModel.episodes.map(\.id) == ["playing", "unqueued"])
+        #expect(allModel.episodes.map(\.id) == ["unqueued"])
+        #expect(unplayedModel.episodes.map(\.id) == ["unqueued"])
         #expect(downloadedModel.episodes.isEmpty)
         #expect(downloadedModel.isFilteredEmpty)
     }
