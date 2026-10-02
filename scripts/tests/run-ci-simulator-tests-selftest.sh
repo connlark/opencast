@@ -16,6 +16,11 @@ RUNNER="${scripts_dir}/run-ci-simulator-tests.sh"
 MOCK="${tests_dir}/mock_ci_simulator_tools.py"
 chmod +x "$MOCK"
 
+# CI runs the runner with the macOS system shell (bash 3.2), whatever newer
+# bash is first on a developer's PATH. Test with that shell when it exists.
+RUNNER_SHELL="${RUNNER_SHELL:-/bin/bash}"
+[[ -x "$RUNNER_SHELL" ]] || RUNNER_SHELL="bash"
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -39,7 +44,7 @@ run_case() { # name scenario [VAR=value...] -> sets RC, OUT, CALLS, SUMMARY, OUT
     XCODEBUILD="python3 $MOCK xcodebuild" SIMCTL="python3 $MOCK simctl" \
     XCRESULTTOOL="python3 $MOCK xcresulttool" \
     GITHUB_STEP_SUMMARY="$SUMMARY" GITHUB_OUTPUT="$OUTPUTS" \
-    bash "$RUNNER" --udid mock-simulator --name lane --out "$OUT" -- \
+    "$RUNNER_SHELL" "$RUNNER" --udid mock-simulator --name lane --out "$OUT" -- \
       -only-testing:OpenCastTests -only-testing:OpenCastUITests/OpenCastUITests/testSmoke \
       >"${work}/${name}.stdout" 2>&1
   RC=$?
@@ -50,7 +55,7 @@ call_order() { awk '{ print ($1 == "xcodebuild" ? $2 : "simctl-" $2) }' "$CALLS"
 
 echo "== run-ci-simulator-tests self-tests =="
 
-bash -n "$RUNNER" && ok "bash -n runner" || bad "bash -n runner"
+"$RUNNER_SHELL" -n "$RUNNER" && ok "runner parses under ${RUNNER_SHELL}" || bad "runner parses under ${RUNNER_SHELL}"
 python3 -m py_compile "$MOCK" && ok "py_compile mock" || bad "py_compile mock"
 
 # ---- 1. clean pass: warm-up order, one attempt, selection passed through ----
@@ -127,7 +132,7 @@ check 1 "$(test_calls)" "failed warm-up does not add an attempt"
 grep -q 'warning: warm-up launch failed' "${work}/warm.stdout" && ok "warm-up failure is reported" || bad "no warm-up warning"
 
 # ---- 11. argument validation ----
-bash "$RUNNER" --udid mock --name lane --out "${work}/args" >/dev/null 2>&1
+"$RUNNER_SHELL" "$RUNNER" --udid mock --name lane --out "${work}/args" >/dev/null 2>&1
 check 2 "$?" "missing selection is a usage error"
 
 echo

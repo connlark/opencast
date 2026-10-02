@@ -229,10 +229,16 @@ if [[ "$build_exit" -ne 0 ]]; then
 fi
 
 # A classifier that printed nothing is treated as a failure, never as a retry.
+# The line is split by hand: an `IFS=... read < <(...)` prefix leaks its IFS
+# into the substituted command on bash 3.2 (the macOS system shell CI uses),
+# which stops the unquoted tool variables from splitting into words.
 classify() { # sets outcome, reason
-  outcome=""; reason=""
-  IFS=$'\t' read -r outcome reason < <(classify_attempt "$ATTEMPT_EXIT" "$BUNDLE" "$LOG") || true
-  if [[ -z "$outcome" ]]; then
+  local line tab=$'\t'
+  line="$(classify_attempt "$ATTEMPT_EXIT" "$BUNDLE" "$LOG")" || true
+  if [[ "$line" == *"$tab"* ]]; then
+    outcome="${line%%"$tab"*}"
+    reason="${line#*"$tab"}"
+  else
     outcome="failed"; reason="attempt could not be classified"
   fi
 }
