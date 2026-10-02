@@ -13,9 +13,11 @@ permissions:
 env:
   DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
 
+# Pull requests cancel their superseded runs. Pushes to main never do: every
+# commit there keeps its own run, so a follow-up push cannot erase its evidence.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.ref == 'refs/heads/main' && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   app-unit-tests:
@@ -74,21 +76,26 @@ jobs:
       - name: Test the UI-test runner with mocked build tools
         run: bash scripts/tests/run-ui-tests-selftest.sh
 
+      - name: Test the CI simulator runner with mocked build tools
+        run: bash scripts/tests/run-ci-simulator-tests-selftest.sh
+
+      # The runner warms the simulator, launches the built app once, and runs
+      # the selection again exactly once when an attempt executed no tests or
+      # failed only for a runner launch signature. A real test failure is
+      # never retried. Each attempt is recorded in the job summary.
       - name: Run app and notification-service unit tests
+        id: tests
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts
-          xcodebuild \
-            -project opencast.xcodeproj \
-            -scheme OpenCast \
-            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
-            -parallel-testing-enabled NO \
-            -maximum-concurrent-test-device-destinations 1 \
-            -resultBundlePath artifacts/app-unit-tests.xcresult \
+          bash scripts/run-ci-simulator-tests.sh \
+            --udid "${{ steps.simulator.outputs.udid }}" \
+            --name app-unit-tests \
+            --out artifacts \
+            --derived-data "${RUNNER_TEMP}/DerivedData" \
+            -- \
             -only-testing:OpenCastTests \
-            -only-testing:OpenCastNotificationServiceTests \
-            test 2>&1 | tee artifacts/app-unit-tests.log
+            -only-testing:OpenCastNotificationServiceTests
 
       - name: Publish app unit-test summary
         if: always()
@@ -132,6 +139,17 @@ jobs:
             artifacts/app-unit-tests.log
             artifacts/app-unit-tests-summary.json
             artifacts/app-unit-tests.xcresult
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload infrastructure-retry evidence
+        if: always() && steps.tests.outputs.retried == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: app-unit-test-infrastructure-attempt-${{ github.run_attempt }}
+          path: |
+            artifacts/app-unit-tests-attempt1.log
+            artifacts/app-unit-tests-attempt1.xcresult
           if-no-files-found: warn
           retention-days: 7
 
@@ -188,20 +206,21 @@ jobs:
           echo "Selected iOS 27 simulator: ${simulator_udid}"
           echo "udid=${simulator_udid}" >> "${GITHUB_OUTPUT}"
 
+      # Same runner as the unit lane: warm simulator, one warm-up launch, and
+      # one recorded retry for an attempt that only hit a runner launch
+      # signature or executed no tests.
       - name: Run seeded Inbox-to-Now-Playing smoke test
+        id: tests
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts
-          xcodebuild \
-            -project opencast.xcodeproj \
-            -scheme OpenCast \
-            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
-            -parallel-testing-enabled NO \
-            -maximum-concurrent-test-device-destinations 1 \
-            -resultBundlePath artifacts/core-flow-ui-smoke.xcresult \
-            -only-testing:OpenCastUITests/OpenCastUITests/testSeededInboxEpisodeTapPlaysAndExpandsNowPlaying \
-            test 2>&1 | tee artifacts/core-flow-ui-smoke.log
+          bash scripts/run-ci-simulator-tests.sh \
+            --udid "${{ steps.simulator.outputs.udid }}" \
+            --name core-flow-ui-smoke \
+            --out artifacts \
+            --derived-data "${RUNNER_TEMP}/DerivedData" \
+            -- \
+            -only-testing:OpenCastUITests/OpenCastUITests/testSeededInboxEpisodeTapPlaysAndExpandsNowPlaying
 
       - name: Publish UI-smoke summary
         if: always()
@@ -245,6 +264,17 @@ jobs:
             artifacts/core-flow-ui-smoke.log
             artifacts/core-flow-ui-smoke-summary.json
             artifacts/core-flow-ui-smoke.xcresult
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload infrastructure-retry evidence
+        if: always() && steps.tests.outputs.retried == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: core-flow-ui-smoke-infrastructure-attempt-${{ github.run_attempt }}
+          path: |
+            artifacts/core-flow-ui-smoke-attempt1.log
+            artifacts/core-flow-ui-smoke-attempt1.xcresult
           if-no-files-found: warn
           retention-days: 7
 
