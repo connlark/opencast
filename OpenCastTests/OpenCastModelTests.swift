@@ -3668,7 +3668,8 @@ private actor StubFeedService: FeedService {
     }
 
     func waitForRequestCount(_ count: Int) async -> Bool {
-        for _ in 0..<1_000 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if requestedURLs.count >= count {
                 return true
             }

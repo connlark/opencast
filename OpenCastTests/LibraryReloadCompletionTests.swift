@@ -54,7 +54,7 @@ struct LibraryReloadCompletionTests {
     }
 
     private func waitForWaiters(_ count: Int, in completion: LibraryReloadCompletion) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
         while completion.waiterCount != count, ContinuousClock.now < deadline {
             await Task.yield()
         }

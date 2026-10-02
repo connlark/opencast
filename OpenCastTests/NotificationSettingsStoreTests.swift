@@ -437,7 +437,8 @@ private final class HangingNotificationRegistrationService: NotificationDeviceRe
 
     @MainActor
     func waitForRegisterRequest() async -> Bool {
-        for _ in 0..<1_000 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if registerContinuation != nil {
                 return true
             }

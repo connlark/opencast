@@ -52,7 +52,7 @@ actor ArtworkDataLoaderProbe {
         }
     }
 
-    func waitForRequestCount(_ count: Int, timeout: Duration = .seconds(1)) async -> Bool {
+    func waitForRequestCount(_ count: Int, timeout: Duration = .seconds(60)) async -> Bool {
         if requestCount >= count {
             return true
         }

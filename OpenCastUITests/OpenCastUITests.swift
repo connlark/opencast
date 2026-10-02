@@ -1307,8 +1307,7 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Skip Forward 15 Seconds"].isHittable)
         attachSmokeScreenshot(named: "mini_player_tab_accessory_inbox_scrolled")
 
-        app.swipeDown()
-        assertExists(expanded, named: "expanded player restored on upward scroll")
+        scrollBackUpUntilExists(expanded, in: app, named: "expanded player restored on upward scroll")
         assertHittable(app.buttons["Skip Forward 15 Seconds"], named: "restored skip control")
 
         app.tabBars.buttons["Search"].tap()
@@ -4621,8 +4620,7 @@ final class OpenCastUITests: XCTestCase {
         assertHittable(playUpNext, named: "Play Up Next while inline")
         attachSmokeScreenshot(named: "up_next_accessory_inline")
 
-        app.swipeDown()
-        assertExists(expanded, named: "expanded Up Next accessory restored on upward scroll")
+        scrollBackUpUntilExists(expanded, in: app, named: "expanded Up Next accessory restored on upward scroll")
 
         playUpNext.tap()
 
@@ -8240,6 +8238,29 @@ final class OpenCastUITests: XCTestCase {
         }
 
         XCTAssertTrue(element.waitForExistence(timeout: 5), file: file, line: line)
+    }
+
+    /// Scrolls back up until `element` exists. The system re-expands the tab
+    /// bar on the way back up, but `scrollUntilExists` takes one swipe or
+    /// several depending on how far each travels, so one swipe down does not
+    /// always undo it: the list can still be mid-way with the bar minimized.
+    @MainActor
+    private func scrollBackUpUntilExists(
+        _ element: XCUIElement,
+        in app: XCUIApplication,
+        named name: String,
+        maxSwipes: Int = 4,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for _ in 0..<maxSwipes {
+            app.swipeDown()
+            if element.waitForExistence(timeout: 5) {
+                return
+            }
+        }
+
+        XCTFail("\(name) should exist", file: file, line: line)
     }
 
     /// Library rows → collection (grid under Automatic, then list) → the

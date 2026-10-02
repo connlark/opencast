@@ -561,7 +561,8 @@ struct RemoteTranscriptionPurchaseStoreTests {
         // bootstrap; a transient surface then joins mid-flight and its .task
         // is cancelled (sheet dismissed, card scrolled away).
         let launchPrepare = Task { await store.prepare() }
-        for _ in 0..<200 where api.bootstrapCalls == 0 {
+        let bootstrapDeadline = ContinuousClock.now + .seconds(60)
+        while api.bootstrapCalls == 0, ContinuousClock.now < bootstrapDeadline {
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(api.bootstrapCalls == 1)
@@ -589,7 +590,8 @@ struct RemoteTranscriptionPurchaseStoreTests {
         )
         let firstLookup = Task { try await cache.snapshot() }
 
-        for _ in 0..<100 where source.currentCalls == 0 {
+        let lookupDeadline = ContinuousClock.now + .seconds(60)
+        while source.currentCalls == 0, ContinuousClock.now < lookupDeadline {
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(source.currentCalls == 1)

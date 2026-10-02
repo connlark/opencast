@@ -106,8 +106,8 @@ struct PlaybackProgressPersistenceTests {
         try appModel.playback.load(episode, startPosition: 42)
         appModel.playback.seek(to: 100)
 
-        // The wait ceiling is a few seconds - far below the periodic
-        // interval, so only the boundary flush can satisfy it.
+        // The wait ceiling is half the periodic interval, so only the
+        // boundary flush can satisfy it.
         #expect(
             await waitUntil {
                 (try? context.fetch(FetchDescriptor<EpisodeProgressRecord>()))?
@@ -117,8 +117,11 @@ struct PlaybackProgressPersistenceTests {
         )
     }
 
+    /// Deliberately shorter than the shared helper: these waits mean "sooner
+    /// than the 60-second periodic flush", so the ceiling is half of it.
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<120 {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while ContinuousClock.now < deadline {
             if condition() {
                 return true
             }

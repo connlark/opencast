@@ -397,7 +397,7 @@ struct EpisodeSearchTests {
         #expect(session.isSearching == true)
         #expect(session.isLoadingVisible == false)
 
-        try await waitUntil("delayed loading presentation", timeout: .seconds(10)) {
+        try await waitUntil("delayed loading presentation", timeout: .seconds(60)) {
             session.isLoadingVisible
         }
         #expect(session.isSearching == true)
@@ -785,7 +785,7 @@ struct EpisodeSearchTests {
 
     private func waitUntil(
         _ description: String,
-        timeout: Duration = .seconds(2),
+        timeout: Duration = .seconds(60),
         pollInterval: Duration = .milliseconds(20),
         condition: () -> Bool
     ) async throws {

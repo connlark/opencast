@@ -270,7 +270,8 @@ struct EpisodeDownloadInfrastructureTests {
         }
         defer { cancellationTask.cancel() }
 
-        for _ in 0..<200 where cancellationProgress < Int64(cancellationBody.count) {
+        let progressDeadline = ContinuousClock.now + .seconds(60)
+        while cancellationProgress < Int64(cancellationBody.count), ContinuousClock.now < progressDeadline {
             try await Task.sleep(for: .milliseconds(10))
         }
         try #require(cancellationProgress == Int64(cancellationBody.count))

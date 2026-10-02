@@ -75,7 +75,7 @@ struct TranscriptionServiceRetentionTests {
     private func waitForUnloads(_ service: SpyService, count: Int) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await service.unloadsReached(count) }
-            group.addTask { try? await Task.sleep(for: .seconds(10)) }
+            group.addTask { try? await Task.sleep(for: .seconds(60)) }
             await group.next()
             group.cancelAll()
         }

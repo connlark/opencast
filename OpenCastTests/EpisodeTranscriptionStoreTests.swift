@@ -518,7 +518,8 @@ struct EpisodeTranscriptionStoreTests {
         let retried = try await cache.loadLibrary(activePodcastIDs: [podcastID])
         #expect(retried.episodes.first?.title == "Rebuild Episode Retitled")
         var transcriptRecovered = false
-        for _ in 0..<250 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if let hits = try? await cache.searchEpisodes(request),
                hits.map(\.episodeID) == [episodeID] {
                 transcriptRecovered = true

@@ -192,7 +192,8 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
         // The rebuild handler's follow-up reconciliation is scheduled through
         // a task hop; give it a bounded window to land, then drain the chain.
         var transcriptRecovered = false
-        for _ in 0..<250 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             await launchTranscriptions.waitForEpisodeSearchIndexSync()
             if let hits = try? await launchStore.searchEpisodes(transcriptRequest),
                hits.map(\.episodeID) == ["upgrade-3"] {

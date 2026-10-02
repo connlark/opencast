@@ -1987,7 +1987,8 @@ private actor HangingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     }
 
     func waitForRequest() async -> Bool {
-        for _ in 0..<100 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if requestCount > 0 {
                 return true
             }

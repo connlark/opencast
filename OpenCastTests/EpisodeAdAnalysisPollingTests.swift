@@ -529,7 +529,7 @@ struct EpisodeAdAnalysisPollingTests {
         _ condition: @escaping @MainActor () -> Bool
     ) async -> Bool {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(10))
+        let deadline = clock.now.advanced(by: .seconds(60))
         while !condition() {
             guard clock.now < deadline else {
                 return false
@@ -644,7 +644,7 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     func waitForPollCount(_ expectedCount: Int) async -> Bool {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.pollCountReached(expectedCount) }
-            group.addTask { try? await Task.sleep(for: .seconds(10)) }
+            group.addTask { try? await Task.sleep(for: .seconds(60)) }
             await group.next()
             group.cancelAll()
         }

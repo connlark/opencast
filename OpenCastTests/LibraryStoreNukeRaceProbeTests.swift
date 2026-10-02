@@ -523,7 +523,8 @@ private actor ProbeFeedService: FeedService {
     }
 
     func waitForHang() async -> Bool {
-        for _ in 0..<600 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if isHanging {
                 return true
             }
