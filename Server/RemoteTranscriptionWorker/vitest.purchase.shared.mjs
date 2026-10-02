@@ -98,8 +98,10 @@ export async function makePurchaseConfig({ include, extraBindings = {} }) {
             MAX_CANONICAL_DURATION_SECONDS: "20000",
             // The multi-slot test drives concurrent jobs from one account.
             MAX_ACTIVE_JOBS_PER_ACCOUNT: "4",
-            // Credit→resume in test time: retry every second, park for 30 s.
-            AWAITING_CREDITS_DEADLINE_SECONDS: "30",
+            // Credit→resume in test time: retry every second. No test here
+            // expires a parked job, so the deadline sits far beyond any
+            // test's wall time (the parked job waits on a redeem round trip).
+            AWAITING_CREDITS_DEADLINE_SECONDS: "600",
             AWAITING_CREDITS_RETRY_SECONDS: "1",
             POLL_AFTER_SECONDS: "1",
             // Fixture material for in-test JWS signing (throwaway keys).

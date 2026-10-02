@@ -57,14 +57,19 @@ const TEST_SETTLE_HOOK_INJECTED_KEY: &str = "test_settle_hook_injected";
 /// The platform's hard wall limit for one alarm invocation. An in-flight
 /// marker older than this belongs to a handler that is no longer running.
 const ALARM_MARKER_STALE_SECONDS: i64 = 15 * 60;
-/// Grace after this instance armed an alarm during which "no alarm set" is
-/// read as "due and being dispatched", not stranded. Measured in workerd: a
-/// due alarm is consumed (`getAlarm` → null) a few milliseconds *before* its
-/// handler starts, and a `/poll` landing in that gap after a zero-delay arm
-/// (from an alarm turn or from `/create`, `/source`, `/upload/complete`)
-/// would otherwise repair a healthy job and spend its one free repair. A
-/// real strand never refreshes the arm time (a CPU kill also resets it), so
-/// the grace only delays a repair by at most this long.
+/// Grace after this instance armed an alarm, and again around that alarm's
+/// due time, during which "no alarm set" is read as "due and being dispatched",
+/// not stranded (`job::alarm_dispatch_pending`). Measured in workerd: a due
+/// alarm is consumed (`getAlarm` → null) a few milliseconds *before* its
+/// handler starts — tens of milliseconds on a loaded runner — and a `/poll`
+/// landing in that gap would otherwise repair a healthy job and spend its
+/// one free repair. The arm time covers a zero-delay arm (from an alarm turn
+/// or from `/create`, `/source`, `/upload/complete`); the due time covers an
+/// alarm armed further out than the grace (a chunk retry backoff, busy
+/// pacing, a credit retry), where two such polls in one state used to fail
+/// a healthy retrying job with the internal code (2026-10-01). A real strand
+/// never refreshes either time (a CPU kill also resets them), so the grace
+/// only delays a repair by at most this long.
 const STRAND_ARM_GRACE_MILLIS: i64 = 3_000;
 const RESULT_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const BUSY_RETRY_SECONDS: u64 = 10;
@@ -149,10 +154,11 @@ pub struct TranscriptionJob {
     /// `None` while a handler runs (the platform consumes the alarm at
     /// handler start): the marker is what tells "running" from "stranded".
     alarm_started_at: Cell<Option<i64>>,
-    /// Epoch milliseconds of the last `schedule` call on this instance (see
-    /// `STRAND_ARM_GRACE_MILLIS`); the other half of "running vs stranded",
-    /// covering the dispatch gap before a due alarm's handler starts.
-    alarm_armed_at: Cell<Option<i64>>,
+    /// Epoch milliseconds of the last `schedule` call on this instance and
+    /// of the moment that alarm comes due (see `STRAND_ARM_GRACE_MILLIS`);
+    /// the other half of "running vs stranded", covering the dispatch gap
+    /// before a due alarm's handler starts.
+    alarm_armed_at: Cell<Option<(i64, i64)>>,
 }
 
 impl DurableObject for TranscriptionJob {
@@ -349,7 +355,9 @@ impl TranscriptionJob {
 
     /// The one place alarms are armed; `repair_if_stranded` relies on that.
     async fn schedule(&self, delay: Duration) -> Result<()> {
-        self.alarm_armed_at.set(Some(now_millis()));
+        let armed_at = now_millis();
+        let due_at = armed_at.saturating_add(delay.as_millis().try_into().unwrap_or(i64::MAX));
+        self.alarm_armed_at.set(Some((armed_at, due_at)));
         self.state.storage().set_alarm(delay).await
     }
 
@@ -1163,9 +1171,10 @@ impl TranscriptionJob {
     /// Called from the two places that can see such a record: `/poll` and
     /// the sweeper's `/nudge`. Stranded ⇔ no alarm is set ∧ no alarm turn is
     /// in flight (the in-memory marker, ignored once older than the
-    /// platform's 15-minute alarm wall) ∧ this instance did not arm an alarm
-    /// within `STRAND_ARM_GRACE_MILLIS` (a due alarm is consumed before its
-    /// handler starts) ∧ the state is one the invariant covers. Then, alarm
+    /// platform's 15-minute alarm wall) ∧ no alarm this instance armed is
+    /// within `STRAND_ARM_GRACE_MILLIS` of its arm or its due time (a due
+    /// alarm is consumed before its handler starts) ∧ the state is one the
+    /// invariant covers. Then, alarm
     /// first, counter second — every storage op, so the stretch stays
     /// input-gated against `/cancel` and `/source`:
     /// - parked, result, and pending-release records are only re-armed
@@ -1191,9 +1200,10 @@ impl TranscriptionJob {
                 return Ok(record);
             }
         }
-        if let Some(armed_at) = self.alarm_armed_at.get() {
-            if now_millis().saturating_sub(armed_at) < STRAND_ARM_GRACE_MILLIS {
-                // Armed moments ago: due and being dispatched, not stranded.
+        if let Some((armed_at, due_at)) = self.alarm_armed_at.get() {
+            if job::alarm_dispatch_pending(now_millis(), armed_at, due_at, STRAND_ARM_GRACE_MILLIS)
+            {
+                // Armed or due moments ago: being dispatched, not stranded.
                 return Ok(record);
             }
         }

@@ -280,6 +280,13 @@ final class DownloadStore {
             return
         }
 
+        if record.bytesReceived == 0 {
+            // Paused before the first byte: there is no partial to append
+            // to, so resuming is starting the download over.
+            retryDownload(record, modelContext: modelContext)
+            return
+        }
+
         guard let sourceURL = URL(string: record.sourceAudioURL) else {
             markResumeFailure(
                 record,
@@ -1050,12 +1057,21 @@ final class DownloadStore {
                 }
             }
 
-            let fileSize = try fileStore.promoteTemporaryFileToPausedPartial(
-                temporaryURL,
-                episodeID: episodeID
-            )
-            guard fileSize > 0,
-                  let record = try fetchRecord(episodeID: episodeID, modelContext: modelContext),
+            // A pause that lands before the first byte is still a pause, not
+            // a failure: there is nothing to resume from, so the record
+            // pauses at zero with no partial and resume starts over.
+            let fileSize: Int64
+            if let temporaryFileSize = try fileSizeIfPresent(at: temporaryURL), temporaryFileSize > 0 {
+                fileSize = try fileStore.promoteTemporaryFileToPausedPartial(
+                    temporaryURL,
+                    episodeID: episodeID
+                )
+            } else {
+                try fileStore.removeItemIfPresent(at: temporaryURL)
+                try fileStore.removePausedPartial(episodeID: episodeID)
+                fileSize = 0
+            }
+            guard let record = try fetchRecord(episodeID: episodeID, modelContext: modelContext),
                   record.state == .downloading
             else {
                 try fileStore.removePausedPartial(episodeID: episodeID)
@@ -1336,7 +1352,8 @@ final class DownloadStore {
             ReconcileFileInput(
                 episodeID: record.episodeID,
                 state: record.state,
-                localRelativePath: record.localRelativePath
+                localRelativePath: record.localRelativePath,
+                bytesReceived: record.bytesReceived
             )
         }
         let claimedRelativePaths = fetchedRecords.compactMap(\.localRelativePath)
@@ -1431,6 +1448,7 @@ final class DownloadStore {
         let episodeID: String
         let state: EpisodeDownloadState
         let localRelativePath: String?
+        let bytesReceived: Int64
     }
 
     private enum ReconcileFileOutcome: Sendable {
@@ -1489,7 +1507,11 @@ final class DownloadStore {
                     outcomes[input.episodeID] = .refreshPausedBytes(partialSize)
                 } else {
                     try fileStore.removePausedPartial(episodeID: input.episodeID)
-                    outcomes[input.episodeID] = .failPausedInterrupted
+                    // A record paused at zero never had a partial; it stays
+                    // paused. One that had bytes and lost them cannot resume.
+                    if input.bytesReceived > 0 {
+                        outcomes[input.episodeID] = .failPausedInterrupted
+                    }
                 }
             case .completed:
                 guard let relativePath = input.localRelativePath,

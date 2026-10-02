@@ -205,6 +205,26 @@ pub enum StrandRepair {
     RearmOnceThenFail,
 }
 
+/// True while "no alarm set" on an instance that armed one still reads as
+/// "due and being dispatched" rather than stranded: within `grace_millis` of
+/// the arm itself, or of the armed alarm's due time. The platform consumes a
+/// due alarm (`getAlarm` → null) before its handler starts, and for an alarm
+/// armed with a delay longer than the grace (a chunk retry backoff, the
+/// limiter's busy pacing, a credit retry) only the due time covers that gap.
+/// The due window is two-sided because the caller's clock is the time of its
+/// own last I/O and can trail the timer that consumed the alarm. An alarm
+/// that vanished well before it was due, outside the arm grace, is still
+/// stranded.
+pub fn alarm_dispatch_pending(
+    now_millis: i64,
+    armed_at_millis: i64,
+    due_at_millis: i64,
+    grace_millis: i64,
+) -> bool {
+    now_millis.saturating_sub(armed_at_millis) < grace_millis
+        || now_millis.saturating_sub(due_at_millis).saturating_abs() < grace_millis
+}
+
 /// Classifies `state` for the stranded-job repair; `None` means the record is
 /// allowed to sit with no alarm (a settled terminal record, or a cancel whose
 /// inline `finish_terminal` — retried by the client — owns the record).
@@ -1480,6 +1500,39 @@ mod tests {
         assert!(json.contains("\"stranded_repairs\":1"));
         let decoded: JobRecord = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded.stranded_repairs, 1);
+    }
+
+    /// The dispatch grace follows the alarm's due time, not only its arm
+    /// time: a poll landing just after a five-second retry backoff comes due
+    /// must not read the consumed alarm as a strand (public Server CI,
+    /// 2026-10-01: two such polls failed healthy retrying jobs).
+    #[test]
+    fn alarm_dispatch_pending_covers_arm_and_due_gaps() {
+        const GRACE: i64 = 3_000;
+        // Zero-delay arm: due equals armed, pending for the grace only.
+        assert!(alarm_dispatch_pending(10_000, 10_000, 10_000, GRACE));
+        assert!(alarm_dispatch_pending(12_999, 10_000, 10_000, GRACE));
+        assert!(!alarm_dispatch_pending(13_000, 10_000, 10_000, GRACE));
+        // Five-second backoff armed at 10 s, due at 15 s: pending inside the
+        // arm grace and again from the due time for the grace.
+        assert!(alarm_dispatch_pending(11_000, 10_000, 15_000, GRACE));
+        assert!(alarm_dispatch_pending(15_000, 10_000, 15_000, GRACE));
+        assert!(alarm_dispatch_pending(15_080, 10_000, 15_000, GRACE));
+        assert!(alarm_dispatch_pending(17_999, 10_000, 15_000, GRACE));
+        assert!(!alarm_dispatch_pending(18_000, 10_000, 15_000, GRACE));
+        // The caller's clock may trail the timer that consumed the alarm.
+        assert!(alarm_dispatch_pending(14_998, 10_000, 15_000, GRACE));
+        // An alarm lost well before it was due, past the arm grace, is a
+        // strand: a far-future result TTL alarm must stay repairable.
+        assert!(!alarm_dispatch_pending(13_000, 10_000, 20_000, GRACE));
+        assert!(!alarm_dispatch_pending(17_000, 10_000, 20_000, GRACE));
+        assert!(alarm_dispatch_pending(17_001, 10_000, 20_000, GRACE));
+        assert!(!alarm_dispatch_pending(
+            20_000,
+            10_000,
+            10_000 + 7 * 24 * 60 * 60 * 1_000,
+            GRACE
+        ));
     }
 
     /// Every declared state gets an explicit repair decision, and the two

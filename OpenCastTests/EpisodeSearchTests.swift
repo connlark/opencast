@@ -218,14 +218,20 @@ struct EpisodeSearchTests {
         #expect(resultIDs(session.results) == ["keyboard"])
         #expect(session.isSearching == false)
 
-        var didStartSearchTask = false
+        // The debounce is held on a gate instead of a timer, so "during the
+        // debounce" is a state the test stands in, not a window it has to hit.
+        let enteredDebounce = AsyncTestGate()
+        let finishDebounce = AsyncTestGate()
         let searchTask = Task {
-            didStartSearchTask = true
             await session.update(
                 episodes: episodes,
                 query: "soldering",
                 mode: .fullText,
-                debounceDuration: .seconds(1)
+                debounceDuration: .seconds(1),
+                debounceSleep: { _ in
+                    await enteredDebounce.release()
+                    await finishDebounce.wait()
+                }
             )
         }
         defer {
@@ -237,14 +243,13 @@ struct EpisodeSearchTests {
             mode: .fullText
         )
 
-        try await waitUntil("search task enters debounce") {
-            didStartSearchTask
-        }
+        await enteredDebounce.wait()
 
         #expect(resultIDs(session.results) == ["keyboard"])
         #expect(resultIDs(session.displayedResults(for: pendingKey)) == ["keyboard"])
         #expect(session.isSearching == false)
 
+        await finishDebounce.release()
         await searchTask.value
 
         #expect(resultIDs(session.results) == ["soldering"])

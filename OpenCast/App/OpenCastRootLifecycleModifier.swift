@@ -171,7 +171,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             guard !Task.isCancelled else {
                 return
             }
-            await appModel.syncStatus.refreshAccountStatus()
+            await appModel.syncStatus.refreshAccountStatusWithinPatience()
             guard !Task.isCancelled else {
                 return
             }

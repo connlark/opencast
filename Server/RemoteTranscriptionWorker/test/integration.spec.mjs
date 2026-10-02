@@ -10,10 +10,11 @@ import {
   createExecutionContext,
   createScheduledController,
   env,
+  runDurableObjectAlarm,
   runInDurableObject,
   waitOnExecutionContext,
 } from "cloudflare:test";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import RemoteTranscriptionWorker from "../build/index.js";
 
 const BASE = "https://remote-transcription.integration.test";
@@ -28,6 +29,11 @@ const BEARER = "integration-test-bearer-token";
 // at the end of the file need 352 s settled plus a 60 s reservation (+412),
 // and mixed-error recovery adds two more 60 s settlements.
 const GRANT = 7932;
+// Must match the four *_DEADLINE_SECONDS state deadlines in vitest.config.mjs.
+// They sit far beyond any test's wall time, so no test races one; the expiry
+// tests move a job's stamped deadline into the past instead (see
+// expireStateDeadline).
+const STATE_DEADLINE_SECONDS = 600;
 const ORIGIN_HOST = "https://origin.example.com";
 // The origin-fetch UA per declared media profile; pinned against the Worker's
 // constants by scripts/check-media-ua-pins.sh.
@@ -191,6 +197,22 @@ afterAll(() => {
   globalThis.fetch = realFetch;
 });
 
+// A test that fails mid-flight must not leave its job parked: with state
+// deadlines far beyond the suite's wall time, a parked job would hold one of
+// the account's two active slots and turn one failure into a cascade of 429s.
+const createdJobIds = [];
+afterEach(async ({ task }) => {
+  const jobIds = createdJobIds.splice(0);
+  if (task.result?.state !== "fail") {
+    return;
+  }
+  for (const jobId of jobIds) {
+    await post(`/v1/remote-transcription/jobs/${jobId}/cancel`, {
+      schema_version: 1,
+    }).catch(() => {});
+  }
+});
+
 function makeBytes(count, seed) {
   const bytes = new Uint8Array(count);
   let state = seed >>> 0;
@@ -285,6 +307,7 @@ async function createJob({
   expect(response.status).toBe(200);
   const body = await response.json();
   expect(body.job.job_id).toBeTruthy();
+  createdJobIds.push(body.job.job_id);
   return body.job;
 }
 
@@ -381,6 +404,42 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function jobStub(jobId) {
+  return env.TRANSCRIPTION_JOB.get(env.TRANSCRIPTION_JOB.idFromName(jobId));
+}
+
+// Deadline expiry in test time. The job must be parked in `state`; this
+// checks that the state stamped the lane deadline and armed an alarm no later
+// than it, then rewrites the persisted deadline into the past. The caller
+// picks which gate sees it: runJobAlarm for the alarm path, a route call for
+// an inline gate. Nothing here waits on a wall clock.
+async function expireStateDeadline(jobId, state) {
+  const now = Math.floor(Date.now() / 1000);
+  const parked = await runInDurableObject(jobStub(jobId), async (_, durable) => {
+    const record = JSON.parse(await durable.storage.get("job"));
+    const snapshot = {
+      state: record.state,
+      deadline: record.state_deadline_at,
+      alarm: await durable.storage.getAlarm(),
+    };
+    record.state_deadline_at = now - 1;
+    await durable.storage.put("job", JSON.stringify(record));
+    return snapshot;
+  });
+  expect(parked.state).toBe(state);
+  expect(parked.deadline).toBeGreaterThan(now + STATE_DEADLINE_SECONDS - 120);
+  expect(parked.deadline).toBeLessThanOrEqual(now + STATE_DEADLINE_SECONDS);
+  expect(parked.alarm).not.toBeNull();
+  expect(parked.alarm).toBeLessThan((parked.deadline + 1) * 1000);
+  return parked;
+}
+
+// Runs the job's armed alarm now instead of waiting for it to come due.
+// False means no alarm was armed (or its turn had already started).
+async function runJobAlarm(jobId) {
+  return runDurableObjectAlarm(jobStub(jobId));
+}
+
 async function deviceIdentity(durationSeconds) {
   originSha256 ??= await sha256Hex(originBytes);
   return {
@@ -421,10 +480,8 @@ describe("remote transcription dev lane", () => {
   });
 
   it("runs create -> hash match -> reserve -> chunk -> fake AI -> stitch -> result -> ack with verified deletes", async () => {
-    // Precompute the deterministic matching identity (a 1 MiB WebCrypto
-    // digest) BEFORE creating the job so hashing cannot eat into the
-    // deliberately short two-second waiting deadline; report immediately
-    // after observing the waiting state.
+    // Report only after observing the waiting state, so this exercises the
+    // inline match on /source rather than the staging turn's own evaluation.
     const source = await deviceIdentity(600);
     const matchedBefore =
       (await counterValues(["source_matched"])).source_matched ?? 0;
@@ -537,10 +594,9 @@ describe("remote transcription dev lane", () => {
   });
 
   it("routes a hash mismatch to exact-device upload and transcribes the uploaded bytes", async () => {
-    // The device's copy (a DAI variant): what actually gets uploaded.
-    // Precomputed before the job exists so the report can land inside the
-    // two-second waiting deadline, after explicitly observing the waiting
-    // state — this exercises the inline mismatch path, not the alarm one.
+    // The device's copy (a DAI variant): what actually gets uploaded. The
+    // report lands after explicitly observing the waiting state — this
+    // exercises the inline mismatch path, not the alarm one.
     const deviceBytes = makeBytes(12 * 1024 * 1024 + 512 * 1024, 23);
     const deviceIdentityMismatch = {
       sha256: await sha256Hex(deviceBytes),
@@ -713,11 +769,12 @@ describe("remote transcription dev lane", () => {
       durationSeconds: 90,
     });
     await waitForState(job.job_id, ["waiting_for_device_source"]);
-    // Sleep past WAITING_FOR_DEVICE_SOURCE_DEADLINE_SECONDS (2 s here).
-    // Whichever side wins the race — the deadline alarm or the inline
-    // deadline gate on /source — a matching report must expire the job,
-    // never match and advance it.
-    await sleep(2_500);
+    // The deadline passes with its alarm still armed for the original time,
+    // so the inline deadline gate on /source is the only thing that can see
+    // it: a matching report must expire the job, never match and advance it.
+    // (The alarm gate has its own test, "expires waiting_for_device_source
+    // at its deadline".)
+    await expireStateDeadline(job.job_id, "waiting_for_device_source");
     const late = await reportSource(job.job_id, source);
     expect(late.state).toBe("cancelled");
     expect(late.error.code).toBe("deadline_expired");
@@ -745,17 +802,26 @@ describe("remote transcription dev lane", () => {
     // The injected failure lands on the request (a 500-class response or a
     // propagated worker exception, depending on runtime plumbing); the
     // armed safety alarm — not the app, and not the twelve-hour deadline —
-    // must finish the mismatch routing (ALARM_RETRY_SECONDS=1 here).
+    // must finish the mismatch routing.
     const response = await post(
       `/v1/remote-transcription/jobs/${job.job_id}/source`,
       { schema_version: 1, source_identity: identity },
     ).catch(() => ({ status: 500 }));
     expect(response.status).toBeGreaterThanOrEqual(500);
-    const required = await waitForState(
-      job.job_id,
-      ["exact_upload_required"],
-      15_000,
-    );
+    // Run that alarm now rather than waiting out ALARM_RETRY_SECONDS. If it
+    // came due on its own first, its turn has already routed the job and
+    // this runs the upload-deadline alarm early, which only re-arms it.
+    // Nothing else can move the job: a poll never advances a state, and the
+    // waiting deadline is STATE_DEADLINE_SECONDS away (this test used to
+    // race a two-second one and lost on slow runners, 2026-09-10 and
+    // 2026-09-26).
+    await runJobAlarm(job.job_id);
+    const required = await waitForState(job.job_id, [
+      "exact_upload_required",
+      "cancelled",
+      "failed",
+    ]);
+    expect(required.job.state).toBe("exact_upload_required");
     expect(required.job.error).toBeFalsy();
     expect(await bucketKeys(`raw/${job.job_id}/`)).toEqual([]);
     await post(`/v1/remote-transcription/jobs/${job.job_id}/cancel`, {
@@ -910,8 +976,12 @@ describe("remote transcription dev lane", () => {
       enclosureUrl: FAILING_ORIGIN_URL,
     });
     await waitForState(job.job_id, ["exact_upload_required"]);
-    // EXACT_UPLOAD_REQUIRED_DEADLINE_SECONDS=4 in this suite.
-    const expired = await waitForState(job.job_id, ["cancelled"], 15_000);
+    const parked = await expireStateDeadline(job.job_id, "exact_upload_required");
+    // Nothing drives this state server-side: its alarm is the deadline.
+    expect(parked.alarm).toBeGreaterThan((parked.deadline - 1) * 1000);
+    expect(await runJobAlarm(job.job_id)).toBe(true);
+    const expired = await pollJob(job.job_id);
+    expect(expired.job.state).toBe("cancelled");
     expect(expired.job.error.code).toBe("deadline_expired");
     await expectJobStorageEmpty(job.job_id);
   });
@@ -1041,8 +1111,12 @@ describe("remote transcription dev lane", () => {
     await reportSource(job.job_id, await deviceIdentity(7000));
     await waitForState(job.job_id, ["awaiting_credits"]);
 
-    // Deadline (2s in this suite) drives the normal cancellation path.
-    const expired = await waitForState(job.job_id, ["cancelled"]);
+    // The deadline drives the normal cancellation path (the armed alarm is
+    // the earlier of the credit retry and the deadline).
+    await expireStateDeadline(job.job_id, "awaiting_credits");
+    expect(await runJobAlarm(job.job_id)).toBe(true);
+    const expired = await pollJob(job.job_id);
+    expect(expired.job.state).toBe("cancelled");
     expect(expired.job.error.code).toBe("deadline_expired");
     await expectJobStorageEmpty(job.job_id);
     expect((await bootstrapBalance()).balance.available_seconds).toBe(GRANT - 1200);
@@ -1103,7 +1177,14 @@ describe("remote transcription dev lane", () => {
       episodeId: "ep-deadline-1",
       durationSeconds: 90,
     });
-    const expired = await waitForState(job.job_id, ["cancelled"]);
+    await waitForState(job.job_id, ["waiting_for_device_source"]);
+    const parked = await expireStateDeadline(job.job_id, "waiting_for_device_source");
+    // No report ever arrives: the alarm armed at the deadline is what
+    // expires the job.
+    expect(parked.alarm).toBeGreaterThan((parked.deadline - 1) * 1000);
+    expect(await runJobAlarm(job.job_id)).toBe(true);
+    const expired = await pollJob(job.job_id);
+    expect(expired.job.state).toBe("cancelled");
     expect(expired.job.error.code).toBe("deadline_expired");
     await expectJobStorageEmpty(job.job_id);
   });
@@ -1274,7 +1355,11 @@ describe("remote transcription dev lane", () => {
       clientRequestId: "e2e-overlap-4",
       episodeId: "ep-overlap-4",
       durationSeconds: 900,
-      languageCode: "fake:mlat=1000;latency=500",
+      // Two seconds per chunk write: the first poll has 2.5 s to see
+      // `chunking` before any chunk completes, and the "completed while
+      // still chunking" observation below has 5.5 s. At mlat=1000 those
+      // windows were 1.5 s and 2.5 s, a couple of slow polls wide.
+      languageCode: "fake:mlat=2000;latency=500",
     });
     await reportSource(job.job_id, await deviceIdentity(900));
     const chunking = await waitForState(job.job_id, ["chunking"]);
@@ -1314,7 +1399,7 @@ describe("remote transcription dev lane", () => {
       schema_version: 1,
     });
     await expectJobStorageEmpty(job.job_id);
-  });
+  }, 60_000);
 
   it("keeps the pass-0 chunk-then-transcribe walk at CHUNK_AI_CONCURRENCY=1", async () => {
     const job = await createJob({
@@ -2120,13 +2205,11 @@ describe("remote transcription dev lane", () => {
       durationSeconds: 300,
       enclosureUrl: GATED_ORIGIN_URL,
     });
-    await waitForState(job.job_id, ["staging_origin"]);
-
     // Never release the gate: the stalled-but-open body must trip the 4 s
     // ORIGIN_FETCH_WALL_SECONDS budget (pre-fix, stream.next() parked
     // unbounded and the job rode the 3600 s staging deadline) and route to
     // the exact-upload fallback through the existing failure arm.
-    const routed = await waitForState(job.job_id, ["exact_upload_required"], 10_000);
+    const routed = await waitForState(job.job_id, ["exact_upload_required"]);
     expect(routed.job.error).toBeFalsy();
 
     const cancelResponse = await post(
@@ -2176,10 +2259,6 @@ describe("remote transcription dev lane", () => {
   // pinning the account's slot. `fake:strand=N` deletes the alarm on the
   // first N active-work alarm turns — the only deterministic way to strand
   // an active state — and the next poll or the hourly sweep repairs it.
-
-  function jobStub(jobId) {
-    return env.TRANSCRIPTION_JOB.get(env.TRANSCRIPTION_JOB.idFromName(jobId));
-  }
 
   // The repair treats an alarm armed by the object within this window as
   // "due and being dispatched" (workerd consumes a due alarm a few ms before
@@ -2479,6 +2558,22 @@ describe("remote transcription dev lane", () => {
   const DECODE_REJECTED =
     "AiError: 3030: Failed to decode audio file. Ensure it is a valid audio format.";
 
+  // Every retry backoff arms an alarm several seconds out. A poll landing
+  // just after one comes due, before its handler starts, used to read the
+  // consumed alarm as a strand; two of those failed a healthy job with
+  // internal_error (public Server CI, 2026-10-01). None of these jobs ever
+  // loses its alarm, so the repair counter must not move.
+  async function strandRepairs() {
+    return (await counterValues(["stranded_job_rearmed"])).stranded_job_rearmed ?? 0;
+  }
+
+  // These tests wait out real retry backoffs (5-7 s of jitter each, three to
+  // five per job), which no seam shortens: about 20 s on the public runner,
+  // up to 35 s of backoff alone at the worst jitter. Budgets are three times
+  // the slowest observed pass, inside a test timeout that outlasts them so a
+  // miss reports the job's last state instead of a bare timeout.
+  const RETRY_WAIT_MS = 75_000;
+
   it("retries decode rejections past the retry-audio ceiling and completes", async () => {
     // Two chunks (300 s + 52 s): the ceiling is max(1.2 × 352, 352 + 600) + 2
     // = 954 s, so three 300 s chunk-0 attempts charged against it (plus the
@@ -2488,6 +2583,7 @@ describe("remote transcription dev lane", () => {
     const rejectedBefore =
       (await counterValues(["ai_errors_decode_rejected"]))
         .ai_errors_decode_rejected ?? 0;
+    const repairsBefore = await strandRepairs();
     const job = await createJob({
       clientRequestId: "e2e-decode-reject-1",
       episodeId: "ep-decode-reject-1",
@@ -2495,7 +2591,7 @@ describe("remote transcription dev lane", () => {
       languageCode: `fake:fail=0:3:${DECODE_REJECTED}`,
     });
     await reportSource(job.job_id, await deviceIdentity(352));
-    const ready = await waitForState(job.job_id, ["result_ready"], 50_000);
+    const ready = await waitForState(job.job_id, ["result_ready"], RETRY_WAIT_MS);
     expect(ready.job.progress.chunks_completed).toBe(2);
     const spans = [...ready.job.phase_timestamps.chunks].sort(
       (a, b) => a.index - b.index,
@@ -2503,6 +2599,7 @@ describe("remote transcription dev lane", () => {
     expect(spans.map((span) => span.failed_attempts)).toEqual([3, 0]);
     const counters = await counterValues(["ai_errors_decode_rejected"]);
     expect(counters.ai_errors_decode_rejected).toBe(rejectedBefore + 3);
+    expect(await strandRepairs()).toBe(repairsBefore);
 
     await post(`/v1/remote-transcription/jobs/${job.job_id}/ack`, {
       schema_version: 1,
@@ -2512,10 +2609,11 @@ describe("remote transcription dev lane", () => {
     expect(after.reserved_seconds).toBe(before.reserved_seconds);
     // Charged once for the episode; rejected attempts cost the customer nothing.
     expect(after.available_seconds).toBe(before.available_seconds - 352);
-  }, 60_000);
+  }, 90_000);
 
   it("fails closed once decode rejections exhaust their own cap", async () => {
     const before = (await bootstrapBalance()).balance;
+    const repairsBefore = await strandRepairs();
     const job = await createJob({
       clientRequestId: "e2e-decode-reject-2",
       episodeId: "ep-decode-reject-2",
@@ -2523,14 +2621,15 @@ describe("remote transcription dev lane", () => {
       languageCode: `fake:fail=0:always:${DECODE_REJECTED}`,
     });
     await reportSource(job.job_id, await deviceIdentity(60));
-    const failed = await waitForState(job.job_id, ["failed"], 50_000);
+    const failed = await waitForState(job.job_id, ["failed"], RETRY_WAIT_MS);
     expect(failed.job.error.code).toBe("transcription_failed");
     expect(failed.job.phase_timestamps.chunks[0].failed_attempts).toBe(4);
+    expect(await strandRepairs()).toBe(repairsBefore);
     await expectJobStorageEmpty(job.job_id);
     const after = (await bootstrapBalance()).balance;
     expect(after.reserved_seconds).toBe(before.reserved_seconds);
     expect(after.available_seconds).toBe(before.available_seconds);
-  }, 60_000);
+  }, 90_000);
 
   it.each([
     {
@@ -2582,6 +2681,7 @@ describe("remote transcription dev lane", () => {
     decodeAttempts, retryableAttempts,
   }) => {
     const before = (await bootstrapBalance()).balance;
+    const repairsBefore = await strandRepairs();
     const job = await createJob({
       clientRequestId: `mixed-${id}`,
       episodeId: `mixed-${id}`,
@@ -2601,7 +2701,8 @@ describe("remote transcription dev lane", () => {
       record.language_code = `fake:${settings};fail=0:${nextCount}:${nextError}`;
       await state.storage.put("job", JSON.stringify(record));
     });
-    const result = await waitForState(job.job_id, ["failed", "result_ready"], 45_000);
+    const result = await waitForState(job.job_id, ["failed", "result_ready"], RETRY_WAIT_MS);
+    expect(await strandRepairs()).toBe(repairsBefore);
     expect(result.job.state).toBe(expectedState);
     expect(result.job.phase_timestamps.chunks[0].failed_attempts)
       .toBe(decodeAttempts + retryableAttempts);
@@ -2623,7 +2724,7 @@ describe("remote transcription dev lane", () => {
     expect(after.reserved_seconds).toBe(before.reserved_seconds);
     expect(after.available_seconds)
       .toBe(before.available_seconds - (expectedState === "result_ready" ? 60 : 0));
-  }, 60_000);
+  }, 120_000);
 
   it("scheduled sweeper alerts on job failures since the last alert", async () => {
     const before = await counterValues(["jobs_failed", "jobs_failed_alerted"]);

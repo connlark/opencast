@@ -271,9 +271,13 @@ struct DataNukeTests {
 
         // The first explicit run parks inside the hanging client; the second
         // queues behind it, leaving a suspended drain holding a pending
-        // episode when the nuke starts.
+        // episode when the nuke starts. Wait for the client call itself:
+        // the run reports isRunning before it reaches the client, and a nuke
+        // that lands in that gap cancels a run that never called it.
         appModel.generateChaptersAndSummary(episodeID: episodeID, modelContext: context)
-        #expect(await waitUntil { transcriptAnalyses.isRunning(for: episodeID) })
+        try #require(await waitUntil {
+            transcriptAnalyses.isRunning(for: episodeID) && client.analyzeCallCount == 1
+        })
         appModel.generateChaptersAndSummary(episodeID: episodeID, modelContext: context)
 
         try await appModel.nukeAllData(modelContext: context)
@@ -845,8 +849,12 @@ struct DataNukeTests {
         return url
     }
 
+    // A wall-clock deadline, not an iteration count: the awaited work runs
+    // off the main actor and can take many seconds on a slow runner, and
+    // giving up early only makes the test act before its precondition holds.
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<100 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if condition() {
                 return true
             }

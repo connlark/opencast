@@ -5,6 +5,11 @@ import SwiftData
 @Observable
 final class SyncStatusStore {
     private static let accountStatusRefreshInterval: TimeInterval = 30
+    /// How long launch and foreground work waits for an account answer before
+    /// carrying on without one. The check is a system round trip that
+    /// normally answers in milliseconds and has taken over 30 seconds on a
+    /// cold system; nothing the app shows should hang on it for that long.
+    static let defaultAccountStatusPatience: Duration = .seconds(10)
 
     private(set) var accountStatus: SyncAccountStatus = .notChecked
     private(set) var libraryActivity: SyncLibraryActivity = .idle
@@ -17,15 +22,47 @@ final class SyncStatusStore {
 
     @ObservationIgnored private let accountStatusProvider: any CloudKitAccountStatusProviding
     @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private let accountStatusPatience: Duration
     @ObservationIgnored private var accountStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var lastAccountStatusRefreshAt: Date?
 
     init(
         accountStatusProvider: any CloudKitAccountStatusProviding = CloudKitAccountStatusProvider(),
-        now: @escaping () -> Date = { Date.now }
+        now: @escaping () -> Date = { Date.now },
+        accountStatusPatience: Duration = SyncStatusStore.defaultAccountStatusPatience
     ) {
         self.accountStatusProvider = accountStatusProvider
         self.now = now
+        self.accountStatusPatience = accountStatusPatience
+    }
+
+    /// Refreshes the account status, waiting for the answer only as long as
+    /// the store's patience. A check that has not answered by then keeps
+    /// running and publishes its status whenever it arrives; the caller gets
+    /// the status known so far (`.checking` on a first check) and moves on.
+    @discardableResult
+    func refreshAccountStatusWithinPatience(force: Bool = false) async -> SyncAccountStatus {
+        guard accountStatusRefreshTask != nil || force || shouldRefreshAccountStatus() else {
+            return accountStatus
+        }
+
+        let refresh = Task { [self] in
+            await refreshAccountStatus(force: force)
+        }
+        let wait = AccountStatusWait()
+        let patience = accountStatusPatience
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let timeout = Task {
+                try? await Task.sleep(for: patience)
+                wait.finish(continuation)
+            }
+            Task {
+                _ = await refresh.value
+                timeout.cancel()
+                wait.finish(continuation)
+            }
+        }
+        return accountStatus
     }
 
     @discardableResult
@@ -148,5 +185,20 @@ final class SyncStatusStore {
         if accountStatus != status {
             accountStatus = status
         }
+    }
+}
+
+/// Resumes a patience-bounded account wait exactly once, whichever of the
+/// answer and the timeout comes first.
+private final class AccountStatusWait {
+    private var isFinished = false
+
+    func finish(_ continuation: CheckedContinuation<Void, Never>) {
+        guard !isFinished else {
+            return
+        }
+
+        isFinished = true
+        continuation.resume()
     }
 }

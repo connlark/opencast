@@ -36,6 +36,11 @@ struct OpenCastLaunchConfiguration {
     var appStoreSoundLabRevealProgress: Double?
     var uiTestLibraryLoadDelayMilliseconds: Int?
     var uiTestCloudKitAccountStatus: SyncAccountStatus?
+    /// UI-test seam: holds the fixed account status back, so a test can show
+    /// what the app does while a slow iCloud account check is outstanding.
+    var uiTestCloudKitAccountStatusDelayMilliseconds: Int?
+    /// UI-test seam: replaces how long launch work waits for that answer.
+    var uiTestCloudKitAccountStatusPatienceMilliseconds: Int?
     var usesUITestSeedFeedRefreshService: Bool
     // Search cold-start probe flags are Release-capable benchmark seams, so
     // unlike the seams above they are deliberately not gated on UI testing.
@@ -130,6 +135,16 @@ struct OpenCastLaunchConfiguration {
         let uiTestCloudKitAccountStatus = isUITesting
             ? Self.uiTestCloudKitAccountStatus(environment: environment)
             : nil
+        let uiTestCloudKitAccountStatusDelayMilliseconds = isUITesting
+            ? Self.positiveMilliseconds(
+                environment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_DELAY_MILLISECONDS"]
+            )
+            : nil
+        let uiTestCloudKitAccountStatusPatienceMilliseconds = isUITesting
+            ? Self.positiveMilliseconds(
+                environment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_PATIENCE_MILLISECONDS"]
+            )
+            : nil
         let usesUITestSeedFeedRefreshService = isUITesting
             && environment["OPENCAST_UI_TEST_REFRESH_SEED_FEED"] == "1"
         #if DEBUG
@@ -181,6 +196,8 @@ struct OpenCastLaunchConfiguration {
             appStoreSoundLabRevealProgress: appStoreSoundLabRevealProgress,
             uiTestLibraryLoadDelayMilliseconds: uiTestLibraryLoadDelayMilliseconds,
             uiTestCloudKitAccountStatus: uiTestCloudKitAccountStatus,
+            uiTestCloudKitAccountStatusDelayMilliseconds: uiTestCloudKitAccountStatusDelayMilliseconds,
+            uiTestCloudKitAccountStatusPatienceMilliseconds: uiTestCloudKitAccountStatusPatienceMilliseconds,
             usesUITestSeedFeedRefreshService: usesUITestSeedFeedRefreshService,
             runsSearchColdStartProbe: arguments.contains(
                 SearchColdStartProbe.probeArgument
@@ -196,7 +213,11 @@ struct OpenCastLaunchConfiguration {
     }
 
     private static func uiTestLibraryLoadDelayMilliseconds(environment: [String: String]) -> Int? {
-        guard let rawValue = environment["OPENCAST_UI_TEST_LIBRARY_LOAD_DELAY_MILLISECONDS"],
+        positiveMilliseconds(environment["OPENCAST_UI_TEST_LIBRARY_LOAD_DELAY_MILLISECONDS"])
+    }
+
+    private static func positiveMilliseconds(_ rawValue: String?) -> Int? {
+        guard let rawValue,
               let milliseconds = Int(rawValue),
               milliseconds > 0
         else {
@@ -206,13 +227,19 @@ struct OpenCastLaunchConfiguration {
         return milliseconds
     }
 
+    // UI testing runs on an in-memory store that never syncs, so the account
+    // status is fixed instead of asked of CloudKit: launch setup waits for
+    // that answer, and on a freshly booted simulator the real check has taken
+    // over 30 seconds. "system" opts back into the real check.
     private static func uiTestCloudKitAccountStatus(environment: [String: String]) -> SyncAccountStatus? {
         guard let rawValue = environment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS"]?.lowercased()
         else {
-            return nil
+            return .noAccount
         }
 
         switch rawValue {
+        case "system":
+            return nil
         case "available":
             return .available
         case "noaccount", "no-account", "no_account":
@@ -224,7 +251,7 @@ struct OpenCastLaunchConfiguration {
         case "temporarilyunavailable", "temporarily-unavailable", "temporarily_unavailable":
             return .temporarilyUnavailable("UI test iCloud account status override.")
         default:
-            return nil
+            return .noAccount
         }
     }
 }

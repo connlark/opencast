@@ -33,7 +33,8 @@ final class EpisodeSearchSession {
         indexedSearchProvider: (() async -> [EpisodeSearchIndexHit]?)? = nil,
         showNotesProvider: (() async -> [String: String]?)? = nil,
         loadingPresentationDelay: Duration = .milliseconds(1_500),
-        debounceDuration: Duration = .milliseconds(120)
+        debounceDuration: Duration = .milliseconds(120),
+        debounceSleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) async {
         let key = EpisodeSearchRequestKey(
             episodes: episodes,
@@ -57,7 +58,7 @@ final class EpisodeSearchSession {
 
         do {
             if debounceDuration > .zero {
-                try await Task.sleep(for: debounceDuration)
+                try await debounceSleep(debounceDuration)
             }
             try Task.checkCancellation()
         } catch {

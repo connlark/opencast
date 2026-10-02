@@ -11,6 +11,10 @@ const H=parts=>createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 const url='https://fixtures.example.invalid/notifications.xml',feed=H(['feed-v1',url]);
 const observation='00000000-0000-4000-8000-000000000001';
 const sends=[];let outcome={status:200};let duringSend;
+// The fixture APNs holds a `timeout` reply this long: twice the Worker's
+// 15-second send deadline, so a starved runner cannot let the reply win. The
+// timer is unreferenced so a reply nobody is waiting for never holds the run.
+const APNS_HANG_MS=30_000;
 const bindings={APPLE_TEAM_ID:'EXAMPLETEAM',APPLE_BUNDLE_ID:'com.example.opencast',APP_ATTEST_ENVIRONMENT:'development',APNS_ENVIRONMENT:'development',NOTIFICATION_ENVIRONMENT:'development',PUBLIC_NOTIFICATIONS_ENABLED:'true',DEBUG_ENDPOINTS_ENABLED:'false'};
 const options={cf:false,workers:[{
   name:'notifications',modulesRoot:fileURLToPath(root),modules:[...['tests/delivery-entry.mjs','adapter/index.js','build/index.js'].map(f=>({type:'ESModule',path:fileURLToPath(new URL(f,root))})),{type:'CompiledWasm',path:fileURLToPath(new URL('build/index_bg.wasm',root))}],compatibilityDate,compatibilityFlags,bindings,
@@ -20,7 +24,7 @@ const options={cf:false,workers:[{
     sends.push({headers:Object.fromEntries(request.headers),url:request.url,body:await request.json()});
     if(duringSend){const callback=duringSend;duringSend=undefined;await callback();}
     if(outcome.lost)return new Response(null,{status:200,headers:{'x-fixture-lost':'1'}});
-    if(outcome.timeout)await new Promise(resolve=>setTimeout(resolve,16000));
+    if(outcome.timeout)await new Promise(resolve=>setTimeout(resolve,APNS_HANG_MS).unref());
     return new Response(outcome.status===200?null:JSON.stringify(outcome.body??{}),{status:outcome.status,headers:outcome.headers});
   }},outboundService:()=>{throw Error('External networking forbidden');},
 },...['FeedEvents','AdAnalysisEvents','RemoteTranscriptionEvents'].map(entrypoint=>({name:entrypoint,modules:true,script:`export default { fetch(r,e) { return e.INGRESS.fetch(r); } }`,compatibilityDate,compatibilityFlags,serviceBindings:{INGRESS:{name:'notifications',entrypoint}}}))]};
@@ -109,7 +113,8 @@ try {
  });
  await check('15-second APNs deadline records uncertainty',async()=>{
    const target=await sql("SELECT * FROM n_delivery WHERE install_id='install-007'").first();outcome={status:200,timeout:true};
-   const start=performance.now();await drive('feed_polling',target.delivery_id,1,'episode');assert.ok(performance.now()-start<15900);
+   const start=performance.now();await drive('feed_polling',target.delivery_id,1,'episode');const elapsed=performance.now()-start;
+   assert.ok(elapsed>=14000,'the attempt ran to the 15-second deadline');assert.ok(elapsed<APNS_HANG_MS-1000,'the Worker deadline, not the fixture reply, ended the attempt');
    assert.equal((await sql('SELECT state FROM n_delivery WHERE delivery_id=?',target.delivery_id).first()).state,'uncertain');outcome={status:200};
  });
  await check('429 and 5xx persist retry deadlines and preserve expiry',async()=>{

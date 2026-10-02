@@ -458,6 +458,64 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSlowICloudAccountCheckDoesNotHoldOnboarding() throws {
+        let app = makeOnboardingApp(forcesDarkMode: false)
+        app.launchEnvironment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_DELAY_MILLISECONDS"] = "45000"
+        app.launch()
+
+        // Onboarding needs nothing from iCloud, so it is up long before a
+        // slow account check answers.
+        assertExists(
+            app.staticTexts["Welcome to opencast!"],
+            named: "onboarding welcome during a slow iCloud account check",
+            timeout: 20
+        )
+    }
+
+    @MainActor
+    func testEmptyLibraryNamesTheICloudAccountCheckWhileItIsPending() throws {
+        let app = makeCompletedOnboardingApp()
+        app.launchEnvironment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_DELAY_MILLISECONDS"] = "30000"
+        // Patience longer than the delay, so this run waits the check out.
+        app.launchEnvironment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_PATIENCE_MILLISECONDS"] = "60000"
+        app.launch()
+
+        openLibrary(in: app)
+        // While the account check is outstanding the empty Library says what
+        // it is waiting for, not the label of the step that ran before it.
+        assertExists(app.staticTexts["Checking iCloud"], named: "account check label during a slow iCloud check")
+        XCTAssertFalse(
+            app.staticTexts["Cleaning Up Sync"].exists,
+            "The duplicate-repair label must not stand in for the iCloud account check."
+        )
+        assertExists(
+            app.staticTexts["No Subscriptions"],
+            named: "empty Library once the account check answers",
+            timeout: 45
+        )
+    }
+
+    @MainActor
+    func testEmptyLibraryStopsWaitingForAnICloudAccountCheckThatDoesNotAnswer() throws {
+        let app = makeCompletedOnboardingApp()
+        // No answer for the length of the test: only the app's own patience
+        // can bring the empty state back.
+        app.launchEnvironment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_DELAY_MILLISECONDS"] = "600000"
+        app.launch()
+
+        openLibrary(in: app)
+        assertExists(
+            app.staticTexts["No Subscriptions"],
+            named: "empty Library while the iCloud account check is still unanswered",
+            timeout: 40
+        )
+        assertExists(
+            app.buttons["Library Empty Add Podcast"],
+            named: "Add Podcast while the iCloud account check is still unanswered"
+        )
+    }
+
+    @MainActor
     func testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty() throws {
         let app = makeCompletedOnboardingApp(libraryLoadDelayMilliseconds: 6_000)
         app.launchEnvironment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS"] = "noAccount"

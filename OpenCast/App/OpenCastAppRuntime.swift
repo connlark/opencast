@@ -220,7 +220,12 @@ final class OpenCastAppRuntime {
         #if DEBUG
         if let status = launchConfiguration.uiTestCloudKitAccountStatus {
             return SyncStatusStore(
-                accountStatusProvider: OpenCastUITestCloudKitAccountStatusProvider(status: status)
+                accountStatusProvider: OpenCastUITestCloudKitAccountStatusProvider(
+                    status: status,
+                    delay: .milliseconds(launchConfiguration.uiTestCloudKitAccountStatusDelayMilliseconds ?? 0)
+                ),
+                accountStatusPatience: launchConfiguration.uiTestCloudKitAccountStatusPatienceMilliseconds
+                    .map { .milliseconds($0) } ?? SyncStatusStore.defaultAccountStatusPatience
             )
         }
         #endif

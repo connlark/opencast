@@ -252,6 +252,54 @@ struct OpenCastLaunchConfigurationTests {
         #expect(enabledConfiguration.uiTestCloudKitAccountStatus == .noAccount)
     }
 
+    @Test("The UI-test CloudKit account status delay requires UI testing mode and a positive value")
+    func uiTestCloudKitAccountStatusDelayRequiresUITestingMode() {
+        func delay(_ arguments: [String], _ rawValue: String) -> Int? {
+            OpenCastLaunchConfiguration.resolving(
+                arguments: arguments,
+                environment: ["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_DELAY_MILLISECONDS": rawValue]
+            ).uiTestCloudKitAccountStatusDelayMilliseconds
+        }
+
+        #expect(delay(["OpenCast"], "30000") == nil)
+        #expect(delay(["OpenCast", "--opencast-ui-testing"], "30000") == 30_000)
+        #expect(delay(["OpenCast", "--opencast-ui-testing"], "0") == nil)
+        #expect(delay(["OpenCast", "--opencast-ui-testing"], "soon") == nil)
+    }
+
+    @Test("The UI-test CloudKit account status patience requires UI testing mode and a positive value")
+    func uiTestCloudKitAccountStatusPatienceRequiresUITestingMode() {
+        func patience(_ arguments: [String], _ rawValue: String) -> Int? {
+            OpenCastLaunchConfiguration.resolving(
+                arguments: arguments,
+                environment: ["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_PATIENCE_MILLISECONDS": rawValue]
+            ).uiTestCloudKitAccountStatusPatienceMilliseconds
+        }
+
+        #expect(patience(["OpenCast"], "60000") == nil)
+        #expect(patience(["OpenCast", "--opencast-ui-testing"], "60000") == 60_000)
+        #expect(patience(["OpenCast", "--opencast-ui-testing"], "-5") == nil)
+    }
+
+    @Test("UI testing never waits on the real CloudKit account check unless asked to")
+    func uiTestingDefaultsToAFixedCloudKitAccountStatus() {
+        func status(_ override: String?) -> SyncAccountStatus? {
+            OpenCastLaunchConfiguration.resolving(
+                arguments: ["OpenCast", "--opencast-ui-testing"],
+                environment: override.map { ["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS": $0] } ?? [:]
+            ).uiTestCloudKitAccountStatus
+        }
+
+        #expect(status(nil) == .noAccount)
+        #expect(status("available") == .available)
+        #expect(status("not-a-status") == .noAccount)
+        #expect(status("system") == nil)
+        #expect(
+            OpenCastLaunchConfiguration.resolving(arguments: ["OpenCast"], environment: [:])
+                .uiTestCloudKitAccountStatus == nil
+        )
+    }
+
     @Test("UI-test diagnostics status exposure is explicit")
     func uiTestDiagnosticsStatusExposureIsExplicit() {
         let configuration = OpenCastLaunchConfiguration.resolving(

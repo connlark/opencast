@@ -41,10 +41,13 @@ export async function workerTestConfig(overrides = {}) {
             R2_S3_ACCESS_KEY_ID: "test-access-key-id",
             R2_S3_SECRET_ACCESS_KEY: "test-secret-access-key",
             UPLOAD_PART_BYTES: "5242880",
-            // Short upload deadlines so expiry runs in test time; live tests
-            // finish their PUTs well inside these windows.
-            EXACT_UPLOAD_REQUIRED_DEADLINE_SECONDS: "4",
-            EXACT_UPLOADING_DEADLINE_SECONDS: "8",
+            // State deadlines sit far beyond any test's wall time, so a slow
+            // runner can never expire a job a test is still driving. The
+            // expiry tests rewrite the stamped deadline and run the alarm
+            // themselves (expireStateDeadline in test/integration.spec.mjs,
+            // whose STATE_DEADLINE_SECONDS must match these four).
+            EXACT_UPLOAD_REQUIRED_DEADLINE_SECONDS: "600",
+            EXACT_UPLOADING_DEADLINE_SECONDS: "600",
             // Fan-out default under test; individual jobs pin their own
             // concurrency through the FAKE_AI language-code hooks.
             CHUNK_AI_CONCURRENCY: "4",
@@ -56,9 +59,8 @@ export async function workerTestConfig(overrides = {}) {
             GLOBAL_INFERENCE_CONCURRENCY: "1",
             MAX_ACTIVE_JOBS_PER_ACCOUNT: "2",
             QUEUE_DEFAULT_REMAINING_SECONDS: "64",
-            // Short deadlines so expiry paths run in wall-clock test time.
-            WAITING_FOR_DEVICE_SOURCE_DEADLINE_SECONDS: "2",
-            AWAITING_CREDITS_DEADLINE_SECONDS: "2",
+            WAITING_FOR_DEVICE_SOURCE_DEADLINE_SECONDS: "600",
+            AWAITING_CREDITS_DEADLINE_SECONDS: "600",
             POLL_AFTER_SECONDS: "1",
             PUSHOVER_APP_TOKEN: "test-pushover-token",
             PUSHOVER_USER_KEY: "test-pushover-user",

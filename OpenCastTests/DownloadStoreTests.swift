@@ -730,8 +730,11 @@ struct DownloadStoreTests {
         )
         let episode = makeEpisode(episodeID: "url-session-pause")
 
+        // This test is about a partial with bytes in it, so the stubbed body
+        // being on disk is a precondition; a pause before the first byte has
+        // its own tests below.
         store.startDownload(for: episode, modelContext: context)
-        #expect(await waitUntil {
+        try #require(await waitUntil {
             store.byteProgress(for: episode.episodeID)?.bytesReceived == Int64(receivedByteCount)
         })
 
@@ -743,6 +746,77 @@ struct DownloadStoreTests {
         #expect(try fileStore.fileSize(
             at: fileStore.pausedPartialFileURL(episodeID: episode.episodeID)
         ) == Int64(receivedByteCount))
+    }
+
+    @Test("Pausing before the first byte pauses at zero, survives reload, and resume starts over")
+    func pausingBeforeTheFirstBytePausesAtZero() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
+        let downloader = SilentThenCompletingEpisodeAudioDownloader()
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "pause-at-zero")
+
+        store.startDownload(for: episode, modelContext: context)
+        try #require(await waitUntil { downloader.resumeContexts().count == 1 })
+        store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+
+        let paused = try #require(store.record(for: episode.episodeID))
+        #expect(paused.state == .paused)
+        #expect(paused.bytesReceived == 0)
+        #expect(paused.errorMessage == nil)
+        #expect(store.lastErrorMessage == nil)
+        #expect(!FileManager.default.fileExists(
+            atPath: fileStore.pausedPartialFileURL(episodeID: episode.episodeID).path
+        ))
+
+        let relaunchedStore = DownloadStore(downloader: downloader, fileStore: fileStore)
+        await relaunchedStore.load(modelContext: context)
+        #expect(relaunchedStore.record(for: episode.episodeID)?.state == .paused)
+
+        relaunchedStore.resumeDownload(episodeID: episode.episodeID, modelContext: context)
+        try await relaunchedStore.waitForDownload(episodeID: episode.episodeID)
+
+        let record = try #require(relaunchedStore.record(for: episode.episodeID))
+        let relativePath = try #require(record.localRelativePath)
+        #expect(record.state == .completed)
+        #expect(try Data(contentsOf: fileStore.fileURL(relativePath: relativePath)) == Data("abcdef".utf8))
+        // Both attempts started from byte zero: there was nothing to resume.
+        #expect(downloader.resumeContexts().allSatisfy { $0 == nil })
+        #expect(downloader.resumeContexts().count == 2)
+    }
+
+    @Test("Pausing a real URLSession stream before its body arrives is a pause, not a failure")
+    func pausingURLSessionStreamBeforeItsBodyPausesAtZero() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BodylessDownloadTestURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let store = DownloadStore(
+            downloader: URLSessionEpisodeAudioDownloader(session: session),
+            fileStore: fileStore
+        )
+        let episode = makeEpisode(episodeID: "url-session-pause-at-zero")
+
+        // No wait before the pause: whether it lands before the response or
+        // after it, no byte has arrived and the outcome has to be the same.
+        store.startDownload(for: episode, modelContext: context)
+        store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        #expect(record.state == .paused)
+        #expect(record.bytesReceived == 0)
+        #expect(record.errorMessage == nil)
+        #expect(!FileManager.default.fileExists(
+            atPath: fileStore.pausedPartialFileURL(episodeID: episode.episodeID).path
+        ))
     }
 
     @Test("Paused downloads survive reload and resume from the on-disk offset")
@@ -890,6 +964,14 @@ struct DownloadStoreTests {
             bytesReceived: 12,
             bytesExpected: 100
         ))
+        context.insert(EpisodeDownloadRecord(
+            episodeID: "paused-at-zero",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: "https://example.com/paused-at-zero.mp3",
+            state: .paused,
+            bytesReceived: 0,
+            bytesExpected: nil
+        ))
         try context.save()
 
         let store = DownloadStore(fileStore: fileStore)
@@ -912,6 +994,8 @@ struct DownloadStoreTests {
         ) == Data("resume crash partial".utf8))
         #expect(store.record(for: "missing-paused")?.state == .failed)
         #expect(store.record(for: "missing-paused")?.errorMessage == EpisodeDownloadError.interrupted.localizedDescription)
+        #expect(store.record(for: "paused-at-zero")?.state == .paused)
+        #expect(store.record(for: "paused-at-zero")?.errorMessage == nil)
     }
 
     @Test("Reconcile deletes files no download record claims")
@@ -1406,8 +1490,12 @@ struct DownloadStoreTests {
         try Data("cache".utf8).write(to: directory.appending(path: fileName), options: .atomic)
     }
 
+    // A wall-clock deadline, not an iteration count: the awaited work runs
+    // off the main actor and can take many seconds on a slow runner, and
+    // giving up early only makes the test act before its precondition holds.
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<100 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if condition() {
                 return true
             }
@@ -1537,6 +1625,40 @@ nonisolated private final class ResumableGatedEpisodeAudioDownloader: EpisodeAud
     }
 }
 
+/// First attempt: parks without a response, a file or a byte until it is
+/// cancelled. Later attempts write the whole body and return.
+nonisolated private final class SilentThenCompletingEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedResumeContexts: [EpisodeDownloadResumeContext?] = []
+
+    nonisolated func download(
+        from sourceURL: URL,
+        to temporaryURL: URL,
+        resume: EpisodeDownloadResumeContext?,
+        onResponseMetadata: @escaping @MainActor @Sendable (EpisodeDownloadResponseMetadata) -> Void,
+        progress: @escaping @MainActor @Sendable (_ bytesReceived: Int64, _ bytesExpected: Int64?) -> Void
+    ) async throws {
+        let attempt = lock.withLock {
+            recordedResumeContexts.append(resume)
+            return recordedResumeContexts.count
+        }
+        if attempt == 1 {
+            while true {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .seconds(1))
+            }
+        }
+
+        await onResponseMetadata(EpisodeDownloadResponseMetadata(entityTag: nil, lastModified: nil))
+        try Data("abcdef".utf8).write(to: temporaryURL, options: .atomic)
+        await progress(6, 6)
+    }
+
+    nonisolated func resumeContexts() -> [EpisodeDownloadResumeContext?] {
+        lock.withLock { recordedResumeContexts }
+    }
+}
+
 nonisolated private final class ResumeFailingOnceEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedResumeOffsets: [Int64] = []
@@ -1628,6 +1750,37 @@ private final class HangingDownloadTestURLProtocol: URLProtocol, @unchecked Send
 
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: fixture.body)
+    }
+
+    override func stopLoading() {
+    }
+}
+
+/// Answers with headers and then never sends a body byte. It keeps no shared
+/// state, so it cannot interfere with the configurable stub above.
+private final class BodylessDownloadTestURLProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url,
+              let response = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Length": "4096"]
+              )
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     }
 
     override func stopLoading() {

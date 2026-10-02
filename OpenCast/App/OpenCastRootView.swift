@@ -203,27 +203,36 @@ struct OpenCastRootView: View {
     private func performInitialSetup() async {
         let activePodcastIDsBeforeInitialLoad = appModel.library.activePodcastIDs
         appModel.syncStatus.beginLibraryActivity(.checkingAccount)
+        // The iCloud account check is a system round trip that can take many
+        // seconds. It starts now and is collected after the local setup:
+        // onboarding, the restored playback surface and the setup gate need
+        // nothing from it and must not wait for it.
+        Task {
+            await appModel.syncStatus.refreshAccountStatus(force: true)
+        }
         await appModel.ensurePlaybackSurfaceLoaded(modelContext: modelContext)
         appModel.appearanceSettings.load(modelContext: modelContext)
         appModel.recentSearches.load(modelContext: modelContext)
         await appModel.notificationSettings.load(modelContext: modelContext)
-        let accountStatus = await appModel.syncStatus.refreshAccountStatus(force: true)
         let didRepairSyncDuplicates = await repairSyncDuplicatesAfterImportedData()
         appModel.onboardingState.load(modelContext: modelContext)
         presentOnboardingIfNeeded()
         presentImportedSubscriptionsNotificationIfNeeded(
             addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeInitialLoad)
         )
-        if didRepairSyncDuplicates {
-            updateLibrarySyncActivityAfterImportCheck(accountStatus: accountStatus)
-        }
         appModel.restorePlaybackSurfaceIfNeeded(modelContext: modelContext)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         isInitialSetupComplete = true
         SearchColdStartProbe.recordFirstUsableIfRequested()
         initialSetupGate.complete()
         OpenCastAppRuntime.shared.performanceDiagnostics.start()
+        // Joins the check started above, for at most the store's patience:
+        // an unanswered check must not hide the empty states or hold the
+        // launch refresh below.
+        showAccountCheckWhileWaiting()
+        let accountStatus = await appModel.syncStatus.refreshAccountStatusWithinPatience()
         if didRepairSyncDuplicates {
+            updateLibrarySyncActivityAfterImportCheck(accountStatus: accountStatus)
             await hydrateImportedFeedsIfNeeded()
             updateLibrarySyncActivityAfterImportCheck(accountStatus: accountStatus)
             presentImportedSubscriptionsNotificationIfNeeded(
@@ -522,7 +531,8 @@ struct OpenCastRootView: View {
             addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeReload)
         )
         await hydrateImportedFeedsIfNeeded()
-        let accountStatus = await appModel.syncStatus.refreshAccountStatus()
+        showAccountCheckWhileWaiting()
+        let accountStatus = await appModel.syncStatus.refreshAccountStatusWithinPatience()
         updateLibrarySyncActivityAfterImportCheck(
             accountStatus: accountStatus,
             startsEmptyImportPolling: startsEmptyImportPolling
@@ -589,6 +599,17 @@ struct OpenCastRootView: View {
         }
 
         return didRefresh
+    }
+
+    /// The account check can outlast the step before it by many seconds.
+    /// A progress label left up for that wait has to name the wait, not the
+    /// step that already finished; a recorded failure stays as it is.
+    private func showAccountCheckWhileWaiting() {
+        guard appModel.syncStatus.libraryActivity.showsProgress else {
+            return
+        }
+
+        appModel.syncStatus.beginLibraryActivity(.checkingAccount)
     }
 
     private func updateLibrarySyncActivityAfterImportCheck(
