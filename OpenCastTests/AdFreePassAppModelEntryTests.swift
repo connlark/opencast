@@ -284,16 +284,6 @@ struct AdFreePassAppModelEntryTests {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
-
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<120 {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(25))
-        }
-        return condition()
-    }
 }
 
 private struct HangingEntryAudioDownloader: EpisodeAudioDownloading {

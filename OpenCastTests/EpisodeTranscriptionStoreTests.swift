@@ -2440,16 +2440,6 @@ struct EpisodeTranscriptionStoreTests {
         let data = try Data(contentsOf: url)
         return OpenCastSHA256.hash(data)
     }
-
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<100 {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return condition()
-    }
 }
 
 private enum ImproveHarnessError: Error {

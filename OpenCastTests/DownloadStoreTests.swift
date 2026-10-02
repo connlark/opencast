@@ -1489,21 +1489,6 @@ struct DownloadStoreTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("cache".utf8).write(to: directory.appending(path: fileName), options: .atomic)
     }
-
-    // A wall-clock deadline, not an iteration count: the awaited work runs
-    // off the main actor and can take many seconds on a slow runner, and
-    // giving up early only makes the test act before its precondition holds.
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now + .seconds(60)
-        while ContinuousClock.now < deadline {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-
-        return condition()
-    }
 }
 
 private struct ChunkedEpisodeAudioDownloader: EpisodeAudioDownloading {

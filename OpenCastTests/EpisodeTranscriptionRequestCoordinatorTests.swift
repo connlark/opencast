@@ -739,16 +739,6 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         return (context, episode, transcriptFiles, transcriptions, engineSettings, downloads, coordinator)
     }
 
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<200 {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return condition()
-    }
-
     private func modelSummary() -> OpenCastWhisperModelInstalledSummary {
         OpenCastWhisperModelInstalledSummary(
             modelIdentifier: OpenCastWhisperModel.tinyEnglish.rawValue,

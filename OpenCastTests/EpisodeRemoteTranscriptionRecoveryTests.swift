@@ -699,16 +699,6 @@ struct EpisodeRemoteTranscriptionRecoveryTests {
         return url
     }
 
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<250 {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return condition()
-    }
-
     /// A result whose words and normalized hash are self-consistent, so it
     /// passes mapper validation against the given identity.
     private static func result(

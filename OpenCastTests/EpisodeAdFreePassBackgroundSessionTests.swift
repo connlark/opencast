@@ -437,15 +437,6 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         )
     }
 
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<40 {
-            if condition() {
-                return true
-            }
-            await Task.yield()
-        }
-        return condition()
-    }
 }
 
 private enum ProbeError: Error {

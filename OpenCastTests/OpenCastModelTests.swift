@@ -3484,14 +3484,6 @@ struct OpenCastModelTests {
         context.insert(episode)
     }
 
-    private func waitUntil(_ condition: () -> Bool) async -> Bool {
-        for _ in 0..<10_000 {
-            if condition() { return true }
-            await Task.yield()
-        }
-        return condition()
-    }
-
     private func makeEpisodeListItem(
         episodeID: String,
         podcastID: String,

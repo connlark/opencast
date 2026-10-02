@@ -1668,16 +1668,6 @@ struct EpisodeAdAnalysisStoreTests {
         return url
     }
 
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<100 {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return condition()
-    }
-
     private func startAndWait(
         store: EpisodeAdAnalysisStore,
         transcript: EpisodeTranscriptDocument,

@@ -1312,17 +1312,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
-
-    private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<200 {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-
-        return condition()
-    }
 }
 
 // MARK: - Launch-argument UI fixtures

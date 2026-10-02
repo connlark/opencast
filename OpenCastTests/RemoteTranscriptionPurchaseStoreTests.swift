@@ -761,21 +761,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(balanceIncreaseCount == 2)
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(1),
-        condition: @escaping @MainActor () -> Bool
-    ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while clock.now < deadline {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return condition()
-    }
-
     // MARK: - Fixtures
 
     private static func makeStore(
