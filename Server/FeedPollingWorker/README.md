@@ -19,17 +19,25 @@ Cloudflare account resources, database IDs or credentials.
 
 - **Dispatch.** A one-minute dispatcher admits at most 400 due polls and 100
   maintenance feeds, rotating across origins, oldest due first. Admission is one
-  statement on `n_feed` that reserves the feed and advances its
-  `schedule_generation`; only the rows it returns become Queue messages. So
-  overlapping dispatchers need no lease, and there is no per-attempt job row.
-- **The Queue message is the lease.** It carries the feed ID, owner epoch,
-  dispatch generation, due time and step. Every write is fenced on epoch,
-  generation and eligibility, so a redelivery may repeat one conditional fetch
-  but can never publish or send twice. A failed delivery is redelivered three
-  times, sixty seconds apart; the dead-letter consumer then backs the feed off
-  from five minutes, doubling to six hours. A five-minute reservation bounds the
-  delay after a lost message. The feed row, not the message, is the recovery
-  source.
+  statement on `n_feed` that reserves the feed (`dispatch_until`); only the
+  rows it returns become Queue messages. So overlapping dispatchers need no
+  lease, and there is no per-attempt job row. A settled feed advances its
+  `schedule_generation`; a lapsed reservation is repaired under the same
+  generation.
+- **The Queue message wakes a durable feed obligation.** It carries the feed
+  ID, owner epoch, dispatch generation, due time and step. Every write is
+  fenced on epoch, generation, eligibility and an unsettled reservation, so a
+  redelivery may repeat one conditional fetch but can never publish or send
+  twice. A failed delivery is redelivered three times, sixty seconds apart; the
+  dead-letter consumer then backs the feed off from five minutes, doubling to
+  six hours. A five-minute reservation bounds the delay after a lost message:
+  its expiry permits a same-generation repair, which leaves queued copies valid
+  until the obligation settles. Each tick repairs at most 20 lapsed
+  obligations, oldest reservation first, across recurring, baseline and
+  maintenance work, before admitting new polls. An uncertain Queue send lapses
+  the reservation for repair rather than settling it, and a new generation
+  begins only after the previous obligation settles. The feed row, not the
+  message, is the recovery source.
 - **Unchanged is cheap.** A matched 304 or a semantically unchanged 200 only
   updates the schedule: three D1 rows and no R2 operation. Rows and snapshots
   are created only once the complete body differs from the published scan's
@@ -86,8 +94,8 @@ message against `opencast-notification-{event,episode,job}-<lane>` and this
 Worker's queues pair with them, so keep the names and choose only the lane
 suffix.
 
-The compatibility date is `2026-09-10`, the newest the pinned local workerd
-supports. Advance it only together with the pinned toolchain.
+The compatibility date is `2026-09-18`, matching the pinned local workerd.
+Advance it only together with the pinned toolchain.
 
 ### Enablement
 
@@ -107,7 +115,7 @@ then apply `0026` through `0028`.
 
 ### Operator alerts
 
-The dispatcher can page an operator when polling stalls. It is off until all
+The dispatcher can page an operator when polling falls behind. It is off until all
 three secrets are set on the lane:
 
 ```sh
@@ -121,10 +129,17 @@ A URL that is not `https://` is refused and logged as
 report `alerting: true` once the lane is configured. Alerts only run while
 the dispatcher itself is enabled.
 
-A stall is at least 50 healthy feeds overdue with no poll completed in five
-minutes. With alerting configured, the lane sends a one-time "armed" notice,
-then an onset alert when a stall starts, a reminder every hour while it
-lasts, and a recovery once five polls complete within five minutes. Stall
+The dispatcher alerts when at least ten healthy, previously scanned feeds are
+more than ten minutes late, or when at least 50 healthy feeds are overdue with
+no poll completed in five minutes. Feeds with publisher or handling failures,
+pending retries or origin cooldowns are not healthy, and late first scans
+(baselines) are counted separately rather than toward the ten. With alerting
+configured, the lane sends a one-time "armed" notice, then an onset alert, a
+reminder every hour while it lasts, and a recovery once no healthy scanned
+feed is over ten minutes late and five polls complete within five minutes.
+The per-minute rollup and `/stats` share these health predicates and report
+`late_600` and `late_baselines`; the rollup also counts `repairs`, and an
+obsolete delivery emits `poll_outcome` without a D1 write. Stall
 state lives in D1 and every transition is fenced there, so overlapping
 dispatchers send each alert once and a failed send is retried rather than
 lost. Alerts carry counts, seconds and the lane name only, never feed IDs or
@@ -185,7 +200,7 @@ yarn workspace @opencast/feed-polling-worker deploy:dry-run
 
 for suite in lifecycle digest-runtime review-regressions alerting \
     permit-reclaim deadline-runtime interest preparation queue evidence \
-    no-change recovery runtime cleanup equivalence; do
+    no-change recovery runtime cleanup equivalence livelock; do
   node "Server/FeedPollingWorker/tests/$suite.mjs" || break
 done
 ```
