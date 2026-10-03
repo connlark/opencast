@@ -40,7 +40,7 @@ fi
 # workspace byte-identical and installable in the public copy.
 
 # 3. Exactly one lockfile inside the workspace, owned by the root.
-extra_locks="$(git ls-files -- '*yarn.lock' ':!fastlane' | grep -v '^yarn.lock$' || true)"
+extra_locks="$(git ls-files -- '*yarn.lock' ':!fastlane' ':!notes' | grep -v '^yarn.lock$' || true)"
 if [[ -n "$extra_locks" ]]; then
   printf 'FAIL: child lockfiles are gone since the workspace migration:\n%s\n' \
     "$extra_locks" >&2
@@ -57,7 +57,7 @@ while IFS= read -r manifest; do
       status=1
     fi
   done
-done < <(git ls-files -- '*package.json' ':!fastlane')
+done < <(git ls-files -- '*package.json' ':!fastlane' ':!notes')
 
 if [[ "$status" -eq 0 ]]; then
   echo "PASS: shell scripts parse; no Yarn 1 patterns; single root lockfile; root-owned Yarn pin and Node floor"

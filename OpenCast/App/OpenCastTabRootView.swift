@@ -20,7 +20,8 @@ struct OpenCastTabRootView: View {
                 NavigationStack(path: $navigationPaths[.library]) {
                     LibraryView(
                         onAdd: onAdd,
-                        onOpenUpNext: onOpenUpNext
+                        onOpenUpNext: onOpenUpNext,
+                        onOpenPlaylist: openPlaylist(on: .library)
                     )
                     .withOpenCastDestinations(
                         onOpenEpisode: openEpisode(on: .library),

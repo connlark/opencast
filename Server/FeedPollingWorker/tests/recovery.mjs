@@ -102,7 +102,8 @@ try {
       assert.equal((await h.first('SELECT COUNT(*) AS n FROM n_observation WHERE feed_id=? AND recovery_evidence=1', feed)).n, 0, 'a crash after publication leaves no first-observed bound');
     }
     if (fault.startsWith('stale')) {
-      // Only a newer generation, issued once the reservation expires, recovers.
+      // The injected newer generation recovers through a same-generation
+      // repair when its reservation lapses; the old message stays fenced.
       await h.run('UPDATE n_feed SET lease_until=0 WHERE feed_id=? AND lease_id IS NOT NULL', feed);
       await advance(301); await h.invoke('test/dispatch'); await h.drain(); await advance(0);
     }

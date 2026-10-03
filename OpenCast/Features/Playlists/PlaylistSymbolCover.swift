@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// A smart playlist's cover: its tint as a soft top-to-bottom gradient with
-/// its symbol large and white. Like `PlaylistArtworkMosaic`, it fills the
-/// square it is offered; callers set the size and corner radius.
+/// A smart playlist's cover when no matched show has artwork: its tint as a
+/// soft top-to-bottom gradient with its symbol large and white. Like
+/// `PlaylistArtworkMosaic`, it fills the square it is offered; callers set
+/// the size and corner radius.
 struct PlaylistSymbolCover: View {
     static let defaultSymbolName = "sparkles"
     private static let symbolInsetFraction = 0.28
@@ -15,11 +16,7 @@ struct PlaylistSymbolCover: View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay {
-                LinearGradient(
-                    colors: [tint.color.mix(with: .white, by: 0.22), tint.color.mix(with: .black, by: 0.12)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                PlaylistTintGradient(tint: tint)
             }
             .overlay {
                 GeometryReader { proxy in

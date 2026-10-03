@@ -94,8 +94,8 @@ try {
   assert.equal((await h.first('SELECT dispatch_until FROM n_feed')).dispatch_until, 0);
   console.log('PASS changed 200 materializes the complete scan/preparation/drain/outbox once, fixed burst and lost receipt');
 
-  // Acknowledged-but-lost enqueue: the reservation expires, then a new
-  // generation is issued. Nothing but the feed row is the recovery source.
+  // Acknowledged-but-lost enqueue: expiry repairs the same obligation.
+  // Nothing but the feed row is the recovery source.
   await h.run('UPDATE n_feed SET due_at=?', h.now);
   await h.invoke('fault', 'lost_queue'); await h.invoke('test/dispatch');
   assert.equal((await h.polls()).length, 0);
@@ -103,7 +103,7 @@ try {
   await h.invoke('test/dispatch'); assert.equal((await h.polls()).length, 0, 'a live reservation is not re-dispatched');
   await h.invoke('clock', '301'); await h.invoke('test/dispatch');
   const recovered = await h.polls(); assert.equal(recovered.length, 1);
-  assert.equal(recovered[0].generation, reserved.schedule_generation + 1);
+  assert.equal(recovered[0].generation, reserved.schedule_generation);
   for (const message of recovered) assert.equal((await h.consume(message)).status, 200);
   assert.equal(h.fetches.length, requests + 1);
   await h.invoke('clock', '0');
@@ -112,13 +112,26 @@ try {
   await h.run('UPDATE n_feed SET due_at=?', h.now);
   await h.invoke('test/dispatch');
   const obsolete = (await h.polls())[0];
+  assert.equal(obsolete.generation, recovered[0].generation + 1, 'only dispatch after settle advances the generation');
+  const beforeStale = h.fetches.length;
+  assert.equal((await h.consume(recovered[0])).outcome, 'obsolete', 'the preceding settled cycle cannot write into the next one');
+  assert.equal(h.fetches.length, beforeStale, 'the stale settled cycle is rejected before fetch');
   await h.run('UPDATE feed_subscriptions SET notifications_enabled=0');
   requests = h.fetches.length;
   assert.equal((await h.consume(obsolete)).outcome, 'obsolete'); await h.invoke('test/dispatch');
   assert.equal(h.fetches.length, requests);
   await h.run('UPDATE feed_subscriptions SET notifications_enabled=1');
-  // Reactivation revises eligibility; an older generation or epoch stays dead.
-  await h.invoke('clock', '301'); await h.invoke('test/dispatch'); await h.polls(); await h.invoke('clock', '0');
+  // Reactivation permits current work again. Expiry repairs that obligation;
+  // manufacture a stale generation by settling it and dispatching the next.
+  await h.invoke('clock', '301'); await h.invoke('test/dispatch');
+  const reactivated = (await h.polls())[0];
+  assert.equal(reactivated.generation, obsolete.generation);
+  assert.equal((await h.consume(reactivated)).outcome, 'not_modified');
+  await h.run('UPDATE n_feed SET due_at=?', h.now);
+  await h.invoke('test/dispatch');
+  assert.equal((await h.polls())[0].generation, obsolete.generation + 1);
+  await h.invoke('clock', '0');
+  requests = h.fetches.length;
   assert.equal((await h.consume(obsolete)).outcome, 'obsolete');
   assert.equal((await h.consume({ ...obsolete, generation: obsolete.generation + 1, owner_epoch: 9 })).outcome, 'obsolete');
   for (const bad of [{ ...obsolete, schema_version: 1 }, { ...obsolete, feed_id: 'https://raw.example.com/feed' }, { ...obsolete, environment: 'production' }, { ...obsolete, url: 'x' }])

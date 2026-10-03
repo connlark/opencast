@@ -13,6 +13,10 @@ enum SheetDestination: Identifiable {
     case transcriptRecap(episodeID: String, kind: TranscriptRecapWindowKind, playhead: TimeInterval)
     case transcriptAsk(episodeID: String)
     case upNext
+    /// Presented only by `PlaylistsView`. A presenter must pass
+    /// `onChooseOrganizerShow` to `SheetDestinationView`; its default no-op
+    /// would leave the picker's rows silently inert.
+    case playlistOrganizerShowPicker
 
     var id: String {
         switch self {
@@ -40,6 +44,8 @@ enum SheetDestination: Identifiable {
             "transcriptAsk-\(episodeID)"
         case .upNext:
             "upNext"
+        case .playlistOrganizerShowPicker:
+            "playlistOrganizerShowPicker"
         }
     }
 }

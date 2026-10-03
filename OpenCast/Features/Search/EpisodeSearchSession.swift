@@ -54,6 +54,11 @@ final class EpisodeSearchSession {
         if shouldShowLoadingImmediately {
             isSearching = true
             scheduleLoadingPresentation(for: key, delay: .zero)
+        } else if !hasAnswer(compatibleWith: key) {
+            // Nothing has answered in this corpus and mode yet, so the
+            // debounce is part of the search: an empty list now means "not
+            // searched yet", not "no results".
+            isSearching = true
         }
 
         do {
@@ -182,15 +187,7 @@ final class EpisodeSearchSession {
     }
 
     func displayedResults(for key: EpisodeSearchRequestKey) -> [EpisodeSearchResult] {
-        guard let resultsKey,
-              resultsKey.corpus == key.corpus,
-              // Ignore query so same-scope typing keeps prior compatible results during debounce.
-              resultsKey.mode == key.mode
-        else {
-            return []
-        }
-
-        return results
+        hasAnswer(compatibleWith: key) ? results : []
     }
 
     func clear() {
@@ -230,6 +227,15 @@ final class EpisodeSearchSession {
         isSearching = false
         isIndexedSearchUnavailable = false
         hideLoadingPresentation()
+    }
+
+    /// Ignores the query so same-scope typing keeps prior compatible results
+    /// during debounce.
+    private func hasAnswer(compatibleWith key: EpisodeSearchRequestKey) -> Bool {
+        guard let resultsKey else {
+            return false
+        }
+        return resultsKey.corpus == key.corpus && resultsKey.mode == key.mode
     }
 
     private func shouldShowLoadingImmediately(for key: EpisodeSearchRequestKey) -> Bool {

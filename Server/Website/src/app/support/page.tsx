@@ -136,10 +136,11 @@ export default function SupportPage() {
                 Ask for a playlist in your own words, or let it suggest groups.
                 You review the drafts first: rename, reorder, or remove
                 playlists and episodes, then save the ones you want as ordinary
-                playlists. To find it, open a show&apos;s page, open the Podcast
-                Actions menu, and choose Make a Playlist… under Apple
-                Intelligence · Beta. It appears on devices that support Apple
-                Intelligence.
+                playlists. To find it, open a show&apos;s page and open the
+                Podcast Actions menu, or the Playlists screen&apos;s Add menu,
+                and choose Make a Playlist… under Apple Intelligence · Beta;
+                from the Playlists screen you then pick the show. It appears
+                on devices that support Apple Intelligence.
               </p>
               <p>
                 The show&apos;s name, its episode titles, dates, lengths and

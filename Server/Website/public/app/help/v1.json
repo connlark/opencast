@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-01T00:00:00Z",
+  "updatedAt": "2026-10-03T00:00:00Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -238,7 +238,7 @@
       "title": "Make a Playlist with Apple Intelligence",
       "symbol": "sparkles",
       "summary": "Playlists drafted from one show's episode list, on Apple Intelligence.",
-      "updatedAt": "2026-10-01T00:00:00Z",
+      "updatedAt": "2026-10-03T00:00:00Z",
       "minAppBuild": 284,
       "related": [
         "recap-and-ask"
@@ -246,7 +246,7 @@
       "blocks": [
         {
           "type": "paragraph",
-          "text": "**Make a Playlist** drafts playlists from one show's episodes, for a request you type or as suggested groups, and you choose which ones to save. On a show's page, open the **Podcast Actions** menu and choose **Make a Playlist…** under **Apple Intelligence · Beta**. It appears on devices that support Apple Intelligence, for shows with at least three episodes."
+          "text": "**Make a Playlist** drafts playlists from one show's episodes, for a request you type or as suggested groups, and you choose which ones to save. On a show's page, open the **Podcast Actions** menu, or open the Playlists screen's **Add** menu, and choose **Make a Playlist…** under **Apple Intelligence · Beta**; from the Playlists screen you then pick the show. It appears on devices that support Apple Intelligence, for shows with at least three episodes."
         },
         {
           "type": "heading",
@@ -379,7 +379,7 @@
       "title": "Share an Episode",
       "symbol": "square.and.arrow.up",
       "summary": "Send a link that plays in any browser, from the start or from where you are.",
-      "updatedAt": "2026-09-22T00:00:00Z",
+      "updatedAt": "2026-10-02T00:00:00Z",
       "minAppBuild": 274,
       "related": [],
       "blocks": [
@@ -390,7 +390,7 @@
         {
           "type": "bullets",
           "items": [
-            "Once you've started an episode, choose **Share**, then **Share from 12:34** to start the listener where you are.",
+            "Once you've started an episode, choose **Share**, then **Share from 12:34** to start the listener where you are. While it's playing, the choice reads **Share from Current Time** and starts wherever playback is when you send it.",
             "In Messages, the link shows the episode's artwork with a Play button, so it can play right in the conversation.",
             "The web player has play and pause, skip back and forward, playback speed, and a **Download** button that saves the audio file."
           ]

@@ -8,17 +8,35 @@ import Testing
 struct EpisodeShareContextTests {
     private let base = URL(string: "https://opencast.mobile/e/")!
 
-    @Test("The current episode offers its live position, floored to whole seconds")
-    func currentEpisodeUsesLivePosition() throws {
+    @Test("The paused current episode offers its player position, floored to whole seconds")
+    func pausedCurrentEpisodeUsesPlayerPosition() throws {
         let context = try #require(make(isCurrentEpisode: true, livePosition: 754.9, progress: progress(position: 12)))
 
-        #expect(context.startLabel == "12:34")
-        #expect(context.startURL?.query() == "t=754")
+        #expect(context.fixedStart?.label == "12:34")
+        #expect(context.fixedStart?.url.query() == "t=754")
         #expect(context.url.query() == nil)
-        #expect(context.startURL?.absoluteString == "\(context.url.absoluteString)?t=754")
+        #expect(context.fixedStart?.url.absoluteString == "\(context.url.absoluteString)?t=754")
     }
 
-    @Test("A finished current episode still offers its live position")
+    @Test("The playing episode offers its position when shared, so the menu never changes as it plays")
+    func playingEpisodeOffersCurrentTime() throws {
+        let context = try #require(EpisodeShareContext.make(episode: snapshot(), playhead: .playing, baseURL: base))
+
+        #expect(context.start == .currentTime)
+        #expect(context.url(startingAt: 754.9).absoluteString == "\(context.url.absoluteString)?t=754")
+        #expect(context.url(startingAt: 4_120.2).query() == "t=4120")
+    }
+
+    @Test("A Current Time link the page would ignore falls back to the plain link")
+    func currentTimeFallsBackToPlainLink() throws {
+        let context = try #require(EpisodeShareContext.make(episode: snapshot(), playhead: .playing, baseURL: base))
+
+        for position in [0, 0.9, .nan, .infinity, 86_401] as [TimeInterval] {
+            #expect(context.url(startingAt: position) == context.url)
+        }
+    }
+
+    @Test("A finished current episode still offers its player position")
     func currentEpisodeIgnoresCompletion() throws {
         let context = try #require(make(
             isCurrentEpisode: true,
@@ -26,16 +44,16 @@ struct EpisodeShareContextTests {
             progress: progress(position: 3_754, isCompleted: true)
         ))
 
-        #expect(context.startLabel == "1:02:34")
-        #expect(context.startURL?.query() == "t=3754")
+        #expect(context.fixedStart?.label == "1:02:34")
+        #expect(context.fixedStart?.url.query() == "t=3754")
     }
 
     @Test("Another episode offers its saved progress when it is visible")
     func nonCurrentEpisodeUsesSavedProgress() throws {
         let context = try #require(make(isCurrentEpisode: false, livePosition: 99, progress: progress(position: 3_754.8)))
 
-        #expect(context.startLabel == "1:02:34")
-        #expect(context.startURL?.query() == "t=3754")
+        #expect(context.fixedStart?.label == "1:02:34")
+        #expect(context.fixedStart?.url.query() == "t=3754")
     }
 
     @Test("No start link for a finished, unstarted, or barely started episode")
@@ -49,8 +67,8 @@ struct EpisodeShareContextTests {
         ]
         for (isCurrentEpisode, livePosition, progress) in cases {
             let context = try #require(make(isCurrentEpisode: isCurrentEpisode, livePosition: livePosition, progress: progress))
-            #expect(context.startURL == nil)
-            #expect(context.startLabel == nil)
+            #expect(context.fixedStart?.url == nil)
+            #expect(context.fixedStart?.label == nil)
         }
     }
 
@@ -60,23 +78,23 @@ struct EpisodeShareContextTests {
         // served file longer or shorter, so a playhead past that figure is
         // real and the page honours any start under a day.
         let nearRSSDuration = try #require(make(isCurrentEpisode: true, livePosition: 3_998.7, progress: progress(position: 0)))
-        #expect(nearRSSDuration.startURL?.query() == "t=3998")
+        #expect(nearRSSDuration.fixedStart?.url.query() == "t=3998")
 
         let pastRSSDuration = try #require(make(isCurrentEpisode: true, livePosition: 4_120.2, progress: progress(position: 0)))
-        #expect(pastRSSDuration.startURL?.query() == "t=4120")
-        #expect(pastRSSDuration.startLabel == "1:08:40")
+        #expect(pastRSSDuration.fixedStart?.url.query() == "t=4120")
+        #expect(pastRSSDuration.fixedStart?.label == "1:08:40")
 
         let savedPastRSSDuration = try #require(make(isCurrentEpisode: false, livePosition: 0, progress: progress(position: 4_120.5)))
-        #expect(savedPastRSSDuration.startURL?.query() == "t=4120")
+        #expect(savedPastRSSDuration.fixedStart?.url.query() == "t=4120")
 
         let atDay = try #require(make(isCurrentEpisode: true, livePosition: 86_400.9, progress: progress(position: 0)))
-        #expect(atDay.startURL?.query() == "t=86400")
+        #expect(atDay.fixedStart?.url.query() == "t=86400")
 
         let pastDay = try #require(make(isCurrentEpisode: true, livePosition: 86_401, progress: progress(position: 0)))
-        #expect(pastDay.startURL == nil)
+        #expect(pastDay.fixedStart?.url == nil)
 
         let absurd = try #require(make(isCurrentEpisode: false, livePosition: 0, progress: progress(position: 1e19)))
-        #expect(absurd.startURL == nil)
+        #expect(absurd.fixedStart?.url == nil)
 
         let unknownDuration = try #require(make(
             episode: snapshot(duration: nil),
@@ -84,7 +102,7 @@ struct EpisodeShareContextTests {
             livePosition: 86_401,
             progress: progress(position: 0)
         ))
-        #expect(unknownDuration.startURL == nil)
+        #expect(unknownDuration.fixedStart?.url == nil)
     }
 
     @Test("Episodes without a shareable audio URL or title produce no context")
@@ -123,9 +141,7 @@ struct EpisodeShareContextTests {
     ) -> EpisodeShareContext? {
         EpisodeShareContext.make(
             episode: episode ?? snapshot(),
-            isCurrentEpisode: isCurrentEpisode,
-            livePosition: livePosition,
-            progress: progress ?? self.progress(position: 0),
+            playhead: isCurrentEpisode ? .paused(livePosition) : .saved(progress ?? self.progress(position: 0)),
             baseURL: base
         )
     }
@@ -160,5 +176,14 @@ struct EpisodeShareContextTests {
             guid: "tag:example.com,2026:almanac:010-rubber-duck-final-witness",
             cachedAt: Date(timeIntervalSince1970: 1_778_600_000)
         )
+    }
+}
+
+private extension EpisodeShareContext {
+    var fixedStart: (url: URL, label: String)? {
+        guard case .fixed(let url, let label) = start else {
+            return nil
+        }
+        return (url, label)
     }
 }

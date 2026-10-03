@@ -20,9 +20,10 @@ try {
   // lose the in-flight continuation so only the reservation can recover it.
   await h.run('UPDATE n_feed SET eligibility_generation=eligibility_generation+1,due_at=? WHERE feed_id=?',h.now,feed);
   await h.invoke('clock','301');await h.invoke('test/dispatch');
-  assert.equal((await h.consume(old)).outcome,'obsolete','the superseded generation is fenced');
   const before=h.fetches.length;
+  assert.notEqual((await h.consume(old)).outcome,'obsolete','a retained continuation remains useful for the published drain');
   const wakes=await h.polls();assert.ok(wakes.length);
+  assert.equal(wakes[0].generation,old.generation,'repair preserves the unsettled generation');
   await h.consume(wakes[0]);
   assert.equal(h.fetches.length,before,'finish published drain before another network scan');
   await h.drain();await h.deliver(true);

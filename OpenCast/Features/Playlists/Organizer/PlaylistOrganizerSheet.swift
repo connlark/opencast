@@ -38,7 +38,7 @@ struct PlaylistOrganizerSheet: View {
                 content
             }
             .navigationTitle(PlaylistOrganizerCopy.sheetTitle)
-            .navigationSubtitle(PlaylistOrganizerCopy.betaSubtitle)
+            .navigationSubtitle(PlaylistOrganizerCopy.subtitle(showTitle: showTitle))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 toolbarContent
@@ -152,6 +152,17 @@ struct PlaylistOrganizerSheet: View {
                 appendEpisodes(episodes, toDraftWithID: request.draftID)
             }
         }
+    }
+
+    /// The captured show's title once it is prepared, so the library is
+    /// read only until then.
+    private var showTitle: String? {
+        if let show {
+            return show.title
+        }
+        let library = appModel.library
+        return library.podcastCache(for: podcastID)?.title
+            ?? library.subscriptions.first(where: { $0.feedURL == podcastID })?.title
     }
 
     private var trimmedRequest: String {

@@ -397,13 +397,7 @@ final class CarPlayInterfaceCoordinator {
         let snapshot = CarPlayBrowseModelBuilder.playlists(
             appModel.playlists.playlists,
             episodeCount: { appModel.playlistEpisodeCount(for: $0) },
-            artworkURL: { summary in
-                PlaylistCoverSources.make(
-                    summary: summary,
-                    items: appModel.playlists.itemsByPlaylistID[summary.playlistID] ?? []
-                ) { appModel.library.podcastCache(for: $0)?.artworkURL.flatMap(URL.init(string:)) }
-                    .artworkURLs.first?.absoluteString
-            },
+            artworkURL: { Self.playlistArtworkURL(for: $0, appModel: appModel) },
             limits: limits
         )
         push(snapshot) { [weak self] row in
@@ -430,6 +424,29 @@ final class CarPlayInterfaceCoordinator {
                 return
             }
         }
+    }
+
+    /// The one image a playlist row carries: a manual playlist's first cover
+    /// show, or a smart playlist's most dominant matched show. The smart
+    /// evaluation is the memo the row's episode count already read.
+    private static func playlistArtworkURL(for summary: PlaylistSummary, appModel: OpenCastAppModel) -> String? {
+        let podcastArtworkURL: (String) -> URL? = { podcastID in
+            appModel.library.podcastCache(for: podcastID)?.artworkURL.flatMap(URL.init(string:))
+        }
+        let url = switch summary.kind {
+        case .manual:
+            PlaylistCoverSources.make(
+                summary: summary,
+                items: appModel.playlists.itemsByPlaylistID[summary.playlistID] ?? [],
+                podcastArtworkURL: podcastArtworkURL
+            ).artworkURLs.first
+        case .smart:
+            SmartPlaylistCoverSources.make(
+                episodes: appModel.smartPlaylistEvaluation(for: summary).episodes,
+                podcastArtworkURL: podcastArtworkURL
+            ).artworkURLs.first
+        }
+        return url?.absoluteString
     }
 
     private func pushPlaylistEpisodes(for row: CarPlayPlaylistRow, limits: CarPlayListLimits) {

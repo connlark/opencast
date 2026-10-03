@@ -5,6 +5,7 @@ struct SheetDestinationView: View {
 
     let destination: SheetDestination
     let onDismiss: () -> Void
+    var onChooseOrganizerShow: (String) -> Void = { _ in }
 
     var body: some View {
         switch destination {
@@ -51,6 +52,10 @@ struct SheetDestinationView: View {
                 .presentationDragIndicator(.visible)
         case .upNext:
             UpNextQueueView()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        case .playlistOrganizerShowPicker:
+            PlaylistOrganizerShowPickerSheet(onChoose: onChooseOrganizerShow)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }

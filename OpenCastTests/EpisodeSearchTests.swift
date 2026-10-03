@@ -257,6 +257,49 @@ struct EpisodeSearchTests {
         #expect(session.isSearching == false)
     }
 
+    @Test("Search session treats the first query's debounce as searching, not as no results")
+    func searchSessionTreatsFirstQueryDebounceAsSearching() async throws {
+        let episodes = [
+            makeEpisode(id: "soldering", title: "Soldering Basics")
+        ]
+        let session = EpisodeSearchSession()
+        let enteredDebounce = AsyncTestGate()
+        let finishDebounce = AsyncTestGate()
+        let searchTask = Task {
+            await session.update(
+                episodes: episodes,
+                query: "soldering",
+                mode: .fullText,
+                debounceDuration: .seconds(1),
+                debounceSleep: { _ in
+                    await enteredDebounce.release()
+                    await finishDebounce.wait()
+                }
+            )
+        }
+        defer {
+            searchTask.cancel()
+        }
+        let pendingKey = EpisodeSearchRequestKey(
+            episodes: episodes,
+            query: "soldering",
+            mode: .fullText
+        )
+
+        await enteredDebounce.wait()
+
+        // Nothing has answered yet, so the results view must not read the
+        // empty list as "No Results".
+        #expect(session.displayedResults(for: pendingKey).isEmpty)
+        #expect(session.isSearching == true)
+
+        await finishDebounce.release()
+        await searchTask.value
+
+        #expect(resultIDs(session.displayedResults(for: pendingKey)) == ["soldering"])
+        #expect(session.isSearching == false)
+    }
+
     @Test("Search session hides prior scope results while switched scope is pending")
     func searchSessionHidesPriorScopeResultsWhileSwitchedScopeIsPending() async throws {
         let episodes = [

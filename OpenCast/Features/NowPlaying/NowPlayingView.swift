@@ -20,6 +20,7 @@ struct NowPlayingView: View {
     @State private var remoteEstimateRequest: RemoteTranscriptionStartPreviewRequest?
     @State private var remoteTranscriptionStartErrorMessage: String?
     @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
+    @State private var naturalContentHeight: CGFloat?
 
     let bottomContentPadding: CGFloat
     let topContentPadding: CGFloat
@@ -68,11 +69,6 @@ struct NowPlayingView: View {
                         }
 
                         VStack(spacing: metrics.metadataSpacing) {
-                            if showsSourcePill, let source = appModel.currentPlaylistSource {
-                                NowPlayingSourcePill(name: source.name, action: openPlaylist)
-                                    .padding(.bottom, 4)
-                            }
-
                             Button(action: openEpisode) {
                                 Text(episode.title)
                                     .font(metrics.titleFont)
@@ -160,8 +156,25 @@ struct NowPlayingView: View {
                     .padding(.horizontal, metrics.horizontalPadding)
                     .padding(.top, metrics.topContentPadding)
                     .padding(.bottom, metrics.bottomContentPadding)
+                    // Measured before the min-height frame and without the
+                    // source pill, so showing the pill never moves this value.
+                    .onGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.size.height
+                    } action: { height in
+                        updateNaturalContentHeight(height)
+                    }
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: metrics.containerHeight, alignment: .top)
+                    .overlay(alignment: .bottom) {
+                        if let source = appModel.currentPlaylistSource,
+                           showsSourcePill(containerHeight: metrics.containerHeight) {
+                            NowPlayingSourcePill(name: source.name, action: openPlaylist)
+                                .frame(maxWidth: metrics.contentWidth)
+                                .padding(.horizontal, metrics.horizontalPadding)
+                                .padding(.bottom, metrics.bottomContentPadding)
+                                .transition(.opacity)
+                        }
+                    }
                     .animation(
                         accessibilityReduceMotion ? nil : .easeOut(duration: 0.2),
                         value: isPlaybackFailed
@@ -384,10 +397,31 @@ struct NowPlayingView: View {
         return appModel.library.isActivelySubscribed(to: currentPodcastID)
     }
 
-    /// At accessibility sizes and in compact height the More menu's
-    /// "Show <playlist>" item is the route back to the source instead.
-    private var showsSourcePill: Bool {
-        !dynamicTypeSize.isAccessibilitySize && verticalSizeClass != .compact
+    /// The source pill is extra information, so it only takes room the
+    /// controls leave free below the utility row. Otherwise, and always at
+    /// accessibility sizes and in compact height, the More menu's
+    /// "Show <playlist>" item is the route back to the source.
+    private func showsSourcePill(containerHeight: CGFloat) -> Bool {
+        guard !dynamicTypeSize.isAccessibilitySize,
+              verticalSizeClass != .compact,
+              let naturalContentHeight
+        else {
+            return false
+        }
+        return containerHeight - naturalContentHeight >= NowPlayingSourcePill.minimumSpareHeight
+    }
+
+    /// The first measurement lands while the card is still presenting, so the
+    /// pill arrives with it; later changes (Dynamic Type, rotation, a failure
+    /// message) fade it in or out.
+    private func updateNaturalContentHeight(_ height: CGFloat) {
+        guard naturalContentHeight != nil else {
+            naturalContentHeight = height
+            return
+        }
+        withAnimation(.easeOut(duration: 0.2)) {
+            naturalContentHeight = height
+        }
     }
 
     private var hasCompletedTranscript: Bool {

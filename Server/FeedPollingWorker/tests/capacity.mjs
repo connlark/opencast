@@ -146,21 +146,24 @@ try{
   assert.ok(maximumOriginRequests()<=2,'publisher concurrency');
   if(replicas===1)assert.ok(Object.values(transport.activeByOrigin).every(n=>n===0),'native transports released after steady work');
   // Pause executors for 30 simulated minutes while dispatch continues. A
-  // reservation expires every five minutes, so each feed is re-dispatched under
-  // a newer generation. Schedules must coalesce, and every retained message of
-  // a superseded generation must be rejected without a fetch.
+  // lapsed reservation is repaired with the same generation. Retained wakeups
+  // stay useful and duplicate copies cannot publish twice.
   const outageStart=start+ticks*60;
   const outageWakeups=[];
   for(let tick=0;tick<30;tick++){await clock(outageStart+tick*60);await h.invoke('test/dispatch');for(let i=0;i<replicas;i++)outageWakeups.push(...await h.invoke('wakeups',undefined,undefined,i));}
   assert.ok((await h.first('SELECT COUNT(*) AS n FROM n_feed WHERE dispatch_until>0')).n<=count);
   const live=new Map((await h.rows('SELECT feed_id,schedule_generation FROM n_feed')).map(f=>[f.feed_id,f.schedule_generation]));
   const superseded=outageWakeups.filter(w=>w.kind==='poll'&&w.generation<live.get(w.feed_id)).length,replayRequests=requests;
+  assert.equal(superseded,0,'outage wakeups retain the unsettled generation');
+  const obligations=new Set(outageWakeups.filter(w=>w.kind==='poll').map(w=>w.feed_id));
+  const eventsBeforeReplay=(await h.first('SELECT COUNT(*) AS n FROM n_event')).n;
   const recoverWall=performance.now();let recoveryTicks=0;
   // Replay retained duplicates as well as reconciling lost wakeups.
   await clock(outageStart+1800);
   let replay=0;
   await Promise.all(Array.from({length:concurrency},async(_,i)=>{while(replay<outageWakeups.length)await deliverWake(outageWakeups[replay++],i%replicas);}));
-  assert.ok(requests-replayRequests<=outageWakeups.length-superseded,'a superseded generation never fetches');
+  assert.ok(requests-replayRequests<=obligations.size*2,'at most one fetch plus a duplicate conditional fetch per obligation');
+  assert.equal((await h.first('SELECT COUNT(*) AS n FROM n_event')).n,eventsBeforeReplay,'outage replay publishes no duplicate event');
   for(;recoveryTicks<15;recoveryTicks++){
     await clock(outageStart+1800+recoveryTicks*60);await h.invoke('test/dispatch');await pump();await h.deliver(true);
     const remaining=await h.first("SELECT COUNT(*) AS n FROM n_feed WHERE last_success_at<? AND poll_failures=0",outageStart+1800);

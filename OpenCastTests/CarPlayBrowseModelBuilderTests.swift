@@ -477,7 +477,7 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(continuation.snapshot.continuation == nil)
     }
 
-    @Test("Playlist rows carry the cover show's artwork or the smart symbol, with an inflected count")
+    @Test("Playlist rows carry the cover show's artwork, else their symbol, with an inflected count")
     func playlistRowsCarryShowArtworkOrSmartSymbol() throws {
         let summaries = [
             makePlaylistSummary(playlistID: "manual-cover", name: "Commute", kind: .manual),
@@ -487,12 +487,13 @@ struct CarPlayBrowseModelBuilderTests {
         ]
         let counts = ["manual-cover": 3, "manual-bare": 0, "smart-default": 1, "smart-star": 12]
 
-        // The closure offers a cover to every playlist but the bare one, so the
-        // smart rows prove they keep their symbol instead.
+        // The closure offers a cover to one playlist of each kind, so the
+        // other two prove they fall back to their symbol.
+        let bare: Set = ["manual-bare", "smart-star"]
         let snapshot = CarPlayBrowseModelBuilder.playlists(
             summaries,
             episodeCount: { counts[$0.playlistID] ?? -1 },
-            artworkURL: { $0.playlistID == "manual-bare" ? nil : "https://example.com/cover.jpg" },
+            artworkURL: { bare.contains($0.playlistID) ? nil : "https://example.com/cover.jpg" },
             limits: Self.roomyLimits
         )
 
@@ -505,8 +506,8 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(rows[1].artworkURL == nil)
         #expect(rows[1].symbolName == "music.note.list")
         #expect(rows[1].detailText == "No episodes")
-        #expect(rows[2].artworkURL == nil)
-        #expect(rows[2].symbolName == "sparkles")
+        #expect(rows[2].artworkURL == "https://example.com/cover.jpg")
+        #expect(rows[2].symbolName == nil)
         #expect(rows[2].detailText == "1 episode")
         #expect(rows[3].artworkURL == nil)
         #expect(rows[3].symbolName == "star")

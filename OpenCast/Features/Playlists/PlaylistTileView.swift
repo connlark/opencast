@@ -14,11 +14,6 @@ struct PlaylistTileView: View {
             VStack(alignment: .leading, spacing: metrics.isCompact ? 6 : 10) {
                 PlaylistCoverView(summary: summary, sources: sources, cornerRadius: 12)
                     .frame(width: metrics.tileWidth, height: metrics.tileWidth)
-                    .overlay(alignment: .topLeading) {
-                        if let tint = summary.tint {
-                            PlaylistSmartBadge(tint: tint)
-                        }
-                    }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(summary.name)

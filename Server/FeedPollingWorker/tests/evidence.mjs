@@ -46,8 +46,8 @@ function renewed(api, release, after) {
 }
 
 // H1 scenario A. Execution A holds its publisher response while a duplicate of
-// the same generation, or a newer generation issued after A's reservation
-// expired, settles an unchanged body. A then sees truncated XML. The success
+// the same generation, or a newer generation issued after a duplicate settled
+// A's obligation, settles an unchanged body. A then sees truncated XML. The success
 // proved absence after A began, so A's failure must bound nothing: a bound here
 // would make the next undated release, a day later, born expired.
 const cases = {};
@@ -61,8 +61,13 @@ for (const newer of [false, true]) cases[newer ? 'late-failure-newer-generation'
     api.serve(async () => { entered = true; await new Promise(resolve => release = resolve); return new Response('<rss><channel><item>truncated'); });
     const held = api.consume(stale); await until(() => entered, 'held publisher response');
     let winner = stale;
-    if (newer) { await api.clock(20 + 301); winner = await api.reserve(feed); assert.ok(winner.generation > stale.generation); }
     api.serve(api.baseline);
+    if (newer) {
+      assert.equal((await h.consume(stale, { replica: 1 })).outcome, 'unchanged');
+      await api.clock(20 + 301); await api.due(feed);
+      winner = await api.reserve(feed);
+      assert.equal(winner.generation, stale.generation + 1);
+    }
     assert.equal((await h.consume(winner, { replica: 1 })).outcome, 'unchanged');
     release();
     const failed = await held;

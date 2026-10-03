@@ -3,6 +3,8 @@
 /// fleet bound is two per origin, without any D1 permit row.
 pub const ORIGIN_LIMIT_PER_CONSUMER: usize = 1;
 pub const DISPATCH_LIMIT: usize = 400;
+pub const REPAIR_LIMIT: usize = 20;
+pub const LATE_FEED_THRESHOLD: i64 = 10;
 /// A dispatched generation is not re-dispatched for this long. It bounds the
 /// delay after a lost message; it is never an authority to publish. It must
 /// outlive the consumer's Queue retries (three, sixty seconds apart).
@@ -24,6 +26,7 @@ pub const STALL_RECOVERY_COMPLETIONS: i64 = 5;
 pub struct StallRollup {
     pub completed_last_5min: i64,
     pub healthy_overdue: i64,
+    pub late_600: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,9 +55,10 @@ pub fn stall_transition(
     if alert_armed_at == 0 {
         return Some(StallAlert::Armed);
     }
-    let stalled = rollup.completed_last_5min == 0 && rollup.healthy_overdue >= 50;
+    let stalled = rollup.late_600 >= LATE_FEED_THRESHOLD
+        || (rollup.completed_last_5min == 0 && rollup.healthy_overdue >= 50);
     if state == "stalled" {
-        if rollup.completed_last_5min >= STALL_RECOVERY_COMPLETIONS {
+        if rollup.late_600 == 0 && rollup.completed_last_5min >= STALL_RECOVERY_COMPLETIONS {
             return Some(StallAlert::Recovery { stall_since });
         }
         if stall_alerted_at == 0 {
@@ -352,6 +356,7 @@ mod tests {
         let stalled = StallRollup {
             completed_last_5min: 0,
             healthy_overdue: 50,
+            late_600: 0,
         };
         assert_eq!(
             stall_transition(stalled, "clear", 0, 0, 1, 100, true),
@@ -372,7 +377,8 @@ mod tests {
             stall_transition(
                 StallRollup {
                     completed_last_5min: 4,
-                    healthy_overdue: 50
+                    healthy_overdue: 50,
+                    late_600: 0,
                 },
                 "stalled",
                 100,
@@ -387,7 +393,8 @@ mod tests {
             stall_transition(
                 StallRollup {
                     completed_last_5min: 5,
-                    healthy_overdue: 50
+                    healthy_overdue: 50,
+                    late_600: 0,
                 },
                 "stalled",
                 100,
@@ -405,6 +412,38 @@ mod tests {
         assert_eq!(
             stall_transition(stalled, "clear", 0, 0, 0, 100, false),
             None
+        );
+    }
+
+    #[test]
+    fn lateness_survives_a_trickle_and_clears_only_after_the_backlog() {
+        let mut rollup = StallRollup {
+            completed_last_5min: 10,
+            healthy_overdue: 384,
+            late_600: 300,
+        };
+        assert_eq!(
+            stall_transition(rollup, "clear", 0, 0, 1, 100, true),
+            Some(StallAlert::Onset { stall_since: 100 })
+        );
+        for late in [300, 10, 9, 1] {
+            rollup.late_600 = late;
+            assert_eq!(
+                stall_transition(rollup, "stalled", 100, 100, 1, 200, true),
+                None
+            );
+        }
+        rollup.late_600 = 0;
+        assert_eq!(
+            stall_transition(rollup, "stalled", 100, 100, 1, 200, true),
+            Some(StallAlert::Recovery { stall_since: 100 })
+        );
+        rollup.late_600 = LATE_FEED_THRESHOLD - 1;
+        assert_eq!(stall_transition(rollup, "clear", 0, 0, 1, 200, true), None);
+        rollup.late_600 = LATE_FEED_THRESHOLD;
+        assert_eq!(
+            stall_transition(rollup, "clear", 0, 0, 1, 200, true),
+            Some(StallAlert::Onset { stall_since: 200 })
         );
     }
 }

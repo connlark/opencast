@@ -1,4 +1,4 @@
-//! The Queue message is the poll-attempt lease. Delivery failure and the
+//! The Queue message wakes a durable feed obligation. Delivery failure and the
 //! consumer's retry policy own crash recovery; the feed's owner epoch and
 //! dispatch generation decide whether a delivery may still mutate anything.
 //! A redelivery may repeat one conditional fetch. It can never publish twice:
@@ -32,8 +32,8 @@ impl Fence {
         Ok(())
     }
     /// `dispatch_until>0` marks the generation as not yet settled. Its expiry
-    /// only lets the dispatcher issue a newer generation, which is what fences
-    /// this one; elapsed time alone grants and removes nothing.
+    /// only lets the dispatcher repair the same generation; elapsed time alone
+    /// grants and removes nothing.
     pub fn sql(&self, _t: i64) -> String {
         // The feed ID is a validated hex digest, never raw request text.
         format!("EXISTS(SELECT 1 FROM n_feed f WHERE f.feed_id='{}' AND f.epoch={} AND f.schedule_generation={} AND f.dispatch_until>0 AND f.admission_paused=0 AND f.no_interest_since IS NULL AND EXISTS(SELECT 1 FROM n_interest j JOIN n_install i ON i.install_id=j.install_id WHERE j.feed_id=f.feed_id AND j.enabled=1 AND i.enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='dispatcher_admission' AND enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='feed_observation' AND enabled=1))",self.feed,self.epoch,self.generation)
@@ -96,6 +96,10 @@ pub async fn consume(
     // Read-only claim: a stale epoch or generation stops here, before any
     // fetch. Equal-generation redelivery is allowed and is idempotent.
     let Some(row) = claim(&db, &wake).await? else {
+        console_log!(
+            "{}",
+            json!({"event":"poll_outcome","outcome":"obsolete","feed":wake.feed_id,"step":wake.step})
+        );
         return outcome("obsolete");
     };
     if attempts > 1 {

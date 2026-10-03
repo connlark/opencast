@@ -205,7 +205,9 @@ enum CarPlayBrowseModelBuilder {
     }
 
     /// Input order is kept: the store already sorts by the collection
-    /// preference the phone shows.
+    /// preference the phone shows. A row carries one image, so a smart
+    /// playlist shows its most dominant show's artwork (its card stack's
+    /// front card) and keeps its symbol only without one.
     static func playlists(
         _ summaries: [PlaylistSummary],
         episodeCount: (PlaylistSummary) -> Int,
@@ -220,8 +222,8 @@ enum CarPlayBrowseModelBuilder {
                 url = artworkURL(summary)
                 symbol = url == nil ? "music.note.list" : nil
             case .smart:
-                url = nil
-                symbol = summary.symbolName ?? PlaylistSymbolCover.defaultSymbolName
+                url = artworkURL(summary)
+                symbol = url == nil ? summary.symbolName ?? PlaylistSymbolCover.defaultSymbolName : nil
             }
             return .playlist(
                 CarPlayPlaylistRow(

@@ -38,6 +38,8 @@ public final class AVFoundationPlaybackController {
     public private(set) var skipBackwardInterval: TimeInterval = PlaybackSkipInterval.backward
     public private(set) var skipForwardInterval: TimeInterval = PlaybackSkipInterval.forward
     public private(set) var playbackDiagnosticsText = ""
+    /// `currentEpisode` and `position` for readers off the main thread.
+    public nonisolated let playheadMirror = PlaybackPlayheadMirror()
 
     @ObservationIgnored private let player = AVPlayer()
     @ObservationIgnored private let mediaSession: SystemPlaybackMediaSession
@@ -1825,6 +1827,10 @@ public final class AVFoundationPlaybackController {
         setIfChanged(\.rate, to: snapshot.rate)
         setIfChanged(\.sleepTimerEndsAt, to: snapshot.sleepTimerEndsAt)
         setIfChanged(\.skipZones, to: snapshot.skipZones)
+        playheadMirror.update(PlaybackPlayheadMirror.Reading(
+            episodeID: snapshot.currentEpisode?.id,
+            position: snapshot.position
+        ))
         refreshPlaybackDiagnosticsText()
     }
 

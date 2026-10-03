@@ -727,6 +727,10 @@ final class LibraryStore {
         return indices.map { episodes[$0] }
     }
 
+    func episodeCount(forPodcastID podcastID: String) -> Int {
+        episodeIndicesByPodcastID[podcastID]?.count ?? 0
+    }
+
     func episodeDetail(for episodeID: String) async -> EpisodeDetailSnapshot? {
         do {
             return try await localCache.episodeDetail(episodeID: episodeID)
