@@ -20,6 +20,11 @@ public final class URLSessionOpenCastHTTPClient: OpenCastHTTPClient, @unchecked 
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 300
+        // `waitsForConnectivity` stays unset on purpose: an unsatisfied path
+        // must fail at once with `.notConnectedToInternet`, which the app's
+        // refresh path classifies as unreachable (no per-feed log or hold).
+        // Enabling it would turn that into a timeout and stop the
+        // classification from ever firing.
         feedSession = URLSession(configuration: configuration)
     }
 

@@ -20,6 +20,8 @@ enum FeedRefreshFetcher {
     enum Outcome: Sendable {
         case success(PreparedFeedOutcome)
         case failure(String)
+        /// The device could not put the request on the network.
+        case unreachable(String)
         case cancelled
     }
 
@@ -54,6 +56,9 @@ enum FeedRefreshFetcher {
         } catch {
             if Task.isCancelled {
                 return Result(feedURLString: feedURLString, outcome: .cancelled)
+            }
+            if FeedTransportErrorClassifier.isUnreachable(error) {
+                return Result(feedURLString: feedURLString, outcome: .unreachable(error.localizedDescription))
             }
             return Result(feedURLString: feedURLString, outcome: .failure(error.localizedDescription))
         }

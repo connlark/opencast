@@ -41,13 +41,16 @@ enum AVFoundationPlaybackDiagnosticsFormatter {
             "player.rate: \(player.rate)",
             "player.currentTime: \(time(player.currentTime().seconds))",
             "player.error: \(description(for: player.error))",
+            "player.allowsExternalPlayback: \(player.allowsExternalPlayback)",
+            "player.isExternalPlaybackActive: \(player.isExternalPlaybackActive)",
             "",
             "item.status: \(description(for: item?.status))",
             "item.duration: \(time(item?.duration.seconds))",
             "item.isPlaybackBufferEmpty: \(item?.isPlaybackBufferEmpty.description ?? "nil")",
             "item.isPlaybackLikelyToKeepUp: \(item?.isPlaybackLikelyToKeepUp.description ?? "nil")",
             "item.isPlaybackBufferFull: \(item?.isPlaybackBufferFull.description ?? "nil")",
-            "item.error: \(description(for: item?.error))"
+            "item.error: \(description(for: item?.error))",
+            "item.audioMix: \(item.map { ($0.audioMix != nil).description } ?? "nil")"
         ]
 
         appendTimeRanges(item?.loadedTimeRanges ?? [], title: "item.loadedTimeRanges", to: &lines)
@@ -86,6 +89,31 @@ enum AVFoundationPlaybackDiagnosticsFormatter {
             return "unknown(\(status.rawValue))"
         }
     }
+
+    #if os(iOS) || os(tvOS) || os(visionOS)
+    static func routeChangeReason(_ reason: AVAudioSession.RouteChangeReason) -> String {
+        switch reason {
+        case .unknown:
+            return "unknown"
+        case .newDeviceAvailable:
+            return "newDeviceAvailable"
+        case .oldDeviceUnavailable:
+            return "oldDeviceUnavailable"
+        case .categoryChange:
+            return "categoryChange"
+        case .override:
+            return "override"
+        case .wakeFromSleep:
+            return "wakeFromSleep"
+        case .noSuitableRouteForCategory:
+            return "noSuitableRouteForCategory"
+        case .routeConfigurationChange:
+            return "routeConfigurationChange"
+        @unknown default:
+            return "unknown(\(reason.rawValue))"
+        }
+    }
+    #endif
 
     static func errorSummary(for error: (any Error)?) -> String {
         guard let error else {

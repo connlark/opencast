@@ -59,6 +59,7 @@ struct InboxView: View {
         .animation(listAnimation, value: appModel.library.state)
         .animation(listAnimation, value: groupsByPodcast)
         .animation(listAnimation, value: layout)
+        .animation(listAnimation, value: appModel.library.lastRefreshWasOffline)
         .safeAreaInset(edge: .top, spacing: 0) {
             SettingsErrorBanner(message: appModel.inboxEpisodeListSettings.lastErrorMessage)
         }
@@ -130,8 +131,12 @@ struct InboxView: View {
                 hidesQueuedEpisodes: hidesQueuedEpisodes
             )
             if layout == .grid {
-                InboxPodcastGroupGrid(groups: groups, episodeListOverride: episodeListOverride)
-                    .transition(.opacity)
+                InboxPodcastGroupGrid(groups: groups, episodeListOverride: episodeListOverride) {
+                    if appModel.library.lastRefreshWasOffline {
+                        LibraryOfflineNotice()
+                    }
+                }
+                .transition(.opacity)
             } else {
                 inboxList {
                     ForEach(groups) { group in
@@ -159,9 +164,23 @@ struct InboxView: View {
 
     private func inboxList<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         List {
+            offlineNoticeSection
             content()
         }
+        .listSectionSpacing(12)
         .contentMargins(.horizontal, horizontalSizeClass == .regular ? 32 : nil, for: .scrollContent)
+    }
+
+    @ViewBuilder
+    private var offlineNoticeSection: some View {
+        if appModel.library.lastRefreshWasOffline {
+            Section {
+                LibraryOfflineNotice()
+                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
+        }
     }
 
     private var listAnimation: Animation? {

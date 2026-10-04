@@ -1919,6 +1919,59 @@ final class OpenCastUITests: XCTestCase {
         assertNewEpisodeValue(of: mainShow, is: "3 new episodes", named: "UI Test Show row with badges back on")
     }
 
+    /// Every feed fails the way it does on a device with no network. The
+    /// pull must leave each row's status as it was and raise one offline
+    /// notice on the Library, the Inbox, and the podcast page.
+    @MainActor
+    func testSeededOfflineRefreshShowsNoticeWithoutFlaggingFeeds() throws {
+        let app = makeSeededApp(seedsLibraryNewEpisodes: true)
+        app.launchEnvironment["OPENCAST_UI_TEST_FEED_TRANSPORT_FAILURE"] = "notConnectedToInternet"
+        app.launch()
+
+        openLibrary(in: app)
+        let list = libraryContainer("Library List", in: app)
+        assertExists(list, named: "Library list before the offline refresh")
+        let mainShow = libraryShow(Self.seededSubscriptionRowIdentifier, in: app)
+        let shows = [
+            libraryShow(Self.aardvarkSubscriptionRowIdentifier, in: app),
+            mainShow,
+            libraryShow(Self.zephyrSubscriptionRowIdentifier, in: app)
+        ]
+        for show in shows {
+            assertExists(show, named: "seeded Library row before the offline refresh")
+        }
+        assertNoFeedProblems(in: app, named: "seeded Library rows before the offline refresh")
+        let notice = app.descendants(matching: .any)["Library Offline Notice"]
+        assertDoesNotExist(notice, named: "offline notice before any refresh")
+
+        pullToRefresh(list)
+        let libraryNoticeAppeared = notice.waitForExistence(timeout: 60)
+        assertNoRefreshInFlight(in: app)
+        attachSmokeScreenshot(named: "offline_refresh_library")
+        XCTAssertTrue(libraryNoticeAppeared, "Library Offline Notice should appear after an offline pull to refresh")
+        assertNoFeedProblems(in: app, named: "seeded Library rows after the offline refresh")
+
+        openInbox(in: app)
+        assertHittable(notice, named: "Inbox offline notice", timeout: 60)
+        attachSmokeScreenshot(named: "offline_refresh_inbox")
+
+        openLibrary(in: app)
+        mainShow.tap()
+        let hero = app.descendants(matching: .any).matching(identifier: "Podcast Hero Header")
+        assertExists(hero.firstMatch, named: "podcast hero after the offline refresh")
+        // The hero header's identifier replaces its children's, so the
+        // notice is found by its copy among the hero's elements.
+        assertExists(
+            hero.descendants(matching: .staticText)
+                .matching(NSPredicate(format: "label BEGINSWITH %@", "Offline — feeds will refresh"))
+                .firstMatch,
+            named: "offline notice under the podcast hero header",
+            timeout: 60
+        )
+        assertNoFeedProblems(in: app, named: "podcast page after the offline refresh")
+        attachSmokeScreenshot(named: "offline_refresh_podcast_page")
+    }
+
     /// Loads a stored Grid choice (compact width would otherwise default to
     /// the list) and checks the column rule against real frames: the largest
     /// text drops the phone grid to two columns. The iPhone app is
@@ -7570,6 +7623,59 @@ final class OpenCastUITests: XCTestCase {
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
         start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    @MainActor
+    private func pullToRefresh(_ list: XCUIElement) {
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    /// The copy and icon label a degraded feed shows on its row, tile, or
+    /// podcast page (`FeedHealthStatus`, `SubscriptionRowView`).
+    private static let feedProblemPhrases = [
+        "Last refresh had problems",
+        "Hasn't refreshed since",
+        "Refresh has never succeeded"
+    ]
+
+    @MainActor
+    private func assertNoFeedProblems(
+        in app: XCUIApplication,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for phrase in Self.feedProblemPhrases {
+            let flagged = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS %@", phrase))
+            XCTAssertEqual(
+                flagged.count,
+                0,
+                "\(name) should not show \"\(phrase)\": \(flagged.allElementsBoundByIndex.map(\.label))",
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    /// Rows spin with a "Refreshing" label while their feed is in flight.
+    @MainActor
+    private func assertNoRefreshInFlight(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertDoesNotExist(
+            app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label CONTAINS %@", "Refreshing"))
+                .firstMatch,
+            named: "a refreshing row",
+            timeout: 60,
+            file: file,
+            line: line
+        )
     }
 
     private func requireArtifactPath(environmentKey: String) throws -> String {

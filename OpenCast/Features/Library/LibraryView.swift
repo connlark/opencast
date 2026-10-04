@@ -36,6 +36,7 @@ struct LibraryView: View {
             .animation(reduceMotion ? nil : .default, value: appModel.library.state)
             .animation(reduceMotion ? nil : .default, value: subscriptions.map(\.feedURL))
             .animation(reduceMotion ? nil : .default, value: layout)
+            .animation(reduceMotion ? nil : .default, value: appModel.library.lastRefreshWasOffline)
             .safeAreaInset(edge: .top, spacing: 0) {
                 SettingsErrorBanner(message: displaySettings.lastErrorMessage)
             }
@@ -115,12 +116,17 @@ struct LibraryView: View {
                     subscriptions: subscriptions,
                     showsNewEpisodeCount: displaySettings.showsNewEpisodeBadges
                 ) {
+                    if appModel.library.lastRefreshWasOffline {
+                        LibraryOfflineNotice()
+                    }
                     collectionsHeader
                         .padding(.vertical, 4)
                 }
                 .transition(.opacity)
             } else {
                 List {
+                    offlineNoticeSection
+
                     collectionsSection
 
                     Section {
@@ -135,6 +141,18 @@ struct LibraryView: View {
                 .listSectionSpacing(12)
                 .accessibilityIdentifier("Library List")
                 .transition(.opacity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var offlineNoticeSection: some View {
+        if appModel.library.lastRefreshWasOffline {
+            Section {
+                LibraryOfflineNotice()
+                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
         }
     }

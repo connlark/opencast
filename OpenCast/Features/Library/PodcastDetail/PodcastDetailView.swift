@@ -153,6 +153,9 @@ struct PodcastDetailView: View {
                                         )
                                     }
                                 }
+                                if appModel.library.lastRefreshWasOffline {
+                                    LibraryOfflineNotice()
+                                }
                                 if let suggestedFeedURL = appModel.library.suggestedFeedMigrationURLsByFeedURL[feedURL] {
                                     FeedAddressUpdateView(
                                         suggestedFeedURL: suggestedFeedURL,

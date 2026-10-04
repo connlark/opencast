@@ -126,6 +126,10 @@ public final class AVFoundationPlaybackController {
         self.voiceBoostAudioTapFactory = voiceBoostAudioTapFactory
         self.audioSessionActivation = audioSessionActivation
         self.audioSessionDeactivation = audioSessionDeactivation
+        // Audio-only app: external playback hands the stream to a video-capable
+        // AirPlay receiver (Mac, Apple TV), which opens a video surface and
+        // bypasses the Voice Boost tap. Keep AirPlay on the audio route instead.
+        player.allowsExternalPlayback = false
         observePlayerTimeControlStatus()
         installAudioSessionObservers()
         installRemoteCommands()
@@ -850,8 +854,16 @@ public final class AVFoundationPlaybackController {
             queue: .main
         ) { [weak self] notification in
             let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            let previousRoute = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey]
+                as? AVAudioSessionRouteDescription
+            let previousOutputs = previousRoute?.outputs.map(\.portType.rawValue) ?? []
             Task { @MainActor [weak self] in
-                self?.handleAudioSessionRouteChange(rawReason: rawReason)
+                let currentOutputs = await Self.currentAudioRouteOutputs()
+                self?.handleAudioSessionRouteChange(
+                    rawReason: rawReason,
+                    previousOutputs: previousOutputs,
+                    currentOutputs: currentOutputs
+                )
             }
         }
 
@@ -947,13 +959,30 @@ public final class AVFoundationPlaybackController {
         play(source: "audio session interruption ended")
     }
 
-    private func handleAudioSessionRouteChange(rawReason: UInt?) {
+    #if os(iOS) || os(tvOS) || os(visionOS)
+    /// Port types only (`AirPlay`, `BluetoothA2DP`, `Speaker`): port names are
+    /// the user's device names and the event log persists on disk.
+    @concurrent
+    private static func currentAudioRouteOutputs() async -> [String] {
+        AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType.rawValue)
+    }
+    #endif
+
+    private func handleAudioSessionRouteChange(
+        rawReason: UInt?,
+        previousOutputs: [String],
+        currentOutputs: [String]
+    ) {
         #if os(iOS) || os(tvOS) || os(visionOS)
         guard let rawReason,
               let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason)
         else {
             return
         }
+
+        recordDiagnosticsEvent(
+            "audio route changed reason=\(AVFoundationPlaybackDiagnosticsFormatter.routeChangeReason(reason)) from=\(previousOutputs.joined(separator: ",")) to=\(currentOutputs.joined(separator: ",")) externalPlayback=\(player.isExternalPlaybackActive)"
+        )
 
         switch reason {
         case .oldDeviceUnavailable:
@@ -2039,6 +2068,10 @@ public final class AVFoundationPlaybackController {
 
     var currentPlayerDefaultRate: Float {
         player.defaultRate
+    }
+
+    var allowsExternalPlayback: Bool {
+        player.allowsExternalPlayback
     }
 
     private func deactivateAudioSession() {

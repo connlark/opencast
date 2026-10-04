@@ -203,15 +203,18 @@ final class OpenCastAppRuntime {
         launchConfiguration: OpenCastLaunchConfiguration,
         localCacheStore: (any LocalLibraryCacheStore)?
     ) -> LibraryStore? {
-        guard launchConfiguration.usesUITestSeedFeedRefreshService,
-              let localCacheStore
-        else {
+        guard let localCacheStore else {
             return nil
         }
-        return LibraryStore(
-            feedService: OpenCastUITestSeedFeedRefreshService(),
-            localCache: localCacheStore
-        )
+        let feedService: any FeedService
+        if let failureCode = launchConfiguration.uiTestFeedTransportFailure {
+            feedService = OpenCastUITestFeedTransportFailureService(code: failureCode)
+        } else if launchConfiguration.usesUITestSeedFeedRefreshService {
+            feedService = OpenCastUITestSeedFeedRefreshService()
+        } else {
+            return nil
+        }
+        return LibraryStore(feedService: feedService, localCache: localCacheStore)
     }
 
     private static func syncStatusStore(

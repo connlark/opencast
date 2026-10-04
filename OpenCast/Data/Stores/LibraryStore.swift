@@ -73,6 +73,11 @@ final class LibraryStore {
     var refreshCompletedToken: Int {
         feedRefreshes.refreshCompletedToken
     }
+    /// Set when a refresh could not reach the network at all; cleared by any
+    /// refresh that reached a feed host and by `recoverConnectivity`.
+    var lastRefreshWasOffline: Bool {
+        feedRefreshes.lastRefreshWasOffline
+    }
 
     /// Counts the app's own synced-store saves so the remote-change observer
     /// can skip the reload each one would otherwise trigger (one credit per
@@ -451,6 +456,28 @@ final class LibraryStore {
 
     func refreshAllIfStale(modelContext: ModelContext, now: Date = .now) async {
         await feedRefreshes.refreshAllIfStale(modelContext: modelContext, now: now)
+    }
+
+    func recoverConnectivity(
+        refreshesStaleFeeds: Bool,
+        modelContext: ModelContext,
+        now: Date = .now,
+        canRefresh: @escaping () -> Bool = { true }
+    ) async {
+        await feedRefreshes.recoverConnectivity(
+            refreshesStaleFeeds: refreshesStaleFeeds,
+            modelContext: modelContext,
+            now: now,
+            canRefresh: canRefresh
+        )
+    }
+
+    func cancelConnectivityRecovery() {
+        feedRefreshes.cancelConnectivityRecovery()
+    }
+
+    func waitForConnectivityRecoveryForTesting() async {
+        await feedRefreshes.waitForConnectivityRecoveryForTesting()
     }
 
     @discardableResult
@@ -1131,7 +1158,7 @@ final class LibraryStore {
                         )
                     )
                 }
-            case .failure(let message):
+            case .failure(let message), .unreachable(let message):
                 result.failures.append(
                     BatchSubscribeFailure(feedURLString: fetchResult.feedURLString, message: message)
                 )

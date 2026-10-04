@@ -471,27 +471,30 @@ struct LibraryStoreStateMachineTests {
         let goodFeedURLB = "https://example.com/batch-good-b.xml"
         let badFeedURL = "https://example.com/batch-bad.xml"
         let schemelessFeedURL = "example.com/batch-no-scheme.xml"
+        let offlineFeedURL = "https://example.com/batch-offline.xml"
         let service = ScriptedFeedService(scripts: [
             goodFeedURLA: [.success(makeSnapshot(feedURL: goodFeedURLA, episodeID: "batch-good-a-episode"))],
             goodFeedURLB: [.success(makeSnapshot(feedURL: goodFeedURLB, episodeID: "batch-good-b-episode"))],
-            badFeedURL: [.failure("Feed rejected")]
+            badFeedURL: [.failure("Feed rejected")],
+            offlineFeedURL: [.urlFailure(.notConnectedToInternet)]
         ])
         let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
         await store.load(modelContext: context)
 
         let result = try await store.subscribeBatch(
-            to: [goodFeedURLA, badFeedURL, schemelessFeedURL, goodFeedURLB],
+            to: [goodFeedURLA, badFeedURL, schemelessFeedURL, offlineFeedURL, goodFeedURLB],
             modelContext: context
         )
 
         #expect(result.subscribedFeedURLStrings.sorted() == [goodFeedURLA, goodFeedURLB])
-        #expect(result.failures.count == 2)
+        #expect(result.failures.count == 3)
         let failureMessagesByFeedURL = Dictionary(
             result.failures.map { ($0.feedURLString, $0.message) },
             uniquingKeysWith: { first, _ in first }
         )
         #expect(failureMessagesByFeedURL[badFeedURL] == "Feed rejected")
         #expect(failureMessagesByFeedURL[schemelessFeedURL] == OpenCastCoreError.invalidFeedURL.localizedDescription)
+        #expect(failureMessagesByFeedURL[offlineFeedURL] == URLError(.notConnectedToInternet).localizedDescription)
 
         let subscribedFeedURLs = try context.fetch(FetchDescriptor<SubscriptionRecord>()).map(\.feedURL)
         #expect(subscribedFeedURLs.sorted() == [goodFeedURLA, goodFeedURLB])
@@ -698,6 +701,7 @@ private actor ScriptedFeedService: FeedService {
     enum Script: Sendable {
         case success(FeedSnapshot)
         case failure(String)
+        case urlFailure(URLError.Code)
         case gatedSuccess(FeedSnapshot, AsyncTestGate)
         case gatedFailure(String, AsyncTestGate)
         case hangUntilCancelled
@@ -728,6 +732,8 @@ private actor ScriptedFeedService: FeedService {
             return snapshot
         case .failure(let message):
             throw ScriptedFeedError(message: message)
+        case .urlFailure(let code):
+            throw URLError(code)
         case .gatedSuccess(let snapshot, let gate):
             await gate.wait()
             return snapshot

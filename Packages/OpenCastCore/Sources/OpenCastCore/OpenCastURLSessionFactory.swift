@@ -66,6 +66,8 @@ public enum OpenCastURLSessionFactory {
         configuration.timeoutIntervalForResource = 300
         configuration.httpAdditionalHeaders = ["User-Agent": userAgent]
         configuration.urlCache = nil
+        // `waitsForConnectivity` stays unset so an offline refresh fails at
+        // once as unreachable; see `URLSessionOpenCastHTTPClient.feedSession`.
         return configuration
     }
 

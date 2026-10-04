@@ -16,6 +16,8 @@ import SwiftData
 @Observable
 final class FeedRefreshCoordinator {
     private(set) var refreshCompletedToken = 0
+    /// In-memory only: a relaunch retries every unreachable feed at once.
+    private(set) var lastRefreshWasOffline = false
 
     var refreshingFeedURLs: Set<String> {
         Set(refreshingFeedURLCounts.keys)
@@ -29,6 +31,14 @@ final class FeedRefreshCoordinator {
     @ObservationIgnored private var refreshingFeedURLCounts: [String: Int] = [:]
     @ObservationIgnored private var refreshActivityByFeedURL: [String: FeedRefreshActivity] = [:]
     @ObservationIgnored private var manualRefreshTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var runningBulkFlowCount = 0
+    @ObservationIgnored private var pendingConnectivityRecovery: (
+        refreshesStaleFeeds: Bool,
+        modelContext: ModelContext,
+        now: Date,
+        canRefresh: () -> Bool
+    )?
+    @ObservationIgnored private var connectivityRecoveryTask: Task<Void, Never>?
     @ObservationIgnored private unowned let host: any FeedRefreshHost
     @ObservationIgnored private let feedService: any FeedService
     @ObservationIgnored private let localCache: any LocalLibraryCacheStore
@@ -56,9 +66,6 @@ final class FeedRefreshCoordinator {
         // Mark the feed busy before the first suspension so refreshAllIfStale
         // cannot start a duplicate refresh while this one is in flight.
         beginRefreshing([feedURL])
-        defer {
-            endRefreshing([feedURL])
-        }
         await performRefreshFlow(setsRefreshingState: false, modelContext: modelContext) { generation in
             guard let subscription = try host.activeSubscription(feedURL: feedURL, modelContext: modelContext) else {
                 return .skip
@@ -70,6 +77,72 @@ final class FeedRefreshCoordinator {
                 modelContext: modelContext
             )
             return didChangeContent ? .full : .logsOnly
+        }
+        endRefreshing([feedURL])
+        resumeDeferredConnectivityRecoveryIfIdle()
+    }
+
+    /// A reconnect that lands mid-pass must not be lost to the busy guard in
+    /// `refreshAllIfStale`, and results still landing from the offline pass
+    /// must not re-set the flag after it was cleared, so a busy library
+    /// defers the recovery until its last flow ends.
+    func recoverConnectivity(
+        refreshesStaleFeeds: Bool,
+        modelContext: ModelContext,
+        now: Date = .now,
+        canRefresh: @escaping () -> Bool = { true }
+    ) async {
+        guard !Task.isCancelled else { return }
+        guard runningBulkFlowCount == 0, refreshingFeedURLCounts.isEmpty else {
+            // A marker-only request must not replace a queued refresh's
+            // lifecycle check when the two requests coalesce.
+            let refreshCheck = refreshesStaleFeeds ? canRefresh : pendingConnectivityRecovery?.canRefresh ?? canRefresh
+            pendingConnectivityRecovery = (
+                refreshesStaleFeeds: refreshesStaleFeeds || pendingConnectivityRecovery?.refreshesStaleFeeds == true,
+                modelContext: modelContext,
+                now: now,
+                canRefresh: refreshCheck
+            )
+            return
+        }
+        setLastRefreshWasOffline(false)
+        if refreshesStaleFeeds, canRefresh() {
+            await refreshAllIfStale(modelContext: modelContext, now: now)
+        }
+    }
+
+    func cancelConnectivityRecovery() {
+        pendingConnectivityRecovery = nil
+        connectivityRecoveryTask?.cancel()
+        connectivityRecoveryTask = nil
+    }
+
+    func waitForConnectivityRecoveryForTesting() async {
+        await connectivityRecoveryTask?.value
+    }
+
+    /// Runs the deferred recovery in its own task so it neither re-enters the
+    /// flow shell that just ended nor inherits that flow's cancellation.
+    private func resumeDeferredConnectivityRecoveryIfIdle() {
+        guard runningBulkFlowCount == 0, refreshingFeedURLCounts.isEmpty,
+              let pending = pendingConnectivityRecovery
+        else {
+            return
+        }
+        pendingConnectivityRecovery = nil
+        connectivityRecoveryTask = Task { [weak self] in
+            await self?.recoverConnectivity(
+                refreshesStaleFeeds: pending.refreshesStaleFeeds,
+                modelContext: pending.modelContext,
+                now: pending.now,
+                canRefresh: pending.canRefresh
+            )
+        }
+    }
+
+    private func setLastRefreshWasOffline(_ isOffline: Bool) {
+        if lastRefreshWasOffline != isOffline {
+            lastRefreshWasOffline = isOffline
         }
     }
 
@@ -191,7 +264,14 @@ final class FeedRefreshCoordinator {
     ) async -> Bool {
         let generation = writeGeneration.capture()
         if setsRefreshingState {
+            runningBulkFlowCount += 1
             host.state = .refreshing
+        }
+        defer {
+            if setsRefreshingState {
+                runningBulkFlowCount -= 1
+                resumeDeferredConnectivityRecoveryIfIdle()
+            }
         }
         host.lastErrorMessage = nil
         do {
@@ -307,6 +387,9 @@ final class FeedRefreshCoordinator {
     ) async throws -> Bool {
         switch result.outcome {
         case .success(let outcome):
+            // Every success branch below, including a failed cache write,
+            // proves the network was reachable.
+            setLastRefreshWasOffline(false)
             do {
                 guard let snapshot = outcome.feed else {
                     // Not-modified short-circuit: still a successful refresh.
@@ -372,6 +455,9 @@ final class FeedRefreshCoordinator {
                 generation: generation
             )
             return false
+        case .unreachable:
+            setLastRefreshWasOffline(true)
+            return false
         case .cancelled:
             throw CancellationError()
         }
@@ -386,8 +472,10 @@ final class FeedRefreshCoordinator {
         try? await localCache.updateFeedValidators(validators, forPodcastID: podcastID)
     }
 
-    /// Refresh logs are written once, on completion. Cancelled refreshes write
-    /// nothing, matching the previous insert-then-delete-on-cancel behavior.
+    /// Refresh logs are written once, on completion. Cancelled and unreachable
+    /// refreshes write nothing: cancellation matches the previous
+    /// insert-then-delete-on-cancel behavior, and an unreachable feed stays
+    /// stale so the next pass retries it.
     private func recordRefreshLog(
         feedURL: String,
         startedAt: Date,
@@ -449,6 +537,8 @@ final class FeedRefreshCoordinator {
             task.cancel()
         }
         manualRefreshTasks.removeAll()
+        cancelConnectivityRecovery()
+        setLastRefreshWasOffline(false)
         refreshingFeedURLCounts.removeAll()
         for activity in refreshActivityByFeedURL.values {
             activity.isRefreshing = false

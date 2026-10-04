@@ -55,7 +55,8 @@ nonisolated protocol LocalLibraryCacheStore: Sendable {
     /// Throttles a failed attempt for one hour without advancing the partial
     /// import counter or shortening an existing partial-import deadline.
     /// Manual refresh bypasses the deadline. Partial imports schedule their
-    /// exponential backoff atomically in `upsertCache` instead.
+    /// exponential backoff atomically in `upsertCache` instead. Attempts the
+    /// device could not put on the network are not recorded.
     func recordFeedRetryFailure(forPodcastID podcastID: String, attemptedAt: Date) async throws
     /// Clears failure-only retry state after a successful not-modified fetch.
     /// Full imports reset it atomically with their catalog transaction.

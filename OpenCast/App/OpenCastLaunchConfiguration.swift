@@ -42,6 +42,8 @@ struct OpenCastLaunchConfiguration {
     /// UI-test seam: replaces how long launch work waits for that answer.
     var uiTestCloudKitAccountStatusPatienceMilliseconds: Int?
     var usesUITestSeedFeedRefreshService: Bool
+    /// UI-test seam: every feed fetch fails with this transport error.
+    var uiTestFeedTransportFailure: URLError.Code?
     // Search cold-start probe flags are Release-capable benchmark seams, so
     // unlike the seams above they are deliberately not gated on UI testing.
     var runsSearchColdStartProbe = false
@@ -147,6 +149,9 @@ struct OpenCastLaunchConfiguration {
             : nil
         let usesUITestSeedFeedRefreshService = isUITesting
             && environment["OPENCAST_UI_TEST_REFRESH_SEED_FEED"] == "1"
+        let uiTestFeedTransportFailure = isUITesting
+            ? OpenCastUITestFeedTransportFailureService.resolve(environment: environment)
+            : nil
         #if DEBUG
         let runsVoiceBoostDeviceProbe = shouldRunVoiceBoostDeviceProbe
         let capturesVoiceBoostDiagnostics = shouldCaptureVoiceBoostDiagnostics || runsVoiceBoostDeviceProbe
@@ -199,6 +204,7 @@ struct OpenCastLaunchConfiguration {
             uiTestCloudKitAccountStatusDelayMilliseconds: uiTestCloudKitAccountStatusDelayMilliseconds,
             uiTestCloudKitAccountStatusPatienceMilliseconds: uiTestCloudKitAccountStatusPatienceMilliseconds,
             usesUITestSeedFeedRefreshService: usesUITestSeedFeedRefreshService,
+            uiTestFeedTransportFailure: uiTestFeedTransportFailure,
             runsSearchColdStartProbe: arguments.contains(
                 SearchColdStartProbe.probeArgument
             ),

@@ -12,6 +12,9 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     @State private var deferredTranscriptionInterruptionTask: Task<Void, Never>?
     @State private var foregroundMaintenanceTask: Task<Void, Never>?
     @State private var foregroundSyncedDataRefreshTask: Task<Void, Never>?
+    @State private var connectivityRecoveryTask: Task<Void, Never>?
+    @State private var hasPendingConnectivityRefresh = false
+    @State private var deferredConnectivityRefreshTask: Task<Void, Never>?
 
     private static let postNowPlayingDismissMaintenanceDelay: TimeInterval = 0.75
     private static let inactiveTranscriptionInterruptionDelay: Duration = .seconds(2)
@@ -78,6 +81,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             appModel.transcriptIntelligence.refreshAvailability()
             startForegroundSyncedDataRefresh()
             runOrDeferForegroundMaintenance()
+            startConnectivityRecovery()
         @unknown default:
             break
         }
@@ -101,14 +105,15 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     }
 
     private func handleNowPlayingPresentationChange(isPresented: Bool) {
-        guard !isPresented,
-              hasPendingForegroundMaintenance,
-              scenePhase == .active
-        else {
+        guard !isPresented, scenePhase == .active else {
             return
         }
 
-        scheduleForegroundMaintenanceAfterNowPlayingDismiss()
+        if hasPendingForegroundMaintenance {
+            scheduleForegroundMaintenanceAfterNowPlayingDismiss()
+        } else if hasPendingConnectivityRefresh {
+            scheduleConnectivityRefreshAfterNowPlayingDismiss()
+        }
     }
 
     private func runOrDeferForegroundMaintenance() {
@@ -150,6 +155,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     private func performForegroundMaintenance() {
         nowPlayingProbeMark("foreground-maintenance-start")
         hasPendingForegroundMaintenance = false
+        hasPendingConnectivityRefresh = false
         foregroundMaintenanceTask?.cancel()
         appModel.library.refreshProgressRecords(modelContext: modelContext)
         appModel.refreshCurrentVoiceBoostSetting(modelContext: modelContext)
@@ -206,6 +212,78 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         }
     }
 
+    /// Watches the network path only while the scene is active. A reconnect
+    /// clears the offline marker at once, but its refresh pass waits out Now
+    /// Playing on its own: the deferred activation maintenance also uploads
+    /// the notification registration, which a reconnect must not trigger.
+    private func startConnectivityRecovery() {
+        connectivityRecoveryTask?.cancel()
+        connectivityRecoveryTask = nil
+        guard appModel.allowsAutomaticFeedRefresh else {
+            return
+        }
+
+        connectivityRecoveryTask = Task {
+            var previousPathWasSatisfied: Bool?
+            for await pathIsSatisfied in NetworkPathObserver.pathSatisfactionUpdates() {
+                let decision = ConnectivityRecoveryPolicy(
+                    previousPathWasSatisfied: previousPathWasSatisfied,
+                    pathIsSatisfied: pathIsSatisfied,
+                    lastRefreshWasOffline: appModel.library.lastRefreshWasOffline
+                ).decision
+                previousPathWasSatisfied = pathIsSatisfied
+                await recoverConnectivity(decision)
+            }
+        }
+    }
+
+    private func recoverConnectivity(_ decision: ConnectivityRecoveryDecision) async {
+        guard !Task.isCancelled, appModel.isSceneActive else { return }
+        switch decision {
+        case .doNothing:
+            return
+        case .clearMarker:
+            await appModel.library.recoverConnectivity(refreshesStaleFeeds: false, modelContext: modelContext)
+        case .clearMarkerAndRefresh:
+            await appModel.library.recoverConnectivity(
+                refreshesStaleFeeds: true,
+                modelContext: modelContext,
+                canRefresh: canRefreshAfterConnectivityRecovery
+            )
+        }
+    }
+
+    private func canRefreshAfterConnectivityRecovery() -> Bool {
+        guard !Task.isCancelled, appModel.isSceneActive else { return false }
+        if appModel.isNowPlayingPresented {
+            hasPendingConnectivityRefresh = true
+            return false
+        }
+        return true
+    }
+
+    private func scheduleConnectivityRefreshAfterNowPlayingDismiss() {
+        deferredConnectivityRefreshTask?.cancel()
+        deferredConnectivityRefreshTask = Task {
+            try? await Task.sleep(for: .seconds(Self.postNowPlayingDismissMaintenanceDelay))
+
+            guard !Task.isCancelled,
+                  scenePhase == .active,
+                  !appModel.isNowPlayingPresented,
+                  hasPendingConnectivityRefresh
+            else {
+                return
+            }
+
+            hasPendingConnectivityRefresh = false
+            await appModel.library.recoverConnectivity(
+                refreshesStaleFeeds: true,
+                modelContext: modelContext,
+                canRefresh: canRefreshAfterConnectivityRecovery
+            )
+        }
+    }
+
     private func cancelForegroundMaintenanceTasks() {
         deferredForegroundMaintenanceTask?.cancel()
         deferredForegroundMaintenanceTask = nil
@@ -213,7 +291,13 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         foregroundMaintenanceTask = nil
         foregroundSyncedDataRefreshTask?.cancel()
         foregroundSyncedDataRefreshTask = nil
+        connectivityRecoveryTask?.cancel()
+        connectivityRecoveryTask = nil
+        appModel.library.cancelConnectivityRecovery()
+        deferredConnectivityRefreshTask?.cancel()
+        deferredConnectivityRefreshTask = nil
         hasPendingForegroundMaintenance = false
+        hasPendingConnectivityRefresh = false
     }
 
     private func flushProgressForLifecycleExitIfNeeded() {

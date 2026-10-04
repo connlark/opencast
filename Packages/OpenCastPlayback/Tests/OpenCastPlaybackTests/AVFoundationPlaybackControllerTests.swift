@@ -50,6 +50,24 @@ struct AVFoundationPlaybackControllerTests {
         #expect(!controller.useDownloadedAudio(at: URL(filePath: "/tmp/other.m4a"), for: EpisodeID(rawValue: "other")))
     }
 
+    @Test("External playback stays off so AirPlay receivers get audio, not a video surface")
+    func externalPlaybackIsDisabled() throws {
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        #expect(!controller.allowsExternalPlayback)
+
+        let current = episode(duration: 240)
+        try controller.load(current, startPosition: 30)
+        #expect(controller.useDownloadedAudio(at: URL(filePath: "/tmp/external-playback.m4a"), for: current.id))
+        #expect(!controller.allowsExternalPlayback)
+
+        controller.setPlaybackDiagnosticsEnabled(true)
+        let diagnostics = controller.playbackDiagnosticsText
+        #expect(diagnostics.contains("player.allowsExternalPlayback: false"))
+        #expect(diagnostics.contains("player.isExternalPlaybackActive: false"))
+        #expect(diagnostics.contains("item.audioMix: true"))
+    }
+
     @Test("Download handoff resumes a buffered play request on real local audio")
     func downloadedAudioResumesBufferedPlayback() async throws {
         try await AVFoundationPlaybackTestGate.acquire()

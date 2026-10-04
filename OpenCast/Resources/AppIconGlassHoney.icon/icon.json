@@ -38,9 +38,9 @@
           "image-name" : "OpenCast-Mark.svg",
           "name" : "Mark",
           "position" : {
-            "scale" : 0.72,
+            "scale" : 0.84,
             "translation-in-points" : [
-              -11.5,
+              -13.44,
               0
             ]
           }
@@ -89,7 +89,7 @@
           "image-name" : "Glass-Disc.svg",
           "name" : "Glass Disc",
           "position" : {
-            "scale" : 1,
+            "scale" : 1.12,
             "translation-in-points" : [
               0,
               0

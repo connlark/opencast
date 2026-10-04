@@ -35,7 +35,7 @@ struct FeedRetryPolicyTests {
         context.insert(progress)
         try context.save()
         let failures: [any Error] = [
-            URLError(.notConnectedToInternet), URLError(.networkConnectionLost),
+            URLError(.badServerResponse), URLError(.networkConnectionLost),
             URLError(.timedOut), URLError(.cannotConnectToHost),
             OpenCastCoreError.unexpectedStatusCode(503),
             OpenCastCoreError.incompleteFeed(reason: .fieldLimit),
@@ -105,8 +105,8 @@ struct FeedRetryPolicyTests {
         context.insert(SubscriptionRecord(feedURL: feedURL.absoluteString, title: "Retry Show"))
         try context.save()
         let service = RetrySequenceFeedService(results: [
-            .failure(URLError(.notConnectedToInternet)),
-            .failure(URLError(.notConnectedToInternet)),
+            .failure(OpenCastCoreError.unexpectedStatusCode(503)),
+            .failure(OpenCastCoreError.unexpectedStatusCode(503)),
             .failure(CancellationError()),
             .success(PreparedFeedOutcome(feed: nil, validators: validators)),
         ])

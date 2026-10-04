@@ -116,7 +116,9 @@ struct OpenCastTabRootView: View {
             tabAccessory
         }
         .sensoryFeedback(.success, trigger: appModel.library.subscriptionAddedToken)
-        .sensoryFeedback(.success, trigger: appModel.library.refreshCompletedToken)
+        .sensoryFeedback(trigger: appModel.library.refreshCompletedToken) { _, _ in
+            appModel.library.lastRefreshWasOffline ? .warning : .success
+        }
         .onChange(of: selectedTab, initial: true) { _, selectedTab in
             isSearchPresented = selectedTab == .search
             leavePlaylistsTabIfCompact()
