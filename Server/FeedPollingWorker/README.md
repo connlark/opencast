@@ -17,11 +17,15 @@ Cloudflare account resources, database IDs or credentials.
 
 ## How it works
 
-- **Dispatch.** A one-minute dispatcher admits at most 400 due polls and 100
-  maintenance feeds, rotating across origins, oldest due first. Admission is one
-  statement on `n_feed` that reserves the feed (`dispatch_until`); only the
-  rows it returns become Queue messages. So overlapping dispatchers need no
-  lease, and there is no per-attempt job row. A settled feed advances its
+- **Dispatch.** A one-minute dispatcher selects at most 400 due polls and 100
+  maintenance feeds, rotating across canonical origins, oldest due first. New
+  scans take only the headroom below 200 live reservations in total and 100 per
+  origin, so one origin cannot use the other half and a different origin that
+  comes due on a later tick still finds room. Repairs and maintenance bypass
+  both caps, but their live reservations count toward them. Admission is one
+  statement on `n_feed` that counts, orders and reserves the feed
+  (`dispatch_until`); only the rows it returns become Queue messages. So
+  overlapping dispatchers need no lease, and there is no per-attempt job row. A settled feed advances its
   `schedule_generation`; a lapsed reservation is repaired under the same
   generation.
 - **The Queue message wakes a durable feed obligation.** It carries the feed
@@ -51,22 +55,29 @@ Cloudflare account resources, database IDs or credentials.
   each isolate still admits only one complete scan or preparation at a time. Do
   not remove that memory guard based on average feeds.
 - **Deadlines.** A queued scan has a 15-second absolute deadline and a
-  five-second body inactivity limit; storage work after the body is bounded by
-  the 180-second scan lease. Large feeds must fit the time budget as well as the
+  five-second body inactivity limit. The whole delivery, including its claim,
+  storage work and continuation send, has a 200-second deadline, and failure
+  bookkeeping gets a further 20 seconds; a timeout still returns failure so the
+  Queue redelivers. Failure cleanup releases only the scan lease that
+  invocation tried to acquire. Large feeds must fit the time budget as well as the
   [byte and item limits](../NotificationsWorker/README.md#feed-resource-policy).
   Memory admission waits up to three seconds, then redelivers after a jittered
   5–15 seconds.
-- **No stuck permits.** Each polling step runs under a 200-second deadline, so
-  an await that never returns ends the step instead of holding its scan
-  permit. A permit older than 240 seconds is reclaimed on the next acquisition
+- **No stuck permits.** Because of the delivery deadline, an await that never
+  returns ends the step instead of holding its scan permit. A permit older than 240 seconds is reclaimed on the next acquisition
   and logged as `scan_permit_reclaimed`. A poll that finds the scanner busy is
   counted as `scan_busy`; once the oldest permit is a minute old it retries
   after a flat 60 seconds instead of the jittered delay.
 - **Cadence.** Each successful poll re-runs the adaptive policy: a 15-minute hot
   floor, 1-hour, 6-hour and 24-hour age tiers, and a cadence accelerator.
   Revoking user interest takes effect immediately.
-- **Cleanup.** A separate wakeup every fifteen minutes takes a D1 lease and
-  collects 200 objects per batch, including scratch objects orphaned by a crash.
+- **Cleanup.** A separate `*/2 * * * *` cron runs cleanup under a 180-second D1
+  lease. Each run selects at most 200 objects, including scratch objects
+  orphaned by a crash, and starts no new object after 25 seconds. Database
+  retention still runs when that budget runs out, so object churn cannot starve
+  history or statistic expiry; an unfinished run leaves the cleanup generation
+  for the next cron. Cleanup Queue messages from older versions are
+  acknowledged without work.
 
 ## Setup
 
@@ -103,7 +114,10 @@ Advance it only together with the pinned toolchain.
 `n_control` row and the environment variable; `cleanup` gates garbage
 collection. `five_minute_polling` stays off: it exists only for the
 `tests/capacity.mjs` fixture experiment. The template ships every switch
-`"false"` and `"crons": []`. See the
+`"false"` and `"crons": []`; a running lane needs both `"* * * * *"`
+(dispatch) and `"*/2 * * * *"` (cleanup). A changed cron list takes effect
+only after `yarn wrangler triggers deploy` for that environment, so check both
+expressions on the live version. See the
 [notifications enablement table](../NotificationsWorker/README.md#enablement-is-a-dual-switch)
 for the full matrix and the statement that flips a row.
 
@@ -138,8 +152,9 @@ configured, the lane sends a one-time "armed" notice, then an onset alert, a
 reminder every hour while it lasts, and a recovery once no healthy scanned
 feed is over ten minutes late and five polls complete within five minutes.
 The per-minute rollup and `/stats` share these health predicates and report
-`late_600` and `late_baselines`; the rollup also counts `repairs`, and an
-obsolete delivery emits `poll_outcome` without a D1 write. Stall
+`late_600` and `late_baselines`; the rollup also counts `repairs`,
+`outstanding` and `admission_deferred` (eligible due scans left unreserved by
+the caps), and an obsolete delivery emits `poll_outcome` without a D1 write. Stall
 state lives in D1 and every transition is fenced there, so overlapping
 dispatchers send each alert once and a failed send is retried rather than
 lost. Alerts carry counts, seconds and the lane name only, never feed IDs or
@@ -169,8 +184,10 @@ adapter Worker in front of it that speaks this contract.
 
 The private `PollingControl` service entrypoint accepts POST:
 
-- `/dispatch`: bounded reconciliation and admission. The scheduled handler calls
+- `/dispatch`: bounded reconciliation and admission. The one-minute cron calls
   it.
+- `/cleanup`: bounded scheduled collection, gated by the cleanup controls. The
+  two-minute cron calls it.
 - `/stats`: aggregate health. Overdue and oldest-due ages (healthy and unhealthy
   separately), publisher backoff, dead-lettered feeds, reservations, origin
   cooldowns, outbox and orphan counts, and rolling 24-hour failure, redelivery,
@@ -181,6 +198,14 @@ The private `PollingControl` service entrypoint accepts POST:
   dead-lettered feed now, or reset a poisoned burst. It never changes ownership,
   controls or event expiry.
 - `/consume` and `/dead-letter`: the Queue adapter's own calls.
+
+`poll_delivery` logs every delivery that is not a plain success, every first
+delivery that waited more than 120 seconds in the Queue, and every delivery
+longer than five seconds; other unchanged successes are sampled at 1 in 64.
+It carries `due_lag_seconds`, `message_age_ms` (from the Queue send time, so
+it includes planned delays and retry backoff), `initial_queue_wait_ms` (first
+attempts of undelayed wakeups only), `claim_ms`, `publisher_fetch_ms` and
+`storage_ms`, with opaque feed and origin keys only.
 
 Every public HTTP path returns 404, spoofed capability headers included. Bind
 operators privately and close temporary operator sessions afterward. Publisher
@@ -199,8 +224,8 @@ yarn workspace @opencast/notifications-worker deploy:dry-run
 yarn workspace @opencast/feed-polling-worker deploy:dry-run
 
 for suite in lifecycle digest-runtime review-regressions alerting \
-    permit-reclaim deadline-runtime interest preparation queue evidence \
-    no-change recovery runtime cleanup equivalence livelock; do
+    stage1-review permit-reclaim deadline-runtime interest preparation queue \
+    evidence no-change recovery runtime cleanup equivalence livelock; do
   node "Server/FeedPollingWorker/tests/$suite.mjs" || break
 done
 ```
@@ -213,6 +238,8 @@ test contacts a remote resource.
 
 `capacity.mjs`, `maximum.mjs` and `cost.mjs` are measurement harnesses. They
 need local loopback ports, write reports under `/private/tmp`, and should run
-one at a time. `maximum.mjs` covers the supported 100,000-item, 128 MiB
+one at a time. The default 2,000-feed capacity case uses the fastest
+production cadence (15 minutes); overload and the admission caps are covered
+by `livelock.mjs`. `maximum.mjs` covers the supported 100,000-item, 128 MiB
 envelope; `OPENCAST_OBSERVATION_SCALE=1` runs the notifications observation
 suite at the same scale.

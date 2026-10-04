@@ -68,6 +68,8 @@ cargo test --locked \
   --test counters_migration \
   --test prompt \
   --test routing \
+  --test run_stats \
+  --test usage \
   --test validation
 cargo check --locked --target wasm32-unknown-unknown
 ```
@@ -110,6 +112,26 @@ coalesced results.
 Failures keep their 30-minute expiry, watchdog deadline and authenticated
 purge-on-read behavior, except while pending credit work blocks the purge. New
 terminal billing records carry an independent 30-minute retry deadline.
+
+## Usage limits
+
+Each submission is admitted by the caller's daily usage limiter and then the
+global one. Both Durable Object names come from one UTC day index, so an
+attempt that spans midnight releases what it took. Admission happens before
+the credit reserve, so over-cap traffic never reaches the credit backend.
+
+A submission that never starts a run gives back every admission it confirmed:
+a credit refusal (402, 403 or 503), a reserve transport failure, a global
+refusal after the caller's admission, or a failure to persist the job record or
+its alarm. The release goes through the limiter's `/release` route
+(`src/admission.rs`, `src/usage.rs`), which saturates at zero and never
+decrements a scope that was not confirmed. Each scope is released exactly once;
+a lost release is not retried and stays charged until its day object expires.
+There is deliberately no daily refusal ceiling: a listener who buys time after
+any number of refusals is admitted the same day.
+
+`jobs_started` counts a run only once its record and alarm are durable. The
+`admission_releases` and `admission_release_failures` counters record cleanup.
 
 ## Security and Privacy Defaults
 
