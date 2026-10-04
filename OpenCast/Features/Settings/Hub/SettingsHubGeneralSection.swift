@@ -18,7 +18,7 @@ struct SettingsHubGeneralSection: View {
                 title: "App Icon",
                 systemImage: "app",
                 route: .appIcon,
-                value: appModel.appIcon.selection.title
+                value: appModel.appIcon.selection.qualifiedTitle
             )
         }
     }

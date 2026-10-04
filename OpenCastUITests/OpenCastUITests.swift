@@ -4982,6 +4982,17 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(emberOption.isSelected, "Ember should be the initial app icon selection")
         attachSmokeScreenshot(named: "settings_app_icon_initial")
 
+        let styleControl = app.segmentedControls["App Icon Style"]
+        let glassVioletOption = app.buttons["App Icon Option Glass Violet"]
+        assertHittable(styleControl.buttons["Glass"], named: "Glass icon style segment")
+        styleControl.buttons["Glass"].tap()
+        assertHittable(glassVioletOption, named: "Glass Violet app icon option")
+        XCTAssertTrue(violetOption.waitForNonExistence(timeout: 5), "Classic rows should leave while Glass is shown")
+        attachSmokeScreenshot(named: "settings_app_icon_glass")
+        styleControl.buttons["Classic"].tap()
+        assertHittable(violetOption, named: "Violet app icon option after returning to Classic")
+        XCTAssertTrue(glassVioletOption.waitForNonExistence(timeout: 5), "Glass rows should leave when Classic returns")
+
         needsPrimaryAppIconRestore = true
         violetOption.tap()
         attachSmokeScreenshot(named: "settings_app_icon_violet_confirmation")

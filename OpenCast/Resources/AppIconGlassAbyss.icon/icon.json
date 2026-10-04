@@ -1,0 +1,159 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "extended-srgb:0.10980,0.10980,0.11765,1.00000",
+      "extended-srgb:0.00000,0.00000,0.00000,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "light",
+              "value" : {
+                "linear-gradient" : [
+                  "extended-srgb:0.14118,0.37255,0.78039,1.00000",
+                  "extended-srgb:0.09020,0.24706,0.57255,1.00000"
+                ]
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "linear-gradient" : [
+                  "extended-srgb:0.72157,0.83922,1.00000,1.00000",
+                  "extended-srgb:0.41569,0.65490,1.00000,1.00000"
+                ]
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "extended-srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ],
+          "image-name" : "OpenCast-Mark.svg",
+          "name" : "Mark",
+          "position" : {
+            "scale" : 0.72,
+            "translation-in-points" : [
+              -11.5,
+              0
+            ]
+          }
+        }
+      ],
+      "name" : "OpenCast Mark",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.3
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.1
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "light",
+              "value" : {
+                "linear-gradient" : [
+                  "extended-srgb:0.95294,0.97255,1.00000,0.94000",
+                  "extended-srgb:0.76863,0.86275,1.00000,0.82000"
+                ]
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "linear-gradient" : [
+                  "extended-srgb:0.14118,0.30588,0.58824,0.90000",
+                  "extended-srgb:0.05490,0.13725,0.28235,0.86000"
+                ]
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "extended-srgb:1.00000,1.00000,1.00000,0.25000"
+              }
+            }
+          ],
+          "image-name" : "Glass-Disc.svg",
+          "name" : "Glass Disc",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "name" : "Glass Disc",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.32
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.26
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : {
+                "linear-gradient" : [
+                  "extended-srgb:0.10980,0.10980,0.11765,1.00000",
+                  "extended-srgb:0.00000,0.00000,0.00000,1.00000"
+                ]
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "extended-srgb:0.00000,0.00000,0.00000,0.00000"
+              }
+            }
+          ],
+          "image-name" : "Background.svg",
+          "name" : "Background",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "name" : "Background",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.08
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "iOS"
+    ]
+  }
+}

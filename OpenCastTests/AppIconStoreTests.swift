@@ -54,6 +54,20 @@ struct AppIconStoreTests {
         #expect(!store.isApplying)
     }
 
+    @Test("Selecting a glass option applies its bundle name")
+    func selectGlassOptionAppliesBundleName() async {
+        let application = AlternateIconApplyingSpy(alternateIconName: nil)
+        let store = AppIconStore(application: application)
+        store.load()
+
+        await store.select(.glassViolet)
+
+        #expect(store.selection == .glassViolet)
+        #expect(store.selection.family == .glass)
+        #expect(application.appliedNames == ["AppIconGlassViolet"])
+        #expect(store.lastErrorMessage == nil)
+    }
+
     @Test("Selecting the current option is a no-op")
     func selectingCurrentOptionIsNoOp() async {
         let application = AlternateIconApplyingSpy(alternateIconName: "AppIconGraphite")

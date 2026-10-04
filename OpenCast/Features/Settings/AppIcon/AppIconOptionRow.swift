@@ -30,7 +30,7 @@ struct AppIconOptionRow: View {
             }
         }
         .disabled(appModel.appIcon.isApplying)
-        .accessibilityIdentifier("App Icon Option \(option.title)")
+        .accessibilityIdentifier("App Icon Option \(option.qualifiedTitle)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 

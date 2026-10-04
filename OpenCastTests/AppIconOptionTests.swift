@@ -35,6 +35,38 @@ struct AppIconOptionTests {
         }
     }
 
+    @Test("Each family lists every colourway once, in the same order")
+    func familiesShareColourwayOrder() {
+        let classic = AppIconOption.options(in: .classic)
+        let glass = AppIconOption.options(in: .glass)
+
+        #expect(classic.map(\.title) == glass.map(\.title))
+        #expect(Set(classic.map(\.title)).count == classic.count)
+        #expect(classic.count + glass.count == AppIconOption.allCases.count)
+        #expect(AppIconOption.allCases.count == 24)
+    }
+
+    @Test("Qualified titles are unique and glass ones carry the family prefix")
+    func qualifiedTitlesAreUniqueAndPrefixed() {
+        let qualifiedTitles = AppIconOption.allCases.map(\.qualifiedTitle)
+
+        #expect(Set(qualifiedTitles).count == qualifiedTitles.count)
+        for option in AppIconOption.options(in: .classic) {
+            #expect(option.qualifiedTitle == option.title)
+        }
+        for option in AppIconOption.options(in: .glass) {
+            #expect(option.qualifiedTitle == "Glass \(option.title)")
+        }
+    }
+
+    @Test("Glass bundle names follow AppIconGlass<Title>")
+    func glassBundleNamesFollowTitle() {
+        for option in AppIconOption.options(in: .glass) {
+            #expect(option.rawValue == "AppIconGlass\(option.title)")
+            #expect(option.alternateIconName == option.rawValue)
+        }
+    }
+
     @Test("Every option's preview image loads")
     func previewImagesLoad() {
         for option in AppIconOption.allCases {

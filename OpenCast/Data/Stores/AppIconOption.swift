@@ -13,11 +13,28 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
     case graphite = "AppIconGraphite"
     case midnight = "AppIconMidnight"
     case abyss = "AppIconAbyss"
+    case glassEmber = "AppIconGlassEmber"
+    case glassSunset = "AppIconGlassSunset"
+    case glassHoney = "AppIconGlassHoney"
+    case glassRose = "AppIconGlassRose"
+    case glassViolet = "AppIconGlassViolet"
+    case glassOcean = "AppIconGlassOcean"
+    case glassLagoon = "AppIconGlassLagoon"
+    case glassFern = "AppIconGlassFern"
+    case glassPearl = "AppIconGlassPearl"
+    case glassGraphite = "AppIconGlassGraphite"
+    case glassMidnight = "AppIconGlassMidnight"
+    case glassAbyss = "AppIconGlassAbyss"
 
     /// Maps UIKit's stored alternate icon name back to an option; `nil` and
     /// names from a build that no longer ships them resolve to the primary.
     init(alternateIconName: String?) {
         self = alternateIconName.flatMap(AppIconOption.init(rawValue:)) ?? .ember
+    }
+
+    /// Every colourway, in picker order, for one family.
+    static func options(in family: AppIconFamily) -> [AppIconOption] {
+        allCases.filter { $0.family == family }
     }
 
     var id: String {
@@ -29,32 +46,55 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
         self == .ember ? nil : rawValue
     }
 
+    var family: AppIconFamily {
+        switch self {
+        case .ember, .sunset, .honey, .rose, .violet, .ocean, .lagoon, .fern, .pearl, .graphite, .midnight, .abyss:
+            .classic
+        case .glassEmber, .glassSunset, .glassHoney, .glassRose, .glassViolet, .glassOcean, .glassLagoon, .glassFern,
+             .glassPearl, .glassGraphite, .glassMidnight, .glassAbyss:
+            .glass
+        }
+    }
+
+    /// The colourway name, shared by both families; the picker shows it under
+    /// the family tab.
     var title: String {
         switch self {
-        case .ember:
+        case .ember, .glassEmber:
             "Ember"
-        case .sunset:
+        case .sunset, .glassSunset:
             "Sunset"
-        case .honey:
+        case .honey, .glassHoney:
             "Honey"
-        case .rose:
+        case .rose, .glassRose:
             "Rose"
-        case .violet:
+        case .violet, .glassViolet:
             "Violet"
-        case .ocean:
+        case .ocean, .glassOcean:
             "Ocean"
-        case .lagoon:
+        case .lagoon, .glassLagoon:
             "Lagoon"
-        case .fern:
+        case .fern, .glassFern:
             "Fern"
-        case .pearl:
+        case .pearl, .glassPearl:
             "Pearl"
-        case .graphite:
+        case .graphite, .glassGraphite:
             "Graphite"
-        case .midnight:
+        case .midnight, .glassMidnight:
             "Midnight"
-        case .abyss:
+        case .abyss, .glassAbyss:
             "Abyss"
+        }
+    }
+
+    /// Names the option where no family tab gives it context: the Settings
+    /// hub value and the picker rows' accessibility identifiers.
+    var qualifiedTitle: String {
+        switch family {
+        case .classic:
+            title
+        case .glass:
+            "Glass \(title)"
         }
     }
 
@@ -84,6 +124,30 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
             .appIconPreviewMidnight
         case .abyss:
             .appIconPreviewAbyss
+        case .glassEmber:
+            .appIconPreviewGlassEmber
+        case .glassSunset:
+            .appIconPreviewGlassSunset
+        case .glassHoney:
+            .appIconPreviewGlassHoney
+        case .glassRose:
+            .appIconPreviewGlassRose
+        case .glassViolet:
+            .appIconPreviewGlassViolet
+        case .glassOcean:
+            .appIconPreviewGlassOcean
+        case .glassLagoon:
+            .appIconPreviewGlassLagoon
+        case .glassFern:
+            .appIconPreviewGlassFern
+        case .glassPearl:
+            .appIconPreviewGlassPearl
+        case .glassGraphite:
+            .appIconPreviewGlassGraphite
+        case .glassMidnight:
+            .appIconPreviewGlassMidnight
+        case .glassAbyss:
+            .appIconPreviewGlassAbyss
         }
     }
 }
