@@ -52,6 +52,10 @@ pub async fn handle(mut request: Request, env: Env) -> Result<Response> {
     let db = env.d1("APP_ATTEST_DB")?;
     match request.path().as_str() {
         "/dispatch" => Response::from_json(&super::dispatch::run_dispatch(&env).await?),
+        "/cleanup" => {
+            super::cleanup::consume(&env, &db, now().div_euclid(60)).await?;
+            Response::ok("cleanup_saved")
+        }
         "/stats" => Response::from_json(&super::dispatch::stats(&env, &db).await?),
         "/consume" => {
             let signal = request.inner().signal();
@@ -61,10 +65,14 @@ pub async fn handle(mut request: Request, env: Env) -> Result<Response> {
                 .get("x-poll-attempts")?
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1);
+            let enqueued_ms = request
+                .headers()
+                .get("x-poll-enqueued-ms")?
+                .and_then(|v| v.parse().ok());
             let Some(wake) = wakeup(&mut request).await? else {
                 return Response::error("invalid_wakeup", 400);
             };
-            super::execute::consume(env, wake, attempts, signal).await
+            super::execute::consume(env, wake, attempts, signal, enqueued_ms).await
         }
         "/dead-letter" => {
             let Some(wake) = wakeup(&mut request).await? else {

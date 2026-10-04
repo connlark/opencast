@@ -198,6 +198,7 @@ final class OpenCastAppModel {
         transcriptions: EpisodeTranscriptionStore = EpisodeTranscriptionStore(),
         adAnalyses: EpisodeAdAnalysisStore = EpisodeAdAnalysisStore(),
         transcriptAnalyses: EpisodeTranscriptAnalysisStore = EpisodeTranscriptAnalysisStore(),
+        remoteTranscriptionPurchases: RemoteTranscriptionPurchaseStore? = nil,
         transcriptIntelligence: TranscriptIntelligenceStore = TranscriptIntelligenceStore(),
         adFreePass: EpisodeAdFreePassCoordinator = EpisodeAdFreePassCoordinator(),
         upNextQueue: UpNextQueueStore = UpNextQueueStore(),
@@ -285,7 +286,7 @@ final class OpenCastAppModel {
             transcriptions: transcriptions,
             store: remoteTranscription.store
         )
-        self.remoteTranscriptionPurchases = RemoteTranscriptionPurchaseStore(
+        self.remoteTranscriptionPurchases = remoteTranscriptionPurchases ?? RemoteTranscriptionPurchaseStore(
             api: remoteTranscriptionAPI,
             storeKit: LiveRemoteTranscriptionStoreKitClient()
         )
@@ -293,11 +294,11 @@ final class OpenCastAppModel {
         if let purchaseFixture = RemoteTranscriptionPurchaseUIFixture.requested() {
             switch purchaseFixture {
             case .reviewScreenshot:
-                remoteTranscriptionPurchases.applyReviewScreenshotFixture()
+                self.remoteTranscriptionPurchases.applyReviewScreenshotFixture()
             case .unavailable:
-                remoteTranscriptionPurchases.applyUnavailableFixture()
+                self.remoteTranscriptionPurchases.applyUnavailableFixture()
             case .delayedAvailability:
-                remoteTranscriptionPurchases.applyDelayedAvailabilityFixture()
+                self.remoteTranscriptionPurchases.applyDelayedAvailabilityFixture()
             }
         }
         if RemoteTranscriptionDevFlag.isEnabled,
@@ -314,7 +315,8 @@ final class OpenCastAppModel {
         transcriptAnalysisQueue = TranscriptAnalysisQueue(
             transcriptAnalyses: transcriptAnalyses,
             transcriptions: transcriptions,
-            library: resolvedLibrary
+            library: resolvedLibrary,
+            purchases: self.remoteTranscriptionPurchases
         )
         resolvedLibrary.episodeSidecarMigrators = [downloads, transcriptions, adAnalyses, transcriptAnalyses, playlists]
         notificationSettings.feedHealthRecorder = { [weak resolvedLibrary] records in
@@ -328,7 +330,7 @@ final class OpenCastAppModel {
             adAnalyses: adAnalyses,
             remoteRunner: remoteTranscriptionRunner,
             remoteJobStore: remoteTranscription.store,
-            remotePurchases: remoteTranscriptionPurchases
+            remotePurchases: self.remoteTranscriptionPurchases
         )
         self.adFreePass = adFreePass
         self.upNextQueue = upNextQueue
@@ -413,7 +415,7 @@ final class OpenCastAppModel {
         dataNuke.resetRuntime = { [weak self] modelContext in
             await self?.resetRuntimeStateAfterDataNuke(modelContext: modelContext)
         }
-        remoteTranscriptionPurchases.onBalanceIncreased = { [weak self] in
+        self.remoteTranscriptionPurchases.onBalanceIncreased = { [weak self] in
             self?.transcriptAnalysisQueue.retryDeferredAfterBalanceIncrease()
         }
         self.transcriptions.onAppleSpeechRunInterrupted = { [weak self] episodeID, restoredPriorTranscript in
@@ -2377,6 +2379,14 @@ final class OpenCastAppModel {
             modelContext: modelContext,
             playback: playback
         )
+    }
+
+    @discardableResult
+    func setTapToPlayEnabled(
+        _ isEnabled: Bool,
+        modelContext: ModelContext
+    ) -> Bool {
+        playbackSettings.setTapToPlayEnabled(isEnabled, modelContext: modelContext)
     }
 
     func runVoiceBoostDeviceProbeIfNeeded(modelContext: ModelContext) async {

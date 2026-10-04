@@ -5,6 +5,7 @@ use opencast_app_attest_core::{
     random,
 };
 
+use crate::admission::admit_spend_caps;
 use crate::analysis::run_analysis;
 use crate::auth::{bearer_token, token_hash, token_matches, AUTHORIZATION_HEADER};
 use crate::billing::{
@@ -41,17 +42,9 @@ use crate::types::{
     InsufficientSecondsResponse, GEMINI_MODEL_ENV_VAR, MAX_AUTHENTICATED_ENVELOPE_BODY_BYTES,
     MAX_BODY_BYTES, SCHEMA_VERSION,
 };
-use crate::usage::{
-    global_usage_object_name, usage_object_name, UsageAdmitRequest, UsageLimitProfile,
-    USAGE_LIMITER_BINDING,
-};
-use crate::validation::{
-    decode_and_validate_request, validate_content_length, DailyUsage, ValidatedRequest,
-};
-use worker::{
-    durable_object, wasm_bindgen, Date, DurableObject, Env, Headers, Method, Request, RequestInit,
-    Response, Result, SqlStorage, SqlStorageValue, State,
-};
+use crate::usage::{UsageLimitProfile, UsageObjectNames};
+use crate::validation::{decode_and_validate_request, validate_content_length, ValidatedRequest};
+use worker::{Date, Env, Headers, Method, Request, RequestInit, Response, Result};
 
 pub(crate) const TRANSCRIPT_ANALYSIS_DB: &str = "TRANSCRIPT_ANALYSIS_DB";
 const GEMINI_API_KEY: &str = "GEMINI_API_KEY";
@@ -429,12 +422,13 @@ async fn analyze_transcript_with_bearer(
 
     // The bearer lane is the billing-exempt probe lane: no
     // install identity, no account, still cap-bounded.
+    let subject = bearer_subject(&token_hash(provided_token));
     analyze_validated_request(
         env,
         validated,
-        &usage_object_name(&token_hash(provided_token), day_index()),
+        UsageObjectNames::for_day(&subject, day_index()),
         UsageLimitProfile::Bearer,
-        &bearer_subject(&token_hash(provided_token)),
+        &subject,
         None,
         route_entry_ms,
     )
@@ -483,7 +477,7 @@ async fn analyze_transcript_with_envelope(
     analyze_validated_request(
         env,
         validated,
-        &usage_object_name(&subject, day_index()),
+        UsageObjectNames::for_day(&subject, day_index()),
         UsageLimitProfile::AppAttestKey,
         &subject,
         billing,
@@ -495,7 +489,7 @@ async fn analyze_transcript_with_envelope(
 async fn analyze_validated_request(
     env: &Env,
     validated: ValidatedRequest,
-    usage_object_name: &str,
+    usage_objects: UsageObjectNames,
     usage_profile: UsageLimitProfile,
     subject: &str,
     billing: Option<BillingContext>,
@@ -516,7 +510,7 @@ async fn analyze_validated_request(
         return submit_async_job(
             env,
             validated,
-            usage_object_name,
+            usage_objects,
             usage_profile,
             subject,
             billing,
@@ -530,15 +524,12 @@ async fn analyze_validated_request(
         return json_error_code(400, ERROR_ASYNC_REQUIRED);
     }
 
-    if let Some(response) = admit_spend_caps(
-        env,
-        usage_object_name,
-        usage_profile,
-        day_index(),
-        validated.estimate.estimated_input_tokens,
-    )
-    .await?
-    {
+    // Legacy inline semantics: the admission is consumed the moment the
+    // model call begins, whatever the outcome, so the acquisition is simply
+    // dropped here and never released.
+    let (caller, global) =
+        usage_objects.scopes(usage_profile, validated.estimate.estimated_input_tokens);
+    if let Err(response) = admit_spend_caps(env, caller, global).await? {
         return Ok(response);
     }
 
@@ -571,7 +562,7 @@ async fn analyze_validated_request(
 async fn submit_async_job(
     env: &Env,
     validated: ValidatedRequest,
-    usage_object_name: &str,
+    usage_objects: UsageObjectNames,
     usage_profile: UsageLimitProfile,
     subject: &str,
     billing: Option<BillingContext>,
@@ -584,7 +575,8 @@ async fn submit_async_job(
     let namespace = env.durable_object(JOB_BINDING)?;
     let stub = namespace.get_by_name(&job_object_name(job_id))?;
     let body = serde_json::to_string(&JobSubmitRequest {
-        usage_object_name: usage_object_name.to_string(),
+        usage_object_name: usage_objects.caller,
+        global_usage_object_name: Some(usage_objects.global),
         usage_profile,
         estimated_input_tokens: validated.estimate.estimated_input_tokens,
         subject: subject.to_string(),
@@ -992,202 +984,6 @@ fn internal_post(url: &str, body: String) -> Result<Request> {
     Request::new_with_init(url, &init)
 }
 
-pub(crate) async fn admit_spend_caps(
-    env: &Env,
-    usage_object_name: &str,
-    usage_profile: UsageLimitProfile,
-    day_index: u64,
-    estimated_input_tokens: u64,
-) -> Result<Option<Response>> {
-    if let Some(response) = admit_usage(
-        env,
-        usage_object_name,
-        usage_profile,
-        estimated_input_tokens,
-    )
-    .await?
-    {
-        return Ok(Some(response));
-    }
-
-    admit_usage(
-        env,
-        &global_usage_object_name(day_index),
-        UsageLimitProfile::Global,
-        estimated_input_tokens,
-    )
-    .await
-}
-
-async fn admit_usage(
-    env: &Env,
-    object_name: &str,
-    profile: UsageLimitProfile,
-    estimated_input_tokens: u64,
-) -> Result<Option<Response>> {
-    let namespace = env.durable_object(USAGE_LIMITER_BINDING)?;
-    let stub = namespace.get_by_name(object_name)?;
-    let body = serde_json::to_string(&UsageAdmitRequest {
-        estimated_input_tokens,
-        profile,
-    })?;
-    let headers = Headers::new();
-    headers.set("content-type", JSON_CONTENT_TYPE)?;
-
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(body.into()));
-
-    let request = Request::new_with_init("https://usage-limiter.opencast.internal/admit", &init)?;
-    let mut response = stub.fetch_with_request(request).await?;
-    let status = response.status_code();
-    if status == 200 {
-        let _: DailyUsage = response.json().await?;
-        return Ok(None);
-    }
-
-    let error = response
-        .json::<ErrorResponse>()
-        .await
-        .unwrap_or_else(|_| ErrorResponse::new("usage_limiter_error"));
-    if status == 429 {
-        // A cap denial, keyed by the profile that refused; limiter errors
-        // (503) are not denials and are not counted.
-        counters::bump(env, &[(cap_denial_counter(profile), 1)]).await;
-    }
-    Ok(Some(json_response(
-        if status == 429 { 429 } else { 503 },
-        error,
-    )?))
-}
-
-fn cap_denial_counter(profile: UsageLimitProfile) -> &'static str {
-    match profile {
-        UsageLimitProfile::Bearer => counters::CAP_DENIALS_BEARER,
-        UsageLimitProfile::AppAttestKey => counters::CAP_DENIALS_APP_ATTEST,
-        UsageLimitProfile::Global => counters::CAP_DENIALS_GLOBAL,
-    }
-}
-
-/// Objects are minted per subject and day and never addressed again once
-/// their day passes, so each schedules its own storage wipe: an alarm ~48 h
-/// after the first write (safely past any timezone or day-boundary read)
-/// deletes everything. Pure GC — the object name is never reused, so live
-/// limits cannot change.
-const USAGE_LIMITER_CLEANUP_DELAY: std::time::Duration =
-    std::time::Duration::from_secs(48 * 60 * 60);
-
-#[durable_object(alarm)]
-pub struct TranscriptAnalysisUsageLimiter {
-    state: State,
-    sql: SqlStorage,
-}
-
-impl DurableObject for TranscriptAnalysisUsageLimiter {
-    fn new(state: State, _env: Env) -> Self {
-        let sql = state.storage().sql();
-        sql.exec(
-            "CREATE TABLE IF NOT EXISTS daily_usage (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                request_count INTEGER NOT NULL,
-                estimated_input_tokens INTEGER NOT NULL
-            );",
-            None,
-        )
-        .expect("create usage limiter table");
-        Self { state, sql }
-    }
-
-    async fn fetch(&self, mut req: Request) -> Result<Response> {
-        if req.method() != Method::Post {
-            return json_error(405, ErrorResponse::new("method_not_allowed"));
-        }
-
-        let admit_request = match req.json::<UsageAdmitRequest>().await {
-            Ok(request) => request,
-            Err(_) => return json_error(400, ErrorResponse::new("malformed_json")),
-        };
-        let current_usage = self.current_usage()?;
-        let next_usage = match current_usage.admitting_with_limits(
-            admit_request.estimated_input_tokens,
-            admit_request.profile.limits(),
-        ) {
-            Ok(usage) => usage,
-            Err(error) => return json_error(429, ErrorResponse::new(error.code())),
-        };
-        self.write_usage(&next_usage)?;
-        self.schedule_cleanup().await?;
-        json_success(200, &next_usage)
-    }
-
-    async fn alarm(&self) -> Result<Response> {
-        // DROP first: delete_all clears the object's storage, and dropping
-        // the table explicitly keeps the wipe complete even if the SQLite
-        // backend's delete_all semantics ever exclude SQL tables.
-        self.sql.exec("DROP TABLE IF EXISTS daily_usage;", None)?;
-        self.state.storage().delete_all().await?;
-        self.state.storage().delete_alarm().await?;
-        Response::ok("")
-    }
-}
-
-impl TranscriptAnalysisUsageLimiter {
-    async fn schedule_cleanup(&self) -> Result<()> {
-        if self.state.storage().get_alarm().await?.is_none() {
-            self.state
-                .storage()
-                .set_alarm(USAGE_LIMITER_CLEANUP_DELAY)
-                .await?;
-        }
-        Ok(())
-    }
-
-    fn current_usage(&self) -> Result<DailyUsage> {
-        let rows: Vec<DailyUsageRow> = self
-            .sql
-            .exec(
-                "SELECT request_count, estimated_input_tokens FROM daily_usage WHERE id = 1 LIMIT 1;",
-                None,
-            )?
-            .to_array()?;
-        Ok(rows
-            .first()
-            .map(DailyUsageRow::daily_usage)
-            .unwrap_or_default())
-    }
-
-    fn write_usage(&self, usage: &DailyUsage) -> Result<()> {
-        self.sql.exec(
-            "INSERT INTO daily_usage (id, request_count, estimated_input_tokens)
-             VALUES (1, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                request_count = excluded.request_count,
-                estimated_input_tokens = excluded.estimated_input_tokens;",
-            vec![
-                SqlStorageValue::Integer(usage.request_count as i64),
-                SqlStorageValue::Integer(usage.estimated_input_tokens as i64),
-            ],
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct DailyUsageRow {
-    request_count: i64,
-    estimated_input_tokens: i64,
-}
-
-impl DailyUsageRow {
-    fn daily_usage(&self) -> DailyUsage {
-        DailyUsage {
-            request_count: self.request_count.max(0) as u64,
-            estimated_input_tokens: self.estimated_input_tokens.max(0) as u64,
-        }
-    }
-}
-
 async fn read_limited_json<T: for<'de> serde::Deserialize<'de>>(
     req: &mut Request,
     max_bytes: usize,
@@ -1289,15 +1085,15 @@ fn json_error_code(status: u16, code: &'static str) -> Result<Response> {
     json_error(status, ErrorResponse::new(code))
 }
 
-fn json_error(status: u16, body: ErrorResponse) -> Result<Response> {
+pub(crate) fn json_error(status: u16, body: ErrorResponse) -> Result<Response> {
     static_response(static_json_response(status, body))
 }
 
-fn json_response(status: u16, body: ErrorResponse) -> Result<Response> {
+pub(crate) fn json_response(status: u16, body: ErrorResponse) -> Result<Response> {
     static_response(static_json_response(status, body))
 }
 
-fn json_success(status: u16, body: &impl serde::Serialize) -> Result<Response> {
+pub(crate) fn json_success(status: u16, body: &impl serde::Serialize) -> Result<Response> {
     let headers = Headers::new();
     headers.set("content-type", JSON_CONTENT_TYPE)?;
     Ok(Response::builder()

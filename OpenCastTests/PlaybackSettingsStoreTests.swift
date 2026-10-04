@@ -52,7 +52,7 @@ struct PlaybackSettingsStoreTests {
         let context = ModelContext(container)
         let playback = PlaybackVoiceBoostControllerSpy()
         let store = PlaybackSettingsStore { _, _ in
-            throw PlaybackRatePersistenceFailure()
+            throw PlaybackSettingsSaveFailure()
         }
         store.load(modelContext: context, playback: playback)
 
@@ -218,9 +218,86 @@ struct PlaybackSettingsStoreTests {
         #expect(reloadedStore.isAutoSkipPromosAndAdsEnabled == false)
         #expect(reloadedPlayback.appliedAutoSkipValues == [false])
     }
+
+    @Test("Tap to Play defaults on")
+    func tapToPlayDefaultsOn() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let store = PlaybackSettingsStore()
+
+        store.load(modelContext: ModelContext(container), playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(store.isTapToPlayEnabled)
+    }
+
+    @Test("Tap to Play off persists and a fresh store reloads it")
+    func tapToPlayOffPersistsAndReloads() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = PlaybackSettingsStore()
+        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(store.setTapToPlayEnabled(false, modelContext: context))
+
+        let reloadedStore = PlaybackSettingsStore()
+        reloadedStore.load(modelContext: ModelContext(container), playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(store.isTapToPlayEnabled == false)
+        #expect(store.lastErrorMessage == nil)
+        #expect(reloadedStore.isTapToPlayEnabled == false)
+    }
+
+    @Test(
+        "A Tap to Play save failure restores the shared context without discarding other edits",
+        arguments: [nil, "true", "false"] as [String?]
+    )
+    func tapToPlaySaveFailureRollsBackAndSurfacesError(storedValue: String?) throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let previousUpdatedAt = Date(timeIntervalSince1970: 1_000)
+        if let storedValue {
+            context.insert(LocalPreferenceRecord(
+                key: PlaybackSettingsStore.tapToPlayPreferenceKey,
+                value: storedValue,
+                updatedAt: previousUpdatedAt
+            ))
+            try context.save()
+        }
+        let unrelatedPreference = LocalPreferenceRecord(key: "unrelated.pending.preference", value: "keep")
+        context.insert(unrelatedPreference)
+        let store = PlaybackSettingsStore(save: { _ in
+            throw PlaybackSettingsSaveFailure()
+        })
+        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
+        let previousValue = store.isTapToPlayEnabled
+
+        let didPersist = store.setTapToPlayEnabled(!previousValue, modelContext: context)
+
+        #expect(!didPersist)
+        #expect(store.isTapToPlayEnabled == previousValue)
+        #expect(store.lastErrorMessage?.contains("Unable to update episode tap behavior") == true)
+
+        let restoredRecord = try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.tapToPlayPreferenceKey,
+            modelContext: context
+        )
+        #expect(restoredRecord?.value == storedValue)
+        #expect(restoredRecord?.updatedAt == (storedValue == nil ? nil : previousUpdatedAt))
+        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
+        #expect(store.isTapToPlayEnabled == previousValue)
+
+        try context.save()
+        let freshContext = ModelContext(container)
+        let reloadedStore = PlaybackSettingsStore()
+        reloadedStore.load(modelContext: freshContext, playback: PlaybackVoiceBoostControllerSpy())
+        #expect(reloadedStore.isTapToPlayEnabled == previousValue)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: unrelatedPreference.key,
+            modelContext: freshContext
+        )?.value == "keep")
+    }
 }
 
-private struct PlaybackRatePersistenceFailure: LocalizedError {
+private struct PlaybackSettingsSaveFailure: LocalizedError {
     var errorDescription: String? {
         "Simulated preference save failure"
     }

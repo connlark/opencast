@@ -12,7 +12,7 @@
 # Measured baseline: shard1 960s + 3 unmeasured (40 tests) |
 # shard2 984s + 2 unmeasured (41 tests) | serial 37s + 5 unmeasured (6 tests)
 
-# --- shard1 (est 960s + 10 unmeasured) ---
+# --- shard1 (est 960s + 11 unmeasured) ---
 shard1 OpenCastUITests/OpenCastUITests/testAddPodcastRSSClipboardPrefillScreenshots
 shard1 OpenCastUITests/OpenCastUITests/testCloudUnavailableDetectPassOffersOneTapOnDeviceFallback
 shard1 OpenCastUITests/OpenCastUITests/testEpisodeMenuShowsRemoteSurfacesOnFreshLaunchWithoutSettings
@@ -42,6 +42,7 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededEpisodeProgressRestoresMiniPlay
 shard1 OpenCastUITests/OpenCastUITests/testSeededEpisodeTapWhileListeningPlaysAndExpandsNowPlaying
 shard1 OpenCastUITests/OpenCastUITests/testSeededFailedDownloadShowsPipelineCardRetry
 shard1 OpenCastUITests/OpenCastUITests/testSeededInboxEpisodeTapPlaysAndExpandsNowPlaying
+shard1 OpenCastUITests/OpenCastUITests/testSeededTapToPlayOffOpensEpisodeDetail
 shard1 OpenCastUITests/OpenCastUITests/testSeededInboxFilterHidesPlayedEpisodes
 shard1 OpenCastUITests/OpenCastUITests/testSeededInboxGroupByPodcastCountsShowsAndOpensThemFiltered
 shard1 OpenCastUITests/OpenCastUITests/testSeededLocalSoundLabTranscriptionCompletesAndOpensTranscript

@@ -14,11 +14,12 @@ struct EpisodeRowButton: View {
     let onOpenEpisode: (String) -> Void
 
     var body: some View {
-        Button(action: openEpisode) {
+        Button(action: primaryAction) {
             EpisodeRowView(
                 episode: episode,
                 searchResult: searchResult,
-                showsLocalStatusBadges: showsLocalStatusBadges
+                showsLocalStatusBadges: showsLocalStatusBadges,
+                onPlay: playButtonAction
             )
         }
         .buttonStyle(.plain)
@@ -33,7 +34,24 @@ struct EpisodeRowButton: View {
         .accessibilityIdentifier(EpisodeRowView.accessibilityIdentifier(for: episode.episodeID))
     }
 
-    private func openEpisode() {
+    /// With Tap to Play off the row opens the episode, so the trailing glyph
+    /// becomes the play button.
+    private var playButtonAction: (() -> Void)? {
+        guard !appModel.playbackSettings.isTapToPlayEnabled else {
+            return nil
+        }
+        return playEpisode
+    }
+
+    private func primaryAction() {
+        if appModel.playbackSettings.isTapToPlayEnabled {
+            playEpisode()
+        } else {
+            viewEpisodeDetails(episode)
+        }
+    }
+
+    private func playEpisode() {
         nowPlayingProbeMark("playepisode-tap")
         onSelect()
         do {

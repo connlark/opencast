@@ -12,8 +12,7 @@ const h = await harness(async request => {
 // leave all of them exactly as they were.
 const durable = async () => Object.fromEntries(await Promise.all(['n_observation', 'n_snapshot', 'n_snapshot_ref', 'n_episode_release', 'n_outbox', 'n_event', 'n_poll_origin', 'n_poll_stat'].map(async table => [table, (await h.first(`SELECT COUNT(*) AS n FROM ${table}`)).n])));
 const objects = async () => (await (await h.instance.getR2Bucket('FEED_SNAPSHOTS', 'polling-runtime')).list()).objects.length;
-// On a fifteen-minute boundary the dispatcher also admits a cleanup wakeup.
-const last = async () => (await h.invoke('metrics')).recent.filter(t => t.path === '/test/consume' && t.outcome !== 'cleanup_saved').at(-1);
+const last = async () => (await h.invoke('metrics')).recent.filter(t => t.path === '/test/consume').at(-1);
 try {
   const feed = await h.add('https://fixture.example.com/feed.xml');
   const publicAttempt = await h.instance.dispatchFetch('https://polling.invalid/dispatch', { method: 'POST', headers: { 'x-polling-capability': 'private' } });

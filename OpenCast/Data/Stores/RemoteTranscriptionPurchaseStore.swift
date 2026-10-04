@@ -55,8 +55,9 @@ final class RemoteTranscriptionPurchaseStore {
     private(set) var isRefreshing = false
     private(set) var refundCandidates: [RemoteTranscriptionRefundCandidate] = []
 
-    /// Fires after a redeem lands seconds on the account, so balance-
-    /// deferred work (the Chapters & Summary pay gate) can re-probe (H8).
+    /// Fires after a redeem or a balance refresh applies more headroom, so
+    /// balance-deferred work (the Chapters & Summary pay gate) can re-probe
+    /// against the balance now in place (H8).
     @ObservationIgnored var onBalanceIncreased: (() -> Void)?
 
     @ObservationIgnored private var appAccountToken: UUID?
@@ -245,12 +246,28 @@ final class RemoteTranscriptionPurchaseStore {
         dismissPurchasePhase()
     }
 
-    func refreshBalance() async {
+    /// Returns whether a fresh balance was applied; a failed or cancelled
+    /// refresh keeps the last balance, which callers must not read as new.
+    /// A headroom increase over the previously known balance (a purchase on
+    /// another device sharing the account, or a grant) wakes balance-deferred
+    /// work once the new balance is in place. The session's first balance is
+    /// not evidence of a top-up.
+    @discardableResult
+    func refreshBalance() async -> Bool {
         #if DEBUG
-        if usesUIFixture { return }
+        if usesUIFixture { return false }
         #endif
-        guard let response = try? await api.bootstrap() else { return }
+        // A transport that answers after the refresh's task was cancelled (a
+        // data nuke mid-sweep) must apply nothing and wake nothing: the
+        // caller has already discarded the work this answer would feed.
+        guard let response = try? await api.bootstrap(), !Task.isCancelled else { return false }
+        let previousBalance = balance
         apply(bootstrap: response)
+        if let previousBalance,
+           purchaseHeadroom(response.balance) > purchaseHeadroom(previousBalance) {
+            onBalanceIncreased?()
+        }
+        return true
     }
 
     func refreshRefundCandidates() async {
@@ -347,6 +364,13 @@ final class RemoteTranscriptionPurchaseStore {
             return nil
         }
         return estimate(chargeSeconds: chargeSeconds)
+    }
+
+    /// The analysis charge basis shared by the detail card and the deferred
+    /// retry sweeps: the server prices the declared duration or the last
+    /// segment end, whichever is larger.
+    func analysisEstimate(transcript document: EpisodeTranscriptDocument) -> RemoteTranscriptionConsumptionEstimate? {
+        analysisEstimate(durationSeconds: max(document.audioDuration, document.segments.last?.end ?? 0))
     }
 
     private func estimate(chargeSeconds: Int64) -> RemoteTranscriptionConsumptionEstimate {

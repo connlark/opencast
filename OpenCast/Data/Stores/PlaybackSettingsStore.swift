@@ -8,6 +8,7 @@ final class PlaybackSettingsStore {
     static let playbackRatePreferenceKey = "playback.rate"
     static let voiceBoostModePreferenceKey = "playback.voiceBoost.mode"
     static let autoSkipPromosAndAdsPreferenceKey = "playback.autoSkipPromosAndAds"
+    static let tapToPlayPreferenceKey = "playback.episodeRow.tapToPlay"
     private static let voiceBoostEpisodeKeyPrefix = "playback.voiceBoost.episode."
     private static let skipBackwardIntervalKey = "playback.skip.backward"
     private static let skipForwardIntervalKey = "playback.skip.forward"
@@ -19,13 +20,18 @@ final class PlaybackSettingsStore {
     private(set) var skipBackwardOption = PlaybackSkipIntervalOption.defaultBackward
     private(set) var skipForwardOption = PlaybackSkipIntervalOption.defaultForward
     private(set) var isAutoSkipPromosAndAdsEnabled = true
+    private(set) var isTapToPlayEnabled = true
     private(set) var lastErrorMessage: String?
     @ObservationIgnored private let playbackRatePersistenceOverride: ((Float, ModelContext) throws -> Void)?
+    @ObservationIgnored private let save: (ModelContext) throws -> Void
 
+    /// `save` is the test seam for preference saves.
     init(
-        playbackRatePersistenceOverride: ((Float, ModelContext) throws -> Void)? = nil
+        playbackRatePersistenceOverride: ((Float, ModelContext) throws -> Void)? = nil,
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) {
         self.playbackRatePersistenceOverride = playbackRatePersistenceOverride
+        self.save = save
     }
 
     var canChangeCurrentEpisodeVoiceBoost: Bool {
@@ -58,6 +64,10 @@ final class PlaybackSettingsStore {
                 key: Self.autoSkipPromosAndAdsPreferenceKey,
                 modelContext: modelContext
             ) ?? true
+            isTapToPlayEnabled = try booleanPreference(
+                key: Self.tapToPlayPreferenceKey,
+                modelContext: modelContext
+            ) ?? true
             isVoiceBoostEnabled = try resolvedVoiceBoostEnabled(
                 episodeID: episodeID,
                 modelContext: modelContext
@@ -69,6 +79,7 @@ final class PlaybackSettingsStore {
             skipBackwardOption = .defaultBackward
             skipForwardOption = .defaultForward
             isAutoSkipPromosAndAdsEnabled = true
+            isTapToPlayEnabled = true
             isVoiceBoostEnabled = true
             playback.setRate(1)
             lastErrorMessage = "Unable to load playback settings: \(error.localizedDescription)"
@@ -100,7 +111,7 @@ final class PlaybackSettingsStore {
                     value: String(rate),
                     modelContext: modelContext
                 )
-                try modelContext.save()
+                try save(modelContext)
             }
             lastErrorMessage = nil
             return true
@@ -136,7 +147,7 @@ final class PlaybackSettingsStore {
                 episodeID: episodeID,
                 modelContext: modelContext
             )
-            try modelContext.save()
+            try save(modelContext)
             applyVoiceBoost(to: playback)
             lastErrorMessage = nil
             return true
@@ -180,7 +191,7 @@ final class PlaybackSettingsStore {
                 value: isEnabled.description,
                 modelContext: modelContext
             )
-            try modelContext.save()
+            try save(modelContext)
             lastErrorMessage = nil
             return true
         } catch {
@@ -213,13 +224,66 @@ final class PlaybackSettingsStore {
                 value: isEnabled.description,
                 modelContext: modelContext
             )
-            try modelContext.save()
+            try save(modelContext)
             lastErrorMessage = nil
             return true
         } catch {
             isAutoSkipPromosAndAdsEnabled = previousValue
             applyAutoSkip(to: playback)
             lastErrorMessage = "Unable to update auto-skip: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// Whether a tap on an episode row plays it. Off, the row opens the
+    /// episode and its trailing glyph becomes the play button.
+    @discardableResult
+    func setTapToPlayEnabled(
+        _ isEnabled: Bool,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard isTapToPlayEnabled != isEnabled else {
+            return true
+        }
+
+        let previousValue = isTapToPlayEnabled
+        isTapToPlayEnabled = isEnabled
+
+        do {
+            let existingRecord = try LocalPreferenceRecord.preference(
+                forKey: Self.tapToPlayPreferenceKey,
+                modelContext: modelContext
+            )
+            let record = existingRecord ?? LocalPreferenceRecord(
+                key: Self.tapToPlayPreferenceKey,
+                value: isEnabled.description
+            )
+            let previousStoredValue = record.value
+            let previousUpdatedAt = record.updatedAt
+            if existingRecord == nil {
+                modelContext.insert(record)
+            }
+            record.value = isEnabled.description
+            record.updatedAt = .now
+
+            do {
+                try save(modelContext)
+            } catch {
+                // Undo only this preference; the shared context can contain
+                // unrelated edits that must survive a failed save.
+                if existingRecord != nil {
+                    record.value = previousStoredValue
+                    record.updatedAt = previousUpdatedAt
+                } else {
+                    modelContext.delete(record)
+                }
+                throw error
+            }
+            lastErrorMessage = nil
+            return true
+        } catch {
+            isTapToPlayEnabled = previousValue
+            lastErrorMessage = "Unable to update episode tap behavior: \(error.localizedDescription)"
             return false
         }
     }
@@ -283,7 +347,7 @@ final class PlaybackSettingsStore {
             for record in records {
                 modelContext.delete(record)
             }
-            try modelContext.save()
+            try save(modelContext)
             lastErrorMessage = nil
             return true
         } catch {
@@ -385,7 +449,7 @@ final class PlaybackSettingsStore {
                 value: "\(option.rawValue)",
                 modelContext: modelContext
             )
-            try modelContext.save()
+            try save(modelContext)
             lastErrorMessage = nil
             return true
         } catch {

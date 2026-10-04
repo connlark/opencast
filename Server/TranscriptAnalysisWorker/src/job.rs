@@ -92,6 +92,15 @@ impl JobRecord {
         }
     }
 
+    pub fn job_id(&self) -> &str {
+        match self {
+            JobRecord::Running { job_id, .. }
+            | JobRecord::Completed { job_id, .. }
+            | JobRecord::FailedUpstream { job_id, .. }
+            | JobRecord::FailedTransient { job_id, .. } => job_id,
+        }
+    }
+
     pub fn subjects(&self) -> &[String] {
         match self {
             JobRecord::Running { subjects, .. }
@@ -238,7 +247,16 @@ pub fn bearer_subject(token_hash: &str) -> String {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct JobSubmitRequest {
+    /// Exact per-caller limiter object for this attempt, day already
+    /// folded in by the route handler.
     pub usage_object_name: String,
+    /// The global limiter object for the SAME day as `usage_object_name`,
+    /// so admission and release address one pair of objects even when the
+    /// attempt straddles 00:00 UTC. Defaulted for deploy skew: a submit
+    /// serialized by the previous worker version falls back to the current
+    /// day.
+    #[serde(default)]
+    pub global_usage_object_name: Option<String>,
     pub usage_profile: UsageLimitProfile,
     pub estimated_input_tokens: u64,
     /// Server-derived caller identity recorded on the job. Defaulted so a

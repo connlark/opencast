@@ -57,5 +57,32 @@ try{
   assert.deepEqual(await h.rows("SELECT state,valid_eof,COUNT(*) AS n FROM n_observation WHERE state<>'published' GROUP BY state,valid_eof"),[{state:'staging',valid_eof:0,n:2}]);
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_poll'")).n+(await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_origin_permit'")).n,0);
   assert.equal((await h.first('SELECT poll_failures FROM n_feed WHERE feed_id=?',feeds.get('healthy'))).poll_failures,0);
+  // Hung D1 claims previously escaped the 200-second budget entirely. A
+  // bookkeeping stall has its own shared 20 seconds, even if the claim failed.
+  failing=false;
+  await h.run('UPDATE n_feed SET due_at=?,dispatch_until=0,retry_at=0',h.now+3600);
+  const bounded=feeds.get('healthy');
+  await h.run('UPDATE n_feed SET due_at=0 WHERE feed_id=?',bounded);
+  await h.invoke('test/dispatch');const [wake]=await h.polls();
+  for(const [fault,minimum,maximum,status] of [['hang_claim',199000,220000,503],['hang_bookkeeping',19000,23000,500]]){
+    await h.invoke('fault',fault);const before=h.fetches.length,start=performance.now();
+    const result=await h.consume(wake,{headers:{'x-poll-enqueued-ms':String(Date.now()-121000)}});
+    const wall=performance.now()-start;
+    assert.equal(result.status,status,result.text);assert.ok(wall>=minimum&&wall<=maximum,`${fault}: ${wall}ms`);
+    assert.equal(h.fetches.length,before,'a hung/failed claim never reaches the publisher');
+    const entry=(await h.invoke('metrics')).deliveries.at(-1);
+    assert.ok(entry.initial_queue_wait_ms>=120000);assert.equal(entry.publisher_fetch_ms,0);
+    if(fault==='hang_claim')assert.ok(entry.claim_ms>=199000);
+    else assert.ok(entry.storage_ms>=19000);
+    await h.invoke('release-hang');
+    console.log(`PASS ${fault} returns a retryable failure within its whole invocation budget (${Math.round(wall)}ms)`);
+  }
+  const retry=await h.consume(wake,{attempts:2,headers:{'x-poll-enqueued-ms':String(Date.now()-121000)}});
+  assert.equal(retry.status,200,retry.text);await h.drain();
+  // Redelivery age includes retry backoff, so it does not force a plain
+  // success into the undelayed-admission Queue-wait sample.
+  const logs=(await h.invoke('metrics')).deliveries;
+  for(const log of logs.filter(log=>log.attempts>1))assert.equal(log.initial_queue_wait_ms,null);
+  assert.ok(logs.every(log=>log.claim_ms>=0&&log.publisher_fetch_ms>=0&&log.storage_ms>=0));
   console.log('PASS both queued timeout classes, repeat transport reuse and healthy follow-up');
 }finally{for(const release of releases)release();if(stop)await stop();await h.instance.dispose();}

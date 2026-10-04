@@ -21,6 +21,7 @@ pub struct ObserverSink {
     pub origin: Option<crate::polling::origin::Session>,
     // Survives dropping a timed-out storage future; never blame its publisher.
     pub storage_pending: bool,
+    pub timings: crate::polling::timing::Timings,
     // The scan's first-observed bound and where to record it. It outlives the
     // observer, which a finishing scan consumes, and is spent at most once.
     evidence: Option<(D1Database, Bound)>,
@@ -37,6 +38,7 @@ impl EpisodeSink for ObserverSink {
             return Ok(());
         };
         self.storage_pending = true;
+        let _span = crate::polling::timing::Span::new(self.timings.sink.clone(), None);
         let result = observer.item(episode, raw).await;
         self.storage_pending = false;
         result
@@ -54,6 +56,7 @@ impl ObserverSink {
             origin,
             storage_pending: false,
             reached: false,
+            timings: Default::default(),
         }
     }
     /// Called immediately before each publisher request is sent. Until then a
@@ -238,6 +241,7 @@ pub(crate) async fn execute(
     feed.etag = authority["etag"].as_str().map(str::to_string);
     feed.last_modified = authority["last_modified"].as_str().map(str::to_string);
     let mut sink = ObserverSink::scanning(env.d1("APP_ATTEST_DB")?, store, origin);
+    sink.timings = poll.as_ref().map(|p| p.timings.clone()).unwrap_or_default();
     let result = scan(&env, &db, &command.feed_id, &feed, poll.as_ref(), &mut sink).await;
     if result.is_err() {
         // The scan died outside its own handling, possibly after its observer

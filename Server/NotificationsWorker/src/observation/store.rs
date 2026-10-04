@@ -198,6 +198,9 @@ impl Store {
         let t = now();
         // The checkpoint read at the start must still be the published one.
         let claim = format!("UPDATE {table} AS s SET lease_id=?7,lease_until=?2+180 WHERE s.feed_id=?1 AND s.{generation}=?4 AND EXISTS(SELECT 1 FROM n_feed f WHERE f.feed_id=s.feed_id AND f.epoch=?5 AND f.eligibility_generation=?6 AND {}){}", Self::admissible(), self.poll.as_ref().map(|p| format!(" AND {}", p.sql(t))).unwrap_or_default());
+        if let Some(poll) = &self.poll {
+            *poll.scan_lease.borrow_mut() = Some(self.lease.clone());
+        }
         if run(
             &self.db,
             &claim,

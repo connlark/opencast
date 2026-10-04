@@ -18,11 +18,11 @@ pub const SCHEMA_VERSION: u8 = 2;
 pub struct Wakeup {
     pub schema_version: u8,
     pub environment: String,
-    /// `poll` advances one feed; `cleanup` is the private maintenance wakeup.
+    /// `poll` advances one feed; retained legacy `cleanup` messages are ignored.
     pub kind: String,
     pub feed_id: String,
     pub owner_epoch: i64,
-    /// Dispatch generation for a poll; the minute for cleanup.
+    /// Dispatch generation for a poll; legacy cleanup minutes are ignored.
     pub generation: i64,
     pub due_at: i64,
     /// Continuation count within this generation.
@@ -35,6 +35,15 @@ const CONTROLS:&str="EXISTS(SELECT 1 FROM n_control WHERE name='dispatcher_admis
 
 // All lateness readers use this predicate, including origin cooldowns.
 pub(super) const HEALTHY: &str = "f.poll_failures=0 AND f.handling_failures=0 AND f.retry_at<=?1 AND NOT EXISTS(SELECT 1 FROM n_poll_origin h WHERE h.origin_key=f.origin_key AND h.cooldown_until>?1)";
+
+/// Canonical URLs have normalized scheme/host/port and no userinfo or fragment.
+/// A root URL may have no slash, or a query immediately after the authority.
+/// Group by that authority even before the first reservation stores origin_key.
+fn admission_origin(alias: &str) -> String {
+    let url = format!("{alias}.canonical_url");
+    let authority = format!("substr({url},instr({url},'://')+3)");
+    format!("substr({url},1,instr({url},'://')+1+MIN(instr({authority}||'/','/'),instr({authority}||'?','?')))")
+}
 
 pub async fn run_dispatch(env: &Env) -> Result<Value> {
     let db = env.d1("APP_ATTEST_DB")?;
@@ -62,17 +71,20 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
     let scan_due = "f.due_at<=?1+30 AND f.retry_at<=?1 AND NOT EXISTS(SELECT 1 FROM n_poll_origin h WHERE h.origin_key=f.origin_key AND h.cooldown_until>?1)";
     let repair_rows = rows(&db, &format!("SELECT f.feed_id,f.canonical_url FROM n_feed f WHERE {ELIGIBLE} AND f.dispatch_until>0 AND f.dispatch_until<=?1 AND (({scan_due}) OR {pending}) ORDER BY f.dispatch_until,f.due_at,f.feed_id LIMIT {}", policy::REPAIR_LIMIT), &[json!(t)]).await?;
     let repairs = repair_rows.iter().map(record).collect::<Result<Vec<_>>>()?;
-    let repaired = reserve(env, &db, &repairs, t, true).await?;
+    let repaired = reserve(env, &db, &repairs, t, true, false).await?;
     // Settled feeds alone create a new obligation. Bounded early admission
     // leaves processing headroom within the minute tick.
     let base = format!("{ELIGIBLE} AND f.dispatch_until=0 AND {scan_due}");
+    let origin = admission_origin("f");
     let query = |baseline: bool, limit: usize| {
-        format!("SELECT feed_id,canonical_url FROM (SELECT f.feed_id,f.canonical_url,f.due_at,ROW_NUMBER() OVER(PARTITION BY COALESCE(f.origin_key,f.feed_id) ORDER BY f.due_at,f.feed_id) AS host_rank FROM n_feed f WHERE {base} AND (f.snapshot_key IS NULL)={}) ORDER BY host_rank,due_at,feed_id LIMIT {limit}",i32::from(baseline))
+        format!("WITH live AS MATERIALIZED (SELECT {origin} AS origin,COUNT(*) AS n FROM n_feed f WHERE f.dispatch_until>?1 GROUP BY origin), ranked AS (SELECT f.feed_id,f.canonical_url,f.due_at,{origin} AS origin,ROW_NUMBER() OVER(PARTITION BY {origin} ORDER BY f.due_at,f.feed_id) AS host_rank FROM n_feed f WHERE {base} AND (f.snapshot_key IS NULL)={}) SELECT r.feed_id,r.canonical_url FROM ranked r LEFT JOIN live l ON l.origin=r.origin WHERE r.host_rank+COALESCE(l.n,0)<={} ORDER BY r.host_rank,r.due_at,r.feed_id LIMIT {limit}",i32::from(baseline),policy::ORIGIN_OUTSTANDING_LIMIT)
     };
-    let mut recurring = rows(&db, &query(false, policy::DISPATCH_LIMIT), &[json!(t)])
+    // Each class may borrow all global headroom; the atomic reserve below
+    // rechecks both limits across their combined 4:1 ordering.
+    let mut recurring = rows(&db, &query(false, policy::OUTSTANDING_LIMIT), &[json!(t)])
         .await?
         .into_iter();
-    let mut baselines = rows(&db, &query(true, policy::DISPATCH_LIMIT), &[json!(t)])
+    let mut baselines = rows(&db, &query(true, policy::OUTSTANDING_LIMIT), &[json!(t)])
         .await?
         .into_iter();
     let mut admitted = vec![];
@@ -87,27 +99,17 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
         };
         admitted.push(record(&row)?);
     }
-    let polls = reserve(env, &db, &admitted, t, false).await?;
+    let polls = reserve(env, &db, &admitted, t, false, true).await?;
     // Separate maintenance admission keeps future/outbox recovery independent
     // of recurring due dates, publisher backoff and origin cooldowns. Oldest
     // work is selected, not alphabetical feeds. It also resumes a preparation
     // whose continuation message was lost.
     let maintenance=rows(&db,&format!("SELECT f.feed_id,f.canonical_url FROM n_feed f WHERE {ELIGIBLE} AND f.dispatch_until=0 AND {pending} ORDER BY f.due_at,f.feed_id LIMIT 100"),&[json!(t)]).await?;
     let maintenance = maintenance.iter().map(record).collect::<Result<Vec<_>>>()?;
-    let maintained = reserve(env, &db, &maintenance, t, false).await?;
-    if permitted(env, &db, "cleanup").await?
-        && t.div_euclid(60) % policy::CLEANUP_INTERVAL_MINUTES == 0
-    {
-        super::cleanup::enqueue(env, t.div_euclid(60)).await?;
-        run(
-            &db,
-            "DELETE FROM n_poll_stat WHERE bucket<?1",
-            &[json!(t.div_euclid(3600) - 48)],
-        )
-        .await?;
-    }
+    let maintained = reserve(env, &db, &maintenance, t, false, false).await?;
     // The one-minute cost/lag rollup: no per-poll diagnostic rows exist.
-    let mut rollup = first(&db,&format!("SELECT (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1) AS overdue,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS healthy_overdue,(SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS oldest_due_seconds,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NOT NULL AND f.due_at<?1-600) AS late_600,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NULL AND f.due_at<?1-600) AS late_baselines,(SELECT COUNT(*) FROM n_feed f WHERE f.dispatch_until>?1) AS in_flight,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome IN('not_modified','unchanged')) AS unchanged_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome='published') AS published_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome NOT IN('not_modified','unchanged','published')) AS failed_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-300 AND f.last_poll_outcome IN('not_modified','unchanged','published')) AS completed_last_5min"),&[json!(t)]).await?.unwrap_or_else(|| json!({}));
+    let mut rollup = first(&db,&format!("SELECT (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1) AS overdue,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS healthy_overdue,(SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS oldest_due_seconds,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NOT NULL AND f.due_at<?1-600) AS late_600,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NULL AND f.due_at<?1-600) AS late_baselines,(SELECT COUNT(*) FROM n_feed f WHERE f.dispatch_until>?1) AS in_flight,(SELECT COUNT(*) FROM n_feed f WHERE {base}) AS admission_deferred,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome IN('not_modified','unchanged')) AS unchanged_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome='published') AS published_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome NOT IN('not_modified','unchanged','published')) AS failed_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-300 AND f.last_poll_outcome IN('not_modified','unchanged','published')) AS completed_last_5min"),&[json!(t)]).await?.unwrap_or_else(|| json!({}));
+    rollup["outstanding"] = rollup["in_flight"].clone();
     rollup["repairs"] = json!(repaired);
     rollup["admitted"] = json!(polls);
     rollup["maintenance_admitted"] = json!(maintained);
@@ -427,7 +429,9 @@ async fn alert_dispatch(
 fn record(row: &Value) -> Result<Value> {
     let url = url::Url::parse(string(row, "canonical_url"))
         .map_err(|_| Error::RustError("invalid_feed_mapping".into()))?;
-    Ok(json!({"feed_id":row["feed_id"],"origin_key":origin::key(&url)}))
+    Ok(
+        json!({"feed_id":row["feed_id"],"origin_key":origin::key(&url),"admission_origin":url.origin().ascii_serialization()}),
+    )
 }
 /// Reserve atomically; only a new obligation advances the generation. Overlapping dispatchers
 /// cannot both reserve a feed, so no dispatcher lease is needed; only the rows
@@ -438,11 +442,16 @@ async fn reserve(
     records: &[Value],
     t: i64,
     repair: bool,
+    bounded: bool,
 ) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
     }
-    let reserved=rows(db,&format!("UPDATE n_feed AS f SET schedule_generation=f.schedule_generation+CASE WHEN f.dispatch_until=0 THEN 1 ELSE 0 END,dispatch_until=?2+{},origin_key=json_extract(j.value,'$.origin_key') FROM json_each(?1) j WHERE f.feed_id=json_extract(j.value,'$.feed_id') AND f.dispatch_until<=?2 AND (f.dispatch_until>0)=?3 AND {ELIGIBLE} AND {CONTROLS} RETURNING feed_id,epoch,schedule_generation,due_at",policy::DISPATCH_RESERVATION_SECONDS),&[json!(records),json!(t),json!(i32::from(repair))]).await?;
+    // Materialize the valid ordered candidates and headroom in this one atomic
+    // statement. An overlapping dispatcher sees the preceding reservations;
+    // rows it already took cannot consume this statement's available slots.
+    let origin = admission_origin("f");
+    let reserved=rows(db,&format!("WITH live AS MATERIALIZED (SELECT {origin} AS origin,COUNT(*) AS n FROM n_feed f WHERE ?4 AND f.dispatch_until>?2 GROUP BY origin), eligible AS MATERIALIZED (SELECT j.value,CAST(j.key AS INTEGER) AS position,ROW_NUMBER() OVER(PARTITION BY json_extract(j.value,'$.admission_origin') ORDER BY CAST(j.key AS INTEGER)) AS origin_rank FROM json_each(?1) j JOIN n_feed f ON f.feed_id=json_extract(j.value,'$.feed_id') WHERE f.dispatch_until<=?2 AND (f.dispatch_until>0)=?3 AND {ELIGIBLE} AND {CONTROLS}), admitted AS MATERIALIZED (SELECT e.value FROM eligible e LEFT JOIN live l ON l.origin=json_extract(e.value,'$.admission_origin') WHERE NOT ?4 OR e.origin_rank+COALESCE(l.n,0)<={} ORDER BY e.position LIMIT (CASE WHEN ?4 THEN MAX(0,{}-(SELECT COUNT(*) FROM n_feed WHERE dispatch_until>?2)) ELSE -1 END)) UPDATE n_feed AS f SET schedule_generation=f.schedule_generation+CASE WHEN f.dispatch_until=0 THEN 1 ELSE 0 END,dispatch_until=?2+{},origin_key=json_extract(j.value,'$.origin_key') FROM admitted j WHERE f.feed_id=json_extract(j.value,'$.feed_id') RETURNING feed_id,epoch,schedule_generation,due_at",policy::ORIGIN_OUTSTANDING_LIMIT,policy::OUTSTANDING_LIMIT,policy::DISPATCH_RESERVATION_SECONDS),&[json!(records),json!(t),json!(i32::from(repair)),json!(i32::from(bounded))]).await?;
     let messages: Vec<_> = reserved
         .iter()
         .map(|r| Wakeup {

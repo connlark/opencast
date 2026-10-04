@@ -914,6 +914,43 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededTapToPlayOffOpensEpisodeDetail() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openSettingsScreen("Playback", in: app)
+        let tapToPlayToggle = app.switches["playback-tap-to-play-toggle"].firstMatch
+        scrollUntilHittable(tapToPlayToggle, in: app)
+        assertToggle(tapToPlayToggle, isOn: true)
+        tapToggle(tapToPlayToggle, to: false)
+        attachSmokeScreenshot(named: "settings_playback_tap_to_play_off")
+
+        openSection("Inbox", in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertHittable(inboxEpisode, named: "seeded inbox episode")
+        attachSmokeScreenshot(named: "inbox_episode_row_tap_to_play_off")
+        inboxEpisode.tap()
+
+        assertExists(
+            episodePlaybackControl(in: app),
+            named: "episode detail after a row tap with Tap to Play off",
+            timeout: 10
+        )
+        assertDoesNotExist(
+            app.buttons["Open Now Playing"],
+            named: "mini-player after a row tap with Tap to Play off",
+            timeout: 2
+        )
+
+        swipeBack(in: app)
+        let playButton = app.buttons["episode-play-ui-test-episode-1"].firstMatch
+        assertHittable(playButton, named: "Inbox row play button")
+        playButton.tap()
+
+        assertNowPlayingOverlay(in: app)
+    }
+
+    @MainActor
     func testSeededInboxEpisodeContextMenuPeekOpensEpisodeDetail() throws {
         let app = makeSeededApp()
         app.launch()

@@ -120,4 +120,40 @@ try {
   await h.consume(retry); await h.drain();
   assert.equal((await h.first('SELECT schedule_generation FROM n_feed WHERE feed_id=?', uncertain)).schedule_generation, lapsed.schedule_generation);
   console.log('PASS uncertain enqueue repairs the same generation and retained copies remain useful');
+  // More due scans than the cap, one concentrated origin and overlapping
+  // ticks. Live obligations remain bounded while service is below demand.
+  await h.run('UPDATE n_feed SET admission_paused=1,dispatch_until=0');
+  const burst=[];
+  for(let i=0;i<260;i++)burst.push(await h.add(`https://${i<240?'burst':'other-'+i}.example.com/${i}`,at+120));
+  // These are newly enrolled feeds: origin_key is still NULL. Admission must
+  // group their canonical origins before the first reservation populates it.
+  await h.invoke('freeze',String(at+120));
+  await Promise.all([h.invoke('test/dispatch'),h.invoke('test/dispatch')]);
+  const firstBurst=await h.polls();
+  assert.equal(firstBurst.length,120);assert.equal(new Set(firstBurst.map(w=>w.feed_id)).size,120);
+  for(const feed of burst.slice(240))assert.ok(firstBurst.some(w=>w.feed_id===feed),'other origins get admitted through a concentrated burst');
+  // A different origin becoming due on a later tick still has headroom.
+  for(let i=0;i<80;i++)await h.add(`https://later-${i}.example.com/feed`,at+180);
+  await h.invoke('freeze',String(at+180));
+  await Promise.all([h.invoke('test/dispatch'),h.invoke('test/dispatch')]);
+  const later=await h.polls();assert.equal(later.length,80);
+  firstBurst.push(...later);
+  assert.equal((await h.invoke('test/dispatch')).admission_deferred,140);
+  assert.equal((await h.polls()).length,0);
+  for(let tick=1;tick<=3;tick++){
+    await h.consume(firstBurst.shift());await h.drain();
+    await h.invoke('freeze',String(at+180+tick*60));
+    const roll=await h.invoke('test/dispatch');
+    assert.ok(roll.outstanding<=200,'new admission cannot exceed the live cap below service demand');
+    firstBurst.push(...await h.polls());
+  }
+  // Maintenance and repair remain admissible even when all scan slots are full.
+  await h.run("UPDATE n_feed SET admission_paused=0,dispatch_until=0 WHERE feed_id=?",maintenance[0]);
+  await h.run("UPDATE n_outbox SET state='pending',next_attempt_at=0 WHERE observation_id IN(SELECT observation_id FROM n_observation WHERE feed_id=?)",maintenance[0]);
+  const exempt=await h.invoke('test/dispatch');
+  assert.equal(exempt.maintenance_admitted,1);assert.equal(exempt.outstanding,201);
+  const repairing=await h.first('SELECT feed_id FROM n_feed WHERE admission_paused=0 AND dispatch_until>? AND due_at<=? LIMIT 1',at+300,at+300);
+  await h.run('UPDATE n_feed SET dispatch_until=? WHERE feed_id=?',at,repairing.feed_id);
+  assert.equal((await h.invoke('test/dispatch')).repairs,1,'repair ignores admission cap');
+  console.log('PASS atomic outstanding cap, overlapping ticks, origin fairness and independent maintenance/repair');
 } finally { await h.instance.dispose(); }

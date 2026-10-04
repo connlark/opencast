@@ -16,9 +16,13 @@ struct DownloadedEpisodeRowButton: View {
     }
 
     var body: some View {
-        Button(action: playDownloadedEpisode) {
+        Button(action: primaryAction) {
             VStack(alignment: .leading, spacing: 0) {
-                EpisodeRowView(episode: item.episode, searchResult: searchResult)
+                EpisodeRowView(
+                    episode: item.episode,
+                    searchResult: searchResult,
+                    onPlay: playButtonAction
+                )
                 if item.isOrphaned {
                     Label("No longer in library", systemImage: "exclamationmark.triangle")
                         .font(.caption)
@@ -48,6 +52,23 @@ struct DownloadedEpisodeRowButton: View {
                 action: togglePlayed
             )
             .tint(isPlayed ? .blue : .green)
+        }
+    }
+
+    /// With Tap to Play off the row opens the episode, so the trailing glyph
+    /// becomes the play button.
+    private var playButtonAction: (() -> Void)? {
+        guard !appModel.playbackSettings.isTapToPlayEnabled else {
+            return nil
+        }
+        return playDownloadedEpisode
+    }
+
+    private func primaryAction() {
+        if appModel.playbackSettings.isTapToPlayEnabled {
+            playDownloadedEpisode()
+        } else {
+            viewEpisodeDetails(item.episode)
         }
     }
 

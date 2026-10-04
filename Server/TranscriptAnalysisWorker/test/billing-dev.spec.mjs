@@ -13,16 +13,19 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ANALYZE_PATH,
   BEARER,
   BOOTSTRAP_PATH,
   GEMINI_TRUNCATED_RESPONSE,
   analysisFor,
+  deviceLimiterStub,
   geminiResponse,
+  globalLimiterStub,
   installFetchStub,
   jobStub,
+  limiterUsage,
   makeRequest,
   makeSyntheticAppAttestIdentity,
   mockGeminiDeferred,
@@ -35,6 +38,7 @@ import {
   readCounters,
   restoreFetchStub,
   seedSyntheticKey,
+  setLimiterUsage,
   waitForCounterDelta,
   waitForTerminalPollAs,
 } from "./support.mjs";
@@ -297,9 +301,11 @@ describe("async lane lifecycle", () => {
 });
 
 describe("insufficient balance", () => {
-  it("returns the typed 402 with charge and balance, consuming nothing", async () => {
+  it("returns the typed 402 with charge and balance, consuming no money and no admission", async () => {
     const countersBefore = await readCounters();
     const { identity } = await bootstrappedIdentity();
+    const deviceLimiter = await deviceLimiterStub(identity);
+    const globalBefore = await limiterUsage(globalLimiterStub());
     const request = makeRequest({
       fingerprint: "4a".repeat(32),
       asyncSupported: true,
@@ -325,8 +331,15 @@ describe("insufficient balance", () => {
       reserved_seconds: 0,
       consumed_seconds: 0,
     });
-    // Admission was consumed but no run started: only the refusal counts.
+    // The refusal is not a run: both admissions were given back, so the
+    // per-device object is untouched and the global object reads as before.
+    expect(await limiterUsage(deviceLimiter)).toEqual({
+      request_count: 0,
+      estimated_input_tokens: 0,
+    });
+    expect(await limiterUsage(globalLimiterStub())).toEqual(globalBefore);
     expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      admission_releases: 1,
       reserve_denied_insufficient: 1,
     });
   });
@@ -347,6 +360,462 @@ describe("insufficient balance", () => {
     expect((await response.json()).charge_seconds).toBe(
       Math.ceil((100000 * 7850) / 3600),
     );
+  });
+});
+
+
+/// An unaffordable request: 100,000 s of audio prices at 218,056
+/// credit-seconds against the 36,000 s dev grant.
+function unaffordableRequest(fingerprint) {
+  const request = makeRequest({ fingerprint, asyncSupported: true });
+  request.transcript.audio_duration = 100000;
+  return request;
+}
+const UNAFFORDABLE_CHARGE = Math.ceil((100000 * 7850) / 3600);
+
+async function grantDevCredit(accountID, availableSeconds) {
+  await env.TRANSCRIPT_ANALYSIS_DB.prepare(
+    "UPDATE dev_credit_accounts SET available_seconds = ?1 WHERE account_id = ?2",
+  )
+    .bind(availableSeconds, accountID)
+    .run();
+}
+
+async function refuseForCredit(identity, request, times) {
+  for (let index = 0; index < times; index += 1) {
+    const response = await postEnvelope(identity, ANALYZE_PATH, request);
+    expect(response.status, `refusal ${index + 1}`).toBe(402);
+    expect((await response.json()).error).toBe("insufficient_transcription_seconds");
+  }
+}
+
+/// A funded submit whose mocked run completes; returns the started job's
+/// terminal poll so the caller can assert on it.
+async function runFunded(identity, request) {
+  mockGeminiOnce(geminiResponse(analysisFor(request.segments.length)));
+  const submitted = await postEnvelope(identity, ANALYZE_PATH, request);
+  expect(submitted.status).toBe(202);
+  const completed = await waitForTerminalPollAs(identity, request.transcript.fingerprint);
+  expect(completed.status).toBe(200);
+  await waitForReservationState(identity.accountID, "settled");
+}
+
+describe("admission accounting (credit refusals give their admissions back)", () => {
+  it("keeps thirteen credit refusals at 402 and never reaches a cap denial", async () => {
+    // The 2026-10-02 incident shape: the twelve-request per-device cap was
+    // filled by refusals and the thirteenth submit got a 429. Now every
+    // refusal unwinds, so the thirteenth is just another 402.
+    const countersBefore = await readCounters();
+    const { identity } = await bootstrappedIdentity();
+    const deviceLimiter = await deviceLimiterStub(identity);
+    const globalBefore = await limiterUsage(globalLimiterStub());
+    const request = unaffordableRequest("8a".repeat(32));
+
+    await refuseForCredit(identity, request, 13);
+
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    expect(await limiterUsage(globalLimiterStub())).toEqual(globalBefore);
+    const diff = counterDiff(countersBefore, await readCounters());
+    expect(diff).toEqual({
+      admission_releases: 13,
+      reserve_denied_insufficient: 13,
+    });
+    expect(Object.keys(diff).filter((name) => name.startsWith("cap_denials"))).toEqual([]);
+    expect((await reservationsFor(identity.accountID)).length).toBe(0);
+  });
+
+  it("admits a buyer the same day after twelve refusals", async () => {
+    const countersBefore = await readCounters();
+    const { identity } = await bootstrappedIdentity();
+    const deviceLimiter = await deviceLimiterStub(identity);
+    const request = unaffordableRequest("8b".repeat(32));
+
+    await refuseForCredit(identity, request, 12);
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+
+    // Top up (the dev-fake equivalent of a purchase landing) and run.
+    await grantDevCredit(identity.accountID, UNAFFORDABLE_CHARGE + 1);
+    await runFunded(identity, request);
+
+    // Exactly the started run is charged against the device's day.
+    const usage = await limiterUsage(deviceLimiter);
+    expect(usage.request_count).toBe(1);
+    expect(usage.estimated_input_tokens).toBeGreaterThan(0);
+    expect(await waitForCounterDelta(countersBefore, "settled_jobs", 1)).toMatchObject({
+      admission_releases: 12,
+      reserve_denied_insufficient: 12,
+      jobs_started: 1,
+      jobs_completed: 1,
+      charged_credit_seconds: UNAFFORDABLE_CHARGE,
+    });
+  });
+
+  it("has no hidden refusal ceiling: forty-one refusals, then a funded submit runs", async () => {
+    // The bearer cap is 40 and a proposed refusal ceiling was 40; neither
+    // bounds credit checks on the App Attest lane. Refusals are free of
+    // quota, so the forty-second attempt, now funded, starts a run.
+    const countersBefore = await readCounters();
+    const { identity } = await bootstrappedIdentity();
+    const deviceLimiter = await deviceLimiterStub(identity);
+    const request = unaffordableRequest("8c".repeat(32));
+
+    await refuseForCredit(identity, request, 41);
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+
+    await grantDevCredit(identity.accountID, UNAFFORDABLE_CHARGE + 1);
+    await runFunded(identity, request);
+    expect((await limiterUsage(deviceLimiter)).request_count).toBe(1);
+    expect(await waitForCounterDelta(countersBefore, "settled_jobs", 1)).toMatchObject({
+      admission_releases: 41,
+      reserve_denied_insufficient: 41,
+      jobs_started: 1,
+    });
+  });
+
+  it("leaves global headroom untouched by unfunded identities while started runs still hit both caps", async () => {
+    const countersBefore = await readCounters();
+    const unfunded = await Promise.all([
+      bootstrappedIdentity(),
+      bootstrappedIdentity(),
+      bootstrappedIdentity(),
+    ]);
+    const globalBefore = await limiterUsage(globalLimiterStub());
+
+    // Three identities without credit, two refusals each: the global object
+    // reads exactly as before, requests and tokens alike.
+    for (const [index, { identity }] of unfunded.entries()) {
+      await refuseForCredit(identity, unaffordableRequest(`9${index}`.repeat(32)), 2);
+      expect(await limiterUsage(await deviceLimiterStub(identity))).toEqual({
+        request_count: 0,
+        estimated_input_tokens: 0,
+      });
+    }
+    expect(await limiterUsage(globalLimiterStub())).toEqual(globalBefore);
+
+    // A started run charges its estimate against both scopes.
+    const { identity: runner } = await bootstrappedIdentity();
+    const runnerLimiter = await deviceLimiterStub(runner);
+    const runRequest = makeRequest({ fingerprint: "9a".repeat(32), asyncSupported: true });
+    await runFunded(runner, runRequest);
+    const runnerUsage = await limiterUsage(runnerLimiter);
+    expect(runnerUsage.request_count).toBe(1);
+    const globalAfterRun = await limiterUsage(globalLimiterStub());
+    expect(globalAfterRun.request_count).toBe(globalBefore.request_count + 1);
+    expect(globalAfterRun.estimated_input_tokens).toBe(
+      globalBefore.estimated_input_tokens + runnerUsage.estimated_input_tokens,
+    );
+
+    // The device cap still applies to a funded caller: at twelve, the
+    // thirteenth is refused before anything is acquired, so nothing is
+    // released and the global object is untouched.
+    await setLimiterUsage(runnerLimiter, { request_count: 12, estimated_input_tokens: 0 });
+    const deviceCapped = await postEnvelope(
+      runner,
+      ANALYZE_PATH,
+      makeRequest({ fingerprint: "9b".repeat(32), asyncSupported: true }),
+    );
+    expect(deviceCapped.status).toBe(429);
+    expect((await deviceCapped.json()).error).toBe("daily_request_cap_exceeded");
+    expect(await limiterUsage(globalLimiterStub())).toEqual(globalAfterRun);
+
+    // The global cap still applies too — and a global refusal gives the
+    // caller's already-confirmed admission back.
+    const { identity: latecomer } = await bootstrappedIdentity();
+    const latecomerLimiter = await deviceLimiterStub(latecomer);
+    await setLimiterUsage(globalLimiterStub(), { request_count: 60, estimated_input_tokens: 0 });
+    const globalCapped = await postEnvelope(
+      latecomer,
+      ANALYZE_PATH,
+      makeRequest({ fingerprint: "9c".repeat(32), asyncSupported: true }),
+    );
+    expect(globalCapped.status).toBe(429);
+    expect((await globalCapped.json()).error).toBe("global_capacity_exhausted");
+    expect(await limiterUsage(latecomerLimiter)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    expect(await limiterUsage(globalLimiterStub())).toEqual({ request_count: 60, estimated_input_tokens: 0 });
+    expect((await reservationsFor(latecomer.accountID)).length).toBe(0);
+
+    await setLimiterUsage(globalLimiterStub(), null);
+    expect(await waitForCounterDelta(countersBefore, "settled_jobs", 1)).toMatchObject({
+      // six credit refusals plus the per-device release after the global refusal
+      admission_releases: 7,
+      reserve_denied_insufficient: 6,
+      cap_denials_app_attest: 1,
+      cap_denials_global: 1,
+      jobs_started: 1,
+    });
+  });
+
+  it("unwinds the caller admission when the global limiter call throws", async () => {
+    const countersBefore = await readCounters();
+    const { identity } = await bootstrappedIdentity();
+    const deviceLimiter = await deviceLimiterStub(identity);
+    // Break the global object's storage so its admit throws (an unknown
+    // outcome, not a refusal): the caller's confirmed admission is released,
+    // the global object is left alone, and no cap denial is counted.
+    await runInDurableObject(globalLimiterStub(), (_instance, state) => {
+      state.storage.sql.exec("DROP TABLE IF EXISTS daily_usage;");
+    });
+    let response;
+    try {
+      response = await postEnvelope(
+        identity,
+        ANALYZE_PATH,
+        makeRequest({ fingerprint: "9d".repeat(32), asyncSupported: true }),
+      );
+    } finally {
+      await setLimiterUsage(globalLimiterStub(), null);
+    }
+    expect(response.status).toBeGreaterThanOrEqual(500);
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    expect((await reservationsFor(identity.accountID)).length).toBe(0);
+    expect(await waitForCounterDelta(countersBefore, "admission_releases", 1)).toEqual({
+      admission_releases: 1,
+    });
+  });
+
+  it("unwinds both scopes when the credit backend fails at reserve", async () => {
+    const countersBefore = await readCounters();
+    const { identity } = await bootstrappedIdentity();
+    const deviceLimiter = await deviceLimiterStub(identity);
+    const globalBefore = await limiterUsage(globalLimiterStub());
+    // Hide the reservations table: the dev fake's reserve fails with an
+    // internal error, which the lane maps to the fail-closed 503.
+    await env.TRANSCRIPT_ANALYSIS_DB.prepare(
+      "ALTER TABLE dev_credit_reservations RENAME TO dev_credit_reservations_hidden",
+    ).run();
+    let response;
+    try {
+      response = await postEnvelope(
+        identity,
+        ANALYZE_PATH,
+        makeRequest({ fingerprint: "9e".repeat(32), asyncSupported: true }),
+      );
+    } finally {
+      await env.TRANSCRIPT_ANALYSIS_DB.prepare(
+        "ALTER TABLE dev_credit_reservations_hidden RENAME TO dev_credit_reservations",
+      ).run();
+    }
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe("billing_unavailable");
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    expect(await limiterUsage(globalLimiterStub())).toEqual(globalBefore);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      admission_releases: 1,
+      billing_unavailable: 1,
+    });
+  });
+
+  it("does not start a run when the Running record cannot be written", async () => {
+    const countersBefore = await readCounters();
+    const { identity } = await bootstrappedIdentity();
+    const deviceLimiter = await deviceLimiterStub(identity);
+    const globalBefore = await limiterUsage(globalLimiterStub());
+    const request = makeRequest({ fingerprint: "9f".repeat(32), asyncSupported: true });
+    const stub = jobStub(request.transcript.fingerprint);
+    await runInDurableObject(stub, (_instance, state) => {
+      const original = state.storage.put.bind(state.storage);
+      state.storage.put = async (...args) => {
+        state.storage.put = original;
+        throw new Error("injected record write failure");
+      };
+    });
+
+    const response = await postEnvelope(identity, ANALYZE_PATH, request);
+    expect(response.status).toBeGreaterThanOrEqual(500);
+    // Nothing started: no record, both admissions back, the hold released
+    // directly (nothing referenced it), no jobs_started.
+    expect(await runInDurableObject(stub, (_instance, state) => state.storage.get("job"))).toBeUndefined();
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    expect(await limiterUsage(globalLimiterStub())).toEqual(globalBefore);
+    expect((await waitForReservationState(identity.accountID, "released")).reserved_seconds).toBe(CHARGE_12_SEGMENTS);
+    expect(await accountRow(identity.accountID)).toEqual({
+      available_seconds: DEV_GRANT,
+      reserved_seconds: 0,
+      consumed_seconds: 0,
+    });
+    expect(await waitForCounterDelta(countersBefore, "admission_releases", 1)).toEqual({
+      admission_releases: 1,
+    });
+
+    // The same fingerprint starts cleanly afterwards.
+    await runFunded(identity, request);
+  });
+
+  it("repairs a Running record whose heartbeat alarm could not be set", async () => {
+    const countersBefore = await readCounters();
+    const { identity } = await bootstrappedIdentity();
+    const deviceLimiter = await deviceLimiterStub(identity);
+    const globalBefore = await limiterUsage(globalLimiterStub());
+    const request = makeRequest({ fingerprint: "9a9b".repeat(16), asyncSupported: true });
+    const stub = jobStub(request.transcript.fingerprint);
+    await runInDurableObject(stub, (_instance, state) => {
+      const original = state.storage.setAlarm.bind(state.storage);
+      state.storage.setAlarm = async (...args) => {
+        state.storage.setAlarm = original;
+        throw new Error("injected alarm failure");
+      };
+    });
+
+    const response = await postEnvelope(identity, ANALYZE_PATH, request);
+    expect(response.status).toBeGreaterThanOrEqual(500);
+    // The written Running record was repaired into a terminal failure that
+    // carries the release through the shared billing path, so a later
+    // submit cannot attach to a job that never launched.
+    const stored = await runInDurableObject(stub, async (_instance, state) =>
+      JSON.parse(await state.storage.get("job")),
+    );
+    expect(stored.state).toBe("failed_transient");
+    expect(stored.billing.billing_id).toMatch(/^tan-/);
+    expect((await waitForReservationState(identity.accountID, "released")).reserved_seconds).toBe(CHARGE_12_SEGMENTS);
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    expect(await limiterUsage(globalLimiterStub())).toEqual(globalBefore);
+    const diff = await waitForCounterDelta(countersBefore, "released_credit_seconds", CHARGE_12_SEGMENTS);
+    expect(diff).toEqual({
+      admission_releases: 1,
+      released_credit_seconds: CHARGE_12_SEGMENTS,
+    });
+    expect(diff.jobs_started).toBeUndefined();
+
+    // A resubmit starts a fresh run instead of attaching to the zombie.
+    await runFunded(identity, request);
+    expect(await waitForCounterDelta(countersBefore, "settled_jobs", 1)).toMatchObject({
+      jobs_started: 1,
+      jobs_completed: 1,
+    });
+  });
+
+  it("counts a partial cleanup as failure, still releases the other scope, and keeps the 402", async () => {
+    const countersBefore = await readCounters();
+    const { identity } = await bootstrappedIdentity();
+    const deviceLimiter = await deviceLimiterStub(identity);
+    const globalBefore = await limiterUsage(globalLimiterStub());
+    // Make the caller's limiter refuse to write a decrement: its admit
+    // (count 0 → 1) lands, its release (→ 0) throws. The global release must
+    // still run and the client must still see the typed refusal.
+    await runInDurableObject(deviceLimiter, (_instance, state) => {
+      const sql = state.storage.sql;
+      const original = sql.exec.bind(sql);
+      sql.exec = (query, ...bindings) => {
+        if (query.includes("INSERT INTO daily_usage") && bindings[0] === 0) {
+          sql.exec = original;
+          throw new Error("injected release write failure");
+        }
+        return original(query, ...bindings);
+      };
+    });
+
+    const response = await postEnvelope(identity, ANALYZE_PATH, unaffordableRequest("9c9d".repeat(16)));
+    expect(response.status).toBe(402);
+    expect((await response.json()).error).toBe("insufficient_transcription_seconds");
+    // The caller scope stays charged (observable, counted); the global one
+    // was given back.
+    expect(await limiterUsage(deviceLimiter)).toEqual(expect.objectContaining({ request_count: 1 }));
+    expect(await limiterUsage(globalLimiterStub())).toEqual(globalBefore);
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      admission_release_failures: 1,
+      reserve_denied_insufficient: 1,
+    });
+  });
+
+  it("serializes concurrent identical submits: one acquisition per started run, one release per refusal", async () => {
+    const countersBefore = await readCounters();
+    const globalBefore = await limiterUsage(globalLimiterStub());
+    // Two unfunded identities race the same fingerprint: both refused, both
+    // released, nothing charged.
+    const [{ identity: first }, { identity: second }] = await Promise.all([
+      bootstrappedIdentity(),
+      bootstrappedIdentity(),
+    ]);
+    const refusedRequest = unaffordableRequest("9e9f".repeat(16));
+    const refusals = await Promise.all([
+      postEnvelope(first, ANALYZE_PATH, refusedRequest),
+      postEnvelope(second, ANALYZE_PATH, refusedRequest),
+    ]);
+    expect(refusals.map((response) => response.status)).toEqual([402, 402]);
+    expect(await limiterUsage(await deviceLimiterStub(first))).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    expect(await limiterUsage(await deviceLimiterStub(second))).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    expect(await limiterUsage(globalLimiterStub())).toEqual(globalBefore);
+
+    // Two funded identities race the same content: one starts, the other
+    // attaches, and exactly one acquisition is charged per scope.
+    const [{ identity: starter }, { identity: joiner }] = await Promise.all([
+      bootstrappedIdentity(),
+      bootstrappedIdentity(),
+    ]);
+    const runRequest = makeRequest({ fingerprint: "9f9a".repeat(16), asyncSupported: true });
+    // Hold the model call so the second submit meets a Running record (and
+    // attaches) rather than a completed result.
+    const deferred = mockGeminiDeferred(geminiResponse(analysisFor(12)));
+    const submits = await Promise.all([
+      postEnvelope(starter, ANALYZE_PATH, runRequest),
+      postEnvelope(joiner, ANALYZE_PATH, runRequest),
+    ]);
+    expect(submits.map((response) => response.status)).toEqual([202, 202]);
+    await deferred.started;
+    deferred.release();
+    const completed = await waitForTerminalPollAs(starter, runRequest.transcript.fingerprint);
+    expect(completed.status).toBe(200);
+    const starterUsage = await limiterUsage(await deviceLimiterStub(starter));
+    const joinerUsage = await limiterUsage(await deviceLimiterStub(joiner));
+    expect([starterUsage.request_count, joinerUsage.request_count].sort()).toEqual([0, 1]);
+    expect((await limiterUsage(globalLimiterStub())).request_count).toBe(globalBefore.request_count + 1);
+    expect(await waitForCounterDelta(countersBefore, "settled_jobs", 1)).toMatchObject({
+      admission_releases: 2,
+      reserve_denied_insufficient: 2,
+      jobs_started: 1,
+      jobs_completed: 1,
+    });
+  });
+
+  it("keeps a seeded pre-deploy capped object capped and restores behaviour on a fresh day", async () => {
+    const countersBefore = await readCounters();
+    const { identity } = await bootstrappedIdentity();
+    // A day object filled before the fix (refusals that leaked) keeps its
+    // stored usage through object re-initialization: no reset, no repair.
+    await setLimiterUsage(await deviceLimiterStub(identity), { request_count: 12, estimated_input_tokens: 600_000 });
+    await abortAllDurableObjects();
+    // Stubs do not survive the abort; address the revived object afresh.
+    const deviceLimiter = await deviceLimiterStub(identity);
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 12, estimated_input_tokens: 600_000 });
+
+    const capped = await postEnvelope(identity, ANALYZE_PATH, unaffordableRequest("9b9c".repeat(16)));
+    expect(capped.status).toBe(429);
+    expect((await capped.json()).error).toBe("daily_request_cap_exceeded");
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 12, estimated_input_tokens: 600_000 });
+    expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      cap_denials_app_attest: 1,
+    });
+
+    // The next UTC day mints fresh objects: an unfunded probe is a 402
+    // again, and a funded submit runs.
+    const tomorrowIndex = Math.floor(Date.now() / 86_400_000) + 1;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(tomorrowIndex * 86_400_000 + 3_600_000);
+      const probe = await postEnvelope(identity, ANALYZE_PATH, unaffordableRequest("9b9c".repeat(16)));
+      expect(probe.status).toBe(402);
+      const tomorrowDevice = await deviceLimiterStub(identity, tomorrowIndex);
+      expect(await limiterUsage(tomorrowDevice)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+      mockGeminiOnce(geminiResponse(analysisFor(12)));
+      const funded = await postEnvelope(
+        identity,
+        ANALYZE_PATH,
+        makeRequest({ fingerprint: "9d9e".repeat(16), asyncSupported: true }),
+      );
+      expect(funded.status).toBe(202);
+      expect((await limiterUsage(tomorrowDevice)).request_count).toBe(1);
+      expect((await limiterUsage(globalLimiterStub(tomorrowIndex))).request_count).toBe(1);
+      const completed = await waitForTerminalPollAs(identity, "9d9e".repeat(16));
+      expect(completed.status).toBe(200);
+      await waitForReservationState(identity.accountID, "settled");
+    } finally {
+      vi.useRealTimers();
+      await setLimiterUsage(globalLimiterStub(tomorrowIndex), null);
+    }
+    // Today's leaked object is still capped: deployment repairs nothing
+    // before rollover.
+    expect(await limiterUsage(deviceLimiter)).toEqual({ request_count: 12, estimated_input_tokens: 600_000 });
+    await setLimiterUsage(deviceLimiter, null);
   });
 });
 

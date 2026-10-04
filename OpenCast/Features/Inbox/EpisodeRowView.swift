@@ -6,9 +6,14 @@ struct EpisodeRowView: View {
     let episode: EpisodeListItemSnapshot
     var searchResult: EpisodeSearchResult?
     var showsLocalStatusBadges = false
+    var onPlay: (() -> Void)?
 
     static func accessibilityIdentifier(for episodeID: String) -> String {
         "episode-row-\(episodeID)"
+    }
+
+    static func playAccessibilityIdentifier(for episodeID: String) -> String {
+        "episode-play-\(episodeID)"
     }
 
     var body: some View {
@@ -95,14 +100,40 @@ struct EpisodeRowView: View {
         appModel.library.updateArtworkPreview(preview, for: episode)
     }
 
+    @ViewBuilder
     private func statusIcon(for progressSummary: EpisodeProgressSummary) -> some View {
-        Image(systemName: progressSummary.isCompleted ? "checkmark.circle.fill" : "play.circle")
-            .font(.title2)
-            .foregroundStyle(
-                progressSummary.isCompleted ? AnyShapeStyle(.green) : AnyShapeStyle(.tint)
-            )
-            .frame(width: 34, height: 34)
-            .contentTransition(.symbolEffect(.replace))
-            .accessibilityHidden(true)
+        if let onPlay {
+            // The frame and content shape sit inside the label so the whole
+            // 44-point square is the button's hit area, not just the glyph.
+            Button(action: onPlay) {
+                Label(
+                    progressSummary.isCompleted ? "Play Again" : "Play",
+                    systemImage: statusSystemImage(for: progressSummary)
+                )
+                .labelStyle(.iconOnly)
+                .font(.title2)
+                .foregroundStyle(statusStyle(for: progressSummary))
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
+                .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier(Self.playAccessibilityIdentifier(for: episode.episodeID))
+        } else {
+            Image(systemName: statusSystemImage(for: progressSummary))
+                .font(.title2)
+                .foregroundStyle(statusStyle(for: progressSummary))
+                .frame(width: 34, height: 34)
+                .contentTransition(.symbolEffect(.replace))
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func statusSystemImage(for progressSummary: EpisodeProgressSummary) -> String {
+        progressSummary.isCompleted ? "checkmark.circle.fill" : "play.circle"
+    }
+
+    private func statusStyle(for progressSummary: EpisodeProgressSummary) -> AnyShapeStyle {
+        progressSummary.isCompleted ? AnyShapeStyle(.green) : AnyShapeStyle(.tint)
     }
 }

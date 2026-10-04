@@ -562,15 +562,13 @@ struct EpisodeDetailView: View {
 
     /// Display-only estimate: the server recomputes the charge from its own
     /// authoritative duration at reserve, so this can mis-display but never
-    /// mis-charge. Mirrors the server's duration basis (declared duration or
-    /// the last segment end, whichever is larger).
+    /// mis-charge.
     private var transcriptAnalysisChargeSeconds: Int64? {
         guard let document = chaptersSection.transcriptDocument else {
             return nil
         }
-        let duration = max(document.audioDuration, document.segments.last?.end ?? 0)
         return appModel.remoteTranscriptionPurchases
-            .analysisEstimate(durationSeconds: duration)?
+            .analysisEstimate(transcript: document)?
             .estimatedSeconds
     }
 

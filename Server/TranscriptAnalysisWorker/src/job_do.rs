@@ -7,6 +7,7 @@ use worker::{
     Request, Response, Result, State, Storage,
 };
 
+use crate::admission::{admit_spend_caps, release_admissions};
 use crate::analysis::run_analysis;
 use crate::billing::{
     billing_retry_delay_seconds, BillingContext, JobBillingState, PendingBillingAction,
@@ -22,9 +23,10 @@ use crate::job::{
 };
 use crate::route::JSON_CONTENT_TYPE;
 use crate::types::{resolve_gemini_model, ErrorResponse, GEMINI_MODEL_ENV_VAR};
-use crate::worker_app::{
-    admit_spend_caps, ladder_config, mint_billing_id, reserve_failure_response, AppConfig,
+use crate::usage::{
+    global_usage_object_name, AcquiredAdmissions, AdmissionScope, UsageLimitProfile,
 };
+use crate::worker_app::{ladder_config, mint_billing_id, reserve_failure_response, AppConfig};
 
 const JOB_STORAGE_KEY: &str = "job";
 const GEMINI_API_KEY: &str = "GEMINI_API_KEY";
@@ -180,29 +182,50 @@ impl TranscriptAnalysisJob {
             // Non-storage I/O opens the DO input gate. Serialize the
             // admission+reserve window in memory so concurrent identical
             // submits cannot double-consume quota or double-reserve before
-            // the Running record is persisted. The window's Drop releases it
-            // on every exit path, error propagation included.
+            // the Running record is persisted, and so this attempt's cleanup
+            // of its own admissions cannot interleave with another attempt's
+            // acquisition. The window's Drop releases it on every exit path,
+            // error propagation included.
             let Some(_admission_window) = ActiveWindow::acquire(&self.admission_active) else {
                 Delay::from(Duration::from_millis(10)).await;
                 continue;
             };
-            if let Some(response) = admit_spend_caps(
+            // Admission precedes reserve (over-cap traffic never reaches the
+            // credit backend), so every exit between here and the run-start
+            // boundary below must give the confirmed admissions back:
+            // usage counts started runs, not refusals. `acquired` is the
+            // attempt's proof of what it holds and is consumed exactly once.
+            let acquired = match admit_spend_caps(
                 &self.env,
-                &submit.usage_object_name,
-                submit.usage_profile,
-                day_index(),
-                submit.estimated_input_tokens,
+                AdmissionScope {
+                    object_name: submit.usage_object_name.clone(),
+                    profile: submit.usage_profile,
+                    estimated_input_tokens: submit.estimated_input_tokens,
+                },
+                AdmissionScope {
+                    // Same day as the caller's object: the route handler
+                    // minted both names together, so an attempt straddling
+                    // 00:00 UTC releases what it admitted against. The
+                    // fallback only serves a deploy-skew submit.
+                    object_name: submit
+                        .global_usage_object_name
+                        .clone()
+                        .unwrap_or_else(|| global_usage_object_name(day_index())),
+                    profile: UsageLimitProfile::Global,
+                    estimated_input_tokens: submit.estimated_input_tokens,
+                },
             )
             .await?
             {
-                return Ok(response);
-            }
+                Ok(acquired) => acquired,
+                Err(response) => return Ok(response),
+            };
 
             // Reserve under a FRESH `tan-` billing id per run attempt —
             // never the fingerprint: PurchaseWorker's
             // reserve idempotency key is permanent and this DO restarts
-            // failed jobs under the same fingerprint. Denied reserves have
-            // already consumed admission quota.
+            // failed jobs under the same fingerprint. A refused reserve is
+            // not a run: its admissions go back before the refusal returns.
             let mut billing_state: Option<JobBillingState> = None;
             if let Some(context) = &submit.billing {
                 match reserve_billing(&self.env, context).await {
@@ -216,6 +239,7 @@ impl TranscriptAnalysisJob {
                             &[(reserve_refusal_counter(response.status_code()), 1)],
                         )
                         .await;
+                        release_admissions(&self.env, acquired).await;
                         return Ok(response);
                     }
                     Err(error) => {
@@ -227,6 +251,7 @@ impl TranscriptAnalysisJob {
                             "transcript-analysis billing unavailable at reserve: {error}"
                         );
                         counters::bump(&self.env, &[(counters::BILLING_UNAVAILABLE, 1)]).await;
+                        release_admissions(&self.env, acquired).await;
                         return json_error(503, ERROR_BILLING_UNAVAILABLE);
                     }
                 }
@@ -246,37 +271,22 @@ impl TranscriptAnalysisJob {
                 content_hash: submitted_hash.clone(),
                 billing: billing_state,
             };
-            // Counted here rather than in the run task: the storage writes
-            // below follow the D1 await before the task parks on the model
-            // call (the placement rule on `counters::bump`).
-            counters::bump(&self.env, &[(counters::JOBS_STARTED, 1)]).await;
-            // A reservation is at stake past the reserve: a storage failure
-            // here would leave the hold referenced by nothing — no record,
-            // no retry path, and no expiry on PurchaseWorker's side. Best
-            // effort release (and a log naming the id) before propagating.
-            let persisted: Result<()> = async {
-                write_record(&self.state.storage(), &running).await?;
-                self.state
-                    .storage()
-                    .set_alarm(Duration::from_secs(JOB_HEARTBEAT_SECONDS))
-                    .await
+            // Run-start boundary: the Running record AND its heartbeat alarm
+            // are durable, and the run task is scheduled right after. A
+            // failure before the boundary is not a run — its admissions go
+            // back along with any billing hold — and `jobs_started` counts
+            // only what crosses it.
+            if let Err(error) = write_record(&self.state.storage(), &running).await {
+                self.abandon_unlaunched(&running, acquired, false).await;
+                return Err(error);
             }
-            .await;
-            if let Err(error) = persisted {
-                if let Some(billing) = running.billing() {
-                    let released = attempt_billing_action(
-                        &self.env,
-                        &billing.account_id,
-                        &billing.billing_id,
-                        PendingBillingAction::Release,
-                    )
-                    .await;
-                    console_error!(
-                        "transcript-analysis reservation {} after failed submit persist: {}",
-                        if released { "released" } else { "STRANDED" },
-                        billing.billing_id
-                    );
-                }
+            if let Err(error) = self
+                .state
+                .storage()
+                .set_alarm(Duration::from_secs(JOB_HEARTBEAT_SECONDS))
+                .await
+            {
+                self.abandon_unlaunched(&running, acquired, true).await;
                 return Err(error);
             }
             self.run_active.set(true);
@@ -310,6 +320,11 @@ impl TranscriptAnalysisJob {
                     }
                 }
             });
+            // Counted after the task is scheduled, so this D1 await resolves
+            // into the 202 below rather than straight into the model-call
+            // park (the placement rule on `counters::bump`); the task is
+            // already past the boundary either way.
+            counters::bump(&self.env, &[(counters::JOBS_STARTED, 1)]).await;
 
             return job_status(
                 202,
@@ -349,6 +364,68 @@ impl TranscriptAnalysisJob {
                 self.purge_served_failure(record.as_ref()).await?;
                 json_error(503, "job_failed_transient")
             }
+        }
+    }
+
+    /// Pre-boundary persistence failure: nothing started, so the attempt's
+    /// admissions and billing hold go back. With no record on disk the hold
+    /// is released directly (and loudly stranded if that fails: nothing
+    /// references it). With the Running record already written but its
+    /// alarm missing, the record is a zombie later submits would attach to
+    /// and no watchdog would ever end; it is repaired into a terminal
+    /// failure through the shared terminal-billing path, which carries the
+    /// unresolved release and its bounded alarm retries. The original error
+    /// still propagates to the caller.
+    async fn abandon_unlaunched(
+        &self,
+        running: &JobRecord,
+        acquired: AcquiredAdmissions,
+        record_written: bool,
+    ) {
+        release_admissions(&self.env, acquired).await;
+        let Some(billing) = running.billing() else {
+            if record_written {
+                if let Err(error) = self.state.storage().delete(JOB_STORAGE_KEY).await {
+                    console_error!(
+                        "transcript-analysis unlaunched record could not be removed: {error}"
+                    );
+                }
+            }
+            return;
+        };
+        if !record_written {
+            let released = attempt_billing_action(
+                &self.env,
+                &billing.account_id,
+                &billing.billing_id,
+                PendingBillingAction::Release,
+            )
+            .await;
+            console_error!(
+                "transcript-analysis reservation {} after failed submit persist: {}",
+                if released { "released" } else { "STRANDED" },
+                billing.billing_id
+            );
+            return;
+        }
+        let purge_at = now_seconds().saturating_add(JOB_FAILURE_TTL_SECONDS);
+        let repaired = JobRecord::FailedTransient {
+            job_id: running.job_id().to_string(),
+            purge_at,
+            subjects: running.subjects().to_vec(),
+            content_hash: running.content_hash().to_string(),
+            billing: Some(billing.clone()),
+        };
+        console_error!(
+            "transcript-analysis unlaunched Running record repaired; release pending: {}",
+            billing.billing_id
+        );
+        if let Err(error) =
+            apply_terminal_billing(&self.env, &self.state.storage(), repaired, purge_at, &[]).await
+        {
+            console_error!(
+                "transcript-analysis unlaunched record repair incomplete (release may be pending without an alarm): {error}"
+            );
         }
     }
 

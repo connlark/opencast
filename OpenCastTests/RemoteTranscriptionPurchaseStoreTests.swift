@@ -763,6 +763,95 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(balanceIncreaseCount == 2)
     }
 
+    @Test("Refresh reports a fresh balance and wakes deferred work only on an observed headroom increase")
+    func refreshBalanceReportsFreshnessAndHeadroomIncreases() async {
+        let api = FakePurchaseAPI()
+        let store = Self.makeStore(api: api, storeKit: FakeStoreKitClient())
+        var observedBalances: [OpenCastRemoteTranscriptionBalance?] = []
+        store.onBalanceIncreased = { observedBalances.append(store.balance) }
+
+        // The first balance of the session is not evidence of a top-up.
+        #expect(await store.refreshBalance())
+        #expect(store.balance?.availableSeconds == 3600)
+        #expect(observedBalances.isEmpty)
+
+        #expect(await store.refreshBalance())
+        #expect(observedBalances.isEmpty)
+
+        // A purchase on another device or a grant: the callback runs after
+        // the new balance is applied, so its sweep reads that balance.
+        let toppedUp = OpenCastRemoteTranscriptionBalance(
+            availableSeconds: 10_000,
+            reservedSeconds: 0,
+            debtSeconds: 0
+        )
+        api.balance = toppedUp
+        #expect(await store.refreshBalance())
+        #expect(observedBalances == [toppedUp])
+
+        // Spending lowers headroom: no wake.
+        api.balance = OpenCastRemoteTranscriptionBalance(
+            availableSeconds: 4_000,
+            reservedSeconds: 1_000,
+            debtSeconds: 0
+        )
+        #expect(await store.refreshBalance())
+        #expect(observedBalances.count == 1)
+    }
+
+    @Test("A failed or cancelled refresh keeps the last balance and reports no fresh balance")
+    func failedOrCancelledRefreshKeepsLastBalance() async {
+        let api = FakePurchaseAPI()
+        let store = Self.makeStore(api: api, storeKit: FakeStoreKitClient())
+        var balanceIncreaseCount = 0
+        store.onBalanceIncreased = { balanceIncreaseCount += 1 }
+        #expect(await store.refreshBalance())
+
+        api.balance = OpenCastRemoteTranscriptionBalance(
+            availableSeconds: 50_000,
+            reservedSeconds: 0,
+            debtSeconds: 0
+        )
+        api.bootstrapError = URLError(.notConnectedToInternet)
+        #expect(await store.refreshBalance() == false)
+        #expect(store.balance?.availableSeconds == 3600)
+
+        api.bootstrapError = nil
+        api.bootstrapDelay = .seconds(60)
+        let refresh = Task { await store.refreshBalance() }
+        #expect(await waitUntil { api.bootstrapCalls == 3 })
+        refresh.cancel()
+        #expect(await refresh.value == false)
+        #expect(store.balance?.availableSeconds == 3600)
+        #expect(balanceIncreaseCount == 0)
+    }
+
+    @Test("A refresh cancelled mid-flight applies nothing even when the transport still answers")
+    func cancelledRefreshNeverAppliesALateAnswer() async {
+        let api = FakePurchaseAPI()
+        let store = Self.makeStore(api: api, storeKit: FakeStoreKitClient())
+        var balanceIncreaseCount = 0
+        store.onBalanceIncreased = { balanceIncreaseCount += 1 }
+        #expect(await store.refreshBalance())
+
+        // The answer carries MORE headroom and arrives after the refresh's
+        // task was cancelled (a data nuke mid-sweep): neither the balance
+        // nor the wake-up may leak out of a cancelled refresh.
+        api.balance = OpenCastRemoteTranscriptionBalance(
+            availableSeconds: 50_000,
+            reservedSeconds: 0,
+            debtSeconds: 0
+        )
+        api.bootstrapDelay = .seconds(60)
+        api.bootstrapSurvivesCancellation = true
+        let refresh = Task { await store.refreshBalance() }
+        #expect(await waitUntil { api.bootstrapCalls == 2 })
+        refresh.cancel()
+        #expect(await refresh.value == false)
+        #expect(store.balance?.availableSeconds == 3600)
+        #expect(balanceIncreaseCount == 0)
+    }
+
     // MARK: - Fixtures
 
     private static func makeStore(
@@ -807,6 +896,9 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
     var redeemError: Error?
     var redeemOutcome: OpenCastRemoteTranscriptionRedeemOutcome = .credited
     var bootstrapDelay: Duration?
+    /// A transport that completes regardless of cancellation: the delay's
+    /// cancellation is swallowed and the answer still arrives.
+    var bootstrapSurvivesCancellation = false
     var bootstrapError: Error?
 
     private var recordedBootstrapCalls = 0
@@ -828,7 +920,11 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
     func bootstrap() async throws -> OpenCastRemoteTranscriptionBootstrapResponse {
         lock.withLock { recordedBootstrapCalls += 1 }
         if let bootstrapDelay {
-            try await Task.sleep(for: bootstrapDelay)
+            if bootstrapSurvivesCancellation {
+                try? await Task.sleep(for: bootstrapDelay)
+            } else {
+                try await Task.sleep(for: bootstrapDelay)
+            }
         }
         if let bootstrapError {
             throw bootstrapError

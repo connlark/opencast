@@ -1,11 +1,11 @@
 import SwiftData
 import SwiftUI
 
-/// A playlist episode that still resolves: the Inbox row, tapped to play
-/// from here (the rest of the playlist goes to the front of Up Next), with
-/// the shared episode context menu. A manual playlist's row carries its item
-/// ID and plays that exact row; a smart playlist's row has none and plays by
-/// episode.
+/// A playlist episode that still resolves: the Inbox row, played from here
+/// by a tap, or by its play button with Tap to Play off (the rest of the
+/// playlist goes to the front of Up Next), with the shared episode context
+/// menu. A manual playlist's row carries its item ID and plays that exact
+/// row; a smart playlist's row has none and plays by episode.
 struct PlaylistEpisodeRowView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -25,8 +25,8 @@ struct PlaylistEpisodeRowView: View {
     }
 
     var body: some View {
-        Button(action: play) {
-            EpisodeRowView(episode: episode)
+        Button(action: primaryAction) {
+            EpisodeRowView(episode: episode, onPlay: playButtonAction)
         }
         .buttonStyle(.plain)
         .modifier(
@@ -45,6 +45,23 @@ struct PlaylistEpisodeRowView: View {
             Self.accessibilityIdentifier(for: itemID)
         } else {
             Self.accessibilityIdentifier(forEpisodeID: episode.episodeID)
+        }
+    }
+
+    /// With Tap to Play off the row opens the episode, so the trailing glyph
+    /// becomes the play button.
+    private var playButtonAction: (() -> Void)? {
+        guard !appModel.playbackSettings.isTapToPlayEnabled else {
+            return nil
+        }
+        return play
+    }
+
+    private func primaryAction() {
+        if appModel.playbackSettings.isTapToPlayEnabled {
+            play()
+        } else {
+            viewEpisodeDetails(episode)
         }
     }
 

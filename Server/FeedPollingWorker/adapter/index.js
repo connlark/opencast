@@ -11,9 +11,12 @@ export class PollingControl extends WorkerEntrypoint {
 }
 export default class extends WorkerEntrypoint {
   fetch() { return new Response('not_found', { status: 404 }); }
-  async scheduled() {
-    const response = await invoke(this.ctx, this.env, new Request('https://polling.invalid/dispatch', { method: 'POST' }));
-    if (!response.ok) throw new Error('poll_dispatch_failed');
+  async scheduled(controller) {
+    const path = controller.cron === '* * * * *' ? 'dispatch'
+      : controller.cron === '*/2 * * * *' ? 'cleanup' : undefined;
+    if (!path) throw new Error('unknown_poll_cron');
+    const response = await invoke(this.ctx, this.env, new Request(`https://polling.invalid/${path}`, { method: 'POST' }));
+    if (!response.ok) throw new Error(`poll_${path}_failed`);
     await response.text();
   }
   async queue(batch) {
@@ -35,7 +38,7 @@ export default class extends WorkerEntrypoint {
     // feed/checkpoint and event commit; any failure or crash redelivers it.
     for (const message of batch.messages) {
       const response = await invoke(this.ctx, this.env, new Request('https://polling.invalid/consume', {
-        method: 'POST', body: JSON.stringify(message.body), headers: { 'x-poll-attempts': String(message.attempts ?? 1) },
+        method: 'POST', body: JSON.stringify(message.body), headers: { 'x-poll-attempts': String(message.attempts ?? 1), 'x-poll-enqueued-ms': String(message.timestamp.getTime()) },
       }));
       await response.text();
       if (response.ok || response.status === 400) message.ack();

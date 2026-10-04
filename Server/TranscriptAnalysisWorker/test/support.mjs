@@ -8,7 +8,7 @@
 // fixture's assertion binds the ad-analysis path in its signed client data,
 // so it cannot authenticate against this worker's routes. Real-fixture
 // attestation coverage lives in `cargo test` (tests/app_attest_auth.rs).
-import { SELF, env } from "cloudflare:test";
+import { SELF, env, runInDurableObject } from "cloudflare:test";
 
 export const ANALYZE_PATH = "/v1/transcript-analysis/transcript";
 export const BOOTSTRAP_PATH = "/v1/transcript-analysis/account/bootstrap";
@@ -513,12 +513,72 @@ export async function waitForCounterDelta(before, name, delta) {
   );
 }
 
+function todayIndex() {
+  return Math.floor(Date.now() / 86_400_000);
+}
+
 /// The day-keyed global usage limiter, for pre-filling a cap from a test.
-export function globalLimiterStub() {
-  const dayIndex = Math.floor(Date.now() / 86_400_000);
+export function globalLimiterStub(dayIndex = todayIndex()) {
   return env.TRANSCRIPT_ANALYSIS_USAGE_LIMITER.getByName(
     `transcript-analysis:v1:usage:${dayIndex}:global`,
   );
+}
+
+/// The per-caller limiter for a synthetic App Attest identity: the worker
+/// keys it by the sha256 hex of the key id (`token_hash`), namespaced as an
+/// App Attest subject.
+export async function deviceLimiterStub(identity, dayIndex = todayIndex()) {
+  const keyHash = bytesToHex(await sha256Bytes(identity.keyID));
+  return env.TRANSCRIPT_ANALYSIS_USAGE_LIMITER.getByName(
+    `transcript-analysis:v1:usage:${dayIndex}:app-attest-key:${keyHash}`,
+  );
+}
+
+/// The DEBUG bearer lane's limiter, keyed by the token hash.
+export async function bearerLimiterStub(dayIndex = todayIndex()) {
+  const tokenHash = bytesToHex(await sha256Bytes(BEARER));
+  return env.TRANSCRIPT_ANALYSIS_USAGE_LIMITER.getByName(
+    `transcript-analysis:v1:usage:${dayIndex}:bearer:${tokenHash}`,
+  );
+}
+
+const DAILY_USAGE_TABLE_SQL =
+  "CREATE TABLE IF NOT EXISTS daily_usage (\n" +
+  "  id INTEGER PRIMARY KEY CHECK (id = 1),\n" +
+  "  request_count INTEGER NOT NULL,\n" +
+  "  estimated_input_tokens INTEGER NOT NULL\n" +
+  ");";
+
+/// The limiter object's stored usage as `{ request_count,
+/// estimated_input_tokens }`; an object with no row (never admitted, or
+/// wiped) reads as zeros, exactly as the worker reads it.
+export async function limiterUsage(stub) {
+  return runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec(DAILY_USAGE_TABLE_SQL);
+    const rows = state.storage.sql
+      .exec("SELECT request_count, estimated_input_tokens FROM daily_usage WHERE id = 1")
+      .toArray();
+    return rows[0] ?? { request_count: 0, estimated_input_tokens: 0 };
+  });
+}
+
+/// Seeds a limiter object's usage directly (a pre-deploy leak, or a cap
+/// about to be reached). `null` clears the row so later tests start clean.
+export async function setLimiterUsage(stub, usage) {
+  await runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec(DAILY_USAGE_TABLE_SQL);
+    if (usage === null) {
+      state.storage.sql.exec("DELETE FROM daily_usage;");
+      return;
+    }
+    state.storage.sql.exec(
+      "INSERT INTO daily_usage (id, request_count, estimated_input_tokens) VALUES (1, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET request_count = excluded.request_count, " +
+        "estimated_input_tokens = excluded.estimated_input_tokens;",
+      usage.request_count,
+      usage.estimated_input_tokens ?? 0,
+    );
+  });
 }
 
 /// The job DO for a fingerprint, for driving its alarm from a test.

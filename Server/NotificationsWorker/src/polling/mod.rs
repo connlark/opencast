@@ -11,6 +11,8 @@ pub mod policy;
 #[cfg(target_arch = "wasm32")]
 mod runtime;
 #[cfg(target_arch = "wasm32")]
+pub(crate) mod timing;
+#[cfg(target_arch = "wasm32")]
 pub(crate) use execute::fetch_failed;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use execute::Fence;

@@ -57,6 +57,15 @@ struct SettingsPlaybackView: View {
                         .foregroundStyle(.orange)
                 }
             }
+
+            Section {
+                Toggle("Tap to Play", isOn: tapToPlayBinding)
+                    .accessibilityIdentifier("playback-tap-to-play-toggle")
+            } header: {
+                Text("Episodes")
+            } footer: {
+                Text("When off, tapping an episode opens its details and the play button beside it starts playback.")
+            }
         }
         .settingsSubscreen(title: "Playback")
     }
@@ -82,6 +91,14 @@ struct SettingsPlaybackView: View {
             appModel.playbackSettings.skipForwardOption
         } set: { option in
             _ = appModel.setSkipForwardOption(option, modelContext: modelContext)
+        }
+    }
+
+    private var tapToPlayBinding: Binding<Bool> {
+        Binding {
+            appModel.playbackSettings.isTapToPlayEnabled
+        } set: { isEnabled in
+            _ = appModel.setTapToPlayEnabled(isEnabled, modelContext: modelContext)
         }
     }
 }

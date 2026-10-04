@@ -1,4 +1,6 @@
 #[cfg(target_arch = "wasm32")]
+mod admission;
+#[cfg(target_arch = "wasm32")]
 mod analysis;
 pub use opencast_app_attest_core::auth;
 pub use opencast_app_attest_core::challenge_limits;

@@ -3,6 +3,10 @@
 /// fleet bound is two per origin, without any D1 permit row.
 pub const ORIGIN_LIMIT_PER_CONSUMER: usize = 1;
 pub const DISPATCH_LIMIT: usize = 400;
+pub const OUTSTANDING_LIMIT: usize = 200;
+/// One origin cannot consume all live scan reservations. This is occupancy,
+/// not a per-minute request rate; repairs and durable maintenance are exempt.
+pub const ORIGIN_OUTSTANDING_LIMIT: usize = OUTSTANDING_LIMIT / 2;
 pub const REPAIR_LIMIT: usize = 20;
 pub const LATE_FEED_THRESHOLD: i64 = 10;
 /// A dispatched generation is not re-dispatched for this long. It bounds the
@@ -11,7 +15,7 @@ pub const LATE_FEED_THRESHOLD: i64 = 10;
 pub const DISPATCH_RESERVATION_SECONDS: i64 = 300;
 /// A continuation chain that never settles is a handling fault, not a loop.
 pub const MAX_STEPS: u32 = 5000;
-pub const CLEANUP_INTERVAL_MINUTES: i64 = 15;
+pub const CLEANUP_BUDGET_SECONDS: u64 = 25;
 /// Healthy polls are sampled; every failure and publication is logged.
 pub const SUCCESS_LOG_SAMPLE: u64 = 64;
 pub const RETRY_AFTER_MAX_SECONDS: i64 = 86400;
@@ -20,6 +24,7 @@ pub const RETRY_AFTER_MAX_SECONDS: i64 = 86400;
 pub const SCAN_DEADLINE_SECONDS: u64 = 15;
 pub const INACTIVITY_SECONDS: u64 = 5;
 pub const STEP_DEADLINE_SECONDS: u64 = 200;
+pub const BOOKKEEPING_DEADLINE_SECONDS: u64 = 20;
 pub const STALL_RECOVERY_COMPLETIONS: i64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

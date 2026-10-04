@@ -131,10 +131,16 @@ async fn read(bucket: &Bucket, key: &str, offset: usize, length: usize) -> Resul
     Ok(bytes)
 }
 /// Completed scratch objects survive only a crash between copy and delete.
-pub async fn sweep(bucket: &Bucket, now_ms: u64) -> Result<usize> {
+pub async fn sweep(bucket: &Bucket, now_ms: u64, budget: &super::gc::Budget) -> Result<usize> {
+    if budget.expired() {
+        return Ok(0);
+    }
     let listed = bucket.list().prefix(PREFIX).limit(100).execute().await?;
     let mut removed = 0;
     for object in listed.objects() {
+        if budget.expired() {
+            break;
+        }
         if object.uploaded().as_millis() + 3_600_000 <= now_ms {
             bucket.delete(object.key()).await?;
             removed += 1;

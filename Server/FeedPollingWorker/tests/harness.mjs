@@ -53,7 +53,7 @@ export async function harness(outbound, options = {}) {
   for(let i=1;i<(options.replicas??1);i++) workers.push({...workers[0],name:`polling-runtime-${i}`});
   // `persist` keeps D1 and R2 on disk, so rollback.mjs can switch packaged
   // binaries on one database and bucket.
-  instance = new Miniflare(convertV4MiniflareOptions({ cf: false, inspectorPort: 0, ...(options.persist ? { resourcePersistencePath: options.persist } : {}), workers }));
+  instance = new Miniflare(convertV4MiniflareOptions({ cf: false, unsafeTriggerHandlers: true, inspectorPort: 0, ...(options.persist ? { resourcePersistencePath: options.persist } : {}), workers }));
   await instance.ready;
   const db = await instance.getD1Database('APP_ATTEST_DB', 'polling-runtime');
   const fresh = !(await db.prepare("SELECT 1 FROM sqlite_master WHERE name='n_feed'").first());

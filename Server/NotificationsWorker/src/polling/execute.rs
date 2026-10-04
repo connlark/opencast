@@ -21,9 +21,13 @@ pub(crate) struct Fence {
     pub epoch: i64,
     pub generation: i64,
     pub schedule: policy::ScheduleInputs,
+    pub timings: super::timing::Timings,
     /// Set once a scan under this fence has sent a publisher request. The
     /// consumer outlives a step it cancels and records the bound for it.
     pub reached: Rc<RefCell<Option<observation::store::Bound>>>,
+    /// A generated lease ID this invocation may have acquired. Register before
+    /// the claim await, so cancellation can clean up an uncertain commit safely.
+    pub scan_lease: Rc<RefCell<Option<String>>>,
 }
 impl Fence {
     pub async fn rejected(&self, db: &D1Database) -> Result<()> {
@@ -75,7 +79,10 @@ pub async fn consume(
     wake: dispatch::Wakeup,
     attempts: u32,
     signal: web_sys::AbortSignal,
+    enqueued_ms: Option<u64>,
 ) -> Result<Response> {
+    let started = super::timing::now_ms();
+    let timings = super::timing::Timings::default();
     let db = env.d1("APP_ATTEST_DB")?;
     if !super::runtime::permitted_by_environment(&env) {
         return Response::error("polling_disabled", 503);
@@ -87,91 +94,150 @@ pub async fn consume(
         return Response::error("invalid_wakeup", 400);
     }
     if wake.kind == "cleanup" {
-        super::cleanup::consume(&env, &db, wake.generation).await?;
-        return outcome("cleanup_saved");
+        // Compatibility with messages retained from the old cron.
+        return outcome("cleanup_ignored");
     }
     if wake.kind != "poll" || !wire::hex_id(&wake.feed_id) || wake.owner_epoch < 1 {
         return Response::error("invalid_wakeup", 400);
     }
-    // Read-only claim: a stale epoch or generation stops here, before any
-    // fetch. Equal-generation redelivery is allowed and is idempotent.
-    let Some(row) = claim(&db, &wake).await? else {
-        console_log!(
-            "{}",
-            json!({"event":"poll_outcome","outcome":"obsolete","feed":wake.feed_id,"step":wake.step})
-        );
-        return outcome("obsolete");
-    };
-    if attempts > 1 {
-        stat(&db, "redeliveries").await?;
-        console_log!(
-            "{}",
-            json!({"event":"poll_redelivered","attempts":attempts,"step":wake.step})
-        );
-    }
-    let fence = Fence {
-        feed: wake.feed_id.clone(),
-        epoch: wake.owner_epoch,
-        generation: wake.generation,
-        schedule: policy::ScheduleInputs {
-            due_at: int(&row, "due_at"),
-            baseline_at: row["baseline_at"].as_i64(),
-            credible_release_at: row["credible_release_at"].as_i64(),
-            credible_cadence: row["credible_cadence"].as_i64(),
-            publish_cadence: row["publish_cadence"].as_i64(),
-            five_minute: int(&row, "five_minute") == 1
-                && super::runtime::flag(&env, "NOTIFICATION_FIVE_MINUTE_POLLING", true),
-        },
-        reached: Default::default(),
-    };
+    let claimed: Rc<RefCell<Option<Fence>>> = Default::default();
+    let step_claimed = claimed.clone();
+    let step_timings = timings.clone();
     let step_env = env.clone();
-    let step_fence = fence.clone();
     let step_wake = wake.clone();
     let result = crate::invocation_owner::run_with_abort_signal_and_deadline(
         signal,
-        async move { step(step_env, step_fence, step_wake, row).await },
+        async move {
+            let db = step_env.d1("APP_ATTEST_DB")?;
+            // The read-only claim and continuation send share the step budget.
+            let claim_span = super::timing::Span::new(step_timings.claim.clone(), None);
+            let row = claim(&db, &step_wake).await?;
+            drop(claim_span);
+            let Some(row) = row else {
+                return Ok("obsolete");
+            };
+            *step_timings.origin.borrow_mut() = row["origin_key"].as_str().map(str::to_string);
+            let fence = Fence {
+                feed: step_wake.feed_id.clone(),
+                epoch: step_wake.owner_epoch,
+                generation: step_wake.generation,
+                schedule: policy::ScheduleInputs {
+                    due_at: int(&row, "due_at"),
+                    baseline_at: row["baseline_at"].as_i64(),
+                    credible_release_at: row["credible_release_at"].as_i64(),
+                    credible_cadence: row["credible_cadence"].as_i64(),
+                    publish_cadence: row["publish_cadence"].as_i64(),
+                    five_minute: int(&row, "five_minute") == 1
+                        && super::runtime::flag(
+                            &step_env,
+                            "NOTIFICATION_FIVE_MINUTE_POLLING",
+                            true,
+                        ),
+                },
+                reached: Default::default(),
+                scan_lease: Default::default(),
+                timings: step_timings,
+            };
+            if attempts > 1 {
+                stat(&db, "redeliveries").await?;
+                console_log!(
+                    "{}",
+                    json!({"event":"poll_redelivered","attempts":attempts,"step":step_wake.step})
+                );
+            }
+            *step_claimed.borrow_mut() = Some(fence.clone());
+            step(step_env, fence, step_wake, row).await
+        },
         policy::STEP_DEADLINE_SECONDS,
         wake.step,
     )
     .await;
-    if result.is_none() {
-        // A dropped scan cannot record its own failure. If it had sent a
-        // publisher request, its start still bounds what a retry may first
-        // observe; waiting for a permit or an origin slot saw nothing. A step
-        // that failed without being dropped has already recorded its own.
-        if let Some(bound) = fence.reached.take() {
-            bound.record(&db).await?;
+    let fence = claimed.take();
+    let (name, status) = match result {
+        Some(Ok(name)) => (name, 200),
+        failure => {
+            let cancelled = failure.is_none();
+            let reason = failure
+                .and_then(|r| r.err())
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            let bookkeeping = crate::deadline::fetch_with_deadline(
+                async {
+                    if let Some(fence) = fence.as_ref() {
+                        if cancelled {
+                            if let Some(bound) = fence.reached.take() {
+                                bound.record(&db).await?;
+                            }
+                        }
+                    }
+                    if !cancelled {
+                        stat(&db, "handling_failures").await?;
+                    }
+                    if let Some(fence) = fence.as_ref() {
+                        release(
+                            &db,
+                            fence,
+                            if cancelled {
+                                "cancelled"
+                            } else {
+                                "handling_failed"
+                            },
+                            &reason,
+                        )
+                        .await?;
+                    }
+                    Ok::<_, Error>(())
+                },
+                Delay::from(std::time::Duration::from_secs(
+                    policy::BOOKKEEPING_DEADLINE_SECONDS,
+                )),
+                Error::RustError("poll_bookkeeping_deadline".into()),
+            )
+            .await;
+            if !cancelled || bookkeeping.is_err() {
+                console_warn!(
+                    "{}",
+                    json!({"event":"poll_handling_failed","feed_id":wake.feed_id,"attempts":attempts,"reason":reason,"bookkeeping_failed":bookkeeping.is_err()})
+                );
+            }
+            (
+                if cancelled { "cancelled" } else { "failed" },
+                if cancelled { 503 } else { 500 },
+            )
         }
+    };
+    if name == "obsolete" {
+        console_log!(
+            "{}",
+            json!({"event":"poll_outcome","outcome":name,"feed":wake.feed_id,"step":wake.step})
+        );
     }
-    // The scan future, its origin guard and its fetch AbortControllers are
-    // gone here. Nothing durable was held, so there is nothing to release.
-    match result {
-        Some(Ok(name)) => outcome(name),
-        Some(Err(error)) => {
-            // Never count storage or handling trouble against the publisher.
-            let reason = error.to_string();
-            stat(&db, "handling_failures").await?;
-            release(&db, &fence, "handling_failed", &reason).await?;
-            console_warn!(
-                "{}",
-                json!({"event":"poll_handling_failed","feed_id":fence.feed,"attempts":attempts,"reason":reason})
-            );
-            // A failed response makes the Queue redeliver, then dead-letter.
-            Response::error("poll_step_failed", 500)
-        }
-        None => {
-            console_log!("{}", json!({"event":"poll_outcome","outcome":"cancelled"}));
-            release(&db, &fence, "cancelled", "").await?;
-            Response::error("poll_cancelled", 503)
-        }
+    let wall_ms = super::timing::now_ms().saturating_sub(started);
+    let message_age_ms = enqueued_ms.map(|at| started.saturating_sub(at));
+    // Continuations and retries include deliberate delay. Only a first
+    // delivery of a dispatcher wakeup has an undelayed send timestamp.
+    let initial_queue_wait_ms = message_age_ms.filter(|_| wake.step == 0 && attempts == 1);
+    let due_lag_seconds = fence
+        .as_ref()
+        .map(|f| started as i64 / 1000 - f.schedule.due_at);
+    let plain = matches!(name, "unchanged" | "not_modified");
+    let sampled = plain && policy::sampled(&wake.feed_id, wake.generation);
+    if !plain || sampled || wall_ms > 5000 || initial_queue_wait_ms.is_some_and(|ms| ms > 120_000) {
+        console_log!(
+            "{}",
+            json!({"event":"poll_delivery","outcome":name,"feed":wake.feed_id,"origin":*timings.origin.borrow(),"step":wake.step,"attempts":attempts,"message_age_ms":message_age_ms,"initial_queue_wait_ms":initial_queue_wait_ms,"due_lag_seconds":due_lag_seconds,"wall_ms":wall_ms,"claim_ms":timings.claim.get(),"publisher_fetch_ms":timings.publisher.get(),"storage_ms":wall_ms.saturating_sub(timings.claim.get()).saturating_sub(timings.publisher.get()),"sample":if plain && wall_ms<=5000 && initial_queue_wait_ms.is_none_or(|ms|ms<=120_000) {policy::SUCCESS_LOG_SAMPLE} else {1}})
+        );
     }
+    outcome(name).map(|response| response.with_status(status))
 }
+
 /// A failed or cancelled step may have claimed the scan lease after proving a
 /// change. Free it for the redelivery, unless it guards a complete preparation
 /// that the redelivery resumes instead of refetching.
 async fn release(db: &D1Database, fence: &Fence, outcome: &str, reason: &str) -> Result<()> {
     let idle = "NOT EXISTS(SELECT 1 FROM n_observation o WHERE o.lease_id=n_feed.lease_id AND o.state='staging' AND o.valid_eof=1)";
-    run(db,&format!("UPDATE n_feed SET last_poll_at=?2,last_poll_outcome=?3,last_poll_error=?4,lease_until=CASE WHEN {idle} THEN NULL ELSE lease_until END,lease_id=CASE WHEN {idle} THEN NULL ELSE lease_id END WHERE feed_id=?1 AND {}",fence.sql(now())),&[json!(fence.feed),json!(now()),json!(outcome),json!(reason.chars().take(96).collect::<String>())]).await?;
+    let lease = fence.scan_lease.borrow().clone();
+    run(db,&format!("UPDATE n_feed SET last_poll_at=?2,last_poll_outcome=?3,last_poll_error=?4,lease_until=CASE WHEN lease_id=?5 AND {idle} THEN NULL ELSE lease_until END,lease_id=CASE WHEN lease_id=?5 AND {idle} THEN NULL ELSE lease_id END WHERE feed_id=?1 AND {}",fence.sql(now())),&[json!(fence.feed),json!(now()),json!(outcome),json!(reason.chars().take(96).collect::<String>()),json!(lease)]).await?;
     Ok(())
 }
 fn outcome(name: &str) -> Result<Response> {
@@ -206,7 +272,7 @@ pub(super) const DRAINING:&str="(EXISTS(SELECT 1 FROM n_observation o WHERE o.fe
 pub(super) const OUTBOXING:&str="EXISTS(SELECT 1 FROM n_outbox x JOIN n_observation o ON o.observation_id=x.observation_id WHERE o.feed_id=f.feed_id AND o.owner_epoch=f.epoch AND x.source='feed_polling' AND x.state='pending' AND x.next_attempt_at<=?4)";
 
 async fn claim(db: &D1Database, wake: &dispatch::Wakeup) -> Result<Option<Value>> {
-    first(db,&format!("SELECT f.due_at,f.retry_at,f.baseline_at,f.credible_release_at,f.credible_cadence,f.publish_cadence,f.lease_until,{PREPARING} AS preparing,{DRAINING} AS draining,{OUTBOXING} AS outboxing,COALESCE((SELECT enabled FROM n_control WHERE name='five_minute_polling'),0) AS five_minute FROM n_feed f WHERE f.feed_id=?1 AND f.epoch=?2 AND f.schedule_generation=?3 AND f.dispatch_until>0 AND f.admission_paused=0 AND f.no_interest_since IS NULL AND EXISTS(SELECT 1 FROM n_interest j JOIN n_install i ON i.install_id=j.install_id WHERE j.feed_id=f.feed_id AND j.enabled=1 AND i.enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='dispatcher_admission' AND enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='feed_observation' AND enabled=1)"),&[json!(wake.feed_id),json!(wake.owner_epoch),json!(wake.generation),json!(now())]).await
+    first(db,&format!("SELECT f.origin_key,f.due_at,f.retry_at,f.baseline_at,f.credible_release_at,f.credible_cadence,f.publish_cadence,f.lease_until,{PREPARING} AS preparing,{DRAINING} AS draining,{OUTBOXING} AS outboxing,COALESCE((SELECT enabled FROM n_control WHERE name='five_minute_polling'),0) AS five_minute FROM n_feed f WHERE f.feed_id=?1 AND f.epoch=?2 AND f.schedule_generation=?3 AND f.dispatch_until>0 AND f.admission_paused=0 AND f.no_interest_since IS NULL AND EXISTS(SELECT 1 FROM n_interest j JOIN n_install i ON i.install_id=j.install_id WHERE j.feed_id=f.feed_id AND j.enabled=1 AND i.enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='dispatcher_admission' AND enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='feed_observation' AND enabled=1)"),&[json!(wake.feed_id),json!(wake.owner_epoch),json!(wake.generation),json!(now())]).await
 }
 
 /// One bounded step. The action is derived from durable observation state, so
@@ -275,12 +341,6 @@ async fn step(env: Env, fence: Fence, wake: dispatch::Wakeup, row: Value) -> Res
         "not_modified" | "unchanged" => {
             if status["settled"] != true {
                 return Ok("obsolete");
-            }
-            if policy::sampled(&fence.feed, fence.generation) {
-                console_log!(
-                    "{}",
-                    json!({"event":"poll_sample","outcome":status["result"],"due_lag_seconds":t-fence.schedule.due_at,"sample":policy::SUCCESS_LOG_SAMPLE})
-                );
             }
             Ok(if string(&status, "result") == "unchanged" {
                 "unchanged"

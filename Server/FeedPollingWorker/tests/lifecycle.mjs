@@ -37,10 +37,13 @@ try{
   await h.invoke('test/dispatch');
   const wakes=await h.polls();
   const classes=await h.rows("SELECT (f.snapshot_key IS NULL) AS baseline,COUNT(*) AS n FROM n_feed f WHERE f.feed_id IN(SELECT json_extract(value,'$.feed_id') FROM json_each(?)) GROUP BY baseline ORDER BY baseline",JSON.stringify(wakes));
-  assert.deepEqual(classes,[{baseline:0,n:320},{baseline:1,n:80}]);
-  assert.equal(new Set(wakes.map(w=>w.feed_id)).size,400,'one live generation per feed');
-  assert.equal((await h.first('SELECT COUNT(*) AS n FROM n_feed WHERE dispatch_until>?',h.now+3601)).n,400);
-  await h.invoke('test/dispatch');assert.equal(new Set([...(await h.polls()).map(w=>w.feed_id),...wakes.map(w=>w.feed_id)]).size,800,'a reserved feed is not admitted again');
+  assert.deepEqual(classes,[{baseline:0,n:160},{baseline:1,n:40}]);
+  assert.equal(new Set(wakes.map(w=>w.feed_id)).size,200,'one live generation per feed');
+  assert.equal((await h.first('SELECT COUNT(*) AS n FROM n_feed WHERE dispatch_until>?',h.now+3601)).n,200);
+  const reserved=await h.rows('SELECT feed_id,schedule_generation,dispatch_until FROM n_feed ORDER BY feed_id');
+  await h.invoke('test/dispatch');
+  assert.deepEqual(await h.polls(),[],'a second tick cannot enqueue an already reserved feed');
+  assert.deepEqual(await h.rows('SELECT feed_id,schedule_generation,dispatch_until FROM n_feed ORDER BY feed_id'),reserved,'a second tick preserves reservations and generations');
   console.log('PASS recurring/baseline 80/20 admission with one reservation per feed and no job rows');
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_poll'")).n,0);
 }finally{await h.instance.dispose();}

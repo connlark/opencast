@@ -695,10 +695,12 @@ struct EpisodeTranscriptAnalysisStoreTests {
         )
         try context.save()
 
+        let (purchases, _) = makeBalancePurchaseStore()
         let appModel = OpenCastAppModel(
             library: LibraryStore(localCache: localCache),
             transcriptions: EpisodeTranscriptionStore(fileStore: transcriptFileStore),
             transcriptAnalyses: transcriptAnalyses,
+            remoteTranscriptionPurchases: purchases,
             allowsAutomaticFeedRefresh: false
         )
         await appModel.library.load(modelContext: context)
@@ -706,6 +708,8 @@ struct EpisodeTranscriptAnalysisStoreTests {
         // The deferrals model manually started runs, so consent is on file.
         transcriptAnalyses.acknowledgeGenerateDisclosure(modelContext: context)
         appModel.transcriptAnalyses.load(modelContext: context)
+        // The increase applied a balance that covers the 35 s estimate.
+        #expect(await purchases.refreshBalance())
         appModel.retryDeferredTranscriptAnalyses(modelContext: context, trigger: .balanceIncreased)
 
         #expect(await waitUntil {
@@ -729,7 +733,7 @@ struct EpisodeTranscriptAnalysisStoreTests {
         #expect(client.requests.map(\.episodeID) == [needsMinutesEpisodeID, capEpisodeID])
     }
 
-    @Test("A fresh insufficient-seconds denial halts the drain instead of burning the queue's admissions")
+    @Test("A fresh insufficient-seconds denial halts the drain instead of uploading every queued retry")
     func freshInsufficientDenialHaltsDrain() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
@@ -801,10 +805,14 @@ struct EpisodeTranscriptAnalysisStoreTests {
         )
         try context.save()
 
+        // The refreshed balance covers both estimates, so the launch sweep
+        // queues both; the worker, which stays authoritative, refuses.
+        let (purchases, _) = makeBalancePurchaseStore()
         let appModel = OpenCastAppModel(
             library: LibraryStore(localCache: localCache),
             transcriptions: EpisodeTranscriptionStore(fileStore: transcriptFileStore),
             transcriptAnalyses: transcriptAnalyses,
+            remoteTranscriptionPurchases: purchases,
             allowsAutomaticFeedRefresh: false
         )
         await appModel.library.load(modelContext: context)
@@ -814,8 +822,8 @@ struct EpisodeTranscriptAnalysisStoreTests {
         appModel.transcriptAnalyses.load(modelContext: context)
         appModel.retryDeferredTranscriptAnalyses(modelContext: context, trigger: .launch)
 
-        // The first run's FRESH 402 must stop the drain: each queued denial
-        // would burn a daily-cap admission the post-top-up retries need.
+        // The first run's FRESH 402 must stop the drain: each further queued
+        // retry would cost a reserve call and a full transcript upload.
         #expect(await waitUntil {
             client.analyzeCallCount == 1 && !transcriptAnalyses.hasActiveJob
         })
@@ -996,11 +1004,485 @@ struct EpisodeTranscriptAnalysisStoreTests {
         #expect(plain.chaptersURL == nil)
     }
 
+    // MARK: - Credit-deferral sweep policy
+
+    @Test("A cold launch submits a credit deferral once: the launch sweep consumes the foreground probe")
+    func coldLaunchSubmitsCreditDeferralOnce() async throws {
+        let client = ThrowingEpisodeTranscriptAnalysisClient(error: Self.insufficientSecondsError)
+        let harness = try await makeDeferredQueueHarness(
+            slug: "cold-launch",
+            episodes: [DeferredEpisodeSpec(kind: .insufficientSeconds)],
+            client: client
+        )
+        harness.loadAnalysisStore()
+        harness.retry(.launch)
+
+        #expect(await waitUntil {
+            client.analyzeCallCount == 1 && !harness.transcriptAnalyses.hasActiveJob
+        })
+        // Scene activation lands after the store load in the same foreground
+        // session; the worker keeps answering the typed 402.
+        harness.retry(.sceneActivated)
+        // Short on purpose: this asserts that no second submit arrives.
+        #expect(!(await waitUntil(timeout: .milliseconds(500)) { client.analyzeCallCount > 1 }))
+        #expect(client.analyzeCallCount == 1)
+        #expect(harness.balanceAPI.bootstrapCalls == 1)
+    }
+
+    @Test("Every sweep submits the credit deferrals the balance covers and parks the rest")
+    func everySweepFiltersCreditDeferralsByHeadroom() async throws {
+        for trigger in [TranscriptAnalysisQueue.RetryTrigger.launch, .sceneActivated, .balanceIncreased] {
+            let client = ScriptedEpisodeTranscriptAnalysisClient()
+            let harness = try await makeDeferredQueueHarness(
+                slug: "headroom-\(trigger)",
+                episodes: [
+                    DeferredEpisodeSpec(kind: .insufficientSeconds),
+                    // Ten audio-hours price at 78,500 s, past 14,400 s of headroom.
+                    DeferredEpisodeSpec(kind: .insufficientSeconds, audioDuration: 36_000)
+                ],
+                client: client
+            )
+            harness.loadAnalysisStore()
+            if trigger == .balanceIncreased {
+                #expect(await harness.purchases.refreshBalance())
+            }
+            harness.retry(trigger)
+
+            #expect(await waitUntil {
+                harness.transcriptAnalyses.record(for: harness.episodeIDs[0])?.state == .completed
+                    && !harness.transcriptAnalyses.hasActiveJob
+            })
+            #expect(client.submittedEpisodeIDs == [harness.episodeIDs[0]])
+            #expect(harness.transcriptAnalyses.insufficientSecondsDeferredEpisodeIDs == [harness.episodeIDs[1]])
+            // Launch and foreground refresh once; a balance increase reads the
+            // balance it was handed (the priming refresh above).
+            #expect(harness.balanceAPI.bootstrapCalls == 1)
+        }
+    }
+
+    @Test("A headroom increase that still cannot cover the episode submits nothing; one that covers it does")
+    func refreshHeadroomIncreaseWakesOnlyCoveredDeferrals() async throws {
+        let client = ScriptedEpisodeTranscriptAnalysisClient()
+        let harness = try await makeDeferredQueueHarness(
+            slug: "small-topup",
+            episodes: [DeferredEpisodeSpec(kind: .insufficientSeconds)],
+            client: client,
+            balance: Self.exhaustedBalance
+        )
+        harness.loadAnalysisStore()
+        harness.retry(.launch)
+        #expect(await waitUntil { harness.balanceAPI.bootstrapCalls == 1 })
+
+        // 20 s of headroom against a 35 s estimate: the refresh fires the
+        // balance callback, and its sweep still parks the record.
+        harness.balanceAPI.balance = Self.balance(available: 20, debt: 10_800)
+        #expect(await harness.purchases.refreshBalance())
+        #expect(!(await waitUntil(timeout: .milliseconds(300)) { !client.submittedEpisodeIDs.isEmpty }))
+
+        harness.balanceAPI.balance = Self.coveringBalance
+        #expect(await harness.purchases.refreshBalance())
+        #expect(await waitUntil {
+            harness.transcriptAnalyses.record(for: harness.episodeIDs[0])?.state == .completed
+                && !harness.transcriptAnalyses.hasActiveJob
+        })
+        #expect(client.submittedEpisodeIDs == harness.episodeIDs)
+        // The balance sweeps never refreshed on their own.
+        #expect(harness.balanceAPI.bootstrapCalls == 3)
+    }
+
+    @Test("A failed refresh parks credit deferrals despite a stale covering balance; cap deferrals still probe")
+    func failedRefreshParksCreditDeferralsButCapProbesContinue() async throws {
+        let client = ScriptedEpisodeTranscriptAnalysisClient()
+        let harness = try await makeDeferredQueueHarness(
+            slug: "refresh-fails",
+            episodes: [
+                DeferredEpisodeSpec(kind: .capExceeded),
+                DeferredEpisodeSpec(kind: .insufficientSeconds)
+            ],
+            client: client
+        )
+        #expect(await harness.purchases.refreshBalance())
+        harness.balanceAPI.bootstrapError = URLError(.notConnectedToInternet)
+        harness.loadAnalysisStore()
+        harness.retry(.launch)
+
+        #expect(await waitUntil {
+            harness.transcriptAnalyses.record(for: harness.episodeIDs[0])?.state == .completed
+                && harness.balanceAPI.bootstrapCalls == 2
+                && !harness.transcriptAnalyses.hasActiveJob
+        })
+        #expect(!(await waitUntil(timeout: .milliseconds(300)) { client.submittedEpisodeIDs.count > 1 }))
+        #expect(client.submittedEpisodeIDs == [harness.episodeIDs[0]])
+        #expect(harness.transcriptAnalyses.insufficientSecondsDeferredEpisodeIDs == [harness.episodeIDs[1]])
+
+        // The next foreground session's successful refresh recovers it.
+        harness.balanceAPI.bootstrapError = nil
+        harness.appModel.resetTranscriptAnalysisForegroundProbe()
+        harness.retry(.sceneActivated)
+        #expect(await waitUntil {
+            harness.transcriptAnalyses.record(for: harness.episodeIDs[1])?.state == .completed
+                && !harness.transcriptAnalyses.hasActiveJob
+        })
+        #expect(client.submittedEpisodeIDs == harness.episodeIDs)
+    }
+
+    @Test("Overlapping launch, activation and balance callbacks share one refresh and submit each episode once")
+    func overlappingSweepsCoalesce() async throws {
+        let client = ScriptedEpisodeTranscriptAnalysisClient()
+        let harness = try await makeDeferredQueueHarness(
+            slug: "overlap",
+            episodes: [
+                DeferredEpisodeSpec(kind: .insufficientSeconds),
+                DeferredEpisodeSpec(kind: .insufficientSeconds)
+            ],
+            client: client,
+            balance: Self.exhaustedBalance
+        )
+        #expect(await harness.purchases.refreshBalance())
+        let gate = SuspensionGate()
+        harness.balanceAPI.bootstrapGate = gate
+        harness.balanceAPI.balance = Self.coveringBalance
+        harness.loadAnalysisStore()
+
+        harness.retry(.launch)
+        await gate.waitUntilEntered()
+        // Both land while the launch refresh is suspended: a scene
+        // activation, and a redeem's headroom callback.
+        harness.retry(.sceneActivated)
+        harness.purchases.onBalanceIncreased?()
+        await gate.open()
+
+        #expect(await waitUntil {
+            harness.episodeIDs.allSatisfy {
+                harness.transcriptAnalyses.record(for: $0)?.state == .completed
+            } && !harness.transcriptAnalyses.hasActiveJob
+        })
+        harness.retry(.sceneActivated)
+        #expect(!(await waitUntil(timeout: .milliseconds(300)) { client.submittedEpisodeIDs.count > 2 }))
+        #expect(client.submittedEpisodeIDs == harness.episodeIDs)
+        // The priming refresh plus the launch refresh; the applied increase
+        // fired the callback without a refresh of its own.
+        #expect(harness.balanceAPI.bootstrapCalls == 2)
+    }
+
+    @Test("An activation before the store load keeps the launch sweep's turn")
+    func activationBeforeLoadKeepsLaunchOpportunity() async throws {
+        let client = ScriptedEpisodeTranscriptAnalysisClient()
+        let harness = try await makeDeferredQueueHarness(
+            slug: "early-activation",
+            episodes: [DeferredEpisodeSpec(kind: .insufficientSeconds)],
+            client: client
+        )
+        harness.retry(.sceneActivated)
+        #expect(harness.balanceAPI.bootstrapCalls == 0)
+
+        harness.loadAnalysisStore()
+        harness.retry(.launch)
+        #expect(await waitUntil {
+            harness.transcriptAnalyses.record(for: harness.episodeIDs[0])?.state == .completed
+                && !harness.transcriptAnalyses.hasActiveJob
+        })
+        #expect(client.submittedEpisodeIDs == harness.episodeIDs)
+        #expect(harness.balanceAPI.bootstrapCalls == 1)
+    }
+
+    @Test("A queued credit retry rechecks headroom before uploading")
+    func queuedCreditRetryRechecksHeadroom() async throws {
+        let client = ScriptedEpisodeTranscriptAnalysisClient()
+        let gate = SuspensionGate()
+        client.gate = gate
+        let harness = try await makeDeferredQueueHarness(
+            slug: "recheck",
+            episodes: [
+                DeferredEpisodeSpec(kind: nil),
+                DeferredEpisodeSpec(kind: .insufficientSeconds)
+            ],
+            client: client
+        )
+        let queue = harness.makeStandaloneQueue()
+        harness.loadAnalysisStore()
+        #expect(await harness.purchases.refreshBalance())
+
+        // A manual run occupies the single-flight store while the balance
+        // sweep queues the covered deferral behind it.
+        queue.generate(episodeID: harness.episodeIDs[0], modelContext: harness.context)
+        await gate.waitUntilEntered()
+        queue.retryDeferred(modelContext: harness.context, trigger: .balanceIncreased)
+        #expect(await waitUntil { queue.pendingEpisodeIDs == [harness.episodeIDs[1]] })
+
+        // Another device spends the headroom before the retry's turn.
+        harness.balanceAPI.balance = Self.exhaustedBalance
+        #expect(await harness.purchases.refreshBalance())
+        await gate.open()
+
+        #expect(await waitUntil {
+            queue.pendingEpisodeIDs.isEmpty && !harness.transcriptAnalyses.hasActiveJob
+                && harness.transcriptAnalyses.record(for: harness.episodeIDs[0])?.state == .completed
+        })
+        #expect(!(await waitUntil(timeout: .milliseconds(300)) { client.submittedEpisodeIDs.count > 1 }))
+        #expect(client.submittedEpisodeIDs == [harness.episodeIDs[0]])
+        #expect(harness.transcriptAnalyses.insufficientSecondsDeferredEpisodeIDs == [harness.episodeIDs[1]])
+
+        // Manual Generate stays unfiltered: the worker decides.
+        queue.generate(episodeID: harness.episodeIDs[1], modelContext: harness.context)
+        #expect(await waitUntil { client.submittedEpisodeIDs.count == 2 })
+    }
+
+    @Test("Cancellation and the data nuke stop a suspended sweep from enqueuing, even when its refresh still answers with more credit")
+    func suspendedSweepCannotEnqueueAfterReset() async throws {
+        for usesDataNuke in [false, true] {
+            let client = ScriptedEpisodeTranscriptAnalysisClient()
+            let harness = try await makeDeferredQueueHarness(
+                slug: "reset-\(usesDataNuke)",
+                episodes: [DeferredEpisodeSpec(kind: .insufficientSeconds)],
+                client: client
+            )
+            let queue = harness.makeStandaloneQueue()
+            // A known balance first: the parked refresh then answers with
+            // MORE headroom, so a late answer that were applied would also
+            // fire the balance-increase callback and start a fresh sweep.
+            #expect(await harness.purchases.refreshBalance())
+            harness.balanceAPI.balance = Self.balance(available: 10_000, debt: 0)
+            let gate = SuspensionGate()
+            harness.balanceAPI.bootstrapGate = gate
+            harness.loadAnalysisStore()
+
+            queue.retryDeferred(modelContext: harness.context, trigger: .launch)
+            await gate.waitUntilEntered()
+            if usesDataNuke {
+                queue.resetAfterDataNuke()
+            } else {
+                await queue.cancelPending()
+            }
+            await gate.open()
+            #expect(await waitUntil { harness.balanceAPI.bootstrapCalls == 2 })
+            #expect(!(await waitUntil(timeout: .milliseconds(300)) { !client.submittedEpisodeIDs.isEmpty }))
+            #expect(queue.pendingEpisodeIDs.isEmpty)
+            // The cancelled refresh applied nothing.
+            #expect(harness.purchases.balance?.availableSeconds == 3_600)
+
+            // The obsolete pass did not absorb the next sweep.
+            queue.retryDeferred(modelContext: harness.context, trigger: .launch)
+            #expect(await waitUntil {
+                harness.transcriptAnalyses.record(for: harness.episodeIDs[0])?.state == .completed
+                    && !harness.transcriptAnalyses.hasActiveJob
+            })
+            #expect(client.submittedEpisodeIDs == harness.episodeIDs)
+            #expect(harness.balanceAPI.bootstrapCalls == 3)
+            #expect(harness.purchases.balance?.availableSeconds == 10_000)
+        }
+    }
+
+    @Test("Cancellation and the data nuke stop a sweep suspended in a transcript load")
+    func sweepSuspendedInTranscriptLoadCannotEnqueueAfterReset() async throws {
+        for usesDataNuke in [false, true] {
+            let client = ScriptedEpisodeTranscriptAnalysisClient()
+            let harness = try await makeDeferredQueueHarness(
+                slug: "reset-load-\(usesDataNuke)",
+                episodes: [DeferredEpisodeSpec(kind: .insufficientSeconds)],
+                client: client
+            )
+            let queue = harness.makeStandaloneQueue()
+            let gate = SuspensionGate()
+            let transcriptions = harness.appModel.transcriptions
+            queue.loadTranscriptDocument = { episodeID in
+                await gate.enter()
+                return try await transcriptions.loadDocument(for: episodeID)
+            }
+            harness.loadAnalysisStore()
+
+            queue.retryDeferred(modelContext: harness.context, trigger: .launch)
+            await gate.waitUntilEntered()
+            if usesDataNuke {
+                queue.resetAfterDataNuke()
+            } else {
+                await queue.cancelPending()
+            }
+            await gate.open()
+            #expect(!(await waitUntil(timeout: .milliseconds(300)) { !client.submittedEpisodeIDs.isEmpty }))
+            #expect(queue.pendingEpisodeIDs.isEmpty)
+
+            queue.retryDeferred(modelContext: harness.context, trigger: .launch)
+            #expect(await waitUntil {
+                harness.transcriptAnalyses.record(for: harness.episodeIDs[0])?.state == .completed
+                    && !harness.transcriptAnalyses.hasActiveJob
+            })
+            #expect(client.submittedEpisodeIDs == harness.episodeIDs)
+        }
+    }
+
+    @Test("A fresh denial also stops the sweep that is still loading the next transcript")
+    func freshDenialStopsSweepSuspendedInTranscriptLoad() async throws {
+        let client = ThrowingEpisodeTranscriptAnalysisClient(error: Self.insufficientSecondsError)
+        let harness = try await makeDeferredQueueHarness(
+            slug: "halt-during-load",
+            episodes: [
+                DeferredEpisodeSpec(kind: .insufficientSeconds),
+                DeferredEpisodeSpec(kind: .insufficientSeconds)
+            ],
+            client: client
+        )
+        let queue = harness.makeStandaloneQueue()
+        let gate = SuspensionGate()
+        let transcriptions = harness.appModel.transcriptions
+        let parkedEpisodeID = harness.episodeIDs[1]
+        queue.loadTranscriptDocument = { episodeID in
+            if episodeID == parkedEpisodeID {
+                await gate.enter()
+            }
+            return try await transcriptions.loadDocument(for: episodeID)
+        }
+        harness.loadAnalysisStore()
+
+        // The sweep queues the first episode, then parks on the second's
+        // transcript while the first upload is refused with a fresh 402.
+        queue.retryDeferred(modelContext: harness.context, trigger: .launch)
+        await gate.waitUntilEntered()
+        #expect(await waitUntil {
+            client.analyzeCallCount == 1
+                && !harness.transcriptAnalyses.hasActiveJob
+                && queue.pendingEpisodeIDs.isEmpty
+        })
+
+        // The balance the sweep relied on has just been contradicted by the
+        // worker: resuming must not upload the second episode on it.
+        await gate.open()
+        #expect(!(await waitUntil(timeout: .milliseconds(500)) { client.analyzeCallCount > 1 }))
+        #expect(client.analyzeCallCount == 1)
+        #expect(queue.pendingEpisodeIDs.isEmpty)
+        #expect(Set(harness.transcriptAnalyses.insufficientSecondsDeferredEpisodeIDs) == Set(harness.episodeIDs))
+    }
+
     // MARK: - Fixtures
+
+    private static var insufficientSecondsError: EpisodeTranscriptAnalysisHTTPError {
+        EpisodeTranscriptAnalysisHTTPError(
+            statusCode: 402,
+            code: "insufficient_transcription_seconds",
+            detail: nil
+        )
+    }
+
+    /// One subscribed show whose episodes carry the given typed deferrals,
+    /// stamped oldest-last so the queue drains them in declaration order.
+    private func makeDeferredQueueHarness(
+        slug: String,
+        episodes: [DeferredEpisodeSpec],
+        client: any EpisodeTranscriptAnalysisClient,
+        balance: OpenCastRemoteTranscriptionBalance? = nil
+    ) async throws -> DeferredQueueHarness {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let localCache = SQLiteLocalLibraryCacheStore.inMemory()
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        let transcriptAnalyses = EpisodeTranscriptAnalysisStore(
+            client: client,
+            fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: temporaryDirectory)
+        )
+        let items = episodes.indices.map { index in
+            """
+                <item>
+                  <title>Episode \(index)</title>
+                  <guid>\(slug)-\(index)</guid>
+                  <enclosure url="https://example.com/audio/\(slug)-\(index).mp3" type="audio/mpeg" />
+                </item>
+            """
+        }.joined(separator: "\n")
+        let snapshot = try RSSFeedParser().parse(
+            data: Data(
+                """
+                <?xml version="1.0" encoding="utf-8"?>
+                <rss version="2.0">
+                  <channel>
+                    <title>\(slug) Show</title>
+                \(items)
+                  </channel>
+                </rss>
+                """.utf8
+            ),
+            feedURL: URL(string: "https://example.com/\(slug).xml")!
+        )
+        try await localCache.upsertCache(from: snapshot, refreshedAt: .now)
+        let feedURL = snapshot.podcast.id.rawValue
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "\(slug) Show"))
+        let base = Date(timeIntervalSince1970: 1_780_500_000)
+        let episodeIDs = snapshot.episodes.map(\.id.rawValue)
+        for (index, spec) in episodes.enumerated() {
+            let episodeID = episodeIDs[index]
+            if spec.isTranscribed {
+                try seedCompletedTranscript(
+                    episodeID: episodeID,
+                    podcastID: feedURL,
+                    audioDuration: spec.audioDuration,
+                    fileStore: transcriptFileStore,
+                    context: context
+                )
+            }
+            if let kind = spec.kind {
+                insertDeferredRecord(
+                    kind: kind,
+                    episodeID: episodeID,
+                    podcastID: feedURL,
+                    updatedAt: base.addingTimeInterval(Double(episodes.count - index) * 10),
+                    context: context
+                )
+            }
+        }
+        try context.save()
+
+        let (purchases, balanceAPI) = makeBalancePurchaseStore(balance: balance ?? Self.coveringBalance)
+        let appModel = OpenCastAppModel(
+            library: LibraryStore(localCache: localCache),
+            transcriptions: EpisodeTranscriptionStore(fileStore: transcriptFileStore),
+            transcriptAnalyses: transcriptAnalyses,
+            remoteTranscriptionPurchases: purchases,
+            allowsAutomaticFeedRefresh: false
+        )
+        await appModel.library.load(modelContext: context)
+        appModel.transcriptions.load(modelContext: context)
+        // The deferrals model manually started runs, so consent is on file.
+        transcriptAnalyses.acknowledgeGenerateDisclosure(modelContext: context)
+        return DeferredQueueHarness(
+            appModel: appModel,
+            context: context,
+            transcriptAnalyses: transcriptAnalyses,
+            purchases: purchases,
+            balanceAPI: balanceAPI,
+            episodeIDs: episodeIDs
+        )
+    }
+
+    /// 3,600 s available plus the 10,800 s debt allowance: 14,400 s of
+    /// headroom, enough for the 35 s fixture estimate.
+    private static let coveringBalance = balance(available: 3_600, debt: 0)
+    /// Debt at the cap and nothing available: no headroom at all.
+    private static let exhaustedBalance = balance(available: 0, debt: 10_800)
+
+    private static func balance(available: Int64, debt: Int64) -> OpenCastRemoteTranscriptionBalance {
+        OpenCastRemoteTranscriptionBalance(
+            availableSeconds: available,
+            reservedSeconds: 0,
+            debtSeconds: debt
+        )
+    }
+
+    private func makeBalancePurchaseStore(
+        balance: OpenCastRemoteTranscriptionBalance = EpisodeTranscriptAnalysisStoreTests.coveringBalance
+    ) -> (RemoteTranscriptionPurchaseStore, FakeBalanceAPI) {
+        let api = FakeBalanceAPI(balance: balance)
+        let store = RemoteTranscriptionPurchaseStore(
+            api: api,
+            storeKit: LiveRemoteTranscriptionStoreKitClient(),
+            configuration: RemoteTranscriptionBackendConfiguration.prodStaging
+        )
+        return (store, api)
+    }
 
     private func makeTranscriptDocument(
         episodeID: String,
         podcastID: String = "https://example.com/feed.xml",
+        audioDuration: Double = 16,
         updatedAt: Date = Date(timeIntervalSince1970: 1_780_000_000)
     ) -> EpisodeTranscriptDocument {
         let segments = [
@@ -1033,7 +1515,7 @@ struct EpisodeTranscriptAnalysisStoreTests {
             modelVersion: "v1",
             modelTreeSHA256: "tree-sha",
             languageCode: "en",
-            audioDuration: 16,
+            audioDuration: audioDuration,
             checkpoints: [],
             segments: segments,
             text: segments.map(\.text).joined(separator: " "),
@@ -1046,10 +1528,15 @@ struct EpisodeTranscriptAnalysisStoreTests {
     private func seedCompletedTranscript(
         episodeID: String,
         podcastID: String,
+        audioDuration: Double = 16,
         fileStore: EpisodeTranscriptFileStore,
         context: ModelContext
     ) throws {
-        let document = makeTranscriptDocument(episodeID: episodeID, podcastID: podcastID)
+        let document = makeTranscriptDocument(
+            episodeID: episodeID,
+            podcastID: podcastID,
+            audioDuration: audioDuration
+        )
         let fingerprint = fileStore.fingerprint(
             sourceFileSHA256: document.sourceFileSHA256,
             modelIdentifier: document.modelIdentifier,
@@ -1116,6 +1603,50 @@ struct EpisodeTranscriptAnalysisStoreTests {
             .appending(path: "OpenCastTranscriptAnalysisTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+private struct DeferredEpisodeSpec {
+    /// Nil seeds a transcribed episode with no analysis record.
+    var kind: EpisodeAnalysisFailureKind?
+    /// 16 s prices at 35 credit-seconds under the flat analysis rate.
+    var audioDuration: Double = 16
+    var isTranscribed = true
+}
+
+@MainActor
+private struct DeferredQueueHarness {
+    let appModel: OpenCastAppModel
+    let context: ModelContext
+    let transcriptAnalyses: EpisodeTranscriptAnalysisStore
+    let purchases: RemoteTranscriptionPurchaseStore
+    let balanceAPI: FakeBalanceAPI
+    let episodeIDs: [String]
+
+    /// A queue over the same stores whose pending list the test can read;
+    /// balance increases wake it instead of the app model's own queue.
+    func makeStandaloneQueue() -> TranscriptAnalysisQueue {
+        let queue = TranscriptAnalysisQueue(
+            transcriptAnalyses: appModel.transcriptAnalyses,
+            transcriptions: appModel.transcriptions,
+            library: appModel.library,
+            purchases: purchases
+        )
+        queue.resolveEpisode = { [appModel] episodeID in
+            appModel.episodeSnapshot(for: episodeID)
+        }
+        purchases.onBalanceIncreased = { [weak queue] in
+            queue?.retryDeferredAfterBalanceIncrease()
+        }
+        return queue
+    }
+
+    func loadAnalysisStore() {
+        appModel.transcriptAnalyses.load(modelContext: context)
+    }
+
+    func retry(_ trigger: TranscriptAnalysisQueue.RetryTrigger) {
+        appModel.retryDeferredTranscriptAnalyses(modelContext: context, trigger: trigger)
     }
 }
 
@@ -1312,5 +1843,134 @@ private final class FakeEpisodeTranscriptAnalysisClient: EpisodeTranscriptAnalys
 
     func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
         throw EpisodeTranscriptAnalysisError.clientDisabled
+    }
+}
+
+/// Records every submit, optionally parks the first one on a gate, and
+/// otherwise completes like `FakeEpisodeTranscriptAnalysisClient`.
+private final class ScriptedEpisodeTranscriptAnalysisClient: EpisodeTranscriptAnalysisClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private let completing = FakeEpisodeTranscriptAnalysisClient()
+    private var recordedEpisodeIDs: [String] = []
+    private var pendingGate: SuspensionGate?
+
+    var gate: SuspensionGate? {
+        get { lock.withLock { pendingGate } }
+        set { lock.withLock { pendingGate = newValue } }
+    }
+
+    var submittedEpisodeIDs: [String] {
+        lock.withLock { recordedEpisodeIDs }
+    }
+
+    func analyze(_ request: EpisodeTranscriptAnalysisAPIRequest) async throws -> EpisodeTranscriptAnalysisSubmitOutcome {
+        let gate: SuspensionGate? = lock.withLock {
+            recordedEpisodeIDs.append(request.episodeID)
+            defer { pendingGate = nil }
+            return pendingGate
+        }
+        await gate?.enter()
+        return try await completing.analyze(request)
+    }
+
+    func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
+        throw EpisodeTranscriptAnalysisError.clientDisabled
+    }
+}
+
+/// Balance-only purchase backend: bootstrap answers with the scripted
+/// balance, optionally parked on a gate or failing.
+private final class FakeBalanceAPI: RemoteTranscriptionAPI, @unchecked Sendable {
+    private let lock = NSLock()
+    private var currentBalance: OpenCastRemoteTranscriptionBalance
+    private var currentError: Error?
+    private var currentGate: SuspensionGate?
+    private var recordedBootstrapCalls = 0
+
+    init(balance: OpenCastRemoteTranscriptionBalance) {
+        currentBalance = balance
+    }
+
+    var balance: OpenCastRemoteTranscriptionBalance {
+        get { lock.withLock { currentBalance } }
+        set { lock.withLock { currentBalance = newValue } }
+    }
+
+    var bootstrapError: Error? {
+        get { lock.withLock { currentError } }
+        set { lock.withLock { currentError = newValue } }
+    }
+
+    var bootstrapGate: SuspensionGate? {
+        get { lock.withLock { currentGate } }
+        set { lock.withLock { currentGate = newValue } }
+    }
+
+    var bootstrapCalls: Int {
+        lock.withLock { recordedBootstrapCalls }
+    }
+
+    func bootstrap() async throws -> OpenCastRemoteTranscriptionBootstrapResponse {
+        let gate = lock.withLock {
+            recordedBootstrapCalls += 1
+            return currentGate
+        }
+        await gate?.enter()
+        if let error = bootstrapError {
+            throw error
+        }
+        return OpenCastRemoteTranscriptionBootstrapResponse(
+            schemaVersion: 1,
+            accountID: "pacct-fake",
+            balance: balance,
+            appAccountToken: "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+            catalog: RemoteTranscriptionEmbeddedCatalog.products,
+            catalogSHA256: RemoteTranscriptionEmbeddedCatalog.catalogSHA256,
+            purchasesEnabled: true
+        )
+    }
+
+    func redeem(transactionJWS: String) async throws -> OpenCastRemoteTranscriptionRedeemResponse {
+        throw Self.unused
+    }
+
+    func createJob(_ request: OpenCastRemoteTranscriptionJobCreateRequest) async throws -> OpenCastRemoteTranscriptionJobResponse {
+        throw Self.unused
+    }
+
+    func reportSource(jobID: String, identity: OpenCastRemoteTranscriptionSourceIdentity) async throws -> OpenCastRemoteTranscriptionJobResponse {
+        throw Self.unused
+    }
+
+    func poll(jobID: String) async throws -> OpenCastRemoteTranscriptionPollResponse {
+        throw Self.unused
+    }
+
+    func result(jobID: String) async throws -> OpenCastRemoteTranscriptionResultResponse {
+        throw Self.unused
+    }
+
+    func ack(jobID: String, normalizedTranscriptSHA256: String?) async throws -> OpenCastRemoteTranscriptionJobResponse {
+        throw Self.unused
+    }
+
+    func cancel(jobID: String) async throws -> OpenCastRemoteTranscriptionJobResponse {
+        throw Self.unused
+    }
+
+    func uploadStart(jobID: String, forBackground: Bool) async throws -> OpenCastRemoteTranscriptionUploadGrantResponse {
+        throw Self.unused
+    }
+
+    func uploadParts(jobID: String, partNumbers: [Int], forBackground: Bool) async throws -> OpenCastRemoteTranscriptionUploadGrantResponse {
+        throw Self.unused
+    }
+
+    func uploadComplete(jobID: String, parts: [OpenCastRemoteTranscriptionUploadCompletedPart]) async throws -> OpenCastRemoteTranscriptionJobResponse {
+        throw Self.unused
+    }
+
+    private static var unused: RemoteTranscriptionHTTPError {
+        RemoteTranscriptionHTTPError(statusCode: -1, code: "unused", detail: nil)
     }
 }

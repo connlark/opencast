@@ -8,8 +8,7 @@ const bucket = await h.instance.getR2Bucket('FEED_SNAPSHOTS', 'polling-runtime')
 const TABLES = ['n_observation', 'n_snapshot', 'n_snapshot_ref', 'n_episode_release', 'n_outbox', 'n_event', 'n_delivery'];
 const durable = async () => ({ ...Object.fromEntries(await Promise.all(TABLES.map(async t => [t, (await h.first(`SELECT COUNT(*) AS n FROM ${t}`)).n]))), objects: (await bucket.list()).objects.length });
 const scratch = async () => (await bucket.list({ prefix: 'scratch/' })).objects.length;
-// On a fifteen-minute boundary the dispatcher also admits a cleanup wakeup.
-const last = async () => (await h.invoke('metrics')).recent.filter(t => t.path === '/test/consume' && t.outcome !== 'cleanup_saved').at(-1);
+const last = async () => (await h.invoke('metrics')).recent.filter(t => t.path === '/test/consume').at(-1);
 const poll = async feed => { await h.run('UPDATE n_feed SET due_at=0,retry_at=0,poll_failures=0,dispatch_until=0 WHERE feed_id=?', feed); await h.invoke('test/dispatch'); await h.drain(); return last(); };
 const pointer = feed => h.first('SELECT observation_generation,snapshot_key,semantic_digest FROM n_feed WHERE feed_id=?', feed);
 try {

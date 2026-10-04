@@ -202,6 +202,21 @@ impl DailyUsage {
             estimated_input_tokens: next_tokens,
         })
     }
+
+    /// Gives back one admission that never started a run: one request and
+    /// its estimated tokens, saturating at zero. Saturation is the only
+    /// defence against a release for an admission this object never
+    /// recorded (a day object wiped by its cleanup alarm, or a replayed
+    /// release) — the route is not idempotent, so callers release each
+    /// confirmed acquisition exactly once.
+    pub fn releasing(&self, estimated_input_tokens: u64) -> Self {
+        Self {
+            request_count: self.request_count.saturating_sub(1),
+            estimated_input_tokens: self
+                .estimated_input_tokens
+                .saturating_sub(estimated_input_tokens),
+        }
+    }
 }
 
 pub fn decode_and_validate_request(body: &[u8]) -> Result<ValidatedRequest, ValidationError> {

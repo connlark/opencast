@@ -71,6 +71,7 @@ pub(crate) async fn fetch_feed(
             Request::new_with_init(&current_url, &init).map_err(|_| FeedFetchError::FetchFailed)?;
         let cancellation = FeedFetchCancellation::default();
         let signal = cancellation.signal();
+        let publisher_span = observer.timings.publisher_span();
         let response = fetch_with_deadline(
             async {
                 Fetch::Request(request)
@@ -82,6 +83,7 @@ pub(crate) async fn fetch_feed(
             FeedFetchError::FetchFailed,
         )
         .await?;
+        drop(publisher_span);
         let status = response.status_code();
 
         if let Some(origin) = observer.origin.as_mut() {
@@ -141,8 +143,10 @@ pub(crate) async fn fetch_feed(
         } else {
             stream
         };
+        let publisher_span = observer.timings.publisher_span();
         let parsed = rss::scan::scan_rss_with_sink(stream, &feed.feed_url, observer).await;
 
+        drop(publisher_span);
         return Ok(FeedFetchOutcome::Fetched(Box::new(FetchedFeed {
             parsed,
             etag,

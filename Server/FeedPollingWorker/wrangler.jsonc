@@ -42,9 +42,10 @@
     "NOTIFICATION_CLEANUP": "false"
   },
   "triggers": {
-    // The dispatcher runs on a one-minute cron. Enable it with ["* * * * *"]
-    // only after App Attest, APNs, D1 migrations, the Queues and your abuse
-    // controls are configured and the n_control rows are deliberately opened.
+    // The dispatcher runs on a one-minute cron and cleanup on a separate
+    // two-minute cron. Enable them with ["* * * * *", "*/2 * * * *"] only after
+    // App Attest, APNs, D1 migrations, the Queues and your abuse controls are
+    // configured and the n_control rows are deliberately opened.
     "crons": []
   },
   "d1_databases": [

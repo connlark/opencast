@@ -26,7 +26,10 @@ import {
   analysisFor,
   bytesToBase64,
   geminiResponse,
+  bearerLimiterStub,
   globalLimiterStub,
+  limiterUsage,
+  setLimiterUsage,
   installFetchStub,
   jobStub,
   makeDenseRequest,
@@ -991,23 +994,14 @@ describe("transport ladder", () => {
 });
 
 describe("spend caps", () => {
-  it("counts a global cap denial by profile without a model call", async () => {
+  it("counts a global cap denial by profile without a model call and gives the bearer admission back", async () => {
     const countersBefore = await readCounters();
+    const bearerLimiter = await bearerLimiterStub();
+    const bearerBefore = await limiterUsage(bearerLimiter);
     // Pre-fill today's global limiter to its declared 60-request cap. The
-    // bearer profile admits first (1 of 40), then the global profile refuses.
-    await runInDurableObject(globalLimiterStub(), (_instance, state) => {
-      state.storage.sql.exec(
-        "CREATE TABLE IF NOT EXISTS daily_usage (\n" +
-          "  id INTEGER PRIMARY KEY CHECK (id = 1),\n" +
-          "  request_count INTEGER NOT NULL,\n" +
-          "  estimated_input_tokens INTEGER NOT NULL\n" +
-          ");",
-      );
-      state.storage.sql.exec(
-        "INSERT INTO daily_usage (id, request_count, estimated_input_tokens) " +
-          "VALUES (1, 60, 0) ON CONFLICT(id) DO UPDATE SET request_count = 60;",
-      );
-    });
+    // bearer profile admits first (1 of 40), then the global profile refuses
+    // — and the bearer admission is released again.
+    await setLimiterUsage(globalLimiterStub(), { request_count: 60, estimated_input_tokens: 0 });
 
     const response = await postAnalyze(
       JSON.stringify(makeRequest({ fingerprint: "d".repeat(64), asyncSupported: true })),
@@ -1015,14 +1009,63 @@ describe("spend caps", () => {
     );
     expect(response.status).toBe(429);
     expect((await response.json()).error).toBe("global_capacity_exhausted");
+    expect(await limiterUsage(bearerLimiter)).toEqual(bearerBefore);
+    expect(await limiterUsage(globalLimiterStub())).toEqual({ request_count: 60, estimated_input_tokens: 0 });
     expect(counterDiff(countersBefore, await readCounters())).toEqual({
+      admission_releases: 1,
       cap_denials_global: 1,
     });
     // Storage is shared across the file: put the limiter back so later
     // submits are not refused by this test's pre-fill.
-    await runInDurableObject(globalLimiterStub(), (_instance, state) => {
-      state.storage.sql.exec("DELETE FROM daily_usage;");
+    await setLimiterUsage(globalLimiterStub(), null);
+  });
+
+  it("returns 404 for an unknown limiter route without touching usage", async () => {
+    const bearerLimiter = await bearerLimiterStub();
+    const before = await limiterUsage(bearerLimiter);
+    const response = await bearerLimiter.fetch("https://usage-limiter.opencast.internal/refund", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ estimated_input_tokens: 1, profile: "bearer" }),
     });
+    expect(response.status).toBe(404);
+    expect((await response.json()).error).toBe("not_found");
+    const wrongMethod = await bearerLimiter.fetch("https://usage-limiter.opencast.internal/release", {
+      method: "GET",
+    });
+    expect(wrongMethod.status).toBe(405);
+    expect(await limiterUsage(bearerLimiter)).toEqual(before);
+  });
+
+  it("saturates a release at zero and never recreates a wiped day object", async () => {
+    const bearerLimiter = await bearerLimiterStub();
+    await setLimiterUsage(bearerLimiter, { request_count: 1, estimated_input_tokens: 500 });
+    const release = (tokens) =>
+      bearerLimiter.fetch("https://usage-limiter.opencast.internal/release", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ estimated_input_tokens: tokens, profile: "bearer" }),
+      });
+    // Releasing more than was admitted clamps rather than wrapping.
+    let response = await release(10_000);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    // A second release of the same admission changes nothing and writes
+    // nothing: the object at zero stays at zero.
+    response = await release(1);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    expect(await limiterUsage(bearerLimiter)).toEqual({ request_count: 0, estimated_input_tokens: 0 });
+    // A release never schedules the object's cleanup: only an admit does.
+    await setLimiterUsage(bearerLimiter, null);
+    await runInDurableObject(bearerLimiter, async (_instance, state) => {
+      await state.storage.deleteAlarm();
+    });
+    response = await release(1);
+    expect(response.status).toBe(200);
+    expect(
+      await runInDurableObject(bearerLimiter, (_instance, state) => state.storage.getAlarm()),
+    ).toBeNull();
   });
 });
 

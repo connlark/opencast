@@ -8,6 +8,7 @@ try{
   const feed=await h.add('https://queue.example.com/feed');
   await h.invoke('test/dispatch');await settle();
   assert.equal((await h.first('SELECT observation_generation FROM n_feed WHERE feed_id=?',feed)).observation_generation,1);
+  assert.ok((await h.invoke('metrics')).deliveries.some(log=>Number.isFinite(log.initial_queue_wait_ms)&&log.initial_queue_wait_ms>=0),'the shipped Queue adapter forwards its own timestamp');
   version=2;await h.run('UPDATE n_feed SET due_at=? WHERE feed_id=?',h.now,feed);
   await h.invoke('test/dispatch');await settle();await h.deliver(true);
   // The first on-phase slot may fall inside the early-admission window.

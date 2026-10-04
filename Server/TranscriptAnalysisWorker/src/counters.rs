@@ -42,6 +42,14 @@ pub const TOTAL_TOKENS: &str = "total_tokens";
 pub const CAP_DENIALS_BEARER: &str = "cap_denials_bearer";
 pub const CAP_DENIALS_APP_ATTEST: &str = "cap_denials_app_attest";
 pub const CAP_DENIALS_GLOBAL: &str = "cap_denials_global";
+/// Submit attempts that exited before the run-start boundary and gave every
+/// confirmed limiter admission back (a per-device release after a global
+/// refusal counts; partial cleanup does not).
+pub const ADMISSION_RELEASES: &str = "admission_releases";
+/// Limiter scopes whose release was refused or whose response was lost —
+/// one per scope, so a single attempt can add two. Each leaves usage
+/// charged until the day's object expires.
+pub const ADMISSION_RELEASE_FAILURES: &str = "admission_release_failures";
 
 pub const BOOTSTRAP_REQUIRED_DENIALS: &str = "bootstrap_required_denials";
 pub const RESERVE_DENIED_INSUFFICIENT: &str = "reserve_denied_insufficient";
@@ -307,6 +315,8 @@ mod tests {
             CAP_DENIALS_BEARER,
             CAP_DENIALS_APP_ATTEST,
             CAP_DENIALS_GLOBAL,
+            ADMISSION_RELEASES,
+            ADMISSION_RELEASE_FAILURES,
             BOOTSTRAP_REQUIRED_DENIALS,
             RESERVE_DENIED_INSUFFICIENT,
             RESERVE_DENIED_BOOTSTRAP,
@@ -339,7 +349,7 @@ mod tests {
             FAILED_JOB_TASK_FAILED,
             FAILED_OTHER,
         ];
-        assert_eq!(names.len(), 44);
+        assert_eq!(names.len(), 46);
         let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
         assert_eq!(unique.len(), names.len());
         for name in names {

@@ -9,12 +9,12 @@ globalThis.Date = class extends NativeDate {
 };
 const wakeups = [], controllers = new Map();
 const COUNTERS = ['d1', 'rows_read', 'rows_written', 'get', 'put', 'head', 'delete', 'list', 'multipart', 'queue_messages'];
-const totals = { outcomes: {}, logged: {}, calls: 0, log_events: 0, ...Object.fromEntries(COUNTERS.map(name => [name, 0])), max_d1: 0, max_r2: 0, scratch_peak_bytes: 0, recent: [] };
+const totals = { deliveries: [], cleanup: [], cron: [], outcomes: {}, logged: {}, calls: 0, log_events: 0, ...Object.fromEntries(COUNTERS.map(name => [name, 0])), max_d1: 0, max_r2: 0, scratch_peak_bytes: 0, recent: [] };
 for(const method of ['log','warn','error']){const native=console[method].bind(console);console[method]=(...args)=>{
   totals.log_events++;
   // Failures are always logged; healthy polls are only sampled. Exact outcome
   // counts come from the consume results, failure classes from these events.
-  try { const event=JSON.parse(args[0]);if(event.event==='poll_outcome'){const key=`${event.outcome}:${event.reason??''}`;totals.logged[key]=(totals.logged[key]??0)+1;} } catch {}
+  try { const event=JSON.parse(args[0]);if(event.event==='poll_delivery'){totals.deliveries.push(event);if(totals.deliveries.length>100)totals.deliveries.shift();}if(event.event==='poll_cleanup')totals.cleanup.push(event);if(event.event==='poll_outcome'){const key=`${event.outcome}:${event.reason??''}`;totals.logged[key]=(totals.logged[key]??0)+1;} } catch {}
   native(...args);
 };}
 function fail(point) { if (fault === `always:${point}`) throw Error(`fixture:${point}`); if (fault === point) { fault = undefined; throw Error(`fixture:${point}`); } }
@@ -27,7 +27,12 @@ function instrument(env, trace) {
       if (key === 'constructor') return target.constructor;
       if (key === 'bind') return (...args) => prepared(target.bind(...args), sql);
       if (['run', 'all', 'first', 'raw'].includes(key)) return async (...args) => {
-        count(1); fail('d1'); if(sql.includes('INSERT INTO n_poll_origin'))fail('origin_status_d1');
+        count(1); fail('d1');
+        if(sql.startsWith('SELECT f.origin_key,f.due_at') && fault==='hang_claim'){fault='claim_active';await new Promise(resolve=>releaseHang=resolve);}
+        if(sql.startsWith('SELECT f.origin_key,f.due_at') && fault==='hang_bookkeeping'){fault='bookkeeping_active';throw Error('fixture:claim_failed');}
+        if(sql.startsWith('INSERT INTO n_poll_stat') && fault==='bookkeeping_active'){await new Promise(resolve=>releaseHang=resolve);}
+        if(sql.startsWith('INSERT INTO n_poll_stat(bucket,redeliveries)') && fault==='hang_redelivery_stat'){fault='redelivery_stat_active';await new Promise(resolve=>releaseHang=resolve);}
+ if(sql.includes('INSERT INTO n_poll_origin'))fail('origin_status_d1');
         if(key==='first'){const value=result(await target.all());const row=value.results[0]??null;return args[0]&&row?row[args[0]]:row;}
         return result(await target[key](...args));
       };
@@ -59,7 +64,7 @@ function instrument(env, trace) {
   } });
   const bucket = new Proxy(env.FEED_SNAPSHOTS, { get(target, key) {
     if (key === 'constructor') return target.constructor;
-    if (['get', 'put', 'head', 'delete', 'list'].includes(key)) return async (...args) => { trace[key]++; if(key==='get'&&fault==='slow_get'){fault=undefined;await new Promise(resolve=>setTimeout(resolve,16000));} if(key==='get'&&fault==='hang_get'){fault='hang_get_active';await new Promise(resolve=>releaseHang=resolve);} fail(`before_${key}`); const value = await target[key](...args); fail(`after_${key}`); return value; };
+    if (['get', 'put', 'head', 'delete', 'list'].includes(key)) return async (...args) => { trace[key]++; if(key==='delete'&&fault==='cleanup_budget'){offset+=26000;fault=undefined;} if(key==='get'&&fault==='slow_get'){fault=undefined;await new Promise(resolve=>setTimeout(resolve,16000));} if(key==='get'&&fault==='hang_get'){fault='hang_get_active';await new Promise(resolve=>releaseHang=resolve);} fail(`before_${key}`); const value = await target[key](...args); fail(`after_${key}`); return value; };
     // Scratch is one multipart upload: count every Class A call and its bytes.
     if (key === 'createMultipartUpload') return async (...args) => {
       trace.multipart++; const upload = await target.createMultipartUpload(...args); let bytes = 0;
@@ -93,6 +98,13 @@ function instrument(env, trace) {
   return instrumented;
 }
 export default class extends Worker {
+  async scheduled(controller) {
+    const trace = { path: '/scheduled', ...Object.fromEntries(COUNTERS.map(name => [name, 0])) };
+    totals.cron.push(controller.cron);
+    await Worker.prototype.scheduled.call({ctx:this.ctx,env:instrument(this.env,trace)},controller);
+    for(const name of COUNTERS)totals[name]+=trace[name];
+    totals.max_d1=Math.max(totals.max_d1,trace.d1);
+  }
   // The real Queue path runs the shipped consumer adapter unchanged, against
   // the same fault-injecting bindings. Only its retry delay is shortened.
   async queue(batch) {
@@ -107,6 +119,7 @@ export default class extends Worker {
     const path = new URL(request.url).pathname;
     if (path === '/clock') { offset = Number(await request.text()) * 1000; return new Response('ok'); }
     if (path === '/fault') { fault = await request.text(); return new Response('ok'); }
+    if (path === '/fault-state') return new Response(fault??'');
     if (path === '/release-hang') { releaseHang?.(); releaseHang = undefined; fault = undefined; return new Response('ok'); }
     if (path === '/freeze') { const at = await request.text(); frozen = at ? Number(at) * 1000 : undefined; return new Response('ok'); }
     if (path === '/wakeups') {
