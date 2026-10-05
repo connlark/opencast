@@ -390,6 +390,95 @@ struct EpisodePipelineStateTests {
         #expect(EpisodePipelineAction.downloadModel(byteCount: nil).title == "Download Model")
     }
 
+    // MARK: - Cloud preparation
+
+    @Test("Each cloud preparation stage names its own work on the transcribe row, with Cancel")
+    func cloudPreparationStagesNameTheirWork() {
+        let expectations: [(EpisodeAdFreePassStage, String)] = [
+            (.cloudQueued, "Preparing cloud transcription…"),
+            (.cloudVerifying, "Verifying audio…"),
+            (.cloudWaitingForCredits, "Waiting for transcription time…")
+        ]
+
+        for (stage, detail) in expectations {
+            let state = makeState(
+                queueStatus: .running,
+                queueSnapshot: activeSnapshot(stage: stage),
+                downloadRecord: downloadRecord(state: .completed)
+            )
+
+            #expect(state == EpisodePipelineState(
+                title: EpisodePipelineState.passTitle,
+                steps: [
+                    EpisodePipelineStep(kind: .download, status: .done),
+                    EpisodePipelineStep(kind: .transcribe, status: .running(fraction: nil, detail: detail)),
+                    EpisodePipelineStep(kind: .detectAds, status: .waiting)
+                ],
+                footnote: nil,
+                action: .cancelPass
+            ))
+        }
+    }
+
+    @Test("An exact-copy upload shows measured part counts, never a fraction, with the upload footnote")
+    func cloudUploadShowsPartCounts() {
+        let expectations: [(completed: Int, total: Int, detail: String)] = [
+            (0, 0, "Preparing audio upload…"),
+            (0, 10, "Uploading audio… 0 of 10 parts uploaded"),
+            (2, 10, "Uploading audio… 2 of 10 parts uploaded"),
+            (9, 10, "Uploading audio… 9 of 10 parts uploaded"),
+            (10, 10, "Finishing audio upload…")
+        ]
+
+        for expectation in expectations {
+            let state = makeState(
+                queueStatus: .running,
+                queueSnapshot: activeSnapshot(stage: .cloudUploadingExactCopy(
+                    completedParts: expectation.completed,
+                    totalParts: expectation.total
+                )),
+                downloadRecord: downloadRecord(state: .completed)
+            )
+
+            #expect(state == EpisodePipelineState(
+                title: EpisodePipelineState.passTitle,
+                steps: [
+                    EpisodePipelineStep(kind: .download, status: .done),
+                    EpisodePipelineStep(
+                        kind: .transcribe,
+                        status: .running(fraction: nil, detail: expectation.detail)
+                    ),
+                    EpisodePipelineStep(kind: .detectAds, status: .waiting)
+                ],
+                footnote: EpisodePipelineState.cloudUploadFootnote,
+                action: .cancelPass
+            ))
+        }
+    }
+
+    @Test("The upload footnote leaves with the upload phase")
+    func cloudUploadFootnoteClearsAfterUpload() {
+        let laterStages: [EpisodeAdFreePassStage] = [
+            .cloudQueued,
+            .cloudTranscribing(nil),
+            .cloudDetectingAds,
+            .cloudParked(.parked),
+            .cloudUnavailable(message: "No credits."),
+            .interrupted,
+            .failed(message: "Upload failed."),
+            .completed(zoneCount: 2)
+        ]
+
+        for stage in laterStages {
+            let state = makeState(
+                queueStatus: .running,
+                queueSnapshot: activeSnapshot(stage: stage),
+                downloadRecord: downloadRecord(state: .completed)
+            )
+            #expect(state?.footnote != EpisodePipelineState.cloudUploadFootnote)
+        }
+    }
+
     // MARK: - Parked cloud job
 
     @Test(

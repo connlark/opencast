@@ -32,6 +32,9 @@ struct EpisodePipelineState: Equatable {
     static let pausedFootnote = "Paused — resume anytime."
     static let appleSpeechRestartFootnote = "Paused — Apple transcription starts over from the beginning."
     static let modelConsentFootnote = "A speech model download is needed to continue."
+    /// Says why the phone's audio is uploading without claiming why the
+    /// server needed it: a source mismatch or a failed origin fetch.
+    static let cloudUploadFootnote = "Uploading your downloaded audio so ad skips match what you hear."
 
     static func make(
         episodeID: String,
@@ -247,16 +250,17 @@ struct EpisodePipelineState: Equatable {
                 action: .cancelPass
             )
         case .cloudQueued:
-            return EpisodePipelineState(
-                title: passTitle,
-                steps: passSteps(
-                    download: completedOrWaiting(downloadRecord),
-                    transcribe: .running(fraction: nil, detail: "Working in the cloud…"),
-                    detect: .waiting
-                ),
-                footnote: nil,
-                action: .cancelPass
+            return cloudPreparingState(.cloudQueued, downloadRecord: downloadRecord)
+        case .cloudVerifying:
+            return cloudPreparingState(.cloudVerifying, downloadRecord: downloadRecord)
+        case .cloudUploadingExactCopy(let completedParts, let totalParts):
+            return cloudPreparingState(
+                .cloudUploadingExactCopy(completedParts: completedParts, totalParts: totalParts),
+                footnote: cloudUploadFootnote,
+                downloadRecord: downloadRecord
             )
+        case .cloudWaitingForCredits:
+            return cloudPreparingState(.cloudWaitingForCredits, downloadRecord: downloadRecord)
         case .cloudTranscribing(let progress):
             return EpisodePipelineState(
                 title: passTitle,
@@ -340,6 +344,26 @@ struct EpisodePipelineState: Equatable {
             steps: passSteps(download: download, transcribe: transcribe, detect: detect),
             footnote: nil,
             action: .retryPass
+        )
+    }
+
+    /// Cloud work before server transcription starts. The transcribe row
+    /// carries the queue surfaces' copy; an upload count stays text, never
+    /// a fraction.
+    private static func cloudPreparingState(
+        _ presentation: EpisodeAdFreePassPresentation,
+        footnote: String? = nil,
+        downloadRecord: EpisodeDownloadRecord?
+    ) -> EpisodePipelineState {
+        EpisodePipelineState(
+            title: passTitle,
+            steps: passSteps(
+                download: completedOrWaiting(downloadRecord),
+                transcribe: .running(fraction: nil, detail: presentation.statusText),
+                detect: .waiting
+            ),
+            footnote: footnote,
+            action: .cancelPass
         )
     }
 

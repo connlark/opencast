@@ -21,6 +21,7 @@ final class EpisodeAdFreePassBackgroundSession {
 
     @ObservationIgnored private let scheduler: any AdFreePassContinuedTaskScheduling
     @ObservationIgnored private let forceForegroundOnly: @MainActor () -> Bool
+    @ObservationIgnored private let now: () -> Date
     private var state: State = .idle
     private var submittedRequiresGPU = false
     private var hasRegisteredLaunchHandler = false
@@ -46,10 +47,12 @@ final class EpisodeAdFreePassBackgroundSession {
 
     init(
         scheduler: any AdFreePassContinuedTaskScheduling = BGTaskSchedulerAdFreePassScheduler(),
-        forceForegroundOnly: @escaping @MainActor () -> Bool = EpisodeAdFreePassBackgroundSession.environmentForcesForegroundOnly
+        forceForegroundOnly: @escaping @MainActor () -> Bool = EpisodeAdFreePassBackgroundSession.environmentForcesForegroundOnly,
+        now: @escaping () -> Date = { .now }
     ) {
         self.scheduler = scheduler
         self.forceForegroundOnly = forceForegroundOnly
+        self.now = now
     }
 
     deinit {
@@ -155,9 +158,15 @@ final class EpisodeAdFreePassBackgroundSession {
 
         recordProgressGapIfNeeded(for: newStage)
         recordEnvironmentIfNeeded(for: newStage)
+        // The cloud preparation stages share one band and one creep clock:
+        // a move between them or a new upload part count never restarts it,
+        // so a long upload can't hold the card flat until the system expires
+        // it as stalled.
+        if !(stage.isCloudPreparation && newStage.isCloudPreparation) {
+            stageBeganAt = now()
+        }
         stage = newStage
         self.queueContext = queueContext
-        stageBeganAt = .now
         AdFreePassBackgroundRunLog.record(
             "stage noted \(newStage.backgroundRunLogDescription) finished=\(queueContext.finishedItemCount) total=\(queueContext.totalItemCount)"
         )
@@ -304,7 +313,11 @@ final class EpisodeAdFreePassBackgroundSession {
             return
         }
 
-        let units = mapper.update(for: stage, queueContext: queueContext, stageElapsed: 0)
+        let units = mapper.update(
+            for: stage,
+            queueContext: queueContext,
+            stageElapsed: now().timeIntervalSince(stageBeganAt)
+        )
         handle.progress.completedUnitCount = units
         handle.updateTitle(title(for: queueContext), subtitle: subtitle(for: stage))
         recordAppliedStage(stage, completedUnits: units)
@@ -366,7 +379,7 @@ final class EpisodeAdFreePassBackgroundSession {
         let units = mapper.update(
             for: stage,
             queueContext: queueContext,
-            stageElapsed: Date.now.timeIntervalSince(stageBeganAt)
+            stageElapsed: now().timeIntervalSince(stageBeganAt)
         )
         handle.progress.completedUnitCount = units
         recordAppliedStage(stage, completedUnits: units)
@@ -430,7 +443,7 @@ final class EpisodeAdFreePassBackgroundSession {
         mapper.reset()
         stage = .idle
         queueContext = AdFreePassQueueContext()
-        stageBeganAt = .now
+        stageBeganAt = now()
         terminalOutcomeNotedBeforeLaunch = nil
         hasCompletedTask = false
         completionGate = AdFreePassOnceGate()
@@ -464,12 +477,22 @@ private extension EpisodeAdFreePassStage {
     var creepsBackgroundProgress: Bool {
         switch self {
         case .downloadingEpisode, .analyzing, .transcribing,
-             .cloudQueued, .cloudTranscribing, .cloudDetectingAds:
+             .cloudQueued, .cloudVerifying, .cloudUploadingExactCopy, .cloudWaitingForCredits,
+             .cloudTranscribing, .cloudDetectingAds:
             // A server phase can hold one poll state for minutes; the creep
             // keeps the system from reading the card as stalled.
             true
         case .idle, .awaitingModelDownloadConsent, .installingModel, .installingSpeechAssets,
              .cloudUnavailable, .cloudParked, .completed, .interrupted, .failed, .unavailable:
+            false
+        }
+    }
+
+    var isCloudPreparation: Bool {
+        switch self {
+        case .cloudQueued, .cloudVerifying, .cloudUploadingExactCopy, .cloudWaitingForCredits:
+            true
+        default:
             false
         }
     }
@@ -526,6 +549,12 @@ private extension EpisodeAdFreePassPresentation {
             self = .analyzing
         case .cloudQueued:
             self = .cloudQueued
+        case .cloudVerifying:
+            self = .cloudVerifying
+        case .cloudUploadingExactCopy(let completedParts, let totalParts):
+            self = .cloudUploadingExactCopy(completedParts: completedParts, totalParts: totalParts)
+        case .cloudWaitingForCredits:
+            self = .cloudWaitingForCredits
         case .cloudTranscribing(let progress):
             self = .cloudTranscribing(progress)
         case .cloudDetectingAds:

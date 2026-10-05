@@ -174,6 +174,66 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         #expect(handle.completions.isEmpty)
     }
 
+    @Test("Cloud preparation stages share one creep clock, and upload part counts reach the subtitle")
+    func cloudPreparationSharesOneCreepClock() async {
+        var currentDate = Date(timeIntervalSince1970: 1_000_000)
+        let scheduler = FakeAdFreePassContinuedTaskScheduler()
+        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler, now: { currentDate })
+        let handle = FakeAdFreePassContinuedTaskHandle()
+        session.arm(episodeTitle: "Cloud Episode", requiresGPU: false)
+        scheduler.launch(handle)
+
+        session.noteStage(.cloudVerifying)
+        #expect(handle.progress.completedUnitCount == 20)
+        #expect(handle.titleUpdates.last?.subtitle == "Verifying audio…")
+
+        // 20 s on the stage clock is 10 creep units, applied on the next tick.
+        currentDate += 20
+        #expect(await waitUntil { handle.progress.completedUnitCount == 30 })
+
+        // A move to the upload and each part count keep that clock; a
+        // restart here would hold the card at 30 until the system expired it.
+        session.noteStage(.cloudUploadingExactCopy(completedParts: 0, totalParts: 0))
+        #expect(handle.titleUpdates.last?.subtitle == "Preparing audio upload…")
+        session.noteStage(.cloudUploadingExactCopy(completedParts: 1, totalParts: 3))
+        #expect(handle.titleUpdates.last?.subtitle == "Uploading audio… 1 of 3 parts uploaded")
+        currentDate += 20
+        #expect(await waitUntil { handle.progress.completedUnitCount == 40 })
+        session.noteStage(.cloudUploadingExactCopy(completedParts: 3, totalParts: 3))
+        #expect(handle.titleUpdates.last?.subtitle == "Finishing audio upload…")
+        #expect(handle.progress.completedUnitCount == 40)
+
+        // Server transcription is a new band with its own clock.
+        session.noteStage(.cloudTranscribing(nil))
+        #expect(handle.progress.completedUnitCount == 250)
+        #expect(handle.completions.isEmpty)
+    }
+
+    @Test("Frequent upload part events advance background progress without waiting for a creep tick")
+    func uploadPartEventsAdvanceProgressBeforeCreepTick() {
+        var currentDate = Date(timeIntervalSince1970: 1_000_000)
+        let scheduler = FakeAdFreePassContinuedTaskScheduler()
+        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler, now: { currentDate })
+        let handle = FakeAdFreePassContinuedTaskHandle()
+        session.arm(episodeTitle: "Cloud Episode", requiresGPU: false)
+        scheduler.launch(handle)
+        defer { session.reset() }
+
+        session.noteStage(.cloudUploadingExactCopy(completedParts: 0, totalParts: 10))
+        #expect(handle.progress.completedUnitCount == 20)
+
+        // Synchronous events cannot yield to the timer; each event must
+        // apply the elapsed preparation time itself.
+        for completedParts in 1...8 {
+            currentDate += 1
+            session.noteStage(.cloudUploadingExactCopy(completedParts: completedParts, totalParts: 10))
+        }
+
+        #expect(handle.progress.completedUnitCount == 24)
+        #expect(handle.titleUpdates.last?.subtitle == "Uploading audio… 8 of 10 parts uploaded")
+        #expect(handle.completions.isEmpty)
+    }
+
     @Test("One submission covers a whole queue drain with per-episode title updates")
     func oneSubmissionCoversQueueDrainWithPerEpisodeTitles() {
         let scheduler = FakeAdFreePassContinuedTaskScheduler()

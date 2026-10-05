@@ -10,7 +10,14 @@ enum EpisodeAdFreePassStage: Equatable {
     case analyzing
     // Cloud detect passes: the job is on the server and no local compute
     // runs; a manual start may still hold the continued-processing card.
+    // Queued, verifying, uploading and waiting for credits are the
+    // preparation before server transcription starts.
     case cloudQueued
+    case cloudVerifying
+    /// The server needs this device's copy of the audio. A zero total means
+    /// the part count isn't known yet.
+    case cloudUploadingExactCopy(completedParts: Int, totalParts: Int)
+    case cloudWaitingForCredits
     case cloudTranscribing(RemoteTranscriptionActiveProgress?)
     case cloudDetectingAds
     /// Cloud detection can't run right now (no credits, service off); the

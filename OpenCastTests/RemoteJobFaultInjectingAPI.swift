@@ -466,6 +466,10 @@ final class RemoteJobFaultInjectingAPI: RemoteTranscriptionAPI, @unchecked Senda
         jobID: String,
         forBackground: Bool
     ) async throws -> OpenCastRemoteTranscriptionUploadGrantResponse {
+        if case let .fail(error, reached, delivered, _) = await applyFault(.uploadStart) {
+            record(.uploadStart, jobID: jobID, reachedServer: reached, responseDelivered: delivered)
+            throw error
+        }
         guard let uploadScript else {
             throw refuse(.uploadStart, jobID: jobID, Self.invalidRequest)
         }
@@ -491,6 +495,10 @@ final class RemoteJobFaultInjectingAPI: RemoteTranscriptionAPI, @unchecked Senda
         jobID: String,
         parts: [OpenCastRemoteTranscriptionUploadCompletedPart]
     ) async throws -> OpenCastRemoteTranscriptionJobResponse {
+        if case let .fail(error, reached, delivered, _) = await applyFault(.uploadComplete) {
+            record(.uploadComplete, jobID: jobID, reachedServer: reached, responseDelivered: delivered)
+            throw error
+        }
         lock.withLock { storedCompletedUploadParts.append(parts) }
         record(.uploadComplete, jobID: jobID)
         return status(jobID: jobID, state: .sourceMatched)

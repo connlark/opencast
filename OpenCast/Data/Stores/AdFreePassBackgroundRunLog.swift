@@ -81,6 +81,12 @@ extension EpisodeAdFreePassStage {
             "analyzing"
         case .cloudQueued:
             "cloudQueued"
+        case .cloudVerifying:
+            "cloudVerifying"
+        case .cloudUploadingExactCopy(let completedParts, let totalParts):
+            "cloudUploadingExactCopy parts=\(completedParts)/\(totalParts)"
+        case .cloudWaitingForCredits:
+            "cloudWaitingForCredits"
         case .cloudTranscribing(let progress):
             "cloudTranscribing fraction=\((progress?.fractionCompleted ?? 0).backgroundLogNumber)"
         case .cloudDetectingAds:
@@ -119,6 +125,12 @@ extension EpisodeAdFreePassStage {
             "analyzing"
         case .cloudQueued:
             "cloudQueued"
+        case .cloudVerifying:
+            "cloudVerifying"
+        case .cloudUploadingExactCopy:
+            "cloudUploadingExactCopy"
+        case .cloudWaitingForCredits:
+            "cloudWaitingForCredits"
         case .cloudTranscribing:
             "cloudTranscribing"
         case .cloudDetectingAds:

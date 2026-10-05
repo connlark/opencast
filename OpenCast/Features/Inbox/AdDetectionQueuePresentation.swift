@@ -192,6 +192,15 @@ struct AdDetectionQueuePresentation: Equatable {
             EpisodeAdFreePassPresentation.analyzing.statusText
         case .cloudQueued:
             EpisodeAdFreePassPresentation.cloudQueued.statusText
+        case .cloudVerifying:
+            EpisodeAdFreePassPresentation.cloudVerifying.statusText
+        case .cloudUploadingExactCopy(let completedParts, let totalParts):
+            EpisodeAdFreePassPresentation.cloudUploadingExactCopy(
+                completedParts: completedParts,
+                totalParts: totalParts
+            ).statusText
+        case .cloudWaitingForCredits:
+            EpisodeAdFreePassPresentation.cloudWaitingForCredits.statusText
         case .cloudTranscribing(let progress):
             EpisodeAdFreePassPresentation.cloudTranscribing(progress).statusText
         case .cloudDetectingAds:

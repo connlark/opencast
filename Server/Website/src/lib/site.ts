@@ -46,7 +46,7 @@ export const screenshots = [
   ),
   screenshot(
     "app_store_09_welcome_framed",
-    "opencast welcome screen: no third-party analytics, view source on GitHub, tiny install"
+    "opencast welcome screen: no third-party analytics, view source on GitHub, no ads of our own"
   ),
   screenshot(
     "app_store_10_up_next_framed",

@@ -47,7 +47,7 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
             )
         case .analyzing:
             min(975, 910 + creepUnits(stageElapsed: stageElapsed))
-        case .cloudQueued:
+        case .cloudQueued, .cloudVerifying, .cloudUploadingExactCopy, .cloudWaitingForCredits:
             min(250, 20 + creepUnits(stageElapsed: stageElapsed))
         case .cloudTranscribing(let progress):
             min(

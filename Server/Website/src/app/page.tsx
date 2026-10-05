@@ -205,7 +205,7 @@ export default function HomePage() {
                   <p>
                     No opencast login, no analytics SDK. Subscriptions and
                     progress sync through your private iCloud. MIT-licensed
-                    code, and the whole app is about 10 MB.
+                    code you can read.
                   </p>
                 </div>
                 <div className="privacy-tags" aria-hidden="true">

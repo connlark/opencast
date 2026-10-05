@@ -45,13 +45,29 @@ struct AdFreePassCloudContinuationTests {
             try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).first { $0.episodeID == episodeID }
         }
 
-        func launch(launchPreparationGate: @escaping @Sendable () async -> Void = {}) -> CloudSession {
+        func launch(
+            launchPreparationGate: @escaping @Sendable () async -> Void = {},
+            uploadTransport: (any RemoteTranscriptionUploadTransport)? = nil
+        ) -> CloudSession {
             let store = RemoteTranscriptionJobStore(defaults: defaults, diagnostics: diagnostics)
+            let api = api
+            let defaults = defaults
             let runner = RemoteTranscriptionJobRunner(
                 api: api,
                 downloads: downloads,
                 transcriptions: transcriptions,
                 store: store,
+                uploadSessionFactory: uploadTransport.map { transport in
+                    { jobID, sourceFileURL in
+                        RemoteTranscriptionUploadSession(
+                            jobID: jobID,
+                            sourceFileURL: sourceFileURL,
+                            api: api,
+                            transport: transport,
+                            defaults: defaults
+                        )
+                    }
+                },
                 transportRetryDelays: [],
                 localRetryDelays: []
             )
@@ -317,6 +333,138 @@ struct AdFreePassCloudContinuationTests {
         #expect(device.api.createCalls.count == createsAfterCancel)
         #expect(device.api.cancelCalls.count == 1)
         #expect(device.api.mintedJobIDs == [seed.jobID])
+    }
+
+    // MARK: Exact-copy upload progress
+
+    @Test("An exact-copy upload reaches the card, the queue and the Sound Lab as measured part counts, then hands over to the server phases")
+    func exactCopyUploadPresentsPartCounts() async throws {
+        let api = RemoteJobFaultInjectingAPI(
+            pollScript: [
+                OpenCastRemoteTranscriptionJobStatus(jobID: "", state: .exactUploadRequired),
+                OpenCastRemoteTranscriptionJobStatus(
+                    jobID: "",
+                    state: .transcribing,
+                    progress: OpenCastRemoteTranscriptionJobProgress(chunksCompleted: 1, chunksTotal: 2)
+                ),
+                OpenCastRemoteTranscriptionJobStatus(jobID: "", state: .detectingAds),
+            ],
+            uploadScript: RemoteJobFaultInjectingAPI.UploadScript(partCount: 3, partSizeBytes: 10)
+        )
+        // "remote audio bytes ep-cloud-up" is 30 bytes: three 10-byte parts.
+        let device = try await makeDevice(episodeIDs: ["ep-cloud-up"], api: api)
+        let episode = device.episode("ep-cloud-up")
+        let startGate = RemoteJobFaultInjectingAPI.Gate()
+        let completeGate = RemoteJobFaultInjectingAPI.Gate()
+        api.inject(.delayed(startGate), at: .uploadStart)
+        api.inject(.delayed(completeGate), at: .uploadComplete)
+        let transport = GatedUploadTransport(partCount: 3)
+        let process = device.launch(uploadTransport: transport)
+
+        process.enqueueCloud(episode)
+
+        // The grant hasn't named a total yet: upload copy, never "0 of 0".
+        #expect(await waitUntil { startGate.isHoldingRequest })
+        expectUploadSurfaces(process, episode: episode, detail: "Preparing audio upload…")
+        // The two polls after the upload are held so each server phase can
+        // be read before the next one replaces it.
+        let afterUploadPoll = RemoteJobFaultInjectingAPI.Gate()
+        let transcribingPoll = RemoteJobFaultInjectingAPI.Gate()
+        api.inject(.delayed(afterUploadPoll), at: .poll)
+        api.inject(.delayed(transcribingPoll), at: .poll)
+
+        startGate.release()
+        #expect(await waitUntil { transport.isHolding(part: 1) && transport.isHolding(part: 2) })
+        expectUploadSurfaces(process, episode: episode, detail: "Uploading audio… 0 of 3 parts uploaded")
+
+        transport.release(part: 1)
+        #expect(await waitUntil {
+            process.pass.currentStage == .cloudUploadingExactCopy(completedParts: 1, totalParts: 3)
+        })
+        expectUploadSurfaces(process, episode: episode, detail: "Uploading audio… 1 of 3 parts uploaded")
+        // A slow next part keeps the last confirmed count; reopening the
+        // card reads the same running stage.
+        #expect(await waitUntil { transport.isHolding(part: 3) })
+        expectUploadSurfaces(process, episode: episode, detail: "Uploading audio… 1 of 3 parts uploaded")
+
+        transport.release(part: 2)
+        transport.release(part: 3)
+        #expect(await waitUntil { completeGate.isHoldingRequest })
+        expectUploadSurfaces(process, episode: episode, detail: "Finishing audio upload…")
+        completeGate.release()
+        // Completed, but the runner hasn't reported the next phase yet.
+        #expect(await waitUntil { afterUploadPoll.isHoldingRequest })
+        expectUploadSurfaces(process, episode: episode, detail: "Finishing audio upload…")
+        // Each part event updated the one running job: no restart.
+        #expect(api.uploadStartCount == 1)
+        #expect(api.createCalls.count == 1)
+        #expect(api.completedUploadParts.map { $0.map(\.partNumber) } == [[1, 2, 3]])
+
+        afterUploadPoll.release()
+        #expect(await waitUntil {
+            if case .cloudTranscribing = process.pass.currentStage { true } else { false }
+        })
+        let transcribing = try #require(process.pipeline(for: episode.episodeID))
+        #expect(transcribing.footnote == nil)
+        #expect(transcribing.steps.first?.status == .done)
+        #expect(transcribing.steps.last?.status == .waiting)
+
+        transcribingPoll.release()
+        #expect(await waitUntil { process.pass.currentStage == .cloudDetectingAds })
+        #expect(process.pipeline(for: episode.episodeID)?.steps.map(\.status) == [
+            .done,
+            .done,
+            .running(fraction: nil, detail: nil),
+        ])
+        #expect(process.pipeline(for: episode.episodeID)?.footnote == nil)
+        // Nothing here armed or submitted a continued-processing card.
+        #expect(process.scheduler.submitCallCount == 0)
+
+        process.pass.cancelActivePass()
+        #expect(await process.waitForDrainToStop())
+        #expect(await waitUntil { api.cancelCalls.count == 1 })
+        #expect(process.pipeline(for: episode.episodeID)?.footnote != EpisodePipelineState.cloudUploadFootnote)
+    }
+
+    @Test("The next queued episode never presents the previous episode's last stage before its own first event")
+    func nextEpisodeStartsWithoutPreviousStage() async throws {
+        let api = RemoteJobFaultInjectingAPI(
+            pollScript: [
+                OpenCastRemoteTranscriptionJobStatus(jobID: "", state: .exactUploadRequired),
+                OpenCastRemoteTranscriptionJobStatus(
+                    jobID: "",
+                    state: .failed,
+                    error: OpenCastRemoteTranscriptionJobError(code: .uploadIdentityMismatch)
+                ),
+            ],
+            uploadScript: RemoteJobFaultInjectingAPI.UploadScript(partCount: 1, partSizeBytes: 64)
+        )
+        let device = try await makeDevice(episodeIDs: ["ep-cloud-first", "ep-cloud-second"], api: api)
+        let transport = GatedUploadTransport(partCount: 1)
+        let process = device.launch(uploadTransport: transport)
+
+        process.enqueueCloud(device.episode("ep-cloud-first"))
+        process.enqueueCloud(device.episode("ep-cloud-second"))
+        #expect(await waitUntil { transport.isHolding(part: 1) })
+        #expect(process.pass.currentStage == .cloudUploadingExactCopy(completedParts: 0, totalParts: 1))
+
+        // The first job fails after its upload; the second is held at its
+        // first request, before it has reported any stage of its own.
+        let secondBootstrap = RemoteJobFaultInjectingAPI.Gate()
+        api.inject(.delayed(secondBootstrap), at: .bootstrap)
+        transport.release(part: 1)
+        #expect(await waitUntil {
+            process.pass.activeEpisodeID == "ep-cloud-second" && secondBootstrap.isHoldingRequest
+        })
+        #expect(process.pass.drainFailedCount == 1)
+        #expect(process.pass.queueSnapshot.currentStage == nil)
+        let second = try #require(process.pipeline(for: "ep-cloud-second"))
+        #expect(second.title == EpisodePipelineState.passTitle)
+        #expect(second.footnote == nil)
+        #expect(second.action == .cancelPass)
+
+        secondBootstrap.release()
+        #expect(await process.waitForDrainToStop())
     }
 
     // MARK: Post-attach failures park
@@ -679,10 +827,63 @@ struct AdFreePassCloudContinuationTests {
         )
     }
 
+    /// The episode card, the Ad Detection queue row and the Sound Lab row
+    /// agree on the running upload's copy; only the card adds the footnote.
+    private func expectUploadSurfaces(
+        _ process: CloudSession,
+        episode: EpisodeListItemSnapshot,
+        detail: String,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        let pipeline = process.pipeline(for: episode.episodeID)
+        #expect(pipeline?.title == EpisodePipelineState.passTitle, sourceLocation: sourceLocation)
+        #expect(pipeline?.steps == [
+            EpisodePipelineStep(kind: .download, status: .done),
+            EpisodePipelineStep(kind: .transcribe, status: .running(fraction: nil, detail: detail)),
+            EpisodePipelineStep(kind: .detectAds, status: .waiting),
+        ], sourceLocation: sourceLocation)
+        #expect(pipeline?.footnote == EpisodePipelineState.cloudUploadFootnote, sourceLocation: sourceLocation)
+        #expect(pipeline?.action == .cancelPass, sourceLocation: sourceLocation)
+        let queue = AdDetectionQueuePresentation(snapshot: process.pass.queueSnapshot, isBackgroundSessionArmed: false)
+        #expect(queue.rows.first?.statusText == detail, sourceLocation: sourceLocation)
+        #expect(process.soundLab(for: episode).statusText == detail, sourceLocation: sourceLocation)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appending(path: "OpenCastCloudContinuationTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
+}
+
+/// Holds each part PUT until the test releases that part number, so an
+/// upload can be read at zero, partial and all-parts-sent.
+private final class GatedUploadTransport: RemoteTranscriptionUploadTransport, @unchecked Sendable {
+    private let gates: [Int: RemoteJobFaultInjectingAPI.Gate]
+
+    init(partCount: Int) {
+        gates = Dictionary(uniqueKeysWithValues: (1...partCount).map { ($0, RemoteJobFaultInjectingAPI.Gate()) })
+    }
+
+    func isHolding(part: Int) -> Bool {
+        gates[part]?.isHoldingRequest ?? false
+    }
+
+    func release(part: Int) {
+        gates[part]?.release()
+    }
+
+    func uploadPart(
+        partNumber: Int,
+        fileURL: URL,
+        to url: URL
+    ) async throws -> RemoteTranscriptionUploadPartPutResult {
+        await gates[partNumber]?.wait()
+        return RemoteTranscriptionUploadPartPutResult(statusCode: 200, etag: "\"etag-\(partNumber)\"")
+    }
+
+    func cancelOutstandingTasks() async {}
+
+    func finishTasksAndInvalidate() {}
 }

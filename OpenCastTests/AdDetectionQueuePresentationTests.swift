@@ -214,7 +214,24 @@ struct AdDetectionQueuePresentationTests {
     func cloudStageStatusText() {
         #expect(
             AdDetectionQueuePresentation.statusText(for: .cloudQueued)
-                == EpisodeAdFreePassPresentation.cloudQueued.statusText
+                == "Preparing cloud transcription…"
+        )
+        #expect(AdDetectionQueuePresentation.statusText(for: .cloudVerifying) == "Verifying audio…")
+        #expect(
+            AdDetectionQueuePresentation.statusText(for: .cloudUploadingExactCopy(completedParts: 0, totalParts: 0))
+                == "Preparing audio upload…"
+        )
+        #expect(
+            AdDetectionQueuePresentation.statusText(for: .cloudUploadingExactCopy(completedParts: 2, totalParts: 10))
+                == "Uploading audio… 2 of 10 parts uploaded"
+        )
+        #expect(
+            AdDetectionQueuePresentation.statusText(for: .cloudUploadingExactCopy(completedParts: 10, totalParts: 10))
+                == "Finishing audio upload…"
+        )
+        #expect(
+            AdDetectionQueuePresentation.statusText(for: .cloudWaitingForCredits)
+                == "Waiting for transcription time…"
         )
         #expect(
             AdDetectionQueuePresentation.statusText(for: .cloudTranscribing(nil))

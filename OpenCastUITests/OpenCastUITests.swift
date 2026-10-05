@@ -625,7 +625,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.staticTexts["Welcome to opencast!"], named: "onboarding welcome")
         assertExists(app.staticTexts["No third-party analytics"], named: "no third-party analytics pitch")
         assertExists(elementContaining(label: "View Source on GitHub", in: app), named: "source pitch link")
-        assertExists(app.staticTexts["Tiny install"], named: "tiny install pitch")
+        assertExists(app.staticTexts["No ads of our own"], named: "no ads of our own pitch")
         attachSmokeScreenshot(named: "onboarding_welcome_dark")
 
         app.buttons["Continue"].tap()

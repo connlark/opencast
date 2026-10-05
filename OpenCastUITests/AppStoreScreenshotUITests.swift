@@ -564,26 +564,27 @@ final class AppStoreScreenshotUITests: XCTestCase {
     }
 
     // A row can report hittable while its lower half sits under the docked
-    // mini player, and a long press there opens Now Playing instead.
+    // tab accessory, and a long press there opens Now Playing (or Up Next,
+    // when nothing is playing) instead.
     @MainActor
     private func isClearOfMiniPlayer(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
         guard element.isHittable else {
             return false
         }
-        let miniPlayer = miniPlayer(in: app)
-        guard miniPlayer.exists else {
+        let accessory = tabAccessory(in: app)
+        guard accessory.exists else {
             return true
         }
-        return element.frame.maxY <= miniPlayer.frame.minY - 4
+        return element.frame.maxY <= accessory.frame.minY - 4
     }
 
     @MainActor
     private func nudgeAboveMiniPlayer(_ element: XCUIElement, in app: XCUIApplication) {
-        let miniPlayer = miniPlayer(in: app)
-        guard miniPlayer.exists else {
+        let accessory = tabAccessory(in: app)
+        guard accessory.exists else {
             return
         }
-        let overlap = element.frame.maxY - miniPlayer.frame.minY + 24
+        let overlap = element.frame.maxY - accessory.frame.minY + 24
         guard overlap > 0 else {
             return
         }
@@ -683,6 +684,13 @@ final class AppStoreScreenshotUITests: XCTestCase {
     @MainActor
     private func miniPlayer(in app: XCUIApplication) -> XCUIElement {
         app.buttons["Open Now Playing"].firstMatch
+    }
+
+    @MainActor
+    private func tabAccessory(in app: XCUIApplication) -> XCUIElement {
+        app.buttons
+            .matching(NSPredicate(format: "label IN %@", ["Open Now Playing", "Open Up Next"]))
+            .firstMatch
     }
 
     // Tabs keep their pushed stacks (episode detail opened from Now Playing

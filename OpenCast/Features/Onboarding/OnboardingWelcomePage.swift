@@ -14,7 +14,7 @@ struct OnboardingWelcomePage: View {
                         .font(.largeTitle)
                         .bold()
 
-                    Text("A small, native podcast app for RSS feeds, iCloud-synced subscriptions, and playback without the ad-tech baggage.")
+                    Text("A native podcast app for RSS feeds, iCloud-synced subscriptions, and playback without the ad-tech baggage.")
                         .font(.body)
                         .foregroundStyle(.secondary)
                 }
@@ -34,9 +34,9 @@ struct OnboardingWelcomePage: View {
                     )
 
                     OnboardingPitchRow(
-                        systemImage: "shippingbox",
-                        title: "Tiny install",
-                        message: "Built to stay around 10 MB."
+                        systemImage: "hand.raised",
+                        title: "No ads of our own",
+                        message: "No sponsored shows or promoted episodes inside opencast."
                     )
                 }
             }

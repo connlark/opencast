@@ -57,9 +57,9 @@ export const screenshotAssets = {
     "height": 1008
   },
   "app_store_09_welcome_framed": {
-    "src": "/screenshots/app_store_09_welcome_framed.2d33fa2b8b.w464.png",
-    "avifSrcSet": "/screenshots/app_store_09_welcome_framed.91c7e5b926.w232.avif 232w, /screenshots/app_store_09_welcome_framed.b218ed25d2.w464.avif 464w",
-    "webpSrcSet": "/screenshots/app_store_09_welcome_framed.c9de45a87d.w232.webp 232w, /screenshots/app_store_09_welcome_framed.34c4871bfb.w464.webp 464w",
+    "src": "/screenshots/app_store_09_welcome_framed.de26c44e9c.w464.png",
+    "avifSrcSet": "/screenshots/app_store_09_welcome_framed.f7d2544455.w232.avif 232w, /screenshots/app_store_09_welcome_framed.b5822448ae.w464.avif 464w",
+    "webpSrcSet": "/screenshots/app_store_09_welcome_framed.1be628dda6.w232.webp 232w, /screenshots/app_store_09_welcome_framed.e0502aecc8.w464.webp 464w",
     "width": 464,
     "height": 1008
   },

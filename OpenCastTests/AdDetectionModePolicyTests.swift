@@ -85,8 +85,17 @@ struct AdDetectionModePolicyTests {
 
     @Test("Cloud stages map into the documented progress bands")
     func cloudProgressBands() {
-        #expect(EpisodeAdFreePassProgressMapper.units(for: .cloudQueued) == 20)
-        #expect(EpisodeAdFreePassProgressMapper.units(for: .cloudQueued, stageElapsed: 600) == 250)
+        let preparation: [EpisodeAdFreePassStage] = [
+            .cloudQueued,
+            .cloudVerifying,
+            .cloudUploadingExactCopy(completedParts: 0, totalParts: 0),
+            .cloudUploadingExactCopy(completedParts: 9, totalParts: 10),
+            .cloudWaitingForCredits
+        ]
+        for stage in preparation {
+            #expect(EpisodeAdFreePassProgressMapper.units(for: stage) == 20)
+            #expect(EpisodeAdFreePassProgressMapper.units(for: stage, stageElapsed: 600) == 250)
+        }
         #expect(EpisodeAdFreePassProgressMapper.units(for: .cloudTranscribing(nil)) == 250)
         let halfway = RemoteTranscriptionActiveProgress(
             stage: .transcribing,

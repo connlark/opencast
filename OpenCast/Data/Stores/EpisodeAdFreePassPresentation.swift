@@ -96,12 +96,30 @@ struct EpisodeAdFreePassPresentation: Equatable {
         isPrimaryActionEnabled: false
     )
 
-    static let cloudQueued = EpisodeAdFreePassPresentation(
-        stage: .cloudQueued,
-        phase: .running,
-        statusText: "Detecting in the cloud...",
-        primaryActionTitle: "Working...",
-        isPrimaryActionEnabled: false
+    static let cloudQueued = cloudPreparing(.cloudQueued, statusText: "Preparing cloud transcription…")
+
+    static let cloudVerifying = cloudPreparing(.cloudVerifying, statusText: "Verifying audio…")
+
+    /// Completed parts only, never a byte percentage: an unknown total
+    /// never reads "0 of 0", and all parts sent stays in the upload until
+    /// the runner reports the next phase.
+    static func cloudUploadingExactCopy(completedParts: Int, totalParts: Int) -> EpisodeAdFreePassPresentation {
+        let statusText = if totalParts <= 0 {
+            "Preparing audio upload…"
+        } else if completedParts >= totalParts {
+            "Finishing audio upload…"
+        } else {
+            "Uploading audio… \(completedParts) of \(totalParts) parts uploaded"
+        }
+        return cloudPreparing(
+            .cloudUploadingExactCopy(completedParts: completedParts, totalParts: totalParts),
+            statusText: statusText
+        )
+    }
+
+    static let cloudWaitingForCredits = cloudPreparing(
+        .cloudWaitingForCredits,
+        statusText: "Waiting for transcription time…"
     )
 
     static func cloudTranscribing(
@@ -215,6 +233,19 @@ struct EpisodeAdFreePassPresentation: Equatable {
             phase: .unavailable,
             statusText: message,
             primaryActionTitle: "Skip Promos & Ads",
+            isPrimaryActionEnabled: false
+        )
+    }
+
+    private static func cloudPreparing(
+        _ stage: EpisodeAdFreePassStage,
+        statusText: String
+    ) -> EpisodeAdFreePassPresentation {
+        EpisodeAdFreePassPresentation(
+            stage: stage,
+            phase: .running,
+            statusText: statusText,
+            primaryActionTitle: "Working...",
             isPrimaryActionEnabled: false
         )
     }

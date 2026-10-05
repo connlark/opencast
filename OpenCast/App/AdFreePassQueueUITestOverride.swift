@@ -5,9 +5,11 @@ import Foundation
 /// without running one.
 ///
 /// `OPENCAST_UI_TEST_AD_FREE_PASS_QUEUE_OVERRIDE=<stage>:<activeEpisodeID>[|<pendingEpisodeID>…]`
-/// with `<stage>` one of `downloading`, `transcribing`, `analyzing`. The
-/// transcribing stage reads
-/// `OPENCAST_UI_TEST_AD_FREE_PASS_QUEUE_OVERRIDE_PROGRESS=<completedSeconds>/<totalSeconds>`.
+/// with `<stage>` one of `downloading`, `transcribing`, `analyzing`, or the
+/// cloud pass's `uploading` (this device's audio, held mid-upload) and
+/// `cloudtranscribing`. The transcribing stage reads
+/// `OPENCAST_UI_TEST_AD_FREE_PASS_QUEUE_OVERRIDE_PROGRESS=<completedSeconds>/<totalSeconds>`;
+/// the uploading stage reads the same key as `<completedParts>/<totalParts>`.
 struct AdFreePassQueueUITestOverride: Equatable {
     static let environmentKey = "OPENCAST_UI_TEST_AD_FREE_PASS_QUEUE_OVERRIDE"
     static let progressEnvironmentKey = "OPENCAST_UI_TEST_AD_FREE_PASS_QUEUE_OVERRIDE_PROGRESS"
@@ -39,6 +41,11 @@ struct AdFreePassQueueUITestOverride: Equatable {
             stage = .transcribing(progress(environment: environment))
         case "analyzing":
             stage = .analyzing
+        case "uploading":
+            let (completedParts, totalParts) = uploadParts(environment: environment)
+            stage = .cloudUploadingExactCopy(completedParts: completedParts, totalParts: totalParts)
+        case "cloudtranscribing":
+            stage = .cloudTranscribing(nil)
         default:
             return nil
         }
@@ -48,6 +55,14 @@ struct AdFreePassQueueUITestOverride: Equatable {
             pendingEpisodeIDs: Array(episodeIDs.dropFirst()),
             stage: stage
         )
+    }
+
+    private static func uploadParts(environment: [String: String]) -> (completed: Int, total: Int) {
+        let parts = environment[progressEnvironmentKey]?.split(separator: "/").compactMap { Int($0) } ?? []
+        guard parts.count == 2 else {
+            return (2, 10)
+        }
+        return (parts[0], parts[1])
     }
 
     private static func progress(environment: [String: String]) -> EpisodeTranscriptionProgress {

@@ -212,6 +212,12 @@ final class EpisodeAdFreePassCoordinator {
             switch currentStage {
             case .cloudQueued:
                 return .cloudQueued
+            case .cloudVerifying:
+                return .cloudVerifying
+            case .cloudUploadingExactCopy(let completedParts, let totalParts):
+                return .cloudUploadingExactCopy(completedParts: completedParts, totalParts: totalParts)
+            case .cloudWaitingForCredits:
+                return .cloudWaitingForCredits
             case .cloudTranscribing(let progress):
                 return .cloudTranscribing(progress)
             case .cloudDetectingAds:
@@ -957,6 +963,9 @@ final class EpisodeAdFreePassCoordinator {
             }
             activeItem = entry.item
             activeCloudJobStore = entry.item.mode == .cloud ? entry.deps.remoteJobStore : nil
+            // The previous item's last stage (a failure, an upload count)
+            // never presents as this item's before its first event.
+            currentStage = nil
             lastPublishedStage = nil
             activeTranscriptionEngine = entry.deps.transcriptionEngine
             activeTranscriptionModelIdentity = nil
@@ -1450,8 +1459,14 @@ final class EpisodeAdFreePassCoordinator {
         switch event {
         case .downloading:
             setStage(.downloadingEpisode)
-        case .verifying, .queuedRemotely, .waitingForCredits, .uploadingExactCopy:
+        case .queuedRemotely:
             setStage(.cloudQueued)
+        case .verifying:
+            setStage(.cloudVerifying)
+        case .uploadingExactCopy(let completedParts, let totalParts):
+            setStage(.cloudUploadingExactCopy(completedParts: completedParts, totalParts: totalParts))
+        case .waitingForCredits:
+            setStage(.cloudWaitingForCredits)
         case .processing(let progress) where progress.stage == .finalizing:
             // Finalization follows the ad phase on detect jobs; falling back
             // to "Transcribing" copy here would read as a regression.
