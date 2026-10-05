@@ -47,7 +47,7 @@ export async function harness(outbound, options = {}) {
       queueProducers: { EVENT_QUEUE: 'isolated-event', EPISODE_DELIVERY_QUEUE: 'isolated-episode', JOB_DELIVERY_QUEUE: 'isolated-job' },
       bindings: { NOTIFICATION_ENVIRONMENT: 'development', NOTIFICATION_EPISODE_ACTIVATION: 'true', NOTIFICATION_EPISODE_SEND: 'true', APPLE_TEAM_ID: 'EXAMPLETEAM', APPLE_BUNDLE_ID: 'com.example.opencast', APP_ATTEST_ENVIRONMENT: 'development', APNS_ENVIRONMENT: 'development', PUBLIC_NOTIFICATIONS_ENABLED: 'false',...options.deliveryBindings },
       serviceBindings: { APNS_CERT: async request => { sends.push(await request.json()); return new Response(null, { status: 200 }); } },
-      outboundService: async request => { fetches.push(request.url); return outbound(request); },
+      outboundService: async request => { fetches.push(request.url); if (request.url === ALERT_WEBHOOK_URL) alerts.push({ headers: Object.fromEntries(request.headers), body: await request.clone().json() }); return outbound(request); },
     },
   ];
   for(let i=1;i<(options.replicas??1);i++) workers.push({...workers[0],name:`polling-runtime-${i}`});

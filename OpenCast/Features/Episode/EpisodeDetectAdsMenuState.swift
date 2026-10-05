@@ -12,7 +12,7 @@ enum EpisodeDetectAdsMenuState: Equatable {
         switch queueStatus {
         case .running:
             self = .detecting
-        case .queued, .capDeferred:
+        case .queued, .capDeferred, .remoteParked:
             self = .queued
         case .completed:
             self = .detected

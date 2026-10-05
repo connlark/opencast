@@ -13,7 +13,7 @@ function instrument(env,trace){
   const prepared=(statement,sql)=>{const proxy=new Proxy(statement,{get(target,key){
     if(key==='constructor')return target.constructor;
     if(key==='bind')return (...args)=>prepared(target.bind(...args),sql);
-    if(['run','first','all','raw'].includes(key))return async (...args)=>{trace.d1++;if(trace.d1>1000)throw Error('query limit');if(sql.includes('UPDATE n_observation SET preparation_key=')){fail('before_checkpoint');const result=measured(await target[key](...args));fail('after_checkpoint');return result;}if(key==='first'){const result=measured(await target.all());const row=result.results[0]??null;return args[0]&&row?row[args[0]]:row;}return measured(await target[key](...args));};
+    if(['run','first','all','raw'].includes(key))return async (...args)=>{trace.d1++;if(sql.includes('AS late_900')){trace.watchdog_reads=(trace.watchdog_reads??0)+1;if(fault==='watchdog_read_hang'){fault=undefined;await new Promise(()=>{});}fail('watchdog_read');}if(trace.d1>1000)throw Error('query limit');if(sql.includes('UPDATE n_observation SET preparation_key=')){fail('before_checkpoint');const result=measured(await target[key](...args));fail('after_checkpoint');return result;}if(key==='first'){const result=measured(await target.all());const row=result.results[0]??null;return args[0]&&row?row[args[0]]:row;}return measured(await target[key](...args));};
     const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;
   }});originals.set(proxy,statement);queries.set(proxy,sql);return proxy;};
   const db=new Proxy(env.APP_ATTEST_DB,{get(target,key){
@@ -52,7 +52,7 @@ export default class extends Worker {
     if(path==='/logcount')return Response.json({log_events:logEvents});
     const trace={path,d1:0,get:0,put:0,head:0,delete:0};traces.push(trace);
     const env=instrument(this.env,trace);
-    if(path==='/scheduled'){await new Worker(this.ctx,env).scheduled({scheduledTime:Date.now(),cron:'*/5 * * * *'});return new Response('ok');}
+    if(path==='/scheduled'){await new Worker(this.ctx,env).scheduled({scheduledTime:Number(request.headers.get('x-test-scheduled-time')??Date.now()),cron:'* * * * *'});return new Response('ok');}
     if(path.startsWith('/control/'))return new FeedControl(this.ctx,env).fetch(new Request(request.url.replace('/control',''),request));
     if(path==='/queue')return new RustWorker(this.ctx,{...env,NOTIFICATION_CAPABILITY:'queue'}).fetch(request);
     if(path.startsWith('/observation/'))return new FeedObservations(this.ctx,env).fetch(new Request(request.url.replace('/observation',''),request));

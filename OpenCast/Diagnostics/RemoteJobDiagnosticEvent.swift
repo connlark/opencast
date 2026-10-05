@@ -73,6 +73,10 @@ nonisolated struct RemoteJobDiagnosticEvent: Codable, Sendable, Equatable {
     }
 
     /// What happened to the persisted reference as a result of the event.
+    /// The `skipped…` values carry a `reattachSkipped` event's reason; the
+    /// reference is retained in every one of them. The `suppressed…` values
+    /// and `deliveryFailed` carry a `notificationSuppressed` event's reason
+    /// and say nothing about the reference.
     enum Disposition: String, Codable, Sendable, CaseIterable {
         case retained
         case attached
@@ -81,6 +85,16 @@ nonisolated struct RemoteJobDiagnosticEvent: Codable, Sendable, Equatable {
         case cancelIntentPersisted
         case cancelAttempted
         case expired
+        case skippedCancelIntent
+        case skippedNotCreated
+        case skippedUnresolvedEpisode
+        case skippedActiveRequest
+        case skippedCompletedTranscript
+        case suppressedRemoteOwner
+        case suppressedSceneActive
+        case suppressedUnauthorized
+        case suppressedSilentOutcome
+        case deliveryFailed
     }
 
     let timestamp: Date

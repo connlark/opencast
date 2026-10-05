@@ -23,7 +23,8 @@ struct AppIconStoreTests {
 
         store.load()
 
-        #expect(store.selection == .ember)
+        #expect(store.selection == .primary)
+        #expect(application.appliedNames.isEmpty)
     }
 
     @Test("Unsupported devices report isSupported false")
@@ -34,7 +35,7 @@ struct AppIconStoreTests {
         store.load()
 
         #expect(!store.isSupported)
-        #expect(store.selection == .ember)
+        #expect(store.selection == .primary)
     }
 
     @Test("Selecting applies the name and updates the selection")
@@ -48,24 +49,10 @@ struct AppIconStoreTests {
         #expect(application.appliedNames == ["AppIconViolet"])
         #expect(store.lastErrorMessage == nil)
 
-        await store.select(.ember)
-        #expect(store.selection == .ember)
+        await store.select(.primary)
+        #expect(store.selection == .primary)
         #expect(application.appliedNames == ["AppIconViolet", nil])
         #expect(!store.isApplying)
-    }
-
-    @Test("Selecting a glass option applies its bundle name")
-    func selectGlassOptionAppliesBundleName() async {
-        let application = AlternateIconApplyingSpy(alternateIconName: nil)
-        let store = AppIconStore(application: application)
-        store.load()
-
-        await store.select(.glassViolet)
-
-        #expect(store.selection == .glassViolet)
-        #expect(store.selection.family == .glass)
-        #expect(application.appliedNames == ["AppIconGlassViolet"])
-        #expect(store.lastErrorMessage == nil)
     }
 
     @Test("Selecting the current option is a no-op")
@@ -87,7 +74,7 @@ struct AppIconStoreTests {
 
         await store.select(.graphite)
 
-        #expect(store.selection == .ember)
+        #expect(store.selection == .primary)
         #expect(store.lastErrorMessage?.hasPrefix("Unable to change the app icon") == true)
         #expect(application.appliedNames.isEmpty)
 

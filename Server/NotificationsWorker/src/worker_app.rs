@@ -270,13 +270,24 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
     }
 }
 
-pub async fn handle_scheduled(env: Env) -> Result<()> {
-    if crate::delivery::reconcile(&env).await.is_err() {
+pub async fn handle_scheduled(env: Env, scheduled_at: i64) -> Result<()> {
+    // Join instead of short-circuiting: maintenance and the independent read
+    // both run even when the other fails. Watchdog I/O has its own deadlines.
+    let (_, maintenance) = futures_util::future::join(
+        crate::polling::watchdog::check(&env, scheduled_at),
+        scheduled_maintenance(&env),
+    )
+    .await;
+    maintenance
+}
+
+async fn scheduled_maintenance(env: &Env) -> Result<()> {
+    if crate::delivery::reconcile(env).await.is_err() {
         worker::console_warn!("notification reconciliation failed; continuing maintenance");
     }
     let db = env.d1(APP_ATTEST_DB)?;
     let now = now_seconds();
-    if !crate::delivery::db::permitted(&env, &db, "cleanup").await? {
+    if !crate::delivery::db::permitted(env, &db, "cleanup").await? {
         return Ok(());
     }
     // Authentication and subscription retention also serve the queued engine.

@@ -52,8 +52,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         appModel.isSceneActive = newPhase == .active
         let transcriptionInterruptionDecision = AdFreePassLifecycleInterruptionPolicy(
             scenePhase: newPhase,
-            isProtectingBackgroundExecution: appModel.adFreePassBackgroundSession.isProtectingBackgroundExecution
-                || appModel.transcriptGenerationBackgroundSession.isProtectingBackgroundExecution
+            isProtectingBackgroundExecution: appModel.isProtectingLocalBackgroundWork
         ).decision
 
         switch newPhase {
@@ -77,6 +76,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             deferredTranscriptionInterruptionTask = nil
             hasFlushedProgressForLifecycleExit = false
             appModel.resumeEnvironmentalAdFreePassIfNeeded(modelContext: modelContext)
+            appModel.reattachRemoteJobsIfNeeded(modelContext: modelContext, trigger: .sceneActivated)
             appModel.retryDeferredTranscriptAnalyses(modelContext: modelContext, trigger: .sceneActivated)
             appModel.transcriptIntelligence.refreshAvailability()
             startForegroundSyncedDataRefresh()

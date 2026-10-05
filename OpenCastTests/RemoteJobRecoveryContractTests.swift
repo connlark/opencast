@@ -362,6 +362,7 @@ struct RemoteJobRecoveryContractTests {
             let records = try environment.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
             #expect(records.map(\.episodeID) == [environment.episode.episodeID])
             #expect(records.first?.modeRawValue == AdDetectionMode.cloud.rawValue)
+            #expect(records.first?.remoteParkReasonRawValue == RemoteTranscriptionJobExit.parked.rawValue)
             #expect(api.serverState(of: seed.jobID) == .transcribing)
 
             // Resume re-attaches by the same client request ID without a

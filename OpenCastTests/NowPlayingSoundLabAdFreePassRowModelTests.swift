@@ -36,6 +36,19 @@ struct NowPlayingSoundLabAdFreePassRowModelTests {
         }
     }
 
+    @Test("A parked cloud job offers Resume without failure emphasis")
+    func remoteParkedRowOffersResume() {
+        let presentation = EpisodeAdFreePassPresentation.remoteParked(.parked)
+        let row = NowPlayingSoundLabAdFreePassRowModel(presentation: presentation)
+
+        #expect(row.title == "Resume")
+        #expect(row.isEnabled)
+        #expect(row.emphasis == .normal)
+        #expect(row.phase == .deferred)
+        #expect(row.statusText == RemoteTranscriptionStatusPresentation.parkedTitle)
+        #expect(presentation.stage == .cloudParked(.parked))
+    }
+
     @Test("Queued rows stay fixed-footprint with the stable title, not Queued")
     func queuedRowKeepsStableTitle() {
         let row = NowPlayingSoundLabAdFreePassRowModel(presentation: .queued(ahead: 2))

@@ -19,7 +19,7 @@ struct AdAutoDetectPlayPolicy {
             // `.cloudUnavailable` re-qualifies like `.failed`: credits
             // arriving later self-heal the next play.
             return true
-        case .queued, .running, .completed, .capDeferred:
+        case .queued, .running, .completed, .capDeferred, .remoteParked:
             return false
         }
     }

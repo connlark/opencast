@@ -102,50 +102,61 @@ struct RemoteTranscriptionStatusCard: View {
 }
 
 #Preview("States") {
-    VStack(spacing: 16) {
-        RemoteTranscriptionStatusCard(
-            presentation: RemoteTranscriptionStatusPresentation.make(
-                phase: .failed(.serverRejected(.transcriptionFailed))
-            )!,
-            onTranscribeLocally: {},
-            onResume: {},
-            onCancel: {},
-            onDismiss: {}
-        )
-        RemoteTranscriptionStatusCard(
-            presentation: RemoteTranscriptionStatusPresentation.make(
-                phase: .parkedOnServer(.connectionLost)
-            )!,
-            onTranscribeLocally: {},
-            onResume: {},
-            onCancel: {},
-            onDismiss: {}
-        )
-        RemoteTranscriptionStatusCard(
-            presentation: RemoteTranscriptionStatusPresentation.make(
-                phase: .failed(.localRequestFailed)
-            )!,
-            onTranscribeLocally: {},
-            onResume: {},
-            onCancel: {},
-            onDismiss: {}
-        )
-        RemoteTranscriptionStatusCard(
-            presentation: RemoteTranscriptionStatusPresentation.make(
-                phase: .processing(RemoteTranscriptionActiveProgress(
-                    stage: .transcribing,
-                    completedChunks: 3,
-                    totalChunks: 7,
-                    fractionCompleted: 3.0 / 7.0,
-                    estimate: .onTrack(remainingSeconds: 52)
-                ))
-            )!,
-            onTranscribeLocally: {},
-            onResume: {},
-            onCancel: {},
-            onDismiss: {}
-        )
+    ScrollView {
+        VStack(spacing: 16) {
+            RemoteTranscriptionStatusCard(
+                presentation: RemoteTranscriptionStatusPresentation.make(
+                    phase: .failed(.serverRejected(.transcriptionFailed))
+                )!,
+                onTranscribeLocally: {},
+                onResume: {},
+                onCancel: {},
+                onDismiss: {}
+            )
+            RemoteTranscriptionStatusCard(
+                presentation: RemoteTranscriptionStatusPresentation.make(
+                    phase: .parkedOnServer(.parked)
+                )!,
+                onTranscribeLocally: {},
+                onResume: {},
+                onCancel: {},
+                onDismiss: {}
+            )
+            RemoteTranscriptionStatusCard(
+                presentation: RemoteTranscriptionStatusPresentation.make(
+                    phase: .parkedOnServer(.connectionLost)
+                )!,
+                onTranscribeLocally: {},
+                onResume: {},
+                onCancel: {},
+                onDismiss: {}
+            )
+            RemoteTranscriptionStatusCard(
+                presentation: RemoteTranscriptionStatusPresentation.make(
+                    phase: .failed(.localRequestFailed)
+                )!,
+                onTranscribeLocally: {},
+                onResume: {},
+                onCancel: {},
+                onDismiss: {}
+            )
+            RemoteTranscriptionStatusCard(
+                presentation: RemoteTranscriptionStatusPresentation.make(
+                    phase: .processing(RemoteTranscriptionActiveProgress(
+                        stage: .transcribing,
+                        completedChunks: 3,
+                        totalChunks: 7,
+                        fractionCompleted: 3.0 / 7.0,
+                        estimate: .onTrack(remainingSeconds: 52)
+                    ))
+                )!,
+                onTranscribeLocally: {},
+                onResume: {},
+                onCancel: {},
+                onDismiss: {}
+            )
+        }
+        .padding()
     }
-    .padding()
     .preferredColorScheme(.dark)
 }

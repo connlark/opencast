@@ -155,9 +155,9 @@ enum RemoteJobRecoveryFixture: String, CaseIterable, Sendable {
 
     /// Plants what an earlier process left behind: an attached reference
     /// (with `lastExit = parked` for the cloud fixtures), the pending cloud
-    /// queue record at the head, and the server job in `seededServerState`
-    /// under the reference's client request ID. Returns nil for fixtures
-    /// that start from a clean process.
+    /// queue record at the head carrying its `parked` reason, and the server
+    /// job in `seededServerState` under the reference's client request ID.
+    /// Returns nil for fixtures that start from a clean process.
     @MainActor
     func seedPersistedState(
         store: RemoteTranscriptionJobStore,
@@ -178,7 +178,8 @@ enum RemoteJobRecoveryFixture: String, CaseIterable, Sendable {
                 podcastID: episode.podcastID,
                 originRawValue: AdFreePassQueueOrigin.manual.rawValue,
                 sequence: 1,
-                modeRawValue: AdDetectionMode.cloud.rawValue
+                modeRawValue: AdDetectionMode.cloud.rawValue,
+                remoteParkReasonRawValue: RemoteTranscriptionJobExit.parked.rawValue
             ))
             try modelContext.save()
             queueRecordEpisodeID = episode.episodeID

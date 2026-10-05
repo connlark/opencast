@@ -7,6 +7,8 @@ final class FakeAdFreePassNotificationCenter: AdFreePassNotificationCenter {
     private(set) var authorizationStatusReadCount = 0
     private(set) var provisionalRequestCount = 0
     private(set) var addedRequests: [UNNotificationRequest] = []
+    /// When set, `add` throws it and records nothing.
+    var addError: (any Error)?
 
     func authorizationStatus() async -> UNAuthorizationStatus {
         authorizationStatusReadCount += 1
@@ -21,6 +23,9 @@ final class FakeAdFreePassNotificationCenter: AdFreePassNotificationCenter {
     }
 
     func add(_ request: UNNotificationRequest) async throws {
+        if let addError {
+            throw addError
+        }
         addedRequests.append(request)
     }
 }

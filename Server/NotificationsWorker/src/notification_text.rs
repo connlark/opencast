@@ -797,7 +797,11 @@ mod tests {
             None
         );
         assert_eq!(
-            summary(Some("https://a.example.com https://b.example.com"), Some(""), "Title"),
+            summary(
+                Some("https://a.example.com https://b.example.com"),
+                Some(""),
+                "Title"
+            ),
             None
         );
         assert_eq!(

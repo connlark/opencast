@@ -24,6 +24,7 @@ struct OpenCastTransportPolicyTests {
         #expect(permittedIdentifiers == [
             "com.connor.opencast.ad-free-pass",
             "com.connor.opencast.transcript-generation",
+            "com.connor.opencast.remote-transcription",
         ])
         #expect(!backgroundModes.contains("processing"))
     }

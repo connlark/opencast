@@ -1,27 +1,38 @@
 /// Copy for the queue-terminal completion notification. `nil` means the
-/// terminal never notifies: a drained queue reports results, and an
-/// interrupt explains the pause — the system posts an unsuppressable "Task
-/// failed" banner when it revokes the continued-processing task, so this is
-/// the honest counterpart telling the user nothing is lost. Cap deferral
-/// and model consent stay silent (the queue screen carries those).
+/// terminal never notifies. A drained queue reports its locally owned
+/// results; a remote owner delivers its own. An on-device interrupt explains
+/// the pause — the system posts an unsuppressable "Task failed" banner when
+/// it revokes the continued-processing task, so this is the honest
+/// counterpart telling the user nothing is lost — and an expiration park of
+/// a cloud item says the server is still working. Cap deferral, model
+/// consent, a cloud user cancel and the other cloud parks stay silent (the
+/// queue screen carries those).
 struct AdFreePassCompletionNotificationContent: Equatable {
     let title: String
     let body: String
 
     init?(terminal: AdFreePassQueueTerminalOutcome, outcomes: [AdFreePassQueueItemOutcome]) {
-        if case .interrupted = terminal {
+        switch terminal {
+        case .interrupted:
             title = "Ad detection paused"
             body = "iOS paused background processing. It will pick up where it left off next time you open OpenCast."
             return
-        }
-
-        guard case .drained = terminal else {
+        case .remoteParked(let exit):
+            guard let copy = RemoteTranscriptionNotificationContent.pausedCopy(for: exit) else {
+                return nil
+            }
+            title = copy.title
+            body = copy.body
+            return
+        case .cloudUserCancelled, .awaitingConsent, .capDeferred:
             return nil
+        case .drained:
+            break
         }
 
         var completed: [(episodeTitle: String, zoneCount: Int)] = []
         var failedCount = 0
-        for outcome in outcomes {
+        for outcome in outcomes where outcome.completionDeliveryOwner == .local {
             switch outcome.kind {
             case .completed(let zoneCount):
                 completed.append((outcome.episodeTitle, zoneCount))

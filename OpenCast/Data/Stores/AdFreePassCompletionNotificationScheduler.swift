@@ -13,16 +13,20 @@ struct AdFreePassCompletionNotificationScheduler {
 
     var center: any AdFreePassNotificationCenter = UNUserNotificationCenter.current()
 
+    @discardableResult
     func scheduleIfNeeded(
         terminal: AdFreePassQueueTerminalOutcome,
         outcomes: [AdFreePassQueueItemOutcome],
         isSceneActive: Bool
-    ) async {
-        guard !isSceneActive,
-              let content = AdFreePassCompletionNotificationContent(terminal: terminal, outcomes: outcomes),
-              Self.allowsLocalDelivery(await center.authorizationStatus())
-        else {
-            return
+    ) async -> CompletionDeliveryDecision {
+        guard !isSceneActive else {
+            return .suppressed(.sceneActive)
+        }
+        guard let content = AdFreePassCompletionNotificationContent(terminal: terminal, outcomes: outcomes) else {
+            return .suppressed(.silentOutcome)
+        }
+        guard Self.allowsLocalDelivery(await center.authorizationStatus()) else {
+            return .suppressed(.unauthorized)
         }
 
         let request = UNNotificationRequest(
@@ -33,10 +37,12 @@ struct AdFreePassCompletionNotificationScheduler {
         do {
             try await center.add(request)
             AdFreePassBackgroundRunLog.record("completion notification scheduled title=\(content.title)")
+            return .scheduled
         } catch {
             // The run log is DEBUG-only; the logger line is the Release artifact.
             AdFreePassBackgroundRunLog.record("completion notification add failed error=\(error)")
             Self.logger.error("ad-free pass completion notification add failed: \(error.localizedDescription, privacy: .public)")
+            return .addFailed
         }
     }
 

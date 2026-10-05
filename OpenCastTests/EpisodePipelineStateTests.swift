@@ -390,6 +390,36 @@ struct EpisodePipelineStateTests {
         #expect(EpisodePipelineAction.downloadModel(byteCount: nil).title == "Download Model")
     }
 
+    // MARK: - Parked cloud job
+
+    @Test(
+        "A parked cloud item says the server is still working, keeps Cancel and offers Resume",
+        arguments: [RemoteTranscriptionJobExit.parked, .connectionLost, .localRequestFailed]
+    )
+    func remoteParkedOffersResumeAndCancel(reason: RemoteTranscriptionJobExit) {
+        var head = pendingItem(episodeID)
+        head.remoteParkReason = reason
+        let state = makeState(
+            queueStatus: .remoteParked(reason),
+            queueSnapshot: AdFreePassQueueSnapshot(state: .pausedInterrupted, pendingItems: [head]),
+            downloadRecord: downloadRecord(state: .completed)
+        )
+
+        #expect(state == EpisodePipelineState(
+            title: RemoteTranscriptionStatusPresentation.parkedTitle,
+            steps: [
+                EpisodePipelineStep(kind: .download, status: .done),
+                EpisodePipelineStep(kind: .transcribe, status: .waiting),
+                EpisodePipelineStep(kind: .detectAds, status: .waiting)
+            ],
+            footnote: RemoteTranscriptionStatusPresentation.parkedDetail(for: reason),
+            action: .cancelPass,
+            footerAction: .resumeQueue
+        ))
+        // The on-device pause copy is never reused for a server job.
+        #expect(state?.footnote != EpisodePipelineState.pausedFootnote)
+    }
+
     // MARK: - Fixtures
 
     private func makeState(

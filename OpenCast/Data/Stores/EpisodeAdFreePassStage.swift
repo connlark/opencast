@@ -8,8 +8,8 @@ enum EpisodeAdFreePassStage: Equatable {
     case installingSpeechAssets(fractionCompleted: Double)
     case transcribing(EpisodeTranscriptionProgress)
     case analyzing
-    // Cloud detect passes: the job is on the server, no local compute runs
-    // and the background session is never armed.
+    // Cloud detect passes: the job is on the server and no local compute
+    // runs; a manual start may still hold the continued-processing card.
     case cloudQueued
     case cloudTranscribing(RemoteTranscriptionActiveProgress?)
     case cloudDetectingAds
@@ -17,6 +17,10 @@ enum EpisodeAdFreePassStage: Equatable {
     /// surface offers a one-tap on-device detect instead — never a silent
     /// switch.
     case cloudUnavailable(message: String)
+    /// The cloud job keeps running on the server while local polling has
+    /// stopped (expiration, connection loss, a local request failure).
+    /// Never the on-device `interrupted` copy.
+    case cloudParked(RemoteTranscriptionJobExit)
     case completed(zoneCount: Int)
     case interrupted
     case failed(message: String)

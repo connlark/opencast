@@ -12,6 +12,9 @@ final class AdFreePassQueueItemRecord {
     var sequence: Int = 0
     /// Empty on records persisted before cloud detect existed ⇒ on-device.
     var modeRawValue: String = ""
+    /// Why a cloud item stopped polling while its server job kept running
+    /// (`RemoteTranscriptionJobExit` raw value). Empty ⇒ not parked.
+    var remoteParkReasonRawValue: String = ""
 
     init(
         episodeID: String,
@@ -19,7 +22,8 @@ final class AdFreePassQueueItemRecord {
         originRawValue: String,
         enqueuedAt: Date = .now,
         sequence: Int,
-        modeRawValue: String = ""
+        modeRawValue: String = "",
+        remoteParkReasonRawValue: String = ""
     ) {
         self.episodeID = episodeID
         self.podcastID = podcastID
@@ -27,5 +31,6 @@ final class AdFreePassQueueItemRecord {
         self.enqueuedAt = enqueuedAt
         self.sequence = sequence
         self.modeRawValue = modeRawValue
+        self.remoteParkReasonRawValue = remoteParkReasonRawValue
     }
 }

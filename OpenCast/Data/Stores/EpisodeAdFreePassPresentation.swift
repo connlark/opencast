@@ -135,6 +135,17 @@ struct EpisodeAdFreePassPresentation: Equatable {
         )
     }
 
+    /// The server job keeps running; Resume re-attaches the same job.
+    static func remoteParked(_ reason: RemoteTranscriptionJobExit) -> EpisodeAdFreePassPresentation {
+        EpisodeAdFreePassPresentation(
+            stage: .cloudParked(reason),
+            phase: .deferred,
+            statusText: RemoteTranscriptionStatusPresentation.parkedTitle,
+            primaryActionTitle: "Resume",
+            isPrimaryActionEnabled: true
+        )
+    }
+
     static func completed(zoneCount: Int) -> EpisodeAdFreePassPresentation {
         let zoneText = zoneCount == 1 ? "1 zone marked." : "\(zoneCount) zones marked."
         return EpisodeAdFreePassPresentation(

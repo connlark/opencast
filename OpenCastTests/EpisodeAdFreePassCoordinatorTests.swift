@@ -459,6 +459,22 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(transcriber.requestProfiles(forURLContaining: second.episodeID) == [.cpuOnly])
     }
 
+    @Test("A GPU-less session selects non-GPU compute for the actual transcription request")
+    func gpuLessSessionPinsTranscriptionCompute() async throws {
+        let transcriber = ComputeFailureEpisodeTranscriber()
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            transcriber: transcriber
+        )
+        fixture.coordinator.requiresNonGPUCompute = { true }
+        let episode = makeEpisode(episodeID: "queue-no-gpu")
+        fixture.enqueue(episode, engine: .selectedWhisperModel)
+        #expect(await waitUntil {
+            fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1
+        })
+        #expect(transcriber.requestProfiles(forURLContaining: episode.episodeID) == [.cpuAndNeuralEngine])
+    }
+
     @Test("Foreground return mid-drain resets the sticky degraded compute profile")
     func foregroundReturnResetsStickyComputeMidDrain() async throws {
         let downloader = GatedEpisodeAudioDownloader()

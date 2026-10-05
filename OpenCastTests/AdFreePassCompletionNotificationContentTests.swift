@@ -22,14 +22,79 @@ struct AdFreePassCompletionNotificationContentTests {
         )
     }
 
-    @Test("Interrupts explain the pause instead of staying silent")
+    @Test("On-device interrupts keep the device-paused copy")
     func interruptedTerminalNotifiesPause() throws {
         let content = try #require(AdFreePassCompletionNotificationContent(
             terminal: .interrupted,
             outcomes: []
         ))
         #expect(content.title == "Ad detection paused")
-        #expect(content.body.contains("pick up where it left off"))
+        #expect(content.body == "iOS paused background processing. It will pick up where it left off next time you open OpenCast.")
+    }
+
+    @Test("An expiration park of a cloud item says the server is still working, never that the device paused")
+    func cloudParkSaysServerIsStillWorking() throws {
+        let content = try #require(AdFreePassCompletionNotificationContent(
+            terminal: .remoteParked(.parked),
+            outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)]
+        ))
+
+        #expect(content.title == RemoteTranscriptionStatusPresentation.parkedTitle)
+        #expect(content.title == "Still running on the server")
+        #expect(content.body == RemoteTranscriptionStatusPresentation.parkedDetail(for: .parked))
+        #expect(content.title != "Ad detection paused")
+        #expect(!content.body.contains("iOS paused"))
+    }
+
+    @Test("Connection-loss and local-failure parks and a cloud user cancel stay silent")
+    func silentCloudTerminals() {
+        for terminal in [
+            AdFreePassQueueTerminalOutcome.remoteParked(.connectionLost),
+            .remoteParked(.localRequestFailed),
+            .cloudUserCancelled,
+        ] {
+            #expect(
+                AdFreePassCompletionNotificationContent(terminal: terminal, outcomes: []) == nil,
+                "terminal \(terminal)"
+            )
+        }
+    }
+
+    @Test("An all-remote drain is silent: a remote owner delivers those completions")
+    func allRemoteDrainIsSilent() {
+        let outcomes = [
+            completedOutcome(episodeID: "a", zoneCount: 4, owner: .remote),
+            failedOutcome(episodeID: "b", owner: .remote),
+        ]
+
+        #expect(AdFreePassCompletionNotificationContent(
+            terminal: .drained(completedCount: 1, failedCount: 1),
+            outcomes: outcomes
+        ) == nil)
+    }
+
+    @Test("A mixed drain summarizes only the locally owned outcomes")
+    func mixedDrainSummarizesLocalOutcomes() throws {
+        let completedLocally = try #require(AdFreePassCompletionNotificationContent(
+            terminal: .drained(completedCount: 2, failedCount: 1),
+            outcomes: [
+                completedOutcome(episodeID: "a", zoneCount: 3, title: "Local Episode"),
+                completedOutcome(episodeID: "b", zoneCount: 5, owner: .remote),
+                failedOutcome(episodeID: "c", owner: .remote),
+            ]
+        ))
+        #expect(completedLocally.title == "Found 3 ad breaks in Local Episode")
+        #expect(completedLocally.body.isEmpty)
+
+        let failedLocally = try #require(AdFreePassCompletionNotificationContent(
+            terminal: .drained(completedCount: 1, failedCount: 1),
+            outcomes: [
+                completedOutcome(episodeID: "a", zoneCount: 2, owner: .remote),
+                failedOutcome(episodeID: "b"),
+            ]
+        ))
+        #expect(failedLocally.title == "Ad detection finished")
+        #expect(failedLocally.body == "1 episode couldn't be analyzed.")
     }
 
     @Test("Single episode copy inflects the zone count")
@@ -110,22 +175,28 @@ struct AdFreePassCompletionNotificationContentTests {
     private func completedOutcome(
         episodeID: String,
         zoneCount: Int,
-        title: String? = nil
+        title: String? = nil,
+        owner: JobCompletionDeliveryOwner = .local
     ) -> AdFreePassQueueItemOutcome {
         AdFreePassQueueItemOutcome(
             episodeID: episodeID,
             episodeTitle: title ?? "Episode \(episodeID)",
             artworkURL: nil,
-            kind: .completed(zoneCount: zoneCount)
+            kind: .completed(zoneCount: zoneCount),
+            completionDeliveryOwner: owner
         )
     }
 
-    private func failedOutcome(episodeID: String) -> AdFreePassQueueItemOutcome {
+    private func failedOutcome(
+        episodeID: String,
+        owner: JobCompletionDeliveryOwner = .local
+    ) -> AdFreePassQueueItemOutcome {
         AdFreePassQueueItemOutcome(
             episodeID: episodeID,
             episodeTitle: "Episode \(episodeID)",
             artworkURL: nil,
-            kind: .failed(message: "Download failed.")
+            kind: .failed(message: "Download failed."),
+            completionDeliveryOwner: owner
         )
     }
 }

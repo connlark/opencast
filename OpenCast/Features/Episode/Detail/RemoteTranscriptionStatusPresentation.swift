@@ -88,7 +88,9 @@ nonisolated struct RemoteTranscriptionStatusPresentation: Equatable {
         }
     }
 
-    private static func parkedDetail(for exit: RemoteTranscriptionJobExit) -> String {
+    /// Shared with the cloud ad-detection surfaces, so a parked job reads
+    /// the same in either flow.
+    static func parkedDetail(for exit: RemoteTranscriptionJobExit) -> String {
         switch exit {
         case .parked:
             "Progress updates paused while the app was in the background. Resume to pick the job back up."

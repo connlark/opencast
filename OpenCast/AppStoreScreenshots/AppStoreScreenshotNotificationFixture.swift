@@ -20,13 +20,15 @@ enum AppStoreScreenshotNotificationFixture {
                         episodeID: AppStoreScreenshotSeedCatalog.primaryEpisodeID,
                         episodeTitle: AppStoreScreenshotSeedCatalog.primaryEpisodeTitle,
                         artworkURL: nil,
-                        kind: .completed(zoneCount: 3)
+                        kind: .completed(zoneCount: 3),
+                        completionDeliveryOwner: .local
                     ),
                     AdFreePassQueueItemOutcome(
                         episodeID: "app-store-orbit-report-episode-2",
                         episodeTitle: "Why Every Comet Is a Surprise",
                         artworkURL: nil,
-                        kind: .completed(zoneCount: 4)
+                        kind: .completed(zoneCount: 4),
+                        completionDeliveryOwner: .local
                     ),
                 ]
             ) else {

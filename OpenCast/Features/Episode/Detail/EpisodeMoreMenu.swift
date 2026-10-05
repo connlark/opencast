@@ -104,6 +104,12 @@ struct EpisodeMoreMenu: View {
                     Button("Resume Remote Transcript", systemImage: "play.circle", action: resumeRemoteTranscript)
                 }
                 Button("Cancel Remote Transcript", systemImage: "xmark.circle", action: cancelRemoteTranscript)
+            } else if RemoteTranscriptionStatusPresentation.make(
+                phase: appModel.remoteTranscription.store.phase(for: episode.episodeID)
+            )?.offersRetry == true {
+                // The status card's Try Again: re-runs the same reference
+                // where one is kept.
+                Button("Retry Remote Transcript", systemImage: "arrow.clockwise", action: resumeRemoteTranscript)
             } else {
                 // Disabled while a cloud detect pass owns this episode — it
                 // already delivers the transcript when it lands.
@@ -171,7 +177,7 @@ struct EpisodeMoreMenu: View {
     }
 
     private func resumeRemoteTranscript() {
-        switch appModel.remoteTranscription.resume(episode: episode, modelContext: modelContext) {
+        switch appModel.resumeRemoteTranscription(episode: episode, modelContext: modelContext) {
         case .started:
             break
         case .rejected(let message):

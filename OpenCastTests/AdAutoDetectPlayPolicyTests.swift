@@ -22,7 +22,9 @@ struct AdAutoDetectPlayPolicyTests {
             (true, false, .queued(ahead: 0), false),
             (true, false, .running, false),
             (true, false, .completed(zoneCount: 2), false),
-            (true, false, .capDeferred, false)
+            (true, false, .capDeferred, false),
+            // A parked cloud item still owns its server job.
+            (true, false, .remoteParked(.connectionLost), false)
         ]
 
         for (isEnabled, hasAnalysis, status, expected) in cases {

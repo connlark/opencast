@@ -22,6 +22,7 @@ final class EpisodeAdFreePassBackgroundSession {
     @ObservationIgnored private let scheduler: any AdFreePassContinuedTaskScheduling
     @ObservationIgnored private let forceForegroundOnly: @MainActor () -> Bool
     private var state: State = .idle
+    private var submittedRequiresGPU = false
     private var hasRegisteredLaunchHandler = false
     private var handle: (any AdFreePassContinuedTaskHandle)?
     private var mapper = AdFreePassQueueProgressMapper()
@@ -65,8 +66,15 @@ final class EpisodeAdFreePassBackgroundSession {
         state == .submitted || state == .running
     }
 
+    /// A cloud-first drain or GPU submission fallback can hold a card
+    /// without GPU even on a platform that normally selects GPU compute.
+    var requiresNonGPUCompute: Bool {
+        isArmed && scheduler.supportsGPUResources && !submittedRequiresGPU
+    }
+
     func arm(
         episodeTitle: String,
+        requiresGPU: Bool = true,
         cancellationSource: AdFreePassCancellationSource = AdFreePassCancellationSource()
     ) {
         guard canStartNewRun else {
@@ -82,7 +90,7 @@ final class EpisodeAdFreePassBackgroundSession {
         self.cancellationSource = cancellationSource
         runSequence += 1
         let subtitle = Self.truncatedTitleText(episodeTitle)
-        AdFreePassBackgroundRunLog.record("arm episodeTitle=\(episodeTitle) subtitle=\(subtitle)")
+        AdFreePassBackgroundRunLog.record("arm episodeTitle=\(episodeTitle) subtitle=\(subtitle) requiresGPU=\(requiresGPU)")
         AdFreePassBackgroundEnvironmentSnapshot.record(reason: "arm")
         guard !forceForegroundOnly() else {
             state = .foregroundOnly
@@ -97,7 +105,7 @@ final class EpisodeAdFreePassBackgroundSession {
 
         do {
             cancelSubmittedRequest(reason: "pre-submit")
-            try submitRequest(subtitle: subtitle, requiresGPU: scheduler.supportsGPUResources)
+            try submitRequest(subtitle: subtitle, requiresGPU: requiresGPU && scheduler.supportsGPUResources)
             state = .submitted
             Self.logger.log("submitted continued processing task")
         } catch {
@@ -118,6 +126,7 @@ final class EpisodeAdFreePassBackgroundSession {
                 requiresGPU: requiresGPU
             )
             AdFreePassBackgroundRunLog.record("submit success identifier=\(Self.identifier) gpu=\(requiresGPU)")
+            submittedRequiresGPU = requiresGPU
         } catch {
             guard requiresGPU else {
                 throw error
@@ -132,6 +141,7 @@ final class EpisodeAdFreePassBackgroundSession {
                 requiresGPU: false
             )
             AdFreePassBackgroundRunLog.record("submit success identifier=\(Self.identifier) gpu=false afterGPURetry=true")
+            submittedRequiresGPU = false
         }
     }
 
@@ -318,7 +328,7 @@ final class EpisodeAdFreePassBackgroundSession {
         case .capDeferred:
             handle.updateTitle(title(for: queueContext), subtitle: Self.capDeferredSubtitle)
             complete(handle, success: false)
-        case .interrupted:
+        case .interrupted, .remoteParked, .cloudUserCancelled:
             complete(handle, success: false)
         }
         resetRunState(keepsForegroundOnly: false)
@@ -416,6 +426,7 @@ final class EpisodeAdFreePassBackgroundSession {
             runSequence += 1
         }
         handle = nil
+        submittedRequiresGPU = false
         mapper.reset()
         stage = .idle
         queueContext = AdFreePassQueueContext()
@@ -452,12 +463,13 @@ final class EpisodeAdFreePassBackgroundSession {
 private extension EpisodeAdFreePassStage {
     var creepsBackgroundProgress: Bool {
         switch self {
-        case .downloadingEpisode, .analyzing, .transcribing:
+        case .downloadingEpisode, .analyzing, .transcribing,
+             .cloudQueued, .cloudTranscribing, .cloudDetectingAds:
+            // A server phase can hold one poll state for minutes; the creep
+            // keeps the system from reading the card as stalled.
             true
         case .idle, .awaitingModelDownloadConsent, .installingModel, .installingSpeechAssets,
-             .cloudQueued, .cloudTranscribing, .cloudDetectingAds, .cloudUnavailable,
-             .completed, .interrupted, .failed, .unavailable:
-            // Cloud stages never run under the background session at all.
+             .cloudUnavailable, .cloudParked, .completed, .interrupted, .failed, .unavailable:
             false
         }
     }
@@ -520,6 +532,8 @@ private extension EpisodeAdFreePassPresentation {
             self = .cloudDetectingAds
         case .cloudUnavailable(let message):
             self = .cloudUnavailable(message)
+        case .cloudParked(let reason):
+            self = .remoteParked(reason)
         case .completed(let zoneCount):
             self = .completed(zoneCount: zoneCount)
         case .interrupted:

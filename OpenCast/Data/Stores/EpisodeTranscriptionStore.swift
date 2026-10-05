@@ -201,6 +201,20 @@ final class EpisodeTranscriptionStore {
         return try? fileStore.read(relativePath: relativePath)
     }
 
+    /// The persisted transcript a remote job produced, when the episode's
+    /// transcript carries that job's provenance token. Import is idempotent
+    /// by the token, so this is how a re-attach recognizes its own result
+    /// after a death following import or ack.
+    func importedRemoteDocument(jobID: String, for episodeID: String) -> EpisodeTranscriptDocument? {
+        guard record(for: episodeID)?.engineProvenance == .remoteWhisper,
+              let document = document(for: episodeID),
+              document.remoteJobProvenanceToken == jobID
+        else {
+            return nil
+        }
+        return document
+    }
+
     func hasCompletedTranscript(for episodeID: String) -> Bool {
         guard let record = record(for: episodeID), record.state == .completed else {
             return false

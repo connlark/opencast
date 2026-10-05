@@ -105,7 +105,7 @@ final class DownloadCleanupCoordinator {
             }
 
             switch adFreePass.queueStatus(for: record.episodeID) {
-            case .queued, .running, .capDeferred:
+            case .queued, .running, .capDeferred, .remoteParked:
                 return false
             case .notQueued, .completed, .failed, .cloudUnavailable:
                 return true

@@ -87,6 +87,8 @@ extension EpisodeAdFreePassStage {
             "cloudDetectingAds"
         case .cloudUnavailable(let message):
             "cloudUnavailable message=\(message)"
+        case .cloudParked(let reason):
+            "cloudParked reason=\(reason.rawValue)"
         case .completed(let zoneCount):
             "completed zoneCount=\(zoneCount)"
         case .interrupted:
@@ -123,6 +125,8 @@ extension EpisodeAdFreePassStage {
             "cloudDetectingAds"
         case .cloudUnavailable:
             "cloudUnavailable"
+        case .cloudParked:
+            "cloudParked"
         case .completed:
             "completed"
         case .interrupted:

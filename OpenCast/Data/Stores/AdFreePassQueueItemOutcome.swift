@@ -11,6 +11,10 @@ struct AdFreePassQueueItemOutcome: Identifiable, Equatable {
     let episodeTitle: String
     let artworkURL: String?
     let kind: Kind
+    /// Who delivers this item's completion. A cloud item copies the owner
+    /// its remote job run snapshotted before the reference was cleared;
+    /// on-device items, and cloud items that never reached a run, are local.
+    let completionDeliveryOwner: JobCompletionDeliveryOwner
 
     var id: String {
         episodeID

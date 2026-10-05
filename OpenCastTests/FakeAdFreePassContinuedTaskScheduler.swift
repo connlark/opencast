@@ -55,6 +55,9 @@ final class FakeAdFreePassContinuedTaskHandle: AdFreePassContinuedTaskHandle {
     let progress = Progress(totalUnitCount: 0)
     private(set) var titleUpdates: [(title: String, subtitle: String)] = []
     private(set) var completions: [Bool] = []
+    /// Observes each completion as it lands, so a test can check what the
+    /// app had already done by the time the system task ended.
+    var onCompleted: ((Bool) -> Void)?
     private var expirationHandler: (@Sendable () -> Void)?
 
     func updateTitle(_ title: String, subtitle: String) {
@@ -63,6 +66,7 @@ final class FakeAdFreePassContinuedTaskHandle: AdFreePassContinuedTaskHandle {
 
     func setTaskCompleted(success: Bool) {
         completions.append(success)
+        onCompleted?(success)
     }
 
     func setExpirationHandler(_ handler: @escaping @Sendable () -> Void) {

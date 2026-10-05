@@ -8,6 +8,7 @@
 	<array>
 		<string>com.connor.opencast.ad-free-pass</string>
 		<string>com.connor.opencast.transcript-generation</string>
+		<string>com.connor.opencast.remote-transcription</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>

@@ -179,21 +179,35 @@ struct AdDetectionQueuePresentationTests {
 
     // MARK: - Fixtures
 
-    @Test("Cloud items hide the background-continuation affordance while running")
-    func cloudRunningHidesBackgroundAffordance() {
-        let cloud = makePresentation(
-            state: .running,
-            activeEpisodeID: "a",
-            activeItemMode: .cloud
-        )
-        #expect(cloud.affordance == nil)
+    @Test("Cloud items offer background continuation like on-device items")
+    func cloudRunningOffersBackgroundContinuation() {
+        for mode in [AdDetectionMode.cloud, .onDevice] {
+            let unarmed = makePresentation(state: .running, activeEpisodeID: "a", activeItemMode: mode)
+            #expect(unarmed.affordance == .continueInBackground, "\(mode)")
 
-        let device = makePresentation(
-            state: .running,
-            activeEpisodeID: "a",
-            activeItemMode: .onDevice
+            let armed = makePresentation(state: .running, activeEpisodeID: "a", activeItemMode: mode, isArmed: true)
+            #expect(armed.affordance == .backgroundContinuationArmed, "\(mode)")
+        }
+    }
+
+    @Test("A parked cloud head renders as still running on the server with the queue-level Resume")
+    func parkedCloudHeadRendersRemoteParkedRow() {
+        var parked = makeItem(episodeID: "parked")
+        parked.remoteParkReason = .connectionLost
+        let presentation = makePresentation(
+            state: .pausedInterrupted,
+            pendingItems: [parked, makeItem(episodeID: "behind")]
         )
-        #expect(device.affordance == .continueInBackground)
+
+        #expect(presentation.indicator == .paused(hasFailures: false))
+        #expect(presentation.affordance == .resumeInterrupted)
+        #expect(presentation.rows.map(\.status) == [.remoteParked(.connectionLost), .queued(ahead: 1)])
+        #expect(presentation.rows[0].statusText == RemoteTranscriptionStatusPresentation.parkedTitle)
+        #expect(presentation.rows[0].statusText != EpisodeAdFreePassPresentation.interrupted.statusText)
+        #expect(
+            AdDetectionQueuePresentation.statusText(for: .cloudParked(.parked))
+                == RemoteTranscriptionStatusPresentation.parkedTitle
+        )
     }
 
     @Test("Cloud stages render their own status text")
@@ -225,7 +239,8 @@ struct AdDetectionQueuePresentationTests {
                 episodeID: "a",
                 episodeTitle: "Episode a",
                 artworkURL: nil,
-                kind: .cloudUnavailable(message: "Cloud detection is off.")
+                kind: .cloudUnavailable(message: "Cloud detection is off."),
+                completionDeliveryOwner: .local
             )]
         )
         #expect(presentation.finishedRows.count == 1)
@@ -300,7 +315,8 @@ struct AdDetectionQueuePresentationTests {
             episodeID: episodeID,
             episodeTitle: "Episode \(episodeID)",
             artworkURL: nil,
-            kind: .completed(zoneCount: zoneCount)
+            kind: .completed(zoneCount: zoneCount),
+            completionDeliveryOwner: .local
         )
     }
 
@@ -309,7 +325,8 @@ struct AdDetectionQueuePresentationTests {
             episodeID: episodeID,
             episodeTitle: "Episode \(episodeID)",
             artworkURL: nil,
-            kind: .failed(message: message)
+            kind: .failed(message: message),
+            completionDeliveryOwner: .local
         )
     }
 }

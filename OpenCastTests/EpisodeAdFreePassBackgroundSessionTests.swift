@@ -51,6 +51,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
 
         #expect(gpuScheduler.submittedGPUFlags == [true])
         #expect(gpuSession.isArmed)
+        #expect(!gpuSession.requiresNonGPUCompute)
 
         let pinnedScheduler = FakeAdFreePassContinuedTaskScheduler()
         let pinnedSession = EpisodeAdFreePassBackgroundSession(scheduler: pinnedScheduler)
@@ -59,6 +60,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
 
         #expect(pinnedScheduler.submittedGPUFlags == [false])
         #expect(pinnedSession.isArmed)
+        #expect(!pinnedSession.requiresNonGPUCompute)
     }
 
     @Test("A failed GPU submission retries once without GPU before arming")
@@ -74,6 +76,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         session.noteStage(.analyzing)
 
         #expect(scheduler.submittedGPUFlags == [true, false])
+        #expect(session.requiresNonGPUCompute)
         #expect(session.isProtectingBackgroundExecution)
         #expect(handle.titleUpdates.last?.subtitle == "Analyzing promos and ads...")
     }
@@ -89,6 +92,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         session.noteStage(.analyzing)
 
         #expect(scheduler.submittedGPUFlags == [true, false])
+        #expect(!session.requiresNonGPUCompute)
         #expect(!session.isArmed)
         #expect(!session.isProtectingBackgroundExecution)
     }
@@ -139,6 +143,35 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         #expect(handle.progress.completedUnitCount == 910)
         #expect(handle.titleUpdates.last?.subtitle == "Analyzing promos and ads...")
         #expect(handle.titleUpdates.last?.title == "Skip Promos & Ads")
+    }
+
+    @Test("Cloud stages submit without GPU, stay monotonic, and creep while the server works")
+    func cloudStagesSubmitWithoutGPUAndCreep() async {
+        let scheduler = FakeAdFreePassContinuedTaskScheduler()
+        scheduler.supportsGPUResources = true
+        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
+        let handle = FakeAdFreePassContinuedTaskHandle()
+
+        session.arm(episodeTitle: "Cloud Episode", requiresGPU: false)
+        #expect(scheduler.submittedGPUFlags == [false])
+        scheduler.launch(handle)
+
+        session.noteStage(.cloudQueued)
+        #expect(handle.progress.completedUnitCount == 20)
+        session.noteStage(.cloudTranscribing(nil))
+        #expect(handle.progress.completedUnitCount == 250)
+        session.noteStage(.cloudDetectingAds)
+        #expect(handle.progress.completedUnitCount == 910)
+        #expect(handle.titleUpdates.last?.subtitle == EpisodeAdFreePassPresentation.cloudDetectingAds.statusText)
+
+        // A server phase can hold one poll state for minutes; the creep (one
+        // tick every 2 s) keeps the system from reading the card as stalled.
+        // The 10 s budget is several ticks.
+        #expect(await waitUntil(timeout: .seconds(10)) { handle.progress.completedUnitCount > 910 })
+        let crept = handle.progress.completedUnitCount
+        session.noteStage(.cloudTranscribing(nil))
+        #expect(handle.progress.completedUnitCount >= crept)
+        #expect(handle.completions.isEmpty)
     }
 
     @Test("One submission covers a whole queue drain with per-episode title updates")
@@ -230,6 +263,9 @@ struct EpisodeAdFreePassBackgroundSessionTests {
             (.drained(completedCount: 1, failedCount: 2), true),
             (.drained(completedCount: 0, failedCount: 2), false),
             (.interrupted, false),
+            (.remoteParked(.parked), false),
+            (.remoteParked(.connectionLost), false),
+            (.cloudUserCancelled, false),
             (.awaitingConsent, false),
             (.capDeferred, false)
         ]

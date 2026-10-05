@@ -24,19 +24,22 @@ enum UITestAdFreePassNotificationLookFixtureScheduler {
                         episodeID: "adfreepass-look-fixture-episode-1",
                         episodeTitle: "866: Very Nice",
                         artworkURL: nil,
-                        kind: .completed(zoneCount: 4)
+                        kind: .completed(zoneCount: 4),
+                        completionDeliveryOwner: .local
                     ),
                     AdFreePassQueueItemOutcome(
                         episodeID: "adfreepass-look-fixture-episode-2",
                         episodeTitle: "867: A Small Fortune",
                         artworkURL: nil,
-                        kind: .completed(zoneCount: 3)
+                        kind: .completed(zoneCount: 3),
+                        completionDeliveryOwner: .local
                     ),
                     AdFreePassQueueItemOutcome(
                         episodeID: "adfreepass-look-fixture-episode-3",
                         episodeTitle: "868: Off Course",
                         artworkURL: nil,
-                        kind: .failed(message: "Download failed.")
+                        kind: .failed(message: "Download failed."),
+                        completionDeliveryOwner: .local
                     ),
                 ]
             ) else {

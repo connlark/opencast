@@ -22,8 +22,8 @@ struct AppIconOptionTests {
     func primaryOptionIsBundlePrimaryIcon() throws {
         let primaryIcon = try #require(bundleIcons["CFBundlePrimaryIcon"] as? [String: Any])
 
-        #expect(primaryIcon["CFBundleIconName"] as? String == AppIconOption.ember.rawValue)
-        #expect(AppIconOption.ember.alternateIconName == nil)
+        #expect(primaryIcon["CFBundleIconName"] as? String == AppIconOption.primary.rawValue)
+        #expect(AppIconOption.primary.alternateIconName == nil)
     }
 
     @Test("Stored names map back to options, unknown names to the primary")
@@ -35,34 +35,16 @@ struct AppIconOptionTests {
         }
     }
 
-    @Test("Each family lists every colourway once, in the same order")
-    func familiesShareColourwayOrder() {
-        let classic = AppIconOption.options(in: .classic)
-        let glass = AppIconOption.options(in: .glass)
-
-        #expect(classic.map(\.title) == glass.map(\.title))
-        #expect(Set(classic.map(\.title)).count == classic.count)
-        #expect(classic.count + glass.count == AppIconOption.allCases.count)
-        #expect(AppIconOption.allCases.count == 24)
-    }
-
-    @Test("Qualified titles are unique and glass ones carry the family prefix")
-    func qualifiedTitlesAreUniqueAndPrefixed() {
-        let qualifiedTitles = AppIconOption.allCases.map(\.qualifiedTitle)
-
-        #expect(Set(qualifiedTitles).count == qualifiedTitles.count)
-        for option in AppIconOption.options(in: .classic) {
-            #expect(option.qualifiedTitle == option.title)
-        }
-        for option in AppIconOption.options(in: .glass) {
-            #expect(option.qualifiedTitle == "Glass \(option.title)")
-        }
-    }
-
-    @Test("Glass bundle names follow AppIconGlass<Title>")
-    func glassBundleNamesFollowTitle() {
-        for option in AppIconOption.options(in: .glass) {
-            #expect(option.rawValue == "AppIconGlass\(option.title)")
+    @Test("The roster has unique titles and bundle names in picker order")
+    func rosterMatchesTitles() {
+        let options = AppIconOption.allCases
+        #expect(Set(options.map(\.title)).count == options.count)
+        #expect(options.count == 12)
+        #expect(options.first == .ember)
+        #expect(options[1] == .ocean)
+        #expect(options[2] == .oceanLight)
+        for option in options where option != .primary {
+            #expect(option.rawValue == "AppIcon" + option.title.replacing(" ", with: ""))
             #expect(option.alternateIconName == option.rawValue)
         }
     }

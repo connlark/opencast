@@ -403,7 +403,7 @@ struct EpisodeDetailView: View {
     /// Resume and Try Again both re-attach the persisted reference; only a
     /// conclusively cleared reference starts a fresh job.
     private func resumeRemoteTranscript(_ episode: EpisodeListItemSnapshot) {
-        switch appModel.remoteTranscription.resume(episode: episode, modelContext: modelContext) {
+        switch appModel.resumeRemoteTranscription(episode: episode, modelContext: modelContext) {
         case .started:
             break
         case .rejected(let message):

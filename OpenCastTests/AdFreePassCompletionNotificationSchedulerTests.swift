@@ -1,3 +1,4 @@
+import Foundation
 import UserNotifications
 import Testing
 @testable import OpenCast
@@ -10,7 +11,7 @@ struct AdFreePassCompletionNotificationSchedulerTests {
         let center = FakeAdFreePassNotificationCenter()
         let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
 
-        await scheduler.scheduleIfNeeded(
+        let decision = await scheduler.scheduleIfNeeded(
             terminal: .drained(completedCount: 1, failedCount: 1),
             outcomes: [
                 completedOutcome(episodeID: "a", zoneCount: 3),
@@ -19,6 +20,7 @@ struct AdFreePassCompletionNotificationSchedulerTests {
             isSceneActive: false
         )
 
+        #expect(decision == .scheduled)
         let request = try #require(center.addedRequests.first)
         #expect(center.addedRequests.count == 1)
         #expect(request.content.title == "Found 3 ad breaks in 1 episode")
@@ -40,12 +42,13 @@ struct AdFreePassCompletionNotificationSchedulerTests {
         let center = FakeAdFreePassNotificationCenter()
         let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
 
-        await scheduler.scheduleIfNeeded(
+        let decision = await scheduler.scheduleIfNeeded(
             terminal: .drained(completedCount: 1, failedCount: 0),
             outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)],
             isSceneActive: true
         )
 
+        #expect(decision == .suppressed(.sceneActive))
         #expect(center.addedRequests.isEmpty)
         #expect(center.authorizationStatusReadCount == 0)
     }
@@ -63,13 +66,15 @@ struct AdFreePassCompletionNotificationSchedulerTests {
             center.authorizationStatusValue = status
             let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
 
-            await scheduler.scheduleIfNeeded(
+            let decision = await scheduler.scheduleIfNeeded(
                 terminal: .drained(completedCount: 1, failedCount: 0),
                 outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)],
                 isSceneActive: false
             )
 
             #expect(center.addedRequests.count == (expectsDelivery ? 1 : 0), "status \(status)")
+            let expected: CompletionDeliveryDecision = expectsDelivery ? .scheduled : .suppressed(.unauthorized)
+            #expect(decision == expected, "status \(status)")
         }
     }
 
@@ -79,17 +84,19 @@ struct AdFreePassCompletionNotificationSchedulerTests {
         let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
 
         for terminal in [AdFreePassQueueTerminalOutcome.capDeferred, .awaitingConsent] {
-            await scheduler.scheduleIfNeeded(
+            let decision = await scheduler.scheduleIfNeeded(
                 terminal: terminal,
                 outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)],
                 isSceneActive: false
             )
+            #expect(decision == .suppressed(.silentOutcome), "terminal \(terminal)")
         }
 
         #expect(center.addedRequests.isEmpty)
+        #expect(center.authorizationStatusReadCount == 0)
     }
 
-    @Test("Interrupted terminals schedule the paused notification")
+    @Test("On-device interrupted terminals schedule the device-paused notification")
     func interruptedTerminalSchedulesPausedNotification() async throws {
         let center = FakeAdFreePassNotificationCenter()
         let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
@@ -106,14 +113,80 @@ struct AdFreePassCompletionNotificationSchedulerTests {
         #expect(request.content.body.contains("pick up where it left off"))
     }
 
+    @Test("An expiration park of a cloud item posts the server-still-working copy on the pinned category and thread, for either owner")
+    func cloudParkSchedulesServerStillWorkingCopy() async throws {
+        let center = FakeAdFreePassNotificationCenter()
+        let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
+
+        let decision = await scheduler.scheduleIfNeeded(
+            terminal: .remoteParked(.parked),
+            outcomes: [completedOutcome(episodeID: "a", zoneCount: 2, owner: .remote)],
+            isSceneActive: false
+        )
+
+        #expect(decision == .scheduled)
+        let request = try #require(center.addedRequests.first)
+        #expect(center.addedRequests.count == 1)
+        #expect(request.content.title == "Still running on the server")
+        #expect(request.content.body == RemoteTranscriptionStatusPresentation.parkedDetail(for: .parked))
+        #expect(request.content.categoryIdentifier == OpenCastNotificationCategory.adFreePass)
+        #expect(request.content.threadIdentifier == AdFreePassCompletionNotificationScheduler.threadIdentifier)
+        let payload = request.content.userInfo["opencast"] as? [String: Any]
+        #expect(payload?["kind"] as? String == "ad-free-pass")
+    }
+
+    @Test("Silent cloud terminals and an all-remote drain never read authorization or reach add")
+    func silentCloudTerminalsNeverReachAdd() async {
+        let center = FakeAdFreePassNotificationCenter()
+        let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
+
+        for (terminal, outcomes) in [
+            (AdFreePassQueueTerminalOutcome.remoteParked(.connectionLost), [AdFreePassQueueItemOutcome]()),
+            (.remoteParked(.localRequestFailed), []),
+            (.cloudUserCancelled, []),
+            (.drained(completedCount: 1, failedCount: 0), [completedOutcome(episodeID: "a", zoneCount: 2, owner: .remote)]),
+        ] {
+            let decision = await scheduler.scheduleIfNeeded(
+                terminal: terminal,
+                outcomes: outcomes,
+                isSceneActive: false
+            )
+            #expect(decision == .suppressed(.silentOutcome), "terminal \(terminal)")
+        }
+
+        #expect(center.addedRequests.isEmpty)
+        #expect(center.authorizationStatusReadCount == 0)
+    }
+
+    @Test("A refused add reports the failure instead of a scheduled notification")
+    func refusedAddReportsFailure() async {
+        let center = FakeAdFreePassNotificationCenter()
+        center.addError = CocoaError(.featureUnsupported)
+        let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
+
+        let decision = await scheduler.scheduleIfNeeded(
+            terminal: .drained(completedCount: 1, failedCount: 0),
+            outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)],
+            isSceneActive: false
+        )
+
+        #expect(decision == .addFailed)
+        #expect(center.addedRequests.isEmpty)
+    }
+
     // MARK: - Fixtures
 
-    private func completedOutcome(episodeID: String, zoneCount: Int) -> AdFreePassQueueItemOutcome {
+    private func completedOutcome(
+        episodeID: String,
+        zoneCount: Int,
+        owner: JobCompletionDeliveryOwner = .local
+    ) -> AdFreePassQueueItemOutcome {
         AdFreePassQueueItemOutcome(
             episodeID: episodeID,
             episodeTitle: "Episode \(episodeID)",
             artworkURL: nil,
-            kind: .completed(zoneCount: zoneCount)
+            kind: .completed(zoneCount: zoneCount),
+            completionDeliveryOwner: owner
         )
     }
 
@@ -122,7 +195,8 @@ struct AdFreePassCompletionNotificationSchedulerTests {
             episodeID: episodeID,
             episodeTitle: "Episode \(episodeID)",
             artworkURL: nil,
-            kind: .failed(message: "Download failed.")
+            kind: .failed(message: "Download failed."),
+            completionDeliveryOwner: .local
         )
     }
 }

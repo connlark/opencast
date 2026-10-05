@@ -36,6 +36,11 @@ const CONTROLS:&str="EXISTS(SELECT 1 FROM n_control WHERE name='dispatcher_admis
 // All lateness readers use this predicate, including origin cooldowns.
 pub(super) const HEALTHY: &str = "f.poll_failures=0 AND f.handling_failures=0 AND f.retry_at<=?1 AND NOT EXISTS(SELECT 1 FROM n_poll_origin h WHERE h.origin_key=f.origin_key AND h.cooldown_until>?1)";
 
+/// Shared by dispatch, stats and the independent watchdog. `?1` is now.
+pub(super) fn late_scanned(seconds: i64) -> String {
+    format!("{ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NOT NULL AND f.due_at<?1-{seconds}")
+}
+
 /// Canonical URLs have normalized scheme/host/port and no userinfo or fragment.
 /// A root URL may have no slash, or a query immediately after the authority.
 /// Group by that authority even before the first reservation stores origin_key.
@@ -108,7 +113,8 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
     let maintenance = maintenance.iter().map(record).collect::<Result<Vec<_>>>()?;
     let maintained = reserve(env, &db, &maintenance, t, false, false).await?;
     // The one-minute cost/lag rollup: no per-poll diagnostic rows exist.
-    let mut rollup = first(&db,&format!("SELECT (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1) AS overdue,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS healthy_overdue,(SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS oldest_due_seconds,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NOT NULL AND f.due_at<?1-600) AS late_600,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NULL AND f.due_at<?1-600) AS late_baselines,(SELECT COUNT(*) FROM n_feed f WHERE f.dispatch_until>?1) AS in_flight,(SELECT COUNT(*) FROM n_feed f WHERE {base}) AS admission_deferred,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome IN('not_modified','unchanged')) AS unchanged_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome='published') AS published_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome NOT IN('not_modified','unchanged','published')) AS failed_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-300 AND f.last_poll_outcome IN('not_modified','unchanged','published')) AS completed_last_5min"),&[json!(t)]).await?.unwrap_or_else(|| json!({}));
+    let late = late_scanned(600);
+    let mut rollup = first(&db,&format!("SELECT (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1) AS overdue,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS healthy_overdue,(SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS oldest_due_seconds,(SELECT COUNT(*) FROM n_feed f WHERE {late}) AS late_600,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NULL AND f.due_at<?1-600) AS late_baselines,(SELECT COUNT(*) FROM n_feed f WHERE f.dispatch_until>?1) AS in_flight,(SELECT COUNT(*) FROM n_feed f WHERE {base}) AS admission_deferred,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome IN('not_modified','unchanged')) AS unchanged_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome='published') AS published_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome NOT IN('not_modified','unchanged','published')) AS failed_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-300 AND f.last_poll_outcome IN('not_modified','unchanged','published')) AS completed_last_5min"),&[json!(t)]).await?.unwrap_or_else(|| json!({}));
     rollup["outstanding"] = rollup["in_flight"].clone();
     rollup["repairs"] = json!(repaired);
     rollup["admitted"] = json!(polls);
@@ -124,13 +130,13 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
 /// The operator alert webhook. The endpoint is deployment configuration, not
 /// source: alerting is on only when all three secrets are set, and a
 /// non-HTTPS URL is refused so the bearer credential never travels in clear.
-struct AlertTarget {
+pub(super) struct AlertTarget {
     url: String,
     credential: String,
     recipient: String,
 }
 
-fn alert_target(env: &Env) -> Option<AlertTarget> {
+pub(super) fn alert_target(env: &Env) -> Option<AlertTarget> {
     let secret = |name: &str| {
         env.secret(name)
             .ok()
@@ -153,7 +159,12 @@ fn alert_target(env: &Env) -> Option<AlertTarget> {
 }
 
 #[derive(Clone, Copy)]
-enum AlertDraft<'a> {
+pub(super) enum AlertDraft<'a> {
+    Watchdog {
+        lane: &'a str,
+        bucket: i64,
+        late: Option<i64>,
+    },
     Armed {
         lane: &'a str,
     },
@@ -184,6 +195,7 @@ enum AlertDraft<'a> {
 impl AlertDraft<'_> {
     fn idempotency_key(self) -> String {
         match self {
+            Self::Watchdog { lane, bucket, .. } => format!("feed-polling-watchdog-{lane}-{bucket}"),
             Self::Armed { lane } => format!("feed-polling-alerts-armed-{lane}"),
             Self::Onset {
                 lane, stall_since, ..
@@ -201,6 +213,8 @@ impl AlertDraft<'_> {
     }
     fn body(self) -> String {
         match self {
+            Self::Watchdog { lane, late: Some(late), .. } => format!("Feed polling watchdog ({lane}): {late} healthy scanned feeds are over 15 minutes late while the dispatcher stall state is clear."),
+            Self::Watchdog { lane, late: None, .. } => format!("Feed polling watchdog ({lane}) could not read polling health within 10 seconds. Check the dispatcher and database."),
             Self::Armed { lane } => format!("Feed polling alerts are armed for {lane}."),
             Self::Onset { lane, healthy_overdue, late_600, in_flight, oldest_due_seconds, .. } | Self::Hourly { lane, healthy_overdue, late_600, in_flight, oldest_due_seconds, .. } => format!("Feed polling is late or stalled ({lane}). Healthy overdue: {healthy_overdue}; late_600: {late_600}; oldest healthy overdue: {oldest_due_seconds}s; in flight: {in_flight}."),
             Self::Recovery { lane, stall_since, completions } => format!("Feed polling recovered for {lane} after {}s; {completions} completions in 5 min.", now().saturating_sub(stall_since)),
@@ -208,6 +222,13 @@ impl AlertDraft<'_> {
     }
     fn payload(self) -> Value {
         let (title, interruption_level, expiration, priority, collapse_id) = match self {
+            Self::Watchdog { lane, .. } => (
+                format!("Feed polling watchdog ({lane})"),
+                "time_sensitive",
+                "one_hour",
+                "immediate",
+                json!("feed-polling-watchdog"),
+            ),
             Self::Armed { lane } => (
                 format!("Feed polling alerts armed ({lane})"),
                 "passive",
@@ -234,7 +255,7 @@ impl AlertDraft<'_> {
     }
 }
 
-async fn send_alert(target: &AlertTarget, draft: AlertDraft<'_>) -> Result<bool> {
+pub(super) async fn send_alert(target: &AlertTarget, draft: AlertDraft<'_>) -> Result<bool> {
     let envelope = json!({"recipient":target.recipient,"draft":draft.payload()});
     let headers = Headers::new();
     headers.set("authorization", &format!("Bearer {}", target.credential))?;
@@ -498,12 +519,13 @@ pub async fn stats(env: &Env, db: &D1Database) -> Result<Value> {
     let t = now();
     let cooling = "EXISTS(SELECT 1 FROM n_poll_origin h WHERE h.origin_key=f.origin_key AND h.cooldown_until>?1)";
     let healthy = HEALTHY;
+    let late = late_scanned(600);
     let eligible = format!("{ELIGIBLE} AND f.due_at<=?1");
     let mut value = first(db,&format!("SELECT
         (SELECT COUNT(*) FROM n_feed f WHERE {eligible}) AS overdue,
         (SELECT COUNT(*) FROM n_feed f WHERE {eligible} AND {healthy}) AS healthy_overdue,
         (SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {eligible} AND {healthy}) AS oldest_due_seconds,
-        (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {healthy} AND f.snapshot_key IS NOT NULL AND f.due_at<?1-600) AS late_600,
+        (SELECT COUNT(*) FROM n_feed f WHERE {late}) AS late_600,
         (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {healthy} AND f.snapshot_key IS NULL AND f.due_at<?1-600) AS late_baselines,
         (SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {eligible} AND NOT({healthy})) AS oldest_unhealthy_due_seconds,
         (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.handling_failures=0 AND (f.poll_failures>0 OR f.retry_at>?1 OR {cooling})) AS publisher_backoff,

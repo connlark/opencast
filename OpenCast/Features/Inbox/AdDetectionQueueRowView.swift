@@ -61,6 +61,9 @@ struct AdDetectionQueueRowView: View {
         case .cloudUnavailable:
             Image(systemName: "icloud.slash")
                 .foregroundStyle(.orange)
+        case .remoteParked:
+            Image(systemName: "icloud")
+                .foregroundStyle(.secondary)
         }
     }
 }

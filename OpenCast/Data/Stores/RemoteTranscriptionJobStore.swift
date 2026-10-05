@@ -121,6 +121,17 @@ final class RemoteTranscriptionJobStore {
         references().first { $0.episodeID == episodeID && $0.resolvedPurpose == purpose }
     }
 
+    /// The completion-delivery owner a run of this reference snapshots: the
+    /// persisted owner, or `local` for a reference the run has yet to mint.
+    /// Read before a run starts, because a terminal failure clears the
+    /// reference before its error reaches the caller.
+    func completionDeliveryOwner(
+        for episodeID: String,
+        purpose: RemoteTranscriptionJobPurpose = .transcription
+    ) -> JobCompletionDeliveryOwner {
+        existingReference(for: episodeID, purpose: purpose)?.completionDeliveryOwner ?? .local
+    }
+
     /// Persisted immediately before a create request can leave the process.
     /// The create state only moves forward, so an attached reference is left
     /// alone.
@@ -188,15 +199,17 @@ final class RemoteTranscriptionJobStore {
         for episodeID: String,
         purpose: RemoteTranscriptionJobPurpose = .transcription
     ) {
-        var all = references()
-        guard let index = all.firstIndex(where: {
-            $0.episodeID == episodeID && $0.resolvedPurpose == purpose
-        }) else {
-            return
-        }
-        let removed = all.remove(at: index)
-        write(all)
-        record(.referenceCleared, reference: removed, disposition: .cleared)
+        removeReference(for: episodeID, purpose: purpose, kind: .referenceCleared, disposition: .cleared)
+    }
+
+    /// Housekeeping for a reference older than the recovery window: the
+    /// server has expired its unacknowledged result by then, so nothing is
+    /// left to re-attach. Nothing is minted in its place.
+    func expireReference(
+        for episodeID: String,
+        purpose: RemoteTranscriptionJobPurpose
+    ) {
+        removeReference(for: episodeID, purpose: purpose, kind: .housekeepingExpired, disposition: .expired)
     }
 
     func references() -> [RemoteTranscriptionJobReference] {
@@ -224,6 +237,23 @@ final class RemoteTranscriptionJobStore {
         transform(&all[index])
         write(all)
         return all[index]
+    }
+
+    private func removeReference(
+        for episodeID: String,
+        purpose: RemoteTranscriptionJobPurpose,
+        kind: RemoteJobDiagnosticEvent.Kind,
+        disposition: RemoteJobDiagnosticEvent.Disposition
+    ) {
+        var all = references()
+        guard let index = all.firstIndex(where: {
+            $0.episodeID == episodeID && $0.resolvedPurpose == purpose
+        }) else {
+            return
+        }
+        let removed = all.remove(at: index)
+        write(all)
+        record(kind, reference: removed, disposition: disposition)
     }
 
     private func persist(_ reference: RemoteTranscriptionJobReference) {

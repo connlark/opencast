@@ -249,7 +249,10 @@ final class RemoteTranscriptionJobRunner {
                 try await releaseUnfundedReservation(trail: trail)
             }
             if finalStatus.state == .acknowledged {
-                return try reconcileAcknowledged(trail: trail)
+                return try reconcileAcknowledged(
+                    trail: trail,
+                    completionDeliveryOwner: reference.completionDeliveryOwner
+                )
             }
             if let failure = terminalFailure(for: finalStatus) {
                 store.clearReference(for: episodeID, purpose: purpose)
@@ -300,7 +303,8 @@ final class RemoteTranscriptionJobRunner {
             return RemoteTranscriptionJobRunOutcome(
                 jobID: jobID,
                 document: document,
-                adAnalysis: resultResponse.adAnalysis
+                adAnalysis: resultResponse.adAnalysis,
+                completionDeliveryOwner: reference.completionDeliveryOwner
             )
         } catch is CancellationError {
             // Local cancellation is a park or a user cancel; neither is the
@@ -337,10 +341,13 @@ final class RemoteTranscriptionJobRunner {
     /// client request ID), sends at most one `/cancel`, and clears the
     /// reference only after that attempt is recorded. Never called from an
     /// error or task-cancellation path. Concurrent calls for the same
-    /// reference await the resolution already in flight.
+    /// reference await the resolution already in flight. `episode` lets a
+    /// recovery trigger replay a lost create after a relaunch, when this
+    /// process never built the original request.
     func cancelServerJob(
         episodeID: String,
-        purpose: RemoteTranscriptionJobPurpose
+        purpose: RemoteTranscriptionJobPurpose,
+        replaying episode: EpisodeListItemSnapshot? = nil
     ) async -> UserCancelResolution {
         let key = ReferenceKey(episodeID: episodeID, purpose: purpose)
         if let inFlight = userCancels[key] {
@@ -348,13 +355,16 @@ final class RemoteTranscriptionJobRunner {
         }
         let resolution = Task {
             defer { self.userCancels[key] = nil }
-            return await self.resolveUserCancel(key: key)
+            return await self.resolveUserCancel(key: key, replaying: episode)
         }
         userCancels[key] = resolution
         return await resolution.value
     }
 
-    private func resolveUserCancel(key: ReferenceKey) async -> UserCancelResolution {
+    private func resolveUserCancel(
+        key: ReferenceKey,
+        replaying episode: EpisodeListItemSnapshot?
+    ) async -> UserCancelResolution {
         let episodeID = key.episodeID
         let purpose = key.purpose
         guard let reference = store.existingReference(for: episodeID, purpose: purpose) else {
@@ -371,7 +381,9 @@ final class RemoteTranscriptionJobRunner {
             // The create response was lost. Replaying the same client
             // request ID attaches the existing job or creates one that is
             // cancelled before funding; it never mints a second request ID.
-            guard let request = createRequests[key] else {
+            guard let request = createRequests[key]
+                ?? replayCreateRequest(for: episode, key: key, clientRequestID: reference.clientRequestID)
+            else {
                 emit(trail, .cancelUncertain, leg: .create, disposition: .retained)
                 return .uncertain
             }
@@ -426,6 +438,37 @@ final class RemoteTranscriptionJobRunner {
             episodeTitle: adAnalysis?.episodeTitle,
             podcastTitle: adAnalysis?.podcastTitle,
             mediaProfile: OpenCastMediaRequestProfile.version
+        )
+    }
+
+    /// The same create request an earlier process sent for this reference,
+    /// rebuilt from the episode: same client request ID and, for a detect
+    /// job, the same ad-analysis context. The server maps the ID to the job
+    /// it already has.
+    private func replayCreateRequest(
+        for episode: EpisodeListItemSnapshot?,
+        key: ReferenceKey,
+        clientRequestID: String
+    ) -> OpenCastRemoteTranscriptionJobCreateRequest? {
+        guard let episode,
+              episode.episodeID == key.episodeID,
+              let enclosureURL = episode.audioURL,
+              !enclosureURL.isEmpty
+        else {
+            return nil
+        }
+        let adAnalysis = key.purpose == .adDetection
+            ? AdAnalysisContext(
+                podcastID: episode.podcastID,
+                episodeTitle: episode.title,
+                podcastTitle: episode.podcastTitle
+            )
+            : nil
+        return createRequest(
+            episode: episode,
+            enclosureURL: enclosureURL,
+            clientRequestID: clientRequestID,
+            adAnalysis: adAnalysis
         )
     }
 
@@ -564,17 +607,23 @@ final class RemoteTranscriptionJobRunner {
     /// job's provenance token). Without that provenance the server has
     /// already deleted its result, so nothing remains to fetch: the
     /// reference is cleared and the distinct outcome is the evidence.
-    private func reconcileAcknowledged(trail: RunTrail) throws -> RemoteTranscriptionJobRunOutcome {
+    private func reconcileAcknowledged(
+        trail: RunTrail,
+        completionDeliveryOwner: JobCompletionDeliveryOwner
+    ) throws -> RemoteTranscriptionJobRunOutcome {
         defer {
             createRequests[ReferenceKey(episodeID: trail.episodeID, purpose: trail.purpose)] = nil
             store.clearReference(for: trail.episodeID, purpose: trail.purpose)
         }
         if let jobID = trail.jobID,
-           transcriptions.record(for: trail.episodeID)?.engineProvenance == .remoteWhisper,
-           let document = transcriptions.document(for: trail.episodeID),
-           document.remoteJobProvenanceToken == jobID {
+           let document = transcriptions.importedRemoteDocument(jobID: jobID, for: trail.episodeID) {
             emit(trail, .acknowledged, leg: .poll, serverState: .acknowledged, disposition: .cleared)
-            return RemoteTranscriptionJobRunOutcome(jobID: jobID, document: document, adAnalysis: nil)
+            return RemoteTranscriptionJobRunOutcome(
+                jobID: jobID,
+                document: document,
+                adAnalysis: nil,
+                completionDeliveryOwner: completionDeliveryOwner
+            )
         }
         emit(trail, .acknowledgedWithoutLocalImport, leg: .poll, serverState: .acknowledged, disposition: .cleared)
         throw RemoteTranscriptionJobRunError.acknowledgedWithoutLocalImport

@@ -31,6 +31,7 @@ final class OpenCastAppModel {
     let transcriptionRequests: EpisodeTranscriptionRequestCoordinator
     let remoteTranscription: EpisodeRemoteTranscriptionCoordinator
     @ObservationIgnored private let remoteTranscriptionRunner: RemoteTranscriptionJobRunner
+    @ObservationIgnored private let remoteJobReattacher: RemoteJobReattacher
     @ObservationIgnored private let adFreePassEnqueueContext: AdFreePassEnqueueContext
     let remoteTranscriptionPurchases: RemoteTranscriptionPurchaseStore
     let adAnalyses: EpisodeAdAnalysisStore
@@ -42,6 +43,7 @@ final class OpenCastAppModel {
     let playlistDisplaySettings: PlaylistDisplaySettingsStore
     let adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession
     let transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession
+    let remoteTranscriptionBackgroundSession: EpisodeRemoteTranscriptionBackgroundSession
     let transcriptImprovement: EpisodeTranscriptImprovementCoordinator
     let playback: AVFoundationPlaybackController
     let appearanceSettings: AppearanceSettingsStore
@@ -158,6 +160,9 @@ final class OpenCastAppModel {
     @ObservationIgnored private var coreStoresLoadTask: Task<Void, Never>?
     @ObservationIgnored private var playbackDependenciesLoadTask: Task<Void, Never>?
     @ObservationIgnored private var playbackSurfaceHydrationTask: Task<Void, Never>?
+    /// The latest Transcribe Remotely delivery decision in flight; the
+    /// remote card's expiration awaits it before completing the task.
+    @ObservationIgnored private var remoteTranscriptionDeliveryTask: Task<Void, Never>?
     /// Flips in the same turn that loads the restorable episode, so the
     /// queue accessory can key off it without ever preceding a restore.
     private(set) var hasRestoredPlaybackSurface = false
@@ -199,6 +204,8 @@ final class OpenCastAppModel {
         adAnalyses: EpisodeAdAnalysisStore = EpisodeAdAnalysisStore(),
         transcriptAnalyses: EpisodeTranscriptAnalysisStore = EpisodeTranscriptAnalysisStore(),
         remoteTranscriptionPurchases: RemoteTranscriptionPurchaseStore? = nil,
+        remoteTranscriptionAPI: (any RemoteTranscriptionAPI)? = nil,
+        remoteTranscriptionJobStore: RemoteTranscriptionJobStore = RemoteTranscriptionJobStore(),
         transcriptIntelligence: TranscriptIntelligenceStore = TranscriptIntelligenceStore(),
         adFreePass: EpisodeAdFreePassCoordinator = EpisodeAdFreePassCoordinator(),
         upNextQueue: UpNextQueueStore = UpNextQueueStore(),
@@ -206,6 +213,7 @@ final class OpenCastAppModel {
         playlistDisplaySettings: PlaylistDisplaySettingsStore = PlaylistDisplaySettingsStore(),
         adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession = EpisodeAdFreePassBackgroundSession(),
         transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession = EpisodeTranscriptGenerationBackgroundSession(),
+        remoteTranscriptionBackgroundSession: EpisodeRemoteTranscriptionBackgroundSession = EpisodeRemoteTranscriptionBackgroundSession(),
         playback: AVFoundationPlaybackController? = nil,
         appearanceSettings: AppearanceSettingsStore = AppearanceSettingsStore(),
         appIcon: AppIconStore = AppIconStore(),
@@ -267,27 +275,28 @@ final class OpenCastAppModel {
             appleSpeechAssets: appleSpeechAssets,
             transcriptions: transcriptions
         )
-        let remoteTranscriptionAPI: any RemoteTranscriptionAPI
+        let resolvedRemoteTranscriptionAPI: any RemoteTranscriptionAPI
         #if DEBUG
-        remoteTranscriptionAPI = RemoteTranscriptionAPIClient()
+        resolvedRemoteTranscriptionAPI = remoteTranscriptionAPI ?? RemoteTranscriptionAPIClient()
         #else
-        remoteTranscriptionAPI = RemoteTranscriptionRoutedAPIClient()
+        resolvedRemoteTranscriptionAPI = remoteTranscriptionAPI ?? RemoteTranscriptionRoutedAPIClient()
         #endif
         self.remoteTranscription = EpisodeRemoteTranscriptionCoordinator(
-            api: remoteTranscriptionAPI,
+            api: resolvedRemoteTranscriptionAPI,
             downloads: downloads,
-            transcriptions: transcriptions
+            transcriptions: transcriptions,
+            store: remoteTranscriptionJobStore
         )
         // Cloud detect passes share the plain surface's job store (purpose-
         // keyed references, one balance) through their own runner instance.
         self.remoteTranscriptionRunner = RemoteTranscriptionJobRunner(
-            api: remoteTranscriptionAPI,
+            api: resolvedRemoteTranscriptionAPI,
             downloads: downloads,
             transcriptions: transcriptions,
             store: remoteTranscription.store
         )
         self.remoteTranscriptionPurchases = remoteTranscriptionPurchases ?? RemoteTranscriptionPurchaseStore(
-            api: remoteTranscriptionAPI,
+            api: resolvedRemoteTranscriptionAPI,
             storeKit: LiveRemoteTranscriptionStoreKitClient()
         )
         #if DEBUG
@@ -333,11 +342,27 @@ final class OpenCastAppModel {
             remotePurchases: self.remoteTranscriptionPurchases
         )
         self.adFreePass = adFreePass
+        remoteJobReattacher = RemoteJobReattacher(
+            plainTranscription: remoteTranscription,
+            cloudRunner: remoteTranscriptionRunner,
+            transcriptions: transcriptions,
+            resolveEpisode: { [resolvedLibrary, downloads] episodeID in
+                Self.episodeSnapshot(for: episodeID, library: resolvedLibrary, downloads: downloads)
+            },
+            cloudQueueEpisodeIDs: { [adFreePass] in
+                var episodeIDs = Set(adFreePass.queueItems.map(\.episodeID))
+                if let activeEpisodeID = adFreePass.activeEpisodeID {
+                    episodeIDs.insert(activeEpisodeID)
+                }
+                return episodeIDs
+            }
+        )
         self.upNextQueue = upNextQueue
         self.playlists = playlists
         self.playlistDisplaySettings = playlistDisplaySettings
         self.adFreePassBackgroundSession = adFreePassBackgroundSession
         self.transcriptGenerationBackgroundSession = transcriptGenerationBackgroundSession
+        self.remoteTranscriptionBackgroundSession = remoteTranscriptionBackgroundSession
         self.transcriptImprovement = EpisodeTranscriptImprovementCoordinator(
             appleSpeechAssets: appleSpeechAssets,
             transcriptions: transcriptions
@@ -440,6 +465,9 @@ final class OpenCastAppModel {
         self.adFreePass.isBackgroundProtected = { [weak self] in
             self?.adFreePassBackgroundSession.isProtectingBackgroundExecution ?? false
         }
+        self.adFreePass.requiresNonGPUCompute = { [weak self] in
+            self?.adFreePassBackgroundSession.requiresNonGPUCompute ?? false
+        }
         self.transcriptionRequests.onPhaseChange = { [weak self] phase in
             guard let self else {
                 return
@@ -448,6 +476,17 @@ final class OpenCastAppModel {
             if phase == .transcribingAppleSpeech {
                 self.requestLocalNotificationAuthorizationIfNeeded()
             }
+        }
+        remoteTranscriptionBackgroundSession.jobStore = remoteTranscription.store
+        remoteTranscription.onPhaseChange = { [weak self] episodeID, phase in
+            self?.remoteTranscriptionBackgroundSession.notePhase(phase, episodeID: episodeID)
+        }
+        remoteTranscription.onRunEnded = { [weak self] episodeID, phase, deliveryOwner in
+            self?.scheduleRemoteTranscriptionNotificationIfNeeded(
+                episodeID: episodeID,
+                phase: phase,
+                deliveryOwner: deliveryOwner
+            )
         }
         transcriptGenerationBackgroundSession.installFraction = { [weak self] in
             guard case .installing(let progress) = self?.transcriptionModels.state,
@@ -1237,6 +1276,14 @@ final class OpenCastAppModel {
     }
 
     func episodeSnapshot(for episodeID: String) -> EpisodeListItemSnapshot? {
+        Self.episodeSnapshot(for: episodeID, library: library, downloads: downloads)
+    }
+
+    private static func episodeSnapshot(
+        for episodeID: String,
+        library: LibraryStore,
+        downloads: DownloadStore
+    ) -> EpisodeListItemSnapshot? {
         if let episode = library.episode(with: episodeID) {
             return episode
         }
@@ -1493,12 +1540,14 @@ final class OpenCastAppModel {
 
     /// Apple-preferred Generate runs are foreground-only, including their
     /// Whisper fallback. Otherwise, one system card at a time: an armed
-    /// ad-free drain keeps its card and Generate stays lifecycle-managed
-    /// instead of competing for a second continued-processing task.
-    private func armTranscriptGenerationBackgroundSessionIfNeeded(episodeTitle: String) {
+    /// ad-free drain or remote transcription keeps its card and Generate
+    /// stays lifecycle-managed instead of competing for a second
+    /// continued-processing task.
+    func armTranscriptGenerationBackgroundSessionIfNeeded(episodeTitle: String) {
         guard !transcriptionEngineSettings.prefersAppleSpeech,
               !transcriptGenerationBackgroundSession.isArmed,
-              !adFreePassBackgroundSession.isArmed
+              !adFreePassBackgroundSession.isArmed,
+              !remoteTranscriptionBackgroundSession.isArmed
         else {
             return
         }
@@ -1536,7 +1585,13 @@ final class OpenCastAppModel {
             )
         }
 
-        switch remoteTranscription.start(episode: episode, modelContext: modelContext) {
+        switch remoteTranscription.start(
+            episode: episode,
+            modelContext: modelContext,
+            prepareBackgroundSession: { [weak self] in
+                self?.armRemoteTranscriptionBackgroundSessionIfNeeded(episode: episode)
+            }
+        ) {
         case .started:
             return .started(episodeID: episode.episodeID)
         case .rejected(let message):
@@ -1558,12 +1613,49 @@ final class OpenCastAppModel {
                 message: "This episode is no longer available. Refresh the podcast and try again."
             )
         }
-        switch remoteTranscription.resume(episode: episode, modelContext: modelContext) {
+        switch resumeRemoteTranscription(episode: episode, modelContext: modelContext) {
         case .started:
             return .started(episodeID: episode.episodeID)
         case .rejected(let message):
             return .unavailable(message: message)
         }
+    }
+
+    /// Resume and Try Again taps from episode detail, the More menu and Now
+    /// Playing: re-attaches the persisted reference and, being a user
+    /// action, may arm the system card.
+    @discardableResult
+    func resumeRemoteTranscription(
+        episode: EpisodeListItemSnapshot,
+        modelContext: ModelContext
+    ) -> EpisodeRemoteTranscriptionCoordinator.StartOutcome {
+        remoteTranscription.resume(
+            episode: episode,
+            modelContext: modelContext,
+            prepareBackgroundSession: { [weak self] in
+                self?.armRemoteTranscriptionBackgroundSessionIfNeeded(episode: episode)
+            }
+        )
+    }
+
+    /// One continued-processing card per app: while the ad-free or the
+    /// transcript-generation card is armed, the remote run stays
+    /// foreground-only. Reached only from a user's start or resume, after
+    /// the coordinator reserved the episode and created the run; launch and
+    /// activation re-attach never arm.
+    private func armRemoteTranscriptionBackgroundSessionIfNeeded(episode: EpisodeListItemSnapshot) {
+        guard !remoteTranscriptionBackgroundSession.isArmed else {
+            return
+        }
+        guard !adFreePassBackgroundSession.isArmed,
+              !transcriptGenerationBackgroundSession.isArmed
+        else {
+            remoteTranscriptionBackgroundSession.recordRefusedArm(episodeID: episode.episodeID)
+            return
+        }
+
+        remoteTranscriptionBackgroundSession.arm(episodeID: episode.episodeID, episodeTitle: episode.title)
+        requestLocalNotificationAuthorizationIfNeeded()
     }
 
     private func transcribeDownloadedEpisodeResolvingEngine(
@@ -1712,9 +1804,16 @@ final class OpenCastAppModel {
         guard let episode = currentPlaybackEpisodeSnapshot else {
             return nil
         }
-        if case .cloudUnavailable = adFreePass.queueStatus(for: episode.episodeID) {
+        switch adFreePass.queueStatus(for: episode.episodeID) {
+        case .cloudUnavailable:
             startAdFreePass(for: episode, modelContext: modelContext, mode: .onDevice)
             return nil
+        case .remoteParked:
+            // Resume re-attaches the parked job; it never asks for a mode.
+            adFreePass.resumePausedQueue()
+            return nil
+        default:
+            break
         }
         return startAdFreePassResolvingMode(for: episode, modelContext: modelContext)
             ? episode
@@ -1736,12 +1835,11 @@ final class OpenCastAppModel {
             podcastLanguageCode: podcastLanguageCode(forPodcastID: episode.podcastID),
             mode: mode,
             prepareBackgroundSession: { [weak self] in
-                // Cloud items never arm the continued-processing card: the
-                // server keeps working while the app is suspended.
-                guard mode == .onDevice else {
-                    return
-                }
-                self?.armAdFreePassBackgroundSessionIfNeeded(episodeTitle: episode.title)
+                self?.armAdFreePassBackgroundSessionIfNeeded(
+                    episodeID: episode.episodeID,
+                    episodeTitle: episode.title,
+                    mode: mode
+                )
             },
             refreshSkipZones: { [weak self] in
                 await self?.skipZones.zoneCountAfterPass(for: episode) ?? 0
@@ -1804,19 +1902,46 @@ final class OpenCastAppModel {
         }
     }
 
+    /// Lifecycle protection counts only local on-device work. A live
+    /// ad-free card whose drain is running a cloud item protects nothing on
+    /// this device, so an unrelated local transcript still takes its
+    /// lifecycle interrupt. The remote transcription card never counts.
+    var isProtectingLocalBackgroundWork: Bool {
+        let protectsLocalPass = adFreePassBackgroundSession.isProtectingBackgroundExecution
+            && adFreePass.activeItem?.mode != .cloud
+        return protectsLocalPass || transcriptGenerationBackgroundSession.isProtectingBackgroundExecution
+    }
+
     func armBackgroundContinuationForActiveQueue() {
         guard adFreePass.queueState == .running,
               !adFreePassBackgroundSession.isArmed,
-              let activeItem = adFreePass.activeItem,
-              // Cloud items never arm: the server keeps working while the
-              // app is suspended and polling resumes on foreground.
-              activeItem.mode == .onDevice
+              let activeItem = adFreePass.activeItem
         else {
             return
         }
 
-        armAdFreePassBackgroundSessionIfNeeded(episodeTitle: activeItem.episode.title)
+        armAdFreePassBackgroundSessionIfNeeded(
+            episodeID: activeItem.episodeID,
+            episodeTitle: activeItem.episode.title,
+            mode: activeItem.mode
+        )
         adFreePass.republishCurrentStage()
+    }
+
+    /// Re-attaches kept remote job references on launch and on scene
+    /// activation (`RemoteJobReattacher`). An activation that arrives before
+    /// the launch restore has loaded the library does nothing; the launch
+    /// trigger covers it. Returns the recovery pass, shared with any pass
+    /// already running.
+    @discardableResult
+    func reattachRemoteJobsIfNeeded(
+        modelContext: ModelContext,
+        trigger: RemoteJobReattacher.Trigger
+    ) -> Task<Void, Never>? {
+        guard trigger == .launch || hasRestoredPlaybackSurface else {
+            return nil
+        }
+        return remoteJobReattacher.reattachIfNeeded(modelContext: modelContext)
     }
 
     func restoreAdFreePassQueue(modelContext: ModelContext) {
@@ -1843,6 +1968,7 @@ final class OpenCastAppModel {
             adFreePass.resumeQueueForEnvironmentalAutoResume()
             return
         }
+        adFreePass.resumeRemoteParkedQueueIfNeeded()
 
         guard adFreePass.activeEpisodeID == nil,
               adFreePass.queueState == .idle,
@@ -1882,16 +2008,58 @@ final class OpenCastAppModel {
         }
     }
 
-    private func armAdFreePassBackgroundSessionIfNeeded(episodeTitle: String) {
+    /// One continued-processing card per app: while the transcript
+    /// generation or remote transcription card is armed the drain stays
+    /// foreground-only. A drain of cloud items alone never asks for GPU.
+    private func armAdFreePassBackgroundSessionIfNeeded(
+        episodeID: String,
+        episodeTitle: String,
+        mode: AdDetectionMode
+    ) {
         guard !adFreePassBackgroundSession.isArmed else {
+            return
+        }
+        guard !transcriptGenerationBackgroundSession.isArmed,
+              !remoteTranscriptionBackgroundSession.isArmed
+        else {
+            let holder = transcriptGenerationBackgroundSession.isArmed ? "transcriptGeneration" : "remoteTranscription"
+            AdFreePassBackgroundRunLog.record("arm skipped reason=\(holder)HoldsCard episodeID=\(episodeID)")
+            recordCloudSessionEvent(.sessionForegroundOnly, episodeID: episodeID, mode: mode)
             return
         }
 
         adFreePassBackgroundSession.arm(
             episodeTitle: episodeTitle,
+            requiresGPU: adFreePass.holdsOnDeviceWork,
             cancellationSource: adFreePass.cancellationSource
         )
+        recordCloudSessionEvent(
+            adFreePassBackgroundSession.isArmed ? .sessionArmed : .sessionForegroundOnly,
+            episodeID: episodeID,
+            mode: mode
+        )
         requestLocalNotificationAuthorizationIfNeeded()
+    }
+
+    /// The remote-job trail notes how a cloud item's card request ended.
+    private func recordCloudSessionEvent(
+        _ kind: RemoteJobDiagnosticEvent.Kind,
+        episodeID: String,
+        mode: AdDetectionMode
+    ) {
+        guard mode == .cloud else {
+            return
+        }
+        let store = remoteTranscription.store
+        let reference = store.existingReference(for: episodeID, purpose: .adDetection)
+        store.diagnostics.record(RemoteJobDiagnosticEvent(
+            component: .backgroundSession,
+            kind: kind,
+            episodeID: episodeID,
+            jobID: reference?.jobID,
+            clientRequestID: reference?.clientRequestID,
+            purpose: .adDetection
+        ))
     }
 
     private func requestLocalNotificationAuthorizationIfNeeded() {
@@ -1903,16 +2071,73 @@ final class OpenCastAppModel {
         }
     }
 
+    /// The remote-job trail records the decisions that concern a remote
+    /// job: the parked cloud head's notification, and each remote-owned
+    /// outcome the local summary left out.
     private func scheduleAdFreePassCompletionNotificationIfNeeded(terminal: AdFreePassQueueTerminalOutcome) {
         let scheduler = AdFreePassCompletionNotificationScheduler(center: adFreePassNotificationCenter)
         let outcomes = adFreePass.drainOutcomes
         let isSceneActive = isSceneActive
+        let jobStore = remoteTranscription.store
+        let diagnostics = jobStore.diagnostics
+        let parkedHead: (episodeID: String, reference: RemoteTranscriptionJobReference?)? =
+            if case .remoteParked = terminal, let head = adFreePass.queueItems.first {
+                (head.episodeID, jobStore.existingReference(for: head.episodeID, purpose: .adDetection))
+            } else {
+                nil
+            }
+        if case .drained = terminal {
+            for outcome in outcomes where outcome.completionDeliveryOwner == .remote {
+                diagnostics.record(CompletionDeliveryDecision.suppressed(.remoteOwner).diagnosticEvent(
+                    episodeID: outcome.episodeID,
+                    reference: nil,
+                    purpose: .adDetection
+                ))
+            }
+        }
         Task {
-            await scheduler.scheduleIfNeeded(
+            let decision = await scheduler.scheduleIfNeeded(
                 terminal: terminal,
                 outcomes: outcomes,
                 isSceneActive: isSceneActive
             )
+            if let parkedHead {
+                diagnostics.record(decision.diagnosticEvent(
+                    episodeID: parkedHead.episodeID,
+                    reference: parkedHead.reference,
+                    purpose: .adDetection
+                ))
+            }
+        }
+    }
+
+    /// One delivery decision per plain run ending. The owner is the run's
+    /// own snapshot. A parked reference also tells delivery whether a server
+    /// job may exist; a completed or failed run has already cleared it.
+    private func scheduleRemoteTranscriptionNotificationIfNeeded(
+        episodeID: String,
+        phase: RemoteTranscriptionRequestPhase,
+        deliveryOwner: JobCompletionDeliveryOwner
+    ) {
+        let store = remoteTranscription.store
+        let scheduler = RemoteTranscriptionNotificationScheduler(center: adFreePassNotificationCenter)
+        let episodeTitle = store.activeEpisodeID == episodeID ? store.activeEpisodeTitle : nil
+        let reference = store.existingReference(for: episodeID)
+        let diagnostics = store.diagnostics
+        let isSceneActive = isSceneActive
+        remoteTranscriptionDeliveryTask = Task {
+            let decision = await scheduler.scheduleIfNeeded(
+                phase: phase,
+                episodeTitle: episodeTitle,
+                deliveryOwner: deliveryOwner,
+                isSceneActive: isSceneActive,
+                createState: reference?.createState
+            )
+            diagnostics.record(decision.diagnosticEvent(
+                episodeID: episodeID,
+                reference: reference,
+                purpose: .transcription
+            ))
         }
     }
 
@@ -1963,6 +2188,21 @@ final class OpenCastAppModel {
         }
         transcriptGenerationBackgroundSession.onExpiration = { [weak self] in
             self?.interruptActiveTranscriptionForLifecycleExit(modelContext: modelContext)
+        }
+        // The server keeps working: expiration only stops local polling and
+        // keeps the reference for Resume. It never touches local
+        // transcription and never cancels the job.
+        remoteTranscriptionBackgroundSession.onExpiration = { [weak self] episodeID in
+            guard let self, remoteTranscription.store.activeEpisodeID == episodeID else {
+                return nil
+            }
+            // Park now; hand back the run's unwind and its notification
+            // decision, so the session completes the task only after both.
+            let run = remoteTranscription.park(exit: .parked)
+            return Task { [weak self] in
+                await run?.value
+                await self?.remoteTranscriptionDeliveryTask?.value
+            }
         }
     }
 
@@ -2464,6 +2704,7 @@ final class OpenCastAppModel {
         playlists.resetAfterDataNuke()
         adFreePassBackgroundSession.reset()
         transcriptGenerationBackgroundSession.reset()
+        remoteTranscriptionBackgroundSession.reset()
         transcriptImprovement.resetForDataNuke()
         transcriptionModels.resetAfterDataNuke()
         transcriptionEngineSettings.load(modelContext: modelContext)

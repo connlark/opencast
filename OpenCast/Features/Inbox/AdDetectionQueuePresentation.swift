@@ -28,6 +28,9 @@ struct AdDetectionQueuePresentation: Equatable {
             case completed(zoneCount: Int)
             case failed(message: String)
             case cloudUnavailable(message: String)
+            /// The cloud job keeps running on the server; the queue-level
+            /// Resume re-attaches it.
+            case remoteParked(RemoteTranscriptionJobExit)
         }
 
         let episodeID: String
@@ -57,6 +60,8 @@ struct AdDetectionQueuePresentation: Equatable {
                 message
             case .cloudUnavailable(let message):
                 message
+            case .remoteParked(let reason):
+                EpisodeAdFreePassPresentation.remoteParked(reason).statusText
             }
         }
     }
@@ -85,13 +90,7 @@ struct AdDetectionQueuePresentation: Equatable {
                 fractionCompleted: snapshot.fractionCompleted,
                 hasFailures: hasFailures
             )
-            // Cloud items never arm the continued-processing card: the
-            // server keeps working while the app is suspended.
-            if snapshot.activeItemMode == .cloud {
-                affordance = nil
-            } else {
-                affordance = isBackgroundSessionArmed ? .backgroundContinuationArmed : .continueInBackground
-            }
+            affordance = isBackgroundSessionArmed ? .backgroundContinuationArmed : .continueInBackground
         case .pausedInterrupted:
             indicator = .paused(hasFailures: hasFailures)
             affordance = .resumeInterrupted
@@ -115,7 +114,9 @@ struct AdDetectionQueuePresentation: Equatable {
         let aheadOffset = snapshot.activeEpisodeID != nil ? 1 : 0
         for (index, item) in snapshot.pendingItems.enumerated() {
             let status: Row.Status
-            if index == 0, snapshot.activeEpisodeID == nil {
+            if let reason = item.remoteParkReason {
+                status = .remoteParked(reason)
+            } else if index == 0, snapshot.activeEpisodeID == nil {
                 switch snapshot.state {
                 case .capDeferred:
                     status = .capDeferred
@@ -197,6 +198,8 @@ struct AdDetectionQueuePresentation: Equatable {
             EpisodeAdFreePassPresentation.cloudDetectingAds.statusText
         case .cloudUnavailable(let message):
             message
+        case .cloudParked(let reason):
+            EpisodeAdFreePassPresentation.remoteParked(reason).statusText
         case .completed(let zoneCount):
             EpisodeAdFreePassPresentation.completed(zoneCount: zoneCount).statusText
         case .interrupted:

@@ -34,6 +34,14 @@ struct EpisodePipelineCard: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+
+            if let footerAction = state.footerAction {
+                Button(footerAction.title) {
+                    onAction(footerAction)
+                }
+                .font(.subheadline)
+                .buttonStyle(.glassProminent)
+            }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -71,6 +79,20 @@ struct EpisodePipelineCard: View {
                 ],
                 footnote: nil,
                 action: .retryDownload
+            ),
+            onAction: { _ in }
+        )
+        EpisodePipelineCard(
+            state: EpisodePipelineState(
+                title: RemoteTranscriptionStatusPresentation.parkedTitle,
+                steps: [
+                    EpisodePipelineStep(kind: .download, status: .done),
+                    EpisodePipelineStep(kind: .transcribe, status: .waiting),
+                    EpisodePipelineStep(kind: .detectAds, status: .waiting)
+                ],
+                footnote: RemoteTranscriptionStatusPresentation.parkedDetail(for: .connectionLost),
+                action: .cancelPass,
+                footerAction: .resumeQueue
             ),
             onAction: { _ in }
         )

@@ -59,7 +59,7 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
             min(975, 910 + creepUnits(stageElapsed: stageElapsed))
         case .completed:
             1_000
-        case .failed, .unavailable, .interrupted, .cloudUnavailable:
+        case .failed, .unavailable, .interrupted, .cloudUnavailable, .cloudParked:
             currentUnits
         }
     }

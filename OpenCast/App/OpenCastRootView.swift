@@ -221,6 +221,7 @@ struct OpenCastRootView: View {
             addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeInitialLoad)
         )
         appModel.restorePlaybackSurfaceIfNeeded(modelContext: modelContext)
+        appModel.reattachRemoteJobsIfNeeded(modelContext: modelContext, trigger: .launch)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         isInitialSetupComplete = true
         SearchColdStartProbe.recordFirstUsableIfRequested()

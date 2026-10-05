@@ -8,6 +8,9 @@ struct EpisodePipelineState: Equatable {
     let steps: [EpisodePipelineStep]
     let footnote: String?
     let action: EpisodePipelineAction?
+    /// A prominent action under the steps. Only a parked cloud job has one:
+    /// Resume, while `action` keeps the Cancel a running pass shows.
+    var footerAction: EpisodePipelineAction? = nil
 
     static let passTitle = "Making this episode ad-free"
     static let passFailedTitle = "Couldn't make this episode ad-free"
@@ -51,6 +54,10 @@ struct EpisodePipelineState: Equatable {
         // take over; nothing below outranks it.
         if case .completed(_, isStale: false) = analysis {
             return nil
+        }
+
+        if case .remoteParked(let reason) = queueStatus {
+            return remoteParkedState(reason: reason, downloadRecord: downloadRecord)
         }
 
         let isPendingHead = queueSnapshot.pendingItems.first?.episodeID == episodeID
@@ -277,6 +284,8 @@ struct EpisodePipelineState: Equatable {
                 downloadRecord: downloadRecord,
                 transcription: .unavailable
             )
+        case .cloudParked(let reason):
+            return remoteParkedState(reason: reason, downloadRecord: downloadRecord)
         case .interrupted:
             return EpisodePipelineState(
                 title: passTitle,
@@ -351,6 +360,22 @@ struct EpisodePipelineState: Equatable {
             ),
             footnote: nil,
             action: .detectOnDevice
+        )
+    }
+
+    /// The cloud job keeps running on the server while this device stopped
+    /// checking on it. Resume re-attaches the same job; Cancel is the user
+    /// cancel, the only path that ends it.
+    private static func remoteParkedState(
+        reason: RemoteTranscriptionJobExit,
+        downloadRecord: EpisodeDownloadRecord?
+    ) -> EpisodePipelineState {
+        EpisodePipelineState(
+            title: RemoteTranscriptionStatusPresentation.parkedTitle,
+            steps: passSteps(download: completedOrWaiting(downloadRecord), transcribe: .waiting, detect: .waiting),
+            footnote: RemoteTranscriptionStatusPresentation.parkedDetail(for: reason),
+            action: .cancelPass,
+            footerAction: .resumeQueue
         )
     }
 

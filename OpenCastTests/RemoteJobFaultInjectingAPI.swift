@@ -54,6 +54,12 @@ final class RemoteJobFaultInjectingAPI: RemoteTranscriptionAPI, @unchecked Senda
             lock.withLock { released }
         }
 
+        /// True once a request is suspended at the gate, so a test can
+        /// inspect client state while that request is in flight.
+        var isHoldingRequest: Bool {
+            lock.withLock { !waiters.isEmpty }
+        }
+
         func release() {
             let pending: [CheckedContinuation<Void, Never>] = lock.withLock {
                 released = true

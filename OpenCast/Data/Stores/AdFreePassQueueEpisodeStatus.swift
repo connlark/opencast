@@ -8,4 +8,7 @@ enum AdFreePassQueueEpisodeStatus: Equatable {
     /// surfaces offer a one-tap on-device detect instead.
     case cloudUnavailable(message: String)
     case capDeferred
+    /// A cloud item stopped polling while its server job kept running; the
+    /// surfaces offer Resume (same job) and Cancel (the user cancel).
+    case remoteParked(RemoteTranscriptionJobExit)
 }

@@ -41,10 +41,22 @@ final class EpisodeAdFreePassCoordinator {
     @ObservationIgnored private var pausedForEnvironmentalInterrupt = false
     @ObservationIgnored private var lastInterruptedEpisodeID: String?
     @ObservationIgnored private var hasProbedCapThisForegroundSession = false
+    /// The running cloud item's job store, so a user cancel can persist its
+    /// intent before the local task is cancelled.
+    @ObservationIgnored private var activeCloudJobStore: RemoteTranscriptionJobStore?
+    /// User cancels of cloud items in flight, keyed by episode. Each deletes
+    /// its queue record only after the runner recorded the cancel attempt,
+    /// and a new start for the same episode waits for it.
+    @ObservationIgnored private var cloudUserCancels: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private let launchPreparationGate: @Sendable () async -> Void
     @ObservationIgnored var onStageChange: (@MainActor (EpisodeAdFreePassStage, AdFreePassQueueContext) -> Void)?
     @ObservationIgnored var onQueueTerminal: (@MainActor (AdFreePassQueueTerminalOutcome) -> Void)?
     @ObservationIgnored var isBackgroundProtected: @MainActor () -> Bool = { false }
+    @ObservationIgnored var requiresNonGPUCompute: @MainActor () -> Bool = { false }
+
+    var initialWhisperComputeProfile: OpenCastTranscriptionComputeProfile {
+        stickyComputeProfile ?? (requiresNonGPUCompute() ? .cpuAndNeuralEngine : .backgroundSafe)
+    }
     /// UI-testing stand-in for the live queue (App Store pipeline shot): the
     /// snapshot and per-episode status come from the override, nothing runs.
     @ObservationIgnored var uiTestQueueOverride: AdFreePassQueueUITestOverride?
@@ -109,6 +121,9 @@ final class EpisodeAdFreePassCoordinator {
         }
 
         if let index = entries.firstIndex(where: { $0.item.episodeID == episodeID }) {
+            if let reason = entries[index].item.remoteParkReason {
+                return .remoteParked(reason)
+            }
             if queueState == .capDeferred, index == 0 {
                 return .capDeferred
             }
@@ -203,6 +218,8 @@ final class EpisodeAdFreePassCoordinator {
                 return .cloudDetectingAds
             case .cloudUnavailable(let message):
                 return .cloudUnavailable(message)
+            case .cloudParked(let reason):
+                return .remoteParked(reason)
             default:
                 break
             }
@@ -461,12 +478,25 @@ final class EpisodeAdFreePassCoordinator {
             }
 
             let mode = AdDetectionMode(rawValue: record.modeRawValue) ?? .onDevice
+            if mode == .cloud,
+               remoteJobStore?.existingReference(for: record.episodeID, purpose: .adDetection)?
+                .userCancelRequestedAt != nil {
+                // The user already cancelled this item; the re-attach trigger
+                // resolves its persisted intent. Draining it would only run
+                // into the runner's refusal.
+                modelContext.delete(record)
+                didDropRecords = true
+                continue
+            }
             let item = AdFreePassQueueItem(
                 episode: episode,
                 origin: origin,
                 enqueuedAt: record.enqueuedAt,
                 sequence: record.sequence,
-                mode: mode
+                mode: mode,
+                remoteParkReason: mode == .cloud
+                    ? RemoteTranscriptionJobExit(rawValue: record.remoteParkReasonRawValue)
+                    : nil
             )
             // Restored items drain foreground-opportunistically; background
             // continuation always requires a fresh explicit tap.
@@ -572,6 +602,7 @@ final class EpisodeAdFreePassCoordinator {
         }
         entries = []
         activeItem = nil
+        activeCloudJobStore = nil
         currentStage = nil
         queueState = .idle
         drainCompletedCount = 0
@@ -592,24 +623,49 @@ final class EpisodeAdFreePassCoordinator {
     }
 
     func cancelActivePass() {
+        if let activeItem, activeItem.mode == .cloud {
+            // Durable before the local task stops, so a death in between
+            // still resolves as the user's cancel and never re-attaches.
+            activeCloudJobStore?.recordUserCancelIntent(episodeID: activeItem.episodeID, purpose: .adDetection)
+        }
         cancellationSource.cancel(reason: .userRequest)
     }
 
-    func removePendingItem(episodeID: String, modelContext: ModelContext) {
-        guard activeItem?.episodeID != episodeID else {
-            return
+    /// Removes a pending item. A cloud item whose server job may exist is a
+    /// user cancel: the intent is persisted first, the item leaves the queue
+    /// at once, and the returned task sends at most one `/cancel` before it
+    /// deletes the queue record.
+    @discardableResult
+    func removePendingItem(episodeID: String, modelContext: ModelContext) -> Task<Void, Never>? {
+        guard activeItem?.episodeID != episodeID,
+              let removed = entries.first(where: { $0.item.episodeID == episodeID })
+        else {
+            return nil
         }
 
-        let countBefore = entries.count
+        var cloudRunner: RemoteTranscriptionJobRunner?
+        if removed.item.mode == .cloud,
+           let jobStore = removed.deps.remoteJobStore,
+           jobStore.existingReference(for: episodeID, purpose: .adDetection) != nil,
+           let runner = removed.deps.remoteRunner {
+            jobStore.recordUserCancelIntent(episodeID: episodeID, purpose: .adDetection)
+            cloudRunner = runner
+        }
         for entry in entries where entry.item.episodeID == episodeID {
             entry.launchPreparation?.cancel()
         }
         entries.removeAll { $0.item.episodeID == episodeID }
-        guard entries.count != countBefore else {
-            return
-        }
 
-        removePersistedItem(episodeID: episodeID, modelContext: modelContext)
+        var userCancel: Task<Void, Never>?
+        if let cloudRunner {
+            userCancel = startCloudUserCancel(
+                episode: removed.item.episode,
+                runner: cloudRunner,
+                modelContext: modelContext
+            )
+        } else {
+            removePersistedItem(episodeID: episodeID, modelContext: modelContext)
+        }
         if pendingModelConsentEpisodeID == episodeID {
             pendingModelConsentEpisodeID = nil
             pendingModelConsentByteCount = nil
@@ -618,8 +674,30 @@ final class EpisodeAdFreePassCoordinator {
             queueState = .idle
         }
         AdFreePassBackgroundRunLog.record(
-            "queue removed pending episodeID=\(episodeID) pending=\(entries.count) state=\(queueState)"
+            "queue removed pending episodeID=\(episodeID) pending=\(entries.count) state=\(queueState) userCancel=\(userCancel != nil)"
         )
+        return userCancel
+    }
+
+    /// Scene activation re-attaches a parked cloud item through the same
+    /// reference (an auto pass enqueued meanwhile may sit ahead of it). It
+    /// stays foreground-only: an automatic resume never arms the
+    /// continued-processing card.
+    func resumeRemoteParkedQueueIfNeeded() {
+        guard queueState == .pausedInterrupted,
+              activeItem == nil,
+              entries.contains(where: { $0.item.remoteParkReason != nil })
+        else {
+            return
+        }
+
+        startDrain()
+    }
+
+    /// Whether the drain holds on-device work, active or pending. A drain of
+    /// cloud items alone never asks the system for GPU.
+    var holdsOnDeviceWork: Bool {
+        activeItem?.mode == .onDevice || entries.contains { $0.item.mode == .onDevice }
     }
 
     // MARK: - Queue drain
@@ -642,7 +720,7 @@ final class EpisodeAdFreePassCoordinator {
     }
 
     private struct QueueEntry {
-        let item: AdFreePassQueueItem
+        var item: AdFreePassQueueItem
         let deps: PassDependencies
         var launchPreparation: Task<LaunchPreparationOutcome, Never>?
     }
@@ -660,6 +738,12 @@ final class EpisodeAdFreePassCoordinator {
         case awaitingConsent
         case interrupted(environmental: Bool)
         case capDeferred
+        /// A cloud item stopped polling while its server job may be
+        /// running; it goes back to the head with this reason.
+        case remoteParked(RemoteTranscriptionJobExit)
+        /// The user cancelled a running cloud item; its cancel task deletes
+        /// the queue record once the attempt is recorded.
+        case cloudUserCancelled
     }
 
     private var finishedItemCount: Int {
@@ -753,12 +837,24 @@ final class EpisodeAdFreePassCoordinator {
             return .skip
         }
 
+        if let userCancel = cloudUserCancels[item.episodeID] {
+            // The earlier item's cancel deletes every record for the
+            // episode; this item's record must land after it.
+            await userCancel.value
+        }
+
         if item.origin == .auto,
            await currentCompletedAnalysisVerdict(
                for: item.episodeID,
                transcriptions: dependencies.transcriptions,
                adAnalyses: dependencies.adAnalyses
            ) {
+            return .skip
+        }
+
+        // Cancellation of a preparation waiting on another task does not
+        // cancel that await. Removal/reset must still win before any writes.
+        guard !Task.isCancelled, entries.contains(where: { $0.item == item }) else {
             return .skip
         }
 
@@ -848,13 +944,19 @@ final class EpisodeAdFreePassCoordinator {
                     episodeID: failedEntry.item.episodeID,
                     episodeTitle: failedEntry.item.episode.title,
                     artworkURL: failedEntry.item.episode.artworkURL,
-                    kind: .failed(message: message)
+                    kind: .failed(message: message),
+                    completionDeliveryOwner: .local
                 ))
                 continue
             }
 
-            let entry = entries.removeFirst()
+            var entry = entries.removeFirst()
+            if entry.item.remoteParkReason != nil {
+                entry.item.remoteParkReason = nil
+                persistRemoteParkReason(nil, episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
+            }
             activeItem = entry.item
+            activeCloudJobStore = entry.item.mode == .cloud ? entry.deps.remoteJobStore : nil
             lastPublishedStage = nil
             activeTranscriptionEngine = entry.deps.transcriptionEngine
             activeTranscriptionModelIdentity = nil
@@ -865,7 +967,8 @@ final class EpisodeAdFreePassCoordinator {
                 "transcription engine requested=\(entry.deps.transcriptionEngine.logDescription)"
             )
 
-            let outcome = await runPass(entry)
+            var deliveryOwner = JobCompletionDeliveryOwner.local
+            let outcome = await runPass(entry, deliveryOwner: &deliveryOwner)
 
             guard generation == drainGeneration else {
                 return
@@ -876,6 +979,7 @@ final class EpisodeAdFreePassCoordinator {
                 stickyComputeProfile = .cpuOnly
             }
             activeItem = nil
+            activeCloudJobStore = nil
             activeTranscriptionEngine = .productDefault
             activeTranscriptionModelIdentity = nil
 
@@ -886,7 +990,8 @@ final class EpisodeAdFreePassCoordinator {
                     episodeID: entry.item.episodeID,
                     episodeTitle: entry.item.episode.title,
                     artworkURL: entry.item.episode.artworkURL,
-                    kind: .completed(zoneCount: zoneCount)
+                    kind: .completed(zoneCount: zoneCount),
+                    completionDeliveryOwner: deliveryOwner
                 ))
                 removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
             case .failed(let message):
@@ -895,7 +1000,8 @@ final class EpisodeAdFreePassCoordinator {
                     episodeID: entry.item.episodeID,
                     episodeTitle: entry.item.episode.title,
                     artworkURL: entry.item.episode.artworkURL,
-                    kind: .failed(message: message)
+                    kind: .failed(message: message),
+                    completionDeliveryOwner: deliveryOwner
                 ))
                 removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
             case .cloudUnavailable(let message):
@@ -904,7 +1010,8 @@ final class EpisodeAdFreePassCoordinator {
                     episodeID: entry.item.episodeID,
                     episodeTitle: entry.item.episode.title,
                     artworkURL: entry.item.episode.artworkURL,
-                    kind: .cloudUnavailable(message: message)
+                    kind: .cloudUnavailable(message: message),
+                    completionDeliveryOwner: deliveryOwner
                 ))
                 removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
             case .awaitingConsent:
@@ -929,6 +1036,20 @@ final class EpisodeAdFreePassCoordinator {
                 hasProbedCapThisForegroundSession = true
                 endDrain(state: .capDeferred, terminal: .capDeferred)
                 return
+            case .remoteParked(let reason):
+                // Never a failure and never dropped: the paid job is still
+                // the user's, and Resume re-attaches it from the head.
+                var parked = entry
+                parked.item.remoteParkReason = reason
+                parked.launchPreparation = nil
+                entries.insert(parked, at: 0)
+                persistRemoteParkReason(reason, episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
+                endDrain(state: .pausedInterrupted, terminal: .remoteParked(reason))
+                return
+            case .cloudUserCancelled:
+                lastInterruptedEpisodeID = entry.item.episodeID
+                endDrain(state: entries.isEmpty ? .idle : .pausedInterrupted, terminal: .cloudUserCancelled)
+                return
             }
         }
 
@@ -949,9 +1070,14 @@ final class EpisodeAdFreePassCoordinator {
         onQueueTerminal?(terminal)
     }
 
-    private func runPass(_ entry: QueueEntry) async -> PassOutcome {
+    /// `deliveryOwner` stays local unless a cloud item reaches its remote
+    /// job run.
+    private func runPass(
+        _ entry: QueueEntry,
+        deliveryOwner: inout JobCompletionDeliveryOwner
+    ) async -> PassOutcome {
         if entry.item.mode == .cloud {
-            return await runCloudPass(entry)
+            return await runCloudPass(entry, deliveryOwner: &deliveryOwner)
         }
         let episode = entry.item.episode
         let deps = entry.deps
@@ -1047,7 +1173,10 @@ final class EpisodeAdFreePassCoordinator {
     /// with chained ad detection. The transcript always imports when the job
     /// delivers; a failed/invalid ad block falls back to the on-device
     /// analysis path over that imported transcript automatically.
-    private func runCloudPass(_ entry: QueueEntry) async -> PassOutcome {
+    private func runCloudPass(
+        _ entry: QueueEntry,
+        deliveryOwner: inout JobCompletionDeliveryOwner
+    ) async -> PassOutcome {
         let episode = entry.item.episode
         let deps = entry.deps
 
@@ -1094,6 +1223,18 @@ final class EpisodeAdFreePassCoordinator {
                     RemoteTranscriptionFailureCategory.missingAudio.message
                 )
             }
+            if let userCancel = cloudUserCancels[episode.episodeID] {
+                await userCancel.value
+            }
+            if jobStore.existingReference(for: episode.episodeID, purpose: .adDetection)?
+                .userCancelRequestedAt != nil {
+                // An earlier cancel of this episode has not reached the
+                // server yet; the re-attach trigger retries it.
+                return cloudUnavailableOutcome(
+                    "The previous cloud detection is still being cancelled.",
+                    episodeID: episode.episodeID
+                )
+            }
             if jobStore.hasActiveRequest, jobStore.activeEpisodeID == episode.episodeID {
                 // A plain Transcribe Remotely job already owns this episode;
                 // it will deliver the transcript the free path can use.
@@ -1103,6 +1244,9 @@ final class EpisodeAdFreePassCoordinator {
                 )
             }
 
+            // Snapshotted before the run: a terminal server failure clears
+            // the reference before its error arrives here.
+            deliveryOwner = jobStore.completionDeliveryOwner(for: episode.episodeID, purpose: .adDetection)
             let outcome = try await runner.run(
                 episode: episode,
                 enclosureURL: audioURL,
@@ -1117,6 +1261,7 @@ final class EpisodeAdFreePassCoordinator {
                     self?.applyCloudEvent(event)
                 }
             )
+            deliveryOwner = outcome.completionDeliveryOwner
 
             if case .completed(let success) = outcome.adAnalysis {
                 do {
@@ -1167,19 +1312,36 @@ final class EpisodeAdFreePassCoordinator {
             return .interrupted(environmental: false)
         } catch is CancellationError {
             // Local cancellation never cancels the server job by itself. A
-            // user request resolves it through the runner's user-cancel
-            // path; expiration and every other stop park the reference so
-            // the paid work re-attaches later.
-            if cancellationSource.lastCancellationReason == .userRequest, let runner = deps.remoteRunner {
-                Task {
-                    _ = await runner.cancelServerJob(episodeID: episode.episodeID, purpose: .adDetection)
-                }
-            } else {
-                deps.remoteJobStore?.recordExit(.parked, episodeID: episode.episodeID, purpose: .adDetection)
+            // user request (its intent already persisted) resolves it
+            // through the runner's user-cancel path; expiration and every
+            // other stop park the reference so the paid work re-attaches.
+            let reason = cancellationSource.lastCancellationReason
+            if reason == .userRequest, let runner = deps.remoteRunner {
+                startCloudUserCancel(episode: episode, runner: runner, modelContext: deps.modelContext)
+                setStage(.interrupted)
+                return .cloudUserCancelled
             }
-            setStage(.interrupted)
-            return .interrupted(environmental: false)
+            guard Self.mayHoldServerJob(episodeID: episode.episodeID, jobStore: deps.remoteJobStore) else {
+                // Before any create, or after the job delivered and only the
+                // free on-device analysis was left: nothing runs remotely.
+                setStage(.interrupted)
+                return .interrupted(environmental: false)
+            }
+            if reason == .sessionExpiration {
+                recordSessionEvent(.sessionExpired, episodeID: episode.episodeID, jobStore: deps.remoteJobStore)
+            }
+            deps.remoteJobStore?.recordExit(.parked, episodeID: episode.episodeID, purpose: .adDetection)
+            setStage(.cloudParked(.parked))
+            return .remoteParked(.parked)
         } catch let error as RemoteTranscriptionJobRunError {
+            if let reason = Self.parkReason(for: error),
+               Self.mayHoldServerJob(episodeID: episode.episodeID, jobStore: deps.remoteJobStore) {
+                // Keep the item at the head with Resume. With no create
+                // attempted there is no job, and the cloud-unavailable
+                // outcome below stays honest.
+                setStage(.cloudParked(reason))
+                return .remoteParked(reason)
+            }
             if Self.isCloudUnavailableRunError(error) {
                 return cloudUnavailableOutcome(
                     Self.cloudFailureMessage(for: error),
@@ -1214,6 +1376,68 @@ final class EpisodeAdFreePassCoordinator {
         clearFailure(episodeID: entry.item.episodeID)
         setStage(.completed(zoneCount: zoneCount))
         return .completed(zoneCount: zoneCount)
+    }
+
+    /// The user cancel of a cloud item, shared by the running item and a
+    /// pending one: the runner resolves the job and sends at most one
+    /// `/cancel`, then the queue record goes. A death in between leaves a
+    /// record the next launch drops and an intent the re-attach trigger
+    /// resolves.
+    @discardableResult
+    private func startCloudUserCancel(
+        episode: EpisodeListItemSnapshot,
+        runner: RemoteTranscriptionJobRunner,
+        modelContext: ModelContext
+    ) -> Task<Void, Never> {
+        let episodeID = episode.episodeID
+        if let inFlight = cloudUserCancels[episodeID] {
+            return inFlight
+        }
+        let userCancel = Task { [weak self] in
+            _ = await runner.cancelServerJob(episodeID: episodeID, purpose: .adDetection, replaying: episode)
+            self?.removePersistedItem(episodeID: episodeID, modelContext: modelContext)
+            self?.cloudUserCancels[episodeID] = nil
+        }
+        cloudUserCancels[episodeID] = userCancel
+        return userCancel
+    }
+
+    /// A create may have reached the server, so a paid job may be running.
+    private static func mayHoldServerJob(episodeID: String, jobStore: RemoteTranscriptionJobStore?) -> Bool {
+        guard let reference = jobStore?.existingReference(for: episodeID, purpose: .adDetection) else {
+            return false
+        }
+        return reference.createState != .prepared
+    }
+
+    private static func parkReason(for error: RemoteTranscriptionJobRunError) -> RemoteTranscriptionJobExit? {
+        switch error {
+        case .connectionLost:
+            .connectionLost
+        case .localRequestFailed:
+            .localRequestFailed
+        default:
+            nil
+        }
+    }
+
+    private func recordSessionEvent(
+        _ kind: RemoteJobDiagnosticEvent.Kind,
+        episodeID: String,
+        jobStore: RemoteTranscriptionJobStore?
+    ) {
+        guard let jobStore else {
+            return
+        }
+        let reference = jobStore.existingReference(for: episodeID, purpose: .adDetection)
+        jobStore.diagnostics.record(RemoteJobDiagnosticEvent(
+            component: .backgroundSession,
+            kind: kind,
+            episodeID: episodeID,
+            jobID: reference?.jobID,
+            clientRequestID: reference?.clientRequestID,
+            purpose: .adDetection
+        ))
     }
 
     private func cloudUnavailableOutcome(_ message: String, episodeID: String) -> PassOutcome {
@@ -1272,6 +1496,9 @@ final class EpisodeAdFreePassCoordinator {
     private func queuedPresentation(for episodeID: String) -> EpisodeAdFreePassPresentation? {
         guard let index = entries.firstIndex(where: { $0.item.episodeID == episodeID }) else {
             return nil
+        }
+        if let reason = entries[index].item.remoteParkReason {
+            return .remoteParked(reason)
         }
 
         switch queueState {
@@ -1457,6 +1684,24 @@ final class EpisodeAdFreePassCoordinator {
             modelContext.delete(record)
             throw error
         }
+    }
+
+    private func persistRemoteParkReason(
+        _ reason: RemoteTranscriptionJobExit?,
+        episodeID: String,
+        modelContext: ModelContext
+    ) {
+        let descriptor = FetchDescriptor<AdFreePassQueueItemRecord>(
+            predicate: #Predicate { $0.episodeID == episodeID }
+        )
+        guard let records = try? modelContext.fetch(descriptor), !records.isEmpty else {
+            return
+        }
+
+        for record in records {
+            record.remoteParkReasonRawValue = reason?.rawValue ?? ""
+        }
+        try? modelContext.save()
     }
 
     private func removePersistedItem(episodeID: String, modelContext: ModelContext) {
@@ -1868,7 +2113,7 @@ final class EpisodeAdFreePassCoordinator {
         // drain, subsequent whisper items skip the doomed default attempt.
         let initialComputeProfile: OpenCastTranscriptionComputeProfile =
             transcriptionPlan.runEngine == .whisper
-                ? (stickyComputeProfile ?? .backgroundSafe)
+                ? initialWhisperComputeProfile
                 : .backgroundSafe
 
         transcriptions.startTranscription(

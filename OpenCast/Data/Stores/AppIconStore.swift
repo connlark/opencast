@@ -14,7 +14,7 @@ extension UIApplication: AlternateIconApplying {}
 /// SwiftData or synced and Delete Data leaves the icon alone.
 @Observable
 final class AppIconStore {
-    private(set) var selection = AppIconOption.ember
+    private(set) var selection = AppIconOption.primary
     private(set) var isSupported = true
     private(set) var isApplying = false
     private(set) var lastErrorMessage: String?

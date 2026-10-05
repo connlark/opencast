@@ -16,7 +16,8 @@ struct EpisodeDetectAdsMenuStateTests {
             (.completed(zoneCount: 3), false, .detected),
             (.failed(message: "probe"), false, .detect),
             (.failed(message: "probe"), true, .detected),
-            (.capDeferred, false, .queued)
+            (.capDeferred, false, .queued),
+            (.remoteParked(.parked), false, .queued)
         ]
 
         for (status, hasAnalysis, expected) in cases {
