@@ -19,7 +19,7 @@ no account. no tracking. no ads of our own. **your listening is not a growth fun
 | :--- | :--- |
 | **Transcribed on your phone.** Download an episode and opencast transcribes it on device with Apple Speech or Whisper, then marks every promo and sponsor read on the timeline and in the transcript. | **No account, no tracking.** No opencast login, no analytics SDK, no ads of our own. Subscriptions and progress sync through your private iCloud when you turn it on. |
 | **Skipped, with an undo.** High-confidence breaks skip automatically and a small red pill says "Skipped promo. Tap to undo." Borderline sponsor reads are marked, never skipped. | **Any RSS feed.** Find a show in the directory or paste its feed URL. Nothing between you and your subscriptions rearranges them. |
-| **Reads the episode.** Tap-to-seek transcripts with follow-along highlighting, full-text search across everything ever said in your library, generated chapters and summaries (optional, paid), and Voice Boost. | **Native and small.** SwiftUI on iOS 27, CarPlay and Siri, Up Next, sleep timer, per-show intro and outro skip, OPML, downloads. About 10 MB. MIT-licensed. |
+| **Reads the episode.** Tap-to-seek transcripts with follow-along highlighting, full-text search across everything ever said in your library, generated chapters and summaries (optional, paid), and Voice Boost. | **Native throughout.** SwiftUI on iOS 27, CarPlay and Siri, Up Next, sleep timer, per-show intro and outro skip, OPML, downloads, app icons. MIT-licensed. |
 
 ![Four opencast screens: Now Playing with a skipped promo, the Sound Lab, a transcript with a flagged sponsor read, and the Library](Screenshots/readme-showcase.png)
 
