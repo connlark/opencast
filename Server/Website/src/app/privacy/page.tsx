@@ -33,7 +33,7 @@ export const metadata: Metadata = createPageMetadata({
 });
 
 const effectiveDate = "June 21, 2026";
-const lastUpdated = "October 1, 2026";
+const lastUpdated = "October 5, 2026";
 
 // The in-app notice shown once before the first Recap or Ask request. The
 // sentences below are the app's own words and the section repeats them
@@ -489,7 +489,7 @@ export default function PrivacyPage() {
                     show, only part of the list may be sent: the episodes that
                     best match your request, chosen on your device by word
                     matching and on-device word vectors, or the newest
-                    episodes that fit. Suggest groups instead sends the list
+                    episodes that fit. Suggest Groups sends the list
                     without a request, and on a long show only its newest 150
                     episodes.
                   </li>
@@ -511,7 +511,12 @@ export default function PrivacyPage() {
                     answer opencast cannot read. When it does, opencast sends
                     the same request once more before telling you, and you can
                     try again. If the list is too long for Apple&apos;s model,
-                    opencast sends a shorter one.
+                    opencast sends a shorter one. When it declines, you can
+                    also choose Try a Simpler Answer, an experimental retry
+                    that asks Apple&apos;s model only for episode numbers and
+                    names the playlists on your device. It sends the same kinds
+                    of details as the first request and nothing else, and
+                    follows the same once-more rule.
                   </li>
                   <li>
                     It shares the Apple Intelligence allowance that Recap and

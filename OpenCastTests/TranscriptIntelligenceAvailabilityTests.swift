@@ -1,4 +1,5 @@
 import Foundation
+import FoundationModels
 import Testing
 @testable import OpenCast
 
@@ -70,7 +71,7 @@ struct TranscriptIntelligenceAvailabilityTests {
     @Test("Per-request outcomes leave the feature available")
     func perRequestOutcomesStayAvailable() {
         #expect(resolve() == .available)
-        #expect(resolve(lastFailure: .guardrailViolation) == .available)
+        #expect(resolve(lastFailure: .guardrailViolation(.output)) == .available)
         #expect(resolve(lastFailure: .refusal) == .available)
         #expect(resolve(lastFailure: .timeout) == .available)
         #expect(resolve(lastFailure: .contextSizeExceeded(tokenCount: 40_000, contextSize: 32_768)) == .available)
@@ -81,16 +82,28 @@ struct TranscriptIntelligenceAvailabilityTests {
     @Test("Transient failures clear on refresh; the rest persist")
     func transientFailures() {
         #expect(TranscriptIntelligenceFailure.offline.isTransient)
-        #expect(TranscriptIntelligenceFailure.guardrailViolation.isTransient)
+        #expect(TranscriptIntelligenceFailure.guardrailViolation(.output).isTransient)
         #expect(!TranscriptIntelligenceFailure.notEntitled.isTransient)
         #expect(!TranscriptIntelligenceFailure.rateLimited(resetDate: nil).isTransient)
         #expect(!TranscriptIntelligenceFailure.quotaLimitReached(resetDate: nil).isTransient)
     }
 
+    @Test("A guardrail decline keeps which check fired", arguments: [
+        ("Safety guardrail was triggered.", TranscriptIntelligenceGuardrailSide.input),
+        ("Response may contain sensitive or unsafe content", .output),
+        ("Streamed response may contain sensitive or unsafe content", .output),
+        ("Recitation detected", .recitation),
+        ("Something new", .unknown),
+    ])
+    func guardrailSideIsReadFromTheModelDetail(debugDescription: String, side: TranscriptIntelligenceGuardrailSide) {
+        let error = LanguageModelError.guardrailViolation(.init(debugDescription: debugDescription))
+        #expect(TranscriptIntelligenceFailure.failure(mapping: error) == .guardrailViolation(side))
+    }
+
     @Test("Cancellation carries no user message; everything else does")
     func userMessages() {
         #expect(TranscriptIntelligenceFailure.cancelled.userMessage == nil)
-        #expect(TranscriptIntelligenceFailure.guardrailViolation.userMessage == "Apple’s model declined this passage.")
+        #expect(TranscriptIntelligenceFailure.guardrailViolation(.output).userMessage == "Apple’s model declined this passage.")
         #expect(TranscriptIntelligenceFailure.unknown("boom").userMessage?.contains("boom") == true)
     }
 }

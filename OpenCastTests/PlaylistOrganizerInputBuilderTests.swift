@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import OpenCast
 
@@ -495,7 +496,151 @@ struct PlaylistOrganizerInputBuilderTests {
         #expect(snippets.allSatisfy { ($0?.count ?? 0) <= 200 })
     }
 
+    // MARK: - Line numbers and the simpler answer
+
+    @Test("Gapped line numbers rise by 1 to 3 from a seed, map back to the episode indices, and change nothing else")
+    func gappedLineNumbersIncreaseWithSmallGaps() async throws {
+        let episodes = ladderEpisodes()
+        let indexed = try await build(episodes)
+        let gapped = try await build(episodes, lineNumbers: .gapped(seed: 42))
+        let again = try await build(episodes, lineNumbers: .gapped(seed: 42))
+
+        let numbered = gapped.lines.split(separator: "\n").map { Self.splitLineNumber(String($0)) }
+        let numbers = numbered.compactMap { $0.number }
+        #expect(numbers.count == 10)
+        #expect((1...9).contains(numbers.first ?? 0))
+        #expect(zip(numbers, numbers.dropFirst()).allSatisfy { (1...3).contains($1 - $0) })
+        // Only the numbers differ from the index-numbered lines.
+        #expect(numbered.map { $0.rest } == indexed.lines.split(separator: "\n").map { Self.splitLineNumber(String($0)).rest })
+        #expect(gapped.indexByLineNumber == Dictionary(zip(numbers, gapped.candidateIndices)) { first, _ in first })
+        for (number, index) in zip(numbers, gapped.candidateIndices) {
+            #expect(gapped.episodeIndex(forLineNumber: number) == index, "line \(number)")
+        }
+        #expect(gapped.episodeIndex(forLineNumber: 0) == nil)
+        #expect(gapped.episodeIndex(forLineNumber: (numbers.last ?? 0) + 1) == nil)
+
+        #expect(again.lines == gapped.lines)
+        #expect(again.indexByLineNumber == gapped.indexByLineNumber)
+        #expect(gapped.candidateIndices == indexed.candidateIndices)
+        #expect(gapped.scope == indexed.scope)
+        #expect(gapped.episodesByIndex == indexed.episodesByIndex)
+        #expect(gapped.rung == indexed.rung)
+        #expect(
+            gapped.prompt == PlaylistOrganizerPrompt.promptedTemplate(
+                show: "Example Show",
+                scope: "all 10",
+                lines: gapped.lines,
+                request: "harbor stories"
+            )
+        )
+        #expect(gapped.framedTokenCount == Self.digitHeavyCount(PlaylistOrganizerPrompt.framed(prompt: gapped.prompt)))
+
+        // The numbers are fixed before the ladder, so every rung carries the same ones.
+        let compact = try await build(episodes, rungs: [.compact], lineNumbers: .gapped(seed: 42))
+        #expect(compact.indexByLineNumber == gapped.indexByLineNumber)
+
+        // An index build starts each line with its index and maps n to n.
+        #expect(indexed.indexByLineNumber.isEmpty)
+        #expect(indexed.lines.split(separator: "\n").compactMap { Self.splitLineNumber(String($0)).number } == Array(0..<10))
+        #expect(indexed.episodeIndex(forLineNumber: 0) == 0)
+        #expect(indexed.episodeIndex(forLineNumber: 7) == 7)
+
+        // A random seed keeps the same shape.
+        let unseeded = try await build(episodes, lineNumbers: .gapped(seed: nil))
+        let unseededNumbers = unseeded.lines.split(separator: "\n").compactMap { Self.splitLineNumber(String($0)).number }
+        #expect(unseededNumbers.count == 10)
+        #expect((1...9).contains(unseededNumbers.first ?? 0))
+        #expect(zip(unseededNumbers, unseededNumbers.dropFirst()).allSatisfy { (1...3).contains($1 - $0) })
+        #expect(unseeded.indexByLineNumber == Dictionary(zip(unseededNumbers, unseeded.candidateIndices)) { first, _ in first })
+    }
+
+    @Test("Gapped numbers cover only the candidates, so a prefiltered list keeps its episodes with small numbers and gaps")
+    func gappedLineNumbersCoverTheCandidates() async throws {
+        let lighthouseTitles = [
+            3: "Keeping the Lighthouse",
+            47: "Lighthouse Lenses",
+            90: "A Lighthouse in Fog",
+            151: "Lighthouse Keepers and Their Logs",
+            188: "The Last Lighthouse",
+        ]
+        let episodes = roundupEpisodes(count: 200, replacingTitles: lighthouseTitles)
+        let request = "Make me a playlist about lighthouses"
+
+        let indexed = try await build(episodes, prompt: request)
+        let gapped = try await build(episodes, prompt: request, lineNumbers: .gapped(seed: 42))
+
+        #expect(gapped.scope.kind == .bestMatches)
+        #expect(gapped.candidateIndices == indexed.candidateIndices)
+        #expect(gapped.scope == indexed.scope)
+        #expect(gapped.window == indexed.window)
+        let candidates = PlaylistOrganizerLineNumbers.gapped(for: indexed.candidateIndices, seed: 42)
+        let numbers = gapped.lines.split(separator: "\n").compactMap { Self.splitLineNumber(String($0)).number }
+        #expect(numbers.count == gapped.candidateIndices.count)
+        #expect(numbers == gapped.candidateIndices.compactMap { candidates[$0] })
+        #expect(zip(numbers, numbers.dropFirst()).allSatisfy { (1...3).contains($1 - $0) })
+        #expect((numbers.last ?? 0) <= 9 + 3 * (numbers.count - 1))
+        #expect(gapped.indexByLineNumber.count == gapped.candidateIndices.count)
+        #expect(Set(gapped.indexByLineNumber.values) == Set(gapped.candidateIndices))
+        for (number, index) in zip(numbers, gapped.candidateIndices) {
+            #expect(gapped.episodeIndex(forLineNumber: number) == index, "line \(number)")
+        }
+    }
+
+    @Test("The simpler answer's input carries its own instructions, counts them, and sends the same lines")
+    func simplerAnswerCountsItsOwnInstructions() async throws {
+        let recorder = CountedTexts()
+        let simpler = try await build(ladderEpisodes(), answerStyle: .indicesOnly) { text in
+            recorder.record(text)
+            return PlaylistOrganizerInputBuilderTests.digitHeavyCount(text)
+        }
+        let standard = try await build(ladderEpisodes())
+
+        let instructions = PlaylistOrganizerPrompt.simplerAnswerInstructions
+        let framed = PlaylistOrganizerPrompt.framed(instructions: instructions, prompt: simpler.prompt)
+        #expect(simpler.answerStyle == .indicesOnly)
+        #expect(simpler.instructions == instructions)
+        #expect(!recorder.texts.isEmpty)
+        #expect(recorder.texts.last == framed)
+        #expect(recorder.texts.allSatisfy { $0.hasPrefix(instructions + "\n\n") })
+        #expect(simpler.framedTokenCount == Self.digitHeavyCount(framed))
+        #expect(simpler.prompt == standard.prompt)
+        #expect(simpler.candidateIndices == standard.candidateIndices)
+        #expect(simpler.rung == standard.rung)
+
+        #expect(standard.answerStyle == .standard)
+        #expect(standard.instructions == PlaylistOrganizerPrompt.instructions)
+        #expect(standard.framedTokenCount == Self.digitHeavyCount(PlaylistOrganizerPrompt.framed(prompt: standard.prompt)))
+    }
+
+    @Test("Seeded line numbers are deterministic, start at 1 to 9 and rise by 1 to 3 in index order")
+    func gappedLineNumbersAreDeterministicPerSeed() {
+        let indices = [5, 0, 3, 9, 1, 12]
+        for seed in [0, 1, 7, 42, UInt64.max] {
+            let numbers = PlaylistOrganizerLineNumbers.gapped(for: indices, seed: seed)
+            #expect(numbers == PlaylistOrganizerLineNumbers.gapped(for: indices, seed: seed), "seed \(seed)")
+            #expect(numbers == PlaylistOrganizerLineNumbers.gapped(for: indices.sorted(), seed: seed), "seed \(seed)")
+            #expect(numbers.keys.sorted() == indices.sorted(), "seed \(seed)")
+            let ascending = indices.sorted().compactMap { numbers[$0] }
+            #expect(ascending.count == indices.count, "seed \(seed)")
+            #expect((1...9).contains(ascending.first ?? 0), "seed \(seed)")
+            #expect(zip(ascending, ascending.dropFirst()).allSatisfy { (1...3).contains($1 - $0) }, "seed \(seed)")
+        }
+        let show = Array(0..<100)
+        #expect(PlaylistOrganizerLineNumbers.gapped(for: show, seed: 1) != PlaylistOrganizerLineNumbers.gapped(for: show, seed: 2))
+        #expect(PlaylistOrganizerLineNumbers.gapped(for: [], seed: 7).isEmpty)
+    }
+
     // MARK: - Fixtures
+
+    /// A sent line's leading number and the text after its ". ".
+    private static func splitLineNumber(_ line: String) -> (number: Int?, rest: String) {
+        let digits = line.prefix { $0.isASCII && $0.isNumber }
+        let remainder = line.dropFirst(digits.count)
+        guard !digits.isEmpty, remainder.hasPrefix(". ") else {
+            return (nil, line)
+        }
+        return (Int(digits), String(remainder.dropFirst(2)))
+    }
 
     /// One token per ASCII digit plus one per four other characters: dates
     /// and indices cost far more than prose, as they do for Apple's model.
@@ -511,18 +656,22 @@ struct PlaylistOrganizerInputBuilderTests {
         candidates: PlaylistOrganizerInputOptions.Candidates = .automatic,
         rungs: [PlaylistOrganizerInput.Rung] = PlaylistOrganizerInput.Rung.allCases,
         budget: Int = PlaylistOrganizerInputBuilder.defaultTokenBudget,
+        lineNumbers: PlaylistOrganizerInputOptions.LineNumbers = .index,
+        answerStyle: PlaylistOrganizerAnswerStyle = .standard,
         tokenCount: @escaping @Sendable (String) -> Int = { PlaylistOrganizerInputBuilderTests.digitHeavyCount($0) }
     ) async throws -> PlaylistOrganizerInput {
         var options = PlaylistOrganizerInputOptions()
         options.candidates = candidates
         options.rungs = rungs
         options.budget = budget
+        options.lineNumbers = lineNumbers
         return try await PlaylistOrganizerInputBuilder.build(
             request: PlaylistOrganizerRequest(
                 podcastID: "https://example.com/feed.xml",
                 showTitle: "Example Show",
                 mode: mode,
-                prompt: mode == .prompted ? prompt : nil
+                prompt: mode == .prompted ? prompt : nil,
+                answerStyle: answerStyle
             ),
             episodes: episodes,
             options: options,
@@ -570,5 +719,18 @@ struct PlaylistOrganizerInputBuilderTests {
                 duration: 2_400
             )
         }
+    }
+}
+
+/// Every text the builder asked the token counter to measure, in order.
+private final class CountedTexts: Sendable {
+    private let storage = Mutex<[String]>([])
+
+    var texts: [String] {
+        storage.withLock { $0 }
+    }
+
+    func record(_ text: String) {
+        storage.withLock { $0.append(text) }
     }
 }

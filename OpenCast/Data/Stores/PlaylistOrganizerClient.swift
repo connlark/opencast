@@ -30,8 +30,10 @@ final class PlaylistOrganizerClient {
     /// The same request with its measurements; the evaluation runner forces `options`.
     ///
     /// A decline and an unreadable answer each get one silent retry with the
-    /// same input, because both are stochastic on PCC. A full context steps
-    /// down to a leaner line format (then a smaller budget) and rebuilds.
+    /// same input, because both are stochastic on PCC. The exception is a
+    /// recitation decline, which repeats on the same input: its retry sends
+    /// the same lines renumbered with gaps. A full context steps down to a
+    /// leaner line format (then a smaller budget) and rebuilds. A simpler answer is named on the device.
     /// Nothing about the request, the show or its episodes is logged.
     func run(
         _ request: PlaylistOrganizerRequest,
@@ -78,10 +80,10 @@ final class PlaylistOrganizerClient {
         }
     }
 
-    /// Keeps indices that were sent and still resolve to a library episode,
-    /// in the model's order (the prompt asks for chronological order unless
-    /// the request implies another); drops repeats, and proposals too small
-    /// to be worth saving.
+    /// Keeps numbers that stand for a sent episode that still resolves to a
+    /// library episode, in the model's order (the prompt asks for
+    /// chronological order unless the request implies another); drops
+    /// repeats, and proposals too small to be worth saving.
     nonisolated static func validate(
         _ set: PlaylistProposalSet,
         input: PlaylistOrganizerInput,
@@ -97,8 +99,9 @@ final class PlaylistOrganizerClient {
             var seenIndices = Set<Int>()
             var seenEpisodeIDs = Set<String>()
             var episodes: [EpisodeListItemSnapshot] = []
-            for index in proposal.episodeIndices {
-                guard seenIndices.insert(index).inserted,
+            for number in proposal.episodeIndices {
+                guard let index = input.episodeIndex(forLineNumber: number),
+                      seenIndices.insert(index).inserted,
                       let episode = input.episodesByIndex[index],
                       let snapshot = snapshotsByEpisodeID[episode.episodeID],
                       seenEpisodeIDs.insert(snapshot.episodeID).inserted
@@ -168,12 +171,29 @@ final class PlaylistOrganizerClient {
                 result.attempts += 1
                 isModelTurn = true
                 let response = try await respond(to: input)
-                let drafts = Self.validate(
+                var drafts = Self.validate(
                     response.content,
                     input: input,
                     mode: request.mode,
                     snapshotsByEpisodeID: snapshotsByEpisodeID
                 )
+                if input.answerStyle == .indicesOnly {
+                    var shortTitleByEpisodeID: [String: String] = [:]
+                    for (index, episode) in input.episodesByIndex {
+                        shortTitleByEpisodeID[episode.episodeID] = input.shortTitlesByIndex[index]
+                    }
+                    let titles = PlaylistProposalLocalTitle.titles(
+                        forEpisodeTitles: drafts.map { $0.episodes.map(\.title) },
+                        shortTitles: drafts.map { draft in
+                            draft.episodes.map { shortTitleByEpisodeID[$0.episodeID] ?? $0.title }
+                        },
+                        mode: request.mode,
+                        request: request.prompt
+                    )
+                    for (offset, title) in zip(drafts.indices, titles) {
+                        drafts[offset].title = title
+                    }
+                }
                 result.usage = response.usage
                 result.rawProposals = response.content.playlists
                 result.failure = nil
@@ -192,7 +212,15 @@ final class PlaylistOrganizerClient {
                     if isModelTurn, !hasResentInput {
                         hasResentInput = true
                         result.retriedFailures.append(failure)
-                        retryInput = result.input
+                        // A long run of consecutive line numbers in the
+                        // answer reads as recitation every time; the same
+                        // lines with gapped numbers never form that run.
+                        if failure == .guardrailViolation(.recitation), options.lineNumbers == .index {
+                            options.lineNumbers = .gapped(seed: nil)
+                            retryInput = nil
+                        } else {
+                            retryInput = result.input
+                        }
                         continue
                     }
                     result.outcome = .declined
@@ -237,17 +265,31 @@ final class PlaylistOrganizerClient {
         }
     }
 
+    /// A simpler answer comes back as proposals with no title or rationale,
+    /// so validation treats both answer styles alike.
     private func respond(to input: PlaylistOrganizerInput) async throws -> TranscriptIntelligenceResponse<PlaylistProposalSet> {
-        let session = store.makeSession(instructions: PlaylistOrganizerPrompt.instructions, tools: [])
+        let session = store.makeSession(instructions: input.instructions, tools: [])
         let prompt = input.prompt
-        return try await store.perform(deadline: deadline) {
-            try await session.respond(
-                to: prompt,
-                generating: PlaylistProposalSet.self,
-                options: TranscriptIntelligenceGenerationOptions(
-                    maximumResponseTokens: Self.maximumResponseTokens,
-                    toolCalling: .disallowed
-                )
+        let options = TranscriptIntelligenceGenerationOptions(
+            maximumResponseTokens: Self.maximumResponseTokens,
+            toolCalling: .disallowed
+        )
+        switch input.answerStyle {
+        case .standard:
+            return try await store.perform(deadline: deadline) {
+                try await session.respond(to: prompt, generating: PlaylistProposalSet.self, options: options)
+            }
+        case .indicesOnly:
+            let response = try await store.perform(deadline: deadline) {
+                try await session.respond(to: prompt, generating: PlaylistIndexSet.self, options: options)
+            }
+            let set = response.content
+            return TranscriptIntelligenceResponse(
+                content: PlaylistProposalSet(playlists: set.playlists.map {
+                    PlaylistProposal(title: "", rationale: "", episodeIndices: $0.episodeIndices, confidence: 1)
+                }),
+                usage: response.usage,
+                toolExchanges: response.toolExchanges
             )
         }
     }

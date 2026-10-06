@@ -18,8 +18,11 @@ struct PlaylistOrganizerSheet: View {
     @State private var phase = PlaylistOrganizerSheetPhase.request
     @State private var requestGeneration = 0
     @State private var requestText = ""
-    @State private var suggestsGroups = false
+    /// The path the listener last chose; Try Again resends it.
     @State private var activeMode = PlaylistOrganizerMode.prompted
+    // The simpler answer belongs to one request text and mode: a new
+    // request, the other mode or an edit returns to the standard answer.
+    @State private var answerStyle = PlaylistOrganizerAnswerStyle.standard
     @State private var show: PlaylistOrganizerShow?
     @State private var formScope: PlaylistOrganizerScope?
     @State private var suggestionFormScope: PlaylistOrganizerScope?
@@ -69,10 +72,11 @@ struct PlaylistOrganizerSheet: View {
         case .request:
             PlaylistOrganizerRequestForm(
                 requestText: $requestText,
-                suggestsGroups: $suggestsGroups,
-                scope: suggestsGroups ? suggestionFormScope : formScope,
+                promptedScope: formScope,
+                suggestionScope: suggestionFormScope,
                 canAsk: canAsk,
-                onAsk: ask
+                onAsk: ask,
+                onSuggest: suggest
             )
         case .loading(let startedAt):
             PlaylistOrganizerProgressView(startedAt: startedAt)
@@ -80,6 +84,7 @@ struct PlaylistOrganizerSheet: View {
             PlaylistOrganizerProposalsList(
                 drafts: $drafts,
                 scope: resultScope,
+                answerStyle: answerStyle,
                 onAddEpisodes: showAddEpisodes
             )
         case .empty:
@@ -139,7 +144,9 @@ struct PlaylistOrganizerSheet: View {
         PlaylistOrganizerOutcomeView(
             outcome: outcome,
             mode: activeMode,
+            answerStyle: answerStyle,
             onTryAgain: tryAgain,
+            onTrySimpler: trySimpler,
             onOtherMode: switchMode,
             onEditRequest: editRequest
         )
@@ -170,7 +177,7 @@ struct PlaylistOrganizerSheet: View {
     }
 
     private var canAsk: Bool {
-        suggestsGroups || !trimmedRequest.isEmpty
+        !trimmedRequest.isEmpty
     }
 
     private var hasUnsavedProposals: Bool {
@@ -242,9 +249,9 @@ struct PlaylistOrganizerSheet: View {
             phase = .unavailable(store.availability)
             return
         }
-        let mode: PlaylistOrganizerMode = suggestsGroups ? .unprompted : .prompted
+        let mode = activeMode
         let prompt = mode == .prompted ? trimmedRequest : nil
-        activeMode = mode
+        let style = answerStyle
         phase = .loading(startedAt: .now)
         guard let show = await preparedShow() else {
             return
@@ -253,7 +260,8 @@ struct PlaylistOrganizerSheet: View {
             podcastID: podcastID,
             showTitle: show.title,
             mode: mode,
-            prompt: prompt
+            prompt: prompt,
+            answerStyle: style
         )
         let outcome = await PlaylistOrganizerClient(store: store).organize(
             request,
@@ -277,7 +285,7 @@ struct PlaylistOrganizerSheet: View {
             resultScope = scope
             phase = .empty
         case .cancelled:
-            phase = .request
+            returnToForm()
         case .declined, .limitReached, .offline, .serviceUnavailable, .timedOut, .malformed, .tooLong, .failed:
             // Rate limits and connection failures move the store into a
             // persistent state that the calm state view explains better.
@@ -289,25 +297,49 @@ struct PlaylistOrganizerSheet: View {
         guard canAsk else {
             return
         }
+        send(.prompted)
+    }
+
+    private func suggest() {
+        send(.unprompted)
+    }
+
+    private func send(_ mode: PlaylistOrganizerMode) {
+        activeMode = mode
+        answerStyle = .standard
         requestGeneration += 1
     }
 
+    /// Resends the request as it last went out, simpler answer included.
     private func tryAgain() {
+        requestGeneration += 1
+    }
+
+    /// Shows progress at once: the decline on screen would otherwise redraw
+    /// for one frame with the simpler request's wording.
+    private func trySimpler() {
+        answerStyle = .indicesOnly
+        phase = .loading(startedAt: .now)
         requestGeneration += 1
     }
 
     private func switchMode() {
         switch activeMode {
         case .prompted:
-            suggestsGroups = true
-            requestGeneration += 1
+            phase = .loading(startedAt: .now)
+            send(.unprompted)
         case .unprompted:
-            suggestsGroups = false
-            phase = .request
+            activeMode = .prompted
+            returnToForm()
         }
     }
 
     private func editRequest() {
+        returnToForm()
+    }
+
+    private func returnToForm() {
+        answerStyle = .standard
         phase = .request
     }
 
@@ -328,7 +360,7 @@ struct PlaylistOrganizerSheet: View {
     /// Removing the last proposal leaves nothing to save or edit.
     private func returnToRequestIfEmptied(_ isEmpty: Bool) {
         if isEmpty, phase == .proposals {
-            phase = .request
+            returnToForm()
         }
     }
 

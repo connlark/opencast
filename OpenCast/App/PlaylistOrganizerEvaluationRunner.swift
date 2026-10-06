@@ -6,9 +6,9 @@ import UIKit
 /// Make a Playlist evaluation on a PCC-eligible device or simulator. Reads
 /// the cases, settings and episode fixtures pushed into
 /// `Documents/PlaylistOrganizerEvaluationInputs`, runs every case through
-/// `PlaylistOrganizerClient` with the candidates and line format the case
-/// forces (fixture episodes, never the device library, so returned indices
-/// line up with the labels), and rewrites
+/// `PlaylistOrganizerClient` with the candidates, line format, line numbers
+/// and answer style the case forces (fixture episodes, never the device
+/// library, so returned indices line up with the labels), and rewrites
 /// `Documents/PlaylistOrganizerEvaluation/report.json` after every run so a
 /// partial run is still harvestable; the external evaluation harness scores
 /// it. The report carries episode titles, so they stay in the container and
@@ -206,11 +206,12 @@ enum PlaylistOrganizerEvaluationRunner {
         nan: "NaN"
     )
 
-    /// The model's answer re-encoded in the instructions' JSON shape, so the
+    /// The model's answer re-encoded in the instructions' JSON shape, with
+    /// every number mapped back to the episode index it stands for, so the
     /// harness scores it exactly as it scored answers taken from the model
     /// directly.
-    private static func rawJSON(_ proposals: [PlaylistProposal]) -> String? {
-        let set = RawProposalSet(playlists: proposals.map(RawProposal.init))
+    private static func rawJSON(_ proposals: [PlaylistProposal], input: PlaylistOrganizerInput?) -> String? {
+        let set = RawProposalSet(playlists: proposals.map { RawProposal($0, input: input) })
         let encoder = JSONEncoder()
         encoder.nonConformingFloatEncodingStrategy = nonConformingFloats
         encoder.outputFormatting = .sortedKeys
@@ -250,6 +251,14 @@ enum PlaylistOrganizerEvaluationRunner {
         }
     }
 
+    private static func guardrailSide(of failure: TranscriptIntelligenceFailure) -> String? {
+        if case .guardrailViolation(let side) = failure {
+            side.rawValue
+        } else {
+            nil
+        }
+    }
+
     private static func kind(of failure: TranscriptIntelligenceFailure) -> String {
         switch failure {
         case .cancelled: "cancelled"
@@ -272,6 +281,8 @@ enum PlaylistOrganizerEvaluationRunner {
         case unknownMode(String)
         case unknownVariant(String)
         case unknownLines(String)
+        case unknownAnswerStyle(String)
+        case unknownLineNumbers(String)
         case missingPrefilter(String)
         case invalidRepeats(Int)
         case missingFixture(String)
@@ -283,6 +294,8 @@ enum PlaylistOrganizerEvaluationRunner {
             case .unknownMode(let caseID): "Case \(caseID) has an unknown mode."
             case .unknownVariant(let caseID): "Case \(caseID) has an unknown variant."
             case .unknownLines(let caseID): "Case \(caseID) has an unknown lines value."
+            case .unknownAnswerStyle(let caseID): "Case \(caseID) has an unknown answer style."
+            case .unknownLineNumbers(let caseID): "Case \(caseID) has an unknown line numbers value."
             case .missingPrefilter(let caseID): "Prefiltered case \(caseID) has neither prefilter indices nor a prefilter query."
             case .invalidRepeats(let repeats): "Settings ask for \(repeats) repeats; at least 1 is needed."
             case .missingFixture(let slug): "No fixture was loaded for \(slug)."
@@ -308,6 +321,10 @@ enum PlaylistOrganizerEvaluationRunner {
         var prefilterIndices: [Int]?
         var limitNewest: Int?
         var lines: String?
+        /// standard (default) or indicesOnly.
+        var answerStyle: String?
+        /// index (default, as the sheet sends) or gapped.
+        var lineNumbers: String?
     }
 
     private struct Prefilter: Decodable {
@@ -346,6 +363,8 @@ enum PlaylistOrganizerEvaluationRunner {
         var variant: String?
         var linesRequested: String
         var candidatesName: String
+        var answerStyle: PlaylistOrganizerAnswerStyle
+        var lineNumbers: String
         var options = PlaylistOrganizerInputOptions()
 
         init(_ evaluationCase: EvaluationCase) throws {
@@ -358,6 +377,18 @@ enum PlaylistOrganizerEvaluationRunner {
                 throw InputError.unknownMode(evaluationCase.id)
             }
             self.mode = mode
+
+            guard let answerStyle = PlaylistOrganizerAnswerStyle(
+                rawValue: evaluationCase.answerStyle ?? PlaylistOrganizerAnswerStyle.standard.rawValue
+            ) else {
+                throw InputError.unknownAnswerStyle(evaluationCase.id)
+            }
+            self.answerStyle = answerStyle
+            lineNumbers = evaluationCase.lineNumbers ?? "index"
+            guard ["gapped", "index"].contains(lineNumbers) else {
+                throw InputError.unknownLineNumbers(evaluationCase.id)
+            }
+            options.lineNumbers = lineNumbers == "index" ? .index : .gapped(seed: nil)
 
             if linesRequested != "auto" {
                 guard let rung = PlaylistOrganizerInput.Rung(rawValue: linesRequested) else {
@@ -394,7 +425,8 @@ enum PlaylistOrganizerEvaluationRunner {
                 podcastID: podcastID,
                 showTitle: showTitle,
                 mode: mode,
-                prompt: mode == .prompted ? requestText : nil
+                prompt: mode == .prompted ? requestText : nil,
+                answerStyle: answerStyle
             )
         }
     }
@@ -445,10 +477,12 @@ enum PlaylistOrganizerEvaluationRunner {
         var variant: String?
         var linesRequested: String
         var candidates: String
+        var answerStyle: String
+        var lineNumbers: String
         var runs: [RunReport] = []
 
         private enum CodingKeys: String, CodingKey {
-            case id, fixture, mode, request, variant, linesRequested, candidates, runs
+            case id, fixture, mode, request, variant, linesRequested, candidates, answerStyle, lineNumbers, runs
         }
 
         init(_ plan: CasePlan) {
@@ -459,6 +493,8 @@ enum PlaylistOrganizerEvaluationRunner {
             variant = plan.variant
             linesRequested = plan.linesRequested
             candidates = plan.candidatesName
+            answerStyle = plan.answerStyle.rawValue
+            lineNumbers = plan.lineNumbers
         }
 
         func encode(to encoder: any Encoder) throws {
@@ -470,6 +506,8 @@ enum PlaylistOrganizerEvaluationRunner {
             try container.encode(variant, forKey: .variant)
             try container.encode(linesRequested, forKey: .linesRequested)
             try container.encode(candidates, forKey: .candidates)
+            try container.encode(answerStyle, forKey: .answerStyle)
+            try container.encode(lineNumbers, forKey: .lineNumbers)
             try container.encode(runs, forKey: .runs)
         }
     }
@@ -482,6 +520,8 @@ enum PlaylistOrganizerEvaluationRunner {
         var attempts: Int
         /// Case names of the failures retried before the outcome.
         var retried: [String]
+        /// The side of every guardrail decline in the run, retried or final.
+        var guardrailSides: [String]
         var usage: UsageReport?
         var error: ErrorReport?
         var rawJSON: String?
@@ -491,7 +531,7 @@ enum PlaylistOrganizerEvaluationRunner {
         private enum CodingKeys: String, CodingKey {
             case index, ok, outcome
             case elapsedSeconds = "elapsedS"
-            case attempts, retried, usage, error
+            case attempts, retried, guardrailSides, usage, error
             case rawJSON = "rawJson"
             case sent, playlists
         }
@@ -503,12 +543,14 @@ enum PlaylistOrganizerEvaluationRunner {
             elapsedSeconds = run.elapsed / .seconds(1)
             attempts = run.attempts
             retried = run.retriedFailures.map(PlaylistOrganizerEvaluationRunner.kind(of:))
+            guardrailSides = (run.retriedFailures + [run.failure].compactMap(\.self))
+                .compactMap(PlaylistOrganizerEvaluationRunner.guardrailSide(of:))
             usage = run.usage.map(UsageReport.init)
-            error = ok ? nil : ErrorReport(run, outcome: outcome, mode: plan.mode)
+            error = ok ? nil : ErrorReport(run, outcome: outcome, mode: plan.mode, answerStyle: plan.answerStyle)
             rawJSON = ok || !run.rawProposals.isEmpty
-                ? PlaylistOrganizerEvaluationRunner.rawJSON(run.rawProposals)
+                ? PlaylistOrganizerEvaluationRunner.rawJSON(run.rawProposals, input: run.input)
                 : nil
-            sent = run.input.map { SentReport($0, budget: plan.options.budget) }
+            sent = run.input.map { SentReport($0, budget: plan.options.budget, lineNumbers: plan.lineNumbers) }
             if case .proposals(let drafts, _) = run.outcome {
                 playlists = drafts.map { PlaylistReport($0, indexByEpisodeID: fixture.indexByEpisodeID) }
             } else {
@@ -524,6 +566,7 @@ enum PlaylistOrganizerEvaluationRunner {
             try container.encode(elapsedSeconds, forKey: .elapsedSeconds)
             try container.encode(attempts, forKey: .attempts)
             try container.encode(retried, forKey: .retried)
+            try container.encode(guardrailSides, forKey: .guardrailSides)
             try container.encode(usage, forKey: .usage)
             try container.encode(error, forKey: .error)
             try container.encode(rawJSON, forKey: .rawJSON)
@@ -547,20 +590,41 @@ enum PlaylistOrganizerEvaluationRunner {
         /// name when no model failure caused it.
         var kind: String
         var message: String
+        /// input, output, recitation or unknown for a guardrail decline.
+        var side: String?
 
-        init(_ run: PlaylistOrganizerRun, outcome: String, mode: PlaylistOrganizerMode) {
+        private enum CodingKeys: String, CodingKey {
+            case kind, message, side
+        }
+
+        init(
+            _ run: PlaylistOrganizerRun,
+            outcome: String,
+            mode: PlaylistOrganizerMode,
+            answerStyle: PlaylistOrganizerAnswerStyle
+        ) {
             if let failure = run.failure {
                 kind = PlaylistOrganizerEvaluationRunner.kind(of: failure)
                 message = String(describing: failure)
+                side = PlaylistOrganizerEvaluationRunner.guardrailSide(of: failure)
             } else {
                 kind = outcome
-                message = run.outcome.message(for: mode) ?? outcome
+                message = run.outcome.message(for: mode, answerStyle: answerStyle) ?? outcome
             }
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(kind, forKey: .kind)
+            try container.encode(message, forKey: .message)
+            try container.encode(side, forKey: .side)
         }
     }
 
     private struct SentReport: Encodable {
         var lines: String
+        /// index or gapped.
+        var lineNumbers: String
         var scope: String
         var episodeCount: Int
         var sentCount: Int
@@ -573,15 +637,21 @@ enum PlaylistOrganizerEvaluationRunner {
         var lexicalCount: Int?
         var fillCount: Int?
         var retrievalMilliseconds: Double
+        /// Exactly what the model received, so a decline can be replayed on
+        /// the Mac probe. Episode text stays in the container.
+        var instructions: String
+        var prompt: String
 
         private enum CodingKeys: String, CodingKey {
-            case lines, scope, episodeCount, sentCount, indices, rankedIndices, framedTokens, budget
+            case lines, lineNumbers, scope, episodeCount, sentCount, indices, rankedIndices, framedTokens, budget
             case lexicalCount, fillCount
             case retrievalMilliseconds = "retrievalMs"
+            case instructions, prompt
         }
 
-        init(_ input: PlaylistOrganizerInput, budget: Int) {
+        init(_ input: PlaylistOrganizerInput, budget: Int, lineNumbers: String) {
             lines = input.rung.rawValue
+            self.lineNumbers = lineNumbers
             scope = input.scope.promptText
             episodeCount = input.scope.totalCount
             sentCount = input.candidateIndices.count
@@ -592,11 +662,14 @@ enum PlaylistOrganizerEvaluationRunner {
             lexicalCount = input.window?.lexicalCount
             fillCount = input.window?.fillCount
             retrievalMilliseconds = input.retrievalMilliseconds
+            instructions = input.instructions
+            prompt = input.prompt
         }
 
         func encode(to encoder: any Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(lines, forKey: .lines)
+            try container.encode(lineNumbers, forKey: .lineNumbers)
             try container.encode(scope, forKey: .scope)
             try container.encode(episodeCount, forKey: .episodeCount)
             try container.encode(sentCount, forKey: .sentCount)
@@ -607,6 +680,8 @@ enum PlaylistOrganizerEvaluationRunner {
             try container.encode(lexicalCount, forKey: .lexicalCount)
             try container.encode(fillCount, forKey: .fillCount)
             try container.encode(retrievalMilliseconds, forKey: .retrievalMilliseconds)
+            try container.encode(instructions, forKey: .instructions)
+            try container.encode(prompt, forKey: .prompt)
         }
     }
 
@@ -634,10 +709,20 @@ enum PlaylistOrganizerEvaluationRunner {
         var episodeIndices: [Int]
         var confidence: Double
 
-        init(_ proposal: PlaylistProposal) {
+        /// Index numbers pass through. A gapped number missing from the
+        /// input's table becomes negative, so the harness counts it invalid.
+        init(_ proposal: PlaylistProposal, input: PlaylistOrganizerInput?) {
             title = proposal.title
             rationale = proposal.rationale
-            episodeIndices = proposal.episodeIndices
+            episodeIndices = proposal.episodeIndices.map { number in
+                guard let input else {
+                    return number
+                }
+                if let index = input.episodeIndex(forLineNumber: number) {
+                    return index
+                }
+                return number < 0 ? number : -1 - number
+            }
             confidence = proposal.confidence
         }
     }

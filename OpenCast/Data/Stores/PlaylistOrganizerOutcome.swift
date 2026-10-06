@@ -16,7 +16,10 @@ nonisolated enum PlaylistOrganizerOutcome: Equatable, Sendable {
     case cancelled
     case failed(String)
 
-    func message(for mode: PlaylistOrganizerMode) -> String? {
+    func message(
+        for mode: PlaylistOrganizerMode,
+        answerStyle: PlaylistOrganizerAnswerStyle = .standard
+    ) -> String? {
         switch self {
         case .proposals, .cancelled:
             nil
@@ -24,6 +27,10 @@ nonisolated enum PlaylistOrganizerOutcome: Equatable, Sendable {
             mode == .prompted
                 ? "No matching episodes. Try different words, or suggest groups instead."
                 : "No groups stood out in this show. Ask for a specific playlist instead."
+        case .declined where answerStyle == .indicesOnly:
+            mode == .prompted
+                ? "Apple’s model declined the simpler request too. Try different words, or suggest groups instead."
+                : "Apple’s model declined the simpler request too. Try again, or ask for a specific playlist instead."
         case .declined:
             mode == .prompted
                 ? "Apple’s model declined this request. Try different words, or suggest groups instead."
@@ -50,6 +57,18 @@ nonisolated enum PlaylistOrganizerOutcome: Equatable, Sendable {
         case .declined, .offline, .serviceUnavailable, .timedOut, .malformed, .failed:
             true
         case .proposals, .empty, .limitReached, .tooLong, .cancelled:
+            false
+        }
+    }
+
+    /// The experimental indices-only retry. The outcome view also hides it
+    /// once the declined request was already the simpler one.
+    var offersSimplerRetry: Bool {
+        switch self {
+        case .declined:
+            true
+        case .proposals, .empty, .limitReached, .offline, .serviceUnavailable, .timedOut, .malformed, .tooLong,
+             .cancelled, .failed:
             false
         }
     }

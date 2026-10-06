@@ -149,7 +149,9 @@ export default function SupportPage() {
                 sent, and no opencast server is involved. The feature is
                 labelled Beta. If Apple&apos;s model declines a request,
                 opencast tries once more before telling you, and you can try
-                again. The{" "}
+                again or choose Try a Simpler Answer, which asks only for
+                episode numbers and names the playlists on your device. It is
+                experimental, so results may vary. The{" "}
                 <Link
                   href="/privacy#ai-playlists"
                   className="font-semibold text-foreground"

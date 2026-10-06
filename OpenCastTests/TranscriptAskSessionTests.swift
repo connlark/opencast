@@ -124,7 +124,7 @@ struct TranscriptAskSessionTests {
     func failuresAndSessionLifetime() async throws {
         client.turns = [
             .answer(json: Self.answerJSON("Fine.", citing: [5]), toolExchanges: [Self.exchange(showing: 5...5)]),
-            .failure(.guardrailViolation),
+            .failure(.guardrailViolation(.output)),
             .answer(json: Self.answerJSON("Still fine.", citing: [6]), toolExchanges: [Self.exchange(showing: 6...6)]),
             .failure(.timeout),
             .answer(json: Self.answerJSON("Fresh.", citing: [7]), toolExchanges: [Self.exchange(showing: 7...7)])
@@ -134,7 +134,7 @@ struct TranscriptAskSessionTests {
         session.onTurn = { turns.append($0) }
 
         _ = try await session.ask("One?") { _ in }
-        await #expect(throws: TranscriptIntelligenceFailure.guardrailViolation) {
+        await #expect(throws: TranscriptIntelligenceFailure.guardrailViolation(.output)) {
             _ = try await session.ask("Two?") { _ in }
         }
         _ = try await session.ask("Three?") { _ in }
@@ -152,7 +152,7 @@ struct TranscriptAskSessionTests {
         #expect(seeded.contains("Q: One?\nA: Fine. [#5]"))
         #expect(seeded.contains("Q: Three?\nA: Still fine. [#6]"))
         #expect(!seeded.contains("Two?"))
-        #expect(turns.compactMap(\.failure) == [.guardrailViolation, .timeout])
+        #expect(turns.compactMap(\.failure) == [.guardrailViolation(.output), .timeout])
     }
 
     @Test("A follow-up may cite passages shown earlier in the same model session, but not across a reseed")

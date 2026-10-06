@@ -5531,7 +5531,7 @@ final class OpenCastUITests: XCTestCase {
             timeout: 10,
             in: app
         )
-        assertExists(organizerElement("Playlist Organizer Suggest Toggle", in: app), named: "Suggest groups toggle")
+        assertExists(organizerSuggestButton(in: app), named: "Suggest Groups button")
         let ask = organizerAskButton(in: app)
         assertExists(ask, named: "Ask button")
         XCTAssertFalse(ask.isEnabled, "Ask should stay disabled while the request is empty")
@@ -5641,8 +5641,34 @@ final class OpenCastUITests: XCTestCase {
         )
     }
 
+    /// Suggest Groups runs on its own tap: no request text and no Ask.
+    @MainActor
+    func testSeededMakePlaylistSuggestGroupsFromForm() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.playlistOrganizerEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "available"
+        app.launchEnvironment[Self.playlistOrganizerResponseEnvironmentKey] = "proposals"
+        app.launch()
+
+        openMakePlaylistSheet(in: app)
+        let suggest = organizerSuggestButton(in: app)
+        assertHittable(suggest, named: "Suggest Groups button")
+        XCTAssertFalse(organizerAskButton(in: app).isEnabled, "Ask should stay disabled while the request is empty")
+        XCTAssertTrue(waitForStableFrame(of: suggest), "Suggest Groups should settle before it is tapped")
+        suggest.tap()
+
+        waitForOrganizerElement(
+            app.textFields["playlist-proposal-1-title"],
+            named: "first suggested proposal title field",
+            timeout: 15,
+            in: app
+        )
+        attachSmokeScreenshot(named: "Make a Playlist suggested groups")
+    }
+
     /// Apple's model declining every turn (the app retries once on its own)
-    /// ends in the decline message with both ways forward.
+    /// ends in the decline message with every way forward, the simpler
+    /// answer included.
     @MainActor
     func testSeededMakePlaylistGuardrailShowsDeclineAndTryAgain() throws {
         let app = makeSeededApp(seedsUpNextQueue: true)
@@ -5667,9 +5693,124 @@ final class OpenCastUITests: XCTestCase {
             named: "prompted decline message"
         )
         assertExists(labeledButton("Try Again", in: app), named: "Try Again action")
+        assertExists(organizerSimplerRetryButton(in: app), named: "Try a Simpler Answer action")
         assertExists(labeledButton("Suggest Groups Instead", in: app), named: "Suggest Groups Instead action")
         assertDoesNotExist(app.textFields["playlist-proposal-1-title"], named: "proposals after a decline")
         attachSmokeScreenshot(named: "Make a Playlist decline")
+    }
+
+    /// After the decline, Try a Simpler Answer sends the same list for
+    /// episode numbers only; the app names the playlists itself and marks
+    /// the result as coming from the simpler answer.
+    @MainActor
+    func testSeededMakePlaylistSimplerRetryShowsProposals() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.playlistOrganizerEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "available"
+        app.launchEnvironment[Self.playlistOrganizerResponseEnvironmentKey] = "guardrail-until-simpler"
+        app.launch()
+
+        openMakePlaylistSheet(in: app)
+        askOrganizer("Queued episodes", in: app)
+        waitForOrganizerElement(
+            organizerElement("Playlist Organizer Outcome", in: app),
+            named: "decline outcome",
+            timeout: 60,
+            in: app
+        )
+        assertExists(organizerSimplerRetryButton(in: app), named: "Try a Simpler Answer action")
+        assertExists(organizerElement("Playlist Organizer Simpler Footnote", in: app), named: "simpler answer footnote")
+        attachSmokeScreenshot(named: "Make a Playlist simpler retry offer")
+        tapOrganizerSimplerRetry(in: app)
+
+        let firstTitle = app.textFields["playlist-proposal-1-title"]
+        waitForOrganizerElement(firstTitle, named: "first simpler proposal title field", timeout: 60, in: app)
+        assertExists(organizerElement("Playlist Organizer Proposals", in: app), named: "proposals list")
+        assertExists(
+            organizerElement("Playlist Organizer Simpler Answer Note", in: app),
+            named: "simpler answer note"
+        )
+        // The fake answers with the prompt's line numbers; every one has to
+        // map back to its episode.
+        XCTAssertTrue(
+            waitUntil {
+                proposalEpisodeIdentifiers(1, in: app) == Set(Self.organizerEpisodeIDs.map { "playlist-proposal-1-episode-\($0)" })
+            },
+            "The simpler proposal should list every seeded episode; got \(proposalEpisodeIdentifiers(1, in: app).sorted())"
+        )
+        // The answer carries no names, so the playlist is named after the request.
+        XCTAssertEqual(firstTitle.value as? String, "Queued episodes")
+        attachSmokeScreenshot(named: "Make a Playlist simpler answer")
+    }
+
+    /// A simpler request that Apple's model declines too says so, keeps Try
+    /// Again, and stops offering the simpler answer.
+    @MainActor
+    func testSeededMakePlaylistSimplerRetryDeclinedAgain() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launchArguments += [Self.transcriptIntelligenceEnableArgument, Self.playlistOrganizerEnableArgument]
+        app.launchEnvironment[Self.transcriptIntelligenceAvailabilityEnvironmentKey] = "available"
+        app.launchEnvironment[Self.playlistOrganizerResponseEnvironmentKey] = "guardrail"
+        app.launch()
+
+        openMakePlaylistSheet(in: app)
+        askOrganizer("Queued episodes", in: app)
+        waitForOrganizerElement(
+            organizerElement("Playlist Organizer Outcome", in: app),
+            named: "decline outcome",
+            timeout: 60,
+            in: app
+        )
+        tapOrganizerSimplerRetry(in: app)
+
+        waitForOrganizerElement(
+            elementContaining(label: "declined the simpler request too", in: app),
+            named: "simpler decline message",
+            timeout: 60,
+            in: app
+        )
+        assertDoesNotExist(
+            organizerSimplerRetryButton(in: app),
+            named: "Try a Simpler Answer after the simpler request was declined",
+            timeout: 5
+        )
+        assertDoesNotExist(
+            organizerElement("Playlist Organizer Simpler Footnote", in: app),
+            named: "simpler answer footnote after the simpler request was declined",
+            timeout: 5
+        )
+        assertExists(labeledButton("Try Again", in: app), named: "Try Again action")
+        assertDoesNotExist(app.textFields["playlist-proposal-1-title"], named: "proposals after a simpler decline")
+        attachSmokeScreenshot(named: "Make a Playlist simpler decline")
+
+        // Try Again resends the simpler request: the standard decline and the
+        // simpler offer must not come back.
+        let standardDecline = elementContaining(label: "Apple\u{2019}s model declined this request.", in: app)
+        let tryAgain = labeledButton("Try Again", in: app)
+        assertHittable(tryAgain, named: "Try Again action")
+        XCTAssertTrue(waitForStableFrame(of: tryAgain), "Try Again should settle before it is tapped")
+        tryAgain.tap()
+        XCTAssertFalse(
+            waitUntil(timeout: 4) { standardDecline.exists || organizerSimplerRetryButton(in: app).exists },
+            "Try Again after a simpler decline should resend the simpler request"
+        )
+        waitForOrganizerElement(
+            elementContaining(label: "declined the simpler request too", in: app),
+            named: "simpler decline after Try Again",
+            timeout: 60,
+            in: app
+        )
+
+        // Edit Request clears it: the next Ask is a standard request again.
+        let editRequest = labeledButton("Edit Request", in: app)
+        assertHittable(editRequest, named: "Edit Request action")
+        editRequest.tap()
+        let ask = organizerAskButton(in: app)
+        assertHittable(ask, named: "Ask button", timeout: 10)
+        XCTAssertTrue(waitForStableFrame(of: ask), "Ask should settle before it is tapped")
+        ask.tap()
+        waitForOrganizerElement(standardDecline, named: "standard decline after Edit Request", timeout: 60, in: app)
+        assertExists(organizerSimplerRetryButton(in: app), named: "Try a Simpler Answer after a new request")
     }
 
     /// Visible but not ready: the request is kept and the calm state offers
@@ -6735,6 +6876,43 @@ final class OpenCastUITests: XCTestCase {
         app.buttons.matching(
             NSPredicate(format: "identifier == %@ OR label == %@", "Playlist Organizer Ask", "Ask")
         ).firstMatch
+    }
+
+    @MainActor
+    private func organizerSuggestButton(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "Playlist Organizer Suggest", "Suggest Groups")
+        ).firstMatch
+    }
+
+    /// The decline's experimental retry, by identifier or by its title.
+    @MainActor
+    private func organizerSimplerRetryButton(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(
+                format: "identifier == %@ OR label == %@",
+                "Playlist Organizer Retry Simpler",
+                "Try a Simpler Answer"
+            )
+        ).firstMatch
+    }
+
+    /// Taps Try a Simpler Answer once the decline's actions have settled.
+    @MainActor
+    private func tapOrganizerSimplerRetry(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let simpler = organizerSimplerRetryButton(in: app)
+        assertHittable(simpler, named: "Try a Simpler Answer action", file: file, line: line)
+        XCTAssertTrue(
+            waitForStableFrame(of: simpler),
+            "Try a Simpler Answer should settle before it is tapped",
+            file: file,
+            line: line
+        )
+        simpler.tap()
     }
 
     /// Types a request and asks. The field's return key asks as well, and

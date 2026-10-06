@@ -38,8 +38,8 @@ extension TranscriptIntelligenceFailure {
 
     private nonisolated static func failure(_ error: LanguageModelError) -> TranscriptIntelligenceFailure {
         switch error {
-        case .guardrailViolation:
-            .guardrailViolation
+        case .guardrailViolation(let detail):
+            .guardrailViolation(TranscriptIntelligenceGuardrailSide(debugDescription: detail.debugDescription))
         case .refusal:
             .refusal
         case .rateLimited(let detail):

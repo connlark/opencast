@@ -5,8 +5,9 @@ import Foundation
 /// errors here; the scripted test client throws these directly.
 nonisolated enum TranscriptIntelligenceFailure: Error, Equatable, Sendable {
     case cancelled
-    /// Apple's input or output guardrail declined the passage. Never retried.
-    case guardrailViolation
+    /// Apple's input or output guardrail declined the passage; the side says
+    /// which check fired.
+    case guardrailViolation(TranscriptIntelligenceGuardrailSide)
     case refusal
     case rateLimited(resetDate: Date?)
     case quotaLimitReached(resetDate: Date?)

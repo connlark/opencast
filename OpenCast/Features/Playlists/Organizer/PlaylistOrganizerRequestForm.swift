@@ -1,14 +1,15 @@
 import SwiftUI
 
-/// The request: a typed playlist idea or suggested groups. The footer says
-/// what the request will send, every time, before anything leaves the device.
+/// The request: a typed playlist idea, or suggested groups at a tap. Each
+/// path says what it will send, every time, before anything leaves the device.
 struct PlaylistOrganizerRequestForm: View {
     @Binding var requestText: String
-    @Binding var suggestsGroups: Bool
-    /// How much of the show the current choice looks through; nil until it is counted.
-    let scope: PlaylistOrganizerScope?
+    /// How much of the show each path looks through; nil until it is counted.
+    let promptedScope: PlaylistOrganizerScope?
+    let suggestionScope: PlaylistOrganizerScope?
     let canAsk: Bool
     let onAsk: () -> Void
+    let onSuggest: () -> Void
 
     var body: some View {
         Form {
@@ -20,18 +21,29 @@ struct PlaylistOrganizerRequestForm: View {
                 )
                 .submitLabel(.go)
                 .onSubmit(onAsk)
-                .disabled(suggestsGroups)
                 .accessibilityIdentifier("Playlist Organizer Request Field")
-
-                Toggle(PlaylistOrganizerCopy.suggestToggleTitle, isOn: $suggestsGroups)
-                    .accessibilityIdentifier("Playlist Organizer Suggest Toggle")
             } header: {
                 Text(PlaylistOrganizerCopy.fieldTitle)
             } footer: {
+                if let promptedScope {
+                    Text(PlaylistOrganizerCopy.formScope(promptedScope))
+                        .accessibilityIdentifier("Playlist Organizer Scope")
+                }
+            }
+
+            Section {
+                Button(PlaylistOrganizerCopy.suggestButtonTitle, systemImage: "sparkles", action: onSuggest)
+                    .accessibilityIdentifier("Playlist Organizer Suggest")
+            } header: {
+                Text(PlaylistOrganizerCopy.suggestSectionTitle)
+            } footer: {
                 VStack(alignment: .leading, spacing: 6) {
-                    if let scope {
-                        Text(PlaylistOrganizerCopy.formScope(scope))
-                            .accessibilityIdentifier("Playlist Organizer Scope")
+                    VStack(alignment: .leading) {
+                        Text(PlaylistOrganizerCopy.suggestExplanation)
+                        if let suggestionScope {
+                            Text(PlaylistOrganizerCopy.formScope(suggestionScope))
+                                .accessibilityIdentifier("Playlist Organizer Suggestion Scope")
+                        }
                     }
                     Text(PlaylistOrganizerDisclosureCopy.body)
                         .accessibilityIdentifier("Playlist Organizer Disclosure")

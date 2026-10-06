@@ -74,19 +74,32 @@ nonisolated enum PlaylistOrganizerInputBuilder {
         let show = collapsingWhitespace(request.showTitle)
         let requestText = collapsingWhitespace(request.prompt ?? "")
         let isPrompted = request.mode == .prompted && !requestText.isEmpty
+        let instructions = PlaylistOrganizerPrompt.instructions(for: request.answerStyle)
         let candidates = try await chooseCandidates(
             options.candidates,
             prepared: prepared,
             isPrompted: isPrompted,
             requestText: requestText
         )
+        // Numbered once over the candidates, so the numbers stay small and
+        // every rung and trim of this build (trims only drop candidates)
+        // sends the same number for the same episode.
+        let lineNumberByIndex: [Int: Int]? = switch options.lineNumbers {
+        case .index:
+            nil
+        case .gapped(let seed):
+            PlaylistOrganizerLineNumbers.gapped(
+                for: candidates.ranked,
+                seed: seed ?? PlaylistOrganizerLineNumbers.randomSeed()
+            )
+        }
 
         func input(rung: PlaylistOrganizerInput.Rung, ranked: [Int], kind: PlaylistOrganizerScope.Kind) -> PlaylistOrganizerInput {
             let indices = ranked.sorted()
             let scope = PlaylistOrganizerScope(kind: kind, sentCount: indices.count, totalCount: ordered.count)
             let lines = indices
                 .compactMap { preparedByIndex[$0] }
-                .map { line(for: $0, rung: rung) }
+                .map { line(for: $0, number: lineNumberByIndex?[$0.index] ?? $0.index, rung: rung) }
                 .joined(separator: "\n")
             let prompt = isPrompted
                 ? PlaylistOrganizerPrompt.promptedTemplate(
@@ -97,8 +110,14 @@ nonisolated enum PlaylistOrganizerInputBuilder {
                 )
                 : PlaylistOrganizerPrompt.unpromptedTemplate(show: show, scope: scope.promptText, lines: lines)
             var sentEpisodes: [Int: PlaylistOrganizerEpisode] = [:]
+            var indexByLineNumber: [Int: Int] = [:]
+            var shortTitles: [Int: String] = [:]
             for index in indices {
                 sentEpisodes[index] = episodesByIndex[index]
+                shortTitles[index] = preparedByIndex[index]?.shortTitle
+                if let number = lineNumberByIndex?[index] {
+                    indexByLineNumber[number] = index
+                }
             }
             return PlaylistOrganizerInput(
                 prompt: prompt,
@@ -109,7 +128,11 @@ nonisolated enum PlaylistOrganizerInputBuilder {
                 episodesByIndex: sentEpisodes,
                 framedTokenCount: 0,
                 window: window(candidates.window, keeping: ranked),
-                retrievalMilliseconds: candidates.retrievalMilliseconds
+                retrievalMilliseconds: candidates.retrievalMilliseconds,
+                instructions: instructions,
+                answerStyle: request.answerStyle,
+                indexByLineNumber: indexByLineNumber,
+                shortTitlesByIndex: shortTitles
             )
         }
 
@@ -120,7 +143,9 @@ nonisolated enum PlaylistOrganizerInputBuilder {
         for rung in rungs {
             try Task.checkCancellation()
             var attempt = input(rung: rung, ranked: ranked, kind: kind)
-            attempt.framedTokenCount = try await tokenCount(PlaylistOrganizerPrompt.framed(prompt: attempt.prompt))
+            attempt.framedTokenCount = try await tokenCount(
+                PlaylistOrganizerPrompt.framed(instructions: instructions, prompt: attempt.prompt)
+            )
             if attempt.framedTokenCount < options.budget {
                 return attempt
             }
@@ -140,7 +165,9 @@ nonisolated enum PlaylistOrganizerInputBuilder {
                 kind = .newest
             }
             var attempt = input(rung: lastRung, ranked: ranked, kind: kind)
-            attempt.framedTokenCount = try await tokenCount(PlaylistOrganizerPrompt.framed(prompt: attempt.prompt))
+            attempt.framedTokenCount = try await tokenCount(
+                PlaylistOrganizerPrompt.framed(instructions: instructions, prompt: attempt.prompt)
+            )
             if attempt.framedTokenCount < options.budget {
                 return attempt
             }
@@ -225,10 +252,11 @@ nonisolated enum PlaylistOrganizerInputBuilder {
 
     // MARK: Lines
 
-    private static func line(for episode: PreparedEpisode, rung: PlaylistOrganizerInput.Rung) -> String {
+    /// `number` is the episode index, or its gapped line number.
+    private static func line(for episode: PreparedEpisode, number: Int, rung: PlaylistOrganizerInput.Rung) -> String {
         switch rung {
         case .snippets, .titles:
-            let line = "\(episode.index). " + [episode.date, episode.length, episode.title]
+            let line = "\(number). " + [episode.date, episode.length, episode.title]
                 .compactMap { $0 }
                 .joined(separator: " · ")
             if rung == .snippets, let snippet = episode.snippet {
@@ -236,7 +264,7 @@ nonisolated enum PlaylistOrganizerInputBuilder {
             }
             return line
         case .compact:
-            return "\(episode.index). " + (episode.year.map { "\($0) · " } ?? "") + episode.shortTitle
+            return "\(number). " + (episode.year.map { "\($0) · " } ?? "") + episode.shortTitle
         }
     }
 

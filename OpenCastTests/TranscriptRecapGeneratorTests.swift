@@ -83,14 +83,14 @@ struct TranscriptRecapGeneratorTests {
     @Test("A guardrail violation surfaces once, with no retry and nothing cached")
     func guardrailDoesNotRetry() async throws {
         defer { try? cache.removeAll() }
-        client.turns = [.failure(.guardrailViolation)]
+        client.turns = [.failure(.guardrailViolation(.output))]
         let generator = makeGenerator()
 
-        await #expect(throws: TranscriptIntelligenceFailure.guardrailViolation) {
+        await #expect(throws: TranscriptIntelligenceFailure.guardrailViolation(.output)) {
             _ = try await generator.recap(document: document, kind: .lastFiveMinutes, playhead: 600)
         }
         #expect(client.sessions.count == 1)
-        #expect(store.lastFailure == .guardrailViolation)
+        #expect(store.lastFailure == .guardrailViolation(.output))
         #expect(try cache.entry(for: TranscriptRecapCacheKey(document: document, kind: .lastFiveMinutes, playhead: 600, modelIdentifier: "scripted")) == nil)
     }
 

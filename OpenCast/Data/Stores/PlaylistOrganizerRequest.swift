@@ -3,4 +3,5 @@ nonisolated struct PlaylistOrganizerRequest: Equatable, Sendable {
     var showTitle: String
     var mode: PlaylistOrganizerMode
     var prompt: String?
+    var answerStyle = PlaylistOrganizerAnswerStyle.standard
 }

@@ -12,7 +12,7 @@
 # Measured baseline: shard1 960s + 3 unmeasured (40 tests) |
 # shard2 984s + 2 unmeasured (41 tests) | serial 37s + 5 unmeasured (6 tests)
 
-# --- shard1 (est 960s + 11 unmeasured) ---
+# --- shard1 (est 960s + 12 unmeasured) ---
 shard1 OpenCastUITests/OpenCastUITests/testAddPodcastRSSClipboardPrefillScreenshots
 shard1 OpenCastUITests/OpenCastUITests/testCloudUnavailableDetectPassOffersOneTapOnDeviceFallback
 shard1 OpenCastUITests/OpenCastUITests/testEpisodeMenuShowsRemoteSurfacesOnFreshLaunchWithoutSettings
@@ -68,8 +68,10 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededTranscriptRecapEntriesHiddenWhe
 shard1 OpenCastUITests/OpenCastUITests/testSeededTranscriptAskShowsUnavailableStateWhenAppleIntelligenceOff
 shard1 OpenCastUITests/OpenCastUITests/testSeededMakePlaylistEntryHiddenWhenDeviceIneligible
 shard1 OpenCastUITests/OpenCastUITests/testSeededMakePlaylistGuardrailShowsDeclineAndTryAgain
+shard1 OpenCastUITests/OpenCastUITests/testSeededMakePlaylistSimplerRetryDeclinedAgain
 shard1 OpenCastUITests/OpenCastUITests/testSeededMakePlaylistShowsUnavailableStateWithTryAgainWhenModelNotReady
 shard1 OpenCastUITests/OpenCastUITests/testSeededMakePlaylistCollectionEntryHiddenWhenDeviceIneligible
+shard1 OpenCastUITests/OpenCastUITests/testSeededMakePlaylistSuggestGroupsFromForm
 shard1 OpenCastUITests/OpenCastUITests/testSeededCompactLibraryGridSortAndNewEpisodeBadges
 shard1 OpenCastUITests/OpenCastUITests/testSeededOfflineRefreshShowsNoticeWithoutFlaggingFeeds
 shard1 OpenCastUITests/OpenCastUITests/testSeededStopPlaybackFromMoreMenuRemovesCardAndMiniPlayer
@@ -82,7 +84,7 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededPlaylistPlayWithEmptyQueueLoads
 shard1 OpenCastUITests/OpenCastUITests/testSeededPlaylistSourceShowsInMiniPlayerNowPlayingAndUpNextSheet
 shard1 OpenCastUITests/OpenCastUITests/testSeededSmartPlaylistChipsEditRulesInPlaceAndPlay
 
-# --- shard2 (est 984s + 6 unmeasured) ---
+# --- shard2 (est 984s + 7 unmeasured) ---
 shard2 OpenCastUITests/OpenCastUITests/testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty
 shard2 OpenCastUITests/OpenCastUITests/testEmptyLibraryNamesTheICloudAccountCheckWhileItIsPending
 shard1 OpenCastUITests/OpenCastUITests/testEmptyLibraryStopsWaitingForAnICloudAccountCheckThatDoesNotAnswer
@@ -133,6 +135,7 @@ shard2 OpenCastUITests/OpenCastUITests/testSeededTranscriptRecapDisclosureThenRe
 shard2 OpenCastUITests/OpenCastUITests/testSeededTranscriptAskDisclosureThenAnswerAndSeek
 shard2 OpenCastUITests/OpenCastUITests/testSeededTranscriptAskRendersUnverifiedAndUnanswerableAnswers
 shard2 OpenCastUITests/OpenCastUITests/testSeededMakePlaylistRequestProposalsAndSave
+shard2 OpenCastUITests/OpenCastUITests/testSeededMakePlaylistSimplerRetryShowsProposals
 shard2 OpenCastUITests/OpenCastUITests/testSeededMakePlaylistFromCollectionPicksShowAndSaves
 shard2 OpenCastUITests/OpenCastUITests/testSeededCompactLibraryLoadsStoredGridAtLargestText
 shard2 OpenCastUITests/OpenCastUITests/testSeededSleepTimerSheetMarksActiveChoiceAndExtends

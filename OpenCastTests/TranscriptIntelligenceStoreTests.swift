@@ -159,13 +159,13 @@ struct TranscriptIntelligenceStoreTests {
     @Test("Guardrail declines are per-request outcomes that keep the feature available")
     func guardrailKeepsAvailable() async {
         let store = makeStore()
-        client.turns = [.failure(.guardrailViolation)]
+        client.turns = [.failure(.guardrailViolation(.output))]
         let session = store.makeSession(instructions: "", tools: [])
 
-        await #expect(throws: TranscriptIntelligenceFailure.guardrailViolation) {
+        await #expect(throws: TranscriptIntelligenceFailure.guardrailViolation(.output)) {
             _ = try await store.perform { try await session.respond(to: "q", options: TranscriptIntelligenceGenerationOptions()) }
         }
-        #expect(store.lastFailure == .guardrailViolation)
+        #expect(store.lastFailure == .guardrailViolation(.output))
         #expect(store.availability == .available)
     }
 

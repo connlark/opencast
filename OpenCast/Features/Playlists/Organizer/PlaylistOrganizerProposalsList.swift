@@ -1,12 +1,14 @@
 import SwiftUI
 
 /// The model's proposals, one section each, between a line saying what part
-/// of the show the model saw and the Apple Intelligence footer.
+/// of the show the model saw (and, after a simpler answer, a note that the
+/// app named them) and the Apple Intelligence footer.
 struct PlaylistOrganizerProposalsList: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Binding var drafts: [PlaylistProposalDraft]
     let scope: PlaylistOrganizerScope?
+    let answerStyle: PlaylistOrganizerAnswerStyle
     let onAddEpisodes: (UUID) -> Void
 
     var body: some View {
@@ -17,6 +19,14 @@ struct PlaylistOrganizerProposalsList: View {
                     .foregroundStyle(.secondary)
                     .listRowBackground(Color.clear)
                     .accessibilityIdentifier("Playlist Organizer Result Scope")
+            }
+
+            if answerStyle == .indicesOnly {
+                Label(PlaylistOrganizerCopy.simplerResult, systemImage: "flask")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
+                    .accessibilityIdentifier("Playlist Organizer Simpler Answer Note")
             }
 
             ForEach(Array(drafts.enumerated()), id: \.element.id) { offset, draft in
