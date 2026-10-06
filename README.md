@@ -6,7 +6,7 @@
 
 **opencast** is a native iPhone and iPad podcast app. Your phone transcribes an episode, opencast finds the ad breaks in the transcript and skips them, and one tap undoes a skip. It is free, and it works with any RSS feed.
 
-no account. no tracking. no ads of our own. **your listening is not a growth funnel.**
+no account. no tracking. no ads of our own.
 
 <p>
   <a href="https://apps.apple.com/us/app/opencast/id6766770733"><img src="Server/Website/public/badges/app-store-badge-black.svg" alt="Download opencast on the App Store" height="40"></a>
