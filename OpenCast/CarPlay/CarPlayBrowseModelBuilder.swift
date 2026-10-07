@@ -223,7 +223,7 @@ enum CarPlayBrowseModelBuilder {
                 symbol = url == nil ? "music.note.list" : nil
             case .smart:
                 url = artworkURL(summary)
-                symbol = url == nil ? summary.symbolName ?? PlaylistSymbolCover.defaultSymbolName : nil
+                symbol = url == nil ? PlaylistSymbolCover.defaultSymbolName : nil
             }
             return .playlist(
                 CarPlayPlaylistRow(

@@ -138,7 +138,7 @@ struct PlaylistStoreTests {
             ]
         )
 
-        let reloaded = PlaylistStore()
+        let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         reloaded.load(modelContext: ModelContext(fixture.container))
 
         #expect(reloaded.playlists == fixture.store.playlists)
@@ -209,7 +209,7 @@ struct PlaylistStoreTests {
         #expect(fixture.store.itemsByPlaylistID[playlist.playlistID]?.map(\.episodeID) == expectedOrder)
         #expect(try storedItems(in: storedContext).map(\.episodeID) == expectedOrder)
 
-        let reloaded = PlaylistStore()
+        let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         reloaded.load(modelContext: ModelContext(fixture.container))
         #expect(reloaded.itemsByPlaylistID[playlist.playlistID]?.map(\.episodeID) == expectedOrder)
     }
@@ -272,7 +272,10 @@ struct PlaylistStoreTests {
         }
         try context.save()
         let probe = PlaylistStoreProbe()
-        let store = PlaylistStore(saveModelContext: probe.save, now: probe.nextDate)
+        let store = PlaylistStore(
+            saveSyncedStore: SyncedStoreSelfSaveLedger(performSave: probe.save).save,
+            now: probe.nextDate
+        )
         store.load(modelContext: context)
         #expect(store.itemsByPlaylistID["renumber"]?.map(\.episodeID) == ["episode-0", "episode-1", "episode-2"])
 
@@ -315,7 +318,7 @@ struct PlaylistStoreTests {
             )
         }
         try context.save()
-        let store = PlaylistStore()
+        let store = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         store.load(modelContext: context)
 
         let added = store.add([episode("fresh")], to: "legacy", modelContext: context)
@@ -437,7 +440,7 @@ struct PlaylistStoreTests {
     @Test("An identity re-key is published only once its save commits and skips an unloaded store")
     func identityRekeyPublishesOnCommit() throws {
         let successorPodcastID = "https://example.com/new.xml"
-        let unloaded = PlaylistStore()
+        let unloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         var unloadedChanges = 0
         unloaded.onPlaylistsChanged = { unloadedChanges += 1 }
         let unloadedContext = ModelContext(try OpenCastModelContainerFactory.make(inMemory: true))
@@ -650,7 +653,7 @@ struct PlaylistStoreTests {
             )
         )
         try context.save()
-        let store = PlaylistStore()
+        let store = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
 
         store.load(modelContext: context)
 
@@ -823,7 +826,7 @@ struct PlaylistStoreTests {
         let storedRecords = try storedPlaylists(in: ModelContext(fixture.container))
         #expect(storedRecords.count == 9)
         #expect(storedRecords.allSatisfy { $0.ruleJSON == PlaylistRule.default.encodedJSON() })
-        let reloaded = PlaylistStore()
+        let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         reloaded.load(modelContext: ModelContext(fixture.container))
         #expect(reloaded.playlists.count == 9)
         #expect(reloaded.playlists.allSatisfy { $0.rule == .default })
@@ -887,7 +890,7 @@ struct PlaylistStoreTests {
         #expect(fixture.store.lastErrorMessage == nil)
         let stored = try #require(try storedPlaylists(in: ModelContext(fixture.container)).first)
         #expect(stored.ruleJSON == expected.encodedJSON())
-        let reloaded = PlaylistStore()
+        let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         reloaded.load(modelContext: ModelContext(fixture.container))
         #expect(reloaded.playlists.first?.rule == expected)
     }
@@ -932,10 +935,10 @@ struct PlaylistStoreTests {
         )
         try context.save()
         var saveCount = 0
-        let store = PlaylistStore(saveModelContext: { modelContext in
+        let store = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger(performSave: { modelContext in
             saveCount += 1
             try modelContext.save()
-        })
+        }).save)
         store.load(modelContext: context)
 
         #expect(store.setRule(.default, for: "smart-nil", modelContext: context))
@@ -1038,7 +1041,7 @@ struct PlaylistStoreTests {
             )
         }
         try context.save()
-        let store = PlaylistStore()
+        let store = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
 
         store.load(modelContext: context)
 
@@ -1297,7 +1300,7 @@ struct PlaylistStoreTests {
         #expect(fixture.store.itemsByPlaylistID[playlist.playlistID]?.map(\.sortKey) == storedRecords.map(\.sortKey))
         _ = try expectBumpedUpdatedAt(playlist.playlistID, since: updatedAt, fixture: fixture)
 
-        let reloaded = PlaylistStore()
+        let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         reloaded.load(modelContext: ModelContext(fixture.container))
         #expect(reloaded.itemsByPlaylistID[playlist.playlistID]?.map(\.episodeID) == newestFirst)
     }
@@ -1449,7 +1452,449 @@ struct PlaylistStoreTests {
 
     private static let january = Date(timeIntervalSince1970: 1_767_355_200)
     private static let february = Date(timeIntervalSince1970: 1_770_033_600)
+    @Test("Deleting a playlist writes one playlist tombstone in the same save and none per item")
+    func deleteWritesOnePlaylistTombstone() throws {
+        let fixture = try makeFixture()
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let added = fixture.store.add([episode("a"), episode("b")], to: playlist.playlistID, modelContext: fixture.context)
+        #expect(added == 2)
+        let saveCount = fixture.probe.saveCount
+
+        #expect(fixture.store.delete(playlist.playlistID, modelContext: fixture.context))
+
+        #expect(fixture.probe.saveCount == saveCount + 1)
+        let storedContext = ModelContext(fixture.container)
+        let tombstones = try storedTombstones(in: storedContext)
+        #expect(tombstones.count == 1)
+        #expect(tombstones.first?.playlistID == playlist.playlistID)
+        #expect(tombstones.first?.episodeID == nil)
+        #expect(tombstones.first?.deletedAt == fixture.probe.latestDate)
+        #expect(try storedPlaylists(in: storedContext).isEmpty)
+        #expect(try storedItems(in: storedContext).isEmpty)
+    }
+
+    @Test("Deleting a playlist whose rows are already gone still writes its tombstone")
+    func deleteOfMemoryOnlyPlaylistWritesTombstone() throws {
+        let fixture = try makeFixture()
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let otherContext = ModelContext(fixture.container)
+        for record in try storedPlaylists(in: otherContext) {
+            otherContext.delete(record)
+        }
+        try otherContext.save()
+        let saveCount = fixture.probe.saveCount
+
+        #expect(fixture.store.delete(playlist.playlistID, modelContext: fixture.context))
+
+        #expect(fixture.probe.saveCount == saveCount + 1)
+        #expect(fixture.store.playlists.isEmpty)
+        let tombstones = try storedTombstones(in: ModelContext(fixture.container))
+        #expect(tombstones.map(\.playlistID) == [playlist.playlistID])
+        #expect(tombstones.first?.episodeID == nil)
+    }
+
+    @Test("Removing an episode writes one item tombstone for the pair and deletes its twin row")
+    func removeWritesItemTombstoneAndDeletesTwin() throws {
+        let fixture = try makeFixture()
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let added = fixture.store.add([episode("a"), episode("b")], to: playlist.playlistID, modelContext: fixture.context)
+        #expect(added == 2)
+        let listedB = try #require(fixture.store.itemsByPlaylistID[playlist.playlistID]?.last)
+        fixture.context.insert(
+            itemRow(itemID: "b-twin", playlistID: playlist.playlistID, episodeID: "b", dedupeUUID: Self.lastDedupeUUID)
+        )
+        try fixture.context.save()
+        let saveCount = fixture.probe.saveCount
+
+        #expect(fixture.store.remove(itemIDs: [listedB.itemID], from: playlist.playlistID, modelContext: fixture.context))
+
+        #expect(fixture.probe.saveCount == saveCount + 1)
+        let storedContext = ModelContext(fixture.container)
+        #expect(try storedItems(in: storedContext).map(\.episodeID) == ["a"])
+        let tombstones = try storedTombstones(in: storedContext)
+        #expect(tombstones.count == 1)
+        #expect(tombstones.first?.playlistID == playlist.playlistID)
+        #expect(tombstones.first?.episodeID == "b")
+        #expect(tombstones.first?.deletedAt == fixture.probe.latestDate)
+        #expect(fixture.store.itemsByPlaylistID[playlist.playlistID]?.map(\.episodeID) == ["a"])
+    }
+
+    @Test("Removing an item whose row is already gone still writes its tombstone")
+    func removeOfMemoryOnlyItemWritesTombstone() throws {
+        let fixture = try makeFixture()
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let added = fixture.store.add([episode("a"), episode("b")], to: playlist.playlistID, modelContext: fixture.context)
+        #expect(added == 2)
+        let listedB = try #require(fixture.store.itemsByPlaylistID[playlist.playlistID]?.last)
+        let otherContext = ModelContext(fixture.container)
+        let rowB = try #require(try storedItems(in: otherContext).first { $0.episodeID == "b" })
+        otherContext.delete(rowB)
+        try otherContext.save()
+
+        #expect(fixture.store.remove(itemIDs: [listedB.itemID], from: playlist.playlistID, modelContext: fixture.context))
+
+        let tombstones = try storedTombstones(in: ModelContext(fixture.container))
+        #expect(tombstones.map(\.episodeID) == ["b"])
+        #expect(tombstones.first?.playlistID == playlist.playlistID)
+        #expect(fixture.store.itemsByPlaylistID[playlist.playlistID]?.map(\.episodeID) == ["a"])
+    }
+
+    @Test("A failed delete or remove rolls the tombstone back with the rows")
+    func failedSaveRollsBackTombstones() throws {
+        let fixture = try makeFixture()
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let added = fixture.store.add([episode("a"), episode("b")], to: playlist.playlistID, modelContext: fixture.context)
+        #expect(added == 2)
+        let itemID = try #require(fixture.store.itemsByPlaylistID[playlist.playlistID]?.first?.itemID)
+        fixture.probe.failsSaves = true
+
+        #expect(!fixture.store.remove(itemIDs: [itemID], from: playlist.playlistID, modelContext: fixture.context))
+        #expect(try fixture.context.fetch(FetchDescriptor<PlaylistTombstoneRecord>()).isEmpty)
+        #expect(try fixture.context.fetch(FetchDescriptor<PlaylistItemRecord>()).count == 2)
+
+        #expect(!fixture.store.delete(playlist.playlistID, modelContext: fixture.context))
+        #expect(try fixture.context.fetch(FetchDescriptor<PlaylistTombstoneRecord>()).isEmpty)
+        #expect(try fixture.context.fetch(FetchDescriptor<PlaylistRecord>()).count == 1)
+        #expect(try fixture.context.fetch(FetchDescriptor<PlaylistItemRecord>()).count == 2)
+        #expect(try storedTombstones(in: ModelContext(fixture.container)).isEmpty)
+    }
+
+    @Test("A reload over unchanged rows publishes nothing and does not notify")
+    func reloadWithoutChangesIsQuiet() throws {
+        let fixture = try makeFixture()
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let added = fixture.store.add([episode("a"), episode("b")], to: playlist.playlistID, modelContext: fixture.context)
+        #expect(added == 2)
+        let playlistsBefore = fixture.store.playlists
+        let itemsBefore = fixture.store.itemsByPlaylistID
+        var changeCount = 0
+        fixture.store.onPlaylistsChanged = { changeCount += 1 }
+
+        let change = fixture.store.reload(modelContext: fixture.context)
+
+        #expect(change == PlaylistReloadChange())
+        #expect(changeCount == 0)
+        #expect(fixture.store.playlists == playlistsBefore)
+        #expect(fixture.store.itemsByPlaylistID == itemsBefore)
+    }
+
+    @Test("A reload lists one row per twin pair (the smallest playlist identity, the newest-added item), and reports repair")
+    func reloadListsTwinWinners() throws {
+        let fixture = try makeFixture()
+        fixture.store.load(modelContext: fixture.context)
+        let older = Date(timeIntervalSince1970: 1_775_000_000)
+        fixture.context.insert(
+            PlaylistRecord(
+                playlistID: "twin",
+                name: "Winner Identity",
+                createdAt: older,
+                updatedAt: older,
+                dedupeUUID: Self.firstDedupeUUID
+            )
+        )
+        fixture.context.insert(
+            PlaylistRecord(
+                playlistID: "twin",
+                name: "Newer Copy",
+                createdAt: older,
+                updatedAt: older.addingTimeInterval(60),
+                dedupeUUID: Self.lastDedupeUUID
+            )
+        )
+        // The item twins invert the playlist pick: the smallest identity was
+        // added first, so the larger identity's newer add is the listed row.
+        fixture.context.insert(
+            itemRow(itemID: "loser-item", playlistID: "twin", episodeID: "a", dedupeUUID: Self.firstDedupeUUID)
+        )
+        fixture.context.insert(
+            itemRow(
+                itemID: "winner-item",
+                playlistID: "twin",
+                episodeID: "a",
+                addedAt: Self.march.addingTimeInterval(60),
+                dedupeUUID: Self.lastDedupeUUID
+            )
+        )
+        try fixture.context.save()
+        var changeCount = 0
+        fixture.store.onPlaylistsChanged = { changeCount += 1 }
+
+        let change = fixture.store.reload(modelContext: fixture.context)
+
+        #expect(change.didChange)
+        #expect(change.needsRepair)
+        #expect(change.removedPlaylistIDs.isEmpty)
+        #expect(change.renamedPlaylistIDs.isEmpty)
+        #expect(changeCount == 1)
+        #expect(fixture.store.playlists.map(\.name) == ["Winner Identity"])
+        #expect(fixture.store.itemsByPlaylistID["twin"]?.map(\.itemID) == ["winner-item"])
+        #expect(fixture.store.playlists.first?.itemCount == 1)
+        #expect(try storedItems(in: ModelContext(fixture.container)).count == 2)
+    }
+
+    @Test("A reload hides a tombstoned playlist and a shadowed item, reports repair, and deletes no row")
+    func reloadHidesShadowedRows() throws {
+        let fixture = try makeFixture()
+        let kept = try #require(fixture.store.create(name: "Kept", kind: .manual, modelContext: fixture.context))
+        let deleted = try #require(fixture.store.create(name: "Deleted", kind: .manual, modelContext: fixture.context))
+        let added = fixture.store.add([episode("a"), episode("b")], to: kept.playlistID, modelContext: fixture.context)
+        #expect(added == 2)
+        let addedAt = fixture.probe.latestDate
+        fixture.context.insert(PlaylistTombstoneRecord(playlistID: deleted.playlistID, deletedAt: .distantPast))
+        fixture.context.insert(PlaylistTombstoneRecord(playlistID: kept.playlistID, episodeID: "a", deletedAt: addedAt))
+        try fixture.context.save()
+
+        let change = fixture.store.reload(modelContext: fixture.context)
+
+        #expect(change.didChange)
+        #expect(change.needsRepair)
+        #expect(change.removedPlaylistIDs == [deleted.playlistID])
+        #expect(fixture.store.playlists.map(\.playlistID) == [kept.playlistID])
+        #expect(fixture.store.itemsByPlaylistID[kept.playlistID]?.map(\.episodeID) == ["b"])
+        #expect(fixture.store.itemsByPlaylistID[deleted.playlistID] == nil)
+        let storedContext = ModelContext(fixture.container)
+        #expect(try storedPlaylists(in: storedContext).count == 2)
+        #expect(try storedItems(in: storedContext).count == 2)
+    }
+
+    @Test("A reload reports the playlists that left and the ones renamed behind the store")
+    func reloadReportsRemovedAndRenamed() throws {
+        let fixture = try makeFixture()
+        let unchanged = try #require(fixture.store.create(name: "Unchanged", kind: .manual, modelContext: fixture.context))
+        let removed = try #require(fixture.store.create(name: "Removed", kind: .manual, modelContext: fixture.context))
+        let renamed = try #require(fixture.store.create(name: "Renamed", kind: .manual, modelContext: fixture.context))
+        for record in try storedPlaylists(in: fixture.context) {
+            if record.playlistID == removed.playlistID {
+                fixture.context.delete(record)
+            } else if record.playlistID == renamed.playlistID {
+                record.name = "Evening"
+            }
+        }
+        try fixture.context.save()
+        var changeCount = 0
+        fixture.store.onPlaylistsChanged = { changeCount += 1 }
+
+        let change = fixture.store.reload(modelContext: fixture.context)
+
+        #expect(change.didChange)
+        #expect(!change.needsRepair)
+        #expect(change.removedPlaylistIDs == [removed.playlistID])
+        #expect(change.renamedPlaylistIDs == [renamed.playlistID])
+        #expect(changeCount == 1)
+        #expect(Set(fixture.store.playlists.map(\.playlistID)) == [unchanged.playlistID, renamed.playlistID])
+        #expect(fixture.store.playlists.first { $0.playlistID == renamed.playlistID }?.name == "Evening")
+    }
+
+    @Test("A reload drops the smart evaluations of the playlists that left")
+    func reloadDropsRemovedEvaluations() throws {
+        let fixture = try makeFixture()
+        let removed = try #require(fixture.store.create(name: "Removed", kind: .smart, modelContext: fixture.context))
+        let kept = try #require(fixture.store.create(name: "Kept", kind: .smart, modelContext: fixture.context))
+        let cache = fixture.store.smartEvaluations
+        let key = memoKey()
+        _ = cache.evaluation(for: removed.playlistID, key: key) { [episode("a")] }
+        _ = cache.evaluation(for: kept.playlistID, key: key) { [episode("b")] }
+        #expect(cache.computeCount == 2)
+        let otherContext = ModelContext(fixture.container)
+        for record in try storedPlaylists(in: otherContext) where record.playlistID == removed.playlistID {
+            otherContext.delete(record)
+        }
+        try otherContext.save()
+
+        let change = fixture.store.reload(modelContext: fixture.context)
+
+        #expect(change.removedPlaylistIDs == [removed.playlistID])
+        let recomputed = cache.evaluation(for: removed.playlistID, key: key) { [] }
+        #expect(recomputed == .empty)
+        #expect(cache.computeCount == 3)
+        let untouched = cache.evaluation(for: kept.playlistID, key: key) { [] }
+        #expect(untouched.episodes.map(\.episodeID) == ["b"])
+        #expect(cache.computeCount == 3)
+    }
+
+    @Test("After a committed identity re-key a reload reports no change")
+    func reloadAfterCommittedRekeyIsQuiet() throws {
+        let successorPodcastID = "https://example.com/new.xml"
+        let fixture = try makeFixture()
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let added = fixture.store.add([episode("a"), episode("old")], to: playlist.playlistID, modelContext: fixture.context)
+        #expect(added == 2)
+        var changeCount = 0
+        fixture.store.onPlaylistsChanged = { changeCount += 1 }
+
+        // The applier rewrites the rows in the same context and the same
+        // save as the memory staging, then the save commits.
+        try fixture.store.migrateEpisodeSidecars(
+            from: "old",
+            to: "new",
+            canonicalPodcastID: successorPodcastID,
+            modelContext: fixture.context
+        )
+        let departed = try #require(try storedItems(in: fixture.context).first { $0.episodeID == "old" })
+        departed.episodeID = "new"
+        departed.podcastID = successorPodcastID
+        fixture.context.insert(
+            PlaylistTombstoneRecord(playlistID: playlist.playlistID, episodeID: "old", deletedAt: fixture.probe.latestDate)
+        )
+        try fixture.context.save()
+        fixture.store.finishEpisodeSidecarMigration(committed: true)
+        #expect(changeCount == 1)
+
+        let change = fixture.store.reload(modelContext: fixture.context)
+
+        #expect(change == PlaylistReloadChange())
+        #expect(changeCount == 1)
+        #expect(fixture.store.itemsByPlaylistID[playlist.playlistID]?.map(\.episodeID) == ["a", "new"])
+    }
+
+    @Test("A reload never rolls back the context's pending changes")
+    func reloadKeepsPendingChanges() throws {
+        let fixture = try makeFixture()
+        _ = try #require(fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context))
+        fixture.context.insert(SubscriptionRecord(feedURL: "https://example.com/pending.xml", title: "Pending Show"))
+        #expect(fixture.context.hasChanges)
+
+        fixture.store.reload(modelContext: fixture.context)
+
+        #expect(fixture.context.hasChanges)
+        #expect(fixture.context.insertedModelsArray.contains { $0 is SubscriptionRecord })
+    }
+
+    @Test("Move and sort work on the listed rows while a twin item row waits for repair")
+    func moveAndSortIgnoreTwinRows() throws {
+        let fixture = try makeFixture()
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let added = fixture.store.add(
+            [
+                episode("a", publishedAt: Self.march),
+                episode("b", publishedAt: Self.march.addingTimeInterval(60)),
+                episode("c", publishedAt: Self.march.addingTimeInterval(120))
+            ],
+            to: playlist.playlistID,
+            modelContext: fixture.context
+        )
+        #expect(added == 3)
+        fixture.context.insert(
+            itemRow(itemID: "b-twin", playlistID: playlist.playlistID, episodeID: "b", dedupeUUID: Self.lastDedupeUUID)
+        )
+        try fixture.context.save()
+        let saveCount = fixture.probe.saveCount
+
+        #expect(
+            fixture.store.move(
+                fromOffsets: IndexSet(integer: 2),
+                toOffset: 0,
+                in: playlist.playlistID,
+                modelContext: fixture.context
+            )
+        )
+        #expect(fixture.store.itemsByPlaylistID[playlist.playlistID]?.map(\.episodeID) == ["c", "a", "b"])
+        #expect(fixture.probe.saveCount == saveCount + 1)
+
+        #expect(fixture.store.sortItems(in: playlist.playlistID, by: .oldestFirst, modelContext: fixture.context))
+        #expect(fixture.store.itemsByPlaylistID[playlist.playlistID]?.map(\.episodeID) == ["a", "b", "c"])
+        #expect(fixture.probe.saveCount == saveCount + 2)
+        #expect(fixture.store.lastErrorMessage == nil)
+
+        let change = fixture.store.reload(modelContext: fixture.context)
+        #expect(!change.didChange)
+        #expect(change.needsRepair)
+        #expect(try storedItems(in: ModelContext(fixture.container)).contains { $0.itemID == "b-twin" })
+    }
+
+    @Test("Adding treats an episode whose row a tombstone shadows as not a member")
+    func addTreatsShadowedRowAsNonMember() throws {
+        let fixture = try makeFixture()
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let firstAdded = fixture.store.add([episode("a")], to: playlist.playlistID, modelContext: fixture.context)
+        #expect(firstAdded == 1)
+        let shadowedItemID = try #require(fixture.store.itemsByPlaylistID[playlist.playlistID]?.first?.itemID)
+        fixture.context.insert(
+            PlaylistTombstoneRecord(playlistID: playlist.playlistID, episodeID: "a", deletedAt: fixture.probe.latestDate)
+        )
+        try fixture.context.save()
+        let change = fixture.store.reload(modelContext: fixture.context)
+        #expect(change.needsRepair)
+        #expect(fixture.store.itemsByPlaylistID[playlist.playlistID]?.isEmpty != false)
+
+        let added = fixture.store.add([episode("a")], to: playlist.playlistID, modelContext: fixture.context)
+
+        #expect(added == 1)
+        let listed = try #require(fixture.store.itemsByPlaylistID[playlist.playlistID])
+        #expect(listed.map(\.episodeID) == ["a"])
+        #expect(listed.first?.itemID != shadowedItemID)
+    }
+
+    @Test("Item rows whose playlist is not listed stay out of memory and stay in the store")
+    func parentlessItemRowsStayStored() throws {
+        let fixture = try makeFixture()
+        fixture.context.insert(itemRow(itemID: "ghost-item", playlistID: "ghost", episodeID: "a"))
+        try fixture.context.save()
+        fixture.store.load(modelContext: fixture.context)
+        #expect(fixture.store.itemsByPlaylistID["ghost"] == nil)
+
+        let playlist = try #require(
+            fixture.store.create(name: "Commute", kind: .manual, modelContext: fixture.context)
+        )
+        let added = fixture.store.add([episode("a")], to: playlist.playlistID, modelContext: fixture.context)
+        #expect(added == 1)
+        let change = fixture.store.reload(modelContext: fixture.context)
+
+        #expect(!change.didChange)
+        #expect(fixture.store.itemsByPlaylistID["ghost"] == nil)
+        let ghostRows = try storedItems(in: ModelContext(fixture.container)).filter { $0.playlistID == "ghost" }
+        #expect(ghostRows.map(\.itemID) == ["ghost-item"])
+    }
+
     private static let march = Date(timeIntervalSince1970: 1_772_452_800)
+    /// Below and above every uppercase `UUID().uuidString`, so a hand-made
+    /// twin loses or wins against a row the store minted.
+    private static let firstDedupeUUID = "00000000-0000-0000-0000-000000000000"
+    private static let lastDedupeUUID = "zzzzzzzz-0000-0000-0000-000000000000"
+
+    private func itemRow(
+        itemID: String,
+        playlistID: String,
+        episodeID: String,
+        addedAt: Date = Self.march,
+        dedupeUUID: String = UUID().uuidString
+    ) -> PlaylistItemRecord {
+        PlaylistItemRecord(
+            itemID: itemID,
+            playlistID: playlistID,
+            episodeID: episodeID,
+            podcastID: "https://example.com/feed.xml",
+            sortKey: "1",
+            addedAt: addedAt,
+            updatedAt: Self.march,
+            episodeTitle: "Episode \(episodeID)",
+            podcastTitle: "Example Show",
+            duration: 60,
+            dedupeUUID: dedupeUUID
+        )
+    }
+
+    private func storedTombstones(in context: ModelContext) throws -> [PlaylistTombstoneRecord] {
+        try context.fetch(FetchDescriptor<PlaylistTombstoneRecord>())
+    }
 
     private func makeFixture() throws -> (
         store: PlaylistStore,
@@ -1459,7 +1904,10 @@ struct PlaylistStoreTests {
     ) {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let probe = PlaylistStoreProbe()
-        let store = PlaylistStore(saveModelContext: probe.save, now: probe.nextDate)
+        let store = PlaylistStore(
+            saveSyncedStore: SyncedStoreSelfSaveLedger(performSave: probe.save).save,
+            now: probe.nextDate
+        )
         return (store, probe, ModelContext(container), container)
     }
 

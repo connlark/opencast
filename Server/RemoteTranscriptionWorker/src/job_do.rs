@@ -383,14 +383,6 @@ impl TranscriptionJob {
         }
     }
 
-    /// Jobs from app versions that predate the `media_profile` declaration:
-    /// the signal for retiring `origin::LEGACY_MEDIA_USER_AGENT`.
-    async fn bump_legacy_media_profile(&self, legacy_media_profile: bool) {
-        if legacy_media_profile {
-            self.bump("jobs_created_legacy_media_profile", 1).await;
-        }
-    }
-
     // --- Route handlers ---
 
     async fn handle_create(&self, req: &mut Request) -> Result<Response> {
@@ -445,7 +437,6 @@ impl TranscriptionJob {
         record.episode_title = message.episode_title;
         record.podcast_title = message.podcast_title;
         record.media_profile = message.media_profile;
-        let legacy_media_profile = crate::origin::uses_legacy_media_profile(message.media_profile);
         record.state_deadline_at = Some(now + config.staging_origin_deadline_seconds);
         self.write_record(&record).await?;
         // Arm the alarm before the counter bump: a reset between write_record
@@ -475,12 +466,10 @@ impl TranscriptionJob {
                 }
             };
             self.bump("jobs_created", 1).await;
-            self.bump_legacy_media_profile(legacy_media_profile).await;
             return self.status_response(&record, None);
         }
         self.schedule(Duration::from_secs(0)).await?;
         self.bump("jobs_created", 1).await;
-        self.bump_legacy_media_profile(legacy_media_profile).await;
         self.status_response(&record, None)
     }
 
@@ -3867,10 +3856,7 @@ impl TranscriptionJob {
                 .set("accept-encoding", crate::origin::MEDIA_ACCEPT_ENCODING)
                 .ok();
             headers
-                .set(
-                    "user-agent",
-                    crate::origin::media_user_agent(record.media_profile),
-                )
+                .set("user-agent", crate::origin::MEDIA_USER_AGENT)
                 .ok();
             let mut init = RequestInit::new();
             init.with_method(Method::Get)

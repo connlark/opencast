@@ -7,6 +7,8 @@ struct SettingsSyncDetailsSection: View {
 
     @State private var subscriptionRecordCount: Int?
     @State private var progressRecordCount: Int?
+    @State private var playlistRecordCount: Int?
+    @State private var playlistItemRecordCount: Int?
     @State private var errorMessage: String?
     @State private var refreshID: UUID?
 
@@ -28,6 +30,18 @@ struct SettingsSyncDetailsSection: View {
                 Text(progressRecordCount.map { "\($0)" } ?? "Not Loaded")
             } label: {
                 Label("Progress Rows", systemImage: "waveform.path.ecg")
+            }
+
+            LabeledContent {
+                Text(playlistRecordCount.map { "\($0)" } ?? "Not Loaded")
+            } label: {
+                Label("Playlist Rows", systemImage: "music.note.list")
+            }
+
+            LabeledContent {
+                Text(playlistItemRecordCount.map { "\($0)" } ?? "Not Loaded")
+            } label: {
+                Label("Playlist Episode Rows", systemImage: "list.bullet")
             }
 
             LabeledContent {
@@ -71,6 +85,8 @@ struct SettingsSyncDetailsSection: View {
         do {
             subscriptionRecordCount = try modelContext.fetchCount(FetchDescriptor<SubscriptionRecord>())
             progressRecordCount = try modelContext.fetchCount(FetchDescriptor<EpisodeProgressRecord>())
+            playlistRecordCount = try modelContext.fetchCount(FetchDescriptor<PlaylistRecord>())
+            playlistItemRecordCount = try modelContext.fetchCount(FetchDescriptor<PlaylistItemRecord>())
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription

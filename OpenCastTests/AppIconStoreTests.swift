@@ -57,11 +57,11 @@ struct AppIconStoreTests {
 
     @Test("Selecting the current option is a no-op")
     func selectingCurrentOptionIsNoOp() async {
-        let application = AlternateIconApplyingSpy(alternateIconName: "AppIconGraphite")
+        let application = AlternateIconApplyingSpy(alternateIconName: "AppIconFern")
         let store = AppIconStore(application: application)
         store.load()
 
-        await store.select(.graphite)
+        await store.select(.fern)
 
         #expect(application.appliedNames.isEmpty)
     }
@@ -72,7 +72,7 @@ struct AppIconStoreTests {
         let store = AppIconStore(application: application)
         store.load()
 
-        await store.select(.graphite)
+        await store.select(.fern)
 
         #expect(store.selection == .primary)
         #expect(store.lastErrorMessage?.hasPrefix("Unable to change the app icon") == true)

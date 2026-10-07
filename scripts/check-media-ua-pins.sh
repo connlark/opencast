@@ -4,17 +4,14 @@
 # (Rust), and the benchmark harness (Python) present the same URL-free
 # User-Agent with identity encoding, so all three fetch the same origin
 # representation. The app declares the profile number when it creates a
-# transcription job and the backend fetches with that profile's User-Agent;
-# jobs that declare nothing come from app versions that still download with
-# the legacy profile-1 value, which only the backend keeps, until those
-# versions age out.
+# transcription job; the backend records it and fetches with the current
+# profile for every job. The profile-1 value was retired on 2026-10-05 and may
+# exist nowhere in the tree.
 #
 # Every declaration must match exactly once (a shadowed duplicate can hide
-# drift), every request site must use its named constant or the backend's
-# per-job selector, and the raw literals may exist nowhere else. Changing the
-# profile edits every site and this script's expectations together, keeps the
-# previous value as the backend's legacy User-Agent, and ships the backend
-# before the app.
+# drift), every request site must use its named constant, and the raw
+# literals may exist nowhere else. Changing the profile edits every site and
+# this script's expectations together and ships the backend before the app.
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,7 +19,7 @@ cd "$repo_dir"
 
 expected_profile='2'
 expected="OpenCast-Media/${expected_profile}"
-expected_legacy='OpenCast-Media/1 (+https://opencast.mobile)'
+retired_legacy='OpenCast-Media/1'
 expected_encoding='identity'
 
 swift_decl="OpenCast/Data/Stores/OpenCastMediaRequestProfile.swift"
@@ -81,9 +78,6 @@ check_declaration "$spec_decl" 's/^const MEDIA_PROFILE = (.*);$/\1/p' "$expected
 check_declaration "$swift_decl" 's/^ *static let acceptEncoding = "(.*)"$/\1/p' "$expected_encoding" "media accept-encoding"
 check_declaration "$rust_decl" 's/^pub const MEDIA_ACCEPT_ENCODING: &str = "(.*)";$/\1/p' "$expected_encoding" "media accept-encoding"
 
-check_declaration "$rust_decl" 's/^pub const LEGACY_MEDIA_USER_AGENT: &str = "(.*)";$/\1/p' "$expected_legacy" "legacy media user-agent"
-check_declaration "$spec_decl" 's/^const LEGACY_MEDIA_USER_AGENT = "(.*)";$/\1/p' "$expected_legacy" "legacy media user-agent"
-
 # --- Request sites: every header set must reference the named constant. -----
 
 # Swift downloader: both media headers must come from the profile.
@@ -98,21 +92,18 @@ if ! grep 'forHTTPHeaderField: "Accept-Encoding"' "$swift_use" \
   fail "$swift_use no longer sets Accept-Encoding from OpenCastMediaRequestProfile.acceptEncoding"
 fi
 
-# Swift job create: the app declares the profile it downloads with, or the
-# backend falls back to the legacy User-Agent for its origin fetch.
+# Swift job create: the app declares the profile it downloads with, so the
+# backend's records show which profile each job's device copy used.
 if ! grep -q 'mediaProfile: OpenCastMediaRequestProfile\.version' "$swift_create"; then
   fail "$swift_create no longer declares mediaProfile: OpenCastMediaRequestProfile.version on create"
 fi
 
-# Rust origin fetch: every user-agent header set must use the per-job
-# selector, and the encoding must be the named constant.
-rust_ua_sites="$(grep -c '"user-agent"' "$rust_use" || true)"
-rust_ua_selected="$(grep -A2 '"user-agent"' "$rust_use" \
-  | grep -c 'crate::origin::media_user_agent(record\.media_profile)' || true)"
-if [[ "$rust_ua_sites" -eq 0 ]]; then
+# Rust origin fetch: every user-agent header set must use the named
+# constant, and so must the encoding.
+if ! grep -q '"user-agent"' "$rust_use"; then
   fail "$rust_use no longer sets a user-agent header (request-site drift?)"
-elif [[ "$rust_ua_selected" -ne "$rust_ua_sites" ]]; then
-  fail "$rust_use sets a user-agent that is not origin::media_user_agent(record.media_profile)"
+elif grep '"user-agent"' "$rust_use" | grep -qv 'crate::origin::MEDIA_USER_AGENT'; then
+  fail "$rust_use sets a user-agent that is not origin::MEDIA_USER_AGENT"
 fi
 if grep '"accept-encoding"' "$rust_use" | grep -qv 'MEDIA_ACCEPT_ENCODING'; then
   fail "$rust_use sets an accept-encoding that is not origin::MEDIA_ACCEPT_ENCODING"
@@ -131,8 +122,8 @@ if ! grep -q '"media_profile": MEDIA_PROFILE' "$python_use"; then
 fi
 
 # --- Raw-literal sweep: media user-agent bytes may exist only at the
-# declarations (and inside this script); the legacy value only in the
-# backend and the suite that checks its selection. -------------------------
+# declarations (and inside this script); the retired profile-1 value
+# nowhere. ------------------------------------------------------------------
 
 sweep() {
   grep -rlF --include='*.swift' --include='*.rs' --include='*.py' \
@@ -154,17 +145,13 @@ if [[ -n "$stray" ]]; then
 $stray"
 fi
 
-allowed_legacy_files="$rust_decl
-$spec_decl
-scripts/check-media-ua-pins.sh"
-
-stray_legacy="$(sweep "$expected_legacy" | grep -Fxv "$allowed_legacy_files" || true)"
+stray_legacy="$(sweep "$retired_legacy" | grep -Fxv "scripts/check-media-ua-pins.sh" || true)"
 if [[ -n "$stray_legacy" ]]; then
-  fail "legacy media user-agent outside the backend's per-job selection:
+  fail "the retired profile-1 media user-agent is back:
 $stray_legacy"
 fi
 
 if [[ "$status" -eq 0 ]]; then
-  echo "PASS: media profile $expected_profile ($expected) pinned at declarations, request sites, and literal sweep; legacy value backend-only"
+  echo "PASS: media profile $expected_profile ($expected) pinned at declarations, request sites, and literal sweep; profile 1 absent"
 fi
 exit "$status"

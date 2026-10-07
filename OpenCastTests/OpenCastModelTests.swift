@@ -36,7 +36,10 @@ struct OpenCastModelTests {
         let syncedEntities = [
             try #require(schema.entity(for: SubscriptionRecord.self)),
             try #require(schema.entity(for: EpisodeProgressRecord.self)),
-            try #require(schema.entity(for: SyncTombstoneRecord.self))
+            try #require(schema.entity(for: SyncTombstoneRecord.self)),
+            try #require(schema.entity(for: PlaylistRecord.self)),
+            try #require(schema.entity(for: PlaylistItemRecord.self)),
+            try #require(schema.entity(for: PlaylistTombstoneRecord.self))
         ]
 
         for entity in syncedEntities {
@@ -58,13 +61,15 @@ struct OpenCastModelTests {
 
     @Test("Playlist records are shaped for sync")
     func playlistRecordsAreSyncShaped() throws {
-        let schema = OpenCastModelContainerFactory.localSchema
+        let schema = OpenCastModelContainerFactory.syncedSchema
         let playlistEntities = [
             try #require(schema.entity(for: PlaylistRecord.self)),
-            try #require(schema.entity(for: PlaylistItemRecord.self))
+            try #require(schema.entity(for: PlaylistItemRecord.self)),
+            try #require(schema.entity(for: PlaylistTombstoneRecord.self))
         ]
         #expect(OpenCastModelContainerFactory.fullSchema.entity(for: PlaylistRecord.self) != nil)
         #expect(OpenCastModelContainerFactory.fullSchema.entity(for: PlaylistItemRecord.self) != nil)
+        #expect(OpenCastModelContainerFactory.fullSchema.entity(for: PlaylistTombstoneRecord.self) != nil)
 
         for entity in playlistEntities {
             let uniqueAttributeNames = entity.attributes
@@ -90,6 +95,30 @@ struct OpenCastModelTests {
                 "\(entity.name) has attributes without defaults: \(undefaultedAttributeNames.joined(separator: ", "))"
             )
         }
+    }
+
+    @Test("Playlists live in the synced store and the full schema is the union of both stores")
+    func playlistModelsLiveInTheSyncedStore() {
+        let syncedNames = Set(OpenCastModelContainerFactory.syncedSchema.entities.map(\.name))
+        let localNames = Set(OpenCastModelContainerFactory.localSchema.entities.map(\.name))
+        let fullNames = Set(OpenCastModelContainerFactory.fullSchema.entities.map(\.name))
+        let playlistNames: Set = [
+            String(describing: PlaylistRecord.self),
+            String(describing: PlaylistItemRecord.self),
+            String(describing: PlaylistTombstoneRecord.self)
+        ]
+
+        #expect(syncedNames.count == 6)
+        #expect(playlistNames.isSubset(of: syncedNames))
+        #expect(localNames.isDisjoint(with: playlistNames))
+        #expect(localNames.isDisjoint(with: syncedNames))
+        #expect(fullNames == syncedNames.union(localNames))
+        #expect(fullNames.count == 16)
+    }
+
+    @Test("The device-local store location names the local store file")
+    func localStoreURLNamesTheLocalStore() {
+        #expect(OpenCastModelContainerFactory.localStoreURL.lastPathComponent == "LocalDeviceData.store")
     }
 
     @Test("Playlist records round-trip with typed kind and origin")
@@ -140,7 +169,6 @@ struct OpenCastModelTests {
         #expect(fetchedPlaylist.ruleJSON == "{\"version\":1}")
         #expect(fetchedPlaylist.hidesPlayed)
         #expect(fetchedPlaylist.tintKey == "teal")
-        #expect(fetchedPlaylist.symbolName == nil)
         #expect(fetchedPlaylist.createdAt == createdAt)
         #expect(!fetchedPlaylist.dedupeUUID.isEmpty)
 

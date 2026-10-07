@@ -203,9 +203,9 @@ export default function HomePage() {
                   <p className="feature-label">Yours, not ours</p>
                   <h3>no account. no tracking.</h3>
                   <p>
-                    No opencast login, no analytics SDK. Subscriptions and
-                    progress sync through your private iCloud. MIT-licensed
-                    code you can read.
+                    No opencast login, no analytics SDK. Subscriptions,
+                    progress, and playlists sync through your private iCloud.
+                    MIT-licensed code you can read.
                   </p>
                 </div>
                 <div className="privacy-tags" aria-hidden="true">

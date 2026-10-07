@@ -107,11 +107,16 @@ final class DataNukeRunner {
     /// write, so it deposits a self-save credit like every other — but only
     /// when it deleted a synced row: a save that touches the local store
     /// alone posts no synced-store notification for the credit to swallow.
+    /// It writes no tombstone, playlist tombstones included: Delete Data
+    /// removes the synced rows on every device signed in to the account.
     private func deleteAllModelRows(modelContext: ModelContext) throws {
         var deletedSyncedRowCount = 0
         deletedSyncedRowCount += try Self.deleteAll(SubscriptionRecord.self, modelContext: modelContext)
         deletedSyncedRowCount += try Self.deleteAll(EpisodeProgressRecord.self, modelContext: modelContext)
         deletedSyncedRowCount += try Self.deleteAll(SyncTombstoneRecord.self, modelContext: modelContext)
+        deletedSyncedRowCount += try Self.deleteAll(PlaylistRecord.self, modelContext: modelContext)
+        deletedSyncedRowCount += try Self.deleteAll(PlaylistItemRecord.self, modelContext: modelContext)
+        deletedSyncedRowCount += try Self.deleteAll(PlaylistTombstoneRecord.self, modelContext: modelContext)
         try Self.deleteAll(PodcastCacheRecord.self, modelContext: modelContext)
         try Self.deleteAll(EpisodeCacheRecord.self, modelContext: modelContext)
         try Self.deleteAll(RefreshLogRecord.self, modelContext: modelContext)
@@ -122,8 +127,6 @@ final class DataNukeRunner {
         try Self.deleteAll(EpisodeTranscriptAnalysisRecord.self, modelContext: modelContext)
         try Self.deleteAll(AdFreePassQueueItemRecord.self, modelContext: modelContext)
         try Self.deleteAll(UpNextQueueItemRecord.self, modelContext: modelContext)
-        try Self.deleteAll(PlaylistRecord.self, modelContext: modelContext)
-        try Self.deleteAll(PlaylistItemRecord.self, modelContext: modelContext)
         if deletedSyncedRowCount > 0 {
             try library.saveSyncedStore(modelContext)
         } else {

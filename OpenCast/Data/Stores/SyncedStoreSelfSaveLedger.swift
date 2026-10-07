@@ -33,7 +33,12 @@ final class SyncedStoreSelfSaveLedger {
             + modelContext.changedModelsArray
             + modelContext.deletedModelsArray
         return dirtiedModels.contains { model in
-            model is SubscriptionRecord || model is EpisodeProgressRecord || model is SyncTombstoneRecord
+            model is SubscriptionRecord
+                || model is EpisodeProgressRecord
+                || model is SyncTombstoneRecord
+                || model is PlaylistRecord
+                || model is PlaylistItemRecord
+                || model is PlaylistTombstoneRecord
         }
     }
     #endif

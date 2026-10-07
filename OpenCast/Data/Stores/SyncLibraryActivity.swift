@@ -44,13 +44,13 @@ enum SyncLibraryActivity: Equatable, Sendable {
     var detail: String {
         switch self {
         case .idle:
-            "Subscriptions and listening progress are up to date."
+            "Subscriptions, listening progress, and playlists are up to date."
         case .checkingAccount:
             "Checking whether iCloud sync is available on this device."
         case .waitingForImports:
-            "Looking for subscriptions and progress saved in your iCloud account."
+            "Looking for subscriptions, progress, and playlists saved in your iCloud account."
         case .reloading:
-            "Applying imported subscription and progress changes."
+            "Applying imported subscription, progress, and playlist changes."
         case .repairingDuplicates:
             "Merging duplicate subscription or progress records from other devices."
         case .syncingFeeds:

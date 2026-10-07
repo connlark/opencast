@@ -35,11 +35,10 @@ const GRANT = 7932;
 // expireStateDeadline).
 const STATE_DEADLINE_SECONDS = 600;
 const ORIGIN_HOST = "https://origin.example.com";
-// The origin-fetch UA per declared media profile; pinned against the Worker's
-// constants by scripts/check-media-ua-pins.sh.
+// The origin-fetch media profile; pinned against the Worker's constants by
+// scripts/check-media-ua-pins.sh.
 const MEDIA_PROFILE = 2;
 const MEDIA_USER_AGENT = "OpenCast-Media/2";
-const LEGACY_MEDIA_USER_AGENT = "OpenCast-Media/1 (+https://opencast.mobile)";
 // Every origin request the Worker sends, in order, with its media headers.
 const originRequests = [];
 const ORIGIN_URL = `${ORIGIN_HOST}/audio.mp3`;
@@ -1012,19 +1011,22 @@ describe("remote transcription dev lane", () => {
     });
   });
 
-  it("fetches the origin with the declared media profile, legacy when undeclared", async () => {
-    // Apps declaring profile 2 download with the URL-free UA; older apps
-    // declare nothing and keep the legacy one, so the server copy mirrors
-    // whichever app created the job — on every redirect hop. Nothing spent.
+  it("fetches the origin with the current media profile, declared or not", async () => {
+    // Profile 1 is retired: a job that declares profile 2, declares
+    // nothing, or declares profile 1 fetches with the URL-free UA on every
+    // redirect hop, and the retired legacy counter never moves. Nothing spent.
     const balanceBefore = (await bootstrapBalance()).balance;
-    const legacyBefore =
-      (await counterValues(["jobs_created_legacy_media_profile"]))
-        .jobs_created_legacy_media_profile ?? 0;
+    const countersBefore = await counterValues([
+      "jobs_created",
+      "jobs_created_legacy_media_profile",
+    ]);
+    const createdBefore = countersBefore.jobs_created ?? 0;
+    const legacyBefore = countersBefore.jobs_created_legacy_media_profile ?? 0;
     const cases = [
-      { mediaProfile: MEDIA_PROFILE, userAgent: MEDIA_USER_AGENT, legacy: 0 },
-      { mediaProfile: undefined, userAgent: LEGACY_MEDIA_USER_AGENT, legacy: 1 },
+      { mediaProfile: MEDIA_PROFILE, userAgent: MEDIA_USER_AGENT },
+      { mediaProfile: undefined, userAgent: MEDIA_USER_AGENT },
+      { mediaProfile: 1, userAgent: MEDIA_USER_AGENT },
     ];
-    let legacyExpected = legacyBefore;
     for (const [index, expected] of cases.entries()) {
       originRequests.length = 0;
       const job = await createJob({
@@ -1040,8 +1042,11 @@ describe("remote transcription dev lane", () => {
         expect(request.userAgent).toBe(expected.userAgent);
         expect(request.acceptEncoding).toBe("identity");
       }
-      legacyExpected += expected.legacy;
-      await waitForCounter("jobs_created_legacy_media_profile", legacyExpected);
+      await waitForCounter("jobs_created", createdBefore + index + 1);
+      expect(
+        (await counterValues(["jobs_created_legacy_media_profile"]))
+          .jobs_created_legacy_media_profile ?? 0,
+      ).toBe(legacyBefore);
 
       const cancelResponse = await post(
         `/v1/remote-transcription/jobs/${job.job_id}/cancel`,

@@ -105,7 +105,7 @@ fn acquired_admissions_hold_scopes_in_acquisition_order_and_release_once() {
         estimated_input_tokens: 5,
     };
     let mut acquired = AcquiredAdmissions::first(caller.clone());
-    assert_eq!(acquired.scopes(), &[caller.clone()]);
+    assert_eq!(acquired.scopes(), std::slice::from_ref(&caller));
     acquired.push(global.clone());
     assert_eq!(acquired.scopes(), &[caller.clone(), global.clone()]);
     // Release consumes the set: the scopes come out exactly once and the

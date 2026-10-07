@@ -158,9 +158,11 @@ struct OpenCastSystemActionTests {
     }
 
     @Test func addToPlaylistSaveFailureIsAnIntentFailure() async throws {
-        let playlists = PlaylistStore(saveModelContext: { _ in throw CocoaError(.fileWriteOutOfSpace) })
-        let fixture = try await OpenCastSystemActionFixture.make(playlists: playlists)
+        let saves = SwitchableSaveFailure()
+        let fixture = try await OpenCastSystemActionFixture.make(librarySave: saves.save)
         let seeded = try await fixture.seedPlaylists()
+        await fixture.model.ensureCoreStoresLoaded(modelContext: fixture.context)
+        saves.failsSaves = true
         await #expect(throws: OpenCastSystemActionError.playlistFailed) {
             try await fixture.model.systemActions.perform(
                 .addToPlaylist(episodeID: "episode-1", playlistID: seeded.emptyID),
@@ -248,5 +250,18 @@ struct OpenCastSystemActionTests {
         defer { fixture.model.playback.pause() }
         #expect(fixture.model.playback.currentEpisode?.id.rawValue == "episode-1")
         #expect(fixture.model.upNextQueue.items.isEmpty)
+    }
+}
+
+/// Fails the library's synced-store saves once switched on, so loading can
+/// finish before a write is made to fail.
+private final class SwitchableSaveFailure {
+    var failsSaves = false
+
+    func save(_ context: ModelContext) throws {
+        if failsSaves {
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
+        try context.save()
     }
 }

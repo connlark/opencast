@@ -33,7 +33,7 @@ export const metadata: Metadata = createPageMetadata({
 });
 
 const effectiveDate = "June 21, 2026";
-const lastUpdated = "October 5, 2026";
+const lastUpdated = "October 6, 2026";
 
 // The in-app notice shown once before the first Recap or Ask request. The
 // sentences below are the app's own words and the section repeats them
@@ -45,7 +45,7 @@ const recapDisclosure =
 // request is sent. The sentences below are the app's own words and the
 // section repeats them verbatim, so the two never drift apart.
 const playlistDisclosure =
-  "This show’s name, its episode titles, dates, lengths and short descriptions, and your request are sent to Apple’s Private Cloud Compute to answer. Apple does not store them. Your audio and transcripts are never sent. Results stay on this device.";
+  "This show’s name, its episode titles, dates, lengths and short descriptions, and your request are sent to Apple’s Private Cloud Compute to answer. Apple does not store them. Your audio and transcripts are never sent. Playlists you save sync through your iCloud like any other playlist.";
 
 const tocItems = [
   { id: "short-version", label: "The short version" },
@@ -150,9 +150,9 @@ export default function PrivacyPage() {
               <li>
                 <Check aria-hidden="true" />
                 <span>
-                  Your subscriptions and listening history live on your
-                  device. iCloud sync, if you use it, goes through your own
-                  Apple account and never through an opencast server.
+                  Your subscriptions, listening history, and playlists live on
+                  your device. iCloud sync, if you use it, goes through your
+                  own Apple account and never through an opencast server.
                 </span>
               </li>
               <li>
@@ -210,8 +210,8 @@ export default function PrivacyPage() {
               >
                 <p>
                   When your device is signed in to iCloud, opencast keeps your
-                  subscriptions and listening progress in your private iCloud
-                  database so your other devices pick them up. Apple stores that
+                  subscriptions, listening progress, and playlists in your
+                  private iCloud database so your other devices pick them up. Apple stores that
                   data under its own privacy policy. opencast has no server in
                   the path and cannot see it.
                 </p>
@@ -221,7 +221,7 @@ export default function PrivacyPage() {
                   device.
                 </p>
                 <DataPathFacts
-                  leaves="Subscriptions and listening progress."
+                  leaves="Subscriptions, listening progress, and playlists (their names, rules and the episodes in them)."
                   receiver="Your own iCloud account, under Apple's privacy policy."
                   kept="As long as it is in your iCloud. opencast holds no copy."
                 />
@@ -502,9 +502,10 @@ export default function PrivacyPage() {
                   <li>
                     Apple does not store the request or the list. The drafts
                     live only in the open sheet. Playlists you save are
-                    ordinary playlists stored on your device, which do not
-                    sync, and you delete them like any other playlist or with
-                    Delete Data.
+                    ordinary playlists that sync through your private iCloud
+                    like any other playlist. You delete them like any other
+                    playlist, or with Delete Data, which removes them on every
+                    device signed in to that iCloud account.
                   </li>
                   <li>
                     Apple&apos;s model may decline a request or return an

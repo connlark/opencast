@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-05T00:00:00Z",
+  "updatedAt": "2026-10-06T00:00:00Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -140,8 +140,8 @@
         {
           "type": "bullets",
           "items": [
-            "**On This Device** transcribes with the Whisper model on your device and uses no credits.",
-            "**In the Cloud** uploads the episode's audio to Cloudflare Workers AI for transcription and charges transcription hours. It is faster and delivers the transcript too.",
+            "**On This Device** transcribes on your device and uses no credits. On iPhone it uses Whisper's **Fast** model. On an iPad that can transcribe in the background, it uses Apple transcription when the show's language is supported, and Whisper otherwise. **Use Apple Transcription** doesn't change this.",
+            "**In the Cloud** has opencast's transcription service run Whisper on Cloudflare Workers AI and charges transcription hours. It fetches the audio from the podcast's host, and your device uploads its copy only when the two differ. It is faster and delivers the transcript too.",
             "**Ask First Time** shows this choice the first time you tap Detect Ads on an episode."
           ]
         },
@@ -184,7 +184,7 @@
         },
         {
           "type": "paragraph",
-          "text": "On supported devices you can use Apple's on-device speech engine instead. It runs only while opencast is open in the foreground and starts over if the app is closed, backgrounded, or the screen locks mid-transcript. When a language or device isn't supported, the Whisper model is used automatically."
+          "text": "On supported devices, **Use Apple Transcription** in Settings › Transcription makes **Generate Transcript** use Apple's on-device speech engine. It runs only while opencast is open in the foreground and starts over if the app is closed, backgrounded, or the screen locks mid-transcript. **Improve Transcript** works the same way. With the switch off, Generate Transcript uses Whisper, keeps running in the background, and can resume where it stopped. When a language or device isn't supported, Whisper is used automatically. Detect Ads picks its own engine (see Ad detection)."
         },
         {
           "type": "heading",
@@ -192,7 +192,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Transcribe Remotely and cloud ad detection send the episode audio to Cloudflare Workers AI, which runs Whisper on opencast's behalf. They use transcription credits and are the only way audio leaves your device."
+          "text": "Transcribe Remotely and cloud ad detection have opencast's transcription service run Whisper on Cloudflare Workers AI. It fetches the audio from the podcast's host, and your device uploads its own copy only when the two differ. They use transcription credits and are the only way audio leaves your device."
         }
       ]
     },
@@ -238,7 +238,7 @@
       "title": "Make a Playlist with Apple Intelligence",
       "symbol": "sparkles",
       "summary": "Playlists drafted from one show's episode list, on Apple Intelligence.",
-      "updatedAt": "2026-10-05T00:00:00Z",
+      "updatedAt": "2026-10-06T00:00:00Z",
       "minAppBuild": 284,
       "related": [
         "recap-and-ask"
@@ -258,7 +258,7 @@
             "Describe the playlist you want in your own words and tap **Ask**, or tap **Suggest Groups** to have it propose groups by topic, series, or story arc. On a long show, suggestions look at the newest 150 episodes.",
             "Nothing is saved until you choose. Rename a draft, swipe an episode to remove it, use **Edit** to reorder, or open the draft's options menu to sort it **Oldest First** or **Newest First** or remove the whole playlist.",
             "**Add Episodes…** lists the show's other episodes, best matches first, so you can add ones the draft missed.",
-            "**Save** keeps the drafts as ordinary playlists on this device. **Cancel** asks before it discards them."
+            "**Save** keeps the drafts as ordinary playlists. **Cancel** asks before it discards them."
           ]
         },
         {
@@ -282,21 +282,21 @@
       "id": "icloud-sync",
       "title": "iCloud sync",
       "symbol": "icloud",
-      "summary": "Subscriptions and listening progress follow your Apple account.",
-      "updatedAt": "2026-09-28T00:00:00Z",
+      "summary": "Subscriptions, listening progress, and playlists follow your Apple account.",
+      "updatedAt": "2026-10-06T00:00:00Z",
       "related": [
         "storage"
       ],
       "blocks": [
         {
           "type": "paragraph",
-          "text": "With iCloud on, your subscriptions and listening progress sync between your devices through your own iCloud account. opencast has no server in the middle and never sees them."
+          "text": "With iCloud on, your subscriptions, listening progress, and playlists sync between your devices through your own iCloud account. opencast has no server in the middle and never sees them."
         },
         {
           "type": "bullets",
           "items": [
             "Downloads, transcripts, caches, and settings stay on each device.",
-            "Playlists stay on this device for now.",
+            "A smart playlist's **Downloaded Only** rule reads each device's own downloads.",
             "If iCloud is off or unavailable, everything keeps working locally on this device.",
             "If sync ever leaves duplicate entries behind, Settings › Diagnostics › Repair Sync Duplicates merges them."
           ]

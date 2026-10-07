@@ -483,7 +483,7 @@ struct CarPlayBrowseModelBuilderTests {
             makePlaylistSummary(playlistID: "manual-cover", name: "Commute", kind: .manual),
             makePlaylistSummary(playlistID: "manual-bare", name: "Bare", kind: .manual),
             makePlaylistSummary(playlistID: "smart-default", name: "Fresh", kind: .smart),
-            makePlaylistSummary(playlistID: "smart-star", name: "Starred", kind: .smart, symbolName: "star")
+            makePlaylistSummary(playlistID: "smart-star", name: "Starred", kind: .smart)
         ]
         let counts = ["manual-cover": 3, "manual-bare": 0, "smart-default": 1, "smart-star": 12]
 
@@ -510,7 +510,7 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(rows[2].symbolName == nil)
         #expect(rows[2].detailText == "1 episode")
         #expect(rows[3].artworkURL == nil)
-        #expect(rows[3].symbolName == "star")
+        #expect(rows[3].symbolName == PlaylistSymbolCover.defaultSymbolName)
         #expect(rows[3].detailText == "12 episodes")
     }
 
@@ -695,8 +695,7 @@ struct CarPlayBrowseModelBuilderTests {
     private func makePlaylistSummary(
         playlistID: String,
         name: String,
-        kind: PlaylistKind,
-        symbolName: String? = nil
+        kind: PlaylistKind
     ) -> PlaylistSummary {
         PlaylistSummary(
             playlistID: playlistID,
@@ -704,7 +703,6 @@ struct CarPlayBrowseModelBuilderTests {
             kind: kind,
             rule: kind == .smart ? PlaylistRule.default : nil,
             hidesPlayed: false,
-            symbolName: symbolName,
             origin: .user,
             itemCount: 0,
             totalDuration: 0,

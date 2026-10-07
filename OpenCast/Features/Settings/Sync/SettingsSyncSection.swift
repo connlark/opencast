@@ -18,10 +18,7 @@ struct SettingsSyncSection: View {
                     .foregroundStyle(statusForegroundStyle)
             }
         } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                HelpFooterLink(title: "How iCloud sync works", topicID: HelpTopicID.iCloudSync)
-                Text("Playlists stay on this device for now.")
-            }
+            HelpFooterLink(title: "How iCloud sync works", topicID: HelpTopicID.iCloudSync)
         }
     }
 
@@ -41,11 +38,11 @@ struct SettingsSyncSection: View {
     private var statusSubtitle: String {
         switch accountStatus {
         case .available:
-            "Subscriptions and listening progress are syncing."
+            "Subscriptions, listening progress, and playlists are syncing."
         case .checking, .notChecked:
-            "Subscriptions and listening progress will sync when iCloud is available."
+            "Subscriptions, listening progress, and playlists will sync when iCloud is available."
         case .noAccount:
-            "Sign in to iCloud to sync subscriptions and listening progress."
+            "Sign in to iCloud to sync subscriptions, listening progress, and playlists."
         case .restricted, .couldNotDetermine, .temporarilyUnavailable:
             accountStatus.detail ?? "opencast still works locally on this device."
         }

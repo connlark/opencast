@@ -11,7 +11,6 @@ nonisolated struct PlaylistSummary: Identifiable, Equatable, Sendable {
     var rule: PlaylistRule?
     var hidesPlayed: Bool
     var tintKey: String?
-    var symbolName: String?
     let origin: PlaylistOrigin
     var itemCount: Int
     /// Sum of the items' stored fallback durations; items without one add

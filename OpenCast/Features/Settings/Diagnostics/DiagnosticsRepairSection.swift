@@ -107,10 +107,7 @@ struct DiagnosticsRepairSection: View {
 
     private func repairSyncDuplicates() {
         Task {
-            await appModel.syncStatus.repairDuplicates(
-                modelContext: modelContext,
-                libraryStore: appModel.library
-            )
+            await appModel.repairSyncDuplicates(modelContext: modelContext)
         }
     }
 

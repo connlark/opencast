@@ -33,7 +33,7 @@ enum SyncAccountStatus: Equatable, Sendable {
         case .available:
             nil
         case .noAccount:
-            "Sign in to iCloud to sync subscriptions and episode progress. opencast still works locally on this device."
+            "Sign in to iCloud to sync subscriptions, episode progress, and playlists. opencast still works locally on this device."
         case .restricted:
             "This device or account restricts iCloud access. opencast still works locally on this device."
         case .couldNotDetermine:

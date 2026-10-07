@@ -19,7 +19,7 @@ struct SmartPlaylistCover: View {
             artworkURLs: sources.artworkURLs,
             fallbackTitle: summary.name,
             tint: summary.tint ?? .blue,
-            symbolName: summary.symbolName,
+            symbolName: nil,
             cornerRadius: cornerRadius
         )
     }

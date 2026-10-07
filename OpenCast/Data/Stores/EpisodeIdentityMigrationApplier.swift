@@ -139,34 +139,54 @@ enum EpisodeIdentityMigrationApplier {
     }
 
     /// Unlike the ad-free queue, a playlist may hold an episode once per
-    /// playlist, so the collision rule is scoped to each playlist: a successor
-    /// already in that playlist makes the departed row redundant there only.
-    /// `itemID` and `sortKey` stay put so the item keeps its identity and
-    /// position; `updatedAt` is untouched because a re-key is not an edit.
+    /// playlist, so the collision rule is scoped to each playlist: a live
+    /// successor already in that playlist makes the departed rows redundant
+    /// there only (a successor an item tombstone shadows does not count).
+    /// Otherwise one departed row per playlist is re-keyed and its twins are
+    /// deleted. `itemID` and `sortKey` stay put so the item keeps its identity
+    /// and position; `addedAt` and `updatedAt` are untouched because a re-key
+    /// is not an edit.
+    ///
+    /// No item tombstone is written for the departed pair. The re-keyed row
+    /// keeps its `addedAt`, so such a tombstone would shadow the user's own
+    /// membership whenever the row comes back to that pair: a feed that moves
+    /// back to its earlier URL, a reverted GUID change, or another device's
+    /// stale copy of the same record winning the conflict. Without it, each of
+    /// those heals on the next re-key. A departed row that an existing
+    /// tombstone already shadows is a removal repair has not applied yet, so
+    /// it is deleted rather than carried out from under that tombstone.
     private static func migratePlaylistItems(
         from oldEpisodeID: String,
         to newEpisodeID: String,
         canonicalFeedURL: String,
         modelContext: ModelContext
     ) throws {
-        // Fetched in the store's item order so that, should a playlist ever
-        // hold twin rows for the departed episode, the row kept here is the
-        // one the store's in-memory pass keeps too.
         let targetOldID = oldEpisodeID
         let departedItems = try modelContext.fetch(
             FetchDescriptor<PlaylistItemRecord>(
                 predicate: #Predicate { record in
                     record.episodeID == targetOldID
-                },
-                sortBy: [
-                    SortDescriptor(\.sortKey, comparator: .lexical),
-                    SortDescriptor(\.addedAt),
-                    SortDescriptor(\.itemID, comparator: .lexical)
-                ]
+                }
             )
         )
         guard !departedItems.isEmpty else {
             return
+        }
+
+        let tombstoneIndex = PlaylistTombstoneIndex(
+            try modelContext.fetch(FetchDescriptor<PlaylistTombstoneRecord>())
+        )
+        var departedItemsByPlaylist: [String: [PlaylistItemRecord]] = [:]
+        for item in departedItems {
+            if tombstoneIndex.shadowsItem(
+                playlistID: item.playlistID,
+                episodeID: item.episodeID,
+                addedAt: item.addedAt
+            ) {
+                modelContext.delete(item)
+            } else {
+                departedItemsByPlaylist[item.playlistID, default: []].append(item)
+            }
         }
 
         let targetNewID = newEpisodeID
@@ -177,14 +197,34 @@ enum EpisodeIdentityMigrationApplier {
                 }
             )
         )
-        var coveredPlaylistIDs = Set(successorItems.map(\.playlistID))
-        for item in departedItems {
-            if coveredPlaylistIDs.contains(item.playlistID) {
+        // A successor an item tombstone already shadows is one the next
+        // repair deletes, so it covers nothing: deleting the departed row
+        // on its account would drop a membership the user added after
+        // that removal.
+        let coveredPlaylistIDs = Set(
+            successorItems
+                .filter { item in
+                    !tombstoneIndex.shadowsItem(
+                        playlistID: item.playlistID,
+                        episodeID: item.episodeID,
+                        addedAt: item.addedAt
+                    )
+                }
+                .map(\.playlistID)
+        )
+        for (playlistID, items) in departedItemsByPlaylist {
+            // The kept twin is the one the store's listing and duplicate
+            // repair keep, so memory and every device agree on the row,
+            // whatever order the store returned them in.
+            let keep = coveredPlaylistIDs.contains(playlistID)
+                ? nil
+                : PlaylistSyncRepairer.keptItem(in: items) ?? items.min(by: PlaylistSyncRepairer.isFresherItem)
+            for item in items where item !== keep {
                 modelContext.delete(item)
-            } else {
-                item.episodeID = newEpisodeID
-                item.podcastID = canonicalFeedURL
-                coveredPlaylistIDs.insert(item.playlistID)
+            }
+            if let keep {
+                keep.episodeID = newEpisodeID
+                keep.podcastID = canonicalFeedURL
             }
         }
     }

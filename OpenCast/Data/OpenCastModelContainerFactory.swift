@@ -10,7 +10,10 @@ enum OpenCastModelContainerFactory {
         Schema([
             SubscriptionRecord.self,
             EpisodeProgressRecord.self,
-            SyncTombstoneRecord.self
+            SyncTombstoneRecord.self,
+            PlaylistRecord.self,
+            PlaylistItemRecord.self,
+            PlaylistTombstoneRecord.self
         ])
     }
 
@@ -25,9 +28,7 @@ enum OpenCastModelContainerFactory {
             EpisodeAdAnalysisRecord.self,
             EpisodeTranscriptAnalysisRecord.self,
             AdFreePassQueueItemRecord.self,
-            UpNextQueueItemRecord.self,
-            PlaylistRecord.self,
-            PlaylistItemRecord.self
+            UpNextQueueItemRecord.self
         ])
     }
 
@@ -36,6 +37,9 @@ enum OpenCastModelContainerFactory {
             SubscriptionRecord.self,
             EpisodeProgressRecord.self,
             SyncTombstoneRecord.self,
+            PlaylistRecord.self,
+            PlaylistItemRecord.self,
+            PlaylistTombstoneRecord.self,
             PodcastCacheRecord.self,
             EpisodeCacheRecord.self,
             RefreshLogRecord.self,
@@ -45,10 +49,19 @@ enum OpenCastModelContainerFactory {
             EpisodeAdAnalysisRecord.self,
             EpisodeTranscriptAnalysisRecord.self,
             AdFreePassQueueItemRecord.self,
-            UpNextQueueItemRecord.self,
-            PlaylistRecord.self,
-            PlaylistItemRecord.self
+            UpNextQueueItemRecord.self
         ])
+    }
+
+    /// Where the device-local store lives, resolved the way `make` resolves
+    /// it and without opening anything.
+    static var localStoreURL: URL {
+        ModelConfiguration(
+            localConfigurationName,
+            schema: localSchema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .none
+        ).url
     }
 
     static func make(inMemory: Bool = false) throws -> ModelContainer {

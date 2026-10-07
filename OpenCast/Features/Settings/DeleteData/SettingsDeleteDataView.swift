@@ -42,7 +42,7 @@ struct SettingsDeleteDataView: View {
                     Button("Continue", role: .destructive, action: requestDataNukeConfirmation)
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("This starts a final confirmation step before deleting synced subscriptions, synced listening progress, local downloads, caches, and settings.")
+                    Text("This starts a final confirmation step before deleting synced subscriptions, synced listening progress, synced playlists, local downloads, caches, and settings.")
                 }
             }
         }

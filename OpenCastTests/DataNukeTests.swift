@@ -152,6 +152,7 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).count == 1)
         #expect(try context.fetch(FetchDescriptor<PlaylistRecord>()).count == 1)
         #expect(try context.fetch(FetchDescriptor<PlaylistItemRecord>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<PlaylistTombstoneRecord>()).count == 1)
         #expect(FileManager.default.fileExists(atPath: cacheController.feedCacheDirectory.appending(path: "feed.cache").path))
         #expect(FileManager.default.fileExists(atPath: cacheController.artworkCacheDirectory.appending(path: "artwork.cache").path))
         #expect(fileStore.fileExists(relativePath: downloadPath))
@@ -371,6 +372,110 @@ struct DataNukeTests {
 
         #expect(appModel.library.syncedStoreSelfSaveCount == creditsBeforeNuke + 1)
         #expect(appModel.dataNukeCompletionID == 2)
+    }
+
+    @Test("A store holding only playlist rows is wiped through the synced-store credit")
+    func playlistOnlyStoreIsWipedThroughTheSyncedStoreCredit() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let appModel = try makeAvailableAppModel()
+        context.insert(PlaylistRecord(playlistID: "nuke-only-playlist", name: "Only Playlist"))
+        context.insert(
+            PlaylistItemRecord(
+                itemID: "nuke-only-item",
+                playlistID: "nuke-only-playlist",
+                episodeID: "nuke-only-episode",
+                podcastID: seededFeedURL,
+                sortKey: PlaylistSortKey.last(after: nil),
+                episodeTitle: "Only Episode",
+                podcastTitle: "Nuke Show"
+            )
+        )
+        context.insert(PlaylistTombstoneRecord(playlistID: "nuke-only-deleted"))
+        try context.save()
+        await appModel.library.load(modelContext: context)
+        let creditsBeforeNuke = appModel.library.syncedStoreSelfSaveCount
+
+        try await appModel.nukeAllData(modelContext: context)
+
+        #expect(appModel.library.syncedStoreSelfSaveCount == creditsBeforeNuke + 1)
+        #expect(try context.fetch(FetchDescriptor<PlaylistRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<PlaylistItemRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<PlaylistTombstoneRecord>()).isEmpty)
+    }
+
+    @Test("The nuke marks the local playlist copy done and drops a pending copy, so a copy that had not finished is not retried")
+    func nukeMarksThePlaylistCopyDoneAndDropsThePendingCopy() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let suiteName = "data-nuke-playlist-copy-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let legacySnapshot = LegacyLocalPlaylistSnapshot(
+            playlists: [
+                LegacyLocalPlaylistSnapshot.Playlist(
+                    playlistID: "nuke-legacy-playlist",
+                    name: "Legacy Playlist",
+                    kindRawValue: "manual",
+                    hidesPlayed: false,
+                    originRawValue: "user",
+                    createdAt: Date(timeIntervalSinceReferenceDate: 813_000_000),
+                    updatedAt: Date(timeIntervalSinceReferenceDate: 813_000_000)
+                )
+            ]
+        )
+        // The flag is unset and the snapshot still pending: the state a launch
+        // whose copy failed (or never ran) is in when Delete Data runs.
+        let appModel = try makeAvailableAppModel(
+            legacyLocalPlaylists: legacySnapshot,
+            playlistMigrationDefaults: defaults
+        )
+        context.insert(PlaylistRecord(playlistID: "nuke-synced-playlist", name: "Synced Playlist"))
+        try context.save()
+        await appModel.library.load(modelContext: context)
+
+        try await appModel.nukeAllData(modelContext: context)
+
+        #expect(defaults.bool(forKey: PlaylistLocalStoreMigration.completedDefaultsKey))
+        #expect(try context.fetch(FetchDescriptor<PlaylistRecord>()).isEmpty)
+
+        // Neither the pending snapshot on the next core load nor a fresh
+        // launch's copy brings the legacy playlist back.
+        await appModel.ensureCoreStoresLoaded(modelContext: context)
+        #expect(try context.fetch(FetchDescriptor<PlaylistRecord>()).isEmpty)
+        #expect(appModel.lastPlaylistError == nil)
+        let inserted = try PlaylistLocalStoreMigration.apply(
+            legacySnapshot,
+            modelContext: context,
+            defaults: defaults,
+            save: appModel.library.saveSyncedStore
+        )
+        #expect(inserted == 0)
+        #expect(try context.fetch(FetchDescriptor<PlaylistRecord>()).isEmpty)
+    }
+
+    private func makeAvailableAppModel(
+        legacyLocalPlaylists: LegacyLocalPlaylistSnapshot? = nil,
+        playlistMigrationDefaults: UserDefaults = .standard
+    ) throws -> OpenCastAppModel {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(
+            baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+        )
+        return OpenCastAppModel(
+            cacheController: OpenCastCacheController(
+                rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+            ),
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(fileStore: fileStore),
+            syncStatus: SyncStatusStore(
+                accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available, .available])
+            ),
+            allowsAutomaticFeedRefresh: false,
+            legacyLocalPlaylists: legacyLocalPlaylists,
+            playlistMigrationDefaults: playlistMigrationDefaults
+        )
     }
 
     @Test("Refresh finishing after nuke cannot recreate cache rows")
@@ -630,6 +735,7 @@ struct DataNukeTests {
                 podcastTitle: "Nuke Show"
             )
         )
+        context.insert(PlaylistTombstoneRecord(playlistID: "nuke-deleted-playlist"))
         try fileStore.prepareDownloadsDirectory()
         try Data("downloaded audio".utf8).write(
             to: fileStore.fileURL(relativePath: downloadPath),
@@ -673,6 +779,7 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<PlaylistRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<PlaylistItemRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<PlaylistTombstoneRecord>()).isEmpty)
     }
 
     private func seedTranscriptAndAdAnalysis(

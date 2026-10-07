@@ -3,15 +3,12 @@ import SwiftUI
 enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
     case ember = "AppIcon"
     case ocean = "AppIconOcean"
-    case oceanLight = "AppIconOceanLight"
     case sunset = "AppIconSunset"
     case honey = "AppIconHoney"
     case rose = "AppIconRose"
     case violet = "AppIconViolet"
     case lagoon = "AppIconLagoon"
     case fern = "AppIconFern"
-    case graphite = "AppIconGraphite"
-    case midnight = "AppIconMidnight"
     case abyss = "AppIconAbyss"
 
     static let primary: AppIconOption = .ember
@@ -35,8 +32,6 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .ocean:
             "Ocean"
-        case .oceanLight:
-            "Ocean Light"
         case .ember:
             "Ember"
         case .sunset:
@@ -51,10 +46,6 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
             "Lagoon"
         case .fern:
             "Fern"
-        case .graphite:
-            "Graphite"
-        case .midnight:
-            "Midnight"
         case .abyss:
             "Abyss"
         }
@@ -64,8 +55,6 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .ocean:
             .appIconPreviewOcean
-        case .oceanLight:
-            .appIconPreviewOceanLight
         case .ember:
             .appIconPreviewEmber
         case .sunset:
@@ -80,10 +69,6 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
             .appIconPreviewLagoon
         case .fern:
             .appIconPreviewFern
-        case .graphite:
-            .appIconPreviewGraphite
-        case .midnight:
-            .appIconPreviewMidnight
         case .abyss:
             .appIconPreviewAbyss
         }

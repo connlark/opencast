@@ -1430,13 +1430,9 @@ mod tests {
         let decoded: JobRecord = serde_json::from_value(minimal).expect("decode");
         assert!(!decoded.origin_unsafe);
         assert!(!decoded.upload_completed);
-        // A record created before the media-profile declaration keeps the
-        // legacy origin-fetch UA its app downloaded with.
+        // A record created before the media-profile declaration decodes with
+        // no profile; the origin fetch uses the current one regardless.
         assert_eq!(decoded.media_profile, None);
-        assert_eq!(
-            crate::origin::media_user_agent(decoded.media_profile),
-            crate::origin::LEGACY_MEDIA_USER_AGENT
-        );
         assert_eq!(decoded.upload_id, None);
         assert_eq!(decoded.upload_part_count, None);
         // RTW-5 backstop fields are additive: old records decode with the

@@ -188,6 +188,10 @@ final class OpenCastAppModel {
     @ObservationIgnored private var importedSubscriptionsNotificationID = 0
     @ObservationIgnored private let unsubscribeSidecarCleanupOverride: ((String, [String], ModelContext) throws -> Void)?
     @ObservationIgnored private let transcriptAnalysisQueue: TranscriptAnalysisQueue
+    /// Playlists an earlier build kept on this device, copied into the synced
+    /// store by the first `ensureCoreStoresLoaded` and then dropped.
+    @ObservationIgnored private var pendingLegacyLocalPlaylists: LegacyLocalPlaylistSnapshot?
+    @ObservationIgnored private let playlistMigrationDefaults: UserDefaults
 
     init(
         cacheController: OpenCastCacheController = OpenCastCacheController(),
@@ -209,7 +213,6 @@ final class OpenCastAppModel {
         transcriptIntelligence: TranscriptIntelligenceStore = TranscriptIntelligenceStore(),
         adFreePass: EpisodeAdFreePassCoordinator = EpisodeAdFreePassCoordinator(),
         upNextQueue: UpNextQueueStore = UpNextQueueStore(),
-        playlists: PlaylistStore = PlaylistStore(),
         playlistDisplaySettings: PlaylistDisplaySettingsStore = PlaylistDisplaySettingsStore(),
         adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession = EpisodeAdFreePassBackgroundSession(),
         transcriptGenerationBackgroundSession: EpisodeTranscriptGenerationBackgroundSession = EpisodeTranscriptGenerationBackgroundSession(),
@@ -234,7 +237,9 @@ final class OpenCastAppModel {
         adFreePassQueueOverride: AdFreePassQueueUITestOverride? = nil,
         adFreePassNotificationCenter: (any AdFreePassNotificationCenter)? = nil,
         siriMediaDiscovery: SiriMediaDiscovery = SiriMediaDiscovery(),
-        unsubscribeSidecarCleanupOverride: ((String, [String], ModelContext) throws -> Void)? = nil
+        unsubscribeSidecarCleanupOverride: ((String, [String], ModelContext) throws -> Void)? = nil,
+        legacyLocalPlaylists: LegacyLocalPlaylistSnapshot? = nil,
+        playlistMigrationDefaults: UserDefaults = .standard
     ) {
         // Before any session configuration is built: configurations capture
         // the user agent at creation time.
@@ -327,6 +332,11 @@ final class OpenCastAppModel {
             library: resolvedLibrary,
             purchases: self.remoteTranscriptionPurchases
         )
+        // Unowned: the library holds this store among its sidecar migrators,
+        // so a strong capture is a cycle; the app model keeps both alive.
+        let playlists = PlaylistStore(saveSyncedStore: { [unowned resolvedLibrary] modelContext in
+            try resolvedLibrary.saveSyncedStore(modelContext)
+        })
         resolvedLibrary.episodeSidecarMigrators = [downloads, transcriptions, adAnalyses, transcriptAnalyses, playlists]
         notificationSettings.feedHealthRecorder = { [weak resolvedLibrary] records in
             await resolvedLibrary?.recordNotificationFeedHealth(records)
@@ -359,6 +369,8 @@ final class OpenCastAppModel {
         )
         self.upNextQueue = upNextQueue
         self.playlists = playlists
+        pendingLegacyLocalPlaylists = legacyLocalPlaylists
+        self.playlistMigrationDefaults = playlistMigrationDefaults
         self.playlistDisplaySettings = playlistDisplaySettings
         self.adFreePassBackgroundSession = adFreePassBackgroundSession
         self.transcriptGenerationBackgroundSession = transcriptGenerationBackgroundSession
@@ -565,6 +577,7 @@ final class OpenCastAppModel {
             if let message = upNextQueue.consumeLastErrorMessage() {
                 lastUpNextError = message
             }
+            migrateLegacyLocalPlaylists(modelContext: modelContext)
             playlists.sortOrder = playlistDisplaySettings.sortOrder
             playlists.load(modelContext: modelContext)
             if let message = playlists.consumeLastErrorMessage() {
@@ -574,6 +587,56 @@ final class OpenCastAppModel {
         }
         coreStoresLoadTask = task
         await task.value
+    }
+
+    /// Brings playlist rows changed behind the store (an iCloud import, a
+    /// repair pass) into memory, and drops the Siri donation group of each
+    /// playlist that left or was renamed.
+    @discardableResult
+    func reloadPlaylistsAfterSyncedChange(modelContext: ModelContext) -> PlaylistReloadChange {
+        let change = playlists.reload(modelContext: modelContext)
+        // Not the playlist alert: this runs on every synced refresh, and a
+        // store that keeps failing would re-present it each time.
+        if let message = playlists.consumeLastErrorMessage() {
+            syncStatus.recordLibraryActivityFailure(message)
+        }
+        // A renamed playlist's donations still carry the old name, which Siri
+        // would keep offering.
+        siriMediaDiscovery.deleteDonations(
+            forPlaylistIDs: change.removedPlaylistIDs.union(change.renamedPlaylistIDs)
+        )
+        return change
+    }
+
+    /// Runs duplicate repair and reloads playlists when the pass changed their
+    /// rows. A pass that failed reloads too: its save can have landed before
+    /// the failure, and memory must not write pre-merge content back.
+    @discardableResult
+    func repairSyncDuplicates(modelContext: ModelContext) async -> SyncRepairResult? {
+        let result = await syncStatus.repairDuplicates(modelContext: modelContext, libraryStore: library)
+        if result?.playlistRowsChanged ?? true {
+            reloadPlaylistsAfterSyncedChange(modelContext: modelContext)
+        }
+        return result
+    }
+
+    /// Runs at most once per launch, before the first playlist load. A failure
+    /// leaves the completion flag unset, so the next launch retries.
+    private func migrateLegacyLocalPlaylists(modelContext: ModelContext) {
+        guard let snapshot = pendingLegacyLocalPlaylists else {
+            return
+        }
+        pendingLegacyLocalPlaylists = nil
+        do {
+            try PlaylistLocalStoreMigration.apply(
+                snapshot,
+                modelContext: modelContext,
+                defaults: playlistMigrationDefaults,
+                save: library.saveSyncedStore
+            )
+        } catch {
+            lastPlaylistError = "Unable to move playlists into iCloud sync: \(error.localizedDescription)"
+        }
     }
 
     /// Everything playback reads before it can start correctly: transcripts and
@@ -2702,6 +2765,11 @@ final class OpenCastAppModel {
         adFreePass.reset()
         upNextQueue.resetAfterDataNuke()
         playlists.resetAfterDataNuke()
+        // The wipe took every playlist with it. A legacy copy that had not
+        // finished (a failed read or save leaves the flag unset) must not be
+        // retried on the next launch and bring those playlists back.
+        pendingLegacyLocalPlaylists = nil
+        playlistMigrationDefaults.set(true, forKey: PlaylistLocalStoreMigration.completedDefaultsKey)
         adFreePassBackgroundSession.reset()
         transcriptGenerationBackgroundSession.reset()
         remoteTranscriptionBackgroundSession.reset()

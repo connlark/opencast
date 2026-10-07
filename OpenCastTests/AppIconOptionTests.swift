@@ -39,10 +39,9 @@ struct AppIconOptionTests {
     func rosterMatchesTitles() {
         let options = AppIconOption.allCases
         #expect(Set(options.map(\.title)).count == options.count)
-        #expect(options.count == 12)
+        #expect(options.count == 9)
         #expect(options.first == .ember)
         #expect(options[1] == .ocean)
-        #expect(options[2] == .oceanLight)
         for option in options where option != .primary {
             #expect(option.rawValue == "AppIcon" + option.title.replacing(" ", with: ""))
             #expect(option.alternateIconName == option.rawValue)

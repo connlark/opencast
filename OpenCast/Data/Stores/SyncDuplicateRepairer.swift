@@ -5,10 +5,11 @@ import SwiftData
 /// Repairs the CloudKit-synced store after imports: enforces deletion
 /// tombstones, merges logical duplicates, and garbage-collects spent
 /// tombstones. Winner selection follows Apple's CloudKit dedupe pattern —
-/// the copy with the smallest synced `dedupeUUID` survives, so every device
-/// independently keeps the same record instead of cross-deleting each
-/// other's picks. The synced models have no relationships, so losing copies
-/// are hard-deleted.
+/// the copy with the smallest synced `dedupeUUID` survives (playlist items
+/// keep the newest `addedAt` instead; see `PlaylistSyncRepairer.keptItem`),
+/// so every device independently keeps the same record instead of
+/// cross-deleting each other's picks. The synced models have no
+/// relationships, so losing copies are hard-deleted.
 enum SyncDuplicateRepairer {
     /// Tombstones older than this are garbage collected. A device offline
     /// longer than the horizon can resurrect records the tombstone would have
@@ -36,6 +37,7 @@ enum SyncDuplicateRepairer {
             claimedFeedURLsByEpisodeID: claimedFeedURLsByEpisodeID,
             result: &result
         )
+        try PlaylistSyncRepairer.repair(modelContext: modelContext, now: now, result: &result)
         collectSpentTombstones(tombstones, index: index, now: now, modelContext: modelContext, result: &result)
 
         if result.hasChanges {
@@ -71,10 +73,11 @@ enum SyncDuplicateRepairer {
                     }
                     merge(&progressClearsByEpisodeID, key: episodeID, deletedAt: tombstone.deletedAt)
                 case .playlist, .playlistItem:
-                    // Reserved for playlist sync: known so hygiene never deletes
-                    // them as unknown, but their key field is not defined yet,
-                    // so nothing indexes, matches or supersedes them; only the
-                    // retention horizon collects them.
+                    // Reserved and never written (playlist deletes use
+                    // `PlaylistTombstoneRecord`): known so hygiene never
+                    // deletes a stray one as unknown, and nothing indexes,
+                    // matches or supersedes them; only the retention horizon
+                    // collects them.
                     continue
                 case nil:
                     continue
@@ -370,7 +373,7 @@ enum SyncDuplicateRepairer {
     /// different field values for the same records and would cross-delete
     /// each other's content-based picks. Returns nil when no copy carries an
     /// identity (all predate the field).
-    private static func deterministicWinner<Record: AnyObject>(
+    static func deterministicWinner<Record: AnyObject>(
         in records: [Record]
     ) -> Record? where Record: DedupeIdentified {
         records
@@ -378,7 +381,7 @@ enum SyncDuplicateRepairer {
             .min { $0.dedupeUUID < $1.dedupeUUID }
     }
 
-    private static func setIfChanged<Record: AnyObject, Value: Equatable>(
+    static func setIfChanged<Record: AnyObject, Value: Equatable>(
         _ record: Record,
         _ keyPath: ReferenceWritableKeyPath<Record, Value>,
         _ value: Value
@@ -495,11 +498,13 @@ enum SyncDuplicateRepairer {
     }
 }
 
-/// Shared shape for `deterministicWinner`; both synced record models carry a
-/// stable dedupe identity.
+/// Shared shape for `deterministicWinner`; every synced record model that
+/// repair merges carries a stable dedupe identity.
 protocol DedupeIdentified {
     var dedupeUUID: String { get }
 }
 
 extension SubscriptionRecord: DedupeIdentified {}
 extension EpisodeProgressRecord: DedupeIdentified {}
+extension PlaylistRecord: DedupeIdentified {}
+extension PlaylistItemRecord: DedupeIdentified {}

@@ -524,7 +524,7 @@ struct EpisodeSidecarCollisionTests {
         #expect(subscriptions.map(\.feedURL) == [Self.canonicalFeedURL])
     }
 
-    @Test("Moved-feed migration re-keys playlist items and drops per-playlist collisions")
+    @Test("Moved-feed migration re-keys playlist items, drops per-playlist collisions, and writes no playlist tombstone")
     func movedFeedMigrationRekeysPlaylistItemsPerPlaylist() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
@@ -545,6 +545,8 @@ struct EpisodeSidecarCollisionTests {
         context.insert(SubscriptionRecord(feedURL: Self.oldFeedURL, title: "Show"))
 
         let itemUpdatedAt = Date(timeIntervalSince1970: 1_700_000_200)
+        context.insert(PlaylistRecord(playlistID: "departed-only-playlist", name: "Departed Only"))
+        context.insert(PlaylistRecord(playlistID: "both-episodes-playlist", name: "Both Episodes"))
         context.insert(
             PlaylistItemRecord(
                 itemID: "rekeyed-item",
@@ -629,6 +631,225 @@ struct EpisodeSidecarCollisionTests {
 
         let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
         #expect(subscriptions.map(\.feedURL) == [Self.canonicalFeedURL])
+
+        // The re-keyed row keeps its addedAt, so a tombstone for the departed
+        // pair would delete this membership if the row ever returned to it.
+        #expect(try context.fetch(FetchDescriptor<PlaylistTombstoneRecord>()).isEmpty)
+
+        let repairResult = try SyncDuplicateRepairer.repair(modelContext: context, save: { try $0.save() })
+
+        let repairedItems = try context.fetch(FetchDescriptor<PlaylistItemRecord>())
+        #expect(repairedItems.map(\.itemID).sorted() == ["rekeyed-item", "successor-item"])
+        #expect(repairedItems.first(where: { $0.itemID == "rekeyed-item" })?.episodeID == newEpisodeID)
+        #expect(repairResult.tombstonedPlaylistItemRecordsDeleted == 0)
+        #expect(try context.fetch(FetchDescriptor<PlaylistTombstoneRecord>()).isEmpty)
+    }
+
+    @Test("A playlist item re-keyed away and back keeps its membership and its addedAt")
+    func playlistItemRekeyedAwayAndBackSurvivesRepair() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let addedAt = Date(timeIntervalSince1970: 1_700_000_200)
+        context.insert(PlaylistRecord(playlistID: "round-trip-playlist", name: "Round Trip"))
+        context.insert(
+            makePlaylistItem(
+                itemID: "round-trip-item",
+                playlistID: "round-trip-playlist",
+                episodeID: "episode-at-first-url",
+                sortKey: "m",
+                addedAt: addedAt
+            )
+        )
+        try context.save()
+
+        try rekeyPlaylistEpisode(
+            from: "episode-at-first-url",
+            to: "episode-at-second-url",
+            canonicalFeedURL: "https://feeds.example.com/moved.xml",
+            modelContext: context
+        )
+        try context.save()
+        try rekeyPlaylistEpisode(
+            from: "episode-at-second-url",
+            to: "episode-at-first-url",
+            canonicalFeedURL: "https://feeds.example.com/show.xml",
+            modelContext: context
+        )
+        try context.save()
+
+        #expect(try context.fetch(FetchDescriptor<PlaylistTombstoneRecord>()).isEmpty)
+        let repairResult = try SyncDuplicateRepairer.repair(modelContext: context, save: { try $0.save() })
+        #expect(repairResult.tombstonedPlaylistItemRecordsDeleted == 0)
+
+        let items = try context.fetch(FetchDescriptor<PlaylistItemRecord>())
+        #expect(items.count == 1)
+        let item = try #require(items.first)
+        #expect(item.itemID == "round-trip-item")
+        #expect(item.playlistID == "round-trip-playlist")
+        #expect(item.episodeID == "episode-at-first-url")
+        #expect(item.podcastID == "https://feeds.example.com/show.xml")
+        #expect(item.sortKey == "m")
+        #expect(item.addedAt == addedAt)
+    }
+
+    @Test("A successor an item tombstone shadows does not cover the departed row, which is re-keyed and survives repair")
+    func rekeyIgnoresTombstonedSuccessor() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let successorAddedAt = Date(timeIntervalSince1970: 1_700_000_200)
+        context.insert(PlaylistRecord(playlistID: "re-add-playlist", name: "Re-add"))
+        // The successor was in the playlist, then removed (tombstone), and the
+        // user added the episode again under its departed identity afterwards.
+        context.insert(
+            makePlaylistItem(
+                itemID: "stale-successor",
+                playlistID: "re-add-playlist",
+                episodeID: "successor-episode",
+                sortKey: "a",
+                addedAt: successorAddedAt
+            )
+        )
+        context.insert(
+            PlaylistTombstoneRecord(
+                playlistID: "re-add-playlist",
+                episodeID: "successor-episode",
+                deletedAt: successorAddedAt.addingTimeInterval(60)
+            )
+        )
+        context.insert(
+            makePlaylistItem(
+                itemID: "re-added-as-departed",
+                playlistID: "re-add-playlist",
+                episodeID: "departed-episode",
+                sortKey: "m",
+                addedAt: successorAddedAt.addingTimeInterval(120)
+            )
+        )
+        try context.save()
+
+        try rekeyPlaylistEpisode(
+            from: "departed-episode",
+            to: "successor-episode",
+            canonicalFeedURL: Self.canonicalFeedURL,
+            modelContext: context
+        )
+        try context.save()
+
+        let rekeyed = try #require(
+            try context.fetch(FetchDescriptor<PlaylistItemRecord>()).first { $0.itemID == "re-added-as-departed" }
+        )
+        #expect(rekeyed.episodeID == "successor-episode")
+        #expect(rekeyed.addedAt == successorAddedAt.addingTimeInterval(120))
+
+        let repairResult = try SyncDuplicateRepairer.repair(modelContext: context, save: { try $0.save() })
+        #expect(repairResult.tombstonedPlaylistItemRecordsDeleted == 1)
+        let items = try context.fetch(FetchDescriptor<PlaylistItemRecord>())
+        #expect(items.map(\.itemID) == ["re-added-as-departed"])
+        #expect(items.first?.episodeID == "successor-episode")
+    }
+
+    @Test("A re-key deletes a departed playlist item an existing removal tombstone shadows")
+    func rekeyDeletesTombstoneShadowedPlaylistItem() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let addedAt = Date(timeIntervalSince1970: 1_700_000_200)
+        context.insert(PlaylistRecord(playlistID: "removed-from-playlist", name: "Removed From"))
+        context.insert(PlaylistRecord(playlistID: "still-holding-playlist", name: "Still Holding"))
+        context.insert(
+            makePlaylistItem(
+                itemID: "removed-item",
+                playlistID: "removed-from-playlist",
+                episodeID: "departed-episode",
+                sortKey: "m",
+                addedAt: addedAt
+            )
+        )
+        context.insert(
+            makePlaylistItem(
+                itemID: "kept-item",
+                playlistID: "still-holding-playlist",
+                episodeID: "departed-episode",
+                sortKey: "m",
+                addedAt: addedAt
+            )
+        )
+        context.insert(
+            PlaylistTombstoneRecord(
+                playlistID: "removed-from-playlist",
+                episodeID: "departed-episode",
+                deletedAt: addedAt.addingTimeInterval(60)
+            )
+        )
+        try context.save()
+
+        try rekeyPlaylistEpisode(
+            from: "departed-episode",
+            to: "successor-episode",
+            canonicalFeedURL: Self.canonicalFeedURL,
+            modelContext: context
+        )
+        try context.save()
+
+        let items = try context.fetch(FetchDescriptor<PlaylistItemRecord>())
+        #expect(items.map(\.itemID) == ["kept-item"])
+        #expect(items.first?.episodeID == "successor-episode")
+        #expect(!items.contains { $0.playlistID == "removed-from-playlist" })
+        let tombstones = try context.fetch(FetchDescriptor<PlaylistTombstoneRecord>())
+        #expect(tombstones.map { "\($0.playlistID)/\($0.episodeID ?? "-")" } == [
+            "removed-from-playlist/departed-episode"
+        ])
+    }
+
+    @Test("A re-key keeps the departed twin added last, whatever the store order or its dedupeUUID")
+    func rekeyKeepsNewestAddedTwin() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let addedAt = Date(timeIntervalSince1970: 1_700_000_200)
+        context.insert(PlaylistRecord(playlistID: "twin-playlist", name: "Twins"))
+        // The store's item order (sortKey first) lists the kept twin last, and
+        // its dedupeUUID is the larger one: only its newer add picks it.
+        context.insert(
+            makePlaylistItem(
+                itemID: "later-sorted-twin",
+                playlistID: "twin-playlist",
+                episodeID: "departed-episode",
+                sortKey: "z",
+                addedAt: addedAt.addingTimeInterval(60),
+                dedupeUUID: "FFFFFFFF-0000-0000-0000-000000000001"
+            )
+        )
+        context.insert(
+            makePlaylistItem(
+                itemID: "earlier-sorted-twin",
+                playlistID: "twin-playlist",
+                episodeID: "departed-episode",
+                sortKey: "a",
+                addedAt: addedAt,
+                dedupeUUID: "00000000-0000-0000-0000-000000000001"
+            )
+        )
+        try context.save()
+
+        try rekeyPlaylistEpisode(
+            from: "departed-episode",
+            to: "successor-episode",
+            canonicalFeedURL: Self.canonicalFeedURL,
+            modelContext: context
+        )
+        try context.save()
+
+        let items = try context.fetch(FetchDescriptor<PlaylistItemRecord>())
+        #expect(items.map(\.itemID) == ["later-sorted-twin"])
+        let survivor = try #require(items.first)
+        #expect(survivor.episodeID == "successor-episode")
+        #expect(survivor.podcastID == Self.canonicalFeedURL)
+        #expect(survivor.sortKey == "z")
+        #expect(survivor.dedupeUUID == "FFFFFFFF-0000-0000-0000-000000000001")
+        #expect(survivor.addedAt == addedAt.addingTimeInterval(60))
+        #expect(try context.fetch(FetchDescriptor<PlaylistTombstoneRecord>()).isEmpty)
+
+        _ = try SyncDuplicateRepairer.repair(modelContext: context, save: { try $0.save() })
+        #expect(try context.fetch(FetchDescriptor<PlaylistItemRecord>()).map(\.itemID) == ["later-sorted-twin"])
     }
 
     // MARK: - Helpers
@@ -659,6 +880,47 @@ struct EpisodeSidecarCollisionTests {
             try bytes.write(to: fileStore.fileURL(relativePath: relativePath))
             return relativePath
         }
+    }
+
+    private func makePlaylistItem(
+        itemID: String,
+        playlistID: String,
+        episodeID: String,
+        sortKey: String,
+        addedAt: Date,
+        dedupeUUID: String = UUID().uuidString
+    ) -> PlaylistItemRecord {
+        PlaylistItemRecord(
+            itemID: itemID,
+            playlistID: playlistID,
+            episodeID: episodeID,
+            podcastID: Self.oldFeedURL,
+            sortKey: sortKey,
+            addedAt: addedAt,
+            updatedAt: addedAt,
+            episodeTitle: "Episode One",
+            podcastTitle: "Show",
+            dedupeUUID: dedupeUUID
+        )
+    }
+
+    private func rekeyPlaylistEpisode(
+        from departedEpisodeID: String,
+        to successorEpisodeID: String,
+        canonicalFeedURL: String,
+        modelContext: ModelContext
+    ) throws {
+        try EpisodeIdentityMigrationApplier.apply(
+            [
+                EpisodeIdentityReconciler.Match(
+                    departedEpisodeID: departedEpisodeID,
+                    successorEpisodeID: successorEpisodeID
+                )
+            ],
+            canonicalFeedURL: canonicalFeedURL,
+            sidecarMigrators: [],
+            modelContext: modelContext
+        )
     }
 
     private func writeTranscriptDocument(

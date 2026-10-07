@@ -72,9 +72,9 @@ struct OpenCastAppModelPlaylistTests {
 
     @Test("A failed playlist mutation surfaces its error through the app model")
     func failedMutationSurfacesError() async throws {
-        let fixture = try await makeFixture(
-            playlists: PlaylistStore(saveModelContext: { _ in throw PlaylistSaveFailure() })
-        )
+        let saves = LibrarySaveProbe()
+        let fixture = try await makeFixture(librarySave: saves.save)
+        saves.failsSaves = true
         let appModel = fixture.appModel
         let context = fixture.context
 
@@ -151,7 +151,7 @@ struct OpenCastAppModelPlaylistTests {
         #expect(resolved.first?.snapshot?.episodeID == successorEpisodeID)
 
         // Memory must match what the next launch loads from the migrated rows.
-        let reloaded = PlaylistStore()
+        let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         reloaded.load(modelContext: ModelContext(fixture.container))
         #expect(appModel.playlists.itemsByPlaylistID == reloaded.itemsByPlaylistID)
         #expect(appModel.playlists.playlists == reloaded.playlists)
@@ -189,7 +189,7 @@ struct OpenCastAppModelPlaylistTests {
 
         // Memory must match what a relaunch loads from the rows the failed
         // save left behind.
-        let reloaded = PlaylistStore()
+        let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         reloaded.load(modelContext: ModelContext(fixture.container))
         #expect(appModel.playlists.itemsByPlaylistID == reloaded.itemsByPlaylistID)
         #expect(appModel.playlists.playlists == reloaded.playlists)
@@ -218,7 +218,7 @@ struct OpenCastAppModelPlaylistTests {
         #expect(migrated.rule?.podcastIDs == [Self.movedFeedURL, otherFeedURL])
         #expect(migrated.updatedAt == smart.updatedAt)
         #expect(appModel.smartPlaylistEvaluation(for: migrated).episodes.map(\.episodeID) == [fixture.successorEpisodeID])
-        let reloaded = PlaylistStore()
+        let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         reloaded.load(modelContext: ModelContext(fixture.container))
         #expect(appModel.playlists.playlists == reloaded.playlists)
     }
@@ -1275,10 +1275,12 @@ struct OpenCastAppModelPlaylistTests {
     @Test("Deleting a playlist drops its Siri donations only after the store deletes it")
     func deletePlaylistDropsTheDonationGroupOnlyAfterTheStoreSucceeds() async throws {
         let failingRecorder = SiriDonationRecorder()
+        let failingSaves = LibrarySaveProbe()
         let failing = try await makeFixture(
-            playlists: PlaylistStore(saveModelContext: { _ in throw PlaylistSaveFailure() }),
+            librarySave: failingSaves.save,
             siriMediaDiscovery: makeDiscovery(recorder: failingRecorder)
         )
+        failingSaves.failsSaves = true
 
         #expect(!failing.appModel.deletePlaylist(Self.commuteID, modelContext: failing.context))
 
@@ -1298,10 +1300,12 @@ struct OpenCastAppModelPlaylistTests {
     @Test("Renaming a playlist drops its Siri donations only after the store saves, and the next start donates the new name")
     func renamePlaylistDropsTheDonationGroupOnlyAfterTheStoreSucceeds() async throws {
         let failingRecorder = SiriDonationRecorder()
+        let failingSaves = LibrarySaveProbe()
         let failing = try await makeFixture(
-            playlists: PlaylistStore(saveModelContext: { _ in throw PlaylistSaveFailure() }),
+            librarySave: failingSaves.save,
             siriMediaDiscovery: makeDiscovery(recorder: failingRecorder)
         )
+        failingSaves.failsSaves = true
 
         #expect(!failing.appModel.renamePlaylist(Self.commuteID, to: "Morning", modelContext: failing.context))
 
@@ -1537,12 +1541,310 @@ struct OpenCastAppModelPlaylistTests {
         return fixture
     }
 
+    @Test("Each playlist mutation through the app model takes exactly one synced-store credit")
+    func everyPlaylistMutationTakesOneCredit() async throws {
+        let fixture = try await makeFixture()
+        let appModel = fixture.appModel
+        let context = fixture.context
+        let library = appModel.library
+
+        var credits = library.syncedStoreSelfSaveCount
+        let created = appModel.performPlaylistMutation {
+            appModel.playlists.create(name: "Walks", kind: .manual, modelContext: context)
+        }
+        #expect(created != nil)
+        #expect(library.syncedStoreSelfSaveCount == credits + 1)
+
+        let smart = try createSmartPlaylist(.default, appModel: appModel, context: context)
+        credits = library.syncedStoreSelfSaveCount
+        let didSetRule = appModel.performPlaylistMutation {
+            appModel.playlists.setRule(
+                PlaylistRule(podcastIDs: [Self.podcastID], status: .all),
+                for: smart.playlistID,
+                modelContext: context
+            )
+        }
+        #expect(didSetRule)
+        #expect(library.syncedStoreSelfSaveCount == credits + 1)
+
+        credits = library.syncedStoreSelfSaveCount
+        #expect(appModel.renamePlaylist(Self.commuteID, to: "Morning", modelContext: context))
+        #expect(library.syncedStoreSelfSaveCount == credits + 1)
+
+        credits = library.syncedStoreSelfSaveCount
+        let didHidePlayed = appModel.performPlaylistMutation {
+            appModel.playlists.setHidesPlayed(true, for: Self.commuteID, modelContext: context)
+        }
+        #expect(didHidePlayed)
+        #expect(library.syncedStoreSelfSaveCount == credits + 1)
+
+        credits = library.syncedStoreSelfSaveCount
+        try addToCommute(["third"], fixture: fixture)
+        #expect(library.syncedStoreSelfSaveCount == credits + 1)
+
+        credits = library.syncedStoreSelfSaveCount
+        let didRemove = appModel.performPlaylistMutation {
+            appModel.playlists.remove(itemIDs: [Self.commuteItemIDs[0]], from: Self.commuteID, modelContext: context)
+        }
+        #expect(didRemove)
+        #expect(library.syncedStoreSelfSaveCount == credits + 1)
+
+        credits = library.syncedStoreSelfSaveCount
+        let didMove = appModel.performPlaylistMutation {
+            appModel.playlists.move(fromOffsets: IndexSet(integer: 1), toOffset: 0, in: Self.commuteID, modelContext: context)
+        }
+        #expect(didMove)
+        #expect(library.syncedStoreSelfSaveCount == credits + 1)
+
+        let dated = try #require(created)
+        let datedAdded = appModel.performPlaylistMutation {
+            appModel.playlists.add(
+                [
+                    datedEpisode("later", publishedAt: Date(timeIntervalSince1970: 1_775_000_600)),
+                    datedEpisode("earlier", publishedAt: Date(timeIntervalSince1970: 1_775_000_000))
+                ],
+                to: dated.playlistID,
+                modelContext: context
+            )
+        }
+        #expect(datedAdded == 2)
+        credits = library.syncedStoreSelfSaveCount
+        let didSort = appModel.performPlaylistMutation {
+            appModel.playlists.sortItems(in: dated.playlistID, by: .oldestFirst, modelContext: context)
+        }
+        #expect(didSort)
+        #expect(appModel.playlists.itemsByPlaylistID[dated.playlistID]?.map(\.episodeID) == ["earlier", "later"])
+        #expect(library.syncedStoreSelfSaveCount == credits + 1)
+
+        credits = library.syncedStoreSelfSaveCount
+        #expect(appModel.deletePlaylist(Self.commuteID, modelContext: context))
+        #expect(library.syncedStoreSelfSaveCount == credits + 1)
+        #expect(appModel.lastPlaylistError == nil)
+    }
+
+    @Test("Rows inserted, renamed and deleted behind the store reach memory through the synced-change reload")
+    func syncedChangeReloadBringsRemoteRowsIntoMemory() async throws {
+        let fixture = try await makeFixture()
+        let appModel = fixture.appModel
+        // The store's own context, saved plainly: an import changes rows
+        // without going through the store.
+        let importContext = fixture.context
+        let importedAt = Date(timeIntervalSince1970: 1_775_003_600)
+        importContext.insert(
+            PlaylistRecord(playlistID: "imported", name: "From Another Device", createdAt: importedAt, updatedAt: importedAt)
+        )
+        importContext.insert(
+            PlaylistItemRecord(
+                itemID: "imported-item",
+                playlistID: "imported",
+                episodeID: "third",
+                podcastID: Self.podcastID,
+                sortKey: PlaylistSortKey.renumbered(count: 1)[0],
+                addedAt: importedAt,
+                updatedAt: importedAt,
+                episodeTitle: "Episode third",
+                podcastTitle: "Playlist Show"
+            )
+        )
+        for record in try importContext.fetch(FetchDescriptor<PlaylistRecord>()) {
+            if record.playlistID == Self.emptyID {
+                record.name = "Renamed Elsewhere"
+            } else if record.playlistID == Self.commuteID {
+                importContext.delete(record)
+            }
+        }
+        for record in try importContext.fetch(FetchDescriptor<PlaylistItemRecord>()) where record.playlistID == Self.commuteID {
+            importContext.delete(record)
+        }
+        try importContext.save()
+        #expect(appModel.playlist(Self.commuteID) != nil)
+
+        let change = appModel.reloadPlaylistsAfterSyncedChange(modelContext: fixture.context)
+
+        #expect(change.didChange)
+        #expect(!change.needsRepair)
+        #expect(change.removedPlaylistIDs == [Self.commuteID])
+        #expect(change.renamedPlaylistIDs == [Self.emptyID])
+        #expect(Set(appModel.playlists.playlists.map(\.playlistID)) == [Self.emptyID, "imported"])
+        #expect(appModel.playlist(Self.emptyID)?.name == "Renamed Elsewhere")
+        #expect(appModel.playlists.itemsByPlaylistID["imported"]?.map(\.itemID) == ["imported-item"])
+        #expect(appModel.playlists.itemsByPlaylistID[Self.commuteID] == nil)
+        #expect(appModel.lastPlaylistError == nil)
+
+        let quiet = appModel.reloadPlaylistsAfterSyncedChange(modelContext: fixture.context)
+        #expect(quiet == PlaylistReloadChange())
+    }
+
+    @Test("A remote delete and a remote rename each drop the playlist's Siri donation group")
+    func syncedChangeReloadDropsDonationGroups() async throws {
+        let recorder = SiriDonationRecorder()
+        let fixture = try await makeFixture(siriMediaDiscovery: makeDiscovery(recorder: recorder))
+        let importContext = fixture.context
+        for record in try importContext.fetch(FetchDescriptor<PlaylistRecord>()) {
+            if record.playlistID == Self.emptyID {
+                record.name = "Renamed Elsewhere"
+            } else if record.playlistID == Self.commuteID {
+                importContext.delete(record)
+            }
+        }
+        try importContext.save()
+
+        fixture.appModel.reloadPlaylistsAfterSyncedChange(modelContext: fixture.context)
+
+        #expect(recorder.deletedGroupIdentifiers.sorted() == [Self.commuteID, Self.emptyID])
+
+        fixture.appModel.reloadPlaylistsAfterSyncedChange(modelContext: fixture.context)
+
+        #expect(recorder.deletedGroupIdentifiers.count == 2)
+    }
+
+    @Test("A repair that merged playlist twins is followed by a reload that lists the merged playlist")
+    func repairOfPlaylistTwinsReloadsPlaylists() async throws {
+        let fixture = try await makeFixture()
+        let appModel = fixture.appModel
+        let newer = Date(timeIntervalSince1970: 1_775_003_600)
+        // Loses the identity to the row the fixture seeded but carries the
+        // newest content, so only a reload after the merge shows its name.
+        fixture.context.insert(
+            PlaylistRecord(
+                playlistID: Self.commuteID,
+                name: "Commute Elsewhere",
+                createdAt: newer,
+                updatedAt: newer,
+                dedupeUUID: "zzzzzzzz-0000-0000-0000-000000000000"
+            )
+        )
+        try fixture.context.save()
+        #expect(appModel.playlist(Self.commuteID)?.name == "Commute")
+
+        let result = await appModel.repairSyncDuplicates(modelContext: fixture.context)
+
+        #expect(result?.playlistRowsChanged == true)
+        #expect(appModel.playlists.playlists.filter { $0.playlistID == Self.commuteID }.count == 1)
+        #expect(appModel.playlist(Self.commuteID)?.name == "Commute Elsewhere")
+        #expect(appModel.playlists.itemsByPlaylistID[Self.commuteID]?.map(\.itemID) == Self.commuteItemIDs)
+        let stored = try ModelContext(fixture.container).fetch(FetchDescriptor<PlaylistRecord>())
+        #expect(stored.filter { $0.playlistID == Self.commuteID }.count == 1)
+    }
+
+    @Test("After a committed feed-address move a synced-change reload reports no change")
+    func syncedChangeReloadAfterFeedMoveIsQuiet() async throws {
+        let fixture = try await makeFeedMoveFixture()
+        let appModel = try makeAppModel(library: fixture.makeLibrary())
+        await appModel.ensureCoreStoresLoaded(modelContext: fixture.context)
+        try await appModel.library.migrateSubscription(
+            from: Self.departedFeedURL,
+            toFeedURL: #require(URL(string: Self.movedFeedURL)),
+            modelContext: fixture.context
+        )
+        let itemsAfterMove = appModel.playlists.itemsByPlaylistID
+
+        let change = appModel.reloadPlaylistsAfterSyncedChange(modelContext: fixture.context)
+
+        #expect(change == PlaylistReloadChange())
+        #expect(appModel.playlists.itemsByPlaylistID == itemsAfterMove)
+    }
+
+    @Test("Playlists an earlier build kept on the device are listed after loading and the copy is marked done")
+    func legacyLocalPlaylistsAreMigratedOnLoad() async throws {
+        let suiteName = "OpenCastAppModelPlaylistTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let cache = SQLiteLocalLibraryCacheStore.inMemory()
+        try await cache.upsertCache(from: feedSnapshot(), refreshedAt: .now)
+        let createdAt = Date(timeIntervalSince1970: 1_775_000_000)
+        let snapshot = LegacyLocalPlaylistSnapshot(
+            playlists: [
+                LegacyLocalPlaylistSnapshot.Playlist(
+                    playlistID: "kept-locally",
+                    name: "Kept Locally",
+                    kindRawValue: "manual",
+                    ruleJSON: nil,
+                    hidesPlayed: false,
+                    tintKey: nil,
+                    originRawValue: "user",
+                    createdAt: createdAt,
+                    updatedAt: createdAt
+                )
+            ],
+            items: [
+                LegacyLocalPlaylistSnapshot.Item(
+                    itemID: "kept-locally-item",
+                    playlistID: "kept-locally",
+                    episodeID: "first",
+                    podcastID: Self.podcastID,
+                    sortKey: PlaylistSortKey.renumbered(count: 1)[0],
+                    addedAt: createdAt,
+                    updatedAt: createdAt,
+                    episodeTitle: "Episode first",
+                    podcastTitle: "Playlist Show",
+                    artworkURL: nil,
+                    audioURL: "https://example.com/first.mp3",
+                    duration: 60,
+                    publishedAt: nil
+                )
+            ]
+        )
+        let appModel = try makeAppModel(
+            library: LibraryStore(localCache: cache),
+            legacyLocalPlaylists: snapshot,
+            playlistMigrationDefaults: defaults
+        )
+
+        await appModel.ensureCoreStoresLoaded(modelContext: context)
+
+        #expect(appModel.playlists.playlists.map(\.playlistID) == ["kept-locally"])
+        #expect(appModel.playlist("kept-locally")?.name == "Kept Locally")
+        #expect(appModel.playlists.itemsByPlaylistID["kept-locally"]?.map(\.itemID) == ["kept-locally-item"])
+        #expect(appModel.lastPlaylistError == nil)
+        #expect(defaults.bool(forKey: PlaylistLocalStoreMigration.completedDefaultsKey))
+        let stored = try ModelContext(container).fetch(FetchDescriptor<PlaylistRecord>())
+        #expect(stored.map(\.playlistID) == ["kept-locally"])
+    }
+
+    @Test("An app model built without locally stored playlists leaves the copy flag untouched")
+    func missingLegacySnapshotLeavesFlagUntouched() async throws {
+        let suiteName = "OpenCastAppModelPlaylistTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let appModel = try makeAppModel(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            playlistMigrationDefaults: defaults
+        )
+
+        await appModel.ensureCoreStoresLoaded(modelContext: context)
+
+        #expect(defaults.object(forKey: PlaylistLocalStoreMigration.completedDefaultsKey) == nil)
+        #expect(appModel.playlists.playlists.isEmpty)
+        #expect(appModel.lastPlaylistError == nil)
+    }
+
+    private func datedEpisode(_ episodeID: String, publishedAt: Date) -> EpisodeListItemSnapshot {
+        .fixture(
+            episodeID: episodeID,
+            podcastID: Self.podcastID,
+            podcastTitle: "Playlist Show",
+            title: "Episode \(episodeID)",
+            publishedAt: publishedAt,
+            audioURL: "https://example.com/\(episodeID).mp3",
+            guid: episodeID
+        )
+    }
+
     private func makeFixture(
         upNextQueue: UpNextQueueStore = UpNextQueueStore(),
-        playlists: PlaylistStore = PlaylistStore(),
         playlistDisplaySettings: PlaylistDisplaySettingsStore = PlaylistDisplaySettingsStore(),
         downloads: DownloadStore? = nil,
         libraryNow: @escaping () -> Date = { .now },
+        librarySave: @escaping (ModelContext) throws -> Void = { try $0.save() },
         siriMediaDiscovery: SiriMediaDiscovery = SiriMediaDiscovery()
     ) async throws -> (
         appModel: OpenCastAppModel,
@@ -1559,9 +1861,12 @@ struct OpenCastAppModelPlaylistTests {
         try context.save()
 
         let appModel = try makeAppModel(
-            library: LibraryStore(localCache: cache, now: libraryNow),
+            library: LibraryStore(
+                localCache: cache,
+                savePlaybackSkipSettingsModelContext: librarySave,
+                now: libraryNow
+            ),
             upNextQueue: upNextQueue,
-            playlists: playlists,
             playlistDisplaySettings: playlistDisplaySettings,
             downloads: downloads,
             siriMediaDiscovery: siriMediaDiscovery
@@ -1573,10 +1878,11 @@ struct OpenCastAppModelPlaylistTests {
     private func makeAppModel(
         library: LibraryStore,
         upNextQueue: UpNextQueueStore = UpNextQueueStore(),
-        playlists: PlaylistStore = PlaylistStore(),
         playlistDisplaySettings: PlaylistDisplaySettingsStore = PlaylistDisplaySettingsStore(),
         downloads: DownloadStore? = nil,
-        siriMediaDiscovery: SiriMediaDiscovery = SiriMediaDiscovery()
+        siriMediaDiscovery: SiriMediaDiscovery = SiriMediaDiscovery(),
+        legacyLocalPlaylists: LegacyLocalPlaylistSnapshot? = nil,
+        playlistMigrationDefaults: UserDefaults = .standard
     ) throws -> OpenCastAppModel {
         let temporaryDirectory = try makeTemporaryDirectory()
         let applicationSupportDirectory = temporaryDirectory.appending(
@@ -1597,11 +1903,12 @@ struct OpenCastAppModelPlaylistTests {
                 fileStore: EpisodeAdAnalysisFileStore(baseDirectory: applicationSupportDirectory)
             ),
             upNextQueue: upNextQueue,
-            playlists: playlists,
             playlistDisplaySettings: playlistDisplaySettings,
             syncStatus: SyncStatusStore(accountStatusProvider: AvailableCloudKitAccountStatusProvider()),
             allowsAutomaticFeedRefresh: false,
-            siriMediaDiscovery: siriMediaDiscovery
+            siriMediaDiscovery: siriMediaDiscovery,
+            legacyLocalPlaylists: legacyLocalPlaylists,
+            playlistMigrationDefaults: playlistMigrationDefaults
         )
     }
 

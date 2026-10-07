@@ -13,7 +13,7 @@ struct NukeConfirmationSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("This deletes all opencast subscriptions, listening progress, local episode records, downloaded files, automatic caches, and local settings.")
+                    Text("This deletes all opencast subscriptions, listening progress, playlists, local episode records, downloaded files, automatic caches, and local settings.")
 
                     TextField("Type NUKE", text: $confirmationText)
                         .textInputAutocapitalization(.characters)

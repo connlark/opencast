@@ -14,8 +14,8 @@
               "appearance" : "light",
               "value" : {
                 "linear-gradient" : [
-                  "extended-srgb:0.14118,0.37255,0.78039,1.00000",
-                  "extended-srgb:0.09020,0.24706,0.57255,1.00000"
+                  "extended-srgb:0.72157,0.83922,1.00000,1.00000",
+                  "extended-srgb:0.41569,0.65490,1.00000,1.00000"
                 ]
               }
             },
@@ -65,8 +65,8 @@
               "appearance" : "light",
               "value" : {
                 "linear-gradient" : [
-                  "extended-srgb:0.95294,0.97255,1.00000,0.94000",
-                  "extended-srgb:0.76863,0.86275,1.00000,0.82000"
+                  "extended-srgb:0.14118,0.30588,0.58824,0.90000",
+                  "extended-srgb:0.05490,0.13725,0.28235,0.86000"
                 ]
               }
             },
@@ -112,6 +112,15 @@
       "layers" : [
         {
           "fill-specializations" : [
+            {
+              "appearance" : "light",
+              "value" : {
+                "linear-gradient" : [
+                  "extended-srgb:0.10980,0.10980,0.11765,1.00000",
+                  "extended-srgb:0.00000,0.00000,0.00000,1.00000"
+                ]
+              }
+            },
             {
               "appearance" : "dark",
               "value" : {
