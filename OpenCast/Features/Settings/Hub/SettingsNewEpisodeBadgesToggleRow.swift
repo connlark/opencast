@@ -9,7 +9,6 @@ struct SettingsNewEpisodeBadgesToggleRow: View {
         Toggle(isOn: showsBadgesBinding) {
             Label {
                 Text("New Episode Badges")
-                Text("Unfinished episodes from the past 30 days, released since you followed each show.")
             } icon: {
                 Image(systemName: "app.badge")
                     .foregroundStyle(Color.primary)

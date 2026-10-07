@@ -601,7 +601,8 @@ pub struct JobRecord {
     pub ad_analysis_submitted_at: Option<i64>,
     /// Media request profile the app declared on create; `None` for app
     /// versions that predate the declaration and for records created before
-    /// it existed. Selects the origin-fetch UA (`origin::media_user_agent`).
+    /// it existed. Recorded only: every job fetches with
+    /// `origin::MEDIA_USER_AGENT`.
     /// Additive `#[serde(default)]`: old records decode with `None`.
     #[serde(default)]
     pub media_profile: Option<u32>,

@@ -105,7 +105,8 @@ pub struct CreateMessage {
     pub episode_title: Option<String>,
     #[serde(default)]
     pub podcast_title: Option<String>,
-    /// The app's declared media request profile (`origin::media_user_agent`).
+    /// The app's declared media request profile. Recorded only: every job
+    /// fetches with `origin::MEDIA_USER_AGENT`.
     #[serde(default)]
     pub media_profile: Option<u32>,
 }
@@ -2586,9 +2587,10 @@ impl TranscriptionJob {
                     if repaired != response_json {
                         // An overwrite failure retains the primary. The
                         // attempt ledger already accounts for issued work.
-                        if self.fake_repair_write_failure(record, config).await? {
-                            self.bump("gap_repair_persist_errors", 1).await;
-                        } else if bucket.put(&response_key, repaired).execute().await.is_err() {
+                        // A hooked fake failure skips the overwrite.
+                        let write_failed = self.fake_repair_write_failure(record, config).await?
+                            || bucket.put(&response_key, repaired).execute().await.is_err();
+                        if write_failed {
                             self.bump("gap_repair_persist_errors", 1).await;
                         }
                     }
@@ -4425,8 +4427,7 @@ impl TranscriptionJob {
         audio: &[u8],
         chunk_index: u32,
         mode: &GapRepairMode,
-        window_start_seconds: f64,
-        window_length_seconds: f64,
+        window: &gap_repair::Window,
     ) -> std::result::Result<Vec<u8>, String> {
         match mode {
             GapRepairMode::Fake(rule) => {
@@ -4443,8 +4444,8 @@ impl TranscriptionJob {
                 let response = ai::fake_repair_response(
                     Some(rule),
                     chunk_index,
-                    window_start_seconds,
-                    window_length_seconds,
+                    window.start,
+                    window.length(),
                 );
                 serde_json::to_vec(&response).map_err(|error| error.to_string())
             }
@@ -4718,6 +4719,7 @@ impl TranscriptionJob {
         repair_budget::CALL_WALL_MILLIS
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn issue_gap_repair(
         &self,
         record: &JobRecord,
@@ -4777,25 +4779,17 @@ impl TranscriptionJob {
         // model request. Cancellation during the request prevents the NEXT
         // reservation, without pretending already-issued work was free.
         issued.set(true);
-        self.run_ai_repair(
-            record,
-            config,
-            audio,
-            chunk,
-            mode,
-            window.start,
-            window.length(),
-        )
-        .await
-        .map_err(|error| {
-            worker::console_error!(
-                "gap repair ai error: job {} chunk {} {}",
-                record.job_id,
-                chunk,
-                error
-            );
-            "ai_error"
-        })
+        self.run_ai_repair(record, config, audio, chunk, mode, window)
+            .await
+            .map_err(|error| {
+                worker::console_error!(
+                    "gap repair ai error: job {} chunk {} {}",
+                    record.job_id,
+                    chunk,
+                    error
+                );
+                "ai_error"
+            })
     }
 
     async fn fake_repair_write_failure(

@@ -5063,6 +5063,73 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(settingsHubRow(hubRow, showsValue: "Ember"), "App Icon hub row should return to Ember")
     }
 
+    @MainActor
+    func testSettingsAboutShowsGlassHeroAndLinks() throws {
+        let app = makeSeededApp(forcesDarkMode: false, forcesLightMode: true)
+        app.launch()
+
+        openSettingsScreen("About", expecting: "About", in: app)
+        let hero = app.images["About Glass Hero"]
+        assertExists(hero, named: "About glass hero")
+        XCTAssertEqual(hero.value as? String, "Icon front")
+        attachSmokeScreenshot(named: "settings_about_front")
+
+        // Only the RealityKit model turns, so this also proves it loaded; the
+        // 2D image shows while the file loads, hence the retries.
+        var swipes = 0
+        repeat {
+            hero.swipeLeft()
+            swipes += 1
+        } while !waitForHero(hero, valuePrefix: "Engraved back") && swipes < 3
+        XCTAssertTrue(waitForHero(hero, valuePrefix: "Engraved back"), "A horizontal swipe should turn the icon to its engraved back")
+        XCTAssertFalse(
+            app.images["AppIconPreview-Ember"].exists,
+            "The 2D stand-in should leave the accessibility tree once the model draws"
+        )
+        Thread.sleep(forTimeInterval: 1)
+        attachSmokeScreenshot(named: "settings_about_back")
+
+        hero.swipeRight()
+        XCTAssertTrue(waitForHero(hero, valuePrefix: "Icon front"), "A second swipe should turn the icon back to its front")
+        let heroTop = hero.frame.minY
+        hero.swipeUp()
+        XCTAssertLessThan(hero.frame.minY, heroTop - 50, "A vertical swipe over the icon should scroll About")
+
+        let versionRow = app.buttons["About Version"]
+        assertExists(versionRow, named: "About version row")
+        XCTAssertNotNil(
+            versionRow.label.range(of: #"\d{4}\.\d+\.\d+ \(\d+\)"#, options: .regularExpression),
+            "Version row should show the marketing version and build, got \(versionRow.label)"
+        )
+
+        // Never taps these: Website leaves the app and Rate may show the system sheet.
+        for identifier in [
+            "Settings Row Website",
+            "Settings Row Rate opencast",
+            "Settings Row Share opencast",
+            "Help Link siri",
+        ] {
+            // Links surface as links, the rest as buttons.
+            let element = app.descendants(matching: .any)[identifier].firstMatch
+            var rowSwipes = 0
+            while !(element.exists && element.isHittable), rowSwipes < 4 {
+                app.swipeUp()
+                rowSwipes += 1
+            }
+            XCTAssertTrue(element.exists, "\(identifier) should exist on About")
+        }
+        attachSmokeScreenshot(named: "settings_about_links")
+    }
+
+    @MainActor
+    private func waitForHero(_ hero: XCUIElement, valuePrefix: String) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value BEGINSWITH %@", valuePrefix),
+            object: hero
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: 3) == .completed
+    }
+
     /// LaunchServices confirms an icon change with a system alert owned by
     /// SpringBoard (not the app) and holds the change until it is answered;
     /// an app-scoped query never sees it. Both owners are checked so a
