@@ -3,7 +3,7 @@
 # state and credentials.
 name = "your-purchase-worker"
 main = "src/index.ts"
-compatibility_date = "2026-09-18"
+compatibility_date = "2026-09-30"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
@@ -43,6 +43,9 @@ binding = "PURCHASE_DB"
 database_name = "your-purchase-db"
 database_id = "REPLACE_WITH_DEVELOPMENT_D1_DATABASE_ID"
 migrations_dir = "migrations"
+
+[durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
 
 [[durable_objects.bindings]]
 name = "PURCHASE_ACCOUNT"
@@ -85,6 +88,9 @@ binding = "PURCHASE_DB"
 database_name = "your-purchase-db-prod-staging"
 database_id = "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID"
 migrations_dir = "migrations"
+
+[env.prod-staging.durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
 
 [[env.prod-staging.durable_objects.bindings]]
 name = "PURCHASE_ACCOUNT"
@@ -129,6 +135,9 @@ binding = "PURCHASE_DB"
 database_name = "your-purchase-db-production"
 database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
 migrations_dir = "migrations"
+
+[env.production.durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
 
 [[env.production.durable_objects.bindings]]
 name = "PURCHASE_ACCOUNT"

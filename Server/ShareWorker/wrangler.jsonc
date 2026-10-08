@@ -13,7 +13,7 @@
 {
   "name": "your-share-worker",
   "main": "src/worker/index.tsx",
-  "compatibility_date": "2026-09-18",
+  "compatibility_date": "2026-09-30",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "assets": { "binding": "ASSETS", "html_handling": "none", "not_found_handling": "none" },

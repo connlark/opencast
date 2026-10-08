@@ -1,6 +1,6 @@
 name = "your-ad-analysis-worker"
 main = "build/index.js"
-compatibility_date = "2026-09-18"
+compatibility_date = "2026-09-30"
 workers_dev = true
 
 [observability]
@@ -15,7 +15,7 @@ invocation_logs = true
 enabled = false
 
 [build]
-command = "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release"
+command = "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release"
 
 [vars]
 APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
@@ -33,6 +33,9 @@ binding = "AD_ANALYSIS_DB"
 database_name = "your-ad-analysis-db"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"
 migrations_dir = "migrations"
+
+[durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
 
 [[durable_objects.bindings]]
 name = "AD_ANALYSIS_USAGE_LIMITER"
@@ -72,6 +75,9 @@ binding = "AD_ANALYSIS_DB"
 database_name = "your-ad-analysis-db-prod-staging"
 database_id = "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID"
 migrations_dir = "migrations"
+
+[env.prod-staging.durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
 
 [[env.prod-staging.durable_objects.bindings]]
 name = "AD_ANALYSIS_USAGE_LIMITER"
@@ -115,6 +121,9 @@ binding = "AD_ANALYSIS_DB"
 database_name = "your-ad-analysis-db-production"
 database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
 migrations_dir = "migrations"
+
+[env.production.durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
 
 [[env.production.durable_objects.bindings]]
 name = "AD_ANALYSIS_USAGE_LIMITER"

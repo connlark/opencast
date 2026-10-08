@@ -2,6 +2,7 @@
 name = "opencast-remote-transcription-worker"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.91"
 publish = false
 
 [lib]
@@ -9,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 aes-gcm = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 futures-util = "0.3"
 hex = "0.4"
 hmac = "0.12"

@@ -2,7 +2,7 @@ import path from "node:path";
 import {
   cloudflareTest,
   readD1Migrations,
-} from "@cloudflare/vitest-pool-workers";
+} from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 import jwt from "jsonwebtoken";
 import { mintFixtures } from "./test/fixtures/mint.mjs";

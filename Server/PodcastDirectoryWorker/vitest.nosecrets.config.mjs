@@ -1,7 +1,7 @@
 // Missing-secret lane: the flag is on but no Podcast Index credentials
 // are bound, proving the worker answers 503 rather than calling
 // upstream unauthenticated.
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({

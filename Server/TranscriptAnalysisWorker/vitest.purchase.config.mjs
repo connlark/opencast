@@ -11,7 +11,7 @@ import path from "node:path";
 import {
   cloudflareTest,
   readD1Migrations,
-} from "@cloudflare/vitest-pool-workers";
+} from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 import { mintFixtures } from "../PurchaseWorker/test/fixtures/mint.mjs";
 
@@ -87,7 +87,7 @@ export default defineConfig(async () => {
             {
               name: "opencast-purchase",
               modules: [purchaseWorkerModule()],
-              compatibilityDate: "2026-09-18",
+              compatibilityDate: "2026-09-30",
               compatibilityFlags: ["nodejs_compat"],
               d1Databases: { PURCHASE_DB: PURCHASE_TEST_DB_ID },
               durableObjects: {

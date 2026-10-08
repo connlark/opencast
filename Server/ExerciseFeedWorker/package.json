@@ -9,7 +9,9 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "catalog:",
+    "@cloudflare/vitest-plugin": "catalog:",
+    "@vitest/runner": "catalog:",
+    "@vitest/snapshot": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"
   }

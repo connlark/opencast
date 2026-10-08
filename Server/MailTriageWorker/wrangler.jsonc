@@ -19,7 +19,7 @@
 {
   "name": "your-mail-triage-worker",
   "main": "src/index.ts",
-  "compatibility_date": "2026-09-18",
+  "compatibility_date": "2026-09-30",
   "workers_dev": false,
   "ai": { "binding": "AI" },
   "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "invocation_logs": false } },

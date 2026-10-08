@@ -1,7 +1,7 @@
 // Kill-switch lane: the public flag is forced off and no Podcast Index
 // credentials are bound, proving the worker fails closed before it can
 // need them.
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({

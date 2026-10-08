@@ -12,12 +12,14 @@
     "login": "wrangler login",
     "test": "cargo test",
     "typecheck": "cargo check --target wasm32-unknown-unknown --lib",
-    "build:worker": "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release",
+    "build:worker": "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release",
     "test:integration": "yarn run build:worker && vitest run && vitest run --config vitest.killswitch.config.mjs && vitest run --config vitest.nosecrets.config.mjs",
     "provision": "scripts/provision-secrets.sh"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "catalog:",
+    "@cloudflare/vitest-plugin": "catalog:",
+    "@vitest/runner": "catalog:",
+    "@vitest/snapshot": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"
   }

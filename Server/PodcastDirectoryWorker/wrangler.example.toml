@@ -1,6 +1,6 @@
 name = "your-podcast-directory-worker"
 main = "build/index.js"
-compatibility_date = "2026-09-18"
+compatibility_date = "2026-09-30"
 workers_dev = true
 
 [observability]
@@ -15,7 +15,7 @@ invocation_logs = true
 enabled = false
 
 [build]
-command = "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release"
+command = "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release"
 
 [vars]
 PUBLIC_PODCAST_DIRECTORY_ENABLED = "false"

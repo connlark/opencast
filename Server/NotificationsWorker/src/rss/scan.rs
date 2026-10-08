@@ -241,7 +241,9 @@ fn account_attributes(
     item: &mut usize,
     total: &mut usize,
 ) -> Result<(), RSSParseError> {
-    for attribute in element.attributes() {
+    // Duplicate-name checking is quadratic in the attribute count of one tag
+    // (RUSTSEC-2026-0194); untrusted feeds get the unchecked, linear iterator.
+    for attribute in element.attributes().with_checks(false) {
         let attribute = attribute.map_err(|_| RSSParseError::InvalidXML)?;
         let count = attribute.value.len();
         *total += count;

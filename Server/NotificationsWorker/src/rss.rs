@@ -373,7 +373,10 @@ fn attribute_value<R>(element: &BytesStart<'_>, name: &str, reader: &Reader<R>) 
         .find_map(|attribute| {
             (normalized_name(attribute.key.as_ref()) == name).then(|| {
                 attribute
-                    .decode_and_unescape_value(reader.decoder())
+                    .decoded_and_normalized_value(
+                        quick_xml::XmlVersion::default(),
+                        reader.decoder(),
+                    )
                     .ok()
                     .map(|value| value.trim().to_string())
             })?

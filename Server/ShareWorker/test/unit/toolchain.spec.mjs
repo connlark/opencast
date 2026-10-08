@@ -1,7 +1,8 @@
-// @cloudflare/vite-plugin pins wrangler, miniflare and workerd exactly. Those
-// must be the versions the root catalog installs, or the tree grows a second
-// workerd and the compatibility-date ceiling splits (docs/build.md). Bump the
-// plugin and the catalog together.
+// @cloudflare/vite-plugin pins wrangler, miniflare and workerd exactly, and
+// @cloudflare/vitest-plugin pins wrangler and miniflare exactly. Those must be
+// the versions the root catalog installs, or the tree grows a second workerd
+// and the compatibility-date ceiling splits (docs/build.md). Bump both plugins
+// and the catalog together.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,19 @@ function manifest(name) {
   }
   throw new Error(`${name} is not installed`);
 }
+
+describe("vitest plugin toolchain pins", () => {
+  const plugin = manifest("@cloudflare/vitest-plugin");
+
+  it.each(["wrangler", "miniflare"])("pins the installed %s", (name) => {
+    expect(plugin.dependencies[name]).toBe(manifest(name).version);
+  });
+
+  it("is the version the catalog declares", () => {
+    const yarnrc = readFileSync(path.join(workerDir, "..", "..", ".yarnrc.yml"), "utf8");
+    expect(yarnrc).toMatch(new RegExp(`^  "@cloudflare/vitest-plugin": ${plugin.version.replaceAll(".", "\\.")}$`, "m"));
+  });
+});
 
 describe("vite plugin toolchain pins", () => {
   const plugin = manifest("@cloudflare/vite-plugin");

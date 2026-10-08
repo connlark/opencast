@@ -6,7 +6,7 @@
 {
   "name": "your-transcription-media-worker",
   "main": "src/index.ts",
-  "compatibility_date": "2026-09-18",
+  "compatibility_date": "2026-09-30",
   "workers_dev": false,
   "observability": { "enabled": true },
   // Build and push your image, then replace every marker and pin its digest.
@@ -19,6 +19,7 @@
     }
   ],
   "durable_objects": {
+    "code_update_strategy": {"mode": "deferred", "max_delay": 300},
     "bindings": [
       {
         "name": "MEDIA_CONTAINER",

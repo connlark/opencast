@@ -211,3 +211,30 @@ fn pinned_large_captures_match_materialized_parser() {
         compare(&xml, 65536);
     }
 }
+
+#[test]
+fn attribute_floods_cost_linear_time() {
+    // RUSTSEC-2026-0194: quick-xml's default duplicate-name check is
+    // quadratic in the attribute count of one start tag. A hostile feed can
+    // put tens of thousands of attributes on a single tag, so the scan must
+    // skip the check and stay linear.
+    let attributes: String = (0..50_000).map(|i| format!(" a{i}=\"\"")).collect();
+    let plain = "<rss><channel><title>Flood</title><item><guid>1</guid><title>One</title><enclosure url=\"https://example.com/1.mp3\"/></item></channel></rss>";
+    let flooded = plain.replace("<item>", &format!("<item{attributes}>"));
+    let started = std::time::Instant::now();
+    let mut sink = Collect::default();
+    let scanned = scan_rss_with_sink(flooded.as_bytes(), FEED_URL, &mut sink)
+        .now_or_never()
+        .unwrap()
+        .unwrap();
+    let elapsed = started.elapsed();
+    let expected = parse_rss(plain, FEED_URL).unwrap();
+    assert_eq!(scanned.title, expected.title);
+    assert_eq!(sink.0.len(), 1);
+    assert_eq!(sink.0[0].id, expected.episodes[0].id);
+    assert_eq!(sink.0[0].audio_url, expected.episodes[0].audio_url);
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "attribute flood took {elapsed:?}"
+    );
+}

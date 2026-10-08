@@ -2,7 +2,7 @@
 # prod-staging and production must use isolated storage and credentials.
 name = "your-remote-transcription-worker"
 main = "build/index.js"
-compatibility_date = "2026-09-18"
+compatibility_date = "2026-09-30"
 workers_dev = true
 
 [observability]
@@ -27,7 +27,7 @@ cpu_ms = 120_000
 crons = []
 
 [build]
-command = "cargo install -q --locked \"worker-build@0.8.5\" && \"$HOME/.cargo/bin/worker-build\" --release"
+command = "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release"
 
 [vars]
 APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
@@ -99,6 +99,9 @@ migrations_dir = "migrations"
 [[r2_buckets]]
 binding = "TRANSCRIPTION_AUDIO"
 bucket_name = "your-remote-transcription-audio"
+
+[durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
 
 [[durable_objects.bindings]]
 name = "TRANSCRIPTION_JOB"
@@ -199,6 +202,9 @@ migrations_dir = "migrations"
 [[env.prod-staging.r2_buckets]]
 binding = "TRANSCRIPTION_AUDIO"
 bucket_name = "your-remote-transcription-audio-prod-staging"
+
+[env.prod-staging.durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
 
 [[env.prod-staging.durable_objects.bindings]]
 name = "TRANSCRIPTION_JOB"
@@ -309,6 +315,9 @@ migrations_dir = "migrations"
 [[env.production.r2_buckets]]
 binding = "TRANSCRIPTION_AUDIO"
 bucket_name = "your-remote-transcription-audio-production"
+
+[env.production.durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
 
 [[env.production.durable_objects.bindings]]
 name = "TRANSCRIPTION_JOB"
