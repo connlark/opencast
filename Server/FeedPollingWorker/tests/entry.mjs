@@ -8,8 +8,13 @@ globalThis.Date = class extends NativeDate {
   static now() { return (frozen ?? NativeDate.now()) + offset; }
 };
 const wakeups = [], controllers = new Map();
-const COUNTERS = ['d1', 'rows_read', 'rows_written', 'get', 'put', 'head', 'delete', 'list', 'multipart', 'queue_messages'];
-const totals = { deliveries: [], cleanup: [], cron: [], outcomes: {}, logged: {}, calls: 0, log_events: 0, ...Object.fromEntries(COUNTERS.map(name => [name, 0])), max_d1: 0, max_r2: 0, scratch_peak_bytes: 0, recent: [] };
+// `rollup_rows_read` is the dispatcher rollup's own D1 reads: the statement
+// carrying `AS completed_last_5min` (both the subquery and single-pass forms).
+// `multipart` is every Class A multipart call; the `multipart_*` split and the
+// `scratch_*` reads and deletes say which scratch lifecycle a scan took.
+const COUNTERS = ['d1', 'rows_read', 'rows_written', 'rollup_rows_read', 'get', 'put', 'head', 'delete', 'list', 'multipart', 'multipart_create', 'multipart_part', 'multipart_complete', 'multipart_abort', 'scratch_get', 'scratch_delete', 'queue_messages'];
+const ROLLUP = 'AS completed_last_5min';
+const totals = { deliveries: [], cleanup: [], cron: [], outcomes: {}, passes: {}, logged: {}, calls: 0, log_events: 0, ...Object.fromEntries(COUNTERS.map(name => [name, 0])), max_d1: 0, max_r2: 0, scratch_peak_bytes: 0, recent: [] };
 for(const method of ['log','warn','error']){const native=console[method].bind(console);console[method]=(...args)=>{
   totals.log_events++;
   // Failures are always logged; healthy polls are only sampled. Exact outcome
@@ -21,7 +26,7 @@ function fail(point) { if (fault === `always:${point}`) throw Error(`fixture:${p
 function instrument(env, trace) {
   const raw = new WeakMap(), sqls = new WeakMap();
   const count = n => { trace.d1 += n; if (trace.d1 > 1000) throw Error('D1 invocation limit'); };
-  const result = value => { for (const r of Array.isArray(value) ? value : [value]) { trace.rows_read += r?.meta?.rows_read ?? 0; trace.rows_written += r?.meta?.rows_written ?? 0; } return value; };
+  const result = (value, sql) => { (Array.isArray(value) ? value : [value]).forEach((r, i) => { trace.rows_read += r?.meta?.rows_read ?? 0; trace.rows_written += r?.meta?.rows_written ?? 0; if ((Array.isArray(sql) ? sql[i] : sql)?.includes(ROLLUP)) trace.rollup_rows_read += r?.meta?.rows_read ?? 0; }); return value; };
   const prepared = (s, sql) => {
     const proxy = new Proxy(s, { get(target, key) {
       if (key === 'constructor') return target.constructor;
@@ -33,8 +38,8 @@ function instrument(env, trace) {
         if(sql.startsWith('INSERT INTO n_poll_stat') && fault==='bookkeeping_active'){await new Promise(resolve=>releaseHang=resolve);}
         if(sql.startsWith('INSERT INTO n_poll_stat(bucket,redeliveries)') && fault==='hang_redelivery_stat'){fault='redelivery_stat_active';await new Promise(resolve=>releaseHang=resolve);}
  if(sql.includes('INSERT INTO n_poll_origin'))fail('origin_status_d1');
-        if(key==='first'){const value=result(await target.all());const row=value.results[0]??null;return args[0]&&row?row[args[0]]:row;}
-        return result(await target[key](...args));
+        if(key==='first'){const value=result(await target.all(),sql);const row=value.results[0]??null;return args[0]&&row?row[args[0]]:row;}
+        return result(await target[key](...args),sql);
       };
       const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
     } }); raw.set(proxy, s); sqls.set(proxy, sql); return proxy;
@@ -58,20 +63,20 @@ function instrument(env, trace) {
       const value = await target.batch(statements.map(s => raw.get(s) ?? s));
       if (sql.includes('UPDATE n_feed SET last_success_at=')) fail('after_settle');
       if (sql.includes('UPDATE n_feed SET observation_generation=')) fail('after_publish');
-      return result(value);
+      return result(value, statements.map(s => sqls.get(s)));
     };
     const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
   } });
   const bucket = new Proxy(env.FEED_SNAPSHOTS, { get(target, key) {
     if (key === 'constructor') return target.constructor;
-    if (['get', 'put', 'head', 'delete', 'list'].includes(key)) return async (...args) => { trace[key]++; if(key==='delete'&&fault==='cleanup_budget'){offset+=26000;fault=undefined;} if(key==='get'&&fault==='slow_get'){fault=undefined;await new Promise(resolve=>setTimeout(resolve,16000));} if(key==='get'&&fault==='hang_get'){fault='hang_get_active';await new Promise(resolve=>releaseHang=resolve);} fail(`before_${key}`); const value = await target[key](...args); fail(`after_${key}`); return value; };
+    if (['get', 'put', 'head', 'delete', 'list'].includes(key)) return async (...args) => { trace[key]++; if (['get', 'delete'].includes(key) && typeof args[0] === 'string' && args[0].startsWith('scratch/')) trace[`scratch_${key}`]++; if(key==='delete'&&fault==='cleanup_budget'){offset+=26000;fault=undefined;} if(key==='get'&&fault==='slow_get'){fault=undefined;await new Promise(resolve=>setTimeout(resolve,16000));} if(key==='get'&&fault==='hang_get'){fault='hang_get_active';await new Promise(resolve=>releaseHang=resolve);} fail(`before_${key}`); const value = await target[key](...args); fail(`after_${key}`); return value; };
     // Scratch is one multipart upload: count every Class A call and its bytes.
     if (key === 'createMultipartUpload') return async (...args) => {
-      trace.multipart++; const upload = await target.createMultipartUpload(...args); let bytes = 0;
+      trace.multipart++; trace.multipart_create++; const upload = await target.createMultipartUpload(...args); let bytes = 0;
       return new Proxy(upload, { get(inner, name) {
         if (name === 'constructor') return inner.constructor;
         if (['uploadPart', 'complete', 'abort'].includes(name)) return async (...parts) => {
-          trace.multipart++; fail(`scratch_${name}`);
+          trace.multipart++; trace[name === 'uploadPart' ? 'multipart_part' : `multipart_${name}`]++; fail(`scratch_${name}`);
           if (name === 'uploadPart') { bytes += parts[1].byteLength ?? parts[1].length ?? 0; totals.scratch_peak_bytes = Math.max(totals.scratch_peak_bytes, bytes); }
           return inner[name](...parts);
         };
@@ -144,7 +149,9 @@ export default class extends Worker {
       const input = new Request(request.url.replace('/test', ''), request);
       const response = await new PollingControl(this.ctx, instrument(this.env, trace)).fetch(controller ? new Request(input, { signal: controller.signal }) : input);
       // Healthy polls are only sampled in logs; the consume result is exact.
-      if (path === '/test/consume' && response.ok) { try { const { outcome } = await response.clone().json(); trace.outcome = outcome; totals.outcomes[outcome] = (totals.outcomes[outcome] ?? 0) + 1; } catch {} }
+      // `passes` is how many times a scan parsed its one response body; steps
+      // that parsed nothing (304s, continuations) are not counted.
+      if (path === '/test/consume' && response.ok) { try { const { outcome, passes } = await response.clone().json(); trace.outcome = outcome; totals.outcomes[outcome] = (totals.outcomes[outcome] ?? 0) + 1; if (passes > 0) { trace.passes = passes; totals.passes[passes] = (totals.passes[passes] ?? 0) + 1; } } catch {} }
       return response;
     } finally {
       cancellation.finished=true;controllers.delete(key);if(watching)await watching;

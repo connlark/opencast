@@ -14,6 +14,11 @@ pub struct Timings {
     pub claim: Rc<Cell<u64>>,
     pub publisher: Rc<Cell<u64>>,
     pub sink: Rc<Cell<u64>>,
+    /// How a `not_modified` poll was proved when it was not a 304.
+    pub via: Rc<Cell<Option<&'static str>>>,
+    /// Parses of the response body: 1 for a probe or a single full pass, 2
+    /// when a changed probe replayed it; 0 when no body was parsed.
+    pub passes: Rc<Cell<u8>>,
 }
 impl Timings {
     pub fn publisher_span(&self) -> Span {

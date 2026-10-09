@@ -9,7 +9,17 @@ const TABLES = ['n_observation', 'n_snapshot', 'n_snapshot_ref', 'n_episode_rele
 const durable = async () => ({ ...Object.fromEntries(await Promise.all(TABLES.map(async t => [t, (await h.first(`SELECT COUNT(*) AS n FROM ${t}`)).n]))), objects: (await bucket.list()).objects.length });
 const scratch = async () => (await bucket.list({ prefix: 'scratch/' })).objects.length;
 const last = async () => (await h.invoke('metrics')).recent.filter(t => t.path === '/test/consume').at(-1);
-const poll = async feed => { await h.run('UPDATE n_feed SET due_at=0,retry_at=0,poll_failures=0,dispatch_until=0 WHERE feed_id=?', feed); await h.invoke('test/dispatch'); await h.drain(); return last(); };
+// The trace of the last consume, plus `passes` from the poll message's own
+// response: how many times the scan parsed its one body.
+const poll = async feed => {
+  await h.run('UPDATE n_feed SET due_at=0,retry_at=0,poll_failures=0,dispatch_until=0 WHERE feed_id=?', feed); await h.invoke('test/dispatch');
+  let passes;
+  for (const wake of await h.polls()) for (let attempts = 1; attempts <= 4; attempts++) {
+    const consumed = await h.consume(wake, { attempts }); if (wake.feed_id === feed) try { passes = JSON.parse(consumed.text).passes; } catch {}
+    if (consumed.status === 200 || consumed.status === 400) break;
+  }
+  await h.drain(); return { ...(await last()), passes };
+};
 const pointer = feed => h.first('SELECT observation_generation,snapshot_key,semantic_digest FROM n_feed WHERE feed_id=?', feed);
 try {
   // Bodies that differ byte-for-byte but not in membership are schedule
@@ -76,6 +86,8 @@ try {
   assert.equal(await scratch(), 0);
   const peak = (await h.invoke('metrics')).scratch_peak_bytes;
   assert.ok(peak >= 5 * 1024 * 1024 && peak % (5 * 1024 * 1024) === 0, `scratch is whole 5 MiB parts, was ${peak}`);
+  // The spilled parts are the retained body: the digest compare needed no replay.
+  assert.equal(unchanged.passes, 1, 'an unchanged large body is parsed once');
   console.log(`PASS unchanged ${(body.length / 1048576).toFixed(1)} MiB feed spills ${(peak / 1048576).toFixed(0)} MiB to one aborted scratch upload: no object, no row`);
 
   for (const [name, reply] of [
@@ -107,11 +119,13 @@ try {
   console.log('PASS truncated, timed-out and cancelled large scans publish nothing and leave no scratch object');
 
   body = large([item('big-release', h.now - 20)]); behavior = () => new Response(body);
-  assert.equal((await h.consume(wake, { attempts: 2 })).status, 200); await h.drain(); await h.deliver(true);
+  const changed = await h.consume(wake, { attempts: 2 });
+  assert.equal(changed.status, 200); await h.drain(); await h.deliver(true);
   assert.equal((await pointer(big)).observation_generation, 2);
   assert.equal(await scratch(), 0, 'the completed scratch object is deleted after its pages are copied');
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM n_event e JOIN n_episode_release r ON r.event_id=e.event_id WHERE r.feed_id=?", big)).n, 1);
   assert.equal((await h.first("SELECT reason_counts_json FROM n_observation WHERE feed_id=? AND state='published' AND generation=2", big)).reason_counts_json.includes('"known_identity":9000'), true);
+  assert.equal(JSON.parse(changed.text).passes, 2, 'a changed large body is replayed from scratch once, never refetched');
   const metrics = await h.invoke('metrics');
   assert.ok(metrics.max_d1 < 800, `largest invocation used ${metrics.max_d1} D1 statements`);
   console.log(`PASS changed large feed copies every spilled page under its lease: one exact event from 9,001 items, largest invocation ${metrics.max_d1} D1 statements`);

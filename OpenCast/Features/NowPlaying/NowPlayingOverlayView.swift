@@ -75,11 +75,18 @@ struct NowPlayingOverlayView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
-                nowPlayingProbeMark("overlay-mounted")
+                nowPlayingProbeMark(isPresented ? "overlay-mounted" : "overlay-prepared")
                 updatePresentation(isPresented: isPresented, containerHeight: proxy.size.height)
             }
             .onChange(of: isPresented) { _, newValue in
+                if newValue { nowPlayingProbeMark("overlay-reused") }
                 updatePresentation(isPresented: newValue, containerHeight: proxy.size.height)
+            }
+            .onChange(of: proxy.size.height) { _, height in
+                if !isPresented { prepareForHiddenPresentation(containerHeight: height) }
+            }
+            .onChange(of: reduceMotion) { _, _ in
+                if !isPresented { prepareForHiddenPresentation(containerHeight: proxy.size.height) }
             }
             .onChange(of: appModel.playback.currentEpisode?.id.rawValue) { _, _ in
                 resetPresentedEpisode(isPresented: isPresented, containerHeight: proxy.size.height)

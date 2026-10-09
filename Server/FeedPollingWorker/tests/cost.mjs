@@ -9,6 +9,17 @@ const classes={
   matched304:{feeds:70,items:10},
   unchanged200:{feeds:15,items:10},
   unchanged200_large:{feeds:5,items:1000},
+  // A constant strong ETag on a publisher that ignores If-None-Match, with the
+  // same 8 KiB prose items as unchanged200_prose: the strong-ETag shortcut
+  // settles it as a 304 without reading the body, so it must cost what a 304
+  // costs, not what the parse below costs (the shortcut CPU gate).
+  unchanged200_etag:{feeds:5,items:300},
+  // The same shortcut on a ten-item body: what a shortcut poll costs when the
+  // fixture's body generation and transport are as small as a 304's.
+  unchanged200_etag_small:{feeds:15,items:10},
+  // No validators, and every item carries an 8 KiB HTML description: the
+  // prose cleaning an unchanged scan pays today.
+  unchanged200_prose:{feeds:5,items:300},
   // One new episode in a 100-item catalog: the ordinary production release.
   changed200_single:{feeds:10,items:100,releases:1},
   // The stress case: a five-member burst, deliberately prolific.
@@ -19,14 +30,17 @@ const classes={
   redelivered304:{feeds:10,items:10},
 };
 let round=1;
+const PARAGRAPH='<p>Show notes with <a href="https://example.com/notes?utm_source=feed">a link</a> &amp; <strong>emphasis</strong>, plus a sentence of ordinary prose.</p>';
+const PARAGRAPHS=Math.floor((8192-7)/PARAGRAPH.length),PROSE=`<![CDATA[${PARAGRAPH.repeat(PARAGRAPHS)}<p>${'more '.repeat(1639).slice(0,8192-7-PARAGRAPHS*PARAGRAPH.length)}</p>]]>`;
 const h=await harness(request=>{
   const url=new URL(request.url),name=url.hostname.split('.')[0].replace(/-\d+$/,''),index=Number(url.pathname.slice(1)),spec=classes[name];
   if(name==='publisher_failed'&&round>1)return new Response('unavailable',{status:503});
   const releases=spec.releases?(round-1)*spec.releases:0,tag=`"${spec.releases?round:1}"`;
   if(['matched304','redelivered304'].includes(name)&&request.headers.get('if-none-match')===tag)return new Response(null,{status:304});
-  const items=[...Array.from({length:spec.items},(_,i)=>item(`${name}-${index}-base-${i}`,h.now-86400-i*3600)),...Array.from({length:releases},(_,i)=>item(`${name}-${index}-release-${i}`,h.now-10+i))];
-  // Unchanged 200s come from publishers without usable validators.
-  return new Response(rss(items),name.startsWith('unchanged200')?{}:{headers:{etag:tag}});
+  const items=[...Array.from({length:spec.items},(_,i)=>item(`${name}-${index}-base-${i}`,h.now-86400-i*3600,undefined,['unchanged200_prose','unchanged200_etag'].includes(name)?PROSE:undefined)),...Array.from({length:releases},(_,i)=>item(`${name}-${index}-release-${i}`,h.now-10+i))];
+  // Unchanged 200s come from publishers without usable validators, except
+  // unchanged200_etag's constant strong tag, sent whatever If-None-Match says.
+  return new Response(rss(items),name.startsWith('unchanged200')&&!name.startsWith('unchanged200_etag')?{}:{headers:{etag:tag}});
 });
 const KEYS=['calls','log_events','d1','rows_read','rows_written','get','put','head','delete','list','multipart','queue_messages'];
 const deliveryWorker=await h.instance.getWorker('delivery-runtime');
@@ -45,13 +59,15 @@ async function measure(work){
   assert.equal(after.cpu.pid,before.cpu.pid);
   const polling=delta(after.polling,before.polling);
   polling.outcomes=Object.fromEntries(Object.entries(after.polling.outcomes).map(([k,n])=>[k,n-(before.polling.outcomes[k]??0)]).filter(([,n])=>n));
-  return {polling:Object.fromEntries(Object.entries(polling).filter(([k])=>KEYS.includes(k)||k==='outcomes')),delivery:delta(after.delivery,before.delivery),storage:delta(after.storage,before.storage),workerd_process_cpu_ms:after.cpu.milliseconds-before.cpu.milliseconds,wall_ms:performance.now()-start,apns_sends:h.sends.length-before.sends,max_d1:Math.max(after.polling.max_d1,after.delivery.max_d1)};
+  // Scan messages by how many times they parsed their one body.
+  polling.passes=Object.fromEntries(Object.entries(after.polling.passes??{}).map(([k,n])=>[k,n-(before.polling.passes?.[k]??0)]).filter(([,n])=>n));
+  return {polling:Object.fromEntries(Object.entries(polling).filter(([k])=>KEYS.includes(k)||k==='outcomes'||k==='passes')),delivery:delta(after.delivery,before.delivery),storage:delta(after.storage,before.storage),workerd_process_cpu_ms:after.cpu.milliseconds-before.cpu.milliseconds,wall_ms:performance.now()-start,apns_sends:h.sends.length-before.sends,max_d1:Math.max(after.polling.max_d1,after.delivery.max_d1)};
 }
 try{
   // Collection is measured by cleanup.mjs and modeled per interval; keep its
   // fifteen-minute wakeup out of the per-outcome unit costs.
   await h.run("UPDATE n_control SET enabled=0 WHERE name='cleanup'");
-  const ids={};let user=0;
+  const ids={},late=[];let user=0;
   for(const [name,spec] of Object.entries(classes)){
     ids[name]=[];
     for(let i=0;i<spec.feeds;i++,user++){
@@ -82,7 +98,9 @@ try{
       await h.drain();await h.deliver(true);
     });
     await h.run('UPDATE n_feed SET due_at=?,retry_at=0 WHERE feed_id IN(SELECT value FROM json_each(?))',h.now+90000,JSON.stringify(ids[name]));
-    const expected={matched304:{not_modified:spec.feeds},unchanged200:{unchanged:spec.feeds},unchanged200_large:{unchanged:spec.feeds},publisher_failed:{publisher_failed:spec.feeds},redelivered304:{not_modified:spec.feeds}}[name];
+    const expected={matched304:{not_modified:spec.feeds},unchanged200:{unchanged:spec.feeds},unchanged200_large:{unchanged:spec.feeds},unchanged200_etag:{not_modified:spec.feeds},unchanged200_etag_small:{not_modified:spec.feeds},unchanged200_prose:{unchanged:spec.feeds},publisher_failed:{publisher_failed:spec.feeds},redelivered304:{not_modified:spec.feeds}}[name];
+    // Printed before the assertions, so a red class still reports its cost.
+    console.log(`MEASURED ${name}: ${(sample.polling.rows_written/spec.feeds).toFixed(1)} polling rows written/poll, ${((sample.polling.put+sample.polling.multipart+sample.polling.list)/spec.feeds).toFixed(1)} R2 class A/poll, ${(sample.polling.calls/spec.feeds).toFixed(1)} invocations/poll, ${(sample.workerd_process_cpu_ms/spec.feeds).toFixed(2)} workerd CPU ms/poll, outcomes ${JSON.stringify(sample.polling.outcomes)}, passes ${JSON.stringify(sample.polling.passes)}`);
     if(expected)assert.deepEqual(sample.polling.outcomes,expected,name);
     if(name.startsWith('matched')||name.startsWith('unchanged')){
       // The Required Verification line, measured rather than asserted by hand.
@@ -90,12 +108,15 @@ try{
       assert.ok(sample.polling.rows_written<=3*spec.feeds,`${name} wrote ${sample.polling.rows_written} rows`);
     }
     if(spec.releases){
+      // Asserted after every class is measured, so a red run still reports
+      // each class's cost: a changed scan probes, then replays its one body.
+      late.push([name,sample.polling.passes,{2:spec.feeds}]);
       assert.equal(sample.apns_sends,spec.feeds,name);
       assert.equal((await h.first("SELECT COUNT(*) AS n FROM n_episode_release WHERE feed_id IN(SELECT value FROM json_each(?))",JSON.stringify(ids[name]))).n,spec.feeds*spec.releases,name);
     }
     result.classes[name]={polls:spec.feeds,items:spec.items,releases_per_poll:spec.releases??0,...sample};
-    console.log(`MEASURED ${name}: ${(sample.polling.rows_written/spec.feeds).toFixed(1)} polling rows written/poll, ${((sample.polling.put+sample.polling.multipart+sample.polling.list)/spec.feeds).toFixed(1)} R2 class A/poll, ${(sample.polling.calls/spec.feeds).toFixed(1)} invocations/poll`);
   }
+  for(const [name,passes,expected] of late)assert.deepEqual(passes,expected,`${name}: passes per scan message`);
   // The only empty reservations are the failed scans' first-observed bounds.
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM n_snapshot s WHERE s.state='reserved' AND s.sha256='' AND NOT EXISTS(SELECT 1 FROM n_observation o WHERE o.snapshot_key=s.object_key AND o.state='staging' AND o.valid_eof=0)")).n,0,'no unused reservations');
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_poll'")).n+(await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_origin_permit'")).n,0);

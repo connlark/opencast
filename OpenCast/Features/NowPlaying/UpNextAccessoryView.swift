@@ -10,7 +10,6 @@ struct UpNextAccessoryView: View {
     @Environment(\.tabViewBottomAccessoryPlacement) private var tabAccessoryPlacement
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    let isNowPlayingPresented: Bool
     let onOpenQueue: () -> Void
 
     @State private var playFeedback = 0
@@ -58,7 +57,7 @@ struct UpNextAccessoryView: View {
             .sensoryFeedback(.impact(flexibility: .soft), trigger: playFeedback)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(isInline ? "up-next-accessory-inline" : "up-next-accessory-expanded")
-            .accessibilityHidden(isNowPlayingPresented)
+            .accessibilityHidden(appModel.isNowPlayingPresented)
         }
     }
 

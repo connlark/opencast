@@ -10,7 +10,6 @@ struct MiniPlayerView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    let isNowPlayingPresented: Bool
     let onExpand: () -> Void
 
     @State private var transportFeedback = 0
@@ -91,7 +90,7 @@ struct MiniPlayerView: View {
             .sensoryFeedback(.impact(flexibility: .soft), trigger: transportFeedback)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(isInline ? "mini-player-inline" : "mini-player-expanded")
-            .accessibilityHidden(isNowPlayingPresented)
+            .accessibilityHidden(appModel.isNowPlayingPresented)
             .accessibilityAction(named: "Stop Playback", stopPlayback)
         }
     }

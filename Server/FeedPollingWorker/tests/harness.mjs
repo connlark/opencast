@@ -126,5 +126,6 @@ export async function harness(outbound, options = {}) {
   }
   return { instance, db, run, first, rows, invoke, add, consume, polls, drain, deliver, sends, fetches, events, alerts, now };
 }
-export const item = (id, at, title = `Episode ${id}`) => `<item><guid>${id}</guid><title>${title}</title>${at == null ? '' : `<pubDate>${new Date(at * 1000).toUTCString()}</pubDate>`}<enclosure url="https://audio.example.com/${id}.mp3"/></item>`;
+// `description` is emitted verbatim (wrap markup in CDATA); omitted, the item is unchanged.
+export const item = (id, at, title = `Episode ${id}`, description) => `<item><guid>${id}</guid><title>${title}</title>${description == null ? '' : `<description>${description}</description>`}${at == null ? '' : `<pubDate>${new Date(at * 1000).toUTCString()}</pubDate>`}<enclosure url="https://audio.example.com/${id}.mp3"/></item>`;
 export const rss = items => `<rss><channel><title>Fixture</title>${items.join('')}</channel></rss>`;

@@ -113,7 +113,7 @@ pub async fn reconcile(env: &Env) -> Result<()> {
         run(&db,"DELETE FROM n_job_interest WHERE rowid IN(SELECT rowid FROM n_job_interest j WHERE register_before<?1 AND NOT EXISTS(SELECT 1 FROM n_event WHERE interest_id=j.interest_id) AND NOT EXISTS(SELECT 1 FROM n_delivery WHERE interest_key=j.interest_id) LIMIT 100)",&[json!(t-TOMBSTONE_SECONDS)]).await?;
         // Later observation passes own history/snapshot GC. Only prune empty
         // identities here, after 30 days with no interested installations.
-        let unused="SELECT feed_id FROM n_feed f WHERE no_interest_since<?1 AND NOT EXISTS(SELECT 1 FROM n_interest WHERE feed_id=f.feed_id AND enabled=1) AND NOT EXISTS(SELECT 1 FROM n_event WHERE feed_id=f.feed_id) AND NOT EXISTS(SELECT 1 FROM n_delivery WHERE interest_key=f.feed_id) AND NOT EXISTS(SELECT 1 FROM n_snapshot WHERE feed_id=f.feed_id) AND NOT EXISTS(SELECT 1 FROM n_observation WHERE feed_id=f.feed_id) ORDER BY no_interest_since LIMIT 100";
+        let unused = crate::observation::retention_sql::NO_INTEREST_PRUNE;
         db.batch(vec![
             statement(
                 &db,

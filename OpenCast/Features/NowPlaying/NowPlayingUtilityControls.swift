@@ -40,7 +40,7 @@ struct NowPlayingUtilityControls: View {
 
     @ViewBuilder
     private var sleepTimerButton: some View {
-        if appModel.playback.sleepTimerMode != .off {
+        if appModel.isNowPlayingPresented, appModel.playback.sleepTimerMode != .off {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 sleepTimerButton(
                     value: sleepTimerText(at: context.date),

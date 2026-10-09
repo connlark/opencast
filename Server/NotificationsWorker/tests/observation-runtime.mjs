@@ -90,9 +90,12 @@ try{
   assert.equal((await first('SELECT observation_generation FROM n_feed')).observation_generation,1);
   assert.equal((await first('SELECT COUNT(*) AS n FROM n_episode_release')).n,0);
   console.log('PASS quiet complete baseline');
-  etag='"v2"';items=[item('baseline'),...Array.from({length:5},(_,i)=>item('new-'+i))];await command('scan');await drain();
+  etag='"v2"';items=[item('baseline'),...Array.from({length:5},(_,i)=>item('new-'+i))];const v2=JSON.parse(await command('scan'));await drain();
   assert.equal((await first('SELECT COUNT(*) AS n FROM n_episode_release')).n,5);
   assert.equal((await first('SELECT COUNT(*) AS n FROM n_outbox')).n,5);
+  // `passes`: how many times the scan parsed its one body. A changed digest
+  // replays the retained body once; an equal one settles after the probe.
+  assert.equal(v2.passes,2,'a changed scan probes, then replays its body');
   console.log('PASS pinned top retains all five releases');
   await command('outbox');
   assert.equal((await first('SELECT COUNT(*) AS n FROM n_event')).n,5);
@@ -111,6 +114,9 @@ try{
   assert.equal(sends.length,1);assert.equal(sends[0].opencast.episode_count,5);
   assert.equal(sends[0].aps.category,'OPENCAST_EPISODE');
   console.log('PASS immutable five-member presentation and replay');
+  // A new validator over the same membership: the probe alone settles it.
+  etag='"v2-rescan"';const rescan=JSON.parse(await command('scan'));
+  assert.deepEqual([rescan.result,rescan.passes],['unchanged',1],'an unchanged rescan is one pass');
   // Reordering, a missing anchor and return after removal are exact-history hits.
   etag='"v3"';items=items.slice(1).reverse();await command('scan');await drain();
   etag='"v4"';items.push(item('baseline'));await command('scan');await drain();
@@ -124,8 +130,9 @@ try{
   console.log('PASS matched 304 does not load history or advance generation');
   // The same visible episode under a changed GUID remains suppressed.
   etag='"v5"';items=[item('baseline').replace('<guid>baseline</guid>','<guid>alias</guid>')];
-  await command('scan');await drain();
+  const alias=JSON.parse(await command('scan'));await drain();
   assert.equal((await first('SELECT COUNT(*) AS n FROM n_episode_release')).n,5);
+  assert.equal(alias.passes,2,'a new GUID is a changed membership: two passes');
   console.log('PASS normalized visible fingerprint blocks GUID churn');
   etag='"v6"';items=[item('undated',null),item('backfill',now-73*3600),item('future',now+3600),item('withdraw',now+3600),item('anomaly',now+8*86400),item('skew',now+600)];
   await command('scan');await drain();
@@ -203,9 +210,10 @@ try{
   assert.equal(unsolicited.status,500);await unsolicited.text();
   assert.equal((await first('SELECT snapshot_key FROM n_feed WHERE feed_id=?',feed)).snapshot_key,null);
   console.log('PASS stale and unsolicited 304 cannot advance authority');
-  await newFeed('metadata-only');etag='"edited"';items=[item('baseline').replace('Summary baseline','Edited description')];await command('scan');await drain();
+  await newFeed('metadata-only');etag='"edited"';items=[item('baseline').replace('Summary baseline','Edited description')];const edited=JSON.parse(await command('scan'));await drain();
   const reasons=await first("SELECT reason_counts_json FROM n_observation WHERE feed_id=? AND generation=2 AND state='published'",feed);
   assert.equal(JSON.parse(reasons.reason_counts_json).metadata_only,1);
+  assert.equal(edited.passes,2,'a changed fingerprint is two passes');
   assert.equal((await first('SELECT COUNT(*) AS n FROM n_episode_release WHERE feed_id=?',feed)).n,0);
   console.log('PASS metadata edits record their disposition without creating releases');
   // Late subscriptions require a dated release after activation or a prior
@@ -280,14 +288,17 @@ try{
     // the maximum size: no generation, observation, snapshot row or object.
     const durable=async()=>({...(await first('SELECT observation_generation,snapshot_key FROM n_feed WHERE feed_id=?',feed)),observations:(await first('SELECT COUNT(*) AS n FROM n_observation WHERE feed_id=?',feed)).n,snapshots:(await first('SELECT COUNT(*) AS n FROM n_snapshot WHERE feed_id=?',feed)).n,scratch:(await (await mf.getR2Bucket('FEED_SNAPSHOTS')).list({prefix:'scratch/'})).objects.length});
     const quiet=await durable();
-    etag='"compressed-rescan"';large={count:100000,bytes:128*1024*1024,gzip:true};await command('scan');large=undefined;
+    etag='"compressed-rescan"';large={count:100000,bytes:128*1024*1024,gzip:true};const rescanned=JSON.parse(await command('scan'));large=undefined;
     assert.deepEqual(await durable(),quiet);assert.equal(quiet.observation_generation,1);
     assert.equal((await first('SELECT etag FROM n_feed WHERE feed_id=?',feed)).etag,'"compressed-rescan"','the unchanged body refreshed its validator');
+    assert.equal(rescanned.passes,1,'the unchanged maximum-size body is parsed once; its spilled parts are aborted');
     console.log('PASS unchanged maximum-size rescan is a schedule update: no generation, row or object');
-    etag='"compressed-edited"';large={count:100000,bytes:128*1024*1024,gzip:true,edited:true};await command('scan');large=undefined;
+    const editedRequests=requests;
+    etag='"compressed-edited"';large={count:100000,bytes:128*1024*1024,gzip:true,edited:true};const replayed=JSON.parse(await command('scan'));large=undefined;
     assert.equal((await first('SELECT observation_generation FROM n_feed WHERE feed_id=?',feed)).observation_generation,2);
     assert.equal((await first('SELECT COUNT(*) AS n FROM n_episode_release WHERE feed_id=?',feed)).n,0);
     assert.equal((await durable()).scratch,0);
+    assert.deepEqual([replayed.passes,requests-editedRequests],[2,1],'the changed maximum-size body is replayed from scratch, never refetched');
     console.log('PASS full maximum-size changed rescan prepares bounded exact history without false releases');
   }
   // Retired manifests and uploads can be reclaimed; live snapshots and an

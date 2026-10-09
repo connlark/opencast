@@ -4,6 +4,8 @@ import OpenCastCore
 import SwiftUI
 
 typealias ArtworkDataLoader = @Sendable (URLRequest) async throws -> ArtworkDataResponse
+typealias ArtworkSourceHasher = @Sendable (Data) async -> String
+typealias ArtworkPreviewBuilder = @Sendable (Data, String, String) async -> ArtworkPreview?
 typealias ArtworkImageDecoder = @Sendable (_ data: Data, _ targetPixelSize: CGSize) -> UIImage?
 
 actor ArtworkLoader {
@@ -13,7 +15,13 @@ actor ArtworkLoader {
     private let diskCache: ArtworkDiskCache
     private let dataLoader: ArtworkDataLoader
     private let imageDecoder: ArtworkImageDecoder
-    private var inFlightLoads: [String: (id: UUID, task: Task<ArtworkDataResponse?, Error>)] = [:]
+    private let sourceHasher: ArtworkSourceHasher
+    private let previewBuilder: ArtworkPreviewBuilder
+    private var inFlightLoads: [String: (id: UUID, task: Task<ArtworkSource?, Error>, readers: Int)] = [:]
+    private var inFlightPreviews: [String: (id: UUID, task: Task<ArtworkPreview?, Never>)] = [:]
+    private var sourcePreviews: [String: ArtworkPreview] = [:]
+    private var previewOrder: [String] = []
+    private var inFlightDecodes: [String: Task<UIImage?, Never>] = [:]
     private var revalidationTasks: [String: Task<Void, Never>] = [:]
 
     init(
@@ -27,7 +35,9 @@ actor ArtworkLoader {
             )
         ),
         dataLoader: ArtworkDataLoader? = nil,
-        imageDecoder: ArtworkImageDecoder? = nil
+        imageDecoder: ArtworkImageDecoder? = nil,
+        sourceHasher: ArtworkSourceHasher? = nil,
+        previewBuilder: ArtworkPreviewBuilder? = nil
     ) {
         self.memoryCache = memoryCache ?? ArtworkMemoryCache(
             countLimit: countLimit,
@@ -36,6 +46,10 @@ actor ArtworkLoader {
         self.diskCache = diskCache ?? ArtworkDiskCache()
         self.dataLoader = dataLoader ?? Self.dataLoader(httpClient: httpClient)
         self.imageDecoder = imageDecoder ?? Self.downsampleImage
+        self.sourceHasher = sourceHasher ?? Self.sourceHash
+        self.previewBuilder = previewBuilder ?? { data, sourceHash, key in
+            await ArtworkPreviewGenerator.generate(from: data, sourceHash: sourceHash, canonicalArtworkURLKey: key)
+        }
     }
 
     nonisolated func cachedImage(for request: ArtworkRequest) -> UIImage? {
@@ -64,73 +78,42 @@ actor ArtworkLoader {
     func loadResult(for request: ArtworkRequest, cacheKind: ArtworkCacheKind = .show) async throws -> ArtworkLoadResult? {
         try Task.checkCancellation()
 
-        if let cachedImage = memoryCache.image(for: request) {
-            let metadata = try? await diskCache.metadata(for: request.url)
-            let preview = await cachedOrBackfilledPreview(for: request, metadata: metadata)
-            if let metadata, metadata.isStale(for: cacheKind) {
+        if inFlightLoads[request.imageKey] == nil,
+           memoryCache.image(for: request) != nil,
+           let metadata = try? await diskCache.metadata(for: request.url),
+           let preview = metadata.preview,
+           let image = memoryCache.image(forContentKey: DecodedArtwork.contentKey(for: request, sourceHash: preview.sourceHash)) {
+            memoryCache.alias(request, toContentKey: DecodedArtwork.contentKey(for: request, sourceHash: preview.sourceHash))
+            if metadata.isStale(for: cacheKind) {
                 scheduleRevalidation(for: request.url, metadata: metadata)
             }
-            return ArtworkLoadResult(image: cachedImage, preview: preview)
+            return ArtworkLoadResult(image: image, preview: preview)
         }
 
-        if let diskEntry = try await diskCache.cachedEntry(for: request.url) {
-            if let image = await Self.decodeImage(
-                data: diskEntry.data,
-                targetPixelSize: request.pixelSize,
-                imageDecoder: imageDecoder
-            ) {
-                memoryCache.insert(image, for: request)
-                let preview = await preview(for: diskEntry, request: request)
-                if diskEntry.metadata.isStale(for: cacheKind) {
-                    scheduleRevalidation(for: request.url, metadata: diskEntry.metadata)
-                }
-                return ArtworkLoadResult(image: image, preview: preview)
-            }
-
-            try? await diskCache.remove(for: request.url)
-        }
-
-        let inFlightLoad = task(for: request.url)
-        let canonicalURLString = request.imageKey
-
-        do {
-            guard let response = try await inFlightLoad.task.value else {
-                finishLoad(inFlightLoad.id, for: canonicalURLString)
-                return nil
-            }
-            let image = await Self.decodeImage(
-                data: response.data,
-                targetPixelSize: request.pixelSize,
-                imageDecoder: imageDecoder
-            )
-            if let image {
-                let preview = await ArtworkPreviewGenerator.generate(
-                    from: response.data,
-                    canonicalArtworkURLKey: request.imageKey
-                )
-                _ = try await diskCache.store(
-                    data: response.data,
-                    response: response.response,
-                    for: request.url,
-                    preview: preview
-                )
-                memoryCache.insert(image, for: request)
-                finishLoad(inFlightLoad.id, for: canonicalURLString)
-                try Task.checkCancellation()
-                return ArtworkLoadResult(image: image, preview: preview)
-            }
-            finishLoad(inFlightLoad.id, for: canonicalURLString)
+        // Coalesce the entire source operation, including hashing, preview and
+        // disk publication. A late caller cannot observe an image-only result.
+        let load = task(for: request)
+        defer { finishLoad(load.id, for: request.imageKey) }
+        guard let source = try await load.task.value else {
             try Task.checkCancellation()
             return nil
-        } catch is CancellationError {
-            if !Task.isCancelled || inFlightLoad.task.isCancelled {
-                finishLoad(inFlightLoad.id, for: canonicalURLString)
-            }
-            throw CancellationError()
-        } catch {
-            finishLoad(inFlightLoad.id, for: canonicalURLString)
-            throw error
         }
+        let contentKey = DecodedArtwork.contentKey(for: request, sourceHash: source.sourceHash)
+        let decoded: DecodedArtwork?
+        if source.firstDecode.contentKey == contentKey {
+            decoded = source.firstDecode
+        } else {
+            decoded = await decodedArtwork(for: request, data: source.data, sourceHash: source.sourceHash)
+        }
+        if let decoded {
+            memoryCache.alias(request, toContentKey: decoded.contentKey)
+        }
+        try Task.checkCancellation()
+        guard let decoded else { return nil }
+        if source.metadata.isStale(for: cacheKind) {
+            scheduleRevalidation(for: request.url, metadata: source.metadata)
+        }
+        return ArtworkLoadResult(image: decoded.image, preview: source.metadata.preview)
     }
 
     func waitForBackgroundRevalidations() async {
@@ -140,69 +123,119 @@ actor ArtworkLoader {
         }
     }
 
-    private func cachedOrBackfilledPreview(
-        for request: ArtworkRequest,
-        metadata: ArtworkDiskCacheMetadata?
-    ) async -> ArtworkPreview? {
-        guard let metadata else {
-            return nil
-        }
-        if let preview = metadata.preview {
-            return preview
+    private func loadSource(for request: ArtworkRequest) async throws -> ArtworkSource? {
+        if let entry = try await diskCache.cachedEntry(for: request.url) {
+            let hash = await sourceHasher(entry.data)
+            if let decoded = await decodedArtwork(for: request, data: entry.data, sourceHash: hash) {
+                var metadata = entry.metadata
+                if metadata.preview?.sourceHash != hash {
+                    metadata.preview = await sharedPreview(data: entry.data, sourceHash: hash, key: request.imageKey)
+                    if let preview = metadata.preview {
+                        // Revalidation may replace the bytes while the preview
+                        // is generated. Never attach an old preview to new data.
+                        _ = try? await diskCache.updatePreview(preview, for: request.url, matchingData: entry.data)
+                    }
+                } else if let preview = metadata.preview {
+                    rememberPreview(preview)
+                }
+                return ArtworkSource(data: entry.data, sourceHash: hash, metadata: metadata, firstDecode: decoded)
+            }
+            try? await diskCache.remove(for: request.url)
         }
 
-        // Backfill is the only warm-hit reason to read the data file.
-        guard let diskEntry = try? await diskCache.cachedEntry(for: request.url) else {
-            return nil
-        }
-        return await preview(for: diskEntry, request: request)
+        guard let response = try await Self.loadArtworkData(
+            from: request.url, validatorHeaderFields: [:], dataLoader: dataLoader
+        ) else { return nil }
+        let hash = await sourceHasher(response.data)
+        guard let decoded = await decodedArtwork(for: request, data: response.data, sourceHash: hash) else { return nil }
+        let preview = await sharedPreview(data: response.data, sourceHash: hash, key: request.imageKey)
+        let metadata = try await diskCache.store(
+            data: response.data, response: response.response, for: request.url, preview: preview
+        )
+        return ArtworkSource(data: response.data, sourceHash: hash, metadata: metadata, firstDecode: decoded)
     }
 
-    private func preview(
-        for diskEntry: ArtworkDiskCacheEntry,
-        request: ArtworkRequest
-    ) async -> ArtworkPreview? {
-        if let preview = diskEntry.metadata.preview {
+    private func sharedPreview(data: Data, sourceHash: String, key: String) async -> ArtworkPreview? {
+        if var preview = sourcePreviews[sourceHash] {
+            preview.canonicalArtworkURLKey = key
             return preview
         }
-
-        guard let preview = await ArtworkPreviewGenerator.generate(
-            from: diskEntry.data,
-            canonicalArtworkURLKey: diskEntry.metadata.canonicalURL
-        ) else {
-            return nil
+        let load: (id: UUID, task: Task<ArtworkPreview?, Never>)
+        if let existing = inFlightPreviews[sourceHash] {
+            load = existing
+        } else {
+            let builder = previewBuilder
+            load = (UUID(), Task { await builder(data, sourceHash, key) })
+            inFlightPreviews[sourceHash] = load
         }
-
-        do {
-            try await diskCache.updatePreview(preview, for: request.url)
-        } catch {
-            // Ignore preview update errors; preview is an optional optimization
+        defer {
+            if inFlightPreviews[sourceHash]?.id == load.id {
+                inFlightPreviews[sourceHash] = nil
+            }
         }
+        guard var preview = await load.task.value else { return nil }
+        rememberPreview(preview)
+        preview.canonicalArtworkURLKey = key
         return preview
     }
 
-    private func task(for artworkURL: URL) -> (id: UUID, task: Task<ArtworkDataResponse?, Error>) {
-        let canonicalURLString = URLCanonicalizer.canonicalString(for: artworkURL)
-        if let inFlightLoad = inFlightLoads[canonicalURLString] {
-            return inFlightLoad
+    private func rememberPreview(_ preview: ArtworkPreview) {
+        if sourcePreviews[preview.sourceHash] == nil {
+            // Only tiny RGB grids are retained here; original bytes and decoded
+            // display images keep their existing cache lifetimes.
+            if previewOrder.count == 200 {
+                sourcePreviews[previewOrder.removeFirst()] = nil
+            }
+            previewOrder.append(preview.sourceHash)
         }
-
-        let dataLoader = dataLoader
-        let task = Task {
-            try await Self.loadArtworkData(from: artworkURL, validatorHeaderFields: [:], dataLoader: dataLoader)
-        }
-        let inFlightLoad = (id: UUID(), task: task)
-        inFlightLoads[canonicalURLString] = inFlightLoad
-        return inFlightLoad
+        sourcePreviews[preview.sourceHash] = preview
     }
 
-    private func finishLoad(_ id: UUID, for canonicalURLString: String) {
-        // A request can be restarted while an older finisher is still unwinding.
-        guard inFlightLoads[canonicalURLString]?.id == id else {
-            return
+    private func decodedArtwork(for request: ArtworkRequest, data: Data, sourceHash: String) async -> DecodedArtwork? {
+        let contentKey = DecodedArtwork.contentKey(for: request, sourceHash: sourceHash)
+        if let image = memoryCache.image(forContentKey: contentKey) {
+            return DecodedArtwork(image: image, contentKey: contentKey, sourceHash: sourceHash)
         }
+        let image: UIImage?
+        if let task = inFlightDecodes[contentKey] {
+            image = await task.value
+        } else {
+            let imageDecoder = imageDecoder
+            let memoryCache = memoryCache
+            let task = Task {
+                let image = await Self.decodeImage(data: data, targetPixelSize: request.pixelSize, imageDecoder: imageDecoder)
+                if let image { memoryCache.store(image, forContentKey: contentKey) }
+                return image
+            }
+            inFlightDecodes[contentKey] = task
+            image = await task.value
+            inFlightDecodes[contentKey] = nil
+        }
+        guard let image else { return nil }
+        return DecodedArtwork(image: image, contentKey: contentKey, sourceHash: sourceHash)
+    }
 
-        inFlightLoads[canonicalURLString] = nil
+    @concurrent
+    private static func sourceHash(for data: Data) async -> String {
+        ArtworkPreviewGenerator.sourceHash(for: data)
+    }
+
+    private func task(for request: ArtworkRequest) -> (id: UUID, task: Task<ArtworkSource?, Error>) {
+        if var existing = inFlightLoads[request.imageKey] {
+            existing.readers += 1
+            inFlightLoads[request.imageKey] = existing
+            return (existing.id, existing.task)
+        }
+        let task = Task { try await loadSource(for: request) }
+        let load = (id: UUID(), task: task)
+        inFlightLoads[request.imageKey] = (load.id, load.task, 1)
+        return load
+    }
+
+    private func finishLoad(_ id: UUID, for key: String) {
+        guard var load = inFlightLoads[key], load.id == id else { return }
+        load.readers -= 1
+        inFlightLoads[key] = load.readers == 0 ? nil : load
     }
 
     private func scheduleRevalidation(for artworkURL: URL, metadata: ArtworkDiskCacheMetadata) {

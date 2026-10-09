@@ -92,7 +92,7 @@ actor ArtworkDiskCache {
     }
 
     @discardableResult
-    func updatePreview(_ preview: ArtworkPreview, for url: URL) throws -> ArtworkDiskCacheMetadata? {
+    func updatePreview(_ preview: ArtworkPreview, for url: URL, matchingData: Data) throws -> ArtworkDiskCacheMetadata? {
         try prepareDirectory()
         let key = cacheKey(for: url)
         let url = metadataURL(forKey: key)
@@ -101,7 +101,8 @@ actor ArtworkDiskCache {
         }
 
         var metadata = try readMetadata(at: url)
-        guard metadata.canonicalURL == preview.canonicalArtworkURLKey else {
+        guard metadata.canonicalURL == preview.canonicalArtworkURLKey,
+              try Data(contentsOf: dataURL(forKey: key)) == matchingData else {
             return metadata
         }
 

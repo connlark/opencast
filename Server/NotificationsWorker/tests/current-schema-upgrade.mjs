@@ -94,7 +94,9 @@ try {
   assert.deepEqual({stall_state:row.stall_state,stall_since:row.stall_since,stall_alerted_at:row.stall_alerted_at,alert_armed_at:row.alert_armed_at},{stall_state:'clear',stall_since:0,stall_alerted_at:0,alert_armed_at:0});
   delete row.stall_state;delete row.stall_since;delete row.stall_alerted_at;delete row.alert_armed_at;
  }
- assert.deepEqual(afterRegistrationMigration,retained,'registration and alerting migrations preserve retained values');
+ // 0030 binds validators to a URL and a parse time: both absent on existing rows.
+ for(const row of afterRegistrationMigration.n_feed){assert.deepEqual({validator_url:row.validator_url,validator_at:row.validator_at},{validator_url:null,validator_at:null});delete row.validator_url;delete row.validator_at;}
+ assert.deepEqual(afterRegistrationMigration,retained,'registration, alerting and validator-binding migrations preserve retained values');
  for(const file of files)await apply(fresh,file);
  const finalSchema=(await schema()).filter(r=>!r.name.startsWith('_cf_'));
  assert.deepEqual((await fresh.prepare('SELECT name,sql FROM sqlite_schema ORDER BY name').all()).results.filter(r=>!r.name.startsWith('_cf_')),finalSchema);

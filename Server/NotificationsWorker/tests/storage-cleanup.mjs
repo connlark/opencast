@@ -96,6 +96,18 @@ try {
  assert.equal(await one("SELECT name FROM sqlite_master WHERE sql LIKE '%recovery_pending%'"),null);
  assert.deepEqual(await rows('PRAGMA foreign_key_check'),[]);
  await run("DELETE FROM n_feed WHERE feed_id='dormant'");
+ // Exercise the final trigger after the compatibility view has been removed.
+ await run("UPDATE n_feed SET canonical_url='https://fixture.example/current.xml' WHERE feed_id='feed'");
+ await enroll('reenrolled');
+ assert.equal((await one("SELECT COUNT(*) n FROM n_legacy_bridge WHERE feed_id='reenrolled'")).n,5);
+ // The current binary requires the current schema (README: 0028 or later;
+ // 0030 adds the validator columns its expiry statement clears), so the
+ // historical lineage continues to the end before the collector runs.
+ // 0026 contracts n_observation.mode; everything else survives the lineage.
+ const at24=await preserved();
+ for(const file of files.filter(f=>f>'0024_drop_recovery_pending.sql'))await apply(file);
+ const current={...at24,observations:at24.observations.map(({mode,...row})=>row)};
+ assert.deepEqual(await preserved(),current);
  await run("UPDATE n_control SET enabled=1 WHERE name IN('cleanup','feed_observation')");
  // The current Rust collector must preserve a page shared with a retired
  // shadow manifest, while actually reclaiming shadow-only objects and roots.
@@ -106,11 +118,7 @@ try {
  for(const key of ['current','shared'])assert.ok(await bucket.head(key),key);
  for(const key of ['shadow','obsolete'])assert.equal(await bucket.head(key),null,key);
  assert.deepEqual(await rows('SELECT object_key FROM n_snapshot ORDER BY object_key'),[{object_key:'current'},{object_key:'shared'}]);
- assert.deepEqual(await preserved(),before);
+ assert.deepEqual(await preserved(),current);
  assert.deepEqual(await rows('PRAGMA foreign_key_check'),[]);
- // Exercise the final trigger after the compatibility view has been removed.
- await run("UPDATE n_feed SET canonical_url='https://fixture.example/current.xml' WHERE feed_id='feed'");
- await enroll('reenrolled');
- assert.equal((await one("SELECT COUNT(*) n FROM n_legacy_bridge WHERE feed_id='reenrolled'")).n,5);
- console.log('PASS populated 0021→0024 upgrade: exact history, transitional deletion, bridge hydration, active/dormant readiness rollback, preserved feed/delivery state, shared-page GC, current events and foreign keys');
+ console.log('PASS populated 0021→0024 upgrade: exact history, transitional deletion, bridge hydration, active/dormant readiness rollback, preserved feed/delivery state, lineage to the current schema, shared-page GC, current events and foreign keys');
 } finally {await mf.dispose();}

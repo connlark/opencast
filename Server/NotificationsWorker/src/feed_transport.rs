@@ -1,10 +1,11 @@
 //! Bounded publisher transport shared by queued observations and their tests.
 use crate::deadline::fetch_with_deadline;
 use crate::feed_fetch::{
-    feed_response_disposition, same_origin, FeedFetchError, FeedResponseDisposition,
-    FEED_USER_AGENT,
+    feed_response_disposition, same_origin, strong_etag_unchanged, FeedFetchError,
+    FeedResponseDisposition, NotModifiedProof, StoredValidators, FEED_USER_AGENT,
 };
 use crate::feed_stream::{FeedFetchCancellation, FeedStream};
+use crate::observation::body::{Body, Retained};
 use crate::{feed_admission, feed_resource, rss, storage};
 use std::{cell::Cell, rc::Rc, time::Duration};
 use worker::{Delay, Fetch, Headers, Method, Request, RequestInit, RequestRedirect};
@@ -14,10 +15,14 @@ pub(crate) struct FetchedFeed {
     pub(crate) parsed: std::result::Result<rss::scan::ScannedFeed, rss::RSSParseError>,
     pub(crate) etag: Option<String>,
     pub(crate) last_modified: Option<String>,
+    /// The hop that answered 200: the resource its validators describe.
+    pub(crate) url: String,
+    /// A probe's complete body, retained for the full observation.
+    pub(crate) body: Option<Body>,
 }
 
 pub(crate) enum FeedFetchOutcome {
-    NotModified,
+    NotModified(NotModifiedProof),
     Fetched(Box<FetchedFeed>),
 }
 
@@ -36,9 +41,9 @@ pub(crate) async fn fetch_feed(
         let parsed_current_url =
             url::Url::parse(&current_url).map_err(|_| FeedFetchError::FetchFailed)?;
         if let Some(origin) = observer.origin.as_mut() {
-            observer.storage_pending = true;
+            observer.storage_pending.set(true);
             let admitted = origin.acquire(&parsed_current_url).await;
-            observer.storage_pending = false;
+            observer.storage_pending.set(false);
             admitted?;
         }
         // From here a publisher request exists: only now can this scan's end
@@ -87,9 +92,9 @@ pub(crate) async fn fetch_feed(
         let status = response.status_code();
 
         if let Some(origin) = observer.origin.as_mut() {
-            observer.storage_pending = true;
+            observer.storage_pending.set(true);
             let recorded = origin.response(status, response.headers()).await;
-            observer.storage_pending = false;
+            observer.storage_pending.set(false);
             recorded.map_err(|_| FeedFetchError::StorageFailed)?;
         }
 
@@ -102,7 +107,7 @@ pub(crate) async fn fetch_feed(
                 {
                     return Err(FeedFetchError::UnexpectedNotModified);
                 }
-                return Ok(FeedFetchOutcome::NotModified);
+                return Ok(FeedFetchOutcome::NotModified(NotModifiedProof::Status));
             }
             FeedResponseDisposition::Redirect => {
                 if redirect_count == MAX_FEED_REDIRECTS {
@@ -135,6 +140,26 @@ pub(crate) async fn fetch_feed(
             .headers()
             .get("last-modified")
             .map_err(|_| FeedFetchError::FetchFailed)?;
+        // A repeated strong ETag of this exact resource, parsed within the
+        // trust window, proves the published snapshot as a 304 would. The
+        // body is never read: dropping the response and its cancellation
+        // aborts the request, exactly as the 304 return above.
+        if observer.etag_shortcut_eligible()
+            && strong_etag_unchanged(
+                &StoredValidators {
+                    etag: feed.etag.as_deref(),
+                    last_modified: feed.last_modified.as_deref(),
+                    url: feed.validator_url.as_deref(),
+                    at: feed.validator_at,
+                },
+                etag.as_deref(),
+                last_modified.as_deref(),
+                &current_url,
+                crate::delivery::db::now(),
+            )
+        {
+            return Ok(FeedFetchOutcome::NotModified(NotModifiedProof::StrongETag));
+        }
         let decoded_bytes = Rc::new(Cell::new(0usize));
         let stream = FeedStream::new(&response, invocation_bytes.clone(), decoded_bytes.clone())
             .map_err(|_| FeedFetchError::StorageFailed)?;
@@ -144,13 +169,38 @@ pub(crate) async fn fetch_feed(
             stream
         };
         let publisher_span = observer.timings.publisher_span();
-        let parsed = rss::scan::scan_rss_with_sink(stream, &feed.feed_url, observer).await;
+        observer.timings.passes.set(1);
+        // A probe keeps every byte it parses, so a changed digest can be
+        // observed in full from this response; nothing else is buffered.
+        let (parsed, body) = match observer.retention() {
+            Some(scratch) => {
+                let mut retained = Retained::new(stream, observer.spill.clone(), scratch);
+                match rss::scan::scan_rss_with_sink(&mut retained, &feed.feed_url, observer).await {
+                    Ok(parsed) => match retained.into_body() {
+                        Ok(body) => (Ok(parsed), Some(body)),
+                        Err(_) => (
+                            Err(rss::RSSParseError::ResourceLimit(
+                                "observation_stage_failed",
+                            )),
+                            None,
+                        ),
+                    },
+                    Err(error) => (Err(error), None),
+                }
+            }
+            None => (
+                rss::scan::scan_rss_with_sink(stream, &feed.feed_url, observer).await,
+                None,
+            ),
+        };
 
         drop(publisher_span);
         return Ok(FeedFetchOutcome::Fetched(Box::new(FetchedFeed {
             parsed,
             etag,
             last_modified,
+            url: current_url,
+            body,
         })));
     }
 

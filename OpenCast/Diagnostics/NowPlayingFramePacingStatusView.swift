@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || OPENCAST_PERFORMANCE_PROBES
 import SwiftUI
 
 /// Exposes the frame-pacing probe's flushed session summaries to UI tests.

@@ -17,8 +17,9 @@ const h=await harness(request=>{
     for(let start=0;start<count;start+=50){if(version===2&&start%500===0)await new Promise(resolve=>setTimeout(resolve,50));let chunk='';for(let i=start;i<start+50;i++)chunk+=item(`max-${i}`,h.now-100).replace('</item>',`<padding>${'x'.repeat(padding+(i<remainder?1:0))}</padding></item>`);yield Buffer.from(chunk);}
     yield Buffer.from(footer);
   }
-  // Miniflare compresses the Node response on its local transport.
-  return new Response(Readable.toWeb(Readable.from(chunks())),{headers:{etag:`"v${version}"`,'content-encoding':'gzip','content-type':'application/rss+xml'}});
+  // Miniflare compresses the Node response on its local transport. The tag is
+  // weak so the rescan is a real unchanged scan, never the strong-ETag shortcut.
+  return new Response(Readable.toWeb(Readable.from(chunks())),{headers:{etag:`W/"v${version}"`,'content-encoding':'gzip','content-type':'application/rss+xml'}});
 },{replicas:2});
 let stop;
 async function drainBoth(maxJob){

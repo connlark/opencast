@@ -21,6 +21,7 @@ struct NowPlayingView: View {
     @State private var remoteTranscriptionStartErrorMessage: String?
     @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
     @State private var naturalContentHeight: CGFloat?
+    @State private var scrollPosition = ScrollPosition(edge: .top)
 
     let bottomContentPadding: CGFloat
     let topContentPadding: CGFloat
@@ -192,6 +193,7 @@ struct NowPlayingView: View {
                 }
             }
             .scrollIndicators(.hidden)
+            .scrollPosition($scrollPosition)
             .scrollDisabled(isTrackingDismissDrag)
             .overlay(alignment: .topTrailing) {
                 if appModel.playback.currentEpisode != nil {
@@ -324,12 +326,15 @@ struct NowPlayingView: View {
                 Text(message)
             }
             .onAppear {
-                showAutoSkipPillIfNeeded(for: appModel.playback.lastAutoSkipEvent)
+                showAutoSkipPillIfNeeded(for: presentedAutoSkipEvent)
+            }
+            .onChange(of: appModel.isNowPlayingPresented) { _, isPresented in
+                if !isPresented { resetPresentation() }
             }
             .onChange(of: appModel.playbackSettings.isVoiceBoostEnabled) { _, _ in
                 syncVoiceBoostEnabledFromStore()
             }
-            .onChange(of: appModel.playback.lastAutoSkipEvent) { _, event in
+            .onChange(of: presentedAutoSkipEvent) { _, event in
                 showAutoSkipPillIfNeeded(for: event)
             }
             .onChange(of: isVoiceBoostEnabled) { _, newValue in
@@ -338,7 +343,7 @@ struct NowPlayingView: View {
             .onChange(of: currentEpisodeID) { _, _ in
                 showsAutoSkipPill = false
                 displayedAutoSkipEventSequence = 0
-                showAutoSkipPillIfNeeded(for: appModel.playback.lastAutoSkipEvent)
+                showAutoSkipPillIfNeeded(for: presentedAutoSkipEvent)
             }
             .task(id: currentEpisodeID) {
                 syncVoiceBoostEnabledFromStore()
@@ -350,7 +355,7 @@ struct NowPlayingView: View {
             .alert(
                 "Sound Lab Error",
                 isPresented: Binding(
-                    get: { appModel.playbackSettings.lastErrorMessage != nil },
+                    get: { appModel.isNowPlayingPresented && appModel.playbackSettings.lastErrorMessage != nil },
                     set: { if !$0 { appModel.playbackSettings.clearLastError() } }
                 ),
                 presenting: appModel.playbackSettings.lastErrorMessage
@@ -434,7 +439,8 @@ struct NowPlayingView: View {
     }
 
     private var transcriptionRequest: EpisodeTranscriptionRequest? {
-        guard appModel.transcriptionRequests.isPresented,
+        guard appModel.isNowPlayingPresented,
+              appModel.transcriptionRequests.isPresented,
               let request = appModel.transcriptionRequests.request,
               request.episodeID == currentEpisodeID
         else {
@@ -444,7 +450,8 @@ struct NowPlayingView: View {
     }
 
     private var remoteTranscriptionPresentation: RemoteTranscriptionStatusPresentation? {
-        guard appModel.remoteTranscriptionPurchases.isSurfaceVisible,
+        guard appModel.isNowPlayingPresented,
+              appModel.remoteTranscriptionPurchases.isSurfaceVisible,
               let currentEpisodeID,
               let phase = appModel.remoteTranscription.store.phase(for: currentEpisodeID),
               !phase.isTerminal
@@ -616,6 +623,24 @@ struct NowPlayingView: View {
 
         displayedAutoSkipEventSequence = event.sequence
         showAutoSkipPill()
+    }
+
+    private var presentedAutoSkipEvent: PlaybackAutoSkipEvent? {
+        appModel.isNowPlayingPresented ? appModel.playback.lastAutoSkipEvent : nil
+    }
+
+    private func resetPresentation() {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            scrollPosition.scrollTo(edge: .top)
+            utilitySheet = nil
+            remoteEstimateRequest = nil
+            remoteTranscriptionStartErrorMessage = nil
+            adDetectionModePromptEpisode = nil
+            showsAutoSkipPill = false
+            displayedAutoSkipEventSequence = 0
+        }
     }
 
     private func showAutoSkipPill() {

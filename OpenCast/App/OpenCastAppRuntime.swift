@@ -17,7 +17,7 @@ final class OpenCastAppRuntime {
         do {
             let launchConfiguration = OpenCastLaunchConfiguration.current
             self.launchConfiguration = launchConfiguration
-            #if DEBUG
+            #if DEBUG || OPENCAST_PERFORMANCE_PROBES
             NowPlayingFramePacingProbe.shared.enableIfRequested()
             #endif
             #if DEBUG || INTERNAL_NOTIFICATIONS_DIAGNOSTICS

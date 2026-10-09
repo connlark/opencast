@@ -74,6 +74,11 @@ pub(crate) async fn scan_rss_with_sink<R: AsyncRead + Unpin, S: EpisodeSink>(
                             return RSSParseError::ResourceLimit("feed_field_limit")
                         }
                         "feed_inactivity_timeout" => return RSSParseError::InactivityTimeout,
+                        // A retained body's scratch write or read: storage
+                        // trouble, never the publisher's transfer.
+                        "observation_stage_failed" => {
+                            return RSSParseError::ResourceLimit("observation_stage_failed")
+                        }
                         _ => return RSSParseError::TransferInterrupted,
                     }
                 }

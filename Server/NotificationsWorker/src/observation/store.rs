@@ -181,6 +181,17 @@ impl Store {
     pub fn bound_digest(snapshot_key: &str, digest: &str) -> String {
         format!("{snapshot_key}:{digest}")
     }
+    /// The published digest describes the snapshot the pointer still names.
+    /// A missing or stale one can never prove a body unchanged, so its feed
+    /// keeps parsing until a 200 repairs it.
+    pub fn has_bound_digest(&self) -> bool {
+        self.previous_key.as_deref().is_some_and(|key| {
+            self.digest
+                .as_deref()
+                .and_then(|digest| digest.strip_prefix(key))
+                .is_some_and(|rest| rest.starts_with(':'))
+        })
+    }
     pub fn unchanged_from(&self, digest: &str) -> bool {
         self.previous_key
             .as_deref()
@@ -424,6 +435,7 @@ impl Store {
         metadata: &Value,
         etag: Option<&str>,
         modified: Option<&str>,
+        validator_url: Option<&str>,
     ) -> Result<bool> {
         self.flush().await?;
         self.release_unused().await?;
@@ -456,7 +468,7 @@ impl Store {
         );
         let valid="EXISTS(SELECT 1 FROM n_snapshot s WHERE s.object_key=?1 AND s.state='uploaded' AND s.expected_pages=(SELECT COUNT(*) FROM n_snapshot_ref r WHERE r.manifest_key=s.object_key) AND NOT EXISTS(SELECT 1 FROM n_snapshot_ref r JOIN n_snapshot p ON p.object_key=r.page_key WHERE r.manifest_key=s.object_key AND (p.state NOT IN('uploaded','referenced') OR p.sha256='' OR p.bytes=0)) AND NOT EXISTS(SELECT 1 FROM json_each(?8) j WHERE NOT EXISTS(SELECT 1 FROM n_snapshot_ref r JOIN n_snapshot p ON p.object_key=r.page_key WHERE r.manifest_key=s.object_key AND p.object_key=json_extract(j.value,'$.key') AND p.sha256=json_extract(j.value,'$.sha256') AND p.bytes=json_extract(j.value,'$.bytes'))))";
         let mut statements=vec![
-            statement(&self.db,&format!("UPDATE {table} SET {generation}=?2,snapshot_key=?1,publish_token=?3,etag=?4,last_modified=?5,last_success_at=?6,semantic_digest=?9,lease_id=NULL,lease_until=NULL WHERE feed_id=?7 AND {fence} AND {valid}"),&[json!(page.key),json!(self.generation),json!(token),json!(etag),json!(modified),json!(t),json!(self.feed_id),json!(pages),json!(metadata["semantic_digest"].as_str().map(|d| Self::bound_digest(&page.key, d)))])?,
+            statement(&self.db,&format!("UPDATE {table} SET {generation}=?2,snapshot_key=?1,publish_token=?3,etag=?4,last_modified=?5,validator_url=?10,validator_at=?6,last_success_at=?6,semantic_digest=?9,lease_id=NULL,lease_until=NULL WHERE feed_id=?7 AND {fence} AND {valid}"),&[json!(page.key),json!(self.generation),json!(token),json!(etag),json!(modified),json!(t),json!(self.feed_id),json!(pages),json!(metadata["semantic_digest"].as_str().map(|d| Self::bound_digest(&page.key, d))),json!(validator_url)])?,
             statement(&self.db,&format!("UPDATE n_observation SET state='published',valid_eof=1,preparation_key=NULL,processing_token=NULL,processing_until=NULL,completed_at=?2,candidate_count=?3,spooled_count=?3,candidate_storage='r2',reason_counts_json=?4,metadata_json=?5,etag=?6,last_modified=?7,drain_complete=CASE WHEN ?3=0 THEN 1 ELSE 0 END WHERE observation_id=?1 AND {published}"),&[json!(self.observation_id),json!(t),json!(manifest.candidate_count),counts.clone(),{let mut m=metadata.clone();let o=m.as_object_mut().expect("metadata");o.remove("withdrawn");o.remove("semantic_digest");m},json!(etag),json!(modified)])?,
             statement(&self.db,&format!("UPDATE n_snapshot SET state='referenced' WHERE (object_key=?1 OR object_key IN(SELECT page_key FROM n_snapshot_ref WHERE manifest_key=?1)) AND {published}"),&[json!(page.key)])?,
         ];
@@ -518,10 +530,12 @@ impl Store {
     /// moves only checkpoint/schedule fields. It never creates an observation,
     /// snapshot, candidate or receipt row, and never advances the generation.
     /// `digest` is `None` for a 304, whose proof is the request validator.
+    /// `url` is the hop that answered a parsed 200; a 304 passes `None`.
     pub async fn unchanged(
         &self,
         etag: Option<&str>,
         modified: Option<&str>,
+        url: Option<&str>,
         digest: Option<&str>,
         settle: Option<&crate::polling::Settle>,
     ) -> Result<bool> {
@@ -540,13 +554,10 @@ impl Store {
         // A 304 proves nothing unless it answers the published validator. A
         // 200 must reproduce the membership digest of the snapshot the pointer
         // still names, and then its own validators describe that snapshot.
-        let (valid, validators) = if bound.is_some() {
-            (
-                "snapshot_key IS NOT NULL AND semantic_digest=?6 AND substr(?6,1,length(snapshot_key)+1)=snapshot_key||':'",
-                ",etag=?1,last_modified=?2",
-            )
+        let valid = if bound.is_some() {
+            "snapshot_key IS NOT NULL AND semantic_digest=?6 AND substr(?6,1,length(snapshot_key)+1)=snapshot_key||':'"
         } else {
-            ("snapshot_key IS NOT NULL AND ?6 IS NULL AND ((etag IS NOT NULL AND etag=?1) OR (etag IS NULL AND last_modified IS NOT NULL AND last_modified=?2))", "")
+            "snapshot_key IS NOT NULL AND ?6 IS NULL AND ((etag IS NOT NULL AND etag=?1) OR (etag IS NULL AND last_modified IS NOT NULL AND last_modified=?2))"
         };
         let published = format!(
             "EXISTS(SELECT 1 FROM {table} WHERE feed_id='{}' AND publish_token='{token}')",
@@ -572,6 +583,17 @@ impl Store {
                 ",due_at=?7,retry_at=0,poll_failures=0,handling_failures=0,dispatch_until=0,baseline_at=COALESCE(baseline_at,?3),credible_release_at=COALESCE(?8,credible_release_at),credible_cadence=COALESCE(?9,credible_cadence),publish_cadence=COALESCE(?10,publish_cadence),last_poll_at=?3,last_poll_outcome=?11,last_poll_error=NULL"
             }
             None => "",
+        };
+        // The parsed 200's validators are bound to the hop that supplied them
+        // and the time of this parse; a 304 refreshes neither.
+        let validators = if bound.is_some() {
+            args.push(json!(url));
+            format!(
+                ",etag=?1,last_modified=?2,validator_url=?{},validator_at=?3",
+                args.len()
+            )
+        } else {
+            String::new()
         };
         let mut writes=vec![
             statement(&self.db,&format!("UPDATE {table} SET last_success_at=?3,publish_token=?4{validators}{schedule} WHERE feed_id=?5 AND {valid} AND {fence}"),&args)?,

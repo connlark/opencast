@@ -41,6 +41,9 @@ pub struct FeedSource {
     pub source_url: String,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    /// The hop whose parsed 200 supplied the validators, and when.
+    pub validator_url: Option<String>,
+    pub validator_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -720,7 +723,8 @@ pub async fn gc_deleted_subscriptions_before(db: &D1Database, cutoff: i64) -> Re
 pub async fn feed_source(db: &D1Database, feed_url: &str) -> Result<Option<FeedSource>> {
     let args = [D1Type::Text(feed_url)];
     db.prepare(
-        "SELECT feed_url, source_url, NULL AS etag, NULL AS last_modified \
+        "SELECT feed_url, source_url, NULL AS etag, NULL AS last_modified, \
+         NULL AS validator_url, NULL AS validator_at \
          FROM n_feed_catalog \
          WHERE feed_url = ?1 \
          LIMIT 1",

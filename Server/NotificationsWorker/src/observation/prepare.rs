@@ -42,6 +42,9 @@ pub struct Preparation {
     metadata: Value,
     etag: Option<String>,
     modified: Option<String>,
+    // Absent from checkpoints staged before validators were bound to a URL.
+    #[serde(default)]
+    validator_url: Option<String>,
     pub first_observed_at: i64,
     phase: u8,
     history: History,
@@ -65,6 +68,7 @@ impl Preparation {
         metadata: Value,
         etag: Option<&str>,
         modified: Option<&str>,
+        validator_url: Option<&str>,
         first_observed_at: i64,
     ) -> Self {
         Self {
@@ -76,6 +80,7 @@ impl Preparation {
             metadata,
             etag: etag.map(str::to_string),
             modified: modified.map(str::to_string),
+            validator_url: validator_url.map(str::to_string),
             first_observed_at,
             phase: 0,
             history: History::default(),
@@ -367,6 +372,7 @@ impl Preparation {
                 &metadata,
                 self.etag.as_deref(),
                 self.modified.as_deref(),
+                self.validator_url.as_deref(),
             )
             .await
     }

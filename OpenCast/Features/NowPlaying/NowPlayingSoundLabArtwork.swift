@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct NowPlayingSoundLabArtwork: View {
+    @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
@@ -82,8 +83,26 @@ struct NowPlayingSoundLabArtwork: View {
         }
         .sensoryFeedback(.selection, trigger: feedbackTrigger)
         .onAppear(perform: applyPinnedReveal)
+        .onChange(of: appModel.isNowPlayingPresented) { _, isPresented in
+            if !isPresented { resetInteraction() }
+        }
+        .onChange(of: appModel.playback.currentEpisode?.id) { _, _ in
+            resetInteraction()
+        }
         .task(id: request) {
             _ = await imageState.loadArtwork(for: request, cacheKind: .episode)
+        }
+    }
+
+    private func resetInteraction() {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            interactionState = .closed
+            revealProgress = 0
+            ignoresCurrentDrag = false
+            isSoundLabInteractionActive = false
+            applyPinnedReveal()
         }
     }
 

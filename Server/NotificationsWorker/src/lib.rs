@@ -45,6 +45,8 @@ mod storage;
 mod subscription_admission;
 #[cfg(any(target_arch = "wasm32", test))]
 mod subscription_payloads;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod test_schema;
 #[cfg(target_arch = "wasm32")]
 mod worker_app;
 #[cfg(target_arch = "wasm32")]

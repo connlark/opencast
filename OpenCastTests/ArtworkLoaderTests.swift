@@ -79,6 +79,93 @@ struct ArtworkLoaderTests {
         #expect(await probe.requestCount == 1)
     }
 
+    @Test("Identical network and disk artwork shares one decode across rows and URLs", arguments: [false, true], [false, true])
+    func concurrentRowsShareDecodedImage(fromDisk: Bool, distinctURLs: Bool) async throws {
+        let data = try pngData(width: 1_600, height: 1_600)
+        let requests = (0..<12).map { index in
+            ArtworkRequest(
+                url: URL(string: "https://example.com/shared-row-\(distinctURLs ? index : 0).png")!,
+                targetPixelSize: CGSize(width: 112, height: 112)
+            )
+        }
+        let diskCache = ArtworkDiskCache(directory: try makeTemporaryDirectory())
+        if fromDisk {
+            for url in Set(requests.map(\.url)) {
+                _ = try await diskCache.store(
+                    data: data,
+                    response: OpenCastHTTPResponse(httpResponse(url: url, statusCode: 200, headers: [:])),
+                    for: url
+                )
+            }
+        }
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)], waitsForRelease: !fromDisk)
+        let decodeProbe = ArtworkDecodeThreadProbe()
+        let loader = ArtworkLoader(
+            diskCache: diskCache,
+            dataLoader: probe.load,
+            imageDecoder: decodeProbe.decode
+        )
+        let readers = Task {
+            try await withThrowingTaskGroup(of: UIImage?.self) { group in
+                for request in requests {
+                    group.addTask { try await loader.image(for: request) }
+                }
+                var images: [UIImage] = []
+                for try await image in group {
+                    images.append(try #require(image))
+                }
+                return images
+            }
+        }
+        let expectedNetworkRequests = fromDisk ? 0 : (distinctURLs ? requests.count : 1)
+        if !fromDisk {
+            #expect(await probe.waitForRequestCount(expectedNetworkRequests))
+            await probe.release()
+        }
+        let images = try await readers.value
+
+        #expect(images.count == requests.count)
+        #expect(images.allSatisfy { $0 === images.first })
+        #expect(decodeProbe.observedMainThreadValues == [false])
+        #expect(await probe.requestCount == expectedNetworkRequests)
+    }
+
+    @Test("Sequential URL aliases reuse pixels while retaining separate preview identities")
+    func sequentialAliasesReuseImage() async throws {
+        let data = try pngData(width: 400, height: 400)
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
+        let decodeProbe = ArtworkDecodeThreadProbe()
+        let memoryCache = ArtworkMemoryCache(memoryWarningName: nil)
+        let loader = ArtworkLoader(
+            memoryCache: memoryCache,
+            diskCache: ArtworkDiskCache(directory: try makeTemporaryDirectory()),
+            dataLoader: probe.load,
+            imageDecoder: decodeProbe.decode
+        )
+        let firstRequest = ArtworkRequest(
+            url: URL(string: "https://example.com/episode-one.png")!,
+            targetPixelSize: CGSize(width: 112, height: 112)
+        )
+        let secondRequest = ArtworkRequest(
+            url: URL(string: "https://example.com/episode-two.png")!,
+            targetPixelSize: firstRequest.pixelSize
+        )
+        let first = try #require(try await loader.loadResult(for: firstRequest))
+        let second = try #require(try await loader.loadResult(for: secondRequest))
+
+        #expect(first.image === second.image)
+        #expect(first.preview?.sourceHash == second.preview?.sourceHash)
+        #expect(first.preview?.canonicalArtworkURLKey == firstRequest.imageKey)
+        #expect(second.preview?.canonicalArtworkURLKey == secondRequest.imageKey)
+        #expect(decodeProbe.observedMainThreadValues == [false])
+
+        memoryCache.removeAll()
+        let reloaded = try #require(try await loader.image(for: secondRequest))
+        #expect(reloaded !== first.image)
+        #expect(decodeProbe.observedMainThreadValues == [false, false])
+        #expect(await probe.requestCount == 2)
+    }
+
     @Test("Failed HTTP responses are not cached")
     func failedHTTPResponsesAreNotCached() async throws {
         let data = try pngData(width: 400, height: 400)
@@ -329,7 +416,8 @@ struct ArtworkLoaderTests {
         let request = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 56, height: 56))
         let memoryCache = ArtworkMemoryCache()
         let image = try #require(UIImage(data: data))
-        memoryCache.insert(image, for: request)
+        memoryCache.store(image, forContentKey: "backfill#56x56")
+        memoryCache.alias(request, toContentKey: "backfill#56x56")
         let diskCache = ArtworkDiskCache(directory: directory)
         _ = try await diskCache.store(
             data: data,

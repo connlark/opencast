@@ -95,7 +95,7 @@ pub async fn consume(
     }
     if wake.kind == "cleanup" {
         // Compatibility with messages retained from the old cron.
-        return outcome("cleanup_ignored");
+        return outcome("cleanup_ignored", None, None);
     }
     if wake.kind != "poll" || !wire::hex_id(&wake.feed_id) || wake.owner_epoch < 1 {
         return Response::error("invalid_wakeup", 400);
@@ -220,15 +220,17 @@ pub async fn consume(
     let due_lag_seconds = fence
         .as_ref()
         .map(|f| started as i64 / 1000 - f.schedule.due_at);
+    // Body parses this step made; a step that parsed none logs null.
+    let passes = Some(timings.passes.get()).filter(|n| *n > 0);
     let plain = matches!(name, "unchanged" | "not_modified");
     let sampled = plain && policy::sampled(&wake.feed_id, wake.generation);
     if !plain || sampled || wall_ms > 5000 || initial_queue_wait_ms.is_some_and(|ms| ms > 120_000) {
         console_log!(
             "{}",
-            json!({"event":"poll_delivery","outcome":name,"feed":wake.feed_id,"origin":*timings.origin.borrow(),"step":wake.step,"attempts":attempts,"message_age_ms":message_age_ms,"initial_queue_wait_ms":initial_queue_wait_ms,"due_lag_seconds":due_lag_seconds,"wall_ms":wall_ms,"claim_ms":timings.claim.get(),"publisher_fetch_ms":timings.publisher.get(),"storage_ms":wall_ms.saturating_sub(timings.claim.get()).saturating_sub(timings.publisher.get()),"sample":if plain && wall_ms<=5000 && initial_queue_wait_ms.is_none_or(|ms|ms<=120_000) {policy::SUCCESS_LOG_SAMPLE} else {1}})
+            json!({"event":"poll_delivery","outcome":name,"feed":wake.feed_id,"origin":*timings.origin.borrow(),"step":wake.step,"attempts":attempts,"message_age_ms":message_age_ms,"initial_queue_wait_ms":initial_queue_wait_ms,"due_lag_seconds":due_lag_seconds,"wall_ms":wall_ms,"claim_ms":timings.claim.get(),"publisher_fetch_ms":timings.publisher.get(),"via":timings.via.get(),"passes":passes,"storage_ms":wall_ms.saturating_sub(timings.claim.get()).saturating_sub(timings.publisher.get()),"sample":if plain && wall_ms<=5000 && initial_queue_wait_ms.is_none_or(|ms|ms<=120_000) {policy::SUCCESS_LOG_SAMPLE} else {1}})
         );
     }
-    outcome(name).map(|response| response.with_status(status))
+    outcome(name, timings.via.get(), passes).map(|response| response.with_status(status))
 }
 
 /// A failed or cancelled step may have claimed the scan lease after proving a
@@ -240,8 +242,8 @@ async fn release(db: &D1Database, fence: &Fence, outcome: &str, reason: &str) ->
     run(db,&format!("UPDATE n_feed SET last_poll_at=?2,last_poll_outcome=?3,last_poll_error=?4,lease_until=CASE WHEN lease_id=?5 AND {idle} THEN NULL ELSE lease_until END,lease_id=CASE WHEN lease_id=?5 AND {idle} THEN NULL ELSE lease_id END WHERE feed_id=?1 AND {}",fence.sql(now())),&[json!(fence.feed),json!(now()),json!(outcome),json!(reason.chars().take(96).collect::<String>()),json!(lease)]).await?;
     Ok(())
 }
-fn outcome(name: &str) -> Result<Response> {
-    Response::from_json(&json!({ "outcome": name }))
+fn outcome(name: &str, via: Option<&str>, passes: Option<u8>) -> Result<Response> {
+    Response::from_json(&json!({ "outcome": name, "via": via, "passes": passes }))
 }
 
 /// The exhausted message is diagnostic; the feed row is the recovery source.
@@ -253,7 +255,7 @@ pub async fn dead_letter(env: &Env, wake: &dispatch::Wakeup) -> Result<Response>
         || !wire::hex_id(&wake.feed_id)
         || !super::runtime::permitted_by_environment(env)
     {
-        return outcome("ignored");
+        return outcome("ignored", None, None);
     }
     let t = now();
     let changed = run(&db,"UPDATE n_feed SET retry_at=?4+MIN(21600,300*(1<<MIN(handling_failures,7))),handling_failures=MIN(handling_failures+1,12),dispatch_until=0,last_poll_at=?4,last_poll_outcome='dead_letter' WHERE feed_id=?1 AND epoch=?2 AND schedule_generation=?3 AND dispatch_until>0",&[json!(wake.feed_id),json!(wake.owner_epoch),json!(wake.generation),json!(t)]).await?;
@@ -264,7 +266,7 @@ pub async fn dead_letter(env: &Env, wake: &dispatch::Wakeup) -> Result<Response>
         "{}",
         json!({"event":"poll_dead_letter","feed_id":wake.feed_id,"settled":changed>0})
     );
-    outcome("dead_letter_saved")
+    outcome("dead_letter_saved", None, None)
 }
 
 pub(super) const PREPARING:&str="EXISTS(SELECT 1 FROM n_observation o WHERE o.feed_id=f.feed_id AND o.state='staging' AND o.valid_eof=1 AND o.processing_failures<10 AND o.lease_id=f.lease_id AND o.owner_epoch=f.epoch AND o.eligibility_generation=f.eligibility_generation AND o.scan_started_at>?4-604800)";

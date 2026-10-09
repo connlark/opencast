@@ -113,6 +113,51 @@ fn complete_document_and_raw_item_limit() {
     ));
 }
 
+/// Serves `bytes`, then fails every later read with `error`.
+struct FailsAfter<'a> {
+    bytes: &'a [u8],
+    error: &'static str,
+}
+impl AsyncRead for FailsAfter<'_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        target: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.bytes.is_empty() {
+            return Poll::Ready(Err(io::Error::other(self.error)));
+        }
+        let count = self.bytes.len().min(target.remaining());
+        target.put_slice(&self.bytes[..count]);
+        self.bytes = &self.bytes[count..];
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[test]
+fn a_retained_body_storage_failure_is_never_a_transfer_failure() {
+    // The probe's body reader fails its read when a scratch part cannot be
+    // written or read back; that is storage trouble, not the publisher's.
+    let head = b"<rss><channel><item><guid>1</guid></item>";
+    for (error, expected) in [
+        (
+            "observation_stage_failed",
+            RSSParseError::ResourceLimit("observation_stage_failed"),
+        ),
+        ("connection reset", RSSParseError::TransferInterrupted),
+    ] {
+        let reader = FailsAfter { bytes: head, error };
+        assert_eq!(
+            scan_rss(reader, FEED_URL)
+                .now_or_never()
+                .unwrap()
+                .unwrap_err(),
+            expected,
+            "{error}"
+        );
+    }
+}
+
 #[test]
 fn incomplete_documents_never_produce_notification_decisions() {
     for xml in [

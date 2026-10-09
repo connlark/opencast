@@ -15,7 +15,8 @@ async function suite(options, body) {
     // A delivery left in flight when an assertion fails dies with the runtime;
     // report the assertion, not that socket error.
     consume(...args) { const pending = h.consume(...args); pending.catch(() => {}); return pending; },
-    baseline: () => new Response(rss([item('baseline', h.now - 10)]), { headers: { etag: '"v1"' } }),
+    // Weak, so every success here is a parsed unchanged 200, never the strong-ETag shortcut.
+    baseline: () => new Response(rss([item('baseline', h.now - 10)]), { headers: { etag: 'W/"v1"' } }),
     grown: () => new Response(rss([item('baseline', h.now - 10), item('new-undated', null)])),
     // Every polling replica and the delivery worker share one virtual clock.
     async clock(seconds) {

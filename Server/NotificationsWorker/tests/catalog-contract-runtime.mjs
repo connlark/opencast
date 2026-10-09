@@ -16,7 +16,9 @@ async function exercise(root,limit){
  const mf=new Miniflare(convertV4MiniflareOptions({cf:false,inspectorPort:0,workers:[{name:'catalog',modulesRoot:root,modules:[...['tests/observation-entry.mjs','adapter/index.js','build/index.js'].map(path=>({type:'ESModule',path:root+path})),{type:'CompiledWasm',path:root+'build/index_bg.wasm'}],compatibilityDate,compatibilityFlags,d1Databases:{APP_ATTEST_DB:'catalog'},r2Buckets:{FEED_SNAPSHOTS:'catalog'},queueProducers:{EVENT_QUEUE:'catalog-events',EPISODE_DELIVERY_QUEUE:'catalog-episodes',JOB_DELIVERY_QUEUE:'catalog-jobs'},bindings:{NOTIFICATION_ENVIRONMENT:'development',APPLE_TEAM_ID:'EXAMPLETEAM',APPLE_BUNDLE_ID:'com.example.opencast',APP_ATTEST_ENVIRONMENT:'development',APNS_ENVIRONMENT:'development',PUBLIC_NOTIFICATIONS_ENABLED:'true',NOTIFICATION_FEED_OBSERVATION:'true'},outboundService:request=>{requests.push(request.url);return new Response('<rss><channel><title>Publisher</title><item><guid>stable-guid</guid><title>Stable</title></item></channel></rss>',{headers:{'content-type':'application/rss+xml'}});}}]}));
  try{
   await mf.ready;const db=await mf.getD1Database('APP_ATTEST_DB');
-  for(const f of (await readdir(migrations)).filter(f=>f.endsWith('.sql')&&Number(f.slice(0,4))<=limit).sort()){
+  // `limit` picks the S3 expansion (25) or contraction (26) state; the additive
+  // migrations after 0026 are the current binary's floor and apply in both.
+  for(const f of (await readdir(migrations)).filter(f=>f.endsWith('.sql')&&(Number(f.slice(0,4))<=limit||Number(f.slice(0,4))>26)).sort()){
    await db.batch(unstable_splitSqlQuery(await readFile(new URL(f,migrations),'utf8')).map(q=>db.prepare(q)));
    if(f.startsWith('0024'))await db.prepare("INSERT INTO feeds(feed_url,source_url,title,poll_interval_seconds,consecutive_failures,last_http_status,last_error,last_polled_at,created_at,updated_at) VALUES('https://orphan.example/feed','http://orphan.example/feed','Retained admission',900,3,503,'http_error',42,30,40)").run();
   }

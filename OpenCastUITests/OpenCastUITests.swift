@@ -1565,12 +1565,14 @@ final class OpenCastUITests: XCTestCase {
         )
         let playEpisodeButton = app.buttons["Play Episode"]
         assertExists(playEpisodeButton, named: "Play Episode button while another episode is playing")
+        let sessionsBefore = frameSummaryValue(in: app).components(separatedBy: "session=").count - 1
         playEpisodeButton.tap()
         assertNowPlayingOverlay(in: app)
         assertExists(playbackProgress(in: app), named: "Playback Progress control after Play Episode")
 
-        let summary = captureFramePacingSummary(in: app, expectedSessions: 2)
-        XCTAssertTrue(summary.contains("session="), "expected frame pacing summary, got: \(summary)")
+        let summary = captureFramePacingSummary(in: app, expectedSessions: sessionsBefore + 1, containing: "card-settled")
+        let newSessions = summary.components(separatedBy: " || ").filter { $0.contains("session=") }.dropFirst(sessionsBefore)
+        XCTAssertTrue(newSessions.contains { $0.contains("card-settled") }, "expected a new settled presentation: \(summary)")
     }
 
     @MainActor
@@ -2752,6 +2754,39 @@ final class OpenCastUITests: XCTestCase {
         assertNowPlayingOverlay(in: app)
         assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
         assertExists(app.switches["Voice Boost"], named: "Voice Boost Sound Lab toggle")
+    }
+
+    @MainActor
+    func testSeededNowPlayingReopenResetsTransientControls() throws {
+        let app = makeSeededApp()
+        app.launch()
+        openSeededNowPlayingSoundLab(in: app)
+
+        let initialProgress = try XCTUnwrap(playbackProgress(in: app).value as? String)
+        dismissNowPlayingOverlay(in: app)
+        XCTAssertFalse(playbackProgress(in: app).exists, "Prepared player controls must be hidden from accessibility")
+        XCTAssertFalse(nowPlayingSoundLabPanel(in: app).exists)
+
+        app.tabBars.buttons["Settings"].tap()
+        app.tabBars.buttons["Inbox"].tap()
+        app.buttons["Open Now Playing"].tap()
+        assertNowPlayingOverlay(in: app)
+        XCTAssertFalse(nowPlayingSoundLabPanel(in: app).exists, "Sound Lab must reopen closed")
+        XCTAssertFalse(app.switches["Voice Boost"].exists)
+
+        let progress = playbackProgress(in: app)
+        let advanced = NSPredicate { object, _ in
+            guard let element = object as? XCUIElement,
+                  let value = element.value as? String else { return false }
+            return value != initialProgress
+        }
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: advanced, object: progress)], timeout: 10),
+            .completed,
+            "Reopened progress must reflect playback while the card was hidden"
+        )
+        nowPlayingArtwork(in: app).tap()
+        assertExists(nowPlayingSoundLabPanel(in: app), named: "Sound Lab after reopening")
     }
 
     @MainActor
@@ -8524,39 +8559,6 @@ final class OpenCastUITests: XCTestCase {
         default:
             return nil
         }
-    }
-
-    /// Reads the frame-pacing probe summaries the app publishes through the
-    /// accessibility tree and saves them as an .xcresult attachment, since the
-    /// probe's on-disk logs live on an unreadable simulator clone and the
-    /// runner's stdout is not streamed to the host.
-    @MainActor
-    @discardableResult
-    private func captureFramePacingSummary(
-        in app: XCUIApplication,
-        expectedSessions: Int,
-        containing requiredEvent: String? = nil,
-        timeout: TimeInterval = 15
-    ) -> String {
-        let element = app.descendants(matching: .any)["Frame Pacing Summary"]
-        let deadline = Date().addingTimeInterval(timeout)
-        var value = ""
-        while Date() < deadline {
-            value = (element.value as? String) ?? ""
-            let sessions = value.components(separatedBy: "session=").count - 1
-            let hasRequiredEvent = requiredEvent.map(value.contains) ?? true
-            if sessions >= expectedSessions, hasRequiredEvent {
-                break
-            }
-            usleep(250_000)
-        }
-
-        let attachment = XCTAttachment(string: value)
-        attachment.name = "FramePacingSummary"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        print("FRAMEPACING_SUMMARY: \(value)")
-        return value
     }
 
     private func assertEventOrder(

@@ -1,7 +1,7 @@
 //! One-minute admission. The feed row is the only schedule state: a dispatch
 //! reserves a new obligation or repairs its same-generation wakeup, and the
 //! returned rows become Queue messages. There is no per-attempt job row.
-use super::{execute, origin, policy};
+use super::{execute, origin, policy, rollup_sql};
 use crate::delivery::{
     db::*,
     wire::{int, string},
@@ -30,16 +30,10 @@ pub struct Wakeup {
     pub step: u32,
 }
 
-pub(super) const ELIGIBLE:&str="f.admission_paused=0 AND f.no_interest_since IS NULL AND EXISTS(SELECT 1 FROM n_interest j JOIN n_install i ON i.install_id=j.install_id WHERE j.feed_id=f.feed_id AND j.enabled=1 AND i.enabled=1)";
 const CONTROLS:&str="EXISTS(SELECT 1 FROM n_control WHERE name='dispatcher_admission' AND enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='feed_observation' AND enabled=1)";
 
-// All lateness readers use this predicate, including origin cooldowns.
-pub(super) const HEALTHY: &str = "f.poll_failures=0 AND f.handling_failures=0 AND f.retry_at<=?1 AND NOT EXISTS(SELECT 1 FROM n_poll_origin h WHERE h.origin_key=f.origin_key AND h.cooldown_until>?1)";
-
-/// Shared by dispatch, stats and the independent watchdog. `?1` is now.
-pub(super) fn late_scanned(seconds: i64) -> String {
-    format!("{ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NOT NULL AND f.due_at<?1-{seconds}")
-}
+// Lifted for the host plan tests; `watchdog`, `reserve` and `stats` read them here.
+pub(super) use super::rollup_sql::{late_scanned, ELIGIBLE, HEALTHY};
 
 /// Canonical URLs have normalized scheme/host/port and no userinfo or fragment.
 /// A root URL may have no slash, or a query immediately after the authority.
@@ -73,7 +67,7 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
         execute::OUTBOXING.replace("?4", "?1"),
         execute::PREPARING.replace("?4", "?1")
     );
-    let scan_due = "f.due_at<=?1+30 AND f.retry_at<=?1 AND NOT EXISTS(SELECT 1 FROM n_poll_origin h WHERE h.origin_key=f.origin_key AND h.cooldown_until>?1)";
+    let scan_due = rollup_sql::SCAN_DUE;
     let repair_rows = rows(&db, &format!("SELECT f.feed_id,f.canonical_url FROM n_feed f WHERE {ELIGIBLE} AND f.dispatch_until>0 AND f.dispatch_until<=?1 AND (({scan_due}) OR {pending}) ORDER BY f.dispatch_until,f.due_at,f.feed_id LIMIT {}", policy::REPAIR_LIMIT), &[json!(t)]).await?;
     let repairs = repair_rows.iter().map(record).collect::<Result<Vec<_>>>()?;
     let repaired = reserve(env, &db, &repairs, t, true, false).await?;
@@ -113,8 +107,9 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
     let maintenance = maintenance.iter().map(record).collect::<Result<Vec<_>>>()?;
     let maintained = reserve(env, &db, &maintenance, t, false, false).await?;
     // The one-minute cost/lag rollup: no per-poll diagnostic rows exist.
-    let late = late_scanned(600);
-    let mut rollup = first(&db,&format!("SELECT (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1) AS overdue,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS healthy_overdue,(SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {ELIGIBLE} AND f.due_at<=?1 AND {HEALTHY}) AS oldest_due_seconds,(SELECT COUNT(*) FROM n_feed f WHERE {late}) AS late_600,(SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {HEALTHY} AND f.snapshot_key IS NULL AND f.due_at<?1-600) AS late_baselines,(SELECT COUNT(*) FROM n_feed f WHERE f.dispatch_until>?1) AS in_flight,(SELECT COUNT(*) FROM n_feed f WHERE {base}) AS admission_deferred,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome IN('not_modified','unchanged')) AS unchanged_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome='published') AS published_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-60 AND f.last_poll_outcome NOT IN('not_modified','unchanged','published')) AS failed_last_minute,(SELECT COUNT(*) FROM n_feed f WHERE f.last_poll_at>?1-300 AND f.last_poll_outcome IN('not_modified','unchanged','published')) AS completed_last_5min"),&[json!(t)]).await?.unwrap_or_else(|| json!({}));
+    let mut rollup = first(&db, &rollup_sql::rollup(), &[json!(t)])
+        .await?
+        .unwrap_or_else(|| json!({}));
     rollup["outstanding"] = rollup["in_flight"].clone();
     rollup["repairs"] = json!(repaired);
     rollup["admitted"] = json!(polls);

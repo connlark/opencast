@@ -35,6 +35,12 @@ struct NowPlayingProgressSection: View {
             isScrubbing = false
             scrubPosition = appModel.playback.position
         }
+        .onChange(of: appModel.isNowPlayingPresented) { _, isPresented in
+            if !isPresented {
+                isScrubbing = false
+                scrubbingEpisodeID = nil
+            }
+        }
     }
 
     private var currentEpisodeID: String? {
@@ -46,9 +52,9 @@ struct NowPlayingProgressSection: View {
     }
 
     private var observedPosition: TimeInterval? {
-        // Hidden position updates still trigger SwiftUI layout during background
-        // audio. Re-entering active observes the current position immediately.
-        scenePhase == .active ? appModel.playback.position : nil
+        // The prepared card remains mounted behind the tabs. Avoid subscribing
+        // to its playback clock until visible, including during background audio.
+        appModel.isNowPlayingPresented && scenePhase == .active ? appModel.playback.position : nil
     }
 
     private func updateScrubbing(_ editing: Bool) {

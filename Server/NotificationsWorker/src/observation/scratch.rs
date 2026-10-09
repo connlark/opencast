@@ -8,13 +8,113 @@ use super::{
     snapshot::Page,
     store::{fault, Store},
 };
+use std::{cell::RefCell, rc::Rc};
 use worker::{Bucket, MultipartUpload, Range, Result, UploadedPart};
 
 /// Buffered bytes that stay in the isolate. R2 requires equal parts of at least
 /// 5 MiB, so this is also the exact scratch part size. It is R2's minimum: a
 /// part is briefly held twice (Wasm and the runtime's copy) while it uploads.
-pub const BUFFER_BYTES: usize = 5 * 1024 * 1024;
+/// The retained feed body uses the same constant, so both spill the same way.
+pub const BUFFER_BYTES: usize = super::body::BODY_BUFFER_BYTES;
 pub const PREFIX: &str = "scratch/";
+
+/// One private multipart scratch upload. Its first part creates it under a
+/// fresh `scratch/{feed}/{uuid}` key; parts are numbered from 1 in push order.
+#[derive(Default)]
+pub struct Upload {
+    started: Option<(String, Rc<MultipartUpload>)>,
+    parts: Vec<UploadedPart>,
+}
+impl Upload {
+    /// The scratch key, once the first part has created the upload.
+    pub fn key(&self) -> Option<&str> {
+        self.started.as_ref().map(|(key, _)| key.as_str())
+    }
+}
+/// Shared, so whoever owns the scan (not only the future that is uploading a
+/// part, which a deadline may drop) keeps the handle that aborts it. No borrow
+/// is ever held across an await.
+pub type Spill = Rc<RefCell<Upload>>;
+
+/// Uploads `part` as the next part of `spill`, creating the upload first.
+pub async fn push_part(spill: &Spill, bucket: &Bucket, feed_id: &str, part: Vec<u8>) -> Result<()> {
+    let started = spill
+        .borrow()
+        .started
+        .as_ref()
+        .map(|(_, upload)| upload.clone());
+    let upload = match started {
+        Some(upload) => upload,
+        None => {
+            let key = format!("{PREFIX}{feed_id}/{}", crate::delivery::db::id());
+            let upload = Rc::new(bucket.create_multipart_upload(&key).execute().await?);
+            spill.borrow_mut().started = Some((key, upload.clone()));
+            upload
+        }
+    };
+    upload_next(spill, &upload, part).await
+}
+/// Uploads the last part of a started upload. R2 requires every other part to
+/// be the same size; only this one may be shorter.
+pub async fn push_final_part(spill: &Spill, part: Vec<u8>) -> Result<()> {
+    let started = spill
+        .borrow()
+        .started
+        .as_ref()
+        .map(|(_, upload)| upload.clone());
+    let upload = started.ok_or_else(|| fault("scratch_missing"))?;
+    upload_next(spill, &upload, part).await
+}
+async fn upload_next(spill: &Spill, upload: &MultipartUpload, part: Vec<u8>) -> Result<()> {
+    let number =
+        u16::try_from(spill.borrow().parts.len() + 1).map_err(|_| fault("scratch_parts"))?;
+    let uploaded = upload.upload_part(number, part).await?;
+    spill.borrow_mut().parts.push(uploaded);
+    Ok(())
+}
+/// Best effort: an upload that cannot be aborted still expires.
+pub async fn abort(spill: &Spill) {
+    let started = {
+        let mut upload = spill.borrow_mut();
+        upload.parts.clear();
+        upload.started.take()
+    };
+    if let Some((_, upload)) = started {
+        if upload.abort().await.is_err() {
+            worker::console_warn!(
+                "{}",
+                serde_json::json!({"event":"feed_scratch_abort_failed"})
+            );
+        }
+    }
+}
+/// Completes the upload into an object and returns its key; `None` when no
+/// part was ever uploaded. Completing spends the handle, so a failed
+/// completion is aborted through a resumed one (best effort, as `abort`).
+pub async fn complete(spill: &Spill, bucket: &Bucket) -> Result<Option<String>> {
+    let (started, parts) = {
+        let mut upload = spill.borrow_mut();
+        (upload.started.take(), std::mem::take(&mut upload.parts))
+    };
+    let Some((key, upload)) = started else {
+        return Ok(None);
+    };
+    let upload = Rc::try_unwrap(upload).map_err(|_| fault("scratch_upload_busy"))?;
+    let id = upload.upload_id().await;
+    if let Err(error) = upload.complete(parts).await {
+        let resumed = bucket.resume_multipart_upload(key, id).map(|upload| {
+            Rc::new(RefCell::new(Upload {
+                started: Some((String::new(), Rc::new(upload))),
+                parts: vec![],
+            }))
+        });
+        if let Ok(resumed) = resumed {
+            abort(&resumed).await;
+        }
+        return Err(error);
+    }
+    Ok(Some(key))
+}
 
 #[derive(Default)]
 pub struct Pending {
@@ -22,8 +122,7 @@ pub struct Pending {
     /// Byte length and record count of every page, in scan order.
     pages: Vec<(usize, usize)>,
     spilled: usize,
-    upload: Option<(String, MultipartUpload)>,
-    parts: Vec<UploadedPart>,
+    upload: Spill,
 }
 impl Pending {
     pub async fn push(
@@ -36,16 +135,9 @@ impl Pending {
         self.pages.push((bytes.len(), count));
         self.buffer.extend(bytes);
         while self.buffer.len() >= BUFFER_BYTES {
-            if self.upload.is_none() {
-                let key = format!("{PREFIX}{feed_id}/{}", crate::delivery::db::id());
-                let upload = bucket.create_multipart_upload(&key).execute().await?;
-                self.upload = Some((key, upload));
-            }
             let rest = self.buffer.split_off(BUFFER_BYTES);
             let part = std::mem::replace(&mut self.buffer, rest);
-            let number = u16::try_from(self.parts.len() + 1).map_err(|_| fault("scratch_parts"))?;
-            let (_, upload) = self.upload.as_ref().expect("scratch upload");
-            self.parts.push(upload.upload_part(number, part).await?);
+            push_part(&self.upload, bucket, feed_id, part).await?;
             self.spilled += BUFFER_BYTES;
         }
         Ok(())
@@ -54,28 +146,13 @@ impl Pending {
     pub async fn discard(&mut self) {
         self.buffer = vec![];
         self.pages.clear();
-        self.parts.clear();
-        if let Some((_, upload)) = self.upload.take() {
-            // Best effort: an upload that cannot be aborted still expires.
-            if upload.abort().await.is_err() {
-                worker::console_warn!(
-                    "{}",
-                    serde_json::json!({"event":"feed_scratch_abort_failed"})
-                );
-            }
-        }
+        abort(&self.upload).await;
     }
     /// A change is proved and the store holds its lease: every page becomes an
     /// ordinary reserved, verified spool page, in its original order.
     pub async fn materialize(mut self, store: &mut Store) -> Result<Vec<Page>> {
         let mut spool = vec![];
-        let scratch = match self.upload.take() {
-            Some((key, upload)) => {
-                upload.complete(std::mem::take(&mut self.parts)).await?;
-                Some(key)
-            }
-            None => None,
-        };
+        let scratch = complete(&self.upload, &store.bucket).await?;
         let mut offset = 0;
         let mut window: (usize, Vec<u8>) = (0, vec![]);
         for (length, count) in std::mem::take(&mut self.pages) {
@@ -111,7 +188,7 @@ impl Pending {
         Ok(spool)
     }
 }
-async fn read(bucket: &Bucket, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
+pub async fn read(bucket: &Bucket, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
     let bytes = bucket
         .get(key)
         .range(Range::OffsetWithLength {

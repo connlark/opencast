@@ -79,22 +79,31 @@ fn expand_hash(value: &str) -> Result<String> {
     }
     Ok(hex::encode(bytes))
 }
+/// The episode's notification fingerprint as bytes; candidates carry its hex.
+fn fingerprint(episode: &ParsedEpisode) -> Option<Hash> {
+    feed_identity::episode_notification_fingerprint_hash(
+        feed_identity::EpisodeNotificationFingerprintInput {
+            title: &episode.title,
+            guid: episode.guid.as_deref(),
+            audio_url: episode.audio_url.as_deref(),
+            duration_seconds: episode.duration_seconds,
+            summary: episode.summary.as_deref(),
+            show_notes_html: episode.show_notes_html.as_deref(),
+            episode_id: &episode.id,
+        },
+    )
+}
 impl Candidate {
-    fn from_episode(episode: &ParsedEpisode, raw_date: Option<&str>, at: i64) -> Self {
+    fn from_episode(
+        episode: &ParsedEpisode,
+        raw_date: Option<&str>,
+        at: i64,
+        fingerprint: Option<Hash>,
+    ) -> Self {
         Self {
             ordinal: 0,
             episode_id: episode.id.clone(),
-            fingerprint: feed_identity::episode_notification_fingerprint(
-                feed_identity::EpisodeNotificationFingerprintInput {
-                    title: &episode.title,
-                    guid: episode.guid.as_deref(),
-                    audio_url: episode.audio_url.as_deref(),
-                    duration_seconds: episode.duration_seconds,
-                    summary: episode.summary.as_deref(),
-                    show_notes_html: episode.show_notes_html.as_deref(),
-                    episode_id: &episode.id,
-                },
-            ),
+            fingerprint: fingerprint.map(hex::encode),
             title: bounded(&episode.title, 512),
             // Prose first, budget second: bounding the raw markup let a long
             // `<a href>` swallow the summary (see `notification_text`).
@@ -141,6 +150,108 @@ pub enum Finished {
     Published(bool),
 }
 
+/// How a probe ended.
+pub enum ProbeFinished {
+    /// The published membership was reproduced and settled; `true` when the
+    /// fenced checkpoint/schedule commit applied.
+    Unchanged(bool),
+    /// The membership differs: the full observation replays the retained body
+    /// with this store, whose publisher request is already recorded.
+    Changed(Box<Store>),
+}
+
+/// The probe of a scan whose published digest is bound to its snapshot: only the
+/// exact identity and fingerprint sets and credible dates the digest compare
+/// needs. No prose, no item keys, no spool, no storage; the body is retained
+/// by its reader for the full observation a changed digest still needs.
+pub struct Probe {
+    pub store: Store,
+    identities: Vec<Hash>,
+    fingerprints: Vec<Hash>,
+    credible_dates: Vec<i64>,
+}
+impl Probe {
+    pub fn new(store: Store) -> Self {
+        Self {
+            store,
+            identities: vec![],
+            fingerprints: vec![],
+            credible_dates: vec![],
+        }
+    }
+    fn push(&mut self, episode: &ParsedEpisode) {
+        if let Some(date) = episode
+            .published_at
+            .filter(|d| *d <= self.store.started_at + 600)
+        {
+            if !self.credible_dates.contains(&date) {
+                self.credible_dates.push(date.min(self.store.started_at));
+                self.credible_dates.sort_unstable_by(|a, b| b.cmp(a));
+                self.credible_dates.truncate(10);
+            }
+        }
+        if self.identities.len() == self.identities.capacity() {
+            self.identities.reserve_exact(snapshot::HASHES_PER_PAGE);
+        }
+        self.identities.push(snapshot::identity(&episode.id));
+        if let Some(fingerprint) = fingerprint(episode) {
+            if self.fingerprints.len() == self.fingerprints.capacity() {
+                self.fingerprints.reserve_exact(snapshot::HASHES_PER_PAGE);
+            }
+            self.fingerprints.push(fingerprint);
+        }
+    }
+    /// `Observer::finish`'s unchanged test and settle, before any spool work.
+    pub async fn finish(
+        mut self,
+        etag: Option<&str>,
+        modified: Option<&str>,
+        validator_url: &str,
+    ) -> Result<ProbeFinished> {
+        self.identities.sort_unstable();
+        self.identities.dedup();
+        self.fingerprints.sort_unstable();
+        self.fingerprints.dedup();
+        let digest = snapshot::semantic_digest(&self.identities, &self.fingerprints);
+        if !self.store.unchanged_from(&digest) {
+            return Ok(ProbeFinished::Changed(Box::new(self.store)));
+        }
+        let mut dates = self.credible_dates.clone();
+        let publish_cadence = crate::poll_scheduling::publish_cadence_seconds(&mut dates);
+        let credible_cadence = crate::polling::policy::cadence(&self.credible_dates);
+        let settle = self.store.poll.as_ref().map(|poll| {
+            poll.settle(
+                crate::delivery::db::now(),
+                "unchanged",
+                self.credible_dates.first().copied(),
+                credible_cadence,
+                publish_cadence,
+            )
+        });
+        Ok(ProbeFinished::Unchanged(
+            self.store
+                .unchanged(
+                    etag,
+                    modified,
+                    Some(validator_url),
+                    Some(&digest),
+                    settle.as_ref(),
+                )
+                .await?,
+        ))
+    }
+}
+impl EpisodeSink for Probe {
+    async fn item(
+        &mut self,
+        episode: &ParsedEpisode,
+        _raw_date: Option<&str>,
+    ) -> std::result::Result<(), RSSParseError> {
+        self.push(episode);
+        Ok(())
+    }
+}
+
 pub struct Observer {
     pub store: Store,
     pending: super::scratch::Pending,
@@ -175,27 +286,26 @@ impl Observer {
                 self.credible_dates.truncate(10);
             }
         }
-        let mut candidate = Candidate::from_episode(episode, raw, self.store.first_observed_at);
-        candidate.ordinal = self.identities.len();
+        let fingerprint = fingerprint(episode);
+        let ordinal = self.identities.len();
         if self.identities.len() == self.identities.capacity() {
             self.identities.reserve_exact(snapshot::HASHES_PER_PAGE);
         }
         self.identities.push(snapshot::identity(&episode.id));
-        if let Some(fingerprint) = &candidate.fingerprint {
+        if let Some(fingerprint) = fingerprint {
             if self.fingerprints.len() == self.fingerprints.capacity() {
                 self.fingerprints.reserve_exact(snapshot::HASHES_PER_PAGE);
             }
-            self.fingerprints.push(
-                hex::decode(fingerprint)
-                    .map_err(|_| fault("fingerprint_hash"))?
-                    .try_into()
-                    .map_err(|_| fault("fingerprint_hash"))?,
-            );
+            self.fingerprints.push(fingerprint);
         }
-        // A quiet baseline needs only fixed-width hashes, never item metadata.
+        // A quiet baseline needs only fixed-width hashes, never item metadata
+        // or prose.
         if self.store.is_baseline() {
             return Ok(());
         }
+        let mut candidate =
+            Candidate::from_episode(episode, raw, self.store.first_observed_at, fingerprint);
+        candidate.ordinal = ordinal;
         if self.item_keys.capacity() - self.item_keys.len() < 65 {
             self.item_keys.reserve_exact(65 * 2000);
         }
@@ -264,6 +374,7 @@ impl Observer {
         feed_url: &str,
         etag: Option<&str>,
         modified: Option<&str>,
+        validator_url: &str,
     ) -> Result<Finished> {
         self.flush_spool().await?;
         self.identities.sort_unstable();
@@ -289,7 +400,13 @@ impl Observer {
             });
             return Ok(Finished::Unchanged(
                 self.store
-                    .unchanged(etag, modified, Some(&digest), settle.as_ref())
+                    .unchanged(
+                        etag,
+                        modified,
+                        Some(validator_url),
+                        Some(&digest),
+                        settle.as_ref(),
+                    )
                     .await?,
             ));
         }
@@ -339,6 +456,7 @@ impl Observer {
                 metadata,
                 etag,
                 modified,
+                Some(validator_url),
                 self.store.first_observed_at,
             );
             self.store.checkpoint(&preparation).await?;
@@ -361,6 +479,7 @@ impl Observer {
                 &metadata,
                 etag,
                 modified,
+                Some(validator_url),
             )
             .await
             .map(Finished::Published)

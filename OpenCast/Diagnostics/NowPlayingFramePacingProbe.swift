@@ -2,18 +2,18 @@ import Foundation
 
 /// Reports the corresponding presentation state and optional frame-probe marker.
 ///
-/// Frame sampling requires the DEBUG probe (`--opencast-frame-probe` /
-/// `OPENCAST_FRAME_PROBE=1`). It measures presentation smoothness independent
+/// Frame sampling requires DEBUG or OPENCAST_PERFORMANCE_PROBES and opt-in
+/// (`--opencast-frame-probe` / `OPENCAST_FRAME_PROBE=1`). It measures smoothness independent
 /// of screen recording, which warms the compositor and masks first-frame stalls.
 @inline(always)
 func nowPlayingProbeMark(_ label: String) {
     PerformanceStateReporter.shared.nowPlayingMarker(label)
-    #if DEBUG
+    #if DEBUG || OPENCAST_PERFORMANCE_PROBES
     NowPlayingFramePacingProbe.shared.mark(label)
     #endif
 }
 
-#if DEBUG
+#if DEBUG || OPENCAST_PERFORMANCE_PROBES
 import QuartzCore
 import os
 
@@ -37,6 +37,8 @@ final class NowPlayingFramePacingProbe: NSObject {
     private var events: [(label: String, time: Double)] = []
     private var flushDeadline: Double?
     private var sessionIndex = 0
+    private(set) var isWindowOpen = false
+    private var measurementWindowIndex = 0
 
     private static let flushQuietWindow = 1.5
     private static let analysisTail = 0.30
@@ -63,8 +65,25 @@ final class NowPlayingFramePacingProbe: NSObject {
 
         events.append((label, CACurrentMediaTime()))
         Self.signposter.emitEvent("mark", "\(label, privacy: .public)")
-        flushDeadline = CACurrentMediaTime() + Self.flushQuietWindow
+        if !isWindowOpen {
+            flushDeadline = CACurrentMediaTime() + Self.flushQuietWindow
+        }
         onMark?(label)
+    }
+
+    func toggleMeasurementWindow() {
+        guard isEnabled else { return }
+        if isWindowOpen {
+            isWindowOpen = false
+            mark("probe-window-end-\(measurementWindowIndex)")
+        } else {
+            // Keep launch/maintenance events out of the measured scroll session.
+            flush()
+            isWindowOpen = true
+            flushDeadline = nil
+            measurementWindowIndex += 1
+            mark("probe-window-start-\(measurementWindowIndex)")
+        }
     }
 
     @objc private func onFrame(_ link: CADisplayLink) {

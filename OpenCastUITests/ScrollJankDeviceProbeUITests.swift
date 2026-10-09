@@ -111,14 +111,6 @@ final class ScrollJankDeviceProbeUITests: XCTestCase {
         return sessions.count
     }
 
-    @MainActor
-    private func frameSummaryValue(in app: XCUIApplication) -> String {
-        let element = app.descendants(matching: .any)["Frame Pacing Summary"]
-        guard element.waitForExistence(timeout: 10) else {
-            return "frame probe element missing"
-        }
-        return (element.value as? String) ?? ""
-    }
 
     // MARK: - Load-state arrangement
 

@@ -6,9 +6,16 @@ import ImageIO
 nonisolated struct ArtworkPreviewGenerator {
     typealias ThreadObserver = @Sendable (_ isMainThread: Bool) -> Void
 
+    private static let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
+        CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+    )
+
+    /// Every preview uses the same source thumbnail, independent of display size.
+    /// `sourceHash` is the SHA-256 of these bytes when already computed by the loader.
     @concurrent
     static func generate(
         from data: Data,
+        sourceHash: String? = nil,
         canonicalArtworkURLKey: String,
         threadObserver: ThreadObserver? = nil
     ) async -> ArtworkPreview? {
@@ -17,7 +24,19 @@ nonisolated struct ArtworkPreviewGenerator {
         }
 
         threadObserver?(isRunningOnMainThread())
-        return makePreview(from: data, canonicalArtworkURLKey: canonicalArtworkURLKey)
+        return makePreview(
+            from: data,
+            sourceHash: sourceHash,
+            canonicalArtworkURLKey: canonicalArtworkURLKey
+        )
+    }
+
+    static func sourceHash(for data: Data) -> String {
+        let digest = SHA256.hash(data: data)
+        return digest.map { byte in
+            let hex = String(byte, radix: 16)
+            return hex.count == 1 ? "0\(hex)" : hex
+        }.joined()
     }
 
     private nonisolated static func isRunningOnMainThread() -> Bool {
@@ -26,8 +45,32 @@ nonisolated struct ArtworkPreviewGenerator {
 
     private nonisolated static func makePreview(
         from data: Data,
+        sourceHash: String?,
         canonicalArtworkURLKey: String
     ) -> ArtworkPreview? {
+        guard let image = thumbnail(from: data) else {
+            return nil
+        }
+        let previewSize = previewPixelSize(for: image)
+        guard let rgbData = makeRGBGrid(
+            from: image,
+            width: previewSize.width,
+            height: previewSize.height
+        ) else {
+            return nil
+        }
+
+        return ArtworkPreview(
+            version: ArtworkPreview.currentVersion,
+            canonicalArtworkURLKey: canonicalArtworkURLKey,
+            sourceHash: sourceHash ?? Self.sourceHash(for: data),
+            pixelWidth: previewSize.width,
+            pixelHeight: previewSize.height,
+            rgbData: rgbData
+        )
+    }
+
+    private nonisolated static func thumbnail(from data: Data) -> CGImage? {
         let sourceOptions = [
             kCGImageSourceShouldCache: false
         ] as CFDictionary
@@ -41,27 +84,7 @@ nonisolated struct ArtworkPreviewGenerator {
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: 64
         ] as CFDictionary
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
-            return nil
-        }
-
-        let previewSize = previewPixelSize(for: image)
-        guard let rgbData = makeRGBGrid(
-            from: image,
-            width: previewSize.width,
-            height: previewSize.height
-        ) else {
-            return nil
-        }
-
-        return ArtworkPreview(
-            version: ArtworkPreview.currentVersion,
-            canonicalArtworkURLKey: canonicalArtworkURLKey,
-            sourceHash: sourceHash(for: data),
-            pixelWidth: previewSize.width,
-            pixelHeight: previewSize.height,
-            rgbData: rgbData
-        )
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions)
     }
 
     private nonisolated static func previewPixelSize(for image: CGImage) -> (width: Int, height: Int) {
@@ -88,9 +111,6 @@ nonisolated struct ArtworkPreviewGenerator {
         let bytesPerPixel = 4
         let bytesPerRow = width * bytesPerPixel
         var rgbaPixels = [UInt8](repeating: 0, count: height * bytesPerRow)
-        let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
-            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
-        )
 
         let didDraw = rgbaPixels.withUnsafeMutableBytes { buffer in
             guard let context = CGContext(
@@ -134,13 +154,5 @@ nonisolated struct ArtworkPreviewGenerator {
             width: scaledSize.width,
             height: scaledSize.height
         )
-    }
-
-    private nonisolated static func sourceHash(for data: Data) -> String {
-        let digest = SHA256.hash(data: data)
-        return digest.map { byte in
-            let hex = String(byte, radix: 16)
-            return hex.count == 1 ? "0\(hex)" : hex
-        }.joined()
     }
 }

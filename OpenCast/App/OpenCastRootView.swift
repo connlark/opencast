@@ -42,7 +42,6 @@ struct OpenCastRootView: View {
 
     var body: some View {
         OpenCastRootLayerView(
-            isNowPlayingPresented: appModel.isNowPlayingPresented,
             onDismissNowPlaying: dismissNowPlaying,
             onOpenCurrentEpisode: openCurrentEpisodeFromNowPlaying,
             onOpenCurrentPodcast: openCurrentPodcastFromNowPlaying,
@@ -52,7 +51,6 @@ struct OpenCastRootView: View {
             OpenCastTabRootView(
                 selectedTab: $selectedTab,
                 navigationPaths: $navigationPaths,
-                isNowPlayingPresented: appModel.isNowPlayingPresented,
                 onAdd: presentAddPodcast,
                 onOpenUpNext: presentUpNextQueue,
                 onPresentNowPlaying: presentNowPlaying

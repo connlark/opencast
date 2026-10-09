@@ -8,6 +8,8 @@ mod execute;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod origin;
 pub mod policy;
+#[cfg(any(target_arch = "wasm32", test))]
+mod rollup_sql;
 #[cfg(target_arch = "wasm32")]
 mod runtime;
 #[cfg(target_arch = "wasm32")]

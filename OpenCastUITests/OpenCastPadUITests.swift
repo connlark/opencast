@@ -289,6 +289,7 @@ final class OpenCastPadUITests: XCTestCase {
     @MainActor
     func testSeededPadMiniPlayerAccessorySurvivesTabSwitchAndExpands() throws {
         try skipUnlessPad()
+        defer { XCUIDevice.shared.orientation = .portrait }
 
         let app = makeSeededApp()
         app.launch()
@@ -299,6 +300,7 @@ final class OpenCastPadUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         dragDismissNowPlayingOverlay(in: app)
+        XCUIDevice.shared.orientation = .landscapeLeft
 
         openLibrary(in: app)
         assertExists(app.buttons["Open Now Playing"], named: "mini-player after Library switch")
@@ -309,6 +311,11 @@ final class OpenCastPadUITests: XCTestCase {
         let miniPlayer = app.buttons["Open Now Playing"]
         assertExists(miniPlayer, named: "mini-player after returning to Inbox")
         miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        attachSmokeScreenshot(named: "ipad_player_reopened_after_hidden_rotation")
+        dragDismissNowPlayingOverlay(in: app)
+        XCUIDevice.shared.orientation = .portrait
+        app.buttons["Open Now Playing"].tap()
         assertNowPlayingOverlay(in: app)
     }
 

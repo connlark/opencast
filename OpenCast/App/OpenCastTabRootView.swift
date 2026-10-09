@@ -9,7 +9,6 @@ struct OpenCastTabRootView: View {
 
     @Binding var selectedTab: AppSection
     @Binding var navigationPaths: AppNavigationPaths
-    let isNowPlayingPresented: Bool
     let onAdd: () -> Void
     let onOpenUpNext: () -> Void
     let onPresentNowPlaying: () -> Void
@@ -173,12 +172,10 @@ struct OpenCastTabRootView: View {
     private var tabAccessory: some View {
         if appModel.playback.currentEpisode != nil {
             MiniPlayerView(
-                isNowPlayingPresented: isNowPlayingPresented,
                 onExpand: onPresentNowPlaying
             )
         } else {
             UpNextAccessoryView(
-                isNowPlayingPresented: isNowPlayingPresented,
                 onOpenQueue: onOpenUpNext
             )
         }
