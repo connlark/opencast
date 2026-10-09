@@ -34,9 +34,7 @@ struct AirPlayRoutePickerButton: View {
         }
 
         if disablesAnimations {
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
+            withTransaction(\.disablesAnimations, true) {
                 updateRoute(route)
             }
         } else {

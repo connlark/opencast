@@ -9,10 +9,10 @@
 # Balanced by measured per-test wall-clock (log 'passed (N seconds)' lines), NOT the
 # .xcresult duration field — that reports 0.0s for screenshot-matrix tests. Regenerate
 # with scripts/gen-ui-test-shards.py <run-dir> after a fresh run.
-# Measured baseline: shard1 960s + 3 unmeasured (40 tests) |
-# shard2 984s + 2 unmeasured (41 tests) | serial 37s + 5 unmeasured (6 tests)
+# Current assignments: shard1 74 tests | shard2 64 tests | serial 6 tests | exclude 18 tests
+# Timing estimates are omitted until these scenarios are remeasured.
 
-# --- shard1 (est 960s + 12 unmeasured) ---
+# --- shard1 ---
 shard1 OpenCastUITests/OpenCastUITests/testAddPodcastRSSClipboardPrefillScreenshots
 shard1 OpenCastUITests/OpenCastUITests/testCloudUnavailableDetectPassOffersOneTapOnDeviceFallback
 shard1 OpenCastUITests/OpenCastUITests/testEpisodeMenuShowsRemoteSurfacesOnFreshLaunchWithoutSettings
@@ -30,6 +30,7 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededAdDetectionQueueCapDeferredShow
 shard1 OpenCastUITests/OpenCastUITests/testSeededAdDetectionQueueShowsFinishedFailures
 shard1 OpenCastUITests/OpenCastUITests/testSeededAutoSkipPillTapUndoesSkipAndZonePlaysThrough
 shard1 OpenCastUITests/OpenCastUITests/testSeededAutoSkipToggleOffLeavesZonesVisibleAndSkippingInert
+shard1 OpenCastUITests/OpenCastUITests/testSeededAutoSkipWhileCollapsedDoesNotReplayOnOpening
 shard1 OpenCastUITests/OpenCastUITests/testSeededMiniPlayerUsesConfiguredSkipInterval
 shard1 OpenCastUITests/OpenCastUITests/testSeededBadAudioURLShowsPlaybackFailedAlert
 shard1 OpenCastUITests/OpenCastUITests/testSeededCompactLibraryEpisodeBackReturnsToPodcast
@@ -52,10 +53,10 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingAdFreePassControlStat
 shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingArtworkSlideDragDoesNotDismissOrMoveCard
 shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingArtworkTapClosesSoundLabPanel
 shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingArtworkTapOpensSoundLabPanel
-shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingReopenResetsTransientControls
 shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingCanDismissAfterBackgroundForeground
 shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingCanDismissFromContentArea
 shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingProgressCanScrub
+shard1 OpenCastUITests/OpenCastUITests/testSeededNowPlayingReopenResetsTransientControls
 shard1 OpenCastUITests/OpenCastUITests/testSeededPodcastAutoDetectToggleConfirmsAndEnables
 shard1 OpenCastUITests/OpenCastUITests/testSeededShowNotesTimestampTapStartsPlaybackAtThatTime
 shard1 OpenCastUITests/OpenCastUITests/testSeededStaleAdAnalysisDoesNotAnnotateTranscriptRows
@@ -86,7 +87,7 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededPlaylistPlayWithEmptyQueueLoads
 shard1 OpenCastUITests/OpenCastUITests/testSeededPlaylistSourceShowsInMiniPlayerNowPlayingAndUpNextSheet
 shard1 OpenCastUITests/OpenCastUITests/testSeededSmartPlaylistChipsEditRulesInPlaceAndPlay
 
-# --- shard2 (est 984s + 7 unmeasured) ---
+# --- shard2 ---
 shard2 OpenCastUITests/OpenCastUITests/testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty
 shard2 OpenCastUITests/OpenCastUITests/testEmptyLibraryNamesTheICloudAccountCheckWhileItIsPending
 shard1 OpenCastUITests/OpenCastUITests/testEmptyLibraryStopsWaitingForAnICloudAccountCheckThatDoesNotAnswer
@@ -127,6 +128,7 @@ shard2 OpenCastUITests/OpenCastUITests/testSeededPodcastEpisodeContextMenuPeekOp
 shard2 OpenCastUITests/OpenCastUITests/testSeededPodcastPlaybackSkipSettingsValidateSaveAndReset
 shard2 OpenCastUITests/OpenCastUITests/testSeededPodcastPullDownOpensSearch
 shard2 OpenCastUITests/OpenCastUITests/testSeededPodcastSearchKeepsResultsFrontAndCenter
+shard2 OpenCastUITests/OpenCastUITests/testSeededSoundLabStaysOpenWhenQueueAdvances
 shard2 OpenCastUITests/OpenCastUITests/testSeededSpanAtStartAutoSkipStartsAtZoneEnd
 shard2 OpenCastUITests/OpenCastUITests/testSeededStaleAdAnalysisSkipsNothingAndOffersRerun
 shard2 OpenCastUITests/OpenCastUITests/testSeededTranscriptWithoutAdAnalysisTokenHidesAnalyzeControls

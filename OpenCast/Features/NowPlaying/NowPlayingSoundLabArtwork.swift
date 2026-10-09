@@ -29,6 +29,7 @@ struct NowPlayingSoundLabArtwork: View {
 
     var body: some View {
         let request = artworkRequest
+        let loadingRequest = appModel.isNowPlayingPresented ? request : nil
         let artworkImage = loadedArtworkImage(for: request)
 
         ZStack {
@@ -86,18 +87,16 @@ struct NowPlayingSoundLabArtwork: View {
         .onChange(of: appModel.isNowPlayingPresented) { _, isPresented in
             if !isPresented { resetInteraction() }
         }
-        .onChange(of: appModel.playback.currentEpisode?.id) { _, _ in
-            resetInteraction()
-        }
-        .task(id: request) {
-            _ = await imageState.loadArtwork(for: request, cacheKind: .episode)
+        .task(id: loadingRequest) {
+            // Dismissal pauses loading without dropping the displayed bitmap.
+            // Reopening can render it even after the shared cache evicts it.
+            guard let loadingRequest else { return }
+            _ = await imageState.loadArtwork(for: loadingRequest, cacheKind: .episode)
         }
     }
 
     private func resetInteraction() {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
+        withTransaction(\.disablesAnimations, true) {
             interactionState = .closed
             revealProgress = 0
             ignoresCurrentDrag = false
@@ -222,9 +221,7 @@ struct NowPlayingSoundLabArtwork: View {
         let baseProgress: CGFloat = isOpen ? 1 : 0
         let verticalAssist = max(0, -translation.height) / (revealDistance * 4)
         let nextProgress = (baseProgress - translation.width / revealDistance + verticalAssist).clamped01
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
+        withTransaction(\.disablesAnimations, true) {
             revealProgress = nextProgress
         }
     }

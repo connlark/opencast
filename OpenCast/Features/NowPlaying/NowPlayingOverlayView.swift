@@ -8,7 +8,6 @@ struct NowPlayingOverlayView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
 
-    let isPresented: Bool
     let onDismissed: () -> Void
     let onOpenEpisode: () -> Void
     let onOpenPodcast: () -> Void
@@ -23,6 +22,8 @@ struct NowPlayingOverlayView: View {
     @State private var isContentScrolledToTop = true
 
     private static let accessibilityTitle = "Now Playing"
+
+    private var isPresented: Bool { appModel.isNowPlayingPresented }
 
     var body: some View {
         GeometryReader { proxy in
@@ -69,6 +70,7 @@ struct NowPlayingOverlayView: View {
                 .scaleEffect(cardScale(progress: progress), anchor: .bottom)
                 .offset(y: currentOffset)
                 .accessibilityElement(children: .contain)
+                // XCTest can still resolve a retained container while it is hidden.
                 .accessibilityLabel(isPresented ? Text(Self.accessibilityTitle) : Text(""))
                 .accessibilityIdentifier(isPresented ? Self.accessibilityTitle : "")
                 .accessibilityHidden(!isPresented)
@@ -89,7 +91,7 @@ struct NowPlayingOverlayView: View {
                 if !isPresented { prepareForHiddenPresentation(containerHeight: proxy.size.height) }
             }
             .onChange(of: appModel.playback.currentEpisode?.id.rawValue) { _, _ in
-                resetPresentedEpisode(isPresented: isPresented, containerHeight: proxy.size.height)
+                if !isPresented { prepareForHiddenPresentation(containerHeight: proxy.size.height) }
             }
             .onChange(of: scenePhase) { _, newPhase in
                 handleScenePhaseChange(newPhase)
@@ -97,6 +99,7 @@ struct NowPlayingOverlayView: View {
             .opacity(isPresented ? 1 : 0)
         }
         .ignoresSafeArea()
+        .allowsHitTesting(isPresented)
     }
 
     private var playerSurface: Color {
@@ -213,9 +216,7 @@ struct NowPlayingOverlayView: View {
     }
 
     private func prepareForHiddenPresentation(containerHeight: CGFloat) {
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
+        withTransaction(\.disablesAnimations, true) {
             offsetY = reduceMotion ? 0 : containerHeight
             resetOverlayInteractionState()
         }
@@ -226,19 +227,6 @@ struct NowPlayingOverlayView: View {
             prepareForPresentation(containerHeight: containerHeight)
         } else {
             prepareForHiddenPresentation(containerHeight: containerHeight)
-        }
-    }
-
-    private func resetPresentedEpisode(isPresented: Bool, containerHeight: CGFloat) {
-        guard !isFinishingDismissal, !isTrackingDismissDrag else {
-            return
-        }
-
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            offsetY = reduceMotion || isPresented ? 0 : containerHeight
-            resetNonDismissInteractionState()
         }
     }
 
@@ -332,9 +320,7 @@ struct NowPlayingOverlayView: View {
             dismissDragLatchBaselineHeight = value.translation.height
         }
 
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
+        withTransaction(\.disablesAnimations, true) {
             offsetY = reduceMotion ? 0 : max(value.translation.height - dismissDragLatchBaselineHeight, 0)
         }
     }

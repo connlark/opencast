@@ -315,7 +315,9 @@ final class OpenCastPadUITests: XCTestCase {
         attachSmokeScreenshot(named: "ipad_player_reopened_after_hidden_rotation")
         dragDismissNowPlayingOverlay(in: app)
         XCUIDevice.shared.orientation = .portrait
-        app.buttons["Open Now Playing"].tap()
+        let portraitMiniPlayer = app.buttons["Open Now Playing"]
+        assertExists(portraitMiniPlayer, named: "mini-player after returning to portrait")
+        portraitMiniPlayer.tap()
         assertNowPlayingOverlay(in: app)
     }
 

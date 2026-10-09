@@ -1218,6 +1218,11 @@ final class OpenCastUITests: XCTestCase {
         fifteenMinutes.tap()
         assertElementValueNotEqual(sleepTimerButton, "Off", named: "armed Sleep Timer control")
 
+        dismissNowPlayingOverlay(in: app)
+        app.buttons["Open Now Playing"].tap()
+        assertNowPlayingOverlay(in: app)
+        assertElementValueNotEqual(sleepTimerButton, "Off", named: "Sleep Timer after reopening the player")
+
         sleepTimerButton.tap()
         assertExists(fifteenMinutes, named: "15 Minutes sleep option after reopening the sheet")
         XCTAssertTrue(fifteenMinutes.isSelected, "The armed preset should be marked as selected.")
@@ -2790,6 +2795,25 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededSoundLabStaysOpenWhenQueueAdvances() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true, audioDurationSeconds: 25)
+        app.launch()
+        openSeededNowPlayingSoundLab(in: app)
+
+        let title = app.buttons["Now Playing Episode Title"]
+        let advanced = NSPredicate(format: "label == %@", "Queued UI Episode 1")
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: advanced, object: title)], timeout: 35),
+            .completed,
+            "Natural completion should advance to the first queued episode"
+        )
+        XCTAssertTrue(nowPlayingSoundLabPanel(in: app).exists, "Auto-advance must preserve the open Sound Lab")
+        assertHittable(app.switches["Voice Boost"], named: "Voice Boost after auto-advance")
+        nowPlayingArtwork(in: app).tap()
+        assertDoesNotExist(nowPlayingSoundLabPanel(in: app), named: "Sound Lab after closing on the next episode")
+    }
+
+    @MainActor
     func testSeededSoundLabAdActionAcknowledgesBeforeHeldLaunchPreparation() throws {
         let app = makeSeededApp(seedsCompletedTranscript: true)
         app.launchArguments.append("-OPENCAST_REMOTE_TRANSCRIPTION_DEV")
@@ -3047,6 +3071,43 @@ final class OpenCastUITests: XCTestCase {
             "Seeded auto-skip should jump to the 4-9s zone end early, not merely arrive by normal playback."
         )
         attachSmokeScreenshot(named: "seeded_auto_skip_pill_and_position_jump")
+
+        assertDoesNotExist(autoSkipPill(in: app), named: "expired auto-skip feedback", timeout: 5)
+        dismissNowPlayingOverlay(in: app)
+        app.buttons["Open Now Playing"].tap()
+        assertNowPlayingOverlay(in: app)
+        XCTAssertFalse(autoSkipPill(in: app).exists, "Reopening must not replay the previous skip or offer stale Undo")
+    }
+
+    @MainActor
+    func testSeededAutoSkipWhileCollapsedDoesNotReplayOnOpening() throws {
+        let app = makeSeededApp(
+            seedsCompletedTranscript: true,
+            seedsCompletedAdAnalysis: true,
+            seedsEpisodeProgress: true
+        )
+        app.launchEnvironment["OPENCAST_SEED_EPISODE_PROGRESS_POSITION"] = "3"
+        app.launch()
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertExists(miniPlayer, named: "restored mini-player")
+        let play = app.buttons["Play"].firstMatch
+        assertHittable(play, named: "collapsed Play control")
+        play.tap()
+        assertExists(app.buttons["Pause"].firstMatch, named: "playing collapsed control")
+
+        // Let playback cross the seeded 4–9s zone while the card stays hidden.
+        let unexpectedlyPresented = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in self.playbackProgress(in: app).exists },
+            object: app
+        )
+        unexpectedlyPresented.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [unexpectedlyPresented], timeout: 6), .completed)
+
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        _ = waitForPlaybackElapsed(playbackProgress(in: app), atLeast: 9, timeout: 2)
+        XCTAssertFalse(autoSkipPill(in: app).exists, "A skip received while hidden must not announce when opening")
     }
 
     @MainActor

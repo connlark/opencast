@@ -16,7 +16,7 @@ struct OpenCastRootLayerView<Content: View>: View {
         onOpenCurrentPodcast: @escaping () -> Void,
         onOpenCurrentPlaylist: @escaping () -> Void,
         onStopPlayback: @escaping () -> Void,
-        @ViewBuilder content: @escaping () -> Content
+        @ViewBuilder content: () -> Content
     ) {
         self.onDismissNowPlaying = onDismissNowPlaying
         self.onOpenCurrentEpisode = onOpenCurrentEpisode
@@ -39,15 +39,12 @@ struct OpenCastRootLayerView<Content: View>: View {
             // and progress; dismissal resets its transient interaction state.
             if appModel.hasNowPlayingPresentationContent {
                 NowPlayingOverlayView(
-                    isPresented: isNowPlayingPresented,
                     onDismissed: onDismissNowPlaying,
                     onOpenEpisode: onOpenCurrentEpisode,
                     onOpenPodcast: onOpenCurrentPodcast,
                     onOpenPlaylist: onOpenCurrentPlaylist,
                     onStopPlayback: onStopPlayback
                 )
-                .allowsHitTesting(isNowPlayingPresented)
-                .accessibilityHidden(!isNowPlayingPresented)
                 .zIndex(1)
             }
 

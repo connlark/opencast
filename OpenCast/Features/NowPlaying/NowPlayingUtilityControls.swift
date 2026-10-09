@@ -3,6 +3,7 @@ import SwiftUI
 struct NowPlayingUtilityControls: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.scenePhase) private var scenePhase
 
     let rate: Float
     let onShowSpeed: () -> Void
@@ -38,17 +39,15 @@ struct NowPlayingUtilityControls: View {
         PlayerUtilitySpeedButton(rate: rate, action: onShowSpeed)
     }
 
-    @ViewBuilder
     private var sleepTimerButton: some View {
-        if appModel.isNowPlayingPresented, appModel.playback.sleepTimerMode != .off {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                sleepTimerButton(
-                    value: sleepTimerText(at: context.date),
-                    progress: sleepTimerProgress(at: context.date)
-                )
-            }
-        } else {
-            sleepTimerButton(value: "Off", progress: nil)
+        TimelineView(.animation(
+            minimumInterval: 1,
+            paused: !appModel.isNowPlayingPresented || scenePhase != .active || appModel.playback.sleepTimerMode == .off
+        )) { context in
+            sleepTimerButton(
+                value: sleepTimerText(at: context.date),
+                progress: sleepTimerProgress(at: context.date)
+            )
         }
     }
 
