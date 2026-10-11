@@ -35,6 +35,9 @@ public final class AVFoundationPlaybackController {
     public private(set) var duration: TimeInterval?
     public private(set) var progress: Double = 0
     public private(set) var progressBoundaryID = 0
+    /// Advances even when a command leaves the state unchanged, so a temporary
+    /// pause can yield to a later remote pause, route change, or sleep timer.
+    @ObservationIgnored public private(set) var playbackIntentRevision: UInt64 = 0
     public private(set) var rate: Float = 1
     public private(set) var sleepTimerEndsAt: Date?
     public private(set) var sleepTimerMode = PlaybackSleepTimerMode.off
@@ -175,6 +178,7 @@ public final class AVFoundationPlaybackController {
             throw OpenCastCoreError.missingAudioURL
         }
 
+        playbackIntentRevision &+= 1
         removeCurrentItemObservations()
         playbackPositionProtection.clear()
         voiceBoostTrackLoadTask?.cancel()
@@ -373,6 +377,7 @@ public final class AVFoundationPlaybackController {
             return
         }
 
+        playbackIntentRevision &+= 1
         let duration = resolvedDuration()
         if hasFinishedCurrentEpisode
             || (duration.map { snapshot.position >= $0 - 0.25 } ?? false)
@@ -414,6 +419,7 @@ public final class AVFoundationPlaybackController {
     }
 
     private func pause(reason: String) {
+        playbackIntentRevision &+= 1
         isPlaybackRequested = false
         shouldResumeAfterInterruption = false
         player.pause()
@@ -424,6 +430,7 @@ public final class AVFoundationPlaybackController {
     }
 
     public func unload() {
+        playbackIntentRevision &+= 1
         if snapshot.currentEpisode != nil {
             markProgressBoundary()
         }

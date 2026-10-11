@@ -253,6 +253,10 @@ struct EpisodeDetailView: View {
                     )
                 }
 
+                EpisodeNotesSection(episodeID: episode.episodeID, episodeTitle: episode.title, showTitle: episode.podcastTitle) { timestamp in
+                    seekToTimestamp(timestamp, episode: episode)
+                }
+
                 // Chapter source priority: embedded in the audio file, then
                 // the feed's declaration, then generated. Creator metadata
                 // wins (D3) at render time too: an analysis generated while

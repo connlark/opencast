@@ -125,6 +125,7 @@ final class DataNukeRunner {
         try Self.deleteAll(EpisodeTranscriptRecord.self, modelContext: modelContext)
         try Self.deleteAll(EpisodeAdAnalysisRecord.self, modelContext: modelContext)
         try Self.deleteAll(EpisodeTranscriptAnalysisRecord.self, modelContext: modelContext)
+        try Self.deleteAll(EpisodeNoteRecord.self, modelContext: modelContext)
         try Self.deleteAll(AdFreePassQueueItemRecord.self, modelContext: modelContext)
         try Self.deleteAll(UpNextQueueItemRecord.self, modelContext: modelContext)
         if deletedSyncedRowCount > 0 {

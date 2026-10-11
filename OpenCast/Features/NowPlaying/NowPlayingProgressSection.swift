@@ -1,4 +1,5 @@
 import OpenCastCore
+import SwiftData
 import SwiftUI
 
 /// Owns every body-level playback-position read on Now Playing — the 1 Hz
@@ -9,6 +10,14 @@ struct NowPlayingProgressSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+
+    @Query private var notes: [EpisodeNoteRecord]
+
+    init(episodeID: String, onShowChapters: @escaping () -> Void) {
+        self.onShowChapters = onShowChapters
+        let id = episodeID
+        _notes = Query(filter: #Predicate<EpisodeNoteRecord> { $0.episodeID == id })
+    }
 
     @State private var scrubPosition: TimeInterval = 0
     @State private var isScrubbing = false
@@ -31,6 +40,7 @@ struct NowPlayingProgressSection: View {
                 zones: appModel.playback.skipZones,
                 displayOnlyZones: appModel.displayOnlySkipZones,
                 chapterBoundaries: chapters.timelineMarkers,
+                noteTimestamps: notes.filter { !$0.isEpisodeWide }.map(\.timestamp),
                 scrubPosition: $scrubPosition,
                 onEditingChanged: updateScrubbing
             )

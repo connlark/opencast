@@ -10,10 +10,13 @@ struct NowPlayingMoreMenu: View {
     /// The name of the playlist playback came from; nil when there is none.
     let playlistSourceName: String?
     let onTranscriptAction: () -> Void
+    let onShowNotes: () -> Void
     let onShowDescription: () -> Void
     let onShowShow: () -> Void
     let onShowPlaylist: () -> Void
     let onAddToPlaylist: () -> Void
+    let onAddTimestampedNote: () -> Void
+    let onAddEpisodeNote: () -> Void
     let onStopPlayback: () -> Void
 
     var body: some View {
@@ -28,6 +31,8 @@ struct NowPlayingMoreMenu: View {
                 systemImage: "text.quote",
                 action: onTranscriptAction
             )
+            Button("Private Notes", systemImage: "note.text", action: onShowNotes)
+                .accessibilityIdentifier("Menu Private Notes")
             Button("Show Description", systemImage: "info.circle", action: onShowDescription)
                 .disabled(!canShowDescription)
             Button("Show Show", systemImage: "rectangle.stack", action: onShowShow)
@@ -41,6 +46,10 @@ struct NowPlayingMoreMenu: View {
             }
             if episode != nil {
                 Button("Add to Playlist…", systemImage: "music.note.list", action: onAddToPlaylist)
+            }
+            Menu("Add Private Note", systemImage: "square.and.pencil") {
+                Button("Add Timestamped Note", systemImage: "clock", action: onAddTimestampedNote)
+                Button("Add Episode Note", systemImage: "note.text", action: onAddEpisodeNote)
             }
             Divider()
             Button("Stop Playback", systemImage: "stop.circle", action: onStopPlayback)
