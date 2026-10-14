@@ -243,6 +243,13 @@ public final class AVFoundationPlaybackController {
         }
     }
 
+    public func loadCurrentItemChapters() async throws -> [EpisodeChapter] {
+        guard let asset = player.currentItem?.asset else {
+            return []
+        }
+        return try await AVAssetChapterReader.chapters(in: asset)
+    }
+
     /// Replaces this episode's audio without starting a new listening session.
     /// Download completion can arrive while paused, buffering, or interrupted.
     @discardableResult

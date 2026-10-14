@@ -38,6 +38,9 @@ let package = Package(
                 .product(name: "OpenCastCore", package: "OpenCastCore"),
                 .product(name: "OpenCastVoiceBoost", package: "OpenCastVoiceBoost")
             ],
+            // Fixtures load via #filePath; a test resource bundle would shadow
+            // the main module's `Bundle.module`.
+            exclude: ["Fixtures"],
             swiftSettings: swift63Settings
         )
     ],
