@@ -4823,10 +4823,58 @@ final class OpenCastUITests: XCTestCase {
             "Tapping a chapter should close the sheet"
         )
 
+        assertCurrentChapter(Self.seededChapterTitles[2], in: app)
         let elapsed = try XCTUnwrap(
             playbackElapsedSeconds(from: playbackProgress(in: app).value as? String ?? "")
         )
         XCTAssertGreaterThanOrEqual(elapsed, 200, "Tapping Wrap-Up should seek to its start")
+    }
+
+    @MainActor
+    func testSeededChapterBarSkipsBetweenChapters() throws {
+        let app = makeSeededApp(seedsChapters: true)
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        assertCurrentChapter(Self.seededChapterTitles[0], in: app)
+
+        let overlay = nowPlayingOverlay(in: app)
+        let pause = overlay.buttons["Pause"].firstMatch
+        assertExists(pause, named: "Pause button")
+        pause.tap()
+        assertExists(overlay.buttons["Play"].firstMatch, named: "Play button after pausing")
+
+        let next = app.buttons["Next Chapter"].firstMatch
+        let previous = app.buttons["Previous Chapter"].firstMatch
+        assertExists(next, named: "Next Chapter button")
+        assertExists(previous, named: "Previous Chapter button")
+
+        next.tap()
+        assertCurrentChapter(Self.seededChapterTitles[1], in: app)
+        next.tap()
+        assertCurrentChapter(Self.seededChapterTitles[2], in: app)
+        XCTAssertFalse(next.isEnabled, "Next Chapter is disabled on the last chapter")
+
+        previous.tap()
+        assertCurrentChapter(Self.seededChapterTitles[1], in: app)
+        attachSmokeScreenshot(named: "now_playing_chapter_bar")
+
+        overlay.buttons["Skip Forward 15 Seconds"].firstMatch.tap()
+        previous.tap()
+        assertCurrentChapter(Self.seededChapterTitles[1], in: app)
+        let elapsed = try XCTUnwrap(
+            playbackElapsedSeconds(from: playbackProgress(in: app).value as? String ?? "")
+        )
+        XCTAssertEqual(elapsed, 60, accuracy: 1.5, "Previous should restart Main Topic at 1:00")
+
+        app.descendants(matching: .any)["Now Playing Current Chapter"].firstMatch.tap()
+        assertExists(app.navigationBars["Chapters"], named: "Chapters sheet from the chapter bar")
+        app.staticTexts[Self.seededChapterTitles[2]].firstMatch.tap()
+        XCTAssertTrue(
+            app.navigationBars["Chapters"].waitForNonExistence(timeout: 5),
+            "Tapping a chapter should close the sheet"
+        )
+        assertCurrentChapter(Self.seededChapterTitles[2], in: app)
     }
 
     @MainActor
@@ -4839,6 +4887,30 @@ final class OpenCastUITests: XCTestCase {
         let chaptersControl = app.buttons["Chapters"].firstMatch
         assertExists(chaptersControl, named: "Chapters Sound Lab control")
         XCTAssertFalse(chaptersControl.isEnabled, "An episode without chapters should not open the sheet")
+        XCTAssertFalse(app.buttons["Next Chapter"].exists, "The chapter bar stays hidden without chapters")
+    }
+
+    @MainActor
+    private func assertCurrentChapter(
+        _ title: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let currentChapter = app.descendants(matching: .any)["Now Playing Current Chapter"].firstMatch
+        assertExists(currentChapter, named: "chapter bar", file: file, line: line)
+        let showsTitle = NSPredicate(format: "label CONTAINS %@", title)
+        let result = XCTWaiter().wait(
+            for: [expectation(for: showsTitle, evaluatedWith: currentChapter)],
+            timeout: 5
+        )
+        XCTAssertEqual(
+            result,
+            .completed,
+            "Chapter bar should show \(title), got \(currentChapter.label)",
+            file: file,
+            line: line
+        )
     }
 
     @MainActor
