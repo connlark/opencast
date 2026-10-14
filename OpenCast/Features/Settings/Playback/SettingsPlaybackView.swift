@@ -22,7 +22,7 @@ struct SettingsPlaybackView: View {
                 Text("Voice Boost")
             } footer: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Lifts quiet voices and evens out volume.")
+                    Text("Lifts quiet voices and evens out volume. Per Episode keeps a switch in the Now Playing “…” menu.")
                     HelpFooterLink(title: "How Voice Boost works", topicID: HelpTopicID.voiceBoost)
                 }
             }

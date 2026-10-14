@@ -5,6 +5,9 @@ struct NowPlayingMoreMenu: View {
     /// episode is neither cached nor downloaded.
     let episode: EpisodeListItemSnapshot?
     let hasTranscript: Bool
+    /// Present only in the Per Episode Voice Boost mode; the global modes
+    /// are set in Settings.
+    let perEpisodeVoiceBoost: Binding<Bool>?
     let canShowDescription: Bool
     let canShowShow: Bool
     /// The name of the playlist playback came from; nil when there is none.
@@ -41,6 +44,10 @@ struct NowPlayingMoreMenu: View {
             }
             if episode != nil {
                 Button("Add to Playlist…", systemImage: "music.note.list", action: onAddToPlaylist)
+            }
+            if let perEpisodeVoiceBoost {
+                Divider()
+                Toggle("Voice Boost", systemImage: "waveform", isOn: perEpisodeVoiceBoost)
             }
             Divider()
             Button("Stop Playback", systemImage: "stop.circle", action: onStopPlayback)

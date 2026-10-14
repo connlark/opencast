@@ -4,8 +4,7 @@ struct NowPlayingSoundLabPanelHost: View {
     @Environment(OpenCastAppModel.self) private var appModel
 
     let revealProgress: CGFloat
-    @Binding var voiceBoostEnabled: Bool
-    let voiceBoostControlEnabled: Bool
+    let onShowChapters: () -> Void
     let onAdFreePassAction: () -> Void
     let onTranscribeRemotely: () -> Void
     let onTranscriptAction: () -> Void
@@ -14,12 +13,12 @@ struct NowPlayingSoundLabPanelHost: View {
     var body: some View {
         NowPlayingSoundLabPanel(
             revealProgress: revealProgress,
-            voiceBoostEnabled: $voiceBoostEnabled,
-            voiceBoostControlEnabled: voiceBoostControlEnabled,
+            chapterCount: appModel.currentEpisodeChapters.chapters.count,
             adFreePassRow: NowPlayingSoundLabAdFreePassRowModel(
                 presentation: appModel.currentAdFreePassPresentation
             ),
             transcriptionRow: transcriptionRow,
+            onShowChapters: onShowChapters,
             onAdFreePassAction: onAdFreePassAction,
             onTranscribeRemotely: onTranscribeRemotely,
             onTranscriptAction: onTranscriptAction,

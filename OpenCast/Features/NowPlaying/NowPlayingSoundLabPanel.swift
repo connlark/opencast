@@ -4,10 +4,11 @@ struct NowPlayingSoundLabPanel: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let revealProgress: CGFloat
-    @Binding var voiceBoostEnabled: Bool
-    let voiceBoostControlEnabled: Bool
+    /// Chapters resolved for the playing episode; zero disables the row.
+    let chapterCount: Int
     let adFreePassRow: NowPlayingSoundLabAdFreePassRowModel
     let transcriptionRow: NowPlayingSoundLabTranscriptionRowModel?
+    let onShowChapters: () -> Void
     let onAdFreePassAction: () -> Void
     let onTranscribeRemotely: () -> Void
     let onTranscriptAction: () -> Void
@@ -68,14 +69,17 @@ struct NowPlayingSoundLabPanel: View {
 
                     GlassEffectContainer(spacing: rowSpacing) {
                         VStack(spacing: rowSpacing) {
-                            NowPlayingSoundLabToggle(
-                                title: "Voice Boost",
-                                systemImage: "waveform",
+                            NowPlayingSoundLabActionRow(
+                                title: "Chapters",
+                                systemImage: "list.bullet",
                                 tint: .cyan,
-                                isEnabled: voiceBoostControlEnabled,
+                                phase: .idle,
+                                isEnabled: chapterCount > 0,
                                 isIconOnly: isIconOnly,
                                 rowHeight: rowHeight,
-                                isOn: $voiceBoostEnabled
+                                accessibilityValueText: chaptersAccessibilityValue,
+                                accessibilityID: "Chapters",
+                                action: onShowChapters
                             )
 
                             NowPlayingSoundLabActionRow(
@@ -126,6 +130,10 @@ struct NowPlayingSoundLabPanel: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Now Playing Sound Lab")
         .accessibilityIdentifier("Now Playing Sound Lab")
+    }
+
+    private var chaptersAccessibilityValue: String {
+        chapterCount == 0 ? "None" : String(localized: "^[\(chapterCount) chapter](inflect: true)")
     }
 
     private var adFreePassTint: Color {
