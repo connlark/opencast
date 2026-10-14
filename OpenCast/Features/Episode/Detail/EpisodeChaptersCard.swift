@@ -1,10 +1,18 @@
+import OpenCastCore
 import SwiftUI
 
-/// Generated chapter list on episode detail: title + start time, tap seeks.
-/// Rendered only for a current (fingerprint-matching) analysis document.
+/// Chapter list on episode detail: title + start time, tap seeks. Renders
+/// chapters embedded in the audio file or a current generated analysis;
+/// the tag tells them apart.
 struct EpisodeChaptersCard: View {
-    let chapters: [EpisodeTranscriptAnalysisChapter]
-    let onSelectChapter: (EpisodeTranscriptAnalysisChapter) -> Void
+    enum Source {
+        case embedded
+        case generated
+    }
+
+    let chapters: [EpisodeChapter]
+    let source: Source
+    let onSelectChapter: (EpisodeChapter) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -12,7 +20,9 @@ struct EpisodeChaptersCard: View {
                 Label("Chapters", systemImage: "list.bullet")
                     .font(.headline)
                 Spacer()
-                GeneratedContentTag()
+                if source == .generated {
+                    GeneratedContentTag()
+                }
             }
 
             VStack(alignment: .leading, spacing: 0) {
@@ -55,4 +65,16 @@ struct EpisodeChaptersCard: View {
             : .minuteSecond
         return Duration.seconds(max(startTime, 0)).formatted(.time(pattern: pattern))
     }
+}
+
+#Preview {
+    EpisodeChaptersCard(
+        chapters: [
+            EpisodeChapter(id: 0, title: "Introduction", startTime: 0, endTime: 120),
+            EpisodeChapter(id: 1, title: "Main Discussion", startTime: 120, endTime: 300),
+            EpisodeChapter(id: 2, title: "Outro", startTime: 4_000, endTime: 4_100),
+        ],
+        source: .embedded
+    ) { _ in }
+    .padding()
 }

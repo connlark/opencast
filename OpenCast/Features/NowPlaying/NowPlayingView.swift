@@ -283,6 +283,12 @@ struct NowPlayingView: View {
                         .modelContext(modelContext)
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
+                case .chapters:
+                    NowPlayingChaptersView()
+                        .environment(appModel)
+                        .modelContext(modelContext)
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
                 case .transcript:
                     NavigationStack {
                         if let currentEpisodeID {

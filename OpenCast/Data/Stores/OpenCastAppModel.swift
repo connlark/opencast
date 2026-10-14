@@ -152,6 +152,10 @@ final class OpenCastAppModel {
     var displayOnlySkipZones: [PlaybackSkipZone] {
         skipZones.displayOnlySkipZones
     }
+    /// Chapters for the loaded episode, resolved embedded → feed → generated.
+    var currentEpisodeChapters: PlaybackChapterList {
+        chapters.current
+    }
     #if DEBUG
     var lastVoiceBoostDeviceProbeResult: String?
     var lastVoiceBoostDeviceProbeReportStatus: String?
@@ -180,6 +184,7 @@ final class OpenCastAppModel {
     /// smart-resume rewind.
     @ObservationIgnored private var restoredUnplayedPlayback: (episodeID: String, position: TimeInterval)?
     @ObservationIgnored private let skipZones: PlaybackSkipZoneCoordinator
+    @ObservationIgnored private let chapters: PlaybackChaptersCoordinator
     @ObservationIgnored private let downloadCleanup: DownloadCleanupCoordinator
     @ObservationIgnored private let dataNuke: DataNukeRunner
     @ObservationIgnored private let siriMediaDiscovery: SiriMediaDiscovery
@@ -235,6 +240,7 @@ final class OpenCastAppModel {
         allowsAutomaticFeedRefresh: Bool = true,
         adFreePassPresentationOverride: EpisodeAdFreePassPresentation? = nil,
         adFreePassQueueOverride: AdFreePassQueueUITestOverride? = nil,
+        uiTestSeededChapters: PlaybackChapterList? = nil,
         adFreePassNotificationCenter: (any AdFreePassNotificationCenter)? = nil,
         siriMediaDiscovery: SiriMediaDiscovery = SiriMediaDiscovery(),
         unsubscribeSidecarCleanupOverride: ((String, [String], ModelContext) throws -> Void)? = nil,
@@ -391,6 +397,12 @@ final class OpenCastAppModel {
             transcriptions: transcriptions,
             adAnalyses: adAnalyses
         )
+        chapters = PlaybackChaptersCoordinator(
+            playback: self.playback,
+            library: resolvedLibrary,
+            transcriptions: transcriptions,
+            transcriptAnalyses: transcriptAnalyses
+        )
         downloadCleanup = DownloadCleanupCoordinator(
             downloads: downloads,
             transcriptions: transcriptions,
@@ -435,14 +447,20 @@ final class OpenCastAppModel {
         self.unsubscribeSidecarCleanupOverride = unsubscribeSidecarCleanupOverride
         self.transcriptions.onEpisodeStateChanged = { [weak self] episodeID in
             self?.skipZones.refreshIfCurrentEpisode(episodeID: episodeID)
+            self?.chapters.refreshIfCurrentEpisode(episodeID: episodeID)
         }
         self.downloads.onEpisodeStateChanged = { [weak self] episodeID in
             self?.skipZones.refreshIfCurrentEpisode(episodeID: episodeID)
+            self?.chapters.refreshIfCurrentEpisode(episodeID: episodeID)
+        }
+        self.transcriptAnalyses.onEpisodeStateChanged = { [weak self] episodeID in
+            self?.chapters.refreshIfCurrentEpisode(episodeID: episodeID)
         }
         transcriptAnalysisQueue.resolveEpisode = { [weak self] episodeID in
             self?.episodeSnapshot(for: episodeID)
         }
         adFreePass.uiTestQueueOverride = adFreePassQueueOverride
+        chapters.uiTestOverride = uiTestSeededChapters
         adFreePass.uiTestEpisodeSnapshotResolver = { [weak self] episodeID in
             self?.episodeSnapshot(for: episodeID)
         }
@@ -2230,6 +2248,46 @@ final class OpenCastAppModel {
 
     func refreshPlaybackSkipZonesForCurrentEpisode() {
         skipZones.refreshForCurrentEpisode()
+        chapters.refreshForCurrentEpisode()
+    }
+
+    func seekCurrentEpisode(
+        toChapter chapter: EpisodeChapter,
+        in list: PlaybackChapterList,
+        modelContext: ModelContext
+    ) {
+        guard let episode = playback.currentEpisode else {
+            return
+        }
+        let episodeID = episode.id.rawValue
+
+        if case .generated(let transcriptSourceSHA256) = list.source {
+            let downloadRecord = downloads.record(for: episodeID)
+            let alignment = TranscriptSourceAlignment.resolve(
+                documentSHA256: transcriptSourceSHA256,
+                trustedDownloadSHA256: downloads.completedSourceIdentity(for: episodeID)?.sha256,
+                downloadFileURL: downloadRecord.flatMap(downloads.localFileURL(for:)),
+                playerItemURL: playback.currentItemSourceIdentity?.assetURL
+            )
+            if case .mismatched(canSwitchToTranscribedCopy: true) = alignment,
+               let snapshot = episodeSnapshot(for: episodeID) {
+                do {
+                    try playEpisode(
+                        snapshot,
+                        at: chapter.startTime,
+                        matchingSourceSHA256: transcriptSourceSHA256,
+                        presentsNowPlaying: false,
+                        autoplay: playback.state == .playing,
+                        modelContext: modelContext
+                    )
+                } catch {
+                    lastPlaybackError = error.localizedDescription
+                }
+                return
+            }
+        }
+
+        playback.seek(to: chapter.startTime, intent: .scrub)
     }
 
     /// Awaits the in-flight skip-zone refresh, if any. Test hook.

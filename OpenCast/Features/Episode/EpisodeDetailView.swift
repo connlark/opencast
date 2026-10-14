@@ -1,3 +1,5 @@
+import AVFoundation
+import OpenCastCore
 import OpenCastPlayback
 import SwiftData
 import SwiftUI
@@ -15,6 +17,7 @@ struct EpisodeDetailView: View {
     @State private var loadedTextContentIdentity: TextContentIdentity?
     @State private var adSection = EpisodeAdAnalysisSectionModel()
     @State private var chaptersSection = EpisodeChaptersSummarySectionModel()
+    @State private var embeddedChapters: [EpisodeChapter] = []
     @State private var isConfirmingClearProgress = false
     @State private var isConfirmingGenerateDisclosure = false
     @State private var sheetDestination: SheetDestination?
@@ -109,6 +112,38 @@ struct EpisodeDetailView: View {
         .task(id: transcriptAnalysisContentIdentifier) {
             await chaptersSection.load(appModel: appModel, episode: episode, key: transcriptAnalysisContentIdentifier)
         }
+        .task(id: embeddedChaptersLoadKey) {
+            guard let fileURL = downloadedFileURL else {
+                embeddedChapters = []
+                return
+            }
+            embeddedChapters = (try? await AVAssetChapterReader.chapters(in: AVURLAsset(url: fileURL))) ?? []
+        }
+    }
+
+    private var downloadedFileURL: URL? {
+        guard let episode, let record = appModel.downloads.record(for: episode.episodeID) else {
+            return nil
+        }
+        return appModel.downloads.localFileURL(for: record)
+    }
+
+    private var embeddedChaptersLoadKey: String? {
+        guard let episode else {
+            return nil
+        }
+        return "\(episode.episodeID)|\(downloadedFileURL?.path ?? "")"
+    }
+
+    private var displayedEmbeddedChapters: [EpisodeChapter] {
+        if !embeddedChapters.isEmpty {
+            return embeddedChapters
+        }
+        guard let episode, appModel.playback.currentEpisode?.id.rawValue == episode.episodeID else {
+            return []
+        }
+        let playing = appModel.currentEpisodeChapters
+        return playing.source == .embedded ? playing.chapters : []
     }
 
     private func content(
@@ -208,16 +243,30 @@ struct EpisodeDetailView: View {
                     )
                 }
 
-                // Creator metadata wins (D3) at render time too: an analysis
-                // generated while chapters_url was still unpopulated (the
-                // pre-upgrade cache window) stops rendering as soon as a feed
-                // refresh reveals the creator declaration.
+                // Chapter source priority: embedded in the audio file, then
+                // the feed's declaration, then generated. Creator metadata
+                // wins (D3) at render time too: an analysis generated while
+                // chapters_url was still unpopulated (the pre-upgrade cache
+                // window) stops rendering as soon as a feed refresh reveals
+                // the creator declaration.
+                if !displayedEmbeddedChapters.isEmpty {
+                    EpisodeChaptersCard(chapters: displayedEmbeddedChapters, source: .embedded) { chapter in
+                        seekToTimestamp(chapter.startTime, episode: episode)
+                    }
+                }
+
                 let showsGeneratedCards = chaptersSection.hasCurrentAnalysis(forKey: chaptersKey, episodeID: episode.episodeID)
                     && chaptersSection.creatorChaptersURL == nil
                 if showsGeneratedCards, let analysisDocument = chaptersSection.analysisDocument {
-                    if !analysisDocument.chapters.isEmpty {
-                        EpisodeChaptersCard(chapters: analysisDocument.chapters) { chapter in
-                            seekToChapter(chapter, episode: episode)
+                    if displayedEmbeddedChapters.isEmpty, !analysisDocument.chapters.isEmpty {
+                        EpisodeChaptersCard(
+                            chapters: analysisDocument.chapters.map(EpisodeChapter.init),
+                            source: .generated
+                        ) { chapter in
+                            guard let generated = analysisDocument.chapters.first(where: { $0.id == chapter.id }) else {
+                                return
+                            }
+                            seekToChapter(generated, episode: episode)
                         }
                     }
                     if let summary = analysisDocument.summary {
