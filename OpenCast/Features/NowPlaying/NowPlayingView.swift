@@ -11,6 +11,7 @@ struct NowPlayingView: View {
     @State private var playPauseFeedback = 0
     @State private var skipFeedback = 0
     @State private var utilitySheet: PlayerUtilitySheet?
+    @State private var isVoiceBoostEnabled = true
     @State private var remoteEstimateRequest: RemoteTranscriptionStartPreviewRequest?
     @State private var remoteTranscriptionStartErrorMessage: String?
     @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
@@ -52,7 +53,8 @@ struct NowPlayingView: View {
                                 title: episode.podcastTitle,
                                 imageURL: episode.artworkURL?.absoluteString,
                                 size: metrics.artworkSize,
-                                onShowChapters: { utilitySheet = .chapters },
+                                voiceBoostEnabled: $isVoiceBoostEnabled,
+                                voiceBoostControlEnabled: appModel.playbackSettings.canChangeCurrentEpisodeVoiceBoost,
                                 onAdFreePassAction: startAdFreePass,
                                 onTranscribeRemotely: presentRemoteTranscriptionEstimate,
                                 onTranscriptAction: performTranscriptAction,
@@ -190,7 +192,6 @@ struct NowPlayingView: View {
                     NowPlayingMoreMenu(
                         episode: presentedEpisodeSnapshot,
                         hasTranscript: hasCompletedTranscript,
-                        perEpisodeVoiceBoost: perEpisodeVoiceBoostBinding,
                         canShowDescription: canOpenCurrentEpisode,
                         canShowShow: canOpenCurrentPodcast,
                         playlistSourceName: appModel.currentPlaylistSource?.name,
@@ -319,6 +320,15 @@ struct NowPlayingView: View {
             .onChange(of: appModel.isNowPlayingPresented) { _, isPresented in
                 if !isPresented { resetPresentation() }
             }
+            .onChange(of: appModel.playbackSettings.isVoiceBoostEnabled) { _, _ in
+                syncVoiceBoostEnabledFromStore()
+            }
+            .onChange(of: isVoiceBoostEnabled) { _, newValue in
+                applyVoiceBoostEnabled(newValue)
+            }
+            .task(id: currentEpisodeID) {
+                syncVoiceBoostEnabledFromStore()
+            }
             .alert(
                 "Sound Lab Error",
                 item: soundLabError
@@ -388,24 +398,6 @@ struct NowPlayingView: View {
         }
         withAnimation(.easeOut(duration: 0.2)) {
             naturalContentHeight = height
-        }
-    }
-
-    /// Per Episode mode keeps its switch in the "…" menu now that the Sound
-    /// Lab row went to chapters; nil in the global modes.
-    private var perEpisodeVoiceBoostBinding: Binding<Bool>? {
-        guard appModel.playbackSettings.canChangeCurrentEpisodeVoiceBoost, let currentEpisodeID else {
-            return nil
-        }
-        return Binding {
-            appModel.playbackSettings.isVoiceBoostEnabled
-        } set: { isEnabled in
-            _ = appModel.setVoiceBoostEnabled(
-                isEnabled,
-                forEpisodeID: currentEpisodeID,
-                podcastID: currentPodcastID,
-                modelContext: modelContext
-            )
         }
     }
 
@@ -638,4 +630,30 @@ struct NowPlayingView: View {
         onStopPlayback()
     }
 
+    private func syncVoiceBoostEnabledFromStore() {
+        isVoiceBoostEnabled = appModel.playbackSettings.isVoiceBoostEnabled
+    }
+
+    private func applyVoiceBoostEnabled(_ isEnabled: Bool) {
+        guard let currentEpisodeID else {
+            syncVoiceBoostEnabledFromStore()
+            return
+        }
+
+        guard appModel.playbackSettings.isVoiceBoostEnabled != isEnabled
+            || appModel.playbackSettings.currentEpisodeID != currentEpisodeID
+        else {
+            return
+        }
+
+        let didUpdate = appModel.setVoiceBoostEnabled(
+            isEnabled,
+            forEpisodeID: currentEpisodeID,
+            podcastID: currentPodcastID,
+            modelContext: modelContext
+        )
+        if !didUpdate {
+            syncVoiceBoostEnabledFromStore()
+        }
+    }
 }

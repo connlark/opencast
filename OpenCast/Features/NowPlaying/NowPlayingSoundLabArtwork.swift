@@ -10,7 +10,8 @@ struct NowPlayingSoundLabArtwork: View {
     let title: String
     let imageURL: String?
     let size: CGFloat
-    let onShowChapters: () -> Void
+    @Binding var voiceBoostEnabled: Bool
+    let voiceBoostControlEnabled: Bool
     let onAdFreePassAction: () -> Void
     let onTranscribeRemotely: () -> Void
     let onTranscriptAction: () -> Void
@@ -35,7 +36,8 @@ struct NowPlayingSoundLabArtwork: View {
             if shouldRenderSoundLabPanel {
                 NowPlayingSoundLabPanelHost(
                     revealProgress: revealProgress,
-                    onShowChapters: onShowChapters,
+                    voiceBoostEnabled: $voiceBoostEnabled,
+                    voiceBoostControlEnabled: voiceBoostControlEnabled,
                     onAdFreePassAction: onAdFreePassAction,
                     onTranscribeRemotely: onTranscribeRemotely,
                     onTranscriptAction: onTranscriptAction,

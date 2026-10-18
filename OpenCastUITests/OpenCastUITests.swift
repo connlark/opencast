@@ -2696,7 +2696,7 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
-        assertExists(app.buttons["Chapters"], named: "Chapters Sound Lab control")
+        assertExists(app.switches["Voice Boost"], named: "Voice Boost Sound Lab toggle")
         XCTAssertFalse(app.buttons["Smart Speed"].exists)
         XCTAssertFalse(app.buttons["Skip Intros"].exists)
         XCTAssertFalse(app.buttons["Show Alerts"].exists)
@@ -2722,7 +2722,7 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         XCTAssertTrue(nowPlayingSoundLabPanel(in: app).waitForNonExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Chapters"].exists)
+        XCTAssertFalse(app.switches["Voice Boost"].exists)
     }
 
     @MainActor
@@ -2745,7 +2745,7 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         XCTAssertTrue(nowPlayingSoundLabPanel(in: app).waitForNonExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Chapters"].exists)
+        XCTAssertFalse(app.switches["Voice Boost"].exists)
     }
 
     @MainActor
@@ -2758,7 +2758,7 @@ final class OpenCastUITests: XCTestCase {
 
         assertNowPlayingOverlay(in: app)
         assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
-        assertExists(app.buttons["Chapters"], named: "Chapters Sound Lab control")
+        assertExists(app.switches["Voice Boost"], named: "Voice Boost Sound Lab toggle")
     }
 
     @MainActor
@@ -2825,13 +2825,13 @@ final class OpenCastUITests: XCTestCase {
 
         openSeededNowPlayingSoundLab(in: app)
 
-        let chaptersControl = app.buttons["Chapters"]
+        let voiceBoost = app.switches["Voice Boost"]
         let adAction = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
         let remoteAction = app.buttons.matching(
             identifier: Self.soundLabTranscriptActionIdentifier
         ).firstMatch
         for (control, name) in [
-            (chaptersControl, "Chapters"),
+            (voiceBoost, "Voice Boost"),
             (adAction, "Skip Promos & Ads"),
             (remoteAction, "Show Transcript")
         ] {
@@ -4303,23 +4303,21 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testNowPlayingVoiceBoostLivesInMoreMenuWithScreenshots() throws {
+    func testNowPlayingVoiceBoostCanToggleWithScreenshots() throws {
         let app = makeSeededApp(seedsPerEpisodeVoiceBoost: true)
         app.launch()
 
         openSeededNowPlayingSoundLab(in: app)
 
-        XCTAssertFalse(app.switches["Voice Boost"].exists, "Voice Boost left the Sound Lab")
-        assertExists(app.buttons["Chapters"], named: "Chapters Sound Lab control")
-        attachSmokeScreenshot(named: "now_playing_sound_lab_chapters")
+        let voiceBoostToggle = app.switches["Voice Boost"]
+        assertExists(voiceBoostToggle, named: "Voice Boost Sound Lab toggle")
+        assertToggle(voiceBoostToggle, isOn: true)
+        attachSmokeScreenshot(named: "now_playing_voice_boost_on")
 
-        closeNowPlayingSoundLab(in: app)
-        app.buttons["More Actions"].firstMatch.tap()
-        assertExists(
-            app.descendants(matching: .any)["Voice Boost"].firstMatch,
-            named: "Voice Boost in the Now Playing more menu"
-        )
-        attachSmokeScreenshot(named: "now_playing_voice_boost_menu")
+        tapToggle(voiceBoostToggle, to: false)
+        attachSmokeScreenshot(named: "now_playing_voice_boost_off")
+
+        tapToggle(voiceBoostToggle, to: true)
     }
 
     @MainActor
@@ -4333,17 +4331,17 @@ final class OpenCastUITests: XCTestCase {
         openSeededNowPlayingSoundLab(in: app)
 
         let panel = nowPlayingSoundLabPanel(in: app)
-        let chaptersControl = app.buttons["Chapters"]
+        let voiceBoostToggle = app.switches["Voice Boost"]
         let adAction = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
         let transcriptAction = app.buttons.matching(
             identifier: Self.soundLabTranscriptActionIdentifier
         ).firstMatch
         let header = app.staticTexts["Sound Lab"].firstMatch
-        assertExists(chaptersControl, named: "Chapters at Accessibility XXXL")
+        assertToggle(voiceBoostToggle, isOn: true)
         assertExists(adAction, named: "Skip Promos & Ads at Accessibility XXXL")
         assertExists(transcriptAction, named: "transcript action at Accessibility XXXL")
 
-        let controls = [chaptersControl, adAction, transcriptAction]
+        let controls = [voiceBoostToggle, adAction, transcriptAction]
         for control in controls {
             XCTAssertTrue(control.isHittable, "\(control.label) should remain hittable")
             XCTAssertGreaterThanOrEqual(control.frame.height, 43.99)
@@ -4370,6 +4368,9 @@ final class OpenCastUITests: XCTestCase {
         }
 
         attachSmokeScreenshot(named: "now_playing_sound_lab_accessibility_xxxl")
+
+        tapToggle(voiceBoostToggle, to: false)
+        tapToggle(voiceBoostToggle, to: true)
     }
 
     @MainActor
@@ -4804,12 +4805,11 @@ final class OpenCastUITests: XCTestCase {
         let app = makeSeededApp(seedsChapters: true)
         app.launch()
 
-        openSeededNowPlayingSoundLab(in: app)
+        openSeededNowPlaying(in: app)
 
-        let chaptersControl = app.buttons["Chapters"].firstMatch
-        assertExists(chaptersControl, named: "Chapters Sound Lab control")
-        XCTAssertTrue(chaptersControl.isEnabled, "Seeded chapters should enable the Chapters row")
-        chaptersControl.tap()
+        let currentChapter = app.descendants(matching: .any)["Now Playing Current Chapter"].firstMatch
+        assertExists(currentChapter, named: "chapter bar")
+        currentChapter.tap()
 
         assertExists(app.navigationBars["Chapters"], named: "Chapters sheet")
         for title in Self.seededChapterTitles {
@@ -4878,15 +4878,17 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    func testSeededSoundLabChaptersRowIsDisabledWithoutChapters() throws {
+    func testSeededChapterBarIsHiddenWithoutChapters() throws {
         let app = makeSeededApp()
         app.launch()
 
-        openSeededNowPlayingSoundLab(in: app)
+        openSeededNowPlaying(in: app)
+        assertExists(playbackProgress(in: app), named: "playback progress")
 
-        let chaptersControl = app.buttons["Chapters"].firstMatch
-        assertExists(chaptersControl, named: "Chapters Sound Lab control")
-        XCTAssertFalse(chaptersControl.isEnabled, "An episode without chapters should not open the sheet")
+        XCTAssertFalse(
+            app.descendants(matching: .any)["Now Playing Current Chapter"].exists,
+            "The chapter bar stays hidden without chapters"
+        )
         XCTAssertFalse(app.buttons["Next Chapter"].exists, "The chapter bar stays hidden without chapters")
     }
 
