@@ -6,6 +6,10 @@ struct NowPlayingProgressView: View {
     let displayedPosition: TimeInterval
     let zones: [PlaybackSkipZone]
     var displayOnlyZones: [PlaybackSkipZone] = []
+    /// Chapter start times marked on the rail under the slider. They stay
+    /// off the slider itself: the stock tick initializer turns the control
+    /// into a discrete slider that snaps to its ticks, which breaks scrubbing.
+    var chapterBoundaries: [TimeInterval] = []
     @Binding var scrubPosition: TimeInterval
     let onEditingChanged: (Bool) -> Void
 
@@ -20,11 +24,12 @@ struct NowPlayingProgressView: View {
             .accessibilityIdentifier("Playback Progress")
             .accessibilityValue(progressAccessibilityValue)
 
-            if !zones.isEmpty || !displayOnlyZones.isEmpty {
+            if !zones.isEmpty || !displayOnlyZones.isEmpty || !chapterMarkers.isEmpty {
                 NowPlayingSkipZoneRail(
                     duration: sliderUpperBound,
                     zones: zones,
-                    displayOnlyZones: displayOnlyZones
+                    displayOnlyZones: displayOnlyZones,
+                    chapterMarkers: chapterMarkers
                 )
             }
 
@@ -45,6 +50,15 @@ struct NowPlayingProgressView: View {
 
     private var sliderUpperBound: TimeInterval {
         max(duration ?? max(displayedPosition, 1), 1)
+    }
+
+    /// Markers only make sense against a known duration; one at or past the
+    /// end of the track is dropped rather than drawn on the edge.
+    private var chapterMarkers: [TimeInterval] {
+        guard let duration, duration.isFinite, duration > 0 else {
+            return []
+        }
+        return chapterBoundaries.filter { $0 > 0 && $0 < duration }
     }
 
     private var remainingDurationText: String {

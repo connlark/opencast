@@ -5,10 +5,14 @@ struct NowPlayingSkipZoneRail: View {
     private static let height: CGFloat = 4
     private static let minimumZoneWidth: CGFloat = 2
     private static let stripeSpacing: CGFloat = 6
+    private static let markerDiameter: CGFloat = 3
 
     let duration: TimeInterval
     let zones: [PlaybackSkipZone]
     let displayOnlyZones: [PlaybackSkipZone]
+    /// Chapter start times, drawn as dots so they read like the stock
+    /// slider's ticks without changing the slider itself.
+    var chapterMarkers: [TimeInterval] = []
 
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
@@ -16,6 +20,7 @@ struct NowPlayingSkipZoneRail: View {
         Canvas { context, size in
             drawZones(displayOnlyZones, dimmed: true, in: &context, size: size)
             drawZones(zones, dimmed: false, in: &context, size: size)
+            drawChapterMarkers(in: &context, size: size)
         }
         .frame(height: Self.height)
         .accessibilityHidden(true)
@@ -47,6 +52,24 @@ struct NowPlayingSkipZoneRail: View {
                 stripedContext.clip(to: shape)
                 stripedContext.stroke(stripePath(in: rect), with: .color(stripe), lineWidth: 1)
             }
+        }
+    }
+
+    private func drawChapterMarkers(in context: inout GraphicsContext, size: CGSize) {
+        guard duration.isFinite, duration > 0, size.width > 0, size.height > 0 else {
+            return
+        }
+
+        let diameter = min(Self.markerDiameter, size.height)
+        for marker in chapterMarkers {
+            let x = xPosition(for: marker, width: size.width)
+            let rect = CGRect(
+                x: (x - diameter / 2).clamped(to: 0...max(size.width - diameter, 0)),
+                y: (size.height - diameter) / 2,
+                width: diameter,
+                height: diameter
+            )
+            context.fill(Path(ellipseIn: rect), with: .color(.secondary))
         }
     }
 
@@ -94,7 +117,8 @@ struct NowPlayingSkipZoneRail: View {
             displayOnlyZones: [
                 PlaybackSkipZone(id: 3, startTime: 120, endTime: 180),
                 PlaybackSkipZone(id: 4, startTime: 470, endTime: 520)
-            ]
+            ],
+            chapterMarkers: [90, 240, 420]
         )
     }
     .padding()
