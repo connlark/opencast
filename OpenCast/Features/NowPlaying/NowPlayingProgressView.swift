@@ -6,28 +6,27 @@ struct NowPlayingProgressView: View {
     let displayedPosition: TimeInterval
     let zones: [PlaybackSkipZone]
     var displayOnlyZones: [PlaybackSkipZone] = []
-    var chapterBoundaries: [TimeInterval] = []
     @Binding var scrubPosition: TimeInterval
     let onEditingChanged: (Bool) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            NowPlayingProgressBar(
-                duration: sliderUpperBound,
-                position: displayedPosition,
-                chapterBoundaries: chapterBoundaries,
-                zones: zones,
-                displayOnlyZones: displayOnlyZones,
-                onScrubBegan: { onEditingChanged(true) },
-                onScrub: { scrubPosition = $0 },
-                onScrubEnded: { onEditingChanged(false) }
+        VStack(spacing: 6) {
+            Slider(
+                value: $scrubPosition,
+                in: 0...sliderUpperBound,
+                onEditingChanged: onEditingChanged
             )
-            .accessibilityRepresentation {
-                Slider(value: $scrubPosition, in: 0...sliderUpperBound, onEditingChanged: onEditingChanged)
-            }
             .accessibilityLabel("Playback Progress")
             .accessibilityIdentifier("Playback Progress")
             .accessibilityValue(progressAccessibilityValue)
+
+            if !zones.isEmpty || !displayOnlyZones.isEmpty {
+                NowPlayingSkipZoneRail(
+                    duration: sliderUpperBound,
+                    zones: zones,
+                    displayOnlyZones: displayOnlyZones
+                )
+            }
 
             HStack {
                 Text(displayedPosition.formattedPlaybackDuration)
@@ -38,7 +37,6 @@ struct NowPlayingProgressView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            .padding(.top, -8)
         }
         .onChange(of: sliderUpperBound) { _, upperBound in
             scrubPosition = scrubPosition.clamped(to: 0...upperBound)
