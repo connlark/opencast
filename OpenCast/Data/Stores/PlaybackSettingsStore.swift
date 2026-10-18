@@ -9,6 +9,7 @@ final class PlaybackSettingsStore {
     static let voiceBoostModePreferenceKey = "playback.voiceBoost.mode"
     static let autoSkipPromosAndAdsPreferenceKey = "playback.autoSkipPromosAndAds"
     static let tapToPlayPreferenceKey = "playback.episodeRow.tapToPlay"
+    static let requeueInterruptedEpisodePreferenceKey = "playback.upNext.requeueInterruptedEpisode"
     private static let voiceBoostEpisodeKeyPrefix = "playback.voiceBoost.episode."
     private static let skipBackwardIntervalKey = "playback.skip.backward"
     private static let skipForwardIntervalKey = "playback.skip.forward"
@@ -21,6 +22,7 @@ final class PlaybackSettingsStore {
     private(set) var skipForwardOption = PlaybackSkipIntervalOption.defaultForward
     private(set) var isAutoSkipPromosAndAdsEnabled = true
     private(set) var isTapToPlayEnabled = true
+    private(set) var isRequeueInterruptedEpisodeEnabled = false
     private(set) var lastErrorMessage: String?
     @ObservationIgnored private let playbackRatePersistenceOverride: ((Float, ModelContext) throws -> Void)?
     @ObservationIgnored private let save: (ModelContext) throws -> Void
@@ -68,6 +70,10 @@ final class PlaybackSettingsStore {
                 key: Self.tapToPlayPreferenceKey,
                 modelContext: modelContext
             ) ?? true
+            isRequeueInterruptedEpisodeEnabled = try booleanPreference(
+                key: Self.requeueInterruptedEpisodePreferenceKey,
+                modelContext: modelContext
+            ) ?? false
             isVoiceBoostEnabled = try resolvedVoiceBoostEnabled(
                 episodeID: episodeID,
                 modelContext: modelContext
@@ -80,6 +86,7 @@ final class PlaybackSettingsStore {
             skipForwardOption = .defaultForward
             isAutoSkipPromosAndAdsEnabled = true
             isTapToPlayEnabled = true
+            isRequeueInterruptedEpisodeEnabled = false
             isVoiceBoostEnabled = true
             playback.setRate(1)
             lastErrorMessage = "Unable to load playback settings: \(error.localizedDescription)"
@@ -242,20 +249,55 @@ final class PlaybackSettingsStore {
         _ isEnabled: Bool,
         modelContext: ModelContext
     ) -> Bool {
-        guard isTapToPlayEnabled != isEnabled else {
+        updateBooleanPreference(
+            isEnabled,
+            key: Self.tapToPlayPreferenceKey,
+            current: \.isTapToPlayEnabled,
+            assign: { isTapToPlayEnabled = $0 },
+            failureDescription: "episode tap behavior",
+            modelContext: modelContext
+        )
+    }
+
+    /// Whether starting another episode puts the one playing at the head of
+    /// Up Next so it resumes afterward.
+    @discardableResult
+    func setRequeueInterruptedEpisodeEnabled(
+        _ isEnabled: Bool,
+        modelContext: ModelContext
+    ) -> Bool {
+        updateBooleanPreference(
+            isEnabled,
+            key: Self.requeueInterruptedEpisodePreferenceKey,
+            current: \.isRequeueInterruptedEpisodeEnabled,
+            assign: { isRequeueInterruptedEpisodeEnabled = $0 },
+            failureDescription: "Up Next behavior",
+            modelContext: modelContext
+        )
+    }
+
+    private func updateBooleanPreference(
+        _ isEnabled: Bool,
+        key: String,
+        current: KeyPath<PlaybackSettingsStore, Bool>,
+        assign: (Bool) -> Void,
+        failureDescription: String,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard self[keyPath: current] != isEnabled else {
             return true
         }
 
-        let previousValue = isTapToPlayEnabled
-        isTapToPlayEnabled = isEnabled
+        let previousValue = self[keyPath: current]
+        assign(isEnabled)
 
         do {
             let existingRecord = try LocalPreferenceRecord.preference(
-                forKey: Self.tapToPlayPreferenceKey,
+                forKey: key,
                 modelContext: modelContext
             )
             let record = existingRecord ?? LocalPreferenceRecord(
-                key: Self.tapToPlayPreferenceKey,
+                key: key,
                 value: isEnabled.description
             )
             let previousStoredValue = record.value
@@ -282,8 +324,8 @@ final class PlaybackSettingsStore {
             lastErrorMessage = nil
             return true
         } catch {
-            isTapToPlayEnabled = previousValue
-            lastErrorMessage = "Unable to update episode tap behavior: \(error.localizedDescription)"
+            assign(previousValue)
+            lastErrorMessage = "Unable to update \(failureDescription): \(error.localizedDescription)"
             return false
         }
     }

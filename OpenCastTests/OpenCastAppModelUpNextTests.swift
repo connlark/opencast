@@ -30,9 +30,26 @@ struct OpenCastAppModelUpNextTests {
         #expect(flushCount == 1)
     }
 
-    @Test("Starting another episode puts the interrupted one at the head of Up Next")
+    @Test("Starting another episode leaves the interrupted one out of Up Next by default")
+    func startingAnotherEpisodeDoesNotRequeueByDefault() async throws {
+        let fixture = try await makeFixture()
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        let third = try #require(fixture.appModel.episodeSnapshot(for: "third"))
+        try playWithoutAutoplay(first, fixture: fixture)
+        fixture.appModel.playback.seek(to: 10)
+
+        try playWithoutAutoplay(third, fixture: fixture)
+
+        #expect(fixture.appModel.playbackSettings.isRequeueInterruptedEpisodeEnabled == false)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "third")
+        #expect(fixture.appModel.upNextQueue.items.isEmpty)
+        #expect(fixture.appModel.library.progressRecord(for: "first")?.position == 10)
+    }
+
+    @Test("With the setting on, starting another episode puts the interrupted one at the head of Up Next")
     func startingAnotherEpisodeRequeuesTheInterruptedOne() async throws {
         let fixture = try await makeFixture()
+        #expect(fixture.appModel.setRequeueInterruptedEpisodeEnabled(true, modelContext: fixture.context))
         let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
         let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
         let third = try #require(fixture.appModel.episodeSnapshot(for: "third"))
@@ -51,6 +68,7 @@ struct OpenCastAppModelUpNextTests {
     @Test("Starting a queued episode moves it out of Up Next and the interrupted one in")
     func startingAQueuedEpisodeSwapsWithTheInterruptedOne() async throws {
         let fixture = try await makeFixture()
+        #expect(fixture.appModel.setRequeueInterruptedEpisodeEnabled(true, modelContext: fixture.context))
         let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
         let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
         let third = try #require(fixture.appModel.episodeSnapshot(for: "third"))
@@ -67,6 +85,7 @@ struct OpenCastAppModelUpNextTests {
     @Test("Restarting the playing episode leaves Up Next alone")
     func restartingThePlayingEpisodeDoesNotRequeueIt() async throws {
         let fixture = try await makeFixture()
+        #expect(fixture.appModel.setRequeueInterruptedEpisodeEnabled(true, modelContext: fixture.context))
         let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
         try playWithoutAutoplay(first, fixture: fixture)
         fixture.appModel.playback.seek(to: 10)
@@ -80,6 +99,7 @@ struct OpenCastAppModelUpNextTests {
     @Test("A finished episode is not requeued when the next one starts")
     func finishedEpisodeIsNotRequeued() async throws {
         let fixture = try await makeFixture()
+        #expect(fixture.appModel.setRequeueInterruptedEpisodeEnabled(true, modelContext: fixture.context))
         let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
         let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
         try playWithoutAutoplay(first, fixture: fixture)

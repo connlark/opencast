@@ -743,7 +743,7 @@ final class OpenCastAppModel {
     /// An explicit start position bypasses smart resume and the skip-intro
     /// floor. `requeuesCurrentEpisode` is off for the queue's own advance,
     /// which replaces a finished or skipped episode rather than interrupting
-    /// one.
+    /// one; it only takes effect with the Up Next playback setting on.
     func playEpisode(
         _ episode: EpisodeListItemSnapshot,
         at startPosition: TimeInterval? = nil,
@@ -2697,6 +2697,14 @@ final class OpenCastAppModel {
         playbackSettings.setTapToPlayEnabled(isEnabled, modelContext: modelContext)
     }
 
+    @discardableResult
+    func setRequeueInterruptedEpisodeEnabled(
+        _ isEnabled: Bool,
+        modelContext: ModelContext
+    ) -> Bool {
+        playbackSettings.setRequeueInterruptedEpisodeEnabled(isEnabled, modelContext: modelContext)
+    }
+
     func runVoiceBoostDeviceProbeIfNeeded(modelContext: ModelContext) async {
         #if DEBUG
         guard runsVoiceBoostDeviceProbe, !hasRunVoiceBoostDeviceProbe else {
@@ -2834,7 +2842,9 @@ final class OpenCastAppModel {
         flushPlaybackProgress(modelContext: modelContext)
         // Read after the flush, which decides whether the interrupted
         // episode counts as played.
-        let interruptedEpisode = requeuesCurrentEpisode ? interruptedPlaybackEpisode(replacedBy: snapshot) : nil
+        let interruptedEpisode = requeuesCurrentEpisode && playbackSettings.isRequeueInterruptedEpisodeEnabled
+            ? interruptedPlaybackEpisode(replacedBy: snapshot)
+            : nil
         let interruptedSourcePlaylistID = currentPlaylistSourceID
         nowPlayingProbeMark("play-validated")
         applyVoiceBoostSetting(for: episode, modelContext: modelContext)

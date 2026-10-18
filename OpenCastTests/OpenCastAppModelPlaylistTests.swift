@@ -1115,10 +1115,9 @@ struct OpenCastAppModelPlaylistTests {
         #expect(appModel.currentPlaylistSource == nil)
         #expect(try preferenceValues(forKey: PlaybackRestorePreferenceStore.episodeIDKey, in: fixture.container) == ["fourth"])
         #expect(try preferenceValues(forKey: PlaybackRestorePreferenceStore.sourcePlaylistIDKey, in: fixture.container).isEmpty)
-        // The interrupted playlist row returns to the head of Up Next under
-        // its tag, ahead of the row still queued from the playlist.
-        #expect(appModel.upNextQueue.items.first?.episodeID == "first")
-        #expect(appModel.upNextQueue.items.map(\.sourcePlaylistID) == [Self.commuteID, Self.commuteID])
+        // Requeueing the interrupted episode is off by default, so only the
+        // row still queued from the playlist remains.
+        #expect(appModel.upNextQueue.items.map(\.sourcePlaylistID) == [Self.commuteID])
     }
 
     @Test("Playing a tagged row straight from Up Next derives the source from its tag")
