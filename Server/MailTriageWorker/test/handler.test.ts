@@ -69,7 +69,7 @@ describe("handleEmail", () => {
 
     expect(fetcher).toHaveBeenCalledTimes(1);
     const entry = logged(log);
-    expect(entry).toMatchObject({ event: "mail_triaged", label: "support", decision: "notify", alert: "sent", alert_status: 200, model: "jev-1.13.0" });
+    expect(entry).toMatchObject({ event: "mail_triaged", label: "support", decision: "notify", alert: "sent", alert_status: 200, model: "jev-1.13.0", forwards: "1/1" });
     const text = JSON.stringify(entry);
     expect(text).not.toMatch(/Downloads|jamie|example\.com|owner/);
   });
@@ -128,9 +128,56 @@ describe("handleEmail", () => {
 
   it("refuses to accept mail with no forward destination", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const FORWARD_TO of ["", " , ,"]) {
+      const { msg, forward } = message(fixture("support.eml"));
+      await expect(handleEmail(msg, env(vi.fn(), { FORWARD_TO }))).rejects.toThrow("FORWARD_TO");
+      expect(forward).not.toHaveBeenCalled();
+    }
+  });
+
+  it("forwards to every listed destination with identical triage headers", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const { msg, forward } = message(fixture("support.eml"));
-    await expect(handleEmail(msg, env(vi.fn(), { FORWARD_TO: "" }))).rejects.toThrow("FORWARD_TO");
-    expect(forward).not.toHaveBeenCalled();
+    const fetcher = accepted();
+    const FORWARD_TO = " owner@example.net, inbox@example.net ,owner@example.net,";
+    await handleEmail(msg, env(async () => jevResponse(SUPPORT_P), { FORWARD_TO }), { fetcher: fetcher as unknown as typeof fetch });
+
+    expect(forward.mock.calls.map((c) => c[0])).toEqual(["owner@example.net", "inbox@example.net"]);
+    const [first, second] = forward.mock.calls.map((c) => [...c[1]!.entries()]);
+    expect(first).toEqual(second);
+    expect(first).toContainEqual(["x-mail-triage", "support"]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(logged(log)).toMatchObject({ alert: "sent", forwards: "2/2" });
+  });
+
+  it("keeps a partial forward failure and still pushes", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { msg, forward } = message(fixture("support.eml"));
+    forward.mockRejectedValueOnce(new TypeError("destination not verified"));
+    const fetcher = accepted();
+    const FORWARD_TO = "owner@example.net,inbox@example.net";
+    await handleEmail(msg, env(async () => jevResponse(SUPPORT_P), { FORWARD_TO }), { fetcher: fetcher as unknown as typeof fetch });
+
+    expect(forward).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(logged(log)).toMatchObject({ alert: "sent", forwards: "1/2" });
+    const failure = JSON.parse(String(error.mock.calls[0]![0]));
+    expect(failure).toMatchObject({ event: "mail_forward_failed", reason: "TypeError", failed: 1, total: 2, failed_at: "1" });
+    const lines = [...log.mock.calls, ...error.mock.calls].map((c) => String(c[0])).join("\n");
+    expect(lines).not.toMatch(/owner|inbox@|example\.net/);
+  });
+
+  it("rethrows when every destination fails and sends no push", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { msg, forward } = message(fixture("support.eml"));
+    forward.mockRejectedValue(new Error("destination not verified"));
+    const fetcher = accepted();
+    const FORWARD_TO = "owner@example.net,inbox@example.net";
+    await expect(handleEmail(msg, env(async () => jevResponse(SUPPORT_P), { FORWARD_TO }), { fetcher: fetcher as unknown as typeof fetch })).rejects.toThrow("destination not verified");
+    expect(forward).toHaveBeenCalledTimes(2);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(JSON.parse(String(error.mock.calls[0]![0]))).toMatchObject({ event: "mail_forward_failed", failed: 2, total: 2, failed_at: "1,2" });
   });
 
   it("never throws for a failed push", async () => {

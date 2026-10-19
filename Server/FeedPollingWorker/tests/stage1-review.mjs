@@ -24,10 +24,25 @@ try {
   const pending=h.consume(wake,{attempts:2,headers:{'x-test-execution':execution}});
   for(let i=0;i<100&&(await h.invoke('fault-state'))!=='redelivery_stat_active';i++)await new Promise(resolve=>setTimeout(resolve,10));
   assert.equal(await h.invoke('fault-state'),'redelivery_stat_active');
+  const abortAt=performance.timeOrigin+performance.now();
   await h.invoke('abort',execution);
   assert.equal((await pending).status,503);
   assert.deepEqual(await h.first('SELECT lease_id,lease_until,last_poll_at,last_poll_outcome FROM n_feed WHERE feed_id=?',feed),held);
+  // The stat transaction is held on the wire, unforwarded. The cancelled
+  // invocation abandons its connection, so the hold ends discarded,
+  // never committed, and release-hang has nothing left to release. Wait for
+  // that close first: had the abort not closed it, the operation's own 4 s
+  // deadline plus its rollback and close (500 ms each) would.
+  const ts=h.storage.testStorage('polling-runtime');
+  const statHold=()=>ts({op:'witness'}).fires.find(f=>f.hook==='P-hang_redelivery_stat');
+  for(let i=0;i<600&&statHold()?.discarded==null;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  const discarded=statHold(),reason=ts({op:'witness'}).discarded.find(d=>d.fire===discarded?.id)?.reason;
+  assert.ok(discarded&&discarded.discarded!==null&&discarded.forwarded===null&&discarded.released===null,`the held stat transaction ended otherwise: ${JSON.stringify(discarded)}`);
+  console.log(`held redelivery stat discarded ${Math.round(discarded.discarded-abortAt)} ms after the abort (${reason}), never forwarded`);
   await h.invoke('release-hang');
+  const after=statHold();
+  assert.ok(after.released===null&&after.forwarded===null,'release-hang forwarded the abandoned stat transaction');
+  ts({op:'expect',fire:after.id,outcome:'discarded'});
   console.log('PASS failed/cancelled redelivery bookkeeping preserves another invocation\'s live lease and feed outcome');
 
   // A non-bookkeeping error before acquiring a lease must also preserve the

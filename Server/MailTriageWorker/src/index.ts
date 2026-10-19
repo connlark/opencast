@@ -51,11 +51,16 @@ export function triageHeaders(verdict: Verdict): Headers {
   return headers;
 }
 
+// FORWARD_TO is a comma-separated list of verified Email Routing destinations.
+export function forwardDestinations(value: string | undefined): string[] {
+  return [...new Set((value ?? "").split(",").map((address) => address.trim()).filter(Boolean))];
+}
+
 export async function handleEmail(message: ForwardableEmailMessage, env: Env, deps: Deps = {}): Promise<void> {
   const now = deps.now ?? Date.now;
   const started = now();
-  const forwardTo = env.FORWARD_TO?.trim();
-  if (!forwardTo) {
+  const destinations = forwardDestinations(env.FORWARD_TO);
+  if (destinations.length === 0) {
     // Throwing (rather than dropping) lets Email Routing report the failure
     // to the sending server instead of accepting mail that goes nowhere.
     errorEvent("mail_forward_failed", { lane: env.LANE, reason: "forward_to_missing" });
@@ -71,15 +76,22 @@ export async function handleEmail(message: ForwardableEmailMessage, env: Env, de
   }
   const { mail, verdict } = triaged;
 
-  try {
-    await message.forward(forwardTo, triageHeaders(verdict));
-  } catch (error) {
+  // One copy reaching any destination is a delivery: only a total failure
+  // throws, so the sender retries instead of duplicating the copies that landed.
+  const results = await Promise.allSettled(destinations.map((to) => message.forward(to, triageHeaders(verdict))));
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length > 0) {
+    const error: unknown = failures[0]!.reason;
     errorEvent("mail_forward_failed", {
       lane: env.LANE,
       reason: error instanceof Error ? error.name : "unknown",
       label: verdict.label,
+      failed: failures.length,
+      total: destinations.length,
+      // 1-based positions in FORWARD_TO: names the failing copy without an address.
+      failed_at: results.flatMap((result, at) => (result.status === "rejected" ? [at + 1] : [])).join(","),
     });
-    throw error;
+    if (failures.length === destinations.length) throw error;
   }
 
   let alert = "quiet";
@@ -113,6 +125,7 @@ export async function handleEmail(message: ForwardableEmailMessage, env: Env, de
     raw_size: message.rawSize,
     body_chars: mail.body.length,
     attachments: mail.signals.attachment_count,
+    forwards: `${destinations.length - failures.length}/${destinations.length}`,
     alert,
     alert_status: alertStatus,
     duration_ms: now() - started,

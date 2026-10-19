@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 // CDP reports JS heap, embedder allocations and ArrayBuffer backing storage
 // separately. workerd does not include Wasm linear memory in these counters;
 // a Wasm caller must add its own measured linear memory (see observation stats).
-export async function sampleRuntimeMemory(inspectorURL, targetName = 'notifications-feed-runtime', timeoutMs = 5000) {
+export async function sampleRuntimeMemory(inspectorURL, targetName = 'notifications-feed-runtime', timeoutMs = 5000, wakeIsolate) {
   const listing = new URL('/json/list', inspectorURL);
   listing.protocol = 'http:';
   const targets = await (await fetch(listing)).json();
@@ -15,6 +15,11 @@ export async function sampleRuntimeMemory(inspectorURL, targetName = 'notificati
   let identifier = 0;
   let peak = { totalBytes: 0 };
   let peakCombined = { totalBytes: 0 };
+  let postCollectionPeak = { totalBytes: 0 };
+  let maxWasmBytes = 0;
+  let phase = 'ordinary';
+  const samples = [];
+  let sampleQueue = Promise.resolve();
   let stopped = false;
   let failed;
   const contexts = [];
@@ -40,33 +45,71 @@ export async function sampleRuntimeMemory(inspectorURL, targetName = 'notificati
       socket.send(JSON.stringify({ id, method, params }));
     });
   }
-  async function sample() {
+  async function readMemory() {
     const value = await command('Runtime.getHeapUsage');
-    const totalBytes = value.usedSize + (value.embedderHeapUsedSize ?? 0) + (value.backingStorageSize ?? 0);
-    if (totalBytes > peak.totalBytes) peak = { totalBytes, ...value };
     const wasm = await command('Runtime.evaluate', {
       contextId: contexts[0].id, expression: 'globalThis.__feedTransportAudit.wasmBytes ?? 0', returnByValue: true,
     });
+    if (wasm.exceptionDetails) throw new Error(JSON.stringify(wasm.exceptionDetails));
     const wasmBytes = wasm.result.value;
-    if (totalBytes + wasmBytes > peakCombined.totalBytes) peakCombined = {
-      totalBytes: totalBytes + wasmBytes, wasmBytes, ...value,
-    };
+    if (![wasmBytes, value.usedSize, value.embedderHeapUsedSize ?? 0, value.backingStorageSize ?? 0]
+      .every(bytes => Number.isFinite(bytes) && bytes >= 0)) throw new Error('Invalid runtime memory counters');
+    const nativeBytes = value.usedSize + (value.embedderHeapUsedSize ?? 0) + (value.backingStorageSize ?? 0);
+    maxWasmBytes = Math.max(maxWasmBytes, wasmBytes);
+    return { totalBytes: nativeBytes + wasmBytes, nativeBytes, wasmBytes, ...value };
   }
+  async function sampleOnce() {
+    const startedMs = performance.now(), currentPhase = phase;
+    const lazy = await readMemory();
+    if (lazy.nativeBytes > peak.totalBytes) peak = { ...lazy, totalBytes: lazy.nativeBytes };
+    if (lazy.totalBytes > peakCombined.totalBytes) peakCombined = { ...lazy, phase: currentPhase };
+    // Other suites retain their lazy sampler until they supply a read-only wake.
+    if (!wakeIsolate) return;
+    const collectStartedMs = performance.now();
+    const collection = command('HeapProfiler.collectGarbage');
+    // The command can reject while the barrier/wake is pending. Preserve that
+    // failure for the await below without an unhandled-rejection race.
+    collection.catch(() => {});
+    const barrier = await command('Runtime.evaluate', {
+      contextId: contexts[0].id, expression: 'void 0', returnByValue: true,
+    });
+    if (barrier.exceptionDetails) throw new Error(JSON.stringify(barrier.exceptionDetails));
+    await wakeIsolate();
+    await collection;
+    const collectCompletedMs = performance.now();
+    const postCollection = await readMemory();
+    const sequence = samples.length + 1;
+    const sample = { sequence, phase: currentPhase, startedMs, collectStartedMs,
+      collectCompletedMs, completedMs: performance.now(), lazy, postCollection };
+    samples.push(sample);
+    if (postCollection.totalBytes > postCollectionPeak.totalBytes) {
+      postCollectionPeak = { ...postCollection, phase: currentPhase, sequence };
+    }
+  }
+  function sample() {
+    const current = sampleQueue.then(sampleOnce);
+    sampleQueue = current.catch(error => { failed ??= error; });
+    return current;
+  }
+  const snapshot = () => ({ ...peak, peakCombined, postCollectionPeak, maxWasmBytes,
+    // Keep both series in Node, outside the measured Worker isolate.
+    ...(wakeIsolate ? { samples: samples.slice() } : {}) });
   // Observe native cancellation inside workerd. Miniflare's Node service
   // bridge does not propagate cancellation back to its source stream.
   try {
     await command('Runtime.enable');
+    if (wakeIsolate) await command('HeapProfiler.enable');
     if (!contexts.length) throw new Error(`Worker execution context missing: ${JSON.stringify(target)}`);
     const installed = await command('Runtime.evaluate', { contextId: contexts[0].id, expression: `(${installTransportAudit.toString()})()` });
     if (installed.exceptionDetails) throw new Error(JSON.stringify(installed.exceptionDetails));
+    await sample();
   } catch (error) { socket.close(); throw error; }
-  await sample();
   const sampling = (async () => {
     while (!stopped) {
       await new Promise(resolve => setTimeout(resolve, 25));
       if (!stopped) await sample();
     }
-  })().catch(error => { failed = error; });
+  })().catch(error => { failed ??= error; });
   let stopping;
   const stop = () => {
     stopping ??= (async () => {
@@ -78,12 +121,13 @@ export async function sampleRuntimeMemory(inspectorURL, targetName = 'notificati
         const audit = await command('Runtime.evaluate', {
           contextId: contexts[0].id, expression: 'globalThis.__feedTransportAudit', returnByValue: true,
         });
-        return { ...peak, peakCombined, inspectorTarget: {title:target.title,url:target.url}, transportAudit: audit.result.value };
+        return { ...snapshot(), inspectorTarget: {title:target.title,url:target.url}, transportAudit: audit.result.value };
       } finally { socket.close(); }
     })();
     return stopping;
   };
-  stop.snapshot = async () => { await sample(); return { ...peak, peakCombined }; };
+  stop.snapshot = async () => { await sample(); if (failed) throw failed; return snapshot(); };
+  stop.phase = async name => { await sampleQueue; phase = name; };
   stop.transportAudit = async () => {
     const audit = await command('Runtime.evaluate', {
       contextId: contexts[0].id, expression: 'globalThis.__feedTransportAudit', returnByValue: true,

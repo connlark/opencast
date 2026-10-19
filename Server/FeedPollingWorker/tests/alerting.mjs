@@ -15,6 +15,14 @@ const h = await harness(request => {
   }
   return new Response('<rss><channel><title>Fixture</title></channel></rss>', { headers: { 'content-type': 'application/rss+xml' } });
 }, { environment: 'production', alertSecrets: { ALERT_WEBHOOK_URL, ALERT_CREDENTIAL: credential, ALERT_RECIPIENT: recipient } });
+// Each alert attempt logs one poll_alert_delivery line; read the new ones in order.
+let seen = 0;
+const expectLines = async (...expected) => {
+  const lines = (await h.invoke('metrics')).alert_deliveries;
+  assert.deepEqual(lines.slice(seen), expected);
+  seen = lines.length;
+};
+const attempt = (kind, status, delivered, marker, marked) => ({ level: delivered ? 'log' : 'warn', event: 'poll_alert_delivery', kind, lane: 'production', status, delivered, marker, marked });
 
 try {
   let rollup = await h.invoke('test/dispatch');
@@ -23,6 +31,7 @@ try {
   assert.equal(h.alerts[0].headers.authorization, `Bearer ${credential}`);
   assert.equal(h.alerts[0].body.recipient, recipient);
   assert.equal(h.alerts[0].body.draft.schema_version, 1);
+  await expectLines(attempt('armed', 200, true, 'armed', true));
 
   for (let i = 0; i < 50; i++) await h.add(`https://stalled-${i}.example.com/feed`, h.now - 600);
   rollup = await h.invoke('test/dispatch');
@@ -33,6 +42,7 @@ try {
   assert.equal(h.alerts[1].headers['idempotency-key'], `feed-polling-stall-production-${rollup.stall_since}`);
   assert.match(h.alerts[1].body.draft.body, /late_600: 0/);
   assert.doesNotMatch(h.alerts[1].body.draft.body, /Redeploy/);
+  await expectLines(attempt('onset', 200, true, 'onset_sent', true));
 
   responseStatus = 409;
   await h.invoke('clock', '60');
@@ -42,11 +52,13 @@ try {
   assert.equal(h.alerts.length, 3, 'the replay is sent once');
   await h.invoke('test/dispatch');
   assert.equal(h.alerts.length, 3, 'a settled idempotency replay does not re-fire');
+  await expectLines(attempt('onset', 409, true, 'onset_sent', true));
 
   responseStatus = 429;
   await h.run('UPDATE n_poll_dispatch SET stall_alerted_at=0');
   await h.invoke('test/dispatch');
   assert.equal((await h.first('SELECT stall_alerted_at FROM n_poll_dispatch')).stall_alerted_at, 0, 'a failed send remains retryable');
+  await expectLines(attempt('onset', 429, false, null, null));
   const retryKey = h.alerts[2].headers['idempotency-key'];
   responseStatus = 200;
   await h.invoke('test/dispatch');
@@ -54,21 +66,32 @@ try {
 
   await h.invoke('test/dispatch');
   assert.equal(h.alerts.length, 5, 'a second tick does not re-fire onset');
+  await expectLines(attempt('onset', 200, true, 'onset_sent', true));
   await h.invoke('clock', '3660');
+  responseStatus = 429;
+  await h.invoke('test/dispatch');
+  assert.equal(h.alerts.length, 6, 'hourly reminder is attempted');
+  await expectLines(attempt('hourly', 429, false, 'finish_hourly', true));
+  responseStatus = 200;
   rollup = await h.invoke('test/dispatch');
-  assert.equal(h.alerts.length, 6, 'hourly reminder sends');
-  assert.match(h.alerts[5].headers['idempotency-key'], /^feed-polling-stall-production-\d+-1$/);
+  assert.equal(h.alerts.length, 7, 'a failed hourly reminder restores its send time and retries');
+  assert.equal(h.alerts[6].headers['idempotency-key'], h.alerts[5].headers['idempotency-key']);
+  assert.match(h.alerts[6].headers['idempotency-key'], /^feed-polling-stall-production-\d+-1$/);
+  await expectLines(attempt('hourly', 200, true, 'finish_hourly', true));
 
   await h.run("UPDATE n_feed SET last_poll_at=?,last_poll_outcome='unchanged'", h.now + 3600);
   responseStatus = 429;
   rollup = await h.invoke('test/dispatch');
   assert.equal(rollup.stall_state, 'stalled', 'a failed recovery remains retryable');
-  assert.equal(h.alerts.length, 7);
+  assert.equal(h.alerts.length, 8);
+  await expectLines(attempt('recovery', 429, false, null, null));
   responseStatus = 200;
   rollup = await h.invoke('test/dispatch');
   assert.equal(rollup.stall_state, 'clear');
-  assert.equal(h.alerts.length, 8, 'recovery retries after a failed send');
-  assert.match(h.alerts[7].body.draft.title, /Feed polling recovered \(production\)/);
+  assert.equal(h.alerts.length, 9, 'recovery retries after a failed send');
+  assert.match(h.alerts[8].body.draft.title, /Feed polling recovered \(production\)/);
+  await expectLines(attempt('recovery', 200, true, 'recovery', true));
+  assert.equal(seen, h.alerts.length, 'one line per alert attempt');
   console.log('PASS alert webhook armed, onset, hourly and recovery transitions');
 
   const at = h.now + 3660;
@@ -96,6 +119,7 @@ try {
   rollup = await h.invoke('test/dispatch');
   assert.equal(rollup.late_600, 10);
   assert.equal(rollup.stall_state, 'stalled', 'lateness alerts despite ongoing completions');
+  await expectLines(attempt('onset', 200, true, 'onset_sent', true));
   const alertsAtOnset = h.alerts.length;
   await h.run('UPDATE n_feed SET due_at=? WHERE feed_id IN(SELECT value FROM json_each(?))', at + 7200, JSON.stringify(late.slice(5, 15)));
   rollup = await h.invoke('test/dispatch');
@@ -106,6 +130,8 @@ try {
   rollup = await h.invoke('test/dispatch');
   assert.equal(rollup.late_600, 0);
   assert.equal(rollup.stall_state, 'clear');
+  await expectLines(attempt('recovery', 200, true, 'recovery', true));
+  assert.equal(seen, h.alerts.length, 'one line per alert attempt');
   console.log('PASS lateness threshold, health exclusions, baseline separation and trickle-completion hysteresis');
 } finally {
   await h.instance.dispose();
@@ -122,6 +148,7 @@ try {
   assert.equal(rollup.alerting, false);
   assert.equal(plain.alerts.length, 0);
   assert.equal((await plain.invoke('test/stats')).alerting, false);
+  assert.deepEqual((await plain.invoke('metrics')).alert_deliveries, [], 'no attempt, no line');
   console.log('PASS a non-HTTPS alert webhook leaves alerting off');
 } finally {
   await plain.instance.dispose();

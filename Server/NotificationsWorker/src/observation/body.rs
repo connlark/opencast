@@ -72,7 +72,7 @@ mod retained {
         },
         replay_window, BodyAccumulator,
     };
-    use crate::polling::timing::Span;
+    use crate::polling::timing::{Span, Storage};
     use std::{
         cell::Cell,
         future::Future,
@@ -97,7 +97,7 @@ mod retained {
     pub struct Scratch {
         pub bucket: Bucket,
         pub feed_id: String,
-        pub storage: Rc<Cell<bool>>,
+        pub storage: Storage,
         pub sink: Rc<Cell<u64>>,
     }
 
@@ -239,7 +239,7 @@ mod retained {
             Ok(())
         }
         /// A reader over the whole body; a spilled body must be completed.
-        pub fn reader(&self, storage: Rc<Cell<bool>>) -> Result<BodyReader<'_>> {
+        pub fn reader(&self, storage: Storage) -> Result<BodyReader<'_>> {
             Ok(match self {
                 Body::Memory(bytes) => BodyReader::new(None, bytes, storage),
                 Body::Spilled {
@@ -292,15 +292,11 @@ mod retained {
         window: Vec<u8>,
         tail: &'a [u8],
         offset: usize,
-        storage: Rc<Cell<bool>>,
+        storage: Storage,
         pending: Option<Pending<Vec<u8>>>,
     }
     impl<'a> BodyReader<'a> {
-        fn new(
-            object: Option<(Bucket, String, usize)>,
-            tail: &'a [u8],
-            storage: Rc<Cell<bool>>,
-        ) -> Self {
+        fn new(object: Option<(Bucket, String, usize)>, tail: &'a [u8], storage: Storage) -> Self {
             Self {
                 object,
                 read: 0,

@@ -8,9 +8,15 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The local harness's fixture timing hooks (the polling loop's clock and gate,
+# the core's close delay) behind private fixture routes. Never enabled by a
+# shipped Worker manifest.
+storage-fixture = ["opencast-notifications-worker/fixture-hooks"]
+
 [dependencies]
 opencast-notifications-worker = { path = "../NotificationsWorker", default-features = false }
-worker = { version = "0.8", features = ["d1", "queue"] }
+worker = { version = "0.8", features = ["queue"] }
 worker-macros = "0.8"
 
 [profile.release]

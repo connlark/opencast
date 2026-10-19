@@ -2,14 +2,15 @@ use super::{
     db::*,
     wire::{int, string, Event},
 };
+use crate::database::slice_d::{self as storage, Operation};
 use crate::{apns, deadline::fetch_with_deadline, feed_stream::FeedFetchCancellation};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::time::Duration;
-use worker::{D1Database, Delay, Env, Headers, Method, Request, RequestInit, Result};
+use worker::{Delay, Env, Headers, Method, Request, RequestInit, Result};
 
 pub async fn deliver(
-    db: &D1Database,
+    db: &crate::database::Authority,
     env: &Env,
     source: &str,
     delivery_id: &str,
@@ -25,7 +26,7 @@ pub async fn deliver(
     } else {
         return Ok(());
     };
-    if !permitted(env, db, switch).await? {
+    if !crate::database::permitted(env, db, switch).await? {
         return Ok(());
     }
     let apns_environment = env
@@ -42,23 +43,10 @@ pub async fn deliver(
         pause(db, "configuration").await?;
         return Ok(());
     };
-    let args = [
-        json!(delivery_id),
-        json!(generation),
-        json!(source),
-        json!(t),
-        json!(lease),
-        json!(switch),
-    ];
-    let eligibility="EXISTS(SELECT 1 FROM n_install i WHERE i.install_id=n_delivery.install_id AND i.epoch=n_delivery.install_epoch AND i.enabled=1 AND i.next_send_at<=?4 AND (n_delivery.source='feed_polling' OR i.job_capable=1)) AND (EXISTS(SELECT 1 FROM n_interest j JOIN n_feed f ON f.feed_id=j.feed_id WHERE j.install_id=n_delivery.install_id AND j.feed_id=n_delivery.interest_key AND j.generation=n_delivery.interest_generation AND j.enabled=1 AND f.send_paused=0 AND f.epoch=n_delivery.owner_epoch) OR EXISTS(SELECT 1 FROM n_job_interest j WHERE j.interest_id=n_delivery.interest_key AND j.install_id=n_delivery.install_id AND j.install_epoch=n_delivery.install_epoch AND j.generation=n_delivery.interest_generation AND j.state='registered'))";
-    let claim=statement(db,&format!("UPDATE n_delivery SET state='leased',lease_id=?5,lease_until=?4+60,attempt=attempt+1,attempt_started_at=COALESCE(attempt_started_at,?4),attempt_token_generation=(SELECT token_generation FROM n_install WHERE install_id=n_delivery.install_id) WHERE delivery_id=?1 AND interest_generation=?2 AND source=?3 AND state IN('pending','uncertain') AND next_attempt_at<=?4 AND expires_at>?4 AND failures<10 AND EXISTS(SELECT 1 FROM n_control WHERE name=?6 AND enabled=1) AND NOT EXISTS(SELECT 1 FROM n_circuit WHERE lane='apns' AND paused=1) AND {eligibility}"),&args)?;
-    db.batch(vec![claim,
-        statement(db,"UPDATE n_install SET next_send_at=?2+1 WHERE install_id=(SELECT install_id FROM n_delivery WHERE delivery_id=?1 AND lease_id=?3)",&[json!(delivery_id),json!(t),json!(lease)])?,
-        statement(db,"UPDATE n_job_interest SET attempt_started_at=COALESCE(attempt_started_at,?2) WHERE interest_id=(SELECT interest_key FROM n_delivery WHERE delivery_id=?1 AND lease_id=?3)",&[json!(delivery_id),json!(t),json!(lease)])?,
-    ]).await?;
-    let Some(row)=first(db,"SELECT d.*,e.envelope_json FROM n_delivery d JOIN n_event e ON e.source=d.source AND e.event_id=d.event_id WHERE d.delivery_id=?1 AND d.lease_id=?2 AND d.state='leased'",&[json!(delivery_id),json!(lease)]).await? else{return Ok(());};
+    storage::execute(db,Operation::ClaimDelivery {delivery:delivery_id.into(),generation,source:source.into(),now:t,lease:lease.clone(),control:switch.into()}).await?;
+    let Some(row)=storage::execute(db, Operation::ReadClaimedDelivery { delivery: delivery_id.to_owned(), lease: lease.to_owned() }).await?.first() else{return Ok(());};
     let event: Event = serde_json::from_str(string(&row, "envelope_json"))?;
-    let Some(endpoint)=first(db,"SELECT d.device_token,d.device_token_hash,d.apns_environment,d.bundle_id,i.token_generation,i.registered_at,i.registration_revision FROM n_install i JOIN devices d ON d.install_id=i.install_id AND d.device_token_hash=i.token_hash WHERE i.install_id=?1 AND i.epoch=?2 AND i.enabled=1 AND d.notifications_enabled=1",&[row["install_id"].clone(),row["install_epoch"].clone()]).await? else {
+    let Some(endpoint)=storage::execute(db, Operation::ReadEndpoint { install: serde_json::from_value(row["install_id"].clone())?, epoch: serde_json::from_value(row["install_epoch"].clone())? }).await?.first() else {
         return finish(db,delivery_id,&lease,"suppressed","no_endpoint",now(),None).await;
     };
     if int(&endpoint, "token_generation") != int(&row, "attempt_token_generation") {
@@ -155,12 +143,16 @@ pub async fn deliver(
     };
     // Final authority query is after endpoint/config I/O and immediately before
     // fetch. It rechecks opt-out, current endpoint, owner, expiry and kill switch.
-    if first(db,&format!("SELECT 1 FROM n_delivery WHERE delivery_id=?1 AND interest_generation=?2 AND source=?3 AND lease_id=?5 AND state='leased' AND expires_at>?4 AND lease_until>?4 AND attempt_token_generation=(SELECT token_generation FROM n_install WHERE install_id=n_delivery.install_id) AND EXISTS(SELECT 1 FROM n_control WHERE name=?6 AND enabled=1) AND NOT EXISTS(SELECT 1 FROM n_circuit WHERE lane='apns' AND paused=1) AND {}",eligibility.replace(" AND i.next_send_at<=?4","")),&[json!(delivery_id),json!(generation),json!(source),json!(now()),json!(lease),json!(switch)]).await?.is_none() {
+    if storage::execute(db, Operation::ReadSendAuthority { delivery: delivery_id.to_owned(), generation, source: source.to_owned(), now: now(), lease: lease.to_owned(), control: switch.to_owned() }).await?.first().is_none() {
         return finish(db,delivery_id,&lease,"pending","authority_changed",now()+60,None).await;
     }
+    let started = worker::Date::now().as_millis();
     let outcome = attempt(fetcher, request).await;
+    let latency_ms = worker::Date::now().as_millis().saturating_sub(started);
     let t = now();
-    let (state, reason, retry) = match &outcome {
+    // The witness line is written even when deciding the disposition fails,
+    // so every APNs attempt leaves exactly one line.
+    let disposition = async { Ok::<_, worker::Error>(match &outcome {
         None => (
             "uncertain",
             "response_unknown",
@@ -194,14 +186,14 @@ pub async fn deliver(
             } else {
                 t
             };
-            let changed=run(db,"UPDATE devices SET device_token='',notifications_enabled=0,last_seen_at=?5 WHERE install_id=?1 AND device_token_hash=?2 AND EXISTS(SELECT 1 FROM n_install i WHERE i.install_id=?1 AND i.token_hash=?2 AND i.token_generation=?3 AND i.registered_at<=?4 AND i.registration_revision=?6)",&[row["install_id"].clone(),endpoint["device_token_hash"].clone(),row["attempt_token_generation"].clone(),json!(timestamp),json!(t),endpoint["registration_revision"].clone()]).await?;
+            let changed=storage::execute(db, Operation::InvalidateEndpoint { install: serde_json::from_value(row["install_id"].clone())?, token_hash: serde_json::from_value(endpoint["device_token_hash"].clone())?, token_generation: serde_json::from_value(row["attempt_token_generation"].clone())?, invalidated_at: timestamp, now: t, registration_revision: serde_json::from_value(endpoint["registration_revision"].clone())? }).await?.count();
             if changed == 0 {
                 if row["stale_410_generation"].as_i64()==row["attempt_token_generation"].as_i64() {
                     // Suppress this delivery only. An older APNs timestamp still
                     // cannot invalidate the installation's newer registration.
                     ("suppressed", "stale_token", 0)
                 } else {
-                    run(db,"UPDATE n_delivery SET stale_410_generation=?3 WHERE delivery_id=?1 AND lease_id=?2",&[json!(delivery_id),json!(lease),row["attempt_token_generation"].clone()]).await?;
+                    storage::execute(db, Operation::MarkStaleToken { delivery: delivery_id.to_owned(), lease: lease.to_owned(), token_generation: serde_json::from_value(row["attempt_token_generation"].clone())? }).await?.count();
                     ("pending", "stale_410", backoff(int(&row,"attempt")))
                 }
             } else {
@@ -213,14 +205,27 @@ pub async fn deliver(
             ("pending", "apns_unavailable", backoff(int(&row, "attempt")))
         }
         Some(_) => ("permanent_failure", "apns_payload", 0),
+    }) }.await;
+    let witness = super::witness::ApnsSend {
+        source,
+        kind: &event.kind,
+        event_id: &event.event_id,
+        device_token_hash: string(&endpoint, "device_token_hash"),
+        attempt: int(&row, "attempt"),
+        status: outcome.as_ref().map(|o| o.status),
+        apns_id: outcome.as_ref().and_then(|o| o.apns_id.as_deref()),
+        apns_reason: outcome.as_ref().map_or("", |o| o.reason.as_str()),
+        latency_ms,
+        disposition: disposition.as_ref().ok().map(|(state, reason, _)| (*state, *reason)),
     };
+    if witness.accepted() {
+        worker::console_log!("{}", witness.line());
+    } else {
+        worker::console_warn!("{}", witness.line());
+    }
+    let (state, reason, retry) = disposition?;
     if reason == "throttled" {
-        run(
-            db,
-            "UPDATE n_install SET next_send_at=MAX(next_send_at,?2) WHERE install_id=?1",
-            &[row["install_id"].clone(), json!(t + retry)],
-        )
-        .await?;
+        storage::execute(db, Operation::ThrottleInstall { install: serde_json::from_value(row["install_id"].clone())?, until: (t + retry) }).await?.count();
     }
     finish(
         db,
@@ -247,18 +252,21 @@ fn backoff(attempt: i64) -> i64 {
         _ => 300,
     }
 }
-async fn pause(db: &D1Database, reason: &str) -> Result<()> {
-    run(
+async fn pause(db: &crate::database::Authority, reason: &str) -> Result<()> {
+    storage::execute(
         db,
-        "UPDATE n_circuit SET paused=1,reason=?1,updated_at=?2 WHERE lane='apns'",
-        &[json!(reason), json!(now())],
+        Operation::PauseCircuit {
+            reason: reason.to_owned(),
+            now: now(),
+        },
     )
-    .await?;
+    .await?
+    .count();
     worker::console_error!("notification apns circuit paused: {}", reason);
     Ok(())
 }
 async fn finish(
-    db: &D1Database,
+    db: &crate::database::Authority,
     id: &str,
     lease: &str,
     state: &str,
@@ -270,8 +278,18 @@ async fn finish(
         state,
         "accepted" | "suppressed" | "expired" | "permanent_failure"
     );
-    let writes=vec![statement(db,"UPDATE n_delivery SET state=?3,last_reason=?4,next_attempt_at=?5,terminal_at=?6,lease_id=NULL,lease_until=NULL,failures=0 WHERE delivery_id=?1 AND lease_id=?2 AND state='leased'",&[json!(id),json!(lease),json!(state),json!(reason),json!(next),if terminal {json!(now())} else {Value::Null}])?];
-    db.batch(writes).await?;
+    storage::execute(
+        db,
+        Operation::FinishDelivery {
+            delivery: id.into(),
+            lease: lease.into(),
+            state: state.into(),
+            reason: reason.into(),
+            next,
+            terminal_at: if terminal { Some(now()) } else { None },
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -342,7 +360,7 @@ pub(crate) async fn attempt(
 /// The existing diagnostic endpoint keeps its public response shape while using
 /// the same kill switch, circuit and token-version rules as durable delivery.
 pub(crate) async fn diagnostic(
-    db: &D1Database,
+    db: &crate::database::Authority,
     env: &Env,
     install: &str,
     token_hash: &str,
@@ -355,10 +373,20 @@ pub(crate) async fn diagnostic(
             return Ok(None);
         }
     };
-    if !permitted(env, db, "diagnostic_send").await? {
+    if !crate::database::permitted(env, db, "diagnostic_send").await? {
         return Ok(None);
     }
-    let Some(endpoint)=first(db,"SELECT token_generation,registration_revision FROM n_install WHERE install_id=?1 AND token_hash=?2 AND enabled=1 AND NOT EXISTS(SELECT 1 FROM n_circuit WHERE lane='apns' AND paused=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='diagnostic_send' AND enabled=1)",&[json!(install),json!(token_hash)]).await? else { return Ok(None); };
+    let Some(endpoint) = storage::execute(
+        db,
+        Operation::ReadDiagnosticAuthority {
+            install: install.to_owned(),
+            token_hash: token_hash.to_owned(),
+        },
+    )
+    .await?
+    .first() else {
+        return Ok(None);
+    };
     let outcome = attempt(fetcher, request).await;
     if let Some(o) = &outcome {
         if o.status == 403 {
@@ -376,7 +404,21 @@ pub(crate) async fn diagnostic(
             } else {
                 now()
             };
-            run(db,"UPDATE devices SET device_token='',notifications_enabled=0,last_seen_at=?5 WHERE install_id=?1 AND device_token_hash=?2 AND EXISTS(SELECT 1 FROM n_install WHERE install_id=?1 AND token_hash=?2 AND token_generation=?3 AND registered_at<=?4 AND registration_revision=?6)",&[json!(install),json!(token_hash),endpoint["token_generation"].clone(),json!(invalidated),json!(now()),endpoint["registration_revision"].clone()]).await?;
+            storage::execute(
+                db,
+                Operation::InvalidateDiagnosticEndpoint {
+                    install: install.to_owned(),
+                    token_hash: token_hash.to_owned(),
+                    token_generation: serde_json::from_value(endpoint["token_generation"].clone())?,
+                    invalidated_at: invalidated,
+                    now: now(),
+                    registration_revision: serde_json::from_value(
+                        endpoint["registration_revision"].clone(),
+                    )?,
+                },
+            )
+            .await?
+            .count();
         }
     }
     Ok(outcome)

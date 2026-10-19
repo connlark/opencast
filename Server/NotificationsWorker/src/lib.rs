@@ -5,13 +5,33 @@
     allow(dead_code, unused_imports)
 )]
 pub mod apns;
+#[cfg(target_arch = "wasm32")]
+pub mod database;
+#[cfg(any(target_arch = "wasm32", test))]
+mod database_identity;
+#[cfg(any(target_arch = "wasm32", test))]
+mod database_selection;
+
+#[cfg(all(feature = "storage-fixture", feature = "notification-entrypoint"))]
+compile_error!("storage-fixture must be built without notification-entrypoint");
+
+#[cfg(all(target_arch = "wasm32", feature = "storage-fixture"))]
+#[worker::event(fetch)]
+pub async fn storage_fixture(
+    req: worker::Request,
+    env: worker::Env,
+    _ctx: worker::Context,
+) -> worker::Result<worker::Response> {
+    let signal = req.inner().signal();
+    invocation_owner::run_with_abort_signal(signal, database::fixture::handle(req, env))
+        .await
+        .unwrap_or_else(|| worker::Response::error("cancelled", 499))
+}
 pub mod delivery;
 #[cfg(target_arch = "wasm32")]
 mod feed_control;
 pub use opencast_app_attest_core::app_attest;
 pub use opencast_app_attest_core::challenge_limits;
-#[cfg(any(target_arch = "wasm32", test))]
-pub(crate) use opencast_app_attest_core::d1_changes;
 #[cfg(target_arch = "wasm32")]
 pub use opencast_app_attest_core::random;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -45,8 +65,6 @@ mod storage;
 mod subscription_admission;
 #[cfg(any(target_arch = "wasm32", test))]
 mod subscription_payloads;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod test_schema;
 #[cfg(target_arch = "wasm32")]
 mod worker_app;
 #[cfg(target_arch = "wasm32")]
@@ -75,3 +93,5 @@ pub async fn scheduled(event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
         console_error!("scheduled notification maintenance failed: {:?}", error);
     }
 }
+
+mod slice_e_json;

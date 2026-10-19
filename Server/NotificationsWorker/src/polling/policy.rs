@@ -19,12 +19,33 @@ pub const CLEANUP_BUDGET_SECONDS: u64 = 25;
 /// Healthy polls are sampled; every failure and publication is logged.
 pub const SUCCESS_LOG_SAMPLE: u64 = 64;
 pub const RETRY_AFTER_MAX_SECONDS: i64 = 86400;
-// Queued scans share a tiny consumer budget. Bound a publisher's occupancy;
-// private observation deadlines remain unchanged.
+// Queued scans share a tiny consumer budget. Bound a publisher's occupancy:
+// the scan's wall time less the time its own storage was pending, so only a
+// publisher await can expire it. Private observation deadlines remain unchanged.
 pub const SCAN_DEADLINE_SECONDS: u64 = 15;
+/// One shared real-time Delay over a queued scan's fetch and its replay, from
+/// the fetch's first poll; its expiry is a storage failure, never the
+/// publisher's. The 200-second step bounds the whole delivery: the read-only
+/// `ReadClaim`, the permit wait, the pre-fetch reads, this race and the finish.
+/// The 180-second scan lease is acquired later, at materialization in finish
+/// (`Store::materialize`, `ClaimScan`, a fresh now), so no finish margin is
+/// derived from it.
+pub const SCAN_STORAGE_DEADLINE_SECONDS: u64 = 120;
+const _: () = assert!(
+    SCAN_STORAGE_DEADLINE_SECONDS > SCAN_DEADLINE_SECONDS
+        && SCAN_STORAGE_DEADLINE_SECONDS + SCAN_PERMIT_WAIT_MS / 1000 < STEP_DEADLINE_SECONDS
+);
 pub const INACTIVITY_SECONDS: u64 = 5;
 pub const STEP_DEADLINE_SECONDS: u64 = 200;
 pub const BOOKKEEPING_DEADLINE_SECONDS: u64 = 20;
+/// A queued scan waits this long for its isolate's scan permit before it
+/// answers scan_busy. It covers every measured contention wait and baseline
+/// hold on both backends (rehearsal: waits to 9,366 ms, holds to
+/// 9,970 ms) and stays inside SCAN_DEADLINE_SECONDS.
+pub const SCAN_PERMIT_WAIT_MS: u64 = 10_000;
+/// A permit owner this old is stalled or leaked: a waiter refuses at once and
+/// the refused delivery continues a minute later, not after the jittered delay.
+pub const STALLED_OWNER_SECONDS: i64 = 60;
 pub const STALL_RECOVERY_COMPLETIONS: i64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

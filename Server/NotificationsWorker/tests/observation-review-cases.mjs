@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 // Regressions from the independent observation review. These run inside the actual
 // packaged-worker fixture and report all findings even against the old bundle.
 export async function reviewRegressions(h) {
-  const {mf,now,item,hash,newFeed,command,drain,run,first,queue,subscribe,feed,clock,setClock,content}=h;
+  const {mf,db,now,item,hash,newFeed,command,drain,run,first,queue,subscribe,feed,clock,setClock,content}=h;
   const results={},failures=[];
   const raw=path=>mf.dispatchFetch('https://runtime.example.com/observation/'+path,{method:'POST',body:JSON.stringify({feed_id:feed()})});
   async function check(name,body){
@@ -28,7 +28,7 @@ export async function reviewRegressions(h) {
     const scanTime=now+clock(), futureDate=scanTime+6*86400;
     content('review-recovered',[...Array.from({length:5},(_,i)=>item('dated-'+i,scanTime-(i+1)*3600)),item('scheduled',futureDate)]);
     await command('scan');await drain();
-    const releases=(await (await mf.getD1Database('APP_ATTEST_DB')).prepare('SELECT * FROM n_episode_release WHERE feed_id=?').bind(feed()).all()).results;
+    const releases=(await db.prepare('SELECT * FROM n_episode_release WHERE feed_id=?').bind(feed()).all()).results;
     const recent=releases.filter(r=>r.reason==='recent');
     assert.equal(recent.length,5);assert.equal(new Set(recent.map(r=>r.presentation_key)).size,1);
     for(const r of recent){assert.equal(r.first_observed_at,bound);assert.equal(r.eligible_at,r.published_at);assert.equal(r.expires_at,r.published_at+86400);}

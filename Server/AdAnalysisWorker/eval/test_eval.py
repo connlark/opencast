@@ -317,5 +317,381 @@ class PCCTests(unittest.TestCase):
         self.assertEqual(safe_error(ValueError("k3y here"), "k3y"), "[REDACTED] here")
 
 
+
+# Golden behaviour pinned before the eval/providers refactor (2026-10 bakeoff).
+# Literal dicts: any byte change to the Gemini/OpenAI wire, count bodies,
+# header names, archives or answer parsing turns these red.
+GOLDEN_CANONICAL = {
+    "systemInstruction": {"parts": [{"text": "rules"}]},
+    "contents": [
+        {"role": "user", "parts": [{"text": "{\"segments\":[{\"id\":1,\"text\":\"a\"}]}"}]},
+        {"role": "model", "parts": [{"text": "{\"spans\":[]}"}]},
+        {"role": "user", "parts": [{"text": "fix it"}]},
+    ],
+    "generationConfig": {
+        "maxOutputTokens": 16384,
+        "responseMimeType": "application/json",
+        "temperature": 0.2,
+        "topP": 0.9,
+        "thinkingConfig": {"thinkingLevel": "medium"},
+        "responseJsonSchema": {
+            "type": "object",
+            "properties": {
+                "spans": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"kind": {"type": "string"}},
+                        "required": ["kind"],
+                    },
+                }
+            },
+            "required": ["spans"],
+        },
+    },
+}
+
+GOLDEN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "spans": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}},
+                "required": ["kind"],
+            },
+        }
+    },
+    "required": ["spans"],
+}
+
+GOLDEN_GEMINI_38_LOW = {
+    "systemInstruction": {"parts": [{"text": "rules"}]},
+    "contents": [
+        {"role": "user", "parts": [{"text": "{\"segments\":[{\"id\":1,\"text\":\"a\"}]}"}]},
+        {"role": "model", "parts": [{"text": "{\"spans\":[]}"}]},
+        {"role": "user", "parts": [{"text": "fix it"}]},
+    ],
+    "generationConfig": {
+        "maxOutputTokens": 4096,
+        "responseMimeType": "application/json",
+        "thinkingConfig": {"thinkingLevel": "low"},
+        "responseJsonSchema": GOLDEN_SCHEMA,
+    },
+}
+
+GOLDEN_GEMINI_38_DEFAULT = {
+    "systemInstruction": {"parts": [{"text": "rules"}]},
+    "contents": GOLDEN_GEMINI_38_LOW["contents"],
+    "generationConfig": {
+        "maxOutputTokens": 4096,
+        "responseMimeType": "application/json",
+        "thinkingConfig": {"thinkingLevel": "medium"},
+        "responseJsonSchema": GOLDEN_SCHEMA,
+    },
+}
+
+GOLDEN_GEMINI_35_HIGH = {
+    "systemInstruction": {"parts": [{"text": "rules"}]},
+    "contents": GOLDEN_GEMINI_38_LOW["contents"],
+    "generationConfig": {
+        "maxOutputTokens": 4096,
+        "responseMimeType": "application/json",
+        "temperature": 0.2,
+        "topP": 0.9,
+        "thinkingConfig": {"thinkingLevel": "high"},
+        "responseJsonSchema": GOLDEN_SCHEMA,
+    },
+}
+
+
+def golden_openai(model, effort):
+    return {
+        "model": model,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "{\"segments\":[{\"id\":1,\"text\":\"a\"}]}"}
+                ],
+            },
+            {"role": "assistant", "content": "{\"spans\":[]}"},
+            {"role": "user", "content": "fix it"},
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "podcast_ad_breaks",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "spans": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {"kind": {"type": "string"}},
+                                "required": ["kind"],
+                                "additionalProperties": False,
+                            },
+                        }
+                    },
+                    "required": ["spans"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "reasoning": {"effort": effort},
+        "max_output_tokens": 4096,
+        "tools": [],
+        "store": False,
+        "background": False,
+        "service_tier": "default",
+        "prompt_cache_options": {"mode": "explicit"},
+        "instructions": "rules",
+    }
+
+
+GOLDEN_GEMINI_DOC = {
+    "candidates": [
+        {
+            "finishReason": "STOP",
+            "content": {
+                "parts": [
+                    {"thought": True, "text": "thinking"},
+                    {"text": "{\"spans\":[{\"kind\":\"inserted_ad\"}]}"},
+                ]
+            },
+        }
+    ],
+    "usageMetadata": {
+        "promptTokenCount": 120,
+        "cachedContentTokenCount": 20,
+        "candidatesTokenCount": 30,
+        "thoughtsTokenCount": 7,
+        "totalTokenCount": 157,
+    },
+}
+
+GOLDEN_OPENAI_DOC = {
+    "status": "completed",
+    "error": None,
+    "incomplete_details": None,
+    "output": [
+        {"type": "reasoning", "summary": []},
+        {
+            "type": "message",
+            "status": "completed",
+            "content": [
+                {"type": "output_text", "text": "{\"spans\":[{\"kind\":\"house_promo\"}]}"}
+            ],
+        },
+    ],
+    "usage": {
+        "input_tokens": 200,
+        "input_tokens_details": {"cached_tokens": 50},
+        "output_tokens": 40,
+        "output_tokens_details": {"reasoning_tokens": 12},
+    },
+}
+
+
+class FakeHTTP:
+    """Patch urllib.request.urlopen: record each request, serve canned bodies."""
+
+    def __init__(self, bodies):
+        self.bodies = list(bodies)
+        self.requests = []
+
+    def __enter__(self):
+        import urllib.request as ur
+
+        self.original = ur.urlopen
+        ur.urlopen = self
+        return self
+
+    def __exit__(self, *exc):
+        import urllib.request as ur
+
+        ur.urlopen = self.original
+
+    def __call__(self, request, timeout=None):
+        import io
+
+        self.requests.append(
+            {
+                "url": request.full_url,
+                "headers": sorted(k.lower() for k in request.headers),
+                "body": json.loads(request.data) if request.data else None,
+            }
+        )
+        body = self.bodies.pop(0)
+        if isinstance(body, Exception):
+            raise body
+        return io.BytesIO(json.dumps(body).encode())
+
+
+class GoldenTests(unittest.TestCase):
+    def payload(self):
+        return json.loads(json.dumps(GOLDEN_CANONICAL))
+
+    def test_gemini_payloads_are_unchanged(self):
+        self.assertEqual(
+            run.provider_payload("gemini-3.8-flash", self.payload(), "low", 4096),
+            GOLDEN_GEMINI_38_LOW,
+        )
+        self.assertEqual(
+            run.provider_payload("gemini-3.8-flash", self.payload(), "default", 4096),
+            GOLDEN_GEMINI_38_DEFAULT,
+        )
+        self.assertEqual(
+            run.provider_payload("gemini-3.5-flash", self.payload(), "high", 4096),
+            GOLDEN_GEMINI_35_HIGH,
+        )
+
+    def test_openai_responses_payloads_are_unchanged(self):
+        self.assertEqual(
+            run.provider_payload("gpt-5.6-luna", self.payload(), "default", 4096),
+            golden_openai("gpt-5.6-luna", "low"),
+        )
+        self.assertEqual(
+            run.provider_payload("gpt-6-astra", self.payload(), "medium", 4096),
+            golden_openai("gpt-6-astra", "medium"),
+        )
+
+    def test_gemini_count_and_generate_wire(self):
+        wire = run.provider_payload("gemini-3.8-flash", self.payload(), "low", 4096)
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Ledger(Path(tmp) / "ledger.json", 15)
+            out = Path(tmp) / "window-0"
+            with FakeHTTP([{"totalTokens": 100}, GOLDEN_GEMINI_DOC]) as fake:
+                output, details = run.call(
+                    "gemini-3.8-flash", wire, "k3y-gemini", ledger, out, {"w": 0}, 4096
+                )
+            base = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash"
+            self.assertEqual(
+                fake.requests,
+                [
+                    {
+                        "url": base + ":countTokens",
+                        "headers": ["content-type", "x-goog-api-key"],
+                        "body": {
+                            "generateContentRequest": {
+                                "model": "models/gemini-3.8-flash",
+                                **GOLDEN_GEMINI_38_LOW,
+                            }
+                        },
+                    },
+                    {
+                        "url": base + ":generateContent",
+                        "headers": ["content-type", "x-goog-api-key"],
+                        "body": GOLDEN_GEMINI_38_LOW,
+                    },
+                ],
+            )
+            self.assertEqual(output, {"spans": [{"kind": "inserted_ad"}]})
+            self.assertEqual(
+                details["usage"],
+                {"input": 120, "cached": 20, "write": 0, "output": 37, "reasoning": 7},
+            )
+            self.assertLessEqual({"elapsed_s", "usage", "reservation"}, set(details))
+            self.assertEqual(json.loads((out / "request.json").read_text()), GOLDEN_GEMINI_38_LOW)
+            self.assertEqual(json.loads((out / "response.json").read_text()), GOLDEN_GEMINI_DOC)
+            entry = ledger.snapshot()["entries"][0]
+            self.assertEqual(
+                (entry["model"], entry["input_bound"], entry["max_output"], entry["state"]),
+                ("gemini-3.8-flash", 100, 4096, "settled"),
+            )
+            self.assertAlmostEqual(
+                entry["actual_usd"], (100 * 0.75 + 20 * 0.075 + 37 * 3.75) / 1e6
+            )
+
+    def test_openai_count_and_generate_wire(self):
+        wire = run.provider_payload("gpt-5.6-luna", self.payload(), "default", 4096)
+        expected = golden_openai("gpt-5.6-luna", "low")
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Ledger(Path(tmp) / "ledger.json", 15)
+            out = Path(tmp) / "window-0"
+            with FakeHTTP([{"input_tokens": 100}, GOLDEN_OPENAI_DOC]) as fake:
+                output, details = run.call(
+                    "gpt-5.6-luna", wire, "sk-k3y", ledger, out, {"w": 0}, 4096
+                )
+            self.assertEqual(
+                fake.requests,
+                [
+                    {
+                        "url": "https://api.openai.com/v1/responses/input_tokens",
+                        "headers": ["authorization", "content-type"],
+                        "body": {
+                            k: expected[k]
+                            for k in ("model", "input", "instructions", "text", "tools")
+                        },
+                    },
+                    {
+                        "url": "https://api.openai.com/v1/responses",
+                        "headers": ["authorization", "content-type"],
+                        "body": expected,
+                    },
+                ],
+            )
+            self.assertEqual(output, {"spans": [{"kind": "house_promo"}]})
+            self.assertEqual(
+                details["usage"],
+                {"input": 200, "cached": 50, "write": 0, "output": 40, "reasoning": 12},
+            )
+            self.assertEqual(json.loads((out / "request.json").read_text()), expected)
+            entry = ledger.snapshot()["entries"][0]
+            self.assertEqual((entry["input_bound"], entry["max_output"]), (100, 4096))
+
+    def test_definite_http_error_releases_and_redacts(self):
+        import io
+        import urllib.error
+
+        wire = run.provider_payload("gpt-5.6-luna", self.payload(), "default", 4096)
+        error = urllib.error.HTTPError(
+            "https://api.openai.com/v1/responses", 429, "rate", {},
+            io.BytesIO(b'{"error":"slow down sk-k3yk3yk3yk3yk3yk3yk3y"}'),
+        )
+        self.addCleanup(error.close)
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Ledger(Path(tmp) / "ledger.json", 15)
+            out = Path(tmp) / "window-0"
+            with FakeHTTP([{"input_tokens": 100}, error]):
+                with self.assertRaises(RuntimeError) as raised:
+                    run.call("gpt-5.6-luna", wire, "sk-k3yk3yk3yk3yk3yk3yk3y", ledger, out, {}, 4096)
+            self.assertNotIn("k3yk3y", str(raised.exception))
+            self.assertEqual(ledger.snapshot()["entries"][0]["state"], "released")
+            self.assertTrue((out / "error.json").exists())
+
+    def test_answer_and_usage_on_archived_docs(self):
+        self.assertEqual(
+            answer_of("gemini-3.8-flash", GOLDEN_GEMINI_DOC),
+            {"spans": [{"kind": "inserted_ad"}]},
+        )
+        self.assertEqual(
+            usage_of("gemini-3.5-flash", GOLDEN_GEMINI_DOC),
+            {"input": 120, "cached": 20, "write": 0, "output": 37, "reasoning": 7},
+        )
+        self.assertEqual(
+            answer_of("gpt-5.6-terra", GOLDEN_OPENAI_DOC),
+            {"spans": [{"kind": "house_promo"}]},
+        )
+        self.assertEqual(
+            usage_of("gpt-6-astra", GOLDEN_OPENAI_DOC),
+            {"input": 200, "cached": 50, "write": 0, "output": 40, "reasoning": 12},
+        )
+        self.assertEqual(
+            answer_of(PCC_MODEL, pcc_report(raw="{\"spans\":[]}")), {"spans": []}
+        )
+        incomplete = json.loads(json.dumps(GOLDEN_OPENAI_DOC))
+        incomplete["status"] = "incomplete"
+        with self.assertRaises(ValueError):
+            answer_of("gpt-5.6-luna", incomplete)
+        no_usage = {"candidates": GOLDEN_GEMINI_DOC["candidates"], "usageMetadata": {}}
+        self.assertIsNone(usage_of("gemini-3.8-flash", no_usage))
+        self.assertIsNone(usage_of("gpt-5.6-luna", {"status": "completed"}))
+
+
 if __name__ == "__main__":
     unittest.main()

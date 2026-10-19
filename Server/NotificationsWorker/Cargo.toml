@@ -11,8 +11,17 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["notification-entrypoint"]
 notification-entrypoint = []
+# Isolated local harness entrypoint, with the fixture timing hooks. Never
+# enabled by a shipped Worker manifest.
+storage-fixture = ["fixture-hooks"]
+# The fixture timing hooks alone (the core's close delay, the polling loop's
+# clock and gate), without the harness entrypoint: the polling Worker's
+# storage-fixture build. Never enabled by a shipped Worker manifest.
+fixture-hooks = ["opencast-worker-database-core/fixture"]
 
 [dependencies]
+# PostgreSQL is the storage authority and the only storage backend.
+opencast-worker-database-core = { path = "../WorkerDatabaseCore", default-features = false, features = ["postgres"] }
 # Already shipped through AppAttestCore; compact observation spool hashes.
 base64 = "0.23"
 futures-util = "0.3"
@@ -26,12 +35,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 url = "2.5"
-worker = { version = "0.8", features = ["d1", "queue"] }
+worker = { version = "0.8", features = ["queue"] }
 worker-macros = "0.8"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 minicbor = "2.3"
-rusqlite = "0.40.1"
 
 [profile.release]
 lto = true

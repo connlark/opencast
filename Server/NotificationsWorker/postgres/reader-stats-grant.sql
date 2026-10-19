@@ -1,0 +1,15 @@
+-- Superuser-applied (NOT the schema owner: opencast_fixture_owner is
+-- NOSUPERUSER NOCREATEROLE and cannot grant membership in a predefined role).
+-- Lets the dashboard's reader see other sessions' state, xact_start,
+-- backend_type and wait_event in pg_stat_activity, so opencast-admin can tell
+-- idle-in-transaction and long transactions on the runtime role. The role also
+-- makes other sessions' query text visible in that view; the dashboard never
+-- selects it. No table access, no write, no schema change.
+--
+-- The reader is provisioned LOGIN NOINHERIT, so the membership must carry
+-- INHERIT TRUE explicitly or its privileges stay dormant in ordinary sessions.
+-- Apply over the host's local maintenance connection, e.g.
+--   podman exec --user postgres opencast-postgres-fixture \
+--     psql -U postgres -d opencast_production -v reader_role=opencast_fixture_reader \
+--     -f reader-stats-grant.sql
+GRANT pg_read_all_stats TO :"reader_role" WITH INHERIT TRUE;

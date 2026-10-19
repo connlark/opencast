@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
-import {migrate} from './migrations.mjs';
+import {openStorage} from './storage.mjs';
 import {identity} from './delivery-auth.mjs';
 import {compatibilityDate,compatibilityFlags} from './runtime-compatibility.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -11,9 +11,10 @@ const H=parts=>createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 const now=Math.floor(Date.now()/1000);
 let items=['baseline'],requests=0;
 const bindings={NOTIFICATION_ENVIRONMENT:'development',NOTIFICATION_FEED_OBSERVATION:'true',NOTIFICATION_EPISODE_ACTIVATION:'true',NOTIFICATION_EPISODE_SEND:'true',NOTIFICATION_CLEANUP:'true',APPLE_TEAM_ID:'EXAMPLETEAM',APPLE_BUNDLE_ID:'com.example.opencast',APP_ATTEST_ENVIRONMENT:'development',APNS_ENVIRONMENT:'development',PUBLIC_NOTIFICATIONS_ENABLED:'true',DEBUG_ENDPOINTS_ENABLED:'true',ADMIN_TEST_ENDPOINTS_ENABLED:'true',ADMIN_TEST_TOKEN:'obsolete',NOTIFICATION_QUEUED_ENROLLMENT:'false',NOTIFICATION_LEGACY_ADMISSION:'true',NOTIFICATION_LEGACY_SEND:'true',NOTIFICATION_LEGACY_CLEANUP:'true'};
-const mf=new Miniflare(convertV4MiniflareOptions({cf:false,inspectorPort:0,workers:[{name:'current-engine',modulesRoot:root,modules:[...['tests/observation-entry.mjs','adapter/index.js','build/index.js'].map(path=>({type:'ESModule',path:root+path})),{type:'CompiledWasm',path:root+'build/index_bg.wasm'}],compatibilityDate,compatibilityFlags,d1Databases:{APP_ATTEST_DB:'current-engine'},r2Buckets:{FEED_SNAPSHOTS:'current-engine'},queueProducers:{EVENT_QUEUE:'current-events',EPISODE_DELIVERY_QUEUE:'current-episodes',JOB_DELIVERY_QUEUE:'current-jobs'},bindings,outboundService:req=>{requests++;assert.equal(new URL(req.url).hostname,'fixture.example.com');return new Response(`<rss><channel><title>Current engine</title>${items.map(id=>`<item><guid>${id}</guid><title>${id}</title><pubDate>${new Date((now-30)*1000).toUTCString()}</pubDate></item>`).join('')}</channel></rss>`,{headers:{'content-type':'application/rss+xml'}});}}]}));
+const storage=await openStorage();
+const mf=new Miniflare(convertV4MiniflareOptions({cf:false,inspectorPort:0,workers:[storage.bind({name:'current-engine',modulesRoot:root,modules:[...['tests/observation-entry.mjs','adapter/index.js','build/index.js'].map(path=>({type:'ESModule',path:root+path})),{type:'CompiledWasm',path:root+'build/index_bg.wasm'}],compatibilityDate,compatibilityFlags,r2Buckets:{FEED_SNAPSHOTS:'current-engine'},queueProducers:{EVENT_QUEUE:'current-events',EPISODE_DELIVERY_QUEUE:'current-episodes',JOB_DELIVERY_QUEUE:'current-jobs'},bindings,outboundService:req=>{requests++;assert.equal(new URL(req.url).hostname,'fixture.example.com');return new Response(`<rss><channel><title>Current engine</title>${items.map(id=>`<item><guid>${id}</guid><title>${id}</title><pubDate>${new Date((now-30)*1000).toUTCString()}</pubDate></item>`).join('')}</channel></rss>`,{headers:{'content-type':'application/rss+xml'}});}})]}));
 try {
- await mf.ready;const db=await mf.getD1Database('APP_ATTEST_DB');await migrate(db,new URL('../migrations/',import.meta.url));
+ await mf.ready;const db=await storage.database(mf);
  const sql=(q,...args)=>db.prepare(q).bind(...args),first=(q,...args)=>sql(q,...args).first();
  const worker=await mf.getWorker('current-engine');
  const post=(path,value,headers={})=>worker.fetch('https://fixture.invalid'+path,{method:'POST',headers,body:JSON.stringify(value)});
@@ -92,4 +93,4 @@ try {
  assert.equal((await first("SELECT COUNT(*) n FROM n_delivery_history WHERE install_id='current-install'")).n,0);
  assert.equal((await first("SELECT COUNT(*) n FROM n_legacy_bridge WHERE install_id='current-install'")).n,0);
  console.log('PASS authenticated installation erasure removes retained history and bridge keys');
-} finally {await mf.dispose();}
+} finally {try{await mf.dispose();}finally{await storage.dispose();}}

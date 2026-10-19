@@ -1,7 +1,11 @@
 //! One-minute admission. The feed row is the only schedule state: a dispatch
 //! reserves a new obligation or repairs its same-generation wakeup, and the
 //! returned rows become Queue messages. There is no per-attempt job row.
-use super::{execute, origin, policy, rollup_sql};
+use super::{origin, policy};
+use crate::database::{
+    self,
+    polling::{AlertMarker, Candidate, Candidates, EnqueueIdentity, Operation, ReservationMode},
+};
 use crate::delivery::{
     db::*,
     wire::{int, string},
@@ -30,29 +34,27 @@ pub struct Wakeup {
     pub step: u32,
 }
 
-const CONTROLS:&str="EXISTS(SELECT 1 FROM n_control WHERE name='dispatcher_admission' AND enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='feed_observation' AND enabled=1)";
+const ALERT_TIMEOUT_SECONDS: u64 = 10;
 
-// Lifted for the host plan tests; `watchdog`, `reserve` and `stats` read them here.
-pub(super) use super::rollup_sql::{late_scanned, ELIGIBLE, HEALTHY};
-
-/// Canonical URLs have normalized scheme/host/port and no userinfo or fragment.
-/// A root URL may have no slash, or a query immediately after the authority.
-/// Group by that authority even before the first reservation stores origin_key.
-fn admission_origin(alias: &str) -> String {
-    let url = format!("{alias}.canonical_url");
-    let authority = format!("substr({url},instr({url},'://')+3)");
-    format!("substr({url},1,instr({url},'://')+1+MIN(instr({authority}||'/','/'),instr({authority}||'?','?')))")
+pub(super) fn storage_deadline(arrived: u64) -> u64 {
+    crate::database::Authority::default_deadline(arrived)
+        .saturating_add((ALERT_TIMEOUT_SECONDS + policy::BOOKKEEPING_DEADLINE_SECONDS) * 1000)
 }
 
-pub async fn run_dispatch(env: &Env) -> Result<Value> {
-    let db = env.d1("APP_ATTEST_DB")?;
+pub async fn run_dispatch(env: &Env, db: crate::database::Authority) -> Result<Value> {
+    let bookkeeping = db.clone();
+    let db = db.capped_at(crate::database::Authority::default_deadline(
+        super::timing::now_ms(),
+    ));
     if !super::runtime::enabled(env, &db).await? {
         return Ok(json!({"disabled":true}));
     }
     let t = now();
     // Incomplete preparations with an obsolete interest generation cannot block
     // a new baseline. Retain their conservative recovery evidence for seven days.
-    let abandoned = run(&db,"UPDATE n_observation SET state='abandoned',processing_token=NULL,processing_until=NULL WHERE observation_id IN(SELECT o.observation_id FROM n_observation o JOIN n_feed f ON f.feed_id=o.feed_id WHERE o.state='staging' AND (o.owner_epoch<>f.epoch OR o.eligibility_generation<>f.eligibility_generation OR f.no_interest_since IS NOT NULL) LIMIT 100)",&[]).await?;
+    let abandoned = database::execute(&db, Operation::AbandonIneligible)
+        .await?
+        .count();
     if abandoned > 0 {
         console_log!(
             "{}",
@@ -61,31 +63,40 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
     }
     // Repair lapsed obligations first, across both scan and maintenance work.
     // Their original wakeups remain useful, regardless of time spent queued.
-    let pending = format!(
-        "({} OR {} OR {})",
-        execute::DRAINING.replace("?4", "?1"),
-        execute::OUTBOXING.replace("?4", "?1"),
-        execute::PREPARING.replace("?4", "?1")
-    );
-    let scan_due = rollup_sql::SCAN_DUE;
-    let repair_rows = rows(&db, &format!("SELECT f.feed_id,f.canonical_url FROM n_feed f WHERE {ELIGIBLE} AND f.dispatch_until>0 AND f.dispatch_until<=?1 AND (({scan_due}) OR {pending}) ORDER BY f.dispatch_until,f.due_at,f.feed_id LIMIT {}", policy::REPAIR_LIMIT), &[json!(t)]).await?;
+    let repair_rows = database::execute(
+        &db,
+        Operation::ReadCandidates {
+            class: Candidates::Repairs,
+            now: t,
+        },
+    )
+    .await?
+    .rows();
     let repairs = repair_rows.iter().map(record).collect::<Result<Vec<_>>>()?;
-    let repaired = reserve(env, &db, &repairs, t, true, false).await?;
+    let repaired = reserve(env, &db, &repairs, t, ReservationMode::Repair).await?;
     // Settled feeds alone create a new obligation. Bounded early admission
     // leaves processing headroom within the minute tick.
-    let base = format!("{ELIGIBLE} AND f.dispatch_until=0 AND {scan_due}");
-    let origin = admission_origin("f");
-    let query = |baseline: bool, limit: usize| {
-        format!("WITH live AS MATERIALIZED (SELECT {origin} AS origin,COUNT(*) AS n FROM n_feed f WHERE f.dispatch_until>?1 GROUP BY origin), ranked AS (SELECT f.feed_id,f.canonical_url,f.due_at,{origin} AS origin,ROW_NUMBER() OVER(PARTITION BY {origin} ORDER BY f.due_at,f.feed_id) AS host_rank FROM n_feed f WHERE {base} AND (f.snapshot_key IS NULL)={}) SELECT r.feed_id,r.canonical_url FROM ranked r LEFT JOIN live l ON l.origin=r.origin WHERE r.host_rank+COALESCE(l.n,0)<={} ORDER BY r.host_rank,r.due_at,r.feed_id LIMIT {limit}",i32::from(baseline),policy::ORIGIN_OUTSTANDING_LIMIT)
-    };
-    // Each class may borrow all global headroom; the atomic reserve below
-    // rechecks both limits across their combined 4:1 ordering.
-    let mut recurring = rows(&db, &query(false, policy::OUTSTANDING_LIMIT), &[json!(t)])
-        .await?
-        .into_iter();
-    let mut baselines = rows(&db, &query(true, policy::OUTSTANDING_LIMIT), &[json!(t)])
-        .await?
-        .into_iter();
+    // Each class may borrow all global headroom; reserve rechecks both caps.
+    let mut recurring = database::execute(
+        &db,
+        Operation::ReadCandidates {
+            class: Candidates::Recurring,
+            now: t,
+        },
+    )
+    .await?
+    .rows()
+    .into_iter();
+    let mut baselines = database::execute(
+        &db,
+        Operation::ReadCandidates {
+            class: Candidates::Baselines,
+            now: t,
+        },
+    )
+    .await?
+    .rows()
+    .into_iter();
     let mut admitted = vec![];
     for i in 0..policy::DISPATCH_LIMIT {
         let next = if i % 5 == 4 {
@@ -98,23 +109,32 @@ pub async fn run_dispatch(env: &Env) -> Result<Value> {
         };
         admitted.push(record(&row)?);
     }
-    let polls = reserve(env, &db, &admitted, t, false, true).await?;
+    let polls = reserve(env, &db, &admitted, t, ReservationMode::Admission).await?;
     // Separate maintenance admission keeps future/outbox recovery independent
     // of recurring due dates, publisher backoff and origin cooldowns. Oldest
     // work is selected, not alphabetical feeds. It also resumes a preparation
     // whose continuation message was lost.
-    let maintenance=rows(&db,&format!("SELECT f.feed_id,f.canonical_url FROM n_feed f WHERE {ELIGIBLE} AND f.dispatch_until=0 AND {pending} ORDER BY f.due_at,f.feed_id LIMIT 100"),&[json!(t)]).await?;
+    let maintenance = database::execute(
+        &db,
+        Operation::ReadCandidates {
+            class: Candidates::Maintenance,
+            now: t,
+        },
+    )
+    .await?
+    .rows();
     let maintenance = maintenance.iter().map(record).collect::<Result<Vec<_>>>()?;
-    let maintained = reserve(env, &db, &maintenance, t, false, false).await?;
+    let maintained = reserve(env, &db, &maintenance, t, ReservationMode::Maintenance).await?;
     // The one-minute cost/lag rollup: no per-poll diagnostic rows exist.
-    let mut rollup = first(&db, &rollup_sql::rollup(), &[json!(t)])
+    let mut rollup = database::execute(&db, Operation::ReadRollup { now: t })
         .await?
+        .first()
         .unwrap_or_else(|| json!({}));
     rollup["outstanding"] = rollup["in_flight"].clone();
     rollup["repairs"] = json!(repaired);
     rollup["admitted"] = json!(polls);
     rollup["maintenance_admitted"] = json!(maintained);
-    let (alerting, alert_state) = alert_dispatch(env, &db, &rollup, t).await?;
+    let (alerting, alert_state) = alert_dispatch(env, &db, &bookkeeping, &rollup, t).await?;
     rollup["alerting"] = json!(alerting);
     rollup["stall_state"] = json!(alert_state["stall_state"]);
     rollup["stall_since"] = json!(alert_state["stall_since"]);
@@ -250,7 +270,15 @@ impl AlertDraft<'_> {
     }
 }
 
-pub(super) async fn send_alert(target: &AlertTarget, draft: AlertDraft<'_>) -> Result<bool> {
+/// The relay's answer to one alert request. `status` is 0 when the request
+/// or its response failed before an HTTP status was read.
+#[derive(Clone, Copy)]
+pub(super) struct AlertReply {
+    pub delivered: bool,
+    pub status: u16,
+}
+
+pub(super) async fn send_alert(target: &AlertTarget, draft: AlertDraft<'_>) -> Result<AlertReply> {
     let envelope = json!({"recipient":target.recipient,"draft":draft.payload()});
     let headers = Headers::new();
     headers.set("authorization", &format!("Bearer {}", target.credential))?;
@@ -263,7 +291,7 @@ pub(super) async fn send_alert(target: &AlertTarget, draft: AlertDraft<'_>) -> R
     let request = Request::new_with_init(&target.url, &init)?;
     let mut response = crate::deadline::fetch_with_deadline(
         Fetch::Request(request).send(),
-        Delay::from(Duration::from_secs(10)),
+        Delay::from(Duration::from_secs(ALERT_TIMEOUT_SECONDS)),
         Error::RustError("poll_alert_timeout".into()),
     )
     .await?;
@@ -301,29 +329,70 @@ pub(super) async fn send_alert(target: &AlertTarget, draft: AlertDraft<'_>) -> R
             json!({"event":"poll_alert_recipient_status","status":aggregate})
         );
     }
-    Ok(delivered)
+    Ok(AlertReply { delivered, status })
 }
 
-async fn send_alert_safely(target: &AlertTarget, draft: AlertDraft<'_>) -> bool {
+async fn send_alert_safely(target: &AlertTarget, draft: AlertDraft<'_>) -> AlertReply {
     match send_alert(target, draft).await {
-        Ok(delivered) => delivered,
+        Ok(reply) => reply,
         Err(error) => {
             console_warn!(
                 "{}",
                 json!({"event":"poll_alert_failed","status":0,"code":error.to_string()})
             );
-            false
+            AlertReply {
+                delivered: false,
+                status: 0,
+            }
         }
     }
 }
 
+/// Writes the attempt's marker, if any, then logs the attempt's one
+/// `poll_alert_delivery` line: kind, lane, relay status and the marker with
+/// whether it changed the dispatch row (null when the write failed, whose
+/// error is then returned).
+async fn settle_alert(
+    db: &crate::database::Authority,
+    kind: &str,
+    lane: &str,
+    reply: AlertReply,
+    marker: Option<(&str, AlertMarker)>,
+) -> Result<bool> {
+    let name = marker.as_ref().map(|(name, _)| *name);
+    let marked = match marker {
+        Some((_, marker)) => {
+            let bookkeeping = db.bookkeeping(
+                super::timing::now_ms().saturating_add(policy::BOOKKEEPING_DEADLINE_SECONDS * 1000),
+            );
+            Some(
+                database::execute(&bookkeeping, Operation::MarkAlert { marker })
+                    .await
+                    .map(|response| response.count() > 0),
+            )
+        }
+        None => None,
+    };
+    let line = json!({"event":"poll_alert_delivery","kind":kind,"lane":lane,"status":reply.status,"delivered":reply.delivered,"marker":name,"marked":marked.as_ref().and_then(|m| m.as_ref().ok())});
+    if reply.delivered {
+        console_log!("{line}");
+    } else {
+        console_warn!("{line}");
+    }
+    if let Some(Err(error)) = marked {
+        return Err(error);
+    }
+    Ok(reply.delivered)
+}
+
 async fn alert_dispatch(
     env: &Env,
-    db: &D1Database,
+    db: &crate::database::Authority,
+    bookkeeping: &crate::database::Authority,
     rollup: &Value,
     t: i64,
 ) -> Result<(bool, Value)> {
-    let state = first(db, "SELECT stall_state,stall_since,stall_alerted_at,alert_armed_at FROM n_poll_dispatch WHERE id=1", &[]).await?.unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0,"stall_alerted_at":0,"alert_armed_at":0}));
+    let state = database::execute(db, Operation::ReadDispatchState { full: true }).await?.first().unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0,"stall_alerted_at":0,"alert_armed_at":0}));
     let Some(target) = alert_target(env) else {
         return Ok((false, state));
     };
@@ -347,27 +416,30 @@ async fn alert_dispatch(
     let lane_name = lane(env);
     let delivered = match transition {
         Some(super::policy::StallAlert::Armed) => {
-            let sent = send_alert_safely(&target, AlertDraft::Armed { lane: &lane_name }).await;
-            if sent {
-                run(
-                    db,
-                    "UPDATE n_poll_dispatch SET alert_armed_at=?1 WHERE id=1 AND alert_armed_at=0",
-                    &[json!(t)],
-                )
-                .await?;
-            }
-            sent
+            let reply = send_alert_safely(&target, AlertDraft::Armed { lane: &lane_name }).await;
+            let marker = reply
+                .delivered
+                .then_some(("armed", AlertMarker::Armed { now: t }));
+            settle_alert(bookkeeping, "armed", &lane_name, reply, marker).await?
         }
         Some(super::policy::StallAlert::Onset { stall_since: onset }) => {
             let entered = if stall_state == "stalled" {
                 true
             } else {
-                run(db, "UPDATE n_poll_dispatch SET stall_state='stalled',stall_since=?1,stall_alerted_at=0 WHERE id=1 AND stall_state='clear'", &[json!(onset)]).await? > 0
+                database::execute(
+                    db,
+                    Operation::MarkAlert {
+                        marker: AlertMarker::Onset { since: onset },
+                    },
+                )
+                .await?
+                .count()
+                    > 0
             };
             if !entered {
                 false
             } else {
-                let sent = send_alert_safely(
+                let reply = send_alert_safely(
                     &target,
                     AlertDraft::Onset {
                         lane: &lane_name,
@@ -379,10 +451,14 @@ async fn alert_dispatch(
                     },
                 )
                 .await;
-                if sent {
-                    run(db, "UPDATE n_poll_dispatch SET stall_alerted_at=?1 WHERE id=1 AND stall_state='stalled' AND stall_since=?2 AND stall_alerted_at=0", &[json!(t),json!(onset)]).await?;
-                }
-                sent
+                let marker = reply.delivered.then_some((
+                    "onset_sent",
+                    AlertMarker::OnsetSent {
+                        since: onset,
+                        now: t,
+                    },
+                ));
+                settle_alert(bookkeeping, "onset", &lane_name, reply, marker).await?
             }
         }
         Some(super::policy::StallAlert::Hourly {
@@ -390,11 +466,23 @@ async fn alert_dispatch(
             hour,
         }) => {
             let marker = -t.max(1);
-            let claimed = run(db, "UPDATE n_poll_dispatch SET stall_alerted_at=?1 WHERE id=1 AND stall_state='stalled' AND stall_since=?2 AND stall_alerted_at=?3", &[json!(marker),json!(since),json!(stall_alerted_at)]).await? > 0;
+            let claimed = database::execute(
+                db,
+                Operation::MarkAlert {
+                    marker: AlertMarker::ClaimHourly {
+                        since,
+                        previous: stall_alerted_at,
+                        marker,
+                    },
+                },
+            )
+            .await?
+            .count()
+                > 0;
             if !claimed {
                 false
             } else {
-                let sent = send_alert_safely(
+                let reply = send_alert_safely(
                     &target,
                     AlertDraft::Hourly {
                         lane: &lane_name,
@@ -407,16 +495,23 @@ async fn alert_dispatch(
                     },
                 )
                 .await;
-                if sent {
-                    run(db, "UPDATE n_poll_dispatch SET stall_alerted_at=?1 WHERE id=1 AND stall_alerted_at=?2", &[json!(t),json!(marker)]).await?;
-                } else {
-                    run(db, "UPDATE n_poll_dispatch SET stall_alerted_at=?1 WHERE id=1 AND stall_alerted_at=?2", &[json!(stall_alerted_at),json!(marker)]).await?;
-                }
-                sent
+                // A failed reminder restores the previous send time.
+                let finish = AlertMarker::FinishHourly {
+                    expected: marker,
+                    value: if reply.delivered { t } else { stall_alerted_at },
+                };
+                settle_alert(
+                    bookkeeping,
+                    "hourly",
+                    &lane_name,
+                    reply,
+                    Some(("finish_hourly", finish)),
+                )
+                .await?
             }
         }
         Some(super::policy::StallAlert::Recovery { stall_since: since }) => {
-            let sent = send_alert_safely(
+            let reply = send_alert_safely(
                 &target,
                 AlertDraft::Recovery {
                     lane: &lane_name,
@@ -425,40 +520,41 @@ async fn alert_dispatch(
                 },
             )
             .await;
-            if sent {
-                run(db, "UPDATE n_poll_dispatch SET stall_state='clear',stall_since=0,stall_alerted_at=0 WHERE id=1 AND stall_state='stalled' AND stall_since=?1", &[json!(since)]).await?;
-            }
-            sent
+            let marker = reply
+                .delivered
+                .then_some(("recovery", AlertMarker::Recovery { since }));
+            settle_alert(bookkeeping, "recovery", &lane_name, reply, marker).await?
         }
         None => false,
     };
-    let current = first(
-        db,
-        "SELECT stall_state,stall_since FROM n_poll_dispatch WHERE id=1",
-        &[],
-    )
-    .await?
-    .unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0}));
+    let bookkeeping = bookkeeping.bookkeeping(
+        super::timing::now_ms().saturating_add(policy::BOOKKEEPING_DEADLINE_SECONDS * 1000),
+    );
+    let current = database::execute(&bookkeeping, Operation::ReadDispatchState { full: false })
+        .await?
+        .first()
+        .unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0}));
     let _ = delivered;
     Ok((true, current))
 }
-fn record(row: &Value) -> Result<Value> {
+fn record(row: &Value) -> Result<Candidate> {
     let url = url::Url::parse(string(row, "canonical_url"))
         .map_err(|_| Error::RustError("invalid_feed_mapping".into()))?;
-    Ok(
-        json!({"feed_id":row["feed_id"],"origin_key":origin::key(&url),"admission_origin":url.origin().ascii_serialization()}),
-    )
+    Ok(Candidate {
+        feed_id: string(row, "feed_id").into(),
+        origin_key: origin::key(&url),
+        admission_origin: url.origin().ascii_serialization(),
+    })
 }
 /// Reserve atomically; only a new obligation advances the generation. Overlapping dispatchers
 /// cannot both reserve a feed, so no dispatcher lease is needed; only the rows
 /// this statement returned are enqueued.
 async fn reserve(
     env: &Env,
-    db: &D1Database,
-    records: &[Value],
+    db: &crate::database::Authority,
+    records: &[Candidate],
     t: i64,
-    repair: bool,
-    bounded: bool,
+    mode: ReservationMode,
 ) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
@@ -466,8 +562,16 @@ async fn reserve(
     // Materialize the valid ordered candidates and headroom in this one atomic
     // statement. An overlapping dispatcher sees the preceding reservations;
     // rows it already took cannot consume this statement's available slots.
-    let origin = admission_origin("f");
-    let reserved=rows(db,&format!("WITH live AS MATERIALIZED (SELECT {origin} AS origin,COUNT(*) AS n FROM n_feed f WHERE ?4 AND f.dispatch_until>?2 GROUP BY origin), eligible AS MATERIALIZED (SELECT j.value,CAST(j.key AS INTEGER) AS position,ROW_NUMBER() OVER(PARTITION BY json_extract(j.value,'$.admission_origin') ORDER BY CAST(j.key AS INTEGER)) AS origin_rank FROM json_each(?1) j JOIN n_feed f ON f.feed_id=json_extract(j.value,'$.feed_id') WHERE f.dispatch_until<=?2 AND (f.dispatch_until>0)=?3 AND {ELIGIBLE} AND {CONTROLS}), admitted AS MATERIALIZED (SELECT e.value FROM eligible e LEFT JOIN live l ON l.origin=json_extract(e.value,'$.admission_origin') WHERE NOT ?4 OR e.origin_rank+COALESCE(l.n,0)<={} ORDER BY e.position LIMIT (CASE WHEN ?4 THEN MAX(0,{}-(SELECT COUNT(*) FROM n_feed WHERE dispatch_until>?2)) ELSE -1 END)) UPDATE n_feed AS f SET schedule_generation=f.schedule_generation+CASE WHEN f.dispatch_until=0 THEN 1 ELSE 0 END,dispatch_until=?2+{},origin_key=json_extract(j.value,'$.origin_key') FROM admitted j WHERE f.feed_id=json_extract(j.value,'$.feed_id') RETURNING feed_id,epoch,schedule_generation,due_at",policy::ORIGIN_OUTSTANDING_LIMIT,policy::OUTSTANDING_LIMIT,policy::DISPATCH_RESERVATION_SECONDS),&[json!(records),json!(t),json!(i32::from(repair)),json!(i32::from(bounded))]).await?;
+    let reserved = database::execute(
+        db,
+        Operation::ReserveDispatch {
+            candidates: records.to_vec(),
+            mode,
+            now: t,
+        },
+    )
+    .await?
+    .rows();
     let messages: Vec<_> = reserved
         .iter()
         .map(|r| Wakeup {
@@ -488,9 +592,19 @@ async fn reserve(
             // the next tick repairs it and any delivered copy stays valid.
             let lost: Vec<_> = chunk
                 .iter()
-                .map(|w| json!({"feed_id":w.feed_id,"generation":w.generation}))
+                .map(|w| EnqueueIdentity {
+                    feed_id: w.feed_id.clone(),
+                    generation: w.generation,
+                })
                 .collect();
-            run(db,&format!("UPDATE n_feed SET dispatch_until=?2 FROM json_each(?1) j WHERE n_feed.feed_id=json_extract(j.value,'$.feed_id') AND n_feed.schedule_generation=json_extract(j.value,'$.generation') AND n_feed.dispatch_until=?2+{}",policy::DISPATCH_RESERVATION_SECONDS),&[json!(lost),json!(t)]).await?;
+            database::execute(
+                db,
+                Operation::LapseUncertainEnqueue {
+                    identities: lost,
+                    now: t,
+                },
+            )
+            .await?;
             console_warn!(
                 "{}",
                 json!({"event":"poll_enqueue_failed","count":chunk.len()})
@@ -510,38 +624,12 @@ pub async fn send(env: &Env, messages: Vec<Wakeup>, delay: u32) -> Result<()> {
         )
         .await
 }
-pub async fn stats(env: &Env, db: &D1Database) -> Result<Value> {
+pub async fn stats(env: &Env, db: &crate::database::Authority) -> Result<Value> {
     let t = now();
-    let cooling = "EXISTS(SELECT 1 FROM n_poll_origin h WHERE h.origin_key=f.origin_key AND h.cooldown_until>?1)";
-    let healthy = HEALTHY;
-    let late = late_scanned(600);
-    let eligible = format!("{ELIGIBLE} AND f.due_at<=?1");
-    let mut value = first(db,&format!("SELECT
-        (SELECT COUNT(*) FROM n_feed f WHERE {eligible}) AS overdue,
-        (SELECT COUNT(*) FROM n_feed f WHERE {eligible} AND {healthy}) AS healthy_overdue,
-        (SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {eligible} AND {healthy}) AS oldest_due_seconds,
-        (SELECT COUNT(*) FROM n_feed f WHERE {late}) AS late_600,
-        (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND {healthy} AND f.snapshot_key IS NULL AND f.due_at<?1-600) AS late_baselines,
-        (SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE {eligible} AND NOT({healthy})) AS oldest_unhealthy_due_seconds,
-        (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.handling_failures=0 AND (f.poll_failures>0 OR f.retry_at>?1 OR {cooling})) AS publisher_backoff,
-        (SELECT COUNT(*) FROM n_feed f WHERE {ELIGIBLE} AND f.handling_failures>0) AS dead_lettered,
-        (SELECT COUNT(*) FROM n_feed f WHERE f.dispatch_until>?1) AS in_flight,
-        (SELECT COUNT(*) FROM n_feed f WHERE f.dispatch_until>0 AND f.dispatch_until<=?1) AS reservation_expired,
-        (SELECT COALESCE(MAX(?1-f.due_at),0) FROM n_feed f WHERE f.dispatch_until>?1 AND f.due_at<=?1) AS queue_age_seconds,
-        (SELECT COUNT(*) FROM n_poll_origin WHERE cooldown_until>?1) AS origin_cooldowns,
-        (SELECT COUNT(*) FROM n_observation WHERE state='abandoned' AND processing_failures>=10) AS preparation_abandoned,
-        (SELECT COUNT(*) FROM n_observation WHERE state='abandoned' AND processing_failures<10) AS eligibility_abandoned,
-        (SELECT COUNT(*) FROM n_burst WHERE complete=0 AND failures>=10) AS burst_poisoned,
-        (SELECT COUNT(*) FROM n_outbox WHERE source='feed_polling' AND state='pending') AS source_pending,
-        (SELECT COUNT(*) FROM n_snapshot s WHERE s.state IN('reserved','uploaded','referenced','gc_claimed') AND s.gc_after<=?1 AND NOT({})) AS snapshot_orphan_total,
-        (SELECT COALESCE(SUM(publisher_failures),0) FROM n_poll_stat WHERE bucket>=?2) AS publisher_failure_total,
-        (SELECT COALESCE(SUM(handling_failures),0) FROM n_poll_stat WHERE bucket>=?2) AS handling_failure_total,
-        (SELECT COALESCE(SUM(redeliveries),0) FROM n_poll_stat WHERE bucket>=?2) AS redelivery_total,
-        (SELECT COALESCE(SUM(dead_letters),0) FROM n_poll_stat WHERE bucket>=?2) AS dead_letter_total,
-        (SELECT COALESCE(SUM(stale_commits),0) FROM n_poll_stat WHERE bucket>=?2) AS stale_commit_total,
-        (SELECT COALESCE(SUM(retry_after_clamps),0) FROM n_poll_stat WHERE bucket>=?2) AS retry_after_clamped_total,
-        (SELECT COALESCE(SUM(scan_busy),0) FROM n_poll_stat WHERE bucket>=?2) AS scan_busy_total,
-        (SELECT COALESCE(SUM(permit_reclaims),0) FROM n_poll_stat WHERE bucket>=?2) AS permit_reclaim_total",crate::observation::gc::live("s")),&[json!(t),json!(t.div_euclid(3600)-24)]).await?.ok_or_else(||Error::RustError("poll_stats_missing".into()))?;
+    let mut value = database::execute(db, Operation::ReadStats { now: t })
+        .await?
+        .first()
+        .ok_or_else(|| Error::RustError("poll_stats_missing".into()))?;
     // Failure, redelivery and rejected-commit totals are a rolling 24 hours.
     // Healthy polls leave only the feed's last outcome and sampled events.
     value["counter_window"] = json!("rolling_24_hours");
@@ -556,13 +644,10 @@ pub async fn stats(env: &Env, db: &D1Database) -> Result<Value> {
     value["abandoned_recovered"] = json!(diagnostics.abandoned_recovered);
     value["stale_releases"] = json!(diagnostics.stale_releases);
     value["permit_reclaims"] = json!(diagnostics.reclaimed);
-    let state = first(
-        db,
-        "SELECT stall_state,stall_since FROM n_poll_dispatch WHERE id=1",
-        &[],
-    )
-    .await?
-    .unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0}));
+    let state = database::execute(db, Operation::ReadDispatchState { full: false })
+        .await?
+        .first()
+        .unwrap_or_else(|| json!({"stall_state":"clear","stall_since":0}));
     value["stall_state"] = json!(state["stall_state"].as_str().unwrap_or("clear"));
     value["stall_since"] = json!(state["stall_since"].as_i64().unwrap_or(0));
     value["alerting"] = json!(alert_target(env).is_some());

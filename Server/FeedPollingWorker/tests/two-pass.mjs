@@ -14,12 +14,17 @@ const h = await harness(request => {
   const body = serve.get(request.url);
   return body == null ? new Response('missing', { status: 404 }) : new Response(body);
 });
+// Anchor the fixture phase before applying offsets: a publication immediately
+// before the next 15-minute slot is scan-due again within the 30-second
+// lookahead, so draining can legitimately replace its outcome with unchanged.
+// At this phase every measured publication stays outside that lookahead.
+h.now -= h.now % 900;
 const bucket = await h.instance.getR2Bucket('FEED_SNAPSHOTS', 'polling-runtime');
 const delivery = await h.instance.getWorker('delivery-runtime');
 let offset = 0;
 async function at(seconds) {
   offset = seconds; await h.invoke('clock', String(seconds));
-  await (await delivery.fetch('https://delivery.invalid/clock', { method: 'POST', body: String(seconds) })).text();
+  await (await delivery.fetch('https://delivery.invalid/clock', { method: 'POST', body: String(h.now + seconds - Math.floor(Date.now() / 1000)) })).text();
 }
 const entry = ({ guid, at: date, title = `Episode ${guid}`, description }) => `<item><guid>${guid}</guid><title>${title}</title>${description == null ? '' : `<description>${description}</description>`}${date == null ? '' : `<pubDate>${new Date(date * 1000).toUTCString()}</pubDate>`}<enclosure url="https://audio.example.com/${guid}.mp3"/></item>`;
 const document = items => `<rss><channel><title>Two-pass fixture</title>${items.map(entry).join('')}</channel></rss>`;
@@ -151,15 +156,17 @@ try {
   assert.deepEqual([kept.reason, kept.first_observed_at, kept.expires_at], ['undated', failedAt, failedAt + 86400], 'the retry publishes with the original bound');
   console.log('PASS case 5a: a scratch write failing during the replay is storage_error: bound recorded, upload aborted, the retry publishes with the original bound');
 
-  // 5b. The spilled body's read back stalls past the scan deadline.
+  // 5b. The spilled body's read back stalls past the scan's storage bound:
+  // it hangs until released, so the bound fires whatever its length.
   largeItems = [{ guid: 'large-slow', title: 'Slow release' }, ...largeItems];
   serve.set(LARGE, document(largeItems));
   const start = performance.now();
-  p = await consume(large, LARGE, { fault: 'slow_get' });
+  p = await consume(large, LARGE, { fault: 'hang_get' });
   const slowAt = h.now + offset, wall = performance.now() - start;
   assert.notEqual(p.status, 200, `the stalled replay read is retryable handling trouble: ${p.text}`);
   assert.equal(Object.keys(p.logged).filter(k => k.startsWith('storage_error:')).length, 1, JSON.stringify(p.logged));
-  assert.equal(await (await h.instance.dispatchFetch('https://polling.invalid/fault-state')).text(), '', 'the stalled get was the replay read');
+  assert.equal(await (await h.instance.dispatchFetch('https://polling.invalid/fault-state')).text(), 'hang_get_active', 'the stalled get was the replay read');
+  await h.invoke('release-hang');
   assert.equal(p.requests, 1);
   assert.equal(await scratch(), 0, 'the completed body was deleted on failure');
   assert.ok((await bounds(large)).some(b => b.scan_started_at === slowAt), 'the failed scan recorded its first-observed bound');
@@ -168,7 +175,7 @@ try {
   assert.equal(p.state.last_poll_outcome, 'published');
   kept = await release(large, 'Slow release');
   assert.deepEqual([kept.reason, kept.first_observed_at, kept.expires_at], ['undated', slowAt, slowAt + 86400], 'the retry publishes with the original bound');
-  console.log(`PASS case 5b: a stalled spilled-body read trips the scan deadline (${Math.round(wall)} ms): storage_error, bound recorded, body deleted, the retry publishes with the original bound`);
+  console.log(`PASS case 5b: a stalled spilled-body read trips the scan's storage bound (${Math.round(wall)} ms): storage_error, bound recorded, body deleted, the retry publishes with the original bound`);
 
   // 6. Without a bound digest a probe could never say unchanged: one full pass,
   // which repairs the digest; the next poll is the probe again.

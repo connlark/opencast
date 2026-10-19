@@ -3,6 +3,7 @@ import { setTimeout } from 'node:timers/promises';
 import { harness, hash, item, rss } from './harness.mjs';
 
 let behavior;
+const wallNow = Date.now;
 const h = await harness(request => behavior(request));
 const baseline = () => new Response(rss([item('base', h.now - 100)]), { headers: { etag: '"v1"' } });
 async function clock(seconds) {
@@ -27,8 +28,13 @@ try {
   // keeps one evidence row for its whole failure streak; the matched 304 must
   // retire it, or it would date the later release into the past. A deferral
   // never reached the publisher and writes nothing at all.
+  // Keep each subcase beyond the prior two-day phase and one-second send throttle.
+  const initialNow = h.now;
+  let phase = 0;
   for (const scenario of ['failed', 'truncated', 'origin-cooldown', 'redirect-cooldown']) {
-    await clock(0);
+    Date.now = () => wallNow() + phase * 1000;
+    h.now = initialNow + phase;
+    await clock(phase + 0);
     behavior = baseline;
     const url = `https://${scenario}.example.com/feed`, feed = await h.add(url);
     await due(feed); await h.drain();
@@ -56,12 +62,12 @@ try {
       await h.run('UPDATE n_feed SET retry_at=1 WHERE feed_id=?', feed);
       assert.equal((await h.invoke('test/stats')).healthy_overdue, 0, 'a failing feed remains unhealthy after its retry deadline passes');
     } else assert.equal(outcome.poll_failures, 0, 'a deferral is not a publisher failure');
-    await clock(180);
+    await clock(phase + 180);
     behavior = () => new Response(null, { status: 304 });
     await due(feed); await h.drain();
     assert.equal((await durable(feed)).evidence, 0);
     assert.equal((await h.first('SELECT last_poll_outcome FROM n_feed WHERE feed_id=?', feed)).last_poll_outcome, 'not_modified');
-    await clock(2 * 86400);
+    await clock(phase + 2 * 86400);
     behavior = () => new Response(rss([item('base', h.now - 100), item('undated', null)]), { headers: { etag: '"v2"' } });
     const sent = h.sends.length;
     await due(feed); await h.drain(); await h.deliver(true);
@@ -71,7 +77,10 @@ try {
     assert.equal((await h.first('SELECT COUNT(*) AS n FROM n_event e JOIN n_outbox x ON x.event_id=e.event_id WHERE x.observation_id IN(SELECT observation_id FROM n_observation WHERE feed_id=?)', feed)).n, 1);
     await h.run('UPDATE n_feed SET admission_paused=1 WHERE feed_id=?', feed);
     console.log(`PASS ${scenario} -> matched 304 -> undated release two days later sends exactly once`);
+    phase += 2 * 86400 + 1;
   }
+  Date.now = wallNow;
+  h.now = initialNow;
 
   // A change that was proved and claimed, then failed before publishing, is
   // durable evidence: its scan start still bounds the retried release.
@@ -124,7 +133,8 @@ try {
   await h.run('UPDATE n_feed SET admission_paused=1 WHERE feed_id=?', storage);
   console.log('PASS R2/D1 failures stay visible as handling trouble without publisher cooldown');
 
-  const failing = await h.add('https://retry-after.example.com/feed', h.now - 90000);
+  // Seed beyond the strict age threshold without relying on elapsed wall time.
+  const failing = await h.add('https://retry-after.example.com/feed', h.now - 90001);
   behavior = () => new Response('busy', { status: 503, headers: { 'retry-after': '31536000' } });
   await h.invoke('test/dispatch'); await h.drain();
   let stats = await h.invoke('test/stats');
@@ -173,4 +183,4 @@ try {
   assert.ok(stats.queue_age_seconds >= 0);
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_poll'")).n + (await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_origin_permit'")).n, 0);
   console.log('PASS rolling failure counters and orphan/queue-age operator gauges');
-} finally { await h.instance.dispose(); }
+} finally { Date.now = wallNow; await h.instance.dispose(); }

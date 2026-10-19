@@ -71,8 +71,12 @@ try {
   assert.equal(queue.length, 0, 'finite service drains the retained backlog unaided');
   assert.ok(samples.at(-1).oldest < 60, 'oldest overdue age converges after capacity returns');
   const delivery = await h.instance.getWorker('delivery-runtime');
-  await (await delivery.fetch('https://delivery.invalid/clock', { method: 'POST', body: String(start + (ticks + 1) * 60 - Math.floor(Date.now() / 1000)) })).text();
-  await h.deliver(true);
+  // Settle with an explicit second per round so the installation throttle
+  // advances even when the worker wall clock is frozen for trace replay.
+  for (let round = 0; round < 60; round++) {
+    await (await delivery.fetch('https://delivery.invalid/clock', { method: 'POST', body: String(start + (ticks + 1) * 60 + round - Math.floor(Date.now() / 1000)) })).text();
+    await h.deliver();
+  }
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM n_observation WHERE state='published'")).n, baselinePublications + 80, 'one publication of each changed feed');
   assert.equal((await h.first('SELECT COUNT(*) AS n FROM n_event')).n, 80, 'one logical event per release');
   assert.equal(h.sends.length, 80, 'one send per release despite duplicate and reordered continuations');
@@ -141,7 +145,9 @@ try {
   assert.equal((await h.invoke('test/dispatch')).admission_deferred,140);
   assert.equal((await h.polls()).length,0);
   for(let tick=1;tick<=3;tick++){
-    await h.consume(firstBurst.shift());await h.drain();
+    // Queue order follows the reservation's RETURNING order, which neither backend specifies; consume a burst-origin wake explicitly.
+    const pick=firstBurst.findIndex(w=>burst.slice(0,240).includes(w.feed_id));
+    await h.consume(firstBurst.splice(pick,1)[0]);await h.drain();
     await h.invoke('freeze',String(at+180+tick*60));
     const roll=await h.invoke('test/dispatch');
     assert.ok(roll.outstanding<=200,'new admission cannot exceed the live cap below service demand');

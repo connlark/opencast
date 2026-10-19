@@ -4,6 +4,7 @@
 //! A redelivery may repeat one conditional fetch. It can never publish twice:
 //! snapshot publication, event keys and the settle statement are all fenced.
 use super::{dispatch, policy, stat};
+use crate::database::{self, polling::Operation};
 use crate::{
     delivery::{
         db::*,
@@ -28,19 +29,21 @@ pub(crate) struct Fence {
     /// A generated lease ID this invocation may have acquired. Register before
     /// the claim await, so cancellation can clean up an uncertain commit safely.
     pub scan_lease: Rc<RefCell<Option<String>>>,
+    /// The Queue message and attempt, when the queue adapter delivered it.
+    pub delivery: Option<crate::feed_scan_admission::Delivery>,
 }
 impl Fence {
-    pub async fn rejected(&self, db: &D1Database) -> Result<()> {
-        stat(db, "stale_commits").await?;
+    pub(crate) fn storage(&self) -> database::polling::Fence {
+        database::polling::Fence {
+            feed: self.feed.clone(),
+            epoch: self.epoch,
+            generation: self.generation,
+        }
+    }
+    pub async fn rejected(&self, db: &crate::database::Authority) -> Result<()> {
+        stat(db, crate::database::polling::Counter::StaleCommits).await?;
         console_log!("{}", json!({"event":"poll_stale_commit","count":1}));
         Ok(())
-    }
-    /// `dispatch_until>0` marks the generation as not yet settled. Its expiry
-    /// only lets the dispatcher repair the same generation; elapsed time alone
-    /// grants and removes nothing.
-    pub fn sql(&self, _t: i64) -> String {
-        // The feed ID is a validated hex digest, never raw request text.
-        format!("EXISTS(SELECT 1 FROM n_feed f WHERE f.feed_id='{}' AND f.epoch={} AND f.schedule_generation={} AND f.dispatch_until>0 AND f.admission_paused=0 AND f.no_interest_since IS NULL AND EXISTS(SELECT 1 FROM n_interest j JOIN n_install i ON i.install_id=j.install_id WHERE j.feed_id=f.feed_id AND j.enabled=1 AND i.enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='dispatcher_admission' AND enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='feed_observation' AND enabled=1))",self.feed,self.epoch,self.generation)
     }
     pub fn settle(
         &self,
@@ -64,26 +67,39 @@ impl Fence {
 
 /// A publisher failure backs the feed off and settles this generation. The
 /// dispatcher issues the next one after `retry_at`; no message waits for it.
-pub(crate) async fn fetch_failed(env: &Env, fence: &Fence, reason: &str) -> Result<()> {
-    let db = env.d1("APP_ATTEST_DB")?;
+pub(crate) async fn fetch_failed(
+    db: &crate::database::Authority,
+    fence: &Fence,
+    reason: &str,
+) -> Result<()> {
     let t = now();
-    let changed = run(&db,&format!("UPDATE n_feed SET retry_at=?2+MIN(21600,300*(1<<MIN(poll_failures,7))),poll_failures=MIN(poll_failures+1,12),dispatch_until=0,last_poll_at=?2,last_poll_outcome='publisher_failed',last_poll_error=?3 WHERE feed_id=?1 AND {}",fence.sql(t)),&[json!(fence.feed),json!(t),json!(reason)]).await?;
+    let changed = database::execute(
+        db,
+        Operation::SettlePublisherFailure {
+            fence: fence.storage(),
+            reason: reason.into(),
+            now: t,
+        },
+    )
+    .await?
+    .count();
     if changed == 0 {
-        return fence.rejected(&db).await;
+        return fence.rejected(db).await;
     }
-    stat(&db, "publisher_failures").await
+    stat(db, crate::database::polling::Counter::PublisherFailures).await
 }
 
 pub async fn consume(
     env: Env,
     wake: dispatch::Wakeup,
     attempts: u32,
+    message: Option<String>,
     signal: web_sys::AbortSignal,
     enqueued_ms: Option<u64>,
+    db: crate::database::Authority,
 ) -> Result<Response> {
     let started = super::timing::now_ms();
     let timings = super::timing::Timings::default();
-    let db = env.d1("APP_ATTEST_DB")?;
     if !super::runtime::permitted_by_environment(&env) {
         return Response::error("polling_disabled", 503);
     }
@@ -105,10 +121,24 @@ pub async fn consume(
     let step_timings = timings.clone();
     let step_env = env.clone();
     let step_wake = wake.clone();
+    let step_delivery = message.map(|message| crate::feed_scan_admission::Delivery {
+        message,
+        attempt: attempts,
+    });
+    let step_db = db.capped_at(started.saturating_add(policy::STEP_DEADLINE_SECONDS * 1000));
     let result = crate::invocation_owner::run_with_abort_signal_and_deadline(
         signal,
         async move {
-            let db = step_env.d1("APP_ATTEST_DB")?;
+            let db = step_db;
+            // Before any route: an obsolete wake or a step that needs no new
+            // permit must still free what this message's cancelled attempt left.
+            if let Some(delivery) = step_delivery.as_ref() {
+                if crate::feed_scan_admission::FeedScanPermit::reclaim_earlier_attempts(delivery)
+                    > 0
+                {
+                    stat(&db, crate::database::polling::Counter::PermitReclaims).await?;
+                }
+            }
             // The read-only claim and continuation send share the step budget.
             let claim_span = super::timing::Span::new(step_timings.claim.clone(), None);
             let row = claim(&db, &step_wake).await?;
@@ -137,16 +167,17 @@ pub async fn consume(
                 reached: Default::default(),
                 scan_lease: Default::default(),
                 timings: step_timings,
+                delivery: step_delivery,
             };
             if attempts > 1 {
-                stat(&db, "redeliveries").await?;
+                stat(&db, crate::database::polling::Counter::Redeliveries).await?;
                 console_log!(
                     "{}",
                     json!({"event":"poll_redelivered","attempts":attempts,"step":step_wake.step})
                 );
             }
             *step_claimed.borrow_mut() = Some(fence.clone());
-            step(step_env, fence, step_wake, row).await
+            step(step_env, fence, step_wake, row, db).await
         },
         policy::STEP_DEADLINE_SECONDS,
         wake.step,
@@ -161,6 +192,9 @@ pub async fn consume(
                 .and_then(|r| r.err())
                 .map(|e| e.to_string())
                 .unwrap_or_default();
+            let db = db.bookkeeping(
+                super::timing::now_ms().saturating_add(policy::BOOKKEEPING_DEADLINE_SECONDS * 1000),
+            );
             let bookkeeping = crate::deadline::fetch_with_deadline(
                 async {
                     if let Some(fence) = fence.as_ref() {
@@ -171,7 +205,7 @@ pub async fn consume(
                         }
                     }
                     if !cancelled {
-                        stat(&db, "handling_failures").await?;
+                        stat(&db, crate::database::polling::Counter::HandlingFailures).await?;
                     }
                     if let Some(fence) = fence.as_ref() {
                         release(
@@ -236,10 +270,24 @@ pub async fn consume(
 /// A failed or cancelled step may have claimed the scan lease after proving a
 /// change. Free it for the redelivery, unless it guards a complete preparation
 /// that the redelivery resumes instead of refetching.
-async fn release(db: &D1Database, fence: &Fence, outcome: &str, reason: &str) -> Result<()> {
-    let idle = "NOT EXISTS(SELECT 1 FROM n_observation o WHERE o.lease_id=n_feed.lease_id AND o.state='staging' AND o.valid_eof=1)";
+async fn release(
+    db: &crate::database::Authority,
+    fence: &Fence,
+    outcome: &str,
+    reason: &str,
+) -> Result<()> {
     let lease = fence.scan_lease.borrow().clone();
-    run(db,&format!("UPDATE n_feed SET last_poll_at=?2,last_poll_outcome=?3,last_poll_error=?4,lease_until=CASE WHEN lease_id=?5 AND {idle} THEN NULL ELSE lease_until END,lease_id=CASE WHEN lease_id=?5 AND {idle} THEN NULL ELSE lease_id END WHERE feed_id=?1 AND {}",fence.sql(now())),&[json!(fence.feed),json!(now()),json!(outcome),json!(reason.chars().take(96).collect::<String>()),json!(lease)]).await?;
+    database::execute(
+        db,
+        Operation::ReleaseAttempt {
+            fence: fence.storage(),
+            lease,
+            outcome: outcome.into(),
+            reason: reason.into(),
+            now: now(),
+        },
+    )
+    .await?;
     Ok(())
 }
 fn outcome(name: &str, via: Option<&str>, passes: Option<u8>) -> Result<Response> {
@@ -248,8 +296,11 @@ fn outcome(name: &str, via: Option<&str>, passes: Option<u8>) -> Result<Response
 
 /// The exhausted message is diagnostic; the feed row is the recovery source.
 /// Back the feed off without blaming its publisher and settle the generation.
-pub async fn dead_letter(env: &Env, wake: &dispatch::Wakeup) -> Result<Response> {
-    let db = env.d1("APP_ATTEST_DB")?;
+pub async fn dead_letter(
+    env: &Env,
+    wake: &dispatch::Wakeup,
+    db: crate::database::Authority,
+) -> Result<Response> {
     // A release brake exhausts messages too; that is not the feed's fault.
     if wake.kind != "poll"
         || !wire::hex_id(&wake.feed_id)
@@ -258,9 +309,21 @@ pub async fn dead_letter(env: &Env, wake: &dispatch::Wakeup) -> Result<Response>
         return outcome("ignored", None, None);
     }
     let t = now();
-    let changed = run(&db,"UPDATE n_feed SET retry_at=?4+MIN(21600,300*(1<<MIN(handling_failures,7))),handling_failures=MIN(handling_failures+1,12),dispatch_until=0,last_poll_at=?4,last_poll_outcome='dead_letter' WHERE feed_id=?1 AND epoch=?2 AND schedule_generation=?3 AND dispatch_until>0",&[json!(wake.feed_id),json!(wake.owner_epoch),json!(wake.generation),json!(t)]).await?;
+    let changed = database::execute(
+        &db,
+        Operation::SettleDeadLetter {
+            fence: database::polling::Fence {
+                feed: wake.feed_id.clone(),
+                epoch: wake.owner_epoch,
+                generation: wake.generation,
+            },
+            now: t,
+        },
+    )
+    .await?
+    .count();
     if changed > 0 {
-        stat(&db, "dead_letters").await?;
+        stat(&db, crate::database::polling::Counter::DeadLetters).await?;
     }
     console_warn!(
         "{}",
@@ -269,18 +332,31 @@ pub async fn dead_letter(env: &Env, wake: &dispatch::Wakeup) -> Result<Response>
     outcome("dead_letter_saved", None, None)
 }
 
-pub(super) const PREPARING:&str="EXISTS(SELECT 1 FROM n_observation o WHERE o.feed_id=f.feed_id AND o.state='staging' AND o.valid_eof=1 AND o.processing_failures<10 AND o.lease_id=f.lease_id AND o.owner_epoch=f.epoch AND o.eligibility_generation=f.eligibility_generation AND o.scan_started_at>?4-604800)";
-pub(super) const DRAINING:&str="(EXISTS(SELECT 1 FROM n_observation o WHERE o.feed_id=f.feed_id AND o.state='published' AND o.drain_complete=0 AND o.owner_epoch=f.epoch) OR EXISTS(SELECT 1 FROM n_episode_release r WHERE r.feed_id=f.feed_id AND r.owner_epoch=f.epoch AND r.state IN('ready','pending_future') AND r.eligible_at<=?4 AND r.expires_at>?4))";
-pub(super) const OUTBOXING:&str="EXISTS(SELECT 1 FROM n_outbox x JOIN n_observation o ON o.observation_id=x.observation_id WHERE o.feed_id=f.feed_id AND o.owner_epoch=f.epoch AND x.source='feed_polling' AND x.state='pending' AND x.next_attempt_at<=?4)";
-
-async fn claim(db: &D1Database, wake: &dispatch::Wakeup) -> Result<Option<Value>> {
-    first(db,&format!("SELECT f.origin_key,f.due_at,f.retry_at,f.baseline_at,f.credible_release_at,f.credible_cadence,f.publish_cadence,f.lease_until,{PREPARING} AS preparing,{DRAINING} AS draining,{OUTBOXING} AS outboxing,COALESCE((SELECT enabled FROM n_control WHERE name='five_minute_polling'),0) AS five_minute FROM n_feed f WHERE f.feed_id=?1 AND f.epoch=?2 AND f.schedule_generation=?3 AND f.dispatch_until>0 AND f.admission_paused=0 AND f.no_interest_since IS NULL AND EXISTS(SELECT 1 FROM n_interest j JOIN n_install i ON i.install_id=j.install_id WHERE j.feed_id=f.feed_id AND j.enabled=1 AND i.enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='dispatcher_admission' AND enabled=1) AND EXISTS(SELECT 1 FROM n_control WHERE name='feed_observation' AND enabled=1)"),&[json!(wake.feed_id),json!(wake.owner_epoch),json!(wake.generation),json!(now())]).await
+async fn claim(db: &crate::database::Authority, wake: &dispatch::Wakeup) -> Result<Option<Value>> {
+    Ok(database::execute(
+        db,
+        Operation::ReadClaim {
+            fence: database::polling::Fence {
+                feed: wake.feed_id.clone(),
+                epoch: wake.owner_epoch,
+                generation: wake.generation,
+            },
+            now: now(),
+        },
+    )
+    .await?
+    .first())
 }
 
 /// One bounded step. The action is derived from durable observation state, so
 /// a redelivered or re-dispatched message resumes exactly where work stopped.
-async fn step(env: Env, fence: Fence, wake: dispatch::Wakeup, row: Value) -> Result<&'static str> {
-    let db = env.d1("APP_ATTEST_DB")?;
+async fn step(
+    env: Env,
+    fence: Fence,
+    wake: dispatch::Wakeup,
+    row: Value,
+    db: crate::database::Authority,
+) -> Result<&'static str> {
     if wake.step >= policy::MAX_STEPS {
         return Err(Error::RustError("poll_step_limit".into()));
     }
@@ -304,19 +380,20 @@ async fn step(env: Env, fence: Fence, wake: dispatch::Wakeup, row: Value) -> Res
         &fence.feed,
         env.clone(),
         Some(fence.clone()),
+        db.clone(),
     )
     .await?;
     match response.status_code() {
         200 => {}
         // Memory admission pressure is never a handling failure.
         429 => {
-            stat(&db, "scan_busy").await?;
+            stat(&db, crate::database::polling::Counter::ScanBusy).await?;
             let view = crate::feed_scan_admission::FeedScanPermit::view();
             console_log!(
                 "{}",
                 json!({"event":"poll_outcome","outcome":"scan_busy","active_permits":view.active_permits,"oldest_permit_age_seconds":view.oldest_permit_age_seconds,"holder_step":view.holder_step,"isolate":view.isolate})
             );
-            let delay = if view.oldest_permit_age_seconds >= 60 {
+            let delay = if view.oldest_permit_age_seconds >= policy::STALLED_OWNER_SECONDS {
                 console_warn!(
                     "{}",
                     json!({"event":"scan_permit_stalled","owner_age_seconds":view.oldest_permit_age_seconds,"isolate":view.isolate})
@@ -366,7 +443,16 @@ async fn step(env: Env, fence: Fence, wake: dispatch::Wakeup, row: Value) -> Res
             let until = status["cooldown_until"].as_i64().unwrap_or(0);
             if until > t + 60 {
                 // A publisher cooldown is schedule state, not a held message.
-                let changed = run(&db,&format!("UPDATE n_feed SET retry_at=MAX(retry_at,?2),dispatch_until=0,last_poll_at=?3,last_poll_outcome='origin_cooldown' WHERE feed_id=?1 AND {}",fence.sql(t)),&[json!(fence.feed),json!(until),json!(t)]).await?;
+                let changed = database::execute(
+                    &db,
+                    Operation::SettleCooldown {
+                        fence: fence.storage(),
+                        until,
+                        now: t,
+                    },
+                )
+                .await?
+                .count();
                 if changed == 0 {
                     fence.rejected(&db).await?;
                 }
@@ -380,7 +466,14 @@ async fn step(env: Env, fence: Fence, wake: dispatch::Wakeup, row: Value) -> Res
         // Staged, or a preparation step that checkpointed or found nothing to
         // resume: look at the durable state again.
         _ => {
-            let waiting=first(&db,"SELECT processing_next_at,processing_until FROM n_observation WHERE feed_id=?1 AND state='staging' AND valid_eof=1 AND processing_failures<10 ORDER BY scan_started_at DESC LIMIT 1",&[json!(fence.feed)]).await?;
+            let waiting = crate::database::slice_b::execute(
+                &db,
+                crate::database::slice_b::Operation::ReadPreparationWait {
+                    feed: fence.feed.clone(),
+                },
+            )
+            .await?
+            .first();
             let delay = waiting
                 .map(|w| int(&w, "processing_next_at").max(int(&w, "processing_until")) - now())
                 .unwrap_or(5);
@@ -390,16 +483,16 @@ async fn step(env: Env, fence: Fence, wake: dispatch::Wakeup, row: Value) -> Res
 }
 
 /// Nothing is due for this generation any more.
-async fn settle_idle(db: &D1Database, fence: &Fence) -> Result<&'static str> {
-    let changed = run(
+async fn settle_idle(db: &crate::database::Authority, fence: &Fence) -> Result<&'static str> {
+    let changed = database::execute(
         db,
-        &format!(
-            "UPDATE n_feed SET dispatch_until=0 WHERE feed_id=?1 AND {}",
-            fence.sql(now())
-        ),
-        &[json!(fence.feed)],
+        Operation::SettleIdle {
+            fence: fence.storage(),
+            now: now(),
+        },
     )
-    .await?;
+    .await?
+    .count();
     if changed == 0 {
         fence.rejected(db).await?;
         return Ok("obsolete");
@@ -411,7 +504,7 @@ async fn settle_idle(db: &D1Database, fence: &Fence) -> Result<&'static str> {
 /// A lost continuation is repaired by the reservation expiring.
 async fn proceed(
     env: &Env,
-    db: &D1Database,
+    db: &crate::database::Authority,
     fence: &Fence,
     wake: &dispatch::Wakeup,
     delay: i64,
@@ -419,18 +512,16 @@ async fn proceed(
 ) -> Result<&'static str> {
     let delay = delay.clamp(0, 900);
     let t = now();
-    let changed = run(
+    let changed = database::execute(
         db,
-        &format!(
-            "UPDATE n_feed SET dispatch_until=?2 WHERE feed_id=?1 AND {}",
-            fence.sql(t)
-        ),
-        &[
-            json!(fence.feed),
-            json!(t + delay + policy::DISPATCH_RESERVATION_SECONDS),
-        ],
+        Operation::RenewContinuation {
+            fence: fence.storage(),
+            delay,
+            now: t,
+        },
     )
-    .await?;
+    .await?
+    .count();
     if changed == 0 {
         fence.rejected(db).await?;
         return Ok("obsolete");

@@ -13,6 +13,19 @@ const h = await harness(async request => {
 const durable = async () => Object.fromEntries(await Promise.all(['n_observation', 'n_snapshot', 'n_snapshot_ref', 'n_episode_release', 'n_outbox', 'n_event', 'n_poll_origin', 'n_poll_stat'].map(async table => [table, (await h.first(`SELECT COUNT(*) AS n FROM ${table}`)).n])));
 const objects = async () => (await (await h.instance.getR2Bucket('FEED_SNAPSHOTS', 'polling-runtime')).list()).objects.length;
 const last = async () => (await h.invoke('metrics')).recent.filter(t => t.path === '/test/consume').at(-1);
+// A settle-only poll commits one transaction of three UPDATEs: the n_feed
+// schedule row (exactly one), then at most the published observation's
+// recovery bound and the enabled interest's absence stamp. The counter is the
+// Worker's own INSERT/UPDATE/DELETE command tags, which no trigger on these
+// statements adds to. The n_feed row
+// is always written, so a 0 means the counter is broken, not that the poll
+// was quiet; a lower bound needs a window no other invocation overlapped.
+const measured = [];
+const settleWrites = (trace, what) => {
+  measured.push(`${what} ${trace.rows_written}`);
+  assert.ok(trace.rows_written >= 1, `${what} settle counted ${trace.rows_written} written rows, not its n_feed row`);
+  assert.equal(trace.storage_exclusive, true, `${what} settle shared its counter window`);
+};
 try {
   const feed = await h.add('https://fixture.example.com/feed.xml');
   const publicAttempt = await h.instance.dispatchFetch('https://polling.invalid/dispatch', { method: 'POST', headers: { 'x-polling-capability': 'private' } });
@@ -50,6 +63,7 @@ try {
   assert.equal(trace.outcome, 'not_modified');
   assert.deepEqual([trace.put, trace.get, trace.head, trace.multipart], [0, 0, 0, 0]);
   assert.ok(trace.rows_written <= 3, `304 settle wrote ${trace.rows_written} rows`);
+  settleWrites(trace, '304');
   let state = await h.first('SELECT observation_generation,due_at,dispatch_until,last_poll_outcome FROM n_feed');
   // The adaptive production policy, re-run on this poll: a release within two
   // days is the fifteen-minute hot floor, coalesced to one future slot.
@@ -68,7 +82,9 @@ try {
     assert.equal(trace.outcome, 'unchanged');
     assert.deepEqual([trace.put, trace.get, trace.head, trace.multipart], [0, 0, 0, 0]);
     assert.ok(trace.rows_written <= 3, `unchanged settle wrote ${trace.rows_written} rows`);
+    settleWrites(trace, `unchanged#${round + 1}`);
   }
+  console.log(`settle rows_written (${h.storage.mode}): ${measured.join(', ')}`);
   assert.equal(h.fetches.length, requests + 2);
   state = await h.first('SELECT observation_generation,etag,last_poll_outcome FROM n_feed');
   assert.deepEqual(state, { observation_generation: 1, etag: null, last_poll_outcome: 'unchanged' });

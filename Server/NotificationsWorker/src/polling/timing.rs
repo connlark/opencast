@@ -1,5 +1,6 @@
 //! Request-local wall timings survive dropping a timed-out future. These are
-//! diagnostics only and never write durable state or identify a subscriber.
+//! diagnostics only and never write durable state or identify a subscriber;
+//! `Storage`'s time also bounds a queued scan's publisher.
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -24,6 +25,35 @@ impl Timings {
     pub fn publisher_span(&self) -> Span {
         Span::new(self.publisher.clone(), Some(self.sink.clone()))
     }
+}
+/// A scan's storage flag and the time it has been set, a write still pending
+/// included. It reads `performance.now()`, never the `Date` tests freeze and
+/// jump, because the queued publisher deadline leaves this time out.
+#[derive(Clone, Default)]
+pub struct Storage {
+    since: Rc<Cell<Option<f64>>>,
+    spent: Rc<Cell<f64>>,
+}
+impl Storage {
+    pub fn set(&self, pending: bool) {
+        match (self.since.get(), pending) {
+            (None, true) => self.since.set(Some(monotonic_ms())),
+            (Some(since), false) => {
+                self.spent.set(self.spent.get() + (monotonic_ms() - since));
+                self.since.set(None);
+            }
+            _ => {}
+        }
+    }
+    pub fn get(&self) -> bool {
+        self.since.get().is_some()
+    }
+    pub fn spent_ms(&self) -> f64 {
+        self.spent.get() + self.since.get().map_or(0.0, |since| monotonic_ms() - since)
+    }
+}
+pub fn monotonic_ms() -> f64 {
+    crate::worker_glue::performance_now_ms()
 }
 pub struct Span {
     start: u64,

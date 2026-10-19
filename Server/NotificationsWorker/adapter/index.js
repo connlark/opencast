@@ -1,5 +1,5 @@
-// Capability adapter only. Validation, authorization, D1 and delivery policy
-// live in Rust. Request headers/URLs can never set this invocation capability.
+// Capability adapter only. Validation, authorization, storage and delivery
+// policy live in Rust. Request headers/URLs can never set this invocation capability.
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import RustWorker from '../build/index.js';
 
@@ -34,9 +34,9 @@ export default class extends WorkerEntrypoint {
 // FeedEvents binding. It has no APNs credentials or public ingress authority.
 export class FeedObservations extends WorkerEntrypoint {
   fetch(request) {
-    const { APP_ATTEST_DB, FEED_SNAPSHOTS, NOTIFICATION_ENVIRONMENT,
+    const { STORAGE_AUTHORITY, STORAGE_IDENTITY, DB, FEED_SNAPSHOTS, NOTIFICATION_ENVIRONMENT,
       NOTIFICATION_FEED_OBSERVATION, NOTIFICATION_CLEANUP, NOTIFICATION_EVENTS } = this.env;
-    return invoke(this.ctx, { APP_ATTEST_DB, FEED_SNAPSHOTS,
+    return invoke(this.ctx, { STORAGE_AUTHORITY, STORAGE_IDENTITY, DB, FEED_SNAPSHOTS,
       NOTIFICATION_ENVIRONMENT, NOTIFICATION_FEED_OBSERVATION, NOTIFICATION_CLEANUP, NOTIFICATION_EVENTS }, 'feed_observations', request);
   }
 }
@@ -44,8 +44,8 @@ export class FeedObservations extends WorkerEntrypoint {
 // Private current-engine operations. Public requests cannot select this authority.
 export class FeedControl extends WorkerEntrypoint {
   fetch(request) {
-    const { APP_ATTEST_DB, EPISODE_DELIVERY_QUEUE, NOTIFICATION_ENVIRONMENT } = this.env;
-    return invoke(this.ctx, { APP_ATTEST_DB, EPISODE_DELIVERY_QUEUE,
+    const { STORAGE_AUTHORITY, STORAGE_IDENTITY, DB, EPISODE_DELIVERY_QUEUE, NOTIFICATION_ENVIRONMENT } = this.env;
+    return invoke(this.ctx, { STORAGE_AUTHORITY, STORAGE_IDENTITY, DB, EPISODE_DELIVERY_QUEUE,
       NOTIFICATION_ENVIRONMENT }, 'feed_control', request);
   }
 }

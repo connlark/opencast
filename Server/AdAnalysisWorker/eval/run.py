@@ -5,16 +5,20 @@ No dependency on private notes, hosted services, or non-stdlib Python packages.
 Inputs are a local manifest of request paths and pre-annotated segment ranges.
 Outputs may contain copyrighted transcripts: use a private, ignored directory.
 
-Providers: Gemini and OpenAI over HTTPS (metered by the shared ledger), and
-`pcc`, Apple's Private Cloud Compute model, reached through a signed, entitled
-helper executable (`--pcc-helper`) that speaks the JSON contract in `pcc_input`.
-PCC has no monetary price and an unpublished per-user quota, so its calls are
-journaled to `pcc-usage.json` in the output root instead of the ledger.
+Providers: every `budget.PRICES` key through one `providers.Adapter` (Gemini,
+OpenAI Responses, Anthropic Messages, Cloudflare Workers AI and AI Gateway,
+and the decision models in `providers.systemone`), all metered by one shared
+ledger (`--ledger`), and `pcc`, Apple's Private Cloud Compute model, reached
+through a signed, entitled helper executable (`--pcc-helper`) that speaks the
+JSON contract in `pcc_input`. PCC has no monetary price and an unpublished
+per-user quota, so its calls are journaled to `pcc-usage.json` in the output
+root instead of the ledger.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -22,10 +26,17 @@ import re
 import subprocess
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
 
-from budget import PRICES, Ledger
+from budget import PRICES, Ledger, cost_usd
+from providers import (
+    MODELS,
+    ContextExceeded,
+    adapter_for,
+    adapter_recognizing,
+    sanitize,
+)
+from providers.base import http, safe_error  # noqa: F401 - re-exported for callers
 
 WORKER = Path(__file__).resolve().parents[1]
 BRIDGE_HASH = None
@@ -102,28 +113,6 @@ def bridge(command):
     return json.loads(run.stdout)
 
 
-def http(url, payload, headers):
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode() if payload is not None else None,
-        headers={"content-type": "application/json", **headers},
-    )
-    with urllib.request.urlopen(request, timeout=180) as response:
-        return json.load(response)
-
-
-def safe_error(error, key):
-    detail = (
-        error.read().decode(errors="replace")
-        if isinstance(error, urllib.error.HTTPError)
-        else str(error)
-    )
-    if key:
-        detail = detail.replace(key, "[REDACTED]")
-    detail = re.sub(r"(?:sk-|AIza)[A-Za-z0-9_-]{16,}", "[REDACTED]", detail)
-    return detail[:1600]
-
-
 def pcc_run(report):
     """The helper's final attempt, or None when it never reached the model."""
     runs = (report or {}).get("runs") or []
@@ -143,29 +132,31 @@ def usage_of(model, response):
             "output": u["output_total"],
             "reasoning": u["output_reasoning"],
         }
-    if model.startswith("gemini"):
-        u = response.get("usageMetadata", {})
-        # Missing billed output metadata is ambiguous, even for safety refusals.
-        if "promptTokenCount" not in u or "candidatesTokenCount" not in u:
-            return None
-        return {
-            "input": u["promptTokenCount"],
-            "cached": u.get("cachedContentTokenCount", 0),
-            "write": 0,
-            "output": u["candidatesTokenCount"] + u.get("thoughtsTokenCount", 0),
-            "reasoning": u.get("thoughtsTokenCount", 0),
-        }
-    u = response.get("usage")
-    if not u:
-        return None
-    d = u.get("input_tokens_details") or {}
-    return {
-        "input": u["input_tokens"],
-        "cached": d.get("cached_tokens", 0),
-        "write": d.get("cache_write_tokens", 0),
-        "output": u["output_tokens"],
-        "reasoning": (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0),
-    }
+    return adapter_of(model, response).usage(response)
+
+
+def adapter_of(model, response):
+    """The model's adapter; for an unknown (archived) key, sniff the doc."""
+    if model in MODELS:
+        return MODELS[model]
+    found = adapter_recognizing(response)
+    if found:
+        return found
+    # Historical fallback: Gemini by name, everything else OpenAI Responses.
+    return MODELS["gemini-3.8-flash" if model.startswith("gemini") else "gpt-5.6-luna"]
+
+
+def archived_window_text(payload):
+    """Window input text from an archived request.json of any shape: the
+    Gemini-shaped canonical, a historical OpenAI Responses wire, or a
+    systemone decision request (`state`)."""
+    if "contents" in payload:
+        return payload["contents"][0]["parts"][0]["text"]
+    if isinstance(payload.get("input"), list):
+        return payload["input"][0]["content"][0]["text"]
+    if isinstance(payload.get("state"), str):
+        return payload["state"]
+    raise ValueError("Unrecognized archived request shape")
 
 
 def answer_of(model, response):
@@ -174,29 +165,8 @@ def answer_of(model, response):
         if not run or not run.get("ok"):
             raise ValueError("Incomplete or refused PCC output")
         texts = [str(run.get("raw_json", ""))]
-    elif model.startswith("gemini"):
-        candidates = response.get("candidates", [])
-        if len(candidates) != 1 or candidates[0].get("finishReason") != "STOP":
-            raise ValueError("Incomplete or refused Gemini output")
-        texts = [
-            p["text"]
-            for p in candidates[0].get("content", {}).get("parts", [])
-            if not p.get("thought") and "text" in p
-        ]
     else:
-        if (
-            response.get("status") != "completed"
-            or response.get("error")
-            or response.get("incomplete_details")
-        ):
-            raise ValueError("Incomplete or refused OpenAI output")
-        texts = [
-            p["text"]
-            for m in response.get("output", [])
-            if m.get("type") == "message" and m.get("status") == "completed"
-            for p in m.get("content", [])
-            if p.get("type") == "output_text"
-        ]
+        return adapter_of(model, response).answer(response)
     texts = [text for text in texts if text.strip()]
     if len(texts) != 1 or len(texts[0].encode()) > 100_000:
         raise ValueError("Expected exactly one bounded answer")
@@ -329,103 +299,79 @@ def provider_payload(model, payload, thinking, max_output):
         # derived from it per call and reasoning travels as a helper flag.
         payload["generationConfig"]["maxOutputTokens"] = max_output
         return payload
-    if model.startswith("gemini"):
-        payload["generationConfig"]["maxOutputTokens"] = max_output
-        if model == "gemini-3.8-flash":
-            payload["generationConfig"].pop("temperature", None)
-            payload["generationConfig"].pop("topP", None)
-        if thinking != "default":
-            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": thinking}
-        return payload
-    schema = payload["generationConfig"]["responseJsonSchema"]
-    schema["additionalProperties"] = False
-    schema["properties"]["spans"]["items"]["additionalProperties"] = False
-    result = {
-        "model": model,
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": payload["contents"][0]["parts"][0]["text"],
-                    }
-                ],
-            }
-        ],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "podcast_ad_breaks",
-                "strict": True,
-                "schema": schema,
-            }
-        },
-        "reasoning": {"effort": thinking if thinking != "default" else "low"},
-        "max_output_tokens": max_output,
-        "tools": [],
-        "store": False,
-        "background": False,
-        "service_tier": "default",
-        "prompt_cache_options": {"mode": "explicit"},
+    return adapter_for(model).build(payload, thinking, max_output)
+
+
+DEFINITE_HTTP_ERRORS = (400, 401, 403, 404, 413, 422, 429)
+
+
+def call(model, payload, key, ledger, out, context, max_output, thinking=None):
+    """One metered model call for one window.
+
+    `payload` is the Gemini-shaped canonical window payload when `thinking`
+    is given (the adapter builds the wire; `request.json` keeps the canonical
+    and `wire-request.json` the body actually sent when it differs), or an
+    already-built wire from `provider_payload` when `thinking` is None (the
+    historical contract of boundary_probe/recall_audit: archived as-is).
+    """
+    adapter = adapter_for(model)
+    creds = adapter.credentials(key)
+    secrets = adapter.secrets(creds)
+    if thinking is None:
+        wire, request_doc, wire_doc = payload, payload, None
+    else:
+        canonical = copy.deepcopy(payload)
+        canonical["generationConfig"]["maxOutputTokens"] = max_output
+        wire = adapter.build(payload, thinking, max_output)
+        request_doc, wire_doc = adapter.archived_request(canonical, wire)
+    tokens = adapter.count(wire, creds)
+    estimated = tokens is None
+    if estimated:
+        tokens = adapter.estimate(wire)
+    details = {
+        **adapter.describe(),
+        "input_count": tokens,
+        **({"input_estimated": True} if estimated else {}),
     }
-    if "systemInstruction" in payload:
-        result["instructions"] = payload["systemInstruction"]["parts"][0]["text"]
-    for message in payload["contents"][1:]:
-        result["input"].append(
-            {
-                "role": "assistant" if message["role"] == "model" else "user",
-                "content": message["parts"][0]["text"],
-            }
+    try:
+        adapter.check_context(tokens)
+    except ContextExceeded as exceeded:
+        write(out / "request.json", request_doc)
+        if wire_doc is not None:
+            write(out / "wire-request.json", wire_doc)
+        write(out / "error.json", {"error": str(exceeded)})
+        details.update(
+            transport_error="context_exceeded",
+            input_tokens=exceeded.tokens,
+            context_limit=exceeded.limit,
         )
-    return result
-
-
-def call(model, payload, key, ledger, out, context, max_output):
-    gemini = model.startswith("gemini")
-    headers = {"x-goog-api-key": key} if gemini else {"authorization": f"Bearer {key}"}
-    base = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
-        if gemini
-        else "https://api.openai.com/v1/responses"
+        return None, details
+    ident = ledger.reserve(
+        model,
+        tokens + adapter.schema_allowance(wire),
+        adapter.reserved_output(wire, max_output) or 1,
+        context,
     )
-    count_payload = (
-        {"generateContentRequest": {"model": f"models/{model}", **payload}}
-        if gemini
-        else {
-            k: v
-            for k, v in payload.items()
-            if k in ("model", "input", "instructions", "text", "tools")
-        }
-    )
-    count = http(
-        base + ":countTokens" if gemini else base + "/input_tokens",
-        count_payload,
-        headers,
-    )
-    tokens = count.get("totalTokens" if gemini else "input_tokens")
-    ident = ledger.reserve(model, tokens, max_output, context)
-    write(out / "request.json", payload)
+    write(out / "request.json", request_doc)
+    if wire_doc is not None:
+        write(out / "wire-request.json", wire_doc)
+    if adapter.rate_limiter:
+        adapter.rate_limiter.wait()
     start = time.monotonic()
     try:
-        response = http(base + ":generateContent" if gemini else base, payload, headers)
+        response = adapter.call(wire, creds)
     except Exception as error:  # noqa: BLE001 - retain spend on any uncertain dispatch
-        detail = safe_error(error, key)
-        definite = isinstance(error, urllib.error.HTTPError) and error.code in (
-            400,
-            401,
-            403,
-            404,
-            413,
-            422,
-            429,
+        detail = safe_error(error, key, secrets)
+        definite = (
+            isinstance(error, urllib.error.HTTPError) and error.code in DEFINITE_HTTP_ERRORS
         )
         ledger.finish(ident, "released" if definite else "ambiguous", error=detail)
         write(out / "error.json", {"error": detail, "reservation": ident})
         raise RuntimeError(detail) from None
     elapsed = time.monotonic() - start
     write(out / "response.json", response)
-    usage = usage_of(model, response)
+    answer = adapter.parse(response)
+    usage = answer.usage
     try:
         ledger.finish(ident, "settled" if usage else "ambiguous", usage=usage)
     except (ValueError, TypeError):
@@ -435,10 +381,21 @@ def call(model, payload, key, ledger, out, context, max_output):
         raise RuntimeError("Missing usage; reservation retained, stopping")
     if any(e.get("reservation_exceeded") for e in ledger.snapshot()["entries"]):
         raise RuntimeError("Provider exceeded reservation; stopping")
-    details = {"elapsed_s": round(elapsed, 3), "usage": usage, "reservation": ident}
+    details = {
+        "elapsed_s": round(elapsed, 3),
+        "usage": usage,
+        "reservation": ident,
+        **details,
+        "latency_ms": round(elapsed * 1000),
+        "finish_reason": answer.finish_reason,
+        **({"answer_channel": answer.channel} if answer.channel else {}),
+    }
+    if answer.error:
+        details["answer_error"] = answer.error
+        return None, details
     try:
-        return answer_of(model, response), details
-    except (ValueError, KeyError, TypeError) as error:
+        return json.loads(answer.text_json), details
+    except (ValueError, TypeError) as error:
         details["answer_error"] = str(error)
         return None, details
 
@@ -498,20 +455,197 @@ def measure(request, spans, truth):
     }
 
 
+# Original synthetic text (no real podcast): a host-read sponsor block, then
+# editorial. Five segments, about 200 tokens of transcript.
+SMOKE_REQUEST = {
+    "schema_version": 1,
+    "request_id": "lane-a-smoke",
+    "episode_id": "smoke-episode-1",
+    "podcast_id": "smoke-podcast",
+    "episode_title": "Keepers of the Northern Light",
+    "podcast_title": "Tide Tables",
+    "transcript": {
+        "language_code": "en",
+        "audio_duration": 150,
+        "fingerprint": "lane-a-smoke-v1",
+        "updated_at": "2026-10-18T00:00:00Z",
+        "state": "completed",
+        "segment_count": 5,
+    },
+    "segments": [
+        {"id": 1, "start": 0, "end": 12, "text": "Before we get into the tide charts, a quick word from this week's sponsor."},
+        {"id": 2, "start": 12, "end": 38, "text": "Harborline Coffee roasts small batches every Tuesday and ships them the same afternoon, so the beans reach your door within days of roasting."},
+        {"id": 3, "start": 38, "end": 55, "text": "Go to harborline dot example and use the code TIDEPOOL for twenty percent off your first bag. Thanks to Harborline for supporting the show."},
+        {"id": 4, "start": 55, "end": 90, "text": "Now, back to the lighthouse keepers of the northern coast. The first keeper we found kept a logbook for thirty-one winters."},
+        {"id": 5, "start": 90, "end": 150, "text": "Every entry starts with the wind direction, then the state of the lamp, and only then, if there was room, a line about her own day."},
+    ],
+}
+SMOKE_QUESTIONS = [
+    {"id": "sponsor_read", "type": "noul", "instructions": "Does the transcript window contain a paid sponsor read or advertisement?"},
+    {"id": "show_promo", "type": "noul", "instructions": "Does the transcript window contain a promotion for a different podcast or show?"},
+]
+SMOKE_MAX_OUTPUT = 4096
+
+
+def key_prefix(adapter, creds):
+    """sha256(primary credential)[:8], the only way a key is ever named."""
+    value = creds.get("api_token") or creds.get("api_key") or ""
+    return hashlib.sha256(value.encode()).hexdigest()[:8]
+
+
+def smoke(args, adapter, key, ledger):
+    """One fixed synthetic window through the same metered path; one JSON line."""
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    out = args.out / "smoke" / sanitize(args.model) / stamp
+    if out.exists():
+        raise RuntimeError(f"Smoke archive exists, refusing overwrite: {out}")
+    creds = adapter.credentials(key)
+    thinking = args.thinking
+    window = bridge(
+        {
+            "op": "prepare",
+            "policy": "promo_ad_breaks_v3",
+            "request": SMOKE_REQUEST,
+            "thinking": adapter.bridge_thinking(thinking),
+        }
+    )["windows"][0]
+    context = {"tag": "smoke", "fixture": "lane-a-smoke", "repeat": 1, "window": 0}
+    line = {"model": args.model, **adapter.describe()}
+    if getattr(adapter, "decision", False):
+        from providers import systemone
+
+        result = systemone.ask(
+            args.model, window["payload"], SMOKE_QUESTIONS, key, ledger, out, context
+        )
+        summary = json.loads((out / "summary.json").read_text())
+        calls = summary["calls"]
+        line.update(
+            count_or_estimate=sum(c["input_estimated_bound"] for c in calls),
+            input_estimated=True,
+            usage=result["usage"],
+            latency_ms=result["latency_ms"],
+            finish_reason=None,
+            answers=result["answers"],
+            parsed_ok=all(
+                isinstance(result["answers"].get(q["id"]), float) for q in SMOKE_QUESTIONS
+            ),
+            pages=result["pages"],
+            cost_usd=result["cost_usd"],
+        )
+    else:
+        max_output = min(args.max_output, SMOKE_MAX_OUTPUT)
+        output, details = call(
+            args.model,
+            window["payload"],
+            key,
+            ledger,
+            out / "window-0",
+            context,
+            max_output,
+            thinking=thinking,
+        )
+        checked = bridge(
+            {
+                "op": "validate",
+                "policy": "promo_ad_breaks_v3",
+                "request": window["request"],
+                "output": output,
+                "window": True,
+            }
+        )
+        write(out / "window-0" / "validation.json", checked)
+        accounting = run_accounting(adapter, thinking, [details])
+        write(
+            out / "summary.json",
+            {
+                "model": args.model,
+                "smoke": True,
+                "policy": "promo_ad_breaks_v3",
+                "thinking": thinking,
+                "calls": [details],
+                "validation": checked,
+                **accounting,
+            },
+        )
+        line.update(
+            count_or_estimate=details.get("input_count"),
+            input_estimated=bool(details.get("input_estimated")),
+            usage=details.get("usage"),
+            latency_ms=details.get("latency_ms"),
+            finish_reason=details.get("finish_reason"),
+            parsed_ok=isinstance(output, dict) and isinstance(output.get("spans"), list),
+            v3_complete=checked["complete"],
+            spans=len(output["spans"]) if isinstance(output, dict) and isinstance(output.get("spans"), list) else None,
+            transport_error=details.get("transport_error"),
+            answer_error=details.get("answer_error"),
+            cost_usd=accounting["cost_usd"],
+        )
+    line.update(
+        provider_thinking=adapter.provider_thinking(thinking),
+        key_sha256_prefix=key_prefix(adapter, creds),
+        archive=str(out),
+        budget=ledger.snapshot()["totals"],
+    )
+    print(json.dumps(line), flush=True)
+
+
+def check_combination(parser, adapter, args):
+    """Reject --thinking/--policy/--repair combinations a route cannot honour."""
+    if args.thinking not in adapter.supported_thinking:
+        parser.error(
+            f"{args.model} supports --thinking "
+            + "|".join(adapter.supported_thinking)
+            + f", not {args.thinking!r}"
+        )
+    if getattr(adapter, "decision", False):
+        if args.repair:
+            parser.error(f"{args.model} is a decision model: --repair does not apply")
+        if args.policy != "promo_ad_breaks_v3":
+            parser.error(f"{args.model} is a decision model: v3 policy only")
+        if not getattr(args, "smoke", False):
+            parser.error(
+                f"{args.model} is a decision model: it returns probabilities, not spans; "
+                "use --smoke here or providers.systemone.ask from eval/decision"
+            )
+
+
+def run_accounting(adapter, thinking, calls):
+    """summary.json fields for a metered route (additive to the historical keys)."""
+    billed = [c for c in calls if c.get("usage")]
+    return {
+        **adapter.describe(),
+        "provider_thinking": adapter.provider_thinking(thinking),
+        "schema_enforcement": "strict" if adapter.strict_schema else "validator_only",
+        "prices": price_row(adapter.model),
+        "input_estimated_calls": sum(1 for c in calls if c.get("input_estimated")),
+        "cost_usd": round(sum(cost_usd(adapter.model, c["usage"]) for c in billed), 9),
+        **({"usage_notes": adapter.usage_notes} if getattr(adapter, "usage_notes", None) else {}),
+    }
+
+
+def price_row(model):
+    from budget import LONG_CONTEXT_TIERS
+
+    row = {"per_million": dict(zip(("input", "cached", "write", "output"), PRICES[model]))}
+    if model in LONG_CONTEXT_TIERS:
+        threshold, tier = LONG_CONTEXT_TIERS[model]
+        row["above_input_tokens"] = threshold
+        row["above_per_million"] = dict(zip(("input", "cached", "write", "output"), tier))
+    return row
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--key-file", type=Path, help="Provider API key (paid providers)")
-    parser.add_argument("--model", choices=(*PRICES, PCC_MODEL), required=True)
+    parser.add_argument("--model", choices=(*MODELS, PCC_MODEL), required=True)
     parser.add_argument(
         "--pcc-helper",
         type=Path,
         help="Signed, PCC-entitled helper executable (required for --model pcc)",
     )
-    parser.add_argument(
-        "--policy", choices=("promo_ad_breaks_v2", "promo_ad_breaks_v3"), required=True
-    )
+    parser.add_argument("--policy", choices=("promo_ad_breaks_v2", "promo_ad_breaks_v3"))
     parser.add_argument(
         "--thinking",
         choices=("default", "none", "low", "medium", "high"),
@@ -519,7 +653,7 @@ def main():
     )
     parser.add_argument("--fixtures", nargs="*")
     parser.add_argument("--repeats", type=int, default=1)
-    parser.add_argument("--tag", required=True)
+    parser.add_argument("--tag")
     parser.add_argument(
         "--repair",
         action="store_true",
@@ -527,27 +661,69 @@ def main():
     )
     parser.add_argument("--max-spend", type=float, default=15)
     parser.add_argument("--max-output", type=int, default=16384)
+    parser.add_argument(
+        "--ledger",
+        type=Path,
+        help="Shared spend ledger (default <out>/budget-ledger.json); one per experiment",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="One fixed synthetic window (two questions for decision models); "
+        "archived under <out>/smoke/<model>/<utc>/, one JSON line printed",
+    )
     args = parser.parse_args()
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", args.tag):
+    if args.smoke:
+        if args.model == PCC_MODEL:
+            parser.error("--smoke covers metered providers, not pcc")
+        if args.manifest or args.tag or args.fixtures or args.repair:
+            parser.error("--smoke takes no --manifest, --tag, --fixtures or --repair")
+        args.policy = args.policy or "promo_ad_breaks_v3"
+        if args.policy != "promo_ad_breaks_v3":
+            parser.error("--smoke renders the v3 window only")
+    elif not args.manifest or not args.policy or not args.tag:
+        parser.error("--manifest, --policy and --tag are required (unless --smoke)")
+    if not args.smoke and not re.fullmatch(r"[A-Za-z0-9._-]+", args.tag):
         parser.error("Unsafe tag")
     if not 1 <= args.repeats <= 10 or not 256 <= args.max_output <= 16384:
         parser.error("Invalid run bounds")
     os.umask(0o077)
     pcc = args.model == PCC_MODEL
+    adapter = None if pcc else adapter_for(args.model)
+    secrets = []
     if pcc:
         if not args.pcc_helper or not os.access(args.pcc_helper, os.X_OK):
             parser.error("--pcc-helper must point at an executable PCC helper")
         key = ""
         helper_hash = hashlib.sha256(args.pcc_helper.read_bytes()).hexdigest()
     else:
+        if (
+            args.smoke
+            and args.thinking == "default"
+            and "default" not in adapter.supported_thinking
+        ):
+            # A smoke without --thinking uses the route's lowest setting.
+            args.thinking = adapter.supported_thinking[0]
+        check_combination(parser, adapter, args)
         if not args.key_file:
             parser.error("--key-file is required for paid providers")
         key = args.key_file.read_text().strip()
         if not key:
             parser.error("Empty key file")
+        try:
+            secrets = adapter.secrets(adapter.credentials(key))
+        except (ValueError, KeyError, TypeError):
+            parser.error(f"--key-file does not hold {adapter.provider} credentials")
         helper_hash = None
     binary_hash = verify_bridge()
-    ledger = None if pcc else Ledger(args.out / "budget-ledger.json", args.max_spend)
+    ledger = (
+        None
+        if pcc
+        else Ledger(args.ledger or args.out / "budget-ledger.json", args.max_spend)
+    )
+    if args.smoke:
+        smoke(args, adapter, key, ledger)
+        return
     journal = args.out / "pcc-usage.json"
     manifest = json.loads(args.manifest.read_text())
     selected = [
@@ -598,12 +774,21 @@ def main():
                     )
                 else:
                     output, details = call(
-                        args.model, payload, key, ledger, directory, context, args.max_output
+                        args.model,
+                        payload,
+                        key,
+                        ledger,
+                        directory,
+                        context,
+                        args.max_output,
+                        thinking=args.thinking,
                     )
                 calls.append(details)
                 if details.get("transport_error"):
                     raise ValueError(
-                        "ad_analysis_incomplete: pcc_" + details["transport_error"]
+                        "ad_analysis_incomplete: "
+                        + ("pcc_" if pcc else "")
+                        + details["transport_error"]
                     )
                 return output
 
@@ -613,15 +798,20 @@ def main():
                         "op": "prepare",
                         "policy": args.policy,
                         "request": request,
-                        # PCC reasoning is a helper flag, never a Gemini config.
+                        # PCC reasoning is a helper flag, never a Gemini config;
+                        # only Gemini thinkingLevel routes bake it in.
                         "thinking": None
-                        if args.thinking == "default" or pcc
-                        else args.thinking,
+                        if pcc
+                        else adapter.bridge_thinking(args.thinking),
                     }
                 )["windows"]
                 for index, window in enumerate(windows):
-                    payload = provider_payload(
-                        args.model, window["payload"], args.thinking, args.max_output
+                    payload = (
+                        provider_payload(
+                            args.model, window["payload"], args.thinking, args.max_output
+                        )
+                        if pcc
+                        else window["payload"]
                     )
                     output = dispatch(
                         payload,
@@ -666,7 +856,9 @@ def main():
                                     corrective,
                                     args.thinking,
                                     args.max_output,
-                                ),
+                                )
+                                if pcc
+                                else corrective,
                                 run / f"repair-{index}",
                                 {
                                     "tag": args.tag,
@@ -717,7 +909,7 @@ def main():
                     }
                 )
             except Exception as exc:  # noqa: BLE001 - archive failures before stopping
-                error = safe_error(exc, key)
+                error = safe_error(exc, key, secrets)
                 validated = {"complete": False, "spans": [], "warnings": [error]}
             # V2 installs surviving spans even when warnings indicate lost coverage.
             # V3 is fail-closed until its bounded recovery can resolve all issues.
@@ -737,6 +929,7 @@ def main():
                 "calls": calls,
                 "elapsed_s": round(time.monotonic() - started, 3),
                 "error": error,
+                **({} if pcc else run_accounting(adapter, args.thinking, calls)),
             }
             write(run / "summary.json", summary)
             print(

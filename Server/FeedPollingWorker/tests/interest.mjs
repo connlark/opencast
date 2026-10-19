@@ -32,3 +32,22 @@ try {
   assert.equal(h.sends.length,1);assert.equal(h.sends[0].opencast.episode_count,130);
   console.log('PASS interest revision and a lost continuation resume the published drain, preserve complete burst membership, and cannot strand a new poll');
 }finally {await h.instance.dispose();}
+
+// An unsubscribe while the wakeup is queued leaves an ineligible feed holding
+// a reservation nothing settles. /stats counts only
+// the lapsed reservations of eligible feeds, so it is not read as stuck work.
+const s=await harness(()=>new Response(rss([item('base',s.now-100)]),{headers:{etag:'"v1"'}}));
+try {
+  const retired=await s.add('https://retired.example.com/feed'),stuck=await s.add('https://stuck.example.com/feed');
+  await s.invoke('test/dispatch');
+  const wakes=await s.polls();assert.equal(wakes.length,2);
+  await s.run("UPDATE feed_subscriptions SET notifications_enabled=0 WHERE feed_url='https://retired.example.com/feed'");
+  assert.equal((await s.consume(wakes.find(wake=>wake.feed_id===retired))).status,200);
+  // The other wakeup is lost. Both reservations lapse; neither is settled.
+  await s.invoke('clock','301');
+  assert.deepEqual((await s.rows('SELECT feed_id FROM n_feed WHERE dispatch_until>0 ORDER BY feed_id')).map(row=>row.feed_id),[retired,stuck].sort());
+  assert.equal((await s.invoke('test/stats')).reservation_expired,1,'only the eligible feed whose wakeup was lost');
+  await s.invoke('test/dispatch');
+  assert.equal((await s.invoke('test/stats')).reservation_expired,0,'its repair leaves only the retired reservation, which is not counted');
+  console.log('PASS a reservation lapsed by an unsubscribe while queued is not counted as an expired reservation');
+}finally {await s.instance.dispose();}

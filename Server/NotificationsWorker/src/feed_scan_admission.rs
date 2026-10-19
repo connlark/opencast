@@ -11,10 +11,18 @@ thread_local! {
     static TEST_NOW: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Owner {
     acquired_at: i64,
     step: &'static str,
+    delivery: Option<Delivery>,
+}
+
+/// The Queue delivery a queued owner serves: its message id and attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Delivery {
+    pub(crate) message: String,
+    pub(crate) attempt: u32,
 }
 
 struct AdmissionState {
@@ -125,7 +133,40 @@ impl FeedScanPermit {
         let _ = (isolate, expired);
         count
     }
-    fn insert(state: &mut AdmissionState, t: i64, step: &'static str) -> Self {
+    /// The Queue redelivers a message only after its previous delivery ended
+    /// unacknowledged, and a cancelled invocation is never polled again, so an
+    /// owner left by an earlier attempt of the same message is dead.
+    fn reclaim_redelivered(state: &mut AdmissionState, t: i64, delivery: &Delivery) -> u32 {
+        let isolate = state.isolate;
+        let mut dead = Vec::new();
+        state.owners.retain(|_, owner| {
+            let earlier = owner.delivery.as_ref().is_some_and(|previous| {
+                previous.message == delivery.message && previous.attempt < delivery.attempt
+            });
+            if earlier {
+                dead.push((t.saturating_sub(owner.acquired_at), owner.step));
+            }
+            !earlier
+        });
+        let count = dead.len() as u32;
+        state.reclaimed = state.reclaimed.saturating_add(count);
+        #[cfg(target_arch = "wasm32")]
+        for (age, step) in dead {
+            worker::console_warn!(
+                "{}",
+                serde_json::json!({"event":"scan_permit_reclaimed","reason":"redelivered","owner_age_seconds":age,"holder_step":step,"isolate":isolate,"wasm_memory_bytes":crate::runtime_diagnostics::current().wasm_memory_bytes})
+            );
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (isolate, dead);
+        count
+    }
+    fn insert(
+        state: &mut AdmissionState,
+        t: i64,
+        step: &'static str,
+        delivery: Option<&Delivery>,
+    ) -> Self {
         state.next_owner_id = state.next_owner_id.wrapping_add(1).max(1);
         let owner_id = state.next_owner_id;
         state.owners.insert(
@@ -133,6 +174,7 @@ impl FeedScanPermit {
             Owner {
                 acquired_at: t,
                 step,
+                delivery: delivery.cloned(),
             },
         );
         Self { owner_id }
@@ -147,10 +189,19 @@ impl FeedScanPermit {
                 state.refused = state.refused.saturating_add(1);
                 return None;
             }
-            Some(Self::insert(&mut state, t, step))
+            Some(Self::insert(&mut state, t, step, None))
         })
     }
+    #[allow(dead_code)]
     pub(crate) fn try_acquire_exclusive(step: &'static str) -> Option<ExclusiveAcquisition> {
+        Self::try_acquire_exclusive_for(step, None)
+    }
+    /// A queued delivery's owners carry its identity, so its redelivery can
+    /// reclaim them through `reclaim_earlier_attempts`.
+    pub(crate) fn try_acquire_exclusive_for(
+        step: &'static str,
+        delivery: Option<&Delivery>,
+    ) -> Option<ExclusiveAcquisition> {
         ADMISSION.with(|admission| {
             let mut state = admission.borrow_mut();
             let t = now_seconds();
@@ -160,9 +211,18 @@ impl FeedScanPermit {
                 return None;
             }
             let permits = (0..MAX_ACTIVE_SCANS)
-                .map(|_| Self::insert(&mut state, t, step))
+                .map(|_| Self::insert(&mut state, t, step, delivery))
                 .collect();
             Some(ExclusiveAcquisition { permits, reclaimed })
+        })
+    }
+    /// Frees the owners this delivery's earlier attempts left, before it routes,
+    /// so a redelivery that never asks for a permit still frees them.
+    pub(crate) fn reclaim_earlier_attempts(delivery: &Delivery) -> u32 {
+        ADMISSION.with(|admission| {
+            let mut state = admission.borrow_mut();
+            let t = now_seconds();
+            Self::reclaim_redelivered(&mut state, t, delivery)
         })
     }
     #[allow(dead_code)]
@@ -210,6 +270,36 @@ impl FeedScanPermit {
             state.reclaimed = 0;
             value
         })
+    }
+}
+
+/// Polls `acquire` every `step_ms` until it succeeds or `patience_ms` of sleep
+/// has passed. A stalled owner will not release within any patience, so the
+/// waiter refuses at once. The sleep is the caller's, so host tests can drive
+/// the clock.
+pub(crate) async fn wait_for_exclusive<T, A, W, S, F>(
+    patience_ms: u64,
+    step_ms: u64,
+    mut acquire: A,
+    mut stalled: W,
+    mut sleep: S,
+) -> Option<T>
+where
+    A: FnMut() -> Option<T>,
+    W: FnMut() -> bool,
+    S: FnMut(u64) -> F,
+    F: std::future::Future<Output = ()>,
+{
+    let mut waited = 0;
+    loop {
+        if let Some(acquisition) = acquire() {
+            return Some(acquisition);
+        }
+        if waited >= patience_ms || stalled() {
+            return None;
+        }
+        sleep(step_ms).await;
+        waited += step_ms;
     }
 }
 
@@ -292,6 +382,114 @@ mod tests {
         drop(replacement);
         assert_eq!(FeedScanPermit::active_count(), 0);
         set_test_now(None);
+    }
+    /// Runs the queued waiter against a holder `owner_age` seconds old that
+    /// releases after `hold_ms` on a clock that only the waiter's sleeps
+    /// advance. Returns whether it acquired and how long it slept.
+    fn queued_wait_from(patience_ms: u64, hold_ms: u64, owner_age: i64) -> (bool, u64) {
+        use std::cell::{Cell, RefCell};
+        use std::future::Future;
+        use std::task::{Context, Poll};
+        set_test_now(Some(1000));
+        let holder = RefCell::new(FeedScanPermit::try_acquire_exclusive("scan"));
+        assert!(holder.borrow().is_some());
+        set_test_now(Some(1000 + owner_age));
+        let clock = Cell::new(0);
+        let waiter = wait_for_exclusive(
+            patience_ms,
+            100,
+            || FeedScanPermit::try_acquire_exclusive("scan"),
+            || {
+                FeedScanPermit::view().oldest_permit_age_seconds
+                    >= crate::polling::policy::STALLED_OWNER_SECONDS
+            },
+            |ms| {
+                clock.set(clock.get() + ms);
+                if clock.get() >= hold_ms {
+                    holder.borrow_mut().take();
+                }
+                std::future::ready(())
+            },
+        );
+        let waker = futures_util::task::noop_waker();
+        let Poll::Ready(acquired) = std::pin::pin!(waiter).poll(&mut Context::from_waker(&waker))
+        else {
+            panic!("the waiter's sleeps are always ready");
+        };
+        let admitted = acquired.is_some();
+        drop((acquired, holder));
+        assert_eq!(FeedScanPermit::active_count(), 0);
+        set_test_now(None);
+        (admitted, clock.get())
+    }
+    fn queued_wait(patience_ms: u64, hold_ms: u64) -> bool {
+        queued_wait_from(patience_ms, hold_ms, 0).0
+    }
+    #[test]
+    fn stalled_owner_is_refused_without_waiting() {
+        let patience = crate::polling::policy::SCAN_PERMIT_WAIT_MS;
+        // A leaked owner (61-239 s in a rehearsal) never releases within any patience.
+        assert_eq!(queued_wait_from(patience, u64::MAX, 61), (false, 0));
+        assert_eq!(queued_wait_from(patience, u64::MAX, 60), (false, 0));
+        // A live owner younger than the threshold is still waited for.
+        assert_eq!(queued_wait_from(patience, 500, 59), (true, 500));
+    }
+    #[test]
+    fn queued_scan_waits_out_measured_holds() {
+        // Measured: the PostgreSQL baseline hold p95, the D1
+        // production-size maximum and the largest contention wait.
+        for hold_ms in [6_165, 8_050, 9_366] {
+            assert!(
+                queued_wait(crate::polling::policy::SCAN_PERMIT_WAIT_MS, hold_ms),
+                "a {hold_ms} ms hold must be waited out"
+            );
+            assert!(
+                !queued_wait(3_000, hold_ms),
+                "the old 3 s patience refuses it"
+            );
+        }
+        assert!(!queued_wait(
+            crate::polling::policy::SCAN_PERMIT_WAIT_MS,
+            10_100
+        ));
+        assert!(!queued_wait(0, 100), "a direct caller never waits");
+    }
+    #[test]
+    fn redelivery_reclaims_the_owner_its_earlier_attempt_left() {
+        let _ = FeedScanPermit::take_diagnostics();
+        let first = Delivery {
+            message: "m1".into(),
+            attempt: 1,
+        };
+        // A cancelled attempt's owner is never dropped (as in a rehearsal ramp).
+        let leaked = FeedScanPermit::try_acquire_exclusive_for("scan", Some(&first)).unwrap();
+        // Another message, the same attempt again and a direct caller still wait.
+        let other = Delivery {
+            message: "m2".into(),
+            attempt: 2,
+        };
+        for delivery in [&other, &first] {
+            assert_eq!(FeedScanPermit::reclaim_earlier_attempts(delivery), 0);
+        }
+        for delivery in [Some(&other), Some(&first), None] {
+            assert!(FeedScanPermit::try_acquire_exclusive_for("scan", delivery).is_none());
+        }
+        let retry = Delivery {
+            message: "m1".into(),
+            attempt: 2,
+        };
+        assert_eq!(FeedScanPermit::reclaim_earlier_attempts(&retry), 2);
+        assert_eq!(FeedScanPermit::active_count(), 0);
+        assert_eq!(FeedScanPermit::diagnostics().reclaimed, 2);
+        let replacement = FeedScanPermit::try_acquire_exclusive_for("scan", Some(&retry))
+            .expect("the redelivery's earlier attempt no longer holds the permits");
+        assert_eq!(replacement.reclaimed, 0);
+        assert_eq!(FeedScanPermit::active_count(), 2);
+        drop(leaked);
+        assert_eq!(FeedScanPermit::active_count(), 2);
+        assert_eq!(FeedScanPermit::diagnostics().stale_releases, 2);
+        drop(replacement);
+        assert_eq!(FeedScanPermit::active_count(), 0);
     }
     #[test]
     fn live_owner_is_not_evicted() {

@@ -9,9 +9,9 @@
 // routing rule. ai, observability and vars are repeated in every lane so
 // environment inheritance cannot change them.
 //
-// Secrets (both lanes; `.dev.vars` locally): FORWARD_TO (a verified Email
-// Routing destination), and ALERT_WEBHOOK_URL, ALERT_CREDENTIAL and
-// ALERT_RECIPIENT for the push. Alerting is off unless all three are set.
+// Secrets (both lanes; `.dev.vars` locally): FORWARD_TO (comma-separated
+// verified Email Routing destinations), and ALERT_WEBHOOK_URL, ALERT_CREDENTIAL
+// and ALERT_RECIPIENT for the push. Alerting is off unless all three are set.
 //
 // Privacy: invocation logs would record the envelope sender and recipient, so
 // they are off. The Worker logs one line per message that carries no subject,

@@ -9,11 +9,12 @@ use super::{
     },
     store::{fault, Store},
 };
+use crate::database::slice_b::{self, Operation};
 use crate::delivery::{db::*, wire::string};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use worker::{Bucket, D1Database, Result};
+use worker::{Bucket, Result};
 
 #[derive(Serialize, Deserialize, Default)]
 struct History {
@@ -329,7 +330,15 @@ impl Preparation {
         let mut withdrawn = vec![];
         let mut cursor = String::new();
         loop {
-            let pending=rows(&store.db,"SELECT episode_id,fingerprint FROM n_episode_release WHERE feed_id=?1 AND state='pending_future' AND episode_id>?2 ORDER BY episode_id LIMIT 1000",&[json!(store.feed_id),json!(cursor)]).await?;
+            let pending = slice_b::execute(
+                &store.db,
+                Operation::ReadPendingFuture {
+                    feed: store.feed_id.clone(),
+                    cursor: cursor.clone(),
+                },
+            )
+            .await?
+            .rows();
             for row in &pending {
                 let id = string(row, "episode_id");
                 let visible = row["fingerprint"]
@@ -431,7 +440,7 @@ async fn write_candidates(store: &mut Store, candidates: &[Candidate]) -> Result
     Ok(pages)
 }
 pub async fn step_fenced(
-    db: D1Database,
+    db: crate::database::Authority,
     bucket: Bucket,
     feed_id: &str,
     poll: Option<crate::polling::Fence>,
@@ -454,7 +463,15 @@ pub async fn step_fenced(
     }
     .await;
     if result.is_err() {
-        run(&store.db,"UPDATE n_observation SET processing_failures=processing_failures+1,processing_next_at=?3+300,processing_token=NULL,processing_until=NULL WHERE observation_id=?1 AND processing_token=?2",&[json!(store.observation_id),json!(store.processing_token),json!(now())]).await?;
+        slice_b::execute(
+            &store.db,
+            Operation::PreparationFailed {
+                observation: store.observation_id.clone(),
+                token: store.processing_token.clone(),
+                now: now(),
+            },
+        )
+        .await?;
         Store::abandon_poisoned(&store.db, &store.feed_id).await?;
     }
     result

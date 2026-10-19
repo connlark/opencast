@@ -34,6 +34,14 @@ pub fn uuid(s: &str) -> bool {
 pub fn string<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
+/// Test the shared storage bound; production request validation is in `parse`.
+#[cfg(test)]
+fn storage_integer(value: i64) -> bool {
+    opencast_worker_database_core::statement::Parameter::Integer(Some(value))
+        .validate()
+        .is_ok()
+}
+
 pub fn int(v: &Value, key: &str) -> i64 {
     v[key].as_i64().unwrap_or(0)
 }
@@ -331,5 +339,20 @@ mod tests {
             digest(&parse(br#"{"a":1,"b":2}"#).unwrap())
         );
         assert_ne!(hash(&["a:b", "c"]), hash(&["a", "b:c"]));
+    }
+}
+
+#[cfg(test)]
+mod storage_integer_tests {
+    use super::storage_integer;
+    #[test]
+    fn exact_request_integer_boundaries() {
+        const MAX: i64 = (1_i64 << 53) - 1;
+        for value in [-MAX, -1, 0, 1, MAX] {
+            assert!(storage_integer(value), "representable {value}");
+        }
+        for value in [i64::MIN, -MAX - 1, MAX + 1, i64::MAX] {
+            assert!(!storage_integer(value), "unrepresentable {value}");
+        }
     }
 }

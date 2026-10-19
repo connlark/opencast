@@ -1,3 +1,12 @@
+// SCALE gate approved by Connor on 2026-10-09: step 1b's lazy 142.22 MiB
+// versus step 1d's post-collection 46.88 MiB used identical compiled Wasm.
+// Review: reviews/03-scale-postcollection-2026-10-09.md in the migration workspace.
+// Gate contemporaneous post-collection memory at 96 MiB ordinary / 112 MiB
+// maximum, leaving 16 MiB of collection slack. Retain/report the lazy series;
+// repeated collection changes its trajectory, so it is not an untouched lazy run.
+// Maximum Wasm above 48 MiB is informational growth, not a failing assertion.
+// GC uses the shared CDP barrier and /health wake; busy-isolate gaps can exceed
+// the 25-ms loop delay, so sampled peaks are not an instantaneous runtime ceiling.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
@@ -6,7 +15,7 @@ import {join} from 'node:path';
 import {Readable} from 'node:stream';
 import {writeFile} from 'node:fs/promises';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
-import {migrate} from './migrations.mjs';
+import {openStorage} from './storage.mjs';
 import {compatibilityDate,compatibilityFlags} from './runtime-compatibility.mjs';
 import {sampleRuntimeMemory} from './runtime-memory.mjs';
 import {reviewRegressions} from './observation-review-cases.mjs';
@@ -17,10 +26,11 @@ let url='https://fixture.example.com/feed.xml',feed=hash(['feed-v1',url]);
 let items=[],tail='',etag='"v1"',requests=0,large,fetchHook,loseReceipt=false;
 const item=(id,date=now-60,title=`Episode ${id}`)=>`<item><guid>${id}</guid><title>${title}</title>${date===null?'':`<pubDate>${new Date(date*1000).toUTCString()}</pubDate>`}<description>Summary ${id}</description><enclosure url="https://audio.example.com/${id}.mp3"/></item>`;
 const sends=[];
-const mf=new Miniflare(convertV4MiniflareOptions({cf:false,inspectorPort:0,workers:[{
+const storage=await openStorage();
+const mf=new Miniflare(convertV4MiniflareOptions({cf:false,inspectorPort:0,workers:[storage.bind({
   name:'notifications-observation-runtime',modulesRoot:root,
   modules:[{type:'ESModule',path:root+'tests/observation-entry.mjs'},{type:'ESModule',path:root+'adapter/index.js'},{type:'ESModule',path:root+'build/index.js'},{type:'CompiledWasm',path:root+'build/index_bg.wasm'}],
-  compatibilityDate,compatibilityFlags,d1Databases:{APP_ATTEST_DB:'isolated-observations'},r2Buckets:{FEED_SNAPSHOTS:'isolated-snapshots'},
+  compatibilityDate,compatibilityFlags,r2Buckets:{FEED_SNAPSHOTS:'isolated-snapshots'},
   queueProducers:{EVENT_QUEUE:'opencast-notification-event-development',EPISODE_DELIVERY_QUEUE:'opencast-notification-episode-development',JOB_DELIVERY_QUEUE:'opencast-notification-job-development'},
   bindings:{NOTIFICATION_ENVIRONMENT:'development',NOTIFICATION_CLEANUP:'true',NOTIFICATION_FEED_OBSERVATION:'true',NOTIFICATION_EPISODE_ACTIVATION:'true',NOTIFICATION_EPISODE_SEND:'true',APPLE_TEAM_ID:'EXAMPLETEAM',APPLE_BUNDLE_ID:'com.example.opencast',APP_ATTEST_ENVIRONMENT:'development',APNS_ENVIRONMENT:'development',PUBLIC_NOTIFICATIONS_ENABLED:'false',DEBUG_ENDPOINTS_ENABLED:'true'},
   serviceBindings:{NOTIFICATION_EVENTS:async req=>{const response=await mf.dispatchFetch('https://runtime.example.com/v1/events',{method:'POST',body:await req.text()});if(loseReceipt){loseReceipt=false;await response.text();return new Response('lost receipt',{status:503});}return response;},APNS_CERT:async req=>{sends.push(await req.json());return new Response(null,{status:200});}},
@@ -54,13 +64,17 @@ const mf=new Miniflare(convertV4MiniflareOptions({cf:false,inspectorPort:0,worke
     const body=`<rss><channel><title>Fixture show</title>${items.join('')}${tail||'</channel></rss>'}`;
     return new Response(body,{headers:{etag,'content-type':'application/rss+xml'}});
   },
-}]}));
+})]}));
 let stop;
 try{
   await mf.ready;
   await mf.dispatchFetch('https://runtime.example.com/health');
-  stop=await sampleRuntimeMemory(await mf.getInspectorURL(),'notifications-observation-runtime',30000);
-  const db=await mf.getD1Database('APP_ATTEST_DB');await migrate(db,new URL('../migrations/',import.meta.url));
+  stop=await sampleRuntimeMemory(await mf.getInspectorURL(),'notifications-observation-runtime',30000,async()=>{
+    const response=await mf.dispatchFetch('https://runtime.example.com/health');
+    if(response.status!==200)throw Error('GC wake health failed');
+    await response.arrayBuffer();
+  });
+  const db=await storage.database(mf);
   const run=(sql,...args)=>db.prepare(sql).bind(...args).run();
   const first=(sql,...args)=>db.prepare(sql).bind(...args).first();
   await run(`INSERT INTO devices(install_id,key_id,device_token,device_token_hash,apns_environment,bundle_id,notifications_enabled,created_at,last_seen_at) VALUES('local','local',?,'hash','development','com.example.opencast',1,?,?)`,'a'.repeat(64),now-1000,now);
@@ -243,14 +257,15 @@ try{
   for(let i=0;i<4;i++)await queue('event',routed);
   assert.equal((await first("SELECT COUNT(*) AS n FROM n_delivery WHERE interest_key=? AND install_id='matched-304'",feed)).n,1);
   console.log('PASS matched 304 supplies per-interest prior absence');
-  const review=await reviewRegressions({mf,now,item,hash,newFeed,command,drain,run,first,queue,subscribe,
+  const review=await reviewRegressions({mf,db,now,item,hash,newFeed,command,drain,run,first,queue,subscribe,
     feed:()=>feed, clock:()=>clock,
     setClock:async value=>{clock=value;await mf.dispatchFetch('https://runtime.example.com/clock',{method:'POST',body:String(clock)});},
     content:(name,entries,ending='')=>{etag=JSON.stringify(name);items=entries;tail=ending;},
   });
   const ordinaryMemory=await stop.snapshot();
-  assert.ok(ordinaryMemory.peakCombined.totalBytes<96*1024*1024,'96-MiB ordinary working target');
+  assert.ok(ordinaryMemory.postCollectionPeak.totalBytes<96*1024*1024,'96-MiB ordinary post-collection working target');
   if(process.env.OPENCAST_OBSERVATION_SCALE==='1'){
+    await stop.phase('maximum-baseline');
     await newFeed('maximum',false);large={count:100000,bytes:128*1024*1024,gzip:false};
     const start=performance.now();await command('scan');large=undefined;
     const pointer=await first('SELECT snapshot_key FROM n_feed WHERE feed_id=?',feed);
@@ -259,6 +274,7 @@ try{
     assert.equal(manifest.pages.filter(p=>p.index==='identity').reduce((n,p)=>n+p.count,0),100000);
     assert.equal((await first('SELECT COUNT(*) AS n FROM n_episode_release WHERE feed_id=?',feed)).n,0);
     console.log('PASS maximum 128-MiB, 100000-item quiet baseline',Math.round(performance.now()-start),'ms');
+    await stop.phase('history-growth');
     etag='"overflow"';items=[item('maximum-99999'),...Array.from({length:2001},(_,i)=>item(`overflow-${i}`,null))];
     await command('scan');await drain();
     const newer=await first('SELECT snapshot_key FROM n_feed WHERE feed_id=?',feed);
@@ -275,12 +291,14 @@ try{
       for(const c of candidates){const order=`${c.eligible_at}:${c.episode_id}`;if(previous)assert.ok(previous<order);previous=order;}
     }
     console.log('PASS exact historical growth and all 2001 overflow releases, sorted across resumable pages');
+    await stop.phase('overflow-fanout');
     for(let i=0;i<201;i++)await command('outbox');
     const overflowEvent=(await first('SELECT event_id FROM n_episode_release WHERE feed_id=?',feed)).event_id;
     for(let i=0;i<3;i++)await queue('event',overflowEvent);
     assert.equal((await first('SELECT COUNT(*) AS n FROM n_delivery WHERE interest_key=?',feed)).n,1);
     assert.equal((await first('SELECT member_count FROM n_delivery WHERE interest_key=?',feed)).member_count,2001);
     console.log('PASS 2001-member immutable recipient presentation');
+    await stop.phase('compressed-baseline');
     await newFeed('compressed-maximum',false);large={count:100000,bytes:128*1024*1024,gzip:true};await command('scan');large=undefined;
     assert.equal((await first('SELECT observation_generation FROM n_feed WHERE feed_id=?',feed)).observation_generation,1);
     console.log('PASS compressed maximum-size baseline');
@@ -288,12 +306,14 @@ try{
     // the maximum size: no generation, observation, snapshot row or object.
     const durable=async()=>({...(await first('SELECT observation_generation,snapshot_key FROM n_feed WHERE feed_id=?',feed)),observations:(await first('SELECT COUNT(*) AS n FROM n_observation WHERE feed_id=?',feed)).n,snapshots:(await first('SELECT COUNT(*) AS n FROM n_snapshot WHERE feed_id=?',feed)).n,scratch:(await (await mf.getR2Bucket('FEED_SNAPSHOTS')).list({prefix:'scratch/'})).objects.length});
     const quiet=await durable();
+    await stop.phase('maximum-unchanged');
     etag='"compressed-rescan"';large={count:100000,bytes:128*1024*1024,gzip:true};const rescanned=JSON.parse(await command('scan'));large=undefined;
     assert.deepEqual(await durable(),quiet);assert.equal(quiet.observation_generation,1);
     assert.equal((await first('SELECT etag FROM n_feed WHERE feed_id=?',feed)).etag,'"compressed-rescan"','the unchanged body refreshed its validator');
     assert.equal(rescanned.passes,1,'the unchanged maximum-size body is parsed once; its spilled parts are aborted');
     console.log('PASS unchanged maximum-size rescan is a schedule update: no generation, row or object');
     const editedRequests=requests;
+    await stop.phase('maximum-changed');
     etag='"compressed-edited"';large={count:100000,bytes:128*1024*1024,gzip:true,edited:true};const replayed=JSON.parse(await command('scan'));large=undefined;
     assert.equal((await first('SELECT observation_generation FROM n_feed WHERE feed_id=?',feed)).observation_generation,2);
     assert.equal((await first('SELECT COUNT(*) AS n FROM n_episode_release WHERE feed_id=?',feed)).n,0);
@@ -303,6 +323,7 @@ try{
   }
   // Retired manifests and uploads can be reclaimed; live snapshots and an
   // unfinished published candidate drain remain roots regardless of age.
+  await stop.phase('retention');
   await newFeed('gc-roots');
   const baselineKey=(await first('SELECT snapshot_key FROM n_feed WHERE feed_id=?',feed)).snapshot_key;
   etag='"gc-candidates"';items=[item('gc-new',null)];await command('scan');
@@ -330,11 +351,13 @@ try{
   const traces=await(await mf.dispatchFetch('https://runtime.example.com/traces')).json();
   const wasm=JSON.parse(await command('stats')).wasm_memory_bytes;
   const memory=await stop();stop=undefined;
-  const report={requests,sends:sends.length,review,ordinaryMemory,maxD1:Math.max(...traces.map(t=>t.d1)),maxR2:Math.max(...traces.map(t=>t.get+t.put+t.head+t.delete)),wasm,memory,conservativeMemoryBytes:memory.totalBytes+wasm,traces};
+  const wasmInformation={maximumBytes:memory.maxWasmBytes,informationalBoundBytes:48*1024*1024,exceedsInformationalBound:memory.maxWasmBytes>48*1024*1024};
+  const report={wasmInformation,requests,sends:sends.length,review,ordinaryMemory,maxD1:Math.max(...traces.map(t=>t.d1)),maxR2:Math.max(...traces.map(t=>t.get+t.put+t.head+t.delete)),wasm,memory,conservativeMemoryBytes:memory.totalBytes+wasm,traces};
   await writeFile(process.env.OPENCAST_OBSERVATION_REPORT??join(tmpdir(),'opencast-feed-observation-runtime.json'),JSON.stringify(report,null,2));
-  console.log('metrics',JSON.stringify({...report,traces:undefined}));
+  console.log('metrics',JSON.stringify({...report,traces:undefined,ordinaryMemory:{...ordinaryMemory,samples:undefined},memory:{...memory,samples:undefined}}));
+  if(wasmInformation.exceedsInformationalBound)console.warn('Wasm linear memory exceeded the informational 48-MiB bound',wasmInformation);
   assert.ok(report.maxD1<=1000);assert.ok(report.maxR2<10000);
   assert.ok(memory.transportAudit.wasmBytes===wasm,'sampler must observe actual final Wasm growth');
-  const memoryLimitMiB=process.env.OPENCAST_OBSERVATION_SCALE==='1'?128:96;
-  assert.ok(memory.peakCombined.totalBytes<memoryLimitMiB*1024*1024,'working target / maximum-feed platform limit');
-}finally{if(stop)await stop();await mf.dispose();}
+  const memoryLimitMiB=process.env.OPENCAST_OBSERVATION_SCALE==='1'?112:96;
+  assert.ok(memory.postCollectionPeak.totalBytes<memoryLimitMiB*1024*1024,'ordinary / maximum-feed post-collection memory target');
+}finally{try{if(stop)await stop();await mf.dispose();}finally{await storage.dispose();}}

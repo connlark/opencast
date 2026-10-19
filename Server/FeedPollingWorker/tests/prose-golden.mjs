@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { harness } from './harness.mjs';
+import { harness, hash } from './harness.mjs';
 
 const FIXTURE = new URL('fixtures/prose-golden.json', import.meta.url);
 const RECORD = process.env.OPENCAST_RECORD_GOLDEN === '1';
@@ -40,9 +40,14 @@ async function at(seconds) {
 const entry = ({ guid, at: date, title = `Episode ${guid}`, description, notes, audio = guid }) => `<item><guid>${guid}</guid><title>${title}</title>${description == null ? '' : `<description>${description}</description>`}${notes == null ? '' : `<content:encoded>${notes}</content:encoded>`}${date == null ? '' : `<pubDate>${new Date(date * 1000).toUTCString()}</pubDate>`}<enclosure url="https://audio.example.com/${audio}.mp3"/></item>`;
 const document = items => `<rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>Prose golden</title>${items.map(entry).join('')}</channel></rss>`;
 async function add(url) {
-  const feed = await h.add(url);
-  // The harness stamps its rows with the real clock; move them onto T0.
-  await h.run('UPDATE feed_subscriptions SET created_at=?,updated_at=?', T0 - 100000, T0 - 100000);
+  const feed = hash(['feed-v1', url]);
+  // Seed activation before the fixed releases: the subscription INSERT trigger
+  // projects created_at, and later timestamp updates preserve that activation.
+  await h.db.batch([
+    h.db.prepare('INSERT INTO n_feed_catalog(feed_url,source_url,created_at,updated_at) VALUES(?,?,?,?)').bind(url, url, T0, T0),
+    h.db.prepare('INSERT INTO n_feed(feed_id,canonical_url,epoch,due_at) VALUES(?,?,1,?)').bind(feed, url, T0),
+    h.db.prepare('INSERT INTO feed_subscriptions(install_id,feed_url,notifications_enabled,created_at,updated_at) VALUES(?,?,1,?,?)').bind('local', url, T0 - 100000, T0 - 100000),
+  ]);
   await h.run('UPDATE devices SET created_at=?,last_seen_at=?', T0 - 100000, T0);
   await h.run('UPDATE n_feed_catalog SET created_at=?,updated_at=?', T0, T0);
   return feed;

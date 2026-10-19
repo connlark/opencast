@@ -2,13 +2,13 @@
 use super::{dispatch, policy};
 use crate::{
     deadline::fetch_with_deadline,
-    delivery::db::{first, lane, now},
+    delivery::db::{lane, now},
 };
 use serde_json::json;
 use std::time::Duration;
 use worker::*;
 
-pub(crate) async fn check(env: &Env, scheduled_at: i64) {
+pub(crate) async fn check(env: &Env, scheduled_at: i64, db: crate::database::Authority) {
     // Use the scheduled minute, not invocation arrival time: delayed cron
     // delivery must not skip a five-minute check or create extra checks.
     if scheduled_at.div_euclid(60).rem_euclid(5) != 0 {
@@ -19,11 +19,14 @@ pub(crate) async fn check(env: &Env, scheduled_at: i64) {
     };
     let t = now();
     let read = async {
-        let db = env.d1("APP_ATTEST_DB")?;
-        let row = first(&db, &format!(
-            "SELECT (SELECT COUNT(*) FROM n_feed f WHERE {}) AS late_900, (SELECT stall_state FROM n_poll_dispatch WHERE id=1) AS stall_state",
-            dispatch::late_scanned(900)
-        ), &[json!(t)]).await?.ok_or_else(|| Error::RustError("watchdog_missing_health".into()))?;
+        let db = db.capped_at(crate::polling::timing::now_ms().saturating_add(10_000));
+        let row = crate::database::execute(
+            &db,
+            crate::database::polling::Operation::ReadWatchdog { now: t },
+        )
+        .await?
+        .first()
+        .ok_or_else(|| Error::RustError("watchdog_missing_health".into()))?;
         let late = row["late_900"]
             .as_i64()
             .ok_or_else(|| Error::RustError("watchdog_invalid_count".into()))?;
@@ -75,7 +78,7 @@ pub(crate) async fn check(env: &Env, scheduled_at: i64) {
     .await;
     console_log!(
         "{}",
-        json!({"event":"poll_watchdog_alert","delivered":matches!(sent, Ok(true))})
+        json!({"event":"poll_watchdog_alert","delivered":sent.is_ok_and(|reply| reply.delivered)})
     );
     // Best effort, no persistent state, and no error escapes to maintenance.
 }

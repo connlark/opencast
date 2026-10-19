@@ -1,4 +1,4 @@
-import { migrate } from './migrations.mjs';
+import { openStorage } from './storage.mjs';
 // Run after packaging the Worker. No remote services or production test hooks.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -20,15 +20,15 @@ const releases = new Set();
 let version = 1;
 const item = index => `<item><guid>episode-${index}</guid><title>Episode ${index}</title><pubDate>${new Date((now - 10 + index) * 1000).toUTCString()}</pubDate><enclosure url="https://audio.example.com/${index}.mp3"/></item>`;
 const xml = () => `<rss><channel><title>Cancellation proof</title>${version === 2 ? item(1) : ''}${item(0)}</channel></rss>`;
+const storage = await openStorage();
 const mf = new Miniflare(convertV4MiniflareOptions({
   cf: false,
   inspectorPort: 0,
-  workers: [{ name: 'notifications-feed-runtime', modulesRoot: root,
+  workers: [storage.bind({ name: 'notifications-feed-runtime', modulesRoot: root,
     modules: [{ type: 'ESModule', path: root + 'tests/cancellation-entry.mjs' },
       { type: 'ESModule', path: root + 'adapter/index.js' },{ type: 'ESModule', path: root + 'build/index.js' },
       { type: 'CompiledWasm', path: root + 'build/index_bg.wasm' }],
     compatibilityDate, compatibilityFlags,
-    d1Databases: { APP_ATTEST_DB: 'cancellation-runtime' },
     r2Buckets: { FEED_SNAPSHOTS: 'isolated-cancellation-snapshots' },
     bindings: { NOTIFICATION_FEED_OBSERVATION:'true', NOTIFICATION_ENVIRONMENT:'development' },
     serviceBindings: { APNS_CERT: async request => {
@@ -62,15 +62,14 @@ const mf = new Miniflare(convertV4MiniflareOptions({
       }
       return new Response(xml(), { headers: { 'content-type': 'application/rss+xml', etag: `"v${version}"` } });
     },
-  }],
+  })],
 }));
 
 let stopMemory;
 try {
   await mf.ready;
   const origin = await mf.ready;
-  const db = await mf.getD1Database('APP_ATTEST_DB');
-  await migrate(db,new URL('../migrations/',import.meta.url));
+  const db = await storage.database(mf);
   await db.prepare("UPDATE n_control SET enabled=1 WHERE name='feed_observation'").run();
   await db.prepare(`INSERT INTO devices(install_id,key_id,device_token,device_token_hash,apns_environment,bundle_id,notifications_enabled,created_at,last_seen_at)
     VALUES ('local','key',?,'hash','development','com.example.opencast',1,?,?)`).bind('a'.repeat(64), now - 120, now).run();
@@ -137,8 +136,24 @@ try {
   const original=await snapshot('postscan');
   const postscan=startRequest('postscan',{'x-test-postscan':'1'});
   await until(async()=> (await state()).postscanReads>0,'post-scan storage read');
+  const cancelAt=performance.timeOrigin+performance.now();
   await mf.dispatchFetch(new URL('/__cancel?id=postscan',origin));aborts++;
   await until(async()=> (await state()).incomingAborts===aborts,'post-scan native abort');postscan.destroy();
+  // The post-scan read waits on its socket: the native abort drops the
+  // operation and closes its connection, so the held reply is discarded on
+  // the client's close before the release, never relayed.
+  const ts=storage.testStorage('notifications-feed-runtime');
+  const fire=()=>ts({op:'witness'}).fires.filter(f=>f.hook==='C-postscan');
+  await until(()=>{const fires=fire();return fires.length>0&&fires.every(f=>f.discarded!==null);},'post-scan hold discarded');
+  const [held,...others]=fire(),w=ts({op:'witness'}),op=w.operations.find(o=>o.id===held.op),ended=w.discarded.find(d=>d.fire===held.id);
+  assert.equal(others.length,0);assert.equal(held.released,null);
+  console.log(JSON.stringify({postscan_hold:{fire:held.id,fire_after_cancel_ms:held.at-cancelAt,discard_after_cancel_ms:held.discarded-cancelAt,discard_after_Z_relay_ms:held.discarded-op.Z_relay,reason:ended.reason}}));
+  assert.ok(held.discarded>=cancelAt,'the hold was outstanding until the abort');
+  assert.ok(['client','terminate'].includes(ended.reason),`the Worker closed the held connection, not the proxy: ${ended.reason}`);
+  // The operation deadline closes no earlier than Z_relay + 4,000 ms: an
+  // earlier close is the abort's.
+  assert.ok(held.discarded-op.Z_relay<4000,'closed by the abort, not by the operation deadline');
+  ts({op:'expect',fire:held.id,outcome:'discarded'});
   await db.prepare('UPDATE n_feed SET lease_id=NULL,lease_until=NULL WHERE feed_id=?').bind(feedID(urls.get('cancel-read-a'))).run();
   const before=fixtureRequests.get('/cancel-read-a')??0,replacement=startRequest('cancel-read-a');
   await until(()=> (fixtureRequests.get('/cancel-read-a')??0)>before,'replacement owner');
@@ -155,6 +170,8 @@ try {
   console.log('PASS late post-scan continuation cannot publish or release replacement permits; healthy follow-up and bounded memory');
 } finally {
   for(const resolve of releases)resolve();
-  if(stopMemory)await stopMemory();
-  await mf.dispose();
+  try {
+    if(stopMemory)await stopMemory();
+    await mf.dispose();
+  } finally { await storage.dispose(); }
 }

@@ -8,8 +8,6 @@ mod execute;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod origin;
 pub mod policy;
-#[cfg(any(target_arch = "wasm32", test))]
-mod rollup_sql;
 #[cfg(target_arch = "wasm32")]
 mod runtime;
 #[cfg(target_arch = "wasm32")]
@@ -25,12 +23,23 @@ pub use runtime::{handle, scheduled};
 /// The 24-hour aggregate that replaces per-attempt receipts. Only a failure,
 /// redelivery, rejected commit or clamp writes here; a healthy poll never does.
 #[cfg(target_arch = "wasm32")]
-pub(crate) async fn stat(db: &worker::D1Database, counter: &'static str) -> worker::Result<()> {
-    use crate::delivery::db::{now, run};
-    // `counter` is one of this module's fixed column names, never request text.
-    run(db,&format!("INSERT INTO n_poll_stat(bucket,{counter}) VALUES(?1,1) ON CONFLICT(bucket) DO UPDATE SET {counter}={counter}+1"),&[serde_json::json!(now().div_euclid(3600))]).await?;
+pub(crate) async fn stat(
+    db: &crate::database::Authority,
+    counter: crate::database::polling::Counter,
+) -> worker::Result<()> {
+    crate::database::execute(
+        db,
+        crate::database::polling::Operation::RecordPollStat {
+            counter,
+            now: crate::delivery::db::now(),
+        },
+    )
+    .await?;
     Ok(())
 }
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod watchdog;
+// Fixture builds only, last so a production build keeps its line numbers.
+#[cfg(all(target_arch = "wasm32", feature = "fixture-hooks"))]
+pub mod fixture;

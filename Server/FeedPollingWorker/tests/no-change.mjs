@@ -4,6 +4,8 @@ import { writeFile } from 'node:fs/promises';
 import { harness, item, rss } from './harness.mjs';
 let behavior;
 const h = await harness(request => behavior(request));
+// Keep the next 15-minute poll slot outside the 30-second scan lookahead.
+h.now -= h.now % 900;
 const bucket = await h.instance.getR2Bucket('FEED_SNAPSHOTS', 'polling-runtime');
 const TABLES = ['n_observation', 'n_snapshot', 'n_snapshot_ref', 'n_episode_release', 'n_outbox', 'n_event', 'n_delivery'];
 const durable = async () => ({ ...Object.fromEntries(await Promise.all(TABLES.map(async t => [t, (await h.first(`SELECT COUNT(*) AS n FROM ${t}`)).n]))), objects: (await bucket.list()).objects.length });
@@ -22,6 +24,9 @@ const poll = async feed => {
 };
 const pointer = feed => h.first('SELECT observation_generation,snapshot_key,semantic_digest FROM n_feed WHERE feed_id=?', feed);
 try {
+  await h.invoke('freeze', String(h.now));
+  const delivery = await h.instance.getWorker('delivery-runtime');
+  await (await delivery.fetch('https://delivery.invalid/clock', { method: 'POST', body: String(h.now - Math.floor(Date.now() / 1000)) })).text();
   // Bodies that differ byte-for-byte but not in membership are schedule
   // updates. Each case below is a changed body for a caching proxy.
   const base = [item('pin', h.now - 40 * 86400), item('one', h.now - 9 * 86400), item('two', h.now - 8 * 86400), item('three', h.now - 7 * 86400)];
@@ -128,6 +133,7 @@ try {
   assert.equal(JSON.parse(changed.text).passes, 2, 'a changed large body is replayed from scratch once, never refetched');
   const metrics = await h.invoke('metrics');
   assert.ok(metrics.max_d1 < 800, `largest invocation used ${metrics.max_d1} D1 statements`);
+  assert.ok(metrics.max_d1 > 0, 'the statement counter read every invocation as 0');
   console.log(`PASS changed large feed copies every spilled page under its lease: one exact event from 9,001 items, largest invocation ${metrics.max_d1} D1 statements`);
   await writeFile('/private/tmp/opencast-pass045-no-change.json', JSON.stringify({ status: 'passed', scratch_peak_bytes: peak, wasm_memory_bytes: (await h.invoke('test/stats')).wasm_memory_bytes, metrics }, null, 2));
 } finally { await h.instance.dispose(); }

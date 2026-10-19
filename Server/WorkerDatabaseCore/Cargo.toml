@@ -1,0 +1,22 @@
+[package]
+name = "opencast-worker-database-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+publish = false
+
+[features]
+default = []
+postgres = ["dep:tokio-postgres", "dep:worker", "worker/tokio-postgres", "dep:tokio"]
+# Fixture-only timing hooks for the local test topology (the close delay);
+# enabled by a Worker's storage-fixture build, never by a shipped manifest.
+fixture = []
+
+[dependencies]
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+tokio-postgres = { version = "=0.7.18", default-features = false, features = ["js"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+worker = { version = "=0.8.7", optional = true }
+tokio = { version = "1", default-features = false, features = ["io-util"], optional = true }

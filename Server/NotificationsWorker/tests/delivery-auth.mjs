@@ -1,7 +1,7 @@
 import { generateKeyPairSync, createHash, sign } from 'node:crypto';
 const sha=bytes=>createHash('sha256').update(bytes).digest();
 const cbor=(major,bytes)=>Buffer.concat([Buffer.from(bytes.length<24?[major+bytes.length]:[major+24,bytes.length]),bytes]);
-// Synthetic keys seeded in local D1 exercise the actual assertion verifier;
+// Synthetic keys seeded in the test database exercise the actual assertion verifier;
 // there is no auth bypass in the shipped entrypoint.
 export async function identity(db,install,appID,time) {
   const {privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'});

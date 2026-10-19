@@ -7,15 +7,31 @@ pub(super) fn flag(env: &Env, name: &str, missing: bool) -> bool {
         .map(|v| v.to_string() == "true")
         .unwrap_or(missing)
 }
-/// Release brakes in the deployment. The D1 controls are part of every fence.
+/// Release brakes in the deployment. The stored controls are part of every fence.
 pub(super) fn permitted_by_environment(env: &Env) -> bool {
     flag(env, "NOTIFICATION_FEED_OBSERVATION", false)
         && flag(env, "NOTIFICATION_DISPATCHER_ADMISSION", false)
 }
-pub(super) async fn enabled(env: &Env, db: &D1Database) -> Result<bool> {
+pub(super) async fn enabled(env: &Env, db: &crate::database::Authority) -> Result<bool> {
     let enabled = permitted_by_environment(env)
-        && control(db, "dispatcher_admission").await?
-        && control(db, "feed_observation").await?;
+        && crate::database::execute(
+            db,
+            crate::database::polling::Operation::ReadControl {
+                control: crate::database::polling::Control::DispatcherAdmission,
+            },
+        )
+        .await?
+        .first()
+        .is_some_and(|v| wire::int(&v, "enabled") == 1)
+        && crate::database::execute(
+            db,
+            crate::database::polling::Operation::ReadControl {
+                control: crate::database::polling::Control::FeedObservation,
+            },
+        )
+        .await?
+        .first()
+        .is_some_and(|v| wire::int(&v, "enabled") == 1);
     if enabled {
         env.service("NOTIFICATION_EVENTS")
             .map_err(|_| Error::RustError("notification_events_binding_missing".into()))?;
@@ -36,9 +52,28 @@ async fn wakeup(request: &mut Request) -> Result<Option<super::dispatch::Wakeup>
     Ok(serde_json::from_slice(&bytes).ok())
 }
 pub async fn scheduled(env: Env) -> Result<()> {
-    super::dispatch::run_dispatch(&env).await.map(|_| ())
+    let db = crate::database::Authority::new(
+        &env,
+        None,
+        super::dispatch::storage_deadline(super::timing::now_ms()),
+    )?;
+    super::dispatch::run_dispatch(&env, db).await.map(|_| ())
 }
 pub async fn handle(mut request: Request, env: Env) -> Result<Response> {
+    let arrived = super::timing::now_ms();
+    let deadline = match request.path().as_str() {
+        "/consume" => arrived.saturating_add(
+            (super::policy::STEP_DEADLINE_SECONDS + super::policy::BOOKKEEPING_DEADLINE_SECONDS)
+                * 1000,
+        ),
+        "/cleanup" => arrived.saturating_add(
+            (super::policy::CLEANUP_BUDGET_SECONDS + super::policy::BOOKKEEPING_DEADLINE_SECONDS)
+                * 1000,
+        ),
+        "/dispatch" => super::dispatch::storage_deadline(arrived),
+        _ => crate::database::Authority::default_deadline(arrived),
+    };
+    let db = crate::database::Authority::new(&env, Some(request.inner().signal()), deadline)?;
     if env
         .var("POLLING_CAPABILITY")
         .map(|v| v.to_string() != "private")
@@ -49,9 +84,8 @@ pub async fn handle(mut request: Request, env: Env) -> Result<Response> {
     if request.method() != Method::Post {
         return Response::error("method_not_allowed", 405);
     }
-    let db = env.d1("APP_ATTEST_DB")?;
     match request.path().as_str() {
-        "/dispatch" => Response::from_json(&super::dispatch::run_dispatch(&env).await?),
+        "/dispatch" => Response::from_json(&super::dispatch::run_dispatch(&env, db).await?),
         "/cleanup" => {
             super::cleanup::consume(&env, &db, now().div_euclid(60)).await?;
             Response::ok("cleanup_saved")
@@ -69,16 +103,22 @@ pub async fn handle(mut request: Request, env: Env) -> Result<Response> {
                 .headers()
                 .get("x-poll-enqueued-ms")?
                 .and_then(|v| v.parse().ok());
+            // The Queue's own message id, from the same adapter. An opaque
+            // in-isolate key only: never stored or logged.
+            let message = request
+                .headers()
+                .get("x-poll-message-id")?
+                .filter(|v| !v.is_empty() && v.len() <= 64);
             let Some(wake) = wakeup(&mut request).await? else {
                 return Response::error("invalid_wakeup", 400);
             };
-            super::execute::consume(env, wake, attempts, signal, enqueued_ms).await
+            super::execute::consume(env, wake, attempts, message, signal, enqueued_ms, db).await
         }
         "/dead-letter" => {
             let Some(wake) = wakeup(&mut request).await? else {
                 return Response::error("invalid_wakeup", 400);
             };
-            super::execute::dead_letter(&env, &wake).await
+            super::execute::dead_letter(&env, &wake, db).await
         }
         "/repair" => {
             #[derive(serde::Deserialize)]
@@ -93,8 +133,21 @@ pub async fn handle(mut request: Request, env: Env) -> Result<Response> {
                 return Response::error("invalid_feed_id", 400);
             }
             // Retry an investigated dead-lettered feed now, not at its backoff.
-            run(&db,"UPDATE n_feed SET handling_failures=0,retry_at=0,last_poll_error='operator_repair' WHERE feed_id=?1 AND handling_failures>0",&[json!(repair.feed_id)]).await?;
-            run(&db,"UPDATE n_burst SET failures=0,next_attempt_at=?2,lease_id=NULL,lease_until=NULL WHERE feed_id=?1 AND complete=0 AND failures>=10",&[json!(repair.feed_id),json!(now())]).await?;
+            crate::database::slice_d::execute(
+                &db,
+                crate::database::slice_d::Operation::RepairFeed {
+                    feed: repair.feed_id.clone(),
+                },
+            )
+            .await?;
+            crate::database::slice_d::execute(
+                &db,
+                crate::database::slice_d::Operation::RepairBursts {
+                    feed: repair.feed_id.clone(),
+                    now: now(),
+                },
+            )
+            .await?;
             console_log!(
                 "{}",
                 json!({"event":"poll_operator_repair","feed_id":repair.feed_id})

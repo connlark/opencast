@@ -47,8 +47,8 @@ pub struct ObserverSink {
     pub origin: Option<crate::polling::origin::Session>,
     // Survives dropping a timed-out storage future; never blame its publisher.
     // Shared with the body's reader, whose part uploads and range reads are
-    // storage too.
-    pub storage_pending: Rc<Cell<bool>>,
+    // storage too. Its time is off a queued publisher's deadline.
+    pub storage_pending: crate::polling::timing::Storage,
     pub timings: crate::polling::timing::Timings,
     /// The probe's complete body, from its EOF until it is discarded, or
     /// replayed and deleted. Kept here, like the observer's spool, so every
@@ -59,7 +59,7 @@ pub struct ObserverSink {
     pub spill: Spill,
     // The scan's first-observed bound and where to record it. It outlives the
     // observer, which a finishing scan consumes, and is spent at most once.
-    evidence: Option<(D1Database, Bound)>,
+    evidence: Option<(crate::database::Authority, Bound)>,
     // A publisher request was sent. Before that the scan has seen nothing.
     reached: bool,
 }
@@ -88,7 +88,7 @@ impl ObserverSink {
     /// baseline, or a digest left by an old binary or expiry) can never be
     /// proved unchanged and runs the full observation once.
     fn scanning(
-        db: D1Database,
+        db: crate::database::Authority,
         store: Store,
         origin: Option<crate::polling::origin::Session>,
     ) -> Self {
@@ -186,7 +186,11 @@ struct Command {
 /// Only the private adapter can grant this capability. The adapter passes an
 /// explicit environment with storage and the private FeedEvents producer binding,
 /// without APNs credentials.
-pub async fn handle(mut request: Request, env: Env) -> Result<Response> {
+pub async fn handle(
+    mut request: Request,
+    env: Env,
+    db: crate::database::Authority,
+) -> Result<Response> {
     if request.method() != Method::Post {
         return Response::error("method_not_allowed", 405);
     }
@@ -208,29 +212,30 @@ pub async fn handle(mut request: Request, env: Env) -> Result<Response> {
     if !wire::hex_id(&command.feed_id) {
         return Response::error("invalid_feed_id", 400);
     }
-    execute(&request.path(), &command.feed_id, env, None).await
+    execute(&request.path(), &command.feed_id, env, None, db).await
 }
 pub(crate) async fn execute(
     path: &str,
     feed_id: &str,
     env: Env,
     poll: Option<crate::polling::Fence>,
+    db: crate::database::Authority,
 ) -> Result<Response> {
     let command = Command {
         feed_id: feed_id.into(),
     };
-    let db = env.d1("APP_ATTEST_DB")?;
     match path {
         "/prepare" => {
-            let Some(acquisition) = scan_permit(poll.is_some(), "prepare").await else {
+            let Some(acquisition) = scan_permit(poll.as_ref(), "prepare").await else {
                 return Response::error("scan_busy", 429);
             };
             if acquisition.reclaimed > 0 {
-                crate::polling::stat(&db, "permit_reclaims").await?;
+                crate::polling::stat(&db, crate::database::polling::Counter::PermitReclaims)
+                    .await?;
             }
             let _permit = acquisition.permits;
             let progress = super::prepare::step_fenced(
-                env.d1("APP_ATTEST_DB")?,
+                db.clone(),
                 env.bucket("FEED_SNAPSHOTS")?,
                 &command.feed_id,
                 poll,
@@ -272,7 +277,7 @@ pub(crate) async fn execute(
         "/scan" => {}
         _ => return Response::error("not_found", 404),
     }
-    let Some(acquisition) = scan_permit(poll.is_some(), "scan").await else {
+    let Some(acquisition) = scan_permit(poll.as_ref(), "scan").await else {
         // Queue-owned polls add the outcome after this response so the
         // refusal is counted once. Direct observation callers still get the
         // isolate-local diagnostic here.
@@ -286,16 +291,17 @@ pub(crate) async fn execute(
         return Response::error("scan_busy", 429);
     };
     if acquisition.reclaimed > 0 {
-        crate::polling::stat(&db, "permit_reclaims").await?;
+        crate::polling::stat(&db, crate::database::polling::Counter::PermitReclaims).await?;
     }
     let _permit = acquisition.permits;
-    let Some(authority) = first(
+    let Some(authority) = crate::database::execute(
         &db,
-        "SELECT canonical_url,etag,last_modified,validator_url,validator_at FROM n_feed WHERE feed_id=?1",
-        &[json!(command.feed_id)],
+        crate::database::polling::Operation::ReadValidators {
+            feed: command.feed_id.clone(),
+        },
     )
     .await?
-    else {
+    .first() else {
         return Response::error("unknown_feed", 404);
     };
     let Some(mut feed) =
@@ -306,7 +312,7 @@ pub(crate) async fn execute(
     // Reads only. Neither admission nor a failed fetch can create conservative
     // observation evidence: no complete RSS body has been seen.
     let Some(store) = Store::deferred(
-        env.d1("APP_ATTEST_DB")?,
+        db.clone(),
         env.bucket("FEED_SNAPSHOTS")?,
         &command.feed_id,
         poll.clone(),
@@ -315,16 +321,16 @@ pub(crate) async fn execute(
     else {
         return Response::error("observation_not_claimed", 409);
     };
-    let origin = poll.clone().map(|p| {
-        crate::polling::origin::Session::new(env.d1("APP_ATTEST_DB").expect("validated DB"), p)
-    });
+    let origin = poll
+        .clone()
+        .map(|p| crate::polling::origin::Session::new(db.clone(), p));
     feed.etag = authority["etag"].as_str().map(str::to_string);
     feed.last_modified = authority["last_modified"].as_str().map(str::to_string);
     feed.validator_url = authority["validator_url"].as_str().map(str::to_string);
     feed.validator_at = authority["validator_at"].as_i64();
-    let mut sink = ObserverSink::scanning(env.d1("APP_ATTEST_DB")?, store, origin);
+    let mut sink = ObserverSink::scanning(db.clone(), store, origin);
     sink.timings = poll.as_ref().map(|p| p.timings.clone()).unwrap_or_default();
-    let result = scan(&env, &db, &command.feed_id, &feed, poll.as_ref(), &mut sink).await;
+    let result = scan(&db, &command.feed_id, &feed, poll.as_ref(), &mut sink).await;
     if result.is_err() {
         // The scan died outside its own handling, possibly after its observer
         // was spent. Its start still bounds what a retry may first observe.
@@ -341,36 +347,49 @@ pub(crate) async fn execute(
 /// changed digest runs the full observation, over the same retained bytes and
 /// never a second request (`"passes":2`). Any other scan is one full pass.
 async fn scan(
-    env: &Env,
-    db: &D1Database,
+    db: &crate::database::Authority,
     feed_id: &str,
     feed: &crate::storage::FeedSource,
     poll: Option<&crate::polling::Fence>,
     sink: &mut ObserverSink,
 ) -> Result<Response> {
+    // A direct observation bounds each pass. A queued scan bounds its
+    // publisher's share on the publisher's own clock, inside one storage bound
+    // over the whole scan, both passes included.
     let deadline = || {
-        Delay::from(Duration::from_secs(if poll.is_some() {
-            crate::polling::policy::SCAN_DEADLINE_SECONDS
-        } else {
-            crate::feed_resource::SCAN_DEADLINE_SECONDS
-        }))
+        Delay::from(Duration::from_secs(
+            crate::feed_resource::SCAN_DEADLINE_SECONDS,
+        ))
     };
-    let outcome = crate::deadline::fetch_with_deadline(
-        fetch_feed(
-            &feed.source_url,
-            feed.etag.as_deref(),
-            feed.last_modified.as_deref(),
-            feed,
-            Rc::new(Cell::new(0)),
-            sink,
-        ),
-        deadline(),
-        FeedFetchError::FetchFailed,
-    )
-    .await;
+    let mut storage_bound = Box::pin(Delay::from(Duration::from_secs(
+        crate::polling::policy::SCAN_STORAGE_DEADLINE_SECONDS,
+    )));
+    let storage = sink.storage_pending.clone();
+    let fetch = fetch_feed(
+        &feed.source_url,
+        feed.etag.as_deref(),
+        feed.last_modified.as_deref(),
+        feed,
+        Rc::new(Cell::new(0)),
+        sink,
+    );
+    let outcome = if poll.is_some() {
+        crate::deadline::fetch_with_deadline(
+            crate::deadline::fetch_with_deadline(
+                fetch,
+                publisher_deadline(storage),
+                FeedFetchError::FetchFailed,
+            ),
+            &mut storage_bound,
+            FeedFetchError::StorageFailed,
+        )
+        .await
+    } else {
+        crate::deadline::fetch_with_deadline(fetch, deadline(), FeedFetchError::FetchFailed).await
+    };
     let mut outcome = match outcome.map_err(|error| storage_failed(error, sink)) {
         Ok(outcome) => outcome,
-        Err(error) => return fetch_error(env, poll, sink, error).await,
+        Err(error) => return fetch_error(db, poll, sink, error).await,
     };
     // The publisher's connection is finished: free its origin slot before any
     // storage work, which is bounded by the scan lease rather than the fetch.
@@ -378,7 +397,7 @@ async fn scan(
     if let FeedFetchOutcome::Fetched(fetched) = &mut outcome {
         sink.body = fetched.body.take();
         if let Err(error) = &fetched.parsed {
-            return scan_error(env, poll, sink, error.code()).await;
+            return scan_error(db, poll, sink, error.code()).await;
         }
     }
     let stage = sink
@@ -423,10 +442,15 @@ async fn scan(
                     }
                     ProbeFinished::Changed(store) => {
                         sink.observer = Some(Stage::Full(Observer::new(*store)));
-                        match replay(sink, &feed.feed_url, deadline()).await {
-                            Err(error) => return fetch_error(env, poll, sink, error).await,
+                        let replayed = if poll.is_some() {
+                            replay(sink, &feed.feed_url, &mut storage_bound).await
+                        } else {
+                            replay(sink, &feed.feed_url, deadline()).await
+                        };
+                        match replayed {
+                            Err(error) => return fetch_error(db, poll, sink, error).await,
                             Ok(Err(error)) => {
-                                return scan_error(env, poll, sink, error.code()).await
+                                return scan_error(db, poll, sink, error.code()).await
                             }
                             Ok(Ok(parsed)) => match sink.observer.take() {
                                 Some(Stage::Full(observer)) => (observer, parsed),
@@ -473,14 +497,30 @@ fn storage_failed(error: FeedFetchError, sink: &ObserverSink) -> FeedFetchError 
     }
 }
 
+/// A queued scan's publisher deadline: its wall time less the time its own
+/// storage was pending, on `performance.now()`. It never ends while storage is
+/// pending and looks again within 250 ms, so its expiry is the publisher's.
+async fn publisher_deadline(storage: crate::polling::timing::Storage) {
+    use crate::polling::timing::monotonic_ms;
+    let budget = (crate::polling::policy::SCAN_DEADLINE_SECONDS * 1000) as f64;
+    let (start, spent) = (monotonic_ms(), storage.spent_ms());
+    loop {
+        let remaining = budget - (monotonic_ms() - start - (storage.spent_ms() - spent));
+        if remaining <= 0.0 && !storage.get() {
+            return;
+        }
+        Delay::from(Duration::from_millis(remaining.max(250.0) as u64)).await;
+    }
+}
+
 /// The replay: the full observation over the first response's retained body. No
 /// publisher request: the bytes come from the isolate or the completed scratch
-/// upload. Its spool writes run under the scan deadline as the in-fetch parse's
-/// do, and a deadline while storage is pending is a storage failure.
+/// upload. Its spool writes run under the scan's deadline as the in-fetch
+/// parse's do, and with no publisher left its expiry is a storage failure.
 async fn replay(
     sink: &mut ObserverSink,
     feed_url: &str,
-    deadline: Delay,
+    deadline: impl std::future::Future<Output = ()>,
 ) -> std::result::Result<
     std::result::Result<rss::scan::ScannedFeed, rss::RSSParseError>,
     FeedFetchError,
@@ -502,18 +542,18 @@ async fn replay(
             Ok(rss::scan::scan_rss_with_sink(reader, feed_url, sink).await)
         },
         deadline,
-        FeedFetchError::FetchFailed,
+        FeedFetchError::StorageFailed,
     )
     .await;
     body.release_bytes();
     sink.body = Some(body);
-    replayed.map_err(|error| storage_failed(error, sink))
+    replayed
 }
 
 /// The scan ended before a complete body: transport, deadline, origin or
 /// storage trouble. Never after the probe, which leaves no publisher to defer to.
 async fn fetch_error(
-    env: &Env,
+    db: &crate::database::Authority,
     poll: Option<&crate::polling::Fence>,
     sink: &mut ObserverSink,
     error: FeedFetchError,
@@ -543,7 +583,7 @@ async fn fetch_error(
                 &json!({"result":"origin_deferred","published":false,"cooldown_until":until}),
             );
         }
-        crate::polling::fetch_failed(env, poll, error.code()).await?;
+        crate::polling::fetch_failed(db, poll, error.code()).await?;
         return Response::from_json(&json!({"result":"publisher_failed","published":false}));
     }
     Err(fault("observation_fetch_failed"))
@@ -551,7 +591,7 @@ async fn fetch_error(
 
 /// The complete body was rejected, or its observation failed in storage.
 async fn scan_error(
-    env: &Env,
+    db: &crate::database::Authority,
     poll: Option<&crate::polling::Fence>,
     sink: &mut ObserverSink,
     code: &'static str,
@@ -565,39 +605,46 @@ async fn scan_error(
     // A failed scratch write is internal handling trouble, not
     // a publisher outage (including failures during the body).
     if let Some(poll) = poll.filter(|_| !storage) {
-        crate::polling::fetch_failed(env, poll, code).await?;
+        crate::polling::fetch_failed(db, poll, code).await?;
         return Response::from_json(&json!({"result":"publisher_failed","published":false}));
     }
     Err(fault(code))
 }
 
 /// A publication with nothing left to drain settled its own generation.
-async fn settled(db: &D1Database, feed_id: &str) -> Result<bool> {
-    Ok(first(
+async fn settled(db: &crate::database::Authority, feed_id: &str) -> Result<bool> {
+    Ok(crate::database::slice_b::execute(
         db,
-        "SELECT 1 FROM n_feed WHERE feed_id=?1 AND dispatch_until=0",
-        &[json!(feed_id)],
+        crate::database::slice_b::Operation::ReadSettled {
+            feed: feed_id.into(),
+        },
     )
     .await?
+    .first()
     .is_some())
 }
 
-// Waiting futures own no scan buffers or cross-request I/O. Short contention
-// resolves within the invocation; long scans use a bounded queue retry.
+// Waiting futures own no scan buffers or cross-request I/O. Contention up to a
+// measured scan resolves within the invocation; longer holds use a bounded
+// queue retry.
 async fn scan_permit(
-    wait: bool,
+    poll: Option<&crate::polling::Fence>,
     step: &'static str,
 ) -> Option<crate::feed_scan_admission::ExclusiveAcquisition> {
-    for attempt in 0..=30 {
-        if let Some(acquisition) =
-            crate::feed_scan_admission::FeedScanPermit::try_acquire_exclusive(step)
-        {
-            return Some(acquisition);
-        }
-        if !wait || attempt == 30 {
-            return None;
-        }
-        Delay::from(Duration::from_millis(100)).await;
-    }
-    None
+    let delivery = poll.and_then(|fence| fence.delivery.as_ref());
+    crate::feed_scan_admission::wait_for_exclusive(
+        if poll.is_some() {
+            crate::polling::policy::SCAN_PERMIT_WAIT_MS
+        } else {
+            0
+        },
+        100,
+        || crate::feed_scan_admission::FeedScanPermit::try_acquire_exclusive_for(step, delivery),
+        || {
+            crate::feed_scan_admission::FeedScanPermit::view().oldest_permit_age_seconds
+                >= crate::polling::policy::STALLED_OWNER_SECONDS
+        },
+        |ms| Delay::from(Duration::from_millis(ms)),
+    )
+    .await
 }

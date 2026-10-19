@@ -38,7 +38,7 @@ export default class extends WorkerEntrypoint {
     // feed/checkpoint and event commit; any failure or crash redelivers it.
     for (const message of batch.messages) {
       const response = await invoke(this.ctx, this.env, new Request('https://polling.invalid/consume', {
-        method: 'POST', body: JSON.stringify(message.body), headers: { 'x-poll-attempts': String(message.attempts ?? 1), 'x-poll-enqueued-ms': String(message.timestamp.getTime()) },
+        method: 'POST', body: JSON.stringify(message.body), headers: { 'x-poll-attempts': String(message.attempts ?? 1), 'x-poll-enqueued-ms': String(message.timestamp.getTime()), 'x-poll-message-id': message.id },
       }));
       await response.text();
       if (response.ok || response.status === 400) message.ack();

@@ -16,13 +16,16 @@ const h = await harness(request => {
   if (r.location) return new Response(null, { status: 302, headers: { location: r.location } });
   return new Response(rss(r.items), { headers: { etag: r.etag, ...(r.modified ? { 'last-modified': r.modified } : {}) } });
 });
+// Anchor the fixture before applying offsets so measured publications stay
+// outside the next 15-minute slot's 30-second scan lookahead.
+h.now -= h.now % 900;
 let offset = 0;
 // The polling clock is frozen at h.now; each poll moves it forward explicitly so
-// every settle has its own second. The delivery worker follows the same offset.
+// every settle has its own second. Align delivery to the same fixture time.
 async function at(seconds) {
   offset = seconds; await h.invoke('clock', String(seconds));
   const delivery = await h.instance.getWorker('delivery-runtime');
-  await (await delivery.fetch('https://delivery.invalid/clock', { method: 'POST', body: String(seconds) })).text();
+  await (await delivery.fetch('https://delivery.invalid/clock', { method: 'POST', body: String(h.now + seconds - Math.floor(Date.now() / 1000)) })).text();
 }
 // `*`: on a build without the validator columns the first red is the outcome.
 const row = feed => h.first('SELECT * FROM n_feed WHERE feed_id=?', feed);

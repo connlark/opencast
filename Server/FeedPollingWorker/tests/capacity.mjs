@@ -1,8 +1,8 @@
 // Sustained real packaged work with a virtual dispatcher clock. No publisher
 // network traffic: every RSS body, delay, status and APNs response is controlled.
-// The default 2,000-feed workload uses the fastest production cadence. The
-// 1,000-feed shared-isolate variants retain the disabled five-minute experiment.
-// Both stay within 200 admissions/minute; overload is tested by livelock.mjs.
+// The 2,000-feed workload uses the fastest production cadence (15 minutes) and
+// stays within 200 admissions/minute; overload is tested by livelock.mjs, and
+// native cancellation of hanging streams under load by deadline-load.mjs.
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
@@ -10,41 +10,23 @@ import { harness, item, rss } from './harness.mjs';
 import { sampleRuntimeMemory } from '../../NotificationsWorker/tests/runtime-memory.mjs';
 
 const count=Number(process.env.OPENCAST_POLL_FEEDS??2000);
-const cadenceMinutes=count>1000?15:5;
+const cadenceMinutes=15;
 const ticks=Number(process.env.OPENCAST_POLL_TICKS??30);
 assert.ok(ticks>0&&ticks%cadenceMinutes===0,'measure whole cadence cycles');
 const concurrency=Number(process.env.OPENCAST_POLL_CONCURRENCY??2);
-const replicas=process.env.OPENCAST_POLL_SHARED==='1'?1:concurrency;
-const deadlines=process.env.OPENCAST_POLL_DEADLINES==='1';
-assert.ok(!deadlines||replicas===1,'deadline fixture audits native cancellation in its shared isolate');
-const suffix=deadlines?'deadline-shared':replicas===1?'shared':'separate';
-let deadlineFailures=0,inactivityFailures=0;
-const unhealthy=index=>deadlines&&(index%200===7||index%200===107);
+// One isolate per consumer.
+const replicas=concurrency;
 let cycle=0,logicalNow,requests=0,changed=0,unchanged=0,slow=0,bytes=0;
-const active=new Map(),originPeak=new Map(),releaseTimes=new Map(),fixtureReleases=new Set();
+const active=new Map(),originPeak=new Map(),releaseTimes=new Map();
+// PostgreSQL storage is bound direct, past the counting wire proxy: this suite
+// arms no storage hook and asserts no storage counter (it reads metrics only
+// for logged outcomes and embeds them in its report), so on PostgreSQL the
+// report's storage counters read 0 and it says they were not measured.
 const h=await harness(async request=>{
   const url=new URL(request.url),index=Number(url.pathname.slice(1));
   const origin=url.origin;active.set(origin,(active.get(origin)??0)+1);originPeak.set(origin,Math.max(originPeak.get(origin)??0,active.get(origin)));
-  let streaming=false;
   try {
     requests++;
-    if(cycle>0 && unhealthy(index)) {
-      streaming=true;
-      const drip=index%200===107;
-      if(drip)deadlineFailures++;else inactivityFailures++;
-      let timer,closed=false,controller;
-      const close=()=>{if(closed)return;closed=true;clearInterval(timer);active.set(origin,active.get(origin)-1);fixtureReleases.delete(close);try{controller?.close();}catch{}};
-      fixtureReleases.add(close);
-      const body=new ReadableStream({
-        start(source){
-          controller=source;
-          controller.enqueue(new TextEncoder().encode('<rss><channel><title>Slow fixture</title>'));
-          if(drip)timer=setInterval(()=>{try{controller.enqueue(new TextEncoder().encode(' '));}catch{close();}},1000);
-        },cancel(){close();}
-      });
-      request.signal.addEventListener('abort',close,{once:true});
-      return new Response(body,{headers:{'content-type':'application/rss+xml'}});
-    }
     const modifies=index%10===0;
     const version=modifies?cycle:0;
     const tag=`"${version}"`;
@@ -59,8 +41,8 @@ const h=await harness(async request=>{
     }
     const body=rss(items);bytes+=Buffer.byteLength(body);
     return new Response(body,{headers:{etag:tag,'content-type':'application/rss+xml'}});
-  }finally{if(!streaming)active.set(origin,active.get(origin)-1);}
-},{replicas,fiveMinute:cadenceMinutes===5});
+  }finally{active.set(origin,active.get(origin)-1);}
+},{replicas,direct:true});
 logicalNow=h.now;
 let stopMemory,clockAnchor=performance.now();
 const samples=[],lag=[],deliveryLag=[];
@@ -103,7 +85,7 @@ async function pump(){
 try{
   // Multiple hosts plus 25% concentration on five origins, not one host per feed.
   for(let i=0;i<100;i++)await h.run("INSERT INTO devices(install_id,key_id,device_token,device_token_hash,apns_environment,bundle_id,notifications_enabled,created_at,last_seen_at) VALUES(?,? ,?,?,'development','com.example.opencast',1,?,?)",`user-${i}`,`key-${i}`,i.toString(16).padStart(64,'0'),`token-${i}`,h.now-100000,h.now);
-  for(let i=0;i<count;i++)await h.add(`https://${unhealthy(i)?'deadline-'+i:i%4===0?'shared-'+i%5:'host-'+i%100}.example.com/${i}`,h.now,`user-${i%97}`);
+  for(let i=0;i<count;i++)await h.add(`https://${i%4===0?'shared-'+i%5:'host-'+i%100}.example.com/${i}`,h.now,`user-${i%97}`);
   console.log(`SEED ${count} actual subscribed feeds, ${concurrency} consumers`);
   stopMemory=await sampleRuntimeMemory(await h.instance.getInspectorURL(),'polling-runtime',30000);
   for(let i=0;i<100;i++){
@@ -141,8 +123,8 @@ try{
   assert.equal((await h.first('SELECT COUNT(*) AS n FROM n_feed WHERE handling_failures>0')).n,0,'nothing dead-lettered');
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_poll'")).n+(await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_origin_permit'")).n,0);
   const transport=await stopMemory.transportAudit();
-  // The Node outbound bridge retains source streams after workerd cancels.
-  // Use native fetch/reader lifetimes for the shared-isolate timeout workload.
+  // The Node outbound bridge retains source streams after workerd cancels, so
+  // one isolate (OPENCAST_POLL_CONCURRENCY=1) reads native fetch/reader lifetimes.
   const maximumOriginRequests=()=>replicas===1?Math.max(...Object.values(transport.peakByOrigin)):Math.max(...originPeak.values());
   assert.ok(maximumOriginRequests()<=2,'publisher concurrency');
   if(replicas===1)assert.ok(Object.values(transport.activeByOrigin).every(n=>n===0),'native transports released after steady work');
@@ -174,19 +156,14 @@ try{
   const memory=await stopMemory();stopMemory=undefined;
   const metrics=await Promise.all(Array.from({length:replicas},(_,i)=>h.invoke('metrics',undefined,undefined,i)));
   const percentile=(values,p)=>values.toSorted((a,b)=>a-b)[Math.floor(values.length*p)]??0;
-  const report={count,concurrency,replicas,deadline_fixture_percent:deadlines?1:0,deadlineFailures,inactivityFailures,retained_outage_wakeups:outageWakeups.length,superseded_outage_wakeups:superseded,ticks,virtual_steady_minutes:ticks,completed_polls:completed.length,steady_wall_seconds:steadyWall,polls_per_second:completed.length/steadyWall,p95_due_seconds:percentile(lag,.95),max_due_seconds:Math.max(...lag),p95_event_to_apns_seconds:percentile(deliveryLag,.95),expected_events:expected,requests,changed,unchanged,slow,decoded_bytes:bytes,maximum_origin_requests:replicas===1?Math.max(...Object.values(memory.transportAudit.peakByOrigin)):Math.max(...originPeak.values()),origin_measurement:replicas===1?'native fetch/body lifetime':'node outbound across replicas',recovery_virtual_seconds:Math.max(60,Math.ceil((logicalNow-outageStart-1800+(performance.now()-clockAnchor)/1000)/60)*60),recovery_wall_seconds:(performance.now()-recoverWall)/1000,memory,metrics,beforeMetrics,samples,node_driver_cpu_us:cpu};
-  await writeFile(`/private/tmp/opencast-pass045-capacity-${suffix}.json`,JSON.stringify(report,null,2));
+  const report={count,concurrency,replicas,cadence_minutes:cadenceMinutes,retained_outage_wakeups:outageWakeups.length,superseded_outage_wakeups:superseded,ticks,virtual_steady_minutes:ticks,completed_polls:completed.length,steady_wall_seconds:steadyWall,polls_per_second:completed.length/steadyWall,p95_due_seconds:percentile(lag,.95),max_due_seconds:Math.max(...lag),p95_event_to_apns_seconds:percentile(deliveryLag,.95),expected_events:expected,requests,changed,unchanged,slow,decoded_bytes:bytes,maximum_origin_requests:replicas===1?Math.max(...Object.values(memory.transportAudit.peakByOrigin)):Math.max(...originPeak.values()),origin_measurement:replicas===1?'native fetch/body lifetime':'node outbound across replicas',recovery_virtual_seconds:Math.max(60,Math.ceil((logicalNow-outageStart-1800+(performance.now()-clockAnchor)/1000)/60)*60),recovery_wall_seconds:(performance.now()-recoverWall)/1000,storage_counters:'not measured (direct)',memory,metrics,beforeMetrics,samples,node_driver_cpu_us:cpu};
+  await writeFile('/private/tmp/opencast-pass045-capacity-separate.json',JSON.stringify(report,null,2));
   assert.ok(report.p95_due_seconds<60,`due p95 ${report.p95_due_seconds}`);
   assert.ok(report.p95_event_to_apns_seconds<60,`APNs p95 ${report.p95_event_to_apns_seconds}`);
   assert.ok(report.polls_per_second>=1000/300*2,`required steady throughput ${report.polls_per_second}`);
   assert.ok(report.maximum_origin_requests<=2,'publisher concurrency including recovery');
   if(replicas===1)assert.ok(Object.values(memory.transportAudit.activeByOrigin).every(n=>n===0),'native transports released after recovery');
-  if(deadlines){
-    assert.ok(deadlineFailures>0&&inactivityFailures>0,'both real timeout classes exercised');
-    assert.ok(metrics.some(m=>m.logged['invalid_scan:feed_inactivity_timeout']>0),'real inactivity deadline fired');
-    assert.ok(metrics.some(m=>m.logged['upstream_error:fetch_failed']>0),'real absolute deadline fired');
-  }
   assert.ok(memory.peakCombined.wasmBytes>0,'must include real Wasm linear memory');
   assert.ok(memory.peakCombined.totalBytes<96*1024*1024,'ordinary memory target');
   console.log('PASS sustained whole-pipeline capacity and outage recovery '+JSON.stringify({polls:report.completed_polls,rate:report.polls_per_second,p95:report.p95_due_seconds,recovery:report.recovery_virtual_seconds}));
-}finally{for(const release of fixtureReleases)release();if(stopMemory)await stopMemory();await h.instance.dispose();}
+}finally{if(stopMemory)await stopMemory();await h.instance.dispose();}

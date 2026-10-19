@@ -16,9 +16,10 @@ try {
   const [firstWake] = await h.polls();
   await h.invoke('fault', 'hang_get');
   const pending = h.consume(firstWake).catch(error => ({ status: 0, error }));
+  // The hung read must be reached before the clock moves; a slower backend may still be in storage.
   for (let i = 0; i < 100; i++) {
     const stats = await h.invoke('test/stats');
-    if (stats.active_permits === 2) break;
+    if (stats.active_permits === 2 && (await h.invoke('fault-state')) === 'hang_get_active') break;
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   assert.equal((await h.invoke('test/stats')).active_permits, 2, 'the hanging R2 read owns both permits');

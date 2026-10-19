@@ -1,8 +1,9 @@
 //! Queue-local publisher safety. An isolate admits one request per origin,
-//! redirect destinations included; consumer concurrency bounds the fleet. No D1
+//! redirect destinations included; consumer concurrency bounds the fleet. No database
 //! row is held across network I/O. `n_poll_origin` is publisher backoff schedule
 //! state only: written when an origin fails or recovers, never by a healthy poll.
 use super::{policy, Fence};
+use crate::database::{self, polling::Operation};
 use crate::{
     delivery::{
         db::*,
@@ -12,7 +13,7 @@ use crate::{
 };
 use serde_json::json;
 use std::{cell::RefCell, collections::HashMap};
-use worker::{D1Database, Headers, Result};
+use worker::{Headers, Result};
 
 thread_local! {
     // Scalar occupancy only: never request I/O, buffers or futures.
@@ -51,7 +52,7 @@ pub fn key(url: &url::Url) -> String {
 }
 
 pub struct Session {
-    db: D1Database,
+    db: crate::database::Authority,
     fence: Fence,
     current: Option<Guard>,
     /// Backoff state of the origin being fetched, read before its request.
@@ -60,7 +61,7 @@ pub struct Session {
     pub cooldown_until: Option<i64>,
 }
 impl Session {
-    pub fn new(db: D1Database, fence: Fence) -> Self {
+    pub fn new(db: crate::database::Authority, fence: Fence) -> Self {
         Self {
             db,
             fence,
@@ -95,7 +96,17 @@ impl Session {
         // claim misses a cooldown committed while this scan waited for its
         // permit or its origin slot.
         let t = now();
-        let state = first(&self.db,&format!("SELECT COALESCE((SELECT cooldown_until FROM n_poll_origin WHERE origin_key=?1),0) AS cooldown_until,COALESCE((SELECT failures FROM n_poll_origin WHERE origin_key=?1),0) AS failures WHERE {}",self.fence.sql(t)),&[json!(key)]).await.map_err(|_| FeedFetchError::StorageFailed)?;
+        let state = database::execute(
+            &self.db,
+            Operation::ReadOrigin {
+                fence: self.fence.storage(),
+                origin: key.clone(),
+                now: t,
+            },
+        )
+        .await
+        .map_err(|_| FeedFetchError::StorageFailed)?
+        .first();
         let Some(state) = state else {
             return Err(FeedFetchError::OriginDeferred);
         };
@@ -131,12 +142,35 @@ impl Session {
                     "{}",
                     json!({"event":"retry_after_clamped","ceiling_seconds":policy::RETRY_AFTER_MAX_SECONDS})
                 );
-                super::stat(&self.db, "retry_after_clamps").await?;
+                super::stat(
+                    &self.db,
+                    crate::database::polling::Counter::RetryAfterClamps,
+                )
+                .await?;
             }
-            run(&self.db,&format!("INSERT INTO n_poll_origin(origin_key,cooldown_until,failures,last_status,updated_at) SELECT ?1,?2,1,?3,?4 WHERE {} ON CONFLICT(origin_key) DO UPDATE SET cooldown_until=MAX(cooldown_until,excluded.cooldown_until),failures=MIN(failures+1,12),last_status=excluded.last_status,updated_at=excluded.updated_at",self.fence.sql(t)),&[json!(key),json!(until),json!(status),json!(t)]).await?;
+            database::execute(
+                &self.db,
+                Operation::RecordOriginFailure {
+                    fence: self.fence.storage(),
+                    origin: key,
+                    until,
+                    status: status.into(),
+                    now: t,
+                },
+            )
+            .await?;
             self.cooldown_until = Some(until);
         } else if (200..400).contains(&status) && self.failures > 0 {
-            run(&self.db,&format!("UPDATE n_poll_origin SET failures=0,last_status=?2,updated_at=?3 WHERE origin_key=?1 AND failures>0 AND {}",self.fence.sql(t)),&[json!(key),json!(status),json!(t)]).await?;
+            database::execute(
+                &self.db,
+                Operation::RecordOriginRecovery {
+                    fence: self.fence.storage(),
+                    origin: key,
+                    status: status.into(),
+                    now: t,
+                },
+            )
+            .await?;
             self.failures = 0;
         }
         Ok(())

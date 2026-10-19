@@ -26,7 +26,7 @@ try {
   behavior = async () => { active++; peak = Math.max(peak, active); await new Promise(resolve => releases.push(resolve)); active--; return normal(); };
   const calls = wakes.map((wake, i) => h.consume(wake, { replica: i % CONSUMERS }));
   await until(() => active === CONSUMERS);
-  await setTimeout(3500);
+  await setTimeout(11500); // outlasts the 10 s scan-permit patience
   assert.equal(active, CONSUMERS, 'waiting deliveries never start a third request');
   behavior = async () => { active++; peak = Math.max(peak, active); await setTimeout(20); active--; return normal(); };
   releases.splice(0).forEach(fn => fn());

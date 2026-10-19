@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { migrate } from './migrations.mjs';
+import { openStorage } from './storage.mjs';
 import { identity } from './delivery-auth.mjs';
 import { compatibilityDate, compatibilityFlags } from './runtime-compatibility.mjs';
 
@@ -16,22 +16,24 @@ const sends=[];let outcome={status:200};let duringSend;
 // timer is unreferenced so a reply nobody is waiting for never holds the run.
 const APNS_HANG_MS=30_000;
 const bindings={APPLE_TEAM_ID:'EXAMPLETEAM',APPLE_BUNDLE_ID:'com.example.opencast',APP_ATTEST_ENVIRONMENT:'development',APNS_ENVIRONMENT:'development',NOTIFICATION_ENVIRONMENT:'development',PUBLIC_NOTIFICATIONS_ENABLED:'true',DEBUG_ENDPOINTS_ENABLED:'false'};
-const options={cf:false,workers:[{
+const storage=await openStorage();
+const options={cf:false,workers:[storage.bind({
   name:'notifications',modulesRoot:fileURLToPath(root),modules:[...['tests/delivery-entry.mjs','adapter/index.js','build/index.js'].map(f=>({type:'ESModule',path:fileURLToPath(new URL(f,root))})),{type:'CompiledWasm',path:fileURLToPath(new URL('build/index_bg.wasm',root))}],compatibilityDate,compatibilityFlags,bindings,
-  d1Databases:{APP_ATTEST_DB:'isolated-delivery'},
   queueProducers:{EVENT_QUEUE:'opencast-notification-event-development',EPISODE_DELIVERY_QUEUE:'opencast-notification-episode-development',JOB_DELIVERY_QUEUE:'opencast-notification-job-development'},
   serviceBindings:{APNS_CERT:async request=>{
     sends.push({headers:Object.fromEntries(request.headers),url:request.url,body:await request.json()});
     if(duringSend){const callback=duringSend;duringSend=undefined;await callback();}
     if(outcome.lost)return new Response(null,{status:200,headers:{'x-fixture-lost':'1'}});
     if(outcome.timeout)await new Promise(resolve=>setTimeout(resolve,APNS_HANG_MS).unref());
-    return new Response(outcome.status===200?null:JSON.stringify(outcome.body??{}),{status:outcome.status,headers:outcome.headers});
+    // APNs answers with the request's apns-id.
+    const echo=request.headers.get('apns-id');
+    return new Response(outcome.status===200?null:JSON.stringify(outcome.body??{}),{status:outcome.status,headers:{...(echo?{'apns-id':echo}:{}),...outcome.headers}});
   }},outboundService:()=>{throw Error('External networking forbidden');},
-},...['FeedEvents','AdAnalysisEvents','RemoteTranscriptionEvents'].map(entrypoint=>({name:entrypoint,modules:true,script:`export default { fetch(r,e) { return e.INGRESS.fetch(r); } }`,compatibilityDate,compatibilityFlags,serviceBindings:{INGRESS:{name:'notifications',entrypoint}}}))]};
+}),...['FeedEvents','AdAnalysisEvents','RemoteTranscriptionEvents'].map(entrypoint=>({name:entrypoint,modules:true,script:`export default { fetch(r,e) { return e.INGRESS.fetch(r); } }`,compatibilityDate,compatibilityFlags,serviceBindings:{INGRESS:{name:'notifications',entrypoint}}}))]};
 const mf=new Miniflare(convertV4MiniflareOptions(options));
 let passed=0; const check=async(name,fn)=>{await fn();passed++;console.log(`PASS ${name}`);};
 try {
- let db=await mf.getD1Database('APP_ATTEST_DB','notifications');await migrate(db,new URL('migrations/',root));
+ let db=await storage.database(mf,'APP_ATTEST_DB','notifications');
  const worker=await mf.getWorker('notifications');const producer=await mf.getWorker('FeedEvents');
  const sql=(query,...args)=>db.prepare(query).bind(...args);
  const post=(w,path,value)=>w.fetch(`https://fixture.invalid${path}`,{method:'POST',body:JSON.stringify(value)});
@@ -178,6 +180,28 @@ try {
    const before=sends.length;assert.equal((await drive('feed_polling',d.delivery_id,1,'job')).status,400);await drive('feed_polling',d.delivery_id,99,'episode');assert.equal(sends.length,before);
    assert.equal((await post(worker,'/test/queue',{queue:'opencast-notification-event-development',message:{schema_version:1,environment:'production',source:'feed_polling',id:e.event_id,generation:1}})).status,400);
  });
+ await check('every APNs attempt leaves one witness line with opaque identifiers only',async()=>{
+   const target=await sql("SELECT * FROM n_delivery WHERE install_id='install-100'").first();
+   // The fixture clock moves two seconds while APNs holds the request.
+   duringSend=()=>clock(T+98);await drive('feed_polling',target.delivery_id,1,'episode');await clock(T+96);
+   const lines=await (await worker.fetch('https://fixture.invalid/test/apns-witnesses')).json();
+   assert.equal(lines.length,sends.length,'one line per APNs attempt and none without one');
+   const device=install=>H([install]).slice(0,16);
+   assert.deepEqual(lines.at(-1),{level:'log',event:'notification_apns_send',source:'feed_polling',kind:'episode',event_id:e.event_id,device_hash:device('install-100'),attempt:1,status:200,apns_id:target.apns_id,apns_reason:null,latency_ms:2000,state:'accepted',reason:'accepted'});
+   assert.deepEqual([lines[0].device_hash,lines[0].apns_id,lines[0].status,lines[0].state],[device('install-000'),d.apns_id,200,'accepted']);
+   for(const line of lines){
+     assert.deepEqual(Object.keys(line).sort(),Object.keys(lines.at(-1)).sort());
+     assert.equal(line.level,line.state==='accepted'?'log':'warn');
+   }
+   const lost=lines.filter(line=>line.status===null);
+   assert.equal(lost.length,2,'the lost response and the 15-second deadline');
+   for(const line of lost)assert.deepEqual([line.apns_id,line.state,line.reason],[null,'uncertain','response_unknown']);
+   for(const [status,apns_reason,state,reason] of [[410,'Unregistered','suppressed','token_invalid'],[403,'BadCertificate','pending','credentials'],[429,null,'pending','throttled'],[503,null,'pending','apns_unavailable']])
+     assert.ok(lines.some(line=>line.status===status&&line.apns_reason===apns_reason&&line.state===state&&line.reason===reason),`${status} ${reason}`);
+   const text=JSON.stringify(lines);
+   for(const token of ['a','b','c','d','e','f'].map(c=>c.repeat(64)))assert.ok(!text.includes(token),'no device token');
+   assert.doesNotMatch(text,/install-\d{3}/,'no installation identifier');assert.ok(!text.includes(url),'no feed URL');
+ });
  await check('legacy public registration payload and signed opt-out erase token and suppress pending work',async()=>{
    const signed=await identity(db,'install-011','EXAMPLETEAM.com.example.opencast',T);
    let r=await signed(worker,'/v1/devices/register',{device_token:'c'.repeat(64),apns_environment:'development'});assert.equal(r.status,200,await r.text());
@@ -214,13 +238,23 @@ try {
    r=await fresh(worker,'/v1/subscriptions/sync',{subscriptions:[{feed_url:url,notifications_enabled:true}]});assert.equal(r.status,200,await r.text());
    await drive('feed_polling',e.event_id);assert.equal((await sql("SELECT COUNT(*) AS n FROM n_delivery WHERE install_id='install-012'").first()).n,0);
  });
+ // On PostgreSQL the proxy holds the old write's whole pipelined transaction
+ // unforwarded. It is one operation whose 4,000 ms deadline starts at the
+ // Worker's timer, after the connection's ReadyForQuery (Z_relay) and before
+ // the hold fires, so the work in between (the delete, the fresh key, register
+ // and sync) must end by Z_relay + 3,000 ms, keeping 1,000 ms spare. The
+ // witness shows the stale write really raced: held, released, forwarded, its
+ // own COMMIT answered and relayed, no deadline rollback, and its 200 after
+ // the release.
+ const stamp=()=>performance.timeOrigin+performance.now();
  await check('pre-deletion authenticated writes cannot overwrite a fresh enrollment',async()=>{
    for(const [install,path,payload] of [
      ['install-016','/v1/devices/register',{device_token:'f'.repeat(64),apns_environment:'development'}],
      ['install-017','/v1/subscriptions/sync',{subscriptions:[]}],
    ]){
      const old=await identity(db,install,'EXAMPLETEAM.com.example.opencast',T);
-     await worker.fetch('https://fixture.invalid/test/hold-auth-write',{method:'POST',body:path});const pending=old(worker,path,payload);
+     let answered;
+     await worker.fetch('https://fixture.invalid/test/hold-auth-write',{method:'POST',body:path});const pending=old(worker,path,payload).then(r=>{answered=stamp();return r;});
      for(let n=0;!(await (await worker.fetch('https://fixture.invalid/test/auth-write-held')).json());n++){assert.ok(n<200);await new Promise(resolve=>setTimeout(resolve,5));}
      let r=await old(worker,'/v1/install/delete',{});assert.equal(r.status,200);
      const fresh=await identity(db,install,'EXAMPLETEAM.com.example.opencast',T+96);
@@ -229,6 +263,18 @@ try {
      await worker.fetch('https://fixture.invalid/test/release-auth-write',{method:'POST'});r=await pending;assert.equal(r.status,200);
      assert.equal((await sql('SELECT device_token FROM devices WHERE install_id=?',install).first()).device_token,'d'.repeat(64));
      assert.equal((await sql('SELECT enabled FROM n_interest WHERE install_id=?',install).first()).enabled,1);
+     const w=storage.testStorage('notifications')({op:'witness'});
+     const held=w.fires.filter(f=>f.hook==='D-hold_auth_write'&&w.armings.find(m=>m.id===f.arming)?.path===path);
+     assert.equal(held.length,1,`one hold for ${path}`);
+     const [f]=held,o=w.operations.find(x=>x.id===f.op);
+     const race={install,path,fire:f.id,release_minus_Z_relay_ms:f.released-o.Z_relay,fire_minus_Z_relay_ms:f.at-o.Z_relay,answer_minus_release_ms:answered-f.released,commit_tag:o.commit_tag,commit_relayed:o.commit_relayed};
+     console.log(JSON.stringify({auth_write_race:race}));
+     assert.equal(f.action,'hold-request');assert.notEqual(f.released,null,'released');assert.equal(f.discarded,null,'never discarded');
+     assert.notEqual(f.forwarded,null,'forwarded on release');assert.ok(f.forwarded>=f.released);
+     assert.equal(o.commit_tag,'COMMIT');assert.equal(o.commit_relayed,true);
+     assert.equal(o.rollback_after_hold,null,'never ended by the client deadline');
+     assert.ok(answered>f.released,'the old write answered after the release');
+     assert.ok(race.release_minus_Z_relay_ms<=3000,`release - Z_relay ${race.release_minus_Z_relay_ms} ms exceeds 3,000 ms`);
    }
  });
  const ad=await mf.getWorker('AdAnalysisEvents');
@@ -296,12 +342,12 @@ try {
    await sql("DELETE FROM n_delivery WHERE interest_key IN(?,?)",pausedFeed,activeFeed).run();
    await sql("DELETE FROM n_feed WHERE feed_id IN(?,?)",pausedFeed,activeFeed).run();
  });
- await check('real Queue consumers repair a lost enqueue and expired lease from D1',async()=>{
+ await check('real Queue consumers repair a lost enqueue and expired lease from storage',async()=>{
    await sql("UPDATE n_delivery SET state='expired',lease_id=NULL,lease_until=NULL,terminal_at=? WHERE state IN('pending','uncertain','leased')",T+86400).run();
    await sql('UPDATE n_event SET fanout_complete=1,lease_id=NULL,lease_until=NULL').run();
    await control('episode_send',0);await control('job_send',0);
    await mf.setOptions(convertV4MiniflareOptions({...options,workers:options.workers.map((w,i)=>i===0?{...w,bindings:{...w.bindings,DEBUG_ENDPOINTS_ENABLED:'true'},queueConsumers:Object.fromEntries(['event','episode','job'].map(kind=>[`opencast-notification-${kind}-development`,{maxBatchSize:10,maxBatchTimeout:0}]))}:w)}));
-   db=await mf.getD1Database('APP_ATTEST_DB','notifications');
+   db=await storage.database(mf,'APP_ATTEST_DB','notifications');
    const actual=await mf.getWorker('notifications'),actualAd=await mf.getWorker('AdAnalysisEvents');
    const waitFor=async predicate=>{for(let i=0;i<150;i++){const result=await predicate();if(result)return result;await new Promise(resolve=>setTimeout(resolve,50));}assert.fail('durable queue progress timed out');};
    const {registration,event}=await seedInterest(102,'install-030');
@@ -324,4 +370,4 @@ try {
 
  });
  console.log(`${passed} delivery runtime checks passed`);
-} finally {await mf.dispose();}
+} finally {try{await mf.dispose();}finally{await storage.dispose();}}

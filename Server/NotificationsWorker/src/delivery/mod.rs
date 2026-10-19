@@ -10,8 +10,10 @@ pub(crate) mod recovery;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod send;
 pub mod wire;
+#[cfg(any(target_arch = "wasm32", test))]
+mod witness;
 #[cfg(target_arch = "wasm32")]
-pub use db::{control, ensure_feed};
+pub use db::ensure_feed;
 #[cfg(target_arch = "wasm32")]
 pub use ingress::handle;
 #[cfg(target_arch = "wasm32")]

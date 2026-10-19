@@ -2,12 +2,26 @@ pub const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 pub const METHOD_NOT_ALLOWED_JSON: &str = r#"{"error":"method_not_allowed"}"#;
 pub const NOT_FOUND_JSON: &str = r#"{"error":"not_found"}"#;
 
+pub const APP_ATTEST_CHALLENGE_PATH: &str = "/v1/app-attest/challenge";
+pub const APP_ATTEST_REGISTER_PATH: &str = "/v1/app-attest/register";
 pub const SECURE_HELLO_PATH: &str = "/v1/secure/hello";
 pub const DEVICES_REGISTER_PATH: &str = "/v1/devices/register";
 pub const DEVICES_UNREGISTER_PATH: &str = "/v1/devices/unregister";
 pub const INSTALL_DELETE_PATH: &str = "/v1/install/delete";
 pub const DEBUG_SEND_TEST_PUSH_PATH: &str = "/v1/debug/send-test-push";
 pub const SUBSCRIPTIONS_SYNC_PATH: &str = "/v1/subscriptions/sync";
+
+/// Every POST route of the public handler; GET on any of them answers 405.
+pub const API_PATHS: [&str; 8] = [
+    APP_ATTEST_CHALLENGE_PATH,
+    APP_ATTEST_REGISTER_PATH,
+    SECURE_HELLO_PATH,
+    DEVICES_REGISTER_PATH,
+    DEVICES_UNREGISTER_PATH,
+    INSTALL_DELETE_PATH,
+    DEBUG_SEND_TEST_PUSH_PATH,
+    SUBSCRIPTIONS_SYNC_PATH,
+];
 
 const HEALTH_PATH: &str = "/health";
 const HEALTH_JSON: &str = r#"{"message":"hello world"}"#;
@@ -73,11 +87,18 @@ pub fn public_write_endpoint(method: &str, path: &str) -> bool {
     method == "POST"
         && matches!(
             path,
-            "/v1/app-attest/challenge"
-                | "/v1/app-attest/register"
+            APP_ATTEST_CHALLENGE_PATH
+                | APP_ATTEST_REGISTER_PATH
                 | DEVICES_REGISTER_PATH
                 | SUBSCRIPTIONS_SYNC_PATH
         )
+}
+
+/// The maintenance freeze covers every POST API route, including the
+/// authenticated unregister and install-delete writes the public kill switch
+/// leaves open.
+pub fn maintenance_freeze_endpoint(method: &str, path: &str) -> bool {
+    method == "POST" && API_PATHS.contains(&path)
 }
 
 pub fn parse_env_flag(value: Option<String>, default_value: bool) -> bool {
@@ -94,6 +115,7 @@ pub fn content_length_exceeds(content_length: Option<&str>, max_bytes: usize) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn diagnostic_endpoint_classification_keeps_production_surface_small() {
@@ -113,6 +135,34 @@ mod tests {
         assert!(!public_write_endpoint("POST", INSTALL_DELETE_PATH));
         assert!(!public_write_endpoint("GET", "/v1/app-attest/challenge"));
         assert!(!public_write_endpoint("POST", DEBUG_SEND_TEST_PUSH_PATH));
+    }
+
+    #[test]
+    fn maintenance_freeze_covers_every_post_api_route() {
+        for path in [
+            APP_ATTEST_CHALLENGE_PATH,
+            APP_ATTEST_REGISTER_PATH,
+            SECURE_HELLO_PATH,
+            DEVICES_REGISTER_PATH,
+            DEVICES_UNREGISTER_PATH,
+            INSTALL_DELETE_PATH,
+            DEBUG_SEND_TEST_PUSH_PATH,
+            SUBSCRIPTIONS_SYNC_PATH,
+        ] {
+            assert!(API_PATHS.contains(&path), "{path}");
+            assert!(maintenance_freeze_endpoint("POST", path), "{path}");
+            assert!(!maintenance_freeze_endpoint("GET", path), "{path}");
+        }
+        // Authenticated cleanup writes are frozen too, unlike the public kill switch.
+        assert!(maintenance_freeze_endpoint("POST", DEVICES_UNREGISTER_PATH));
+        assert!(maintenance_freeze_endpoint("POST", INSTALL_DELETE_PATH));
+        assert_eq!(
+            API_PATHS.iter().collect::<BTreeSet<_>>().len(),
+            API_PATHS.len()
+        );
+        assert!(!maintenance_freeze_endpoint("GET", HEALTH_PATH));
+        assert!(!maintenance_freeze_endpoint("POST", HEALTH_PATH));
+        assert!(!maintenance_freeze_endpoint("POST", "/v1/unknown"));
     }
 
     #[test]

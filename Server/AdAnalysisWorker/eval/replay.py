@@ -11,7 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from run import answer_of, bridge, measure, verify_bridge, write
+from run import answer_of, archived_window_text, bridge, measure, verify_bridge, write
 
 
 def main():
@@ -43,11 +43,7 @@ def main():
             key=lambda p: int(p.parent.name.split("-")[1]),
         ):
             payload = json.loads(saved.read_text())
-            text = (
-                payload["contents"][0]["parts"][0]["text"]
-                if "contents" in payload
-                else payload["input"][0]["content"][0]["text"]
-            )
+            text = archived_window_text(payload)
             segments = json.loads(text)["segments"]
             if any(
                 s != {"id": by_id[s["id"]]["id"], "text": by_id[s["id"]]["text"]}

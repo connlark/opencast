@@ -1,0 +1,12 @@
+disallowed-methods = [
+  { path = "tokio_postgres::Client::simple_query", reason = "The simple protocol interpolates SQL text; operational SQL is typed and unnamed." },
+  { path = "tokio_postgres::Client::simple_query_raw", reason = "Never interpolate values into SQL text; use typed unnamed queries." },
+  { path = "tokio_postgres::Client::prepare", reason = "Named statement preparation belongs only to compatibility probes; dropping a Statement can poison the next unnamed query." },
+  { path = "tokio_postgres::Client::prepare_typed", reason = "Explicit parameter types do not make a named prepared statement safe under this Hyperdrive path." },
+  { path = "tokio_postgres::Client::query", reason = "Use typed unnamed operational SQL; named statement lifetime is a retained Hyperdrive compatibility gate." },
+  { path = "tokio_postgres::Client::query_one", reason = "Use query_typed_one; implicit named preparation is not an operational API." },
+  { path = "tokio_postgres::Client::query_opt", reason = "Use query_typed_opt; implicit named preparation is not an operational API." },
+  { path = "tokio_postgres::Client::query_raw", reason = "Use query_typed_raw; implicit named preparation is not an operational API." },
+  { path = "tokio_postgres::Client::execute", reason = "Use the adapter's typed transactional execute; implicit named preparation is not an operational API." },
+  { path = "tokio_postgres::Client::execute_raw", reason = "Use query_typed_raw and exact rows_affected in an explicit transaction." },
+]

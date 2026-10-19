@@ -2,9 +2,9 @@
 
 An [Email Worker](https://developers.cloudflare.com/email-routing/email-workers/)
 that sits behind an Email Routing rule for a support address. It forwards
-**every** message to the inbox the rule used to forward to, tags the forwarded
-copy with the result, and sends one push through an operator alert webhook when
-the message looks worth reading. Nothing is dropped and nothing is stored.
+**every** message to each inbox in `FORWARD_TO`, tags the forwarded copies with
+the result, and sends one push through an operator alert webhook when the
+message looks worth reading. Nothing is dropped and nothing is stored.
 
 Classification uses [Jev](https://developers.cloudflare.com/ai/models/typesafe/jev/)
 on Workers AI, a classifier that answers a typed `choice` question with
@@ -17,15 +17,17 @@ MX → Email Routing rule → email()
   0. rawSize > 4 MiB?   → skip parsing, header-only verdict
   1. read raw once → MIME parse          ┐ any failure ⇒
   2. Jev via AI Gateway, 15 s deadline   ┘ header-only verdict
-  3. forward(FORWARD_TO, X-Mail-Triage* headers)   ← a failure here is rethrown
+  3. forward(each FORWARD_TO address, X-Mail-Triage* headers)  ← rethrown only if every copy fails
   4. verdict notify → one push (never throws, idempotent per Message-ID)
   5. one `mail_triaged` log line
 ```
 
 Forwarding runs after classification so the tags can ride on the forwarded
 copy. Classification can never prevent the forward: it is wrapped, cancelled by
-a real deadline, and skipped for oversized mail. A failed forward is rethrown so
-Email Routing reports it to the sending server, and no push is sent.
+a real deadline, and skipped for oversized mail. When every copy fails, the
+error is rethrown so Email Routing reports it to the sending server, and no push
+is sent. A partial failure logs `mail_forward_failed` and carries on: the copy
+that landed is a delivery, and a sender retry would duplicate it.
 
 ## Categories
 
@@ -77,8 +79,9 @@ Vars (`wrangler.jsonc`, repeated per lane):
 
 Secrets (`wrangler secret put NAME --env production`):
 
-- `FORWARD_TO`: a verified Email Routing destination address. Without it the
-  Worker refuses every message instead of accepting mail that goes nowhere.
+- `FORWARD_TO`: one or more verified Email Routing destination addresses,
+  comma-separated (trimmed, duplicates dropped). Without one the Worker refuses
+  every message instead of accepting mail that goes nowhere.
 - `ALERT_WEBHOOK_URL`, `ALERT_CREDENTIAL`, `ALERT_RECIPIENT`: the push webhook
   (HTTPS only), its bearer credential and the recipient key. Alerting is off
   unless all three are set. The request body is `{recipient, draft}` with a
@@ -146,8 +149,8 @@ dependencies of its own. It is pinned to an exact version.
   body, and header-derived signals. Nothing else leaves the Worker.
 - The AI Gateway runs with logging off. Invocation logs are off, because they
   would record the envelope sender and recipient.
-- The `mail_triaged` log line carries the label, decision, scores, sizes and
-  alert outcome. It never carries a subject, body or address. Workers Logs
+- The `mail_triaged` log line carries the label, decision, scores, sizes,
+  forward count and alert outcome. It never carries a subject, body or address. Workers Logs
   still attach the envelope sender to every event as `$metadata.trigger`; turn
   observability off entirely if that is unacceptable.
 - The push carries the sender's display name, the subject and a short excerpt,

@@ -19,6 +19,8 @@ export function opencastWorkerGlue(operation, value, number) {
       return undefined;
     case 5:
       return value.buffer.byteLength;
+    case 6:
+      return performance.now();
     default:
       throw new Error('unknown opencast Worker glue operation');
   }
@@ -42,6 +44,14 @@ pub(crate) fn read_feed_chunk(reader: &JsValue, size: u32) -> Promise {
 
 pub(crate) fn cancel_feed_reader(reader: &JsValue) {
     let _ = js_worker_glue(2, reader, 0);
+}
+
+/// Milliseconds on `performance.now()`, never the overridable `Date`.
+pub(crate) fn performance_now_ms() -> f64 {
+    js_worker_glue(6, &JsValue::UNDEFINED, 0)
+        .ok()
+        .and_then(|value| value.as_f64())
+        .unwrap_or_default()
 }
 
 pub(crate) fn wasm_memory_bytes() -> u32 {

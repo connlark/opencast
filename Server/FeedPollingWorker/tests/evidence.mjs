@@ -58,6 +58,13 @@ for (const newer of [false, true]) cases[newer ? 'late-failure-newer-generation'
     await h.consume(await api.reserve(feed));
     await api.clock(20); await api.due(feed);
     const stale = await api.reserve(feed);
+    // The newer generation lands 301 s after the stale reservation. A is
+    // delivered 150 s after that reservation, so it is still in flight when the
+    // 300 s reservation lapses, yet inside its own 200 s step deadline:
+    // PostgreSQL storage bounds every operation by the execution's absolute
+    // deadline, read from this shared clock, and a jump past it would fail A's
+    // late writes before they could prove anything.
+    if (newer) await api.clock(20 + 150);
     let release, entered = false;
     api.serve(async () => { entered = true; await new Promise(resolve => release = resolve); return new Response('<rss><channel><item>truncated'); });
     const held = api.consume(stale); await until(() => entered, 'held publisher response');

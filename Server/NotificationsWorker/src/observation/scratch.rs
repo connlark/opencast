@@ -1,6 +1,6 @@
 //! Spool pages held before a scan has proved a semantic change. They live in a
 //! bounded worker buffer; only a feed too large for it spills into one private
-//! multipart scratch upload. Scratch has no D1 row and no event authority. An
+//! multipart scratch upload. Scratch has no database row and no event authority. An
 //! unchanged, failed or truncated scan aborts the upload, so nothing becomes an
 //! object; R2 expires an upload abandoned by a crash. Only a proved change
 //! completes it, copies the pages under the claimed lease and deletes it.

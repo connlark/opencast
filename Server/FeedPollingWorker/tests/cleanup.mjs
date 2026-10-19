@@ -23,6 +23,9 @@ try {
   assert.equal((await h.consume(legacy)).outcome,'cleanup_ignored');
   const afterLegacy=await h.invoke('metrics');
   assert.equal(afterLegacy.d1,beforeLegacy.d1,'retained cleanup message performs no storage work');
+  // On PostgreSQL the count is the proxy's statement delta over the consume's
+  // window: the equality holds only if no other invocation overlapped it.
+  assert.equal(afterLegacy.recent.filter(t=>t.path==='/test/consume').at(-1).storage_exclusive,true,'the retained cleanup consume shared its counter window');
   const live=(await h.first('SELECT snapshot_key FROM n_feed')).snapshot_key;
   const keys=Array.from({length:650},()=>randomUUID());
   await h.run("INSERT INTO n_snapshot(object_key,feed_id,owner_epoch,lease_id,sha256,bytes,state,created_at,gc_after) SELECT value,?,1,?,'',0,'reserved',?,? FROM json_each(?)",feed,randomUUID(),h.now-864000,h.now-1,JSON.stringify(keys));
@@ -77,6 +80,7 @@ try {
   assert.ok(await bucket.get((await h.first('SELECT snapshot_key FROM n_feed')).snapshot_key));
   const metrics=await h.invoke('metrics');
   assert.ok(metrics.max_d1<800,`largest invocation used ${metrics.max_d1} D1 statements`);
+  assert.ok(metrics.max_d1>0,'the statement counter read every invocation as 0');
   assert.ok(metrics.delete>=650);
   await writeFile('/private/tmp/opencast-pass045-cleanup.json',JSON.stringify(metrics,null,2));
   await h.run("UPDATE n_control SET enabled=0 WHERE name='cleanup'");

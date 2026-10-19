@@ -73,6 +73,8 @@ try{
   const memory=await stop();stop=undefined;
   assert.ok(memory.peakCombined.wasmBytes>0,'must include real Wasm linear memory');
   assert.ok(memory.peakCombined.totalBytes<128*1024*1024,'platform memory limit');
-  const metrics=await h.invoke('metrics');assert.ok(metrics.max_d1<800);
+  const metrics=await h.invoke('metrics');assert.ok(metrics.max_d1<800,`largest invocation used ${metrics.max_d1} D1 statements`);
+  assert.ok(metrics.max_d1>0,'the statement counter read every invocation as 0');
+  console.log(`largest invocation ${metrics.max_d1} D1 statements`);
   await writeFile('/private/tmp/opencast-pass045-maximum.json',JSON.stringify({count,decoded_bytes:bytes,phases,memory,metrics},null,2));
 }finally{if(stop)await stop();await h.instance.dispose();}

@@ -4,17 +4,30 @@ use super::{
     snapshot::{checksum, Manifest},
     store::fault,
 };
+use crate::database::slice_d::{self as storage, Operation};
 use crate::delivery::{
     db::*,
     wire::{self, int, string},
 };
 use serde_json::{json, Value};
-use worker::{Bucket, D1Database, Env, Method, Request, RequestInit, Result};
+use worker::{Bucket, Env, Method, Request, RequestInit, Result};
 
-pub async fn page(db: &D1Database, bucket: &Bucket, feed_id: &str, lane: &str) -> Result<()> {
+pub async fn page(
+    db: &crate::database::Authority,
+    bucket: &Bucket,
+    feed_id: &str,
+    lane: &str,
+) -> Result<()> {
     let t = now();
-    let Some(observation)=first(db,"SELECT o.*,s.sha256,s.bytes FROM n_observation o JOIN n_snapshot s ON s.object_key=o.snapshot_key JOIN n_feed f ON f.feed_id=o.feed_id WHERE o.feed_id=?1 AND o.state='published' AND o.drain_complete=0 AND f.epoch=o.owner_epoch AND f.no_interest_since IS NULL ORDER BY o.generation LIMIT 1",&[json!(feed_id)]).await? else {
-        mature(db,feed_id,lane).await?;
+    let Some(observation) = storage::execute(
+        db,
+        Operation::ReadDrain {
+            feed: feed_id.to_owned(),
+        },
+    )
+    .await?
+    .first() else {
+        mature(db, feed_id, lane).await?;
         return Ok(());
     };
     let key = string(&observation, "snapshot_key");
@@ -62,7 +75,6 @@ pub async fn page(db: &D1Database, bucket: &Bucket, feed_id: &str, lane: &str) -
     let epoch = int(&observation, "owner_epoch");
     let generation = int(&observation, "generation");
     let metadata: Value = serde_json::from_str(string(&observation, "metadata_json"))?;
-    let fence=format!("EXISTS(SELECT 1 FROM n_observation o JOIN n_feed f ON f.feed_id=o.feed_id WHERE o.observation_id='{}' AND o.state='published' AND o.candidate_cursor={} AND f.epoch=o.owner_epoch AND f.no_interest_since IS NULL)",observation_id,cursor);
     let mut records = vec![];
     for candidate in candidates {
         let event_id = wire::hash(&["episode-v1", lane, feed_id, &candidate.episode_id]);
@@ -85,25 +97,49 @@ pub async fn page(db: &D1Database, bucket: &Bucket, feed_id: &str, lane: &str) -
         } else {
             "ready"
         };
-        records.push(json!({"episode_id":candidate.episode_id,"event_id":event_id,"presentation_key":presentation_key,"first_observed_at":candidate.first_observed_at,"eligible_at":candidate.eligible_at,"expires_at":candidate.eligible_at+86400,"reason":candidate.reason,"fingerprint":candidate.fingerprint,"published_at":candidate.published_at,"metadata":display,"state":state}));
+        records.push(serde_json::from_value(json!({"episode_id":candidate.episode_id,"event_id":event_id,"presentation_key":presentation_key,"first_observed_at":candidate.first_observed_at,"eligible_at":candidate.eligible_at,"expires_at":candidate.eligible_at+86400,"reason":candidate.reason,"fingerprint":candidate.fingerprint,"published_at":candidate.published_at,"metadata":display,"state":state}))?);
     }
-    db.batch(vec![
-        statement(db,&format!("INSERT INTO n_episode_release(feed_id,episode_id,observation_id,generation,owner_epoch,event_id,presentation_key,first_observed_at,eligible_at,expires_at,reason,fingerprint,published_at,metadata_json,state,disposition) SELECT ?1,json_extract(value,'$.episode_id'),?2,?3,?4,json_extract(value,'$.event_id'),json_extract(value,'$.presentation_key'),json_extract(value,'$.first_observed_at'),json_extract(value,'$.eligible_at'),json_extract(value,'$.expires_at'),json_extract(value,'$.reason'),json_extract(value,'$.fingerprint'),json_extract(value,'$.published_at'),json_extract(value,'$.metadata'),json_extract(value,'$.state'),CASE WHEN json_extract(value,'$.state')='expired' THEN 'expired' ELSE 'eligible_pending' END FROM json_each(?5) WHERE {fence} ON CONFLICT DO NOTHING"),&[json!(feed_id),json!(observation_id),json!(generation),json!(epoch),json!(records)])?,
-        statement(db,&format!("UPDATE n_observation SET candidate_cursor=?2,drain_complete=(?2=candidate_count) WHERE observation_id=?1 AND {fence}"),&[json!(observation_id),json!(offset)])?,
-    ]).await?;
+    storage::execute(
+        db,
+        Operation::Drain {
+            feed: feed_id.into(),
+            observation: observation_id.into(),
+            generation,
+            epoch,
+            cursor: cursor as i64,
+            next: offset as i64,
+            records,
+        },
+    )
+    .await?;
     mature(db, feed_id, lane).await?;
     Ok(())
 }
 
-async fn mature(db: &D1Database, feed_id: &str, lane: &str) -> Result<()> {
+async fn mature(db: &crate::database::Authority, feed_id: &str, lane: &str) -> Result<()> {
     let t = now();
-    let rows=rows(db,"SELECT r.* FROM n_episode_release r JOIN n_feed f ON f.feed_id=r.feed_id JOIN n_observation o ON o.observation_id=r.observation_id WHERE r.feed_id=?1 AND r.state IN('ready','pending_future') AND r.eligible_at<=?2 AND o.drain_complete=1 AND f.epoch=r.owner_epoch AND f.no_interest_since IS NULL ORDER BY r.eligible_at,r.episode_id LIMIT 100",&[json!(feed_id),json!(t)]).await?;
+    let rows = storage::execute(
+        db,
+        Operation::ReadMatureReleases {
+            feed: feed_id.to_owned(),
+            now: (t),
+        },
+    )
+    .await?
+    .rows();
     for row in rows {
         let event_id = string(&row, "event_id");
         let epoch = int(&row, "owner_epoch");
-        let fence="EXISTS(SELECT 1 FROM n_episode_release r JOIN n_feed f ON f.feed_id=r.feed_id WHERE r.event_id=?1 AND r.state IN('ready','pending_future') AND f.epoch=r.owner_epoch AND f.epoch=?2 AND f.no_interest_since IS NULL)";
         if int(&row, "expires_at") <= t {
-            run(db,&format!("UPDATE n_episode_release SET state='expired',disposition='expired' WHERE event_id=?1 AND {fence}"),&[json!(event_id),json!(epoch)]).await?;
+            storage::execute(
+                db,
+                Operation::ExpireRelease {
+                    event: event_id.to_owned(),
+                    epoch: (epoch),
+                },
+            )
+            .await?
+            .count();
             continue;
         }
         let c: Value = serde_json::from_str(string(&row, "metadata_json"))?;
@@ -121,21 +157,46 @@ async fn mature(db: &D1Database, feed_id: &str, lane: &str) -> Result<()> {
             }
         }
         let event = json!({"schema_version":1,"environment":lane,"source":"feed_polling","event_id":event_id,"kind":"episode","occurred_at":row["first_observed_at"],"eligible_at":row["eligible_at"],"expires_at":row["expires_at"],"routing":{"feed_id":feed_id,"observation_id":row["observation_id"],"observation_generation":row["generation"],"owner_epoch":epoch,"episode_id":row["episode_id"]},"data":data});
-        db.batch(vec![
-            statement(db,&format!("INSERT INTO n_outbox(source,event_id,observation_id,payload_digest,occurred_at,expires_at,next_attempt_at,state,payload_json) SELECT 'feed_polling',?1,?3,?4,?5,?6,?7,'pending',?8 WHERE {fence} ON CONFLICT DO NOTHING"),&[json!(event_id),json!(epoch),row["observation_id"].clone(),json!(wire::digest(&event)),row["first_observed_at"].clone(),row["expires_at"].clone(),json!(t),event])?,
-            statement(db,&format!("UPDATE n_episode_release SET state='outboxed' WHERE event_id=?1 AND {fence}"),&[json!(event_id),json!(epoch)])?,
-        ]).await?;
+        storage::execute(
+            db,
+            Operation::OutboxRelease {
+                event: event_id.into(),
+                epoch,
+                observation: serde_json::from_value(row["observation_id"].clone())?,
+                digest: wire::digest(&event),
+                occurred_at: serde_json::from_value(row["first_observed_at"].clone())?,
+                expires_at: serde_json::from_value(row["expires_at"].clone())?,
+                now: t,
+                payload: event,
+            },
+        )
+        .await?;
     }
     Ok(())
 }
 
-pub async fn outbox(db: &D1Database, env: &Env, feed_id: &str) -> Result<()> {
+pub async fn outbox(db: &crate::database::Authority, env: &Env, feed_id: &str) -> Result<()> {
     mature(db, feed_id, &lane(env)).await?;
-    let due=rows(db,"SELECT x.* FROM n_outbox x JOIN n_observation o ON o.observation_id=x.observation_id JOIN n_feed f ON f.feed_id=o.feed_id WHERE o.feed_id=?1 AND f.epoch=o.owner_epoch AND x.state='pending' AND x.next_attempt_at<=?2 ORDER BY x.next_attempt_at,x.event_id LIMIT 10",&[json!(feed_id),json!(now())]).await?;
+    let due = storage::execute(
+        db,
+        Operation::ReadDueOutbox {
+            feed: feed_id.to_owned(),
+            now: (now()),
+        },
+    )
+    .await?
+    .rows();
     for row in due {
         let event_id = string(&row, "event_id");
         if int(&row, "expires_at") <= now() {
-            run(db,"UPDATE n_outbox SET state='expired',payload_json='{}' WHERE source='feed_polling' AND event_id=?1 AND state='pending'",&[json!(event_id)]).await?;
+            storage::execute(
+                db,
+                Operation::ExpireOutbox {
+                    event: event_id.to_owned(),
+                },
+            )
+            .await?
+            .count();
             continue;
         }
         // No endpoint is derived from feed metadata; only the named private binding.
@@ -158,17 +219,48 @@ pub async fn outbox(db: &D1Database, env: &Env, feed_id: &str) -> Result<()> {
                     || !["accepted", "duplicate", "suppressed"]
                         .contains(&string(&receipt, "disposition"))
                 {
-                    run(db,"UPDATE n_outbox SET next_attempt_at=?2 WHERE source='feed_polling' AND event_id=?1 AND state='pending'",&[json!(event_id),json!(now()+60)]).await?;
+                    storage::execute(
+                        db,
+                        Operation::RetryOutbox {
+                            event: event_id.to_owned(),
+                            next: (now() + 60),
+                        },
+                    )
+                    .await?
+                    .count();
                     continue;
                 }
 
-                run(db,"UPDATE n_outbox SET state='accepted',receipt_id=?2 WHERE source='feed_polling' AND event_id=?1 AND state='pending'",&[json!(event_id),receipt["receipt_id"].clone()]).await?;
+                storage::execute(
+                    db,
+                    Operation::AcceptOutbox {
+                        event: event_id.to_owned(),
+                        receipt: serde_json::from_value(receipt["receipt_id"].clone())?,
+                    },
+                )
+                .await?
+                .count();
             }
             Ok(response) if response.status_code() == 409 => {
-                run(db,"UPDATE n_outbox SET state='conflict' WHERE source='feed_polling' AND event_id=?1 AND state='pending'",&[json!(event_id)]).await?;
+                storage::execute(
+                    db,
+                    Operation::ConflictOutbox {
+                        event: event_id.to_owned(),
+                    },
+                )
+                .await?
+                .count();
             }
             _ => {
-                run(db,"UPDATE n_outbox SET next_attempt_at=?2 WHERE source='feed_polling' AND event_id=?1 AND state='pending'",&[json!(event_id),json!(now()+60)]).await?;
+                storage::execute(
+                    db,
+                    Operation::RetryOutbox {
+                        event: event_id.to_owned(),
+                        next: (now() + 60),
+                    },
+                )
+                .await?
+                .count();
             }
         }
     }

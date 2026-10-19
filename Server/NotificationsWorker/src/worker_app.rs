@@ -8,7 +8,8 @@ use crate::challenge_limits::{
     MAX_GLOBAL_CHALLENGES_PER_HOUR,
 };
 use crate::route::{
-    content_length_exceeds, diagnostic_endpoint_path, parse_env_flag, public_write_endpoint,
+    content_length_exceeds, diagnostic_endpoint_path, maintenance_freeze_endpoint, parse_env_flag,
+    public_write_endpoint, API_PATHS, APP_ATTEST_CHALLENGE_PATH, APP_ATTEST_REGISTER_PATH,
     DEBUG_SEND_TEST_PUSH_PATH, DEVICES_REGISTER_PATH, DEVICES_UNREGISTER_PATH, INSTALL_DELETE_PATH,
     SECURE_HELLO_PATH, SUBSCRIPTIONS_SYNC_PATH,
 };
@@ -28,7 +29,6 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use worker::{Env, Headers, Request, Response, Result};
 
-const APP_ATTEST_DB: &str = "APP_ATTEST_DB";
 const REGISTER_PURPOSE: &str = "register";
 const CHALLENGE_SOURCE_HASH_KEY: &str = "CHALLENGE_SOURCE_HASH_KEY";
 const DEVELOPMENT_CHALLENGE_SOURCE_HASH_KEY: &str = "opencast-development-challenge-source-key";
@@ -207,18 +207,24 @@ struct TestPushResponse {
 }
 
 pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
+    let arrived = crate::polling::timing::now_ms();
     let capability = env
         .var("NOTIFICATION_CAPABILITY")
         .map(|v| v.to_string())
         .unwrap_or_default();
+    // A queue delivery can await the existing 15-second APNs bound before
+    // finishing or recording failure. Each storage segment retains its own cap.
+    let deadline = crate::database::Authority::default_deadline(arrived)
+        .saturating_add(if capability == "queue" { 15_000 } else { 0 });
+    let db = crate::database::Authority::new(&env, Some(req.inner().signal()), deadline)?;
     if capability == "feed_control" {
-        return crate::feed_control::handle(req, env).await;
+        return crate::feed_control::handle(req, env, db).await;
     }
     if capability == "feed_observations" {
-        return crate::observation::runtime::handle(req, env).await;
+        return crate::observation::runtime::handle(req, env, db).await;
     }
     if !capability.is_empty() {
-        return crate::delivery::handle(req, env, &capability).await;
+        return crate::delivery::handle(req, env, &capability, db).await;
     }
     let method = req.method();
     let path = req.path();
@@ -226,9 +232,13 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
     if path == "/health" {
         return route_response(route::handle_request(method.as_ref(), &path));
     }
+    // Before configuration, authentication and the first storage call: no
+    // identity verdict, App Attest counter or row is read or written.
+    if maintenance_freeze_endpoint(method.as_ref(), &path) && maintenance_frozen(&env) {
+        return json_error(503, "maintenance_freeze");
+    }
 
     let config = AppConfig::from_env(&env)?;
-    let db = env.d1(APP_ATTEST_DB)?;
     let now = now_seconds();
 
     if diagnostic_endpoint_path(&path) && !debug_endpoints_enabled(&env) {
@@ -239,8 +249,8 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
     }
 
     match (method.as_ref(), path.as_str()) {
-        ("POST", "/v1/app-attest/challenge") => handle_challenge(&mut req, &env, &db, now).await,
-        ("POST", "/v1/app-attest/register") => handle_register(&mut req, &db, &config, now).await,
+        ("POST", APP_ATTEST_CHALLENGE_PATH) => handle_challenge(&mut req, &env, &db, now).await,
+        ("POST", APP_ATTEST_REGISTER_PATH) => handle_register(&mut req, &db, &config, now).await,
         ("POST", SECURE_HELLO_PATH) => handle_secure_hello(&mut req, &db, &config, now).await,
         ("POST", DEVICES_REGISTER_PATH) => {
             handle_register_device(&mut req, &db, &config, now).await
@@ -255,39 +265,39 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
         ("POST", SUBSCRIPTIONS_SYNC_PATH) => {
             handle_sync_subscriptions(&mut req, &db, &config, now).await
         }
-        (
-            "GET",
-            "/v1/app-attest/challenge"
-            | "/v1/app-attest/register"
-            | SECURE_HELLO_PATH
-            | DEVICES_REGISTER_PATH
-            | DEVICES_UNREGISTER_PATH
-            | INSTALL_DELETE_PATH
-            | DEBUG_SEND_TEST_PUSH_PATH
-            | SUBSCRIPTIONS_SYNC_PATH,
-        ) => json_error(405, "method_not_allowed"),
+        ("GET", path) if API_PATHS.contains(&path) => json_error(405, "method_not_allowed"),
         _ => json_error(404, "not_found"),
     }
 }
 
 pub async fn handle_scheduled(env: Env, scheduled_at: i64) -> Result<()> {
+    // Before the storage authority exists: no identity read, watchdog I/O,
+    // reconciliation or retention.
+    if maintenance_frozen(&env) {
+        worker::console_log!("{}", json!({"event": "scheduled_maintenance_frozen"}));
+        return Ok(());
+    }
+    let db = crate::database::Authority::new(
+        &env,
+        None,
+        crate::database::Authority::default_deadline(crate::polling::timing::now_ms()),
+    )?;
     // Join instead of short-circuiting: maintenance and the independent read
     // both run even when the other fails. Watchdog I/O has its own deadlines.
     let (_, maintenance) = futures_util::future::join(
-        crate::polling::watchdog::check(&env, scheduled_at),
-        scheduled_maintenance(&env),
+        crate::polling::watchdog::check(&env, scheduled_at, db.clone()),
+        scheduled_maintenance(&env, db),
     )
     .await;
     maintenance
 }
 
-async fn scheduled_maintenance(env: &Env) -> Result<()> {
-    if crate::delivery::reconcile(env).await.is_err() {
+async fn scheduled_maintenance(env: &Env, db: crate::database::Authority) -> Result<()> {
+    if crate::delivery::reconcile(env, db.clone()).await.is_err() {
         worker::console_warn!("notification reconciliation failed; continuing maintenance");
     }
-    let db = env.d1(APP_ATTEST_DB)?;
     let now = now_seconds();
-    if !crate::delivery::db::permitted(env, &db, "cleanup").await? {
+    if !crate::database::permitted(env, &db, "cleanup").await? {
         return Ok(());
     }
     // Authentication and subscription retention also serve the queued engine.
@@ -341,7 +351,7 @@ async fn scheduled_maintenance(env: &Env) -> Result<()> {
 async fn handle_challenge(
     req: &mut Request,
     env: &Env,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     now: i64,
 ) -> Result<Response> {
     let body =
@@ -406,7 +416,7 @@ async fn handle_challenge(
 
 async fn handle_register(
     req: &mut Request,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     config: &AppConfig,
     now: i64,
 ) -> Result<Response> {
@@ -490,7 +500,7 @@ async fn handle_register(
 
 async fn handle_secure_hello(
     req: &mut Request,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     config: &AppConfig,
     now: i64,
 ) -> Result<Response> {
@@ -525,7 +535,7 @@ async fn handle_secure_hello(
 
 async fn handle_register_device(
     req: &mut Request,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     config: &AppConfig,
     now: i64,
 ) -> Result<Response> {
@@ -602,7 +612,7 @@ async fn handle_register_device(
 
 async fn handle_unregister_device(
     req: &mut Request,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     config: &AppConfig,
     now: i64,
 ) -> Result<Response> {
@@ -637,7 +647,7 @@ async fn handle_unregister_device(
 
 async fn handle_delete_install(
     req: &mut Request,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     config: &AppConfig,
     now: i64,
 ) -> Result<Response> {
@@ -670,7 +680,7 @@ async fn handle_delete_install(
 async fn handle_debug_send_test_push(
     req: &mut Request,
     env: &Env,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     config: &AppConfig,
     now: i64,
 ) -> Result<Response> {
@@ -728,7 +738,7 @@ async fn handle_debug_send_test_push(
 
 async fn handle_sync_subscriptions(
     req: &mut Request,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     config: &AppConfig,
     now: i64,
 ) -> Result<Response> {
@@ -757,10 +767,10 @@ async fn handle_sync_subscriptions(
 
     // Every write this sync produces — pending feed rows, admission-attempt
     // history, subscription upserts, and stale-subscription deletes — is
-    // collected here and flushed in one D1 batch. A 200-feed first sync is
-    // then a handful of IN-list reads plus one batched write instead of
-    // several D1 subrequests per feed.
-    let mut writes: Vec<worker::D1PreparedStatement> = Vec::new();
+    // collected here and flushed in one storage transaction. A 200-feed first
+    // sync is then a handful of array reads plus one transaction of array
+    // writes instead of several storage statements per feed.
+    let mut writes: Vec<crate::database::slice_c::SubscriptionWrite> = Vec::new();
     let mut rejected = Vec::new();
     let mut admitted_by_url: BTreeMap<String, AdmittedSubscription> = BTreeMap::new();
     for subscription in payload.subscriptions {
@@ -964,16 +974,16 @@ fn logged_install_id(install_id: &str) -> String {
 
 async fn authenticate_envelope(
     req: &mut Request,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     config: &AppConfig,
     now: i64,
     method: &str,
     path: &'static str,
     max_payload_bytes: usize,
 ) -> Result<std::result::Result<AuthenticatedPayload, AuthFailure>> {
-    let result = app_attest_envelope::authenticate_envelope(
+    let result = app_attest_envelope::slice_c::authenticate_envelope_with_storage(
         req,
-        db,
+        &db.attest()?,
         &config.app_id,
         &config.app_attest_environment,
         now,
@@ -987,7 +997,7 @@ async fn authenticate_envelope(
 }
 
 async fn respond_to_auth_failure(
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     failure: AuthFailure,
     records_secure_attempt: bool,
     now: i64,
@@ -1011,6 +1021,10 @@ fn debug_endpoints_enabled(env: &Env) -> bool {
 
 fn public_notifications_enabled(env: &Env) -> bool {
     env_flag(env, "PUBLIC_NOTIFICATIONS_ENABLED", false)
+}
+
+fn maintenance_frozen(env: &Env) -> bool {
+    env_flag(env, "NOTIFICATION_MAINTENANCE_FREEZE", false)
 }
 
 fn env_flag(env: &Env, name: &str, default_value: bool) -> bool {
@@ -1116,11 +1130,11 @@ async fn send_apns_request(
     request: apns::PushRequest,
     install_id: &str,
     device: &storage::DeviceRow,
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     apns_environment: apns::ApnsEnvironment,
     now: i64,
 ) -> Result<TestPushResponse> {
-    if !crate::delivery::control(db, "diagnostic_send").await? {
+    if !crate::database::control(db, "diagnostic_send").await? {
         return Ok(TestPushResponse {
             message: "send_disabled",
             apns_status: None,
@@ -1175,7 +1189,7 @@ async fn send_apns_request(
 }
 
 async fn record_push_send_attempt(
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     attempt: PushSendAttempt<'_>,
 ) -> Result<()> {
     let attempt_id = random::random_urlsafe_token(16)
@@ -1197,14 +1211,14 @@ async fn record_push_send_attempt(
 }
 
 fn feed_admission_attempt_statement(
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     install_id: &str,
     key_id: &str,
     host: Option<&str>,
     accepted: bool,
     error_code: Option<&str>,
     now: i64,
-) -> Result<worker::D1PreparedStatement> {
+) -> Result<crate::database::slice_c::SubscriptionWrite> {
     let attempt_id = random::random_urlsafe_token(16)
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
     storage::insert_feed_admission_attempt_statement(
@@ -1222,7 +1236,7 @@ fn feed_admission_attempt_statement(
 }
 
 async fn record_secure_attempt(
-    db: &worker::D1Database,
+    db: &crate::database::Authority,
     install_id: &str,
     key_id: &str,
     accepted: bool,
