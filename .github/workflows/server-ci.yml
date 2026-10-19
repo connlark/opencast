@@ -64,6 +64,10 @@ jobs:
             directory: Server/MP3FrameCore
             wasm: true
             check_args: ""
+          - name: WorkerDatabaseCore
+            directory: Server/WorkerDatabaseCore
+            wasm: true
+            check_args: "--lib"
           - name: NotificationsWorker
             directory: Server/NotificationsWorker
             wasm: true
@@ -152,7 +156,6 @@ jobs:
   deterministic-integration:
     name: Integration (${{ matrix.name }})
     runs-on: ubuntu-24.04
-    # The FeedPolling lane packages two release Rust Workers before its suites.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -160,10 +163,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: NotificationsWorker
-            directory: Server/NotificationsWorker
-          - name: FeedPollingWorker
-            directory: Server/FeedPollingWorker
           - name: AdAnalysisWorker
             directory: Server/AdAnalysisWorker
           - name: TranscriptAnalysisWorker
@@ -224,13 +223,6 @@ jobs:
           mkdir -p tests/fixtures
           node --input-type=module --eval \
             "import { writeFileSync } from 'node:fs'; writeFileSync('tests/fixtures/ad_analysis_app_attest_development_fixture.json', '{}\n');"
-
-      # FeedPolling links the notifications crate and its harness boots the
-      # packaged notifications Worker, so that lane needs the same template.
-      - name: Prepare public Notifications integration harness
-        if: matrix.name == 'NotificationsWorker' || matrix.name == 'FeedPollingWorker'
-        working-directory: Server/NotificationsWorker
-        run: cp wrangler.example.toml wrangler.toml
 
       - name: Prepare public TranscriptAnalysis integration harness
         if: matrix.name == 'TranscriptAnalysisWorker'
@@ -303,32 +295,6 @@ jobs:
           yarn exec vitest run -t \
             'routing|rejects an unauthenticated request|challenges|404s internal paths on the public host|rejects malformed internal envelopes and invalid payloads|404s an unknown internal job id'
 
-      - name: Run deterministic Notifications integration tests
-        if: matrix.name == 'NotificationsWorker'
-        working-directory: ${{ matrix.directory }}
-        run: |
-          yarn deploy:dry-run
-          node tests/storage-cleanup.mjs
-          node tests/current-schema-upgrade.mjs
-          node tests/catalog-contract-runtime.mjs
-          node tests/current-engine-runtime.mjs
-          node tests/delivery-runtime.mjs
-          node tests/observation-runtime.mjs
-          node tests/feed-cancellation-runtime.mjs
-
-      - name: Run deterministic FeedPolling integration tests
-        if: matrix.name == 'FeedPollingWorker'
-        working-directory: ${{ matrix.directory }}
-        run: |
-          yarn workspace @opencast/notifications-worker deploy:dry-run
-          yarn deploy:dry-run
-          node tests/lifecycle.mjs
-          node tests/digest-runtime.mjs
-          node tests/review-regressions.mjs
-          node tests/stage1-review.mjs
-          node tests/alerting.mjs
-          node tests/permit-reclaim.mjs
-
       - name: Run deterministic TranscriptAnalysis integration tests
         if: matrix.name == 'TranscriptAnalysisWorker'
         working-directory: ${{ matrix.directory }}
@@ -348,6 +314,173 @@ jobs:
         if: matrix.name == 'RemoteTranscriptionWorker'
         working-directory: ${{ matrix.directory }}
         run: yarn test:integration
+
+  # NotificationsWorker and FeedPollingWorker keep all storage in PostgreSQL.
+  # Their suites run on clones of the local test topology's template, installed
+  # with the host psql into a PostgreSQL 18.6 service container pinned to the
+  # multi-platform index digest (the runner pulls its own platform's entry).
+  # Matrix entries share no filesystem, so each one prepares all of its inputs.
+  postgres-integration:
+    name: Integration (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    # Each entry packages two release Rust Workers; the Notifications entry also
+    # builds the storage-fixture Worker.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: NotificationsWorker
+            directory: Server/NotificationsWorker
+          - name: FeedPollingWorker
+            directory: Server/FeedPollingWorker
+    services:
+      postgres:
+        image: docker.io/library/postgres@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          # The local topology's fixed superuser password, not a secret.
+          POSTGRES_PASSWORD: opencast-local-postgres
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports:
+          - 127.0.0.1:55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-retries 30
+    env:
+      OPENCAST_PG_PSQL: host
+      OPENCAST_PG_HOST: 127.0.0.1
+      OPENCAST_PG_PORT: "55432"
+      # The host transport cannot inspect the service container, so the install
+      # marker records this reference as requested.
+      OPENCAST_PG_IMAGE: docker.io/library/postgres@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
+
+      - name: Activate Yarn 4.18.0
+        shell: bash
+        run: |
+          npm install --global corepack@0.35.0
+          corepack enable
+          corepack install --global yarn@4.18.0
+          node --version
+          corepack --version
+          yarn --version
+
+      - name: Install stable Rust and the WebAssembly target
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install the PostgreSQL client
+        shell: bash
+        run: |
+          sudo apt-get \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            update
+
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            install --yes --no-install-recommends postgresql-client
+
+          psql --version
+
+      # The service's own image record. A digest is named as resolved only when
+      # the image's repository digests reduce to one platform entry that is not
+      # the requested index; anything else is logged as unresolved.
+      - name: Record the PostgreSQL service image
+        shell: bash
+        run: |
+          service="${{ job.services.postgres.id }}"
+          docker inspect --format '{{.Image}} {{.Config.Image}}' "$service"
+          image=$(docker inspect --format '{{.Image}}' "$service")
+          docker image inspect --format '{{json .RepoDigests}} {{.Os}}/{{.Architecture}}' "$image"
+          requested="${OPENCAST_PG_IMAGE#*@}"
+          listed=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" |
+            sed -n 's/^.*@//p' | sort -u)
+          # local-postgres.sh's rule: the requested index set aside, exactly one
+          # remaining digest is the platform image the service runs.
+          digests=$(printf '%s\n' "$listed" | grep -v -x -F "$requested" | grep . || true)
+          count=$(printf '%s\n' "$digests" | grep -c . || true)
+          if [ "$count" -eq 1 ]; then
+            echo "image provenance resolved: $digests (requested $OPENCAST_PG_IMAGE)"
+          elif [ "$count" -gt 1 ]; then
+            echo "image provenance unresolved: multiple (requested $OPENCAST_PG_IMAGE)"
+          elif [ -n "$listed" ]; then
+            echo "image provenance unresolved: index-not-child (requested $OPENCAST_PG_IMAGE)"
+          else
+            echo "image provenance unresolved: empty (requested $OPENCAST_PG_IMAGE)"
+          fi
+
+      - name: Install the local PostgreSQL topology
+        shell: bash
+        run: |
+          bash Server/NotificationsWorker/postgres/local/local-postgres.sh install
+          bash Server/NotificationsWorker/postgres/local/local-postgres.sh status
+
+      # FeedPolling links the notifications crate and its harness boots the
+      # packaged notifications Worker, so both entries need the same template.
+      - name: Prepare public Notifications integration harness
+        working-directory: Server/NotificationsWorker
+        run: cp wrangler.example.toml wrangler.toml
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Package both Workers
+        run: |
+          yarn workspace @opencast/notifications-worker deploy:dry-run
+          yarn workspace @opencast/feed-polling-worker deploy:dry-run
+
+      - name: Run deterministic Notifications integration tests
+        if: matrix.name == 'NotificationsWorker'
+        working-directory: ${{ matrix.directory }}
+        shell: bash
+        run: |
+          "$HOME/.cargo/bin/worker-build" --release --out-dir "$RUNNER_TEMP/opencast-storage-fixture-build" \
+            --no-default-features --features storage-fixture
+          export OPENCAST_FIXTURE_BUILD="$RUNNER_TEMP/opencast-storage-fixture-build"
+          node postgres/local/test-local-postgres.mjs
+          node tests/postgres/test-sql.mjs
+          node tests/postgres/test-database.mjs
+          node tests/postgres/test-storage.mjs
+          node tests/postgres/test-proxy.mjs
+          node tests/postgres/test-timing.mjs
+          node tests/catalog-contract-runtime.mjs
+          node tests/current-engine-runtime.mjs
+          node tests/delivery-runtime.mjs
+          node tests/observation-runtime.mjs
+          node tests/feed-cancellation-runtime.mjs
+          node tests/storage-gc-runtime.mjs
+          node tests/identity-cache-runtime.mjs
+
+      - name: Run deterministic FeedPolling integration tests
+        if: matrix.name == 'FeedPollingWorker'
+        working-directory: ${{ matrix.directory }}
+        run: |
+          OPENCAST_POSTGRES_BUILD="$GITHUB_WORKSPACE/Server/NotificationsWorker/build" \
+            OPENCAST_POLLING_POSTGRES_BUILD="$GITHUB_WORKSPACE/Server/FeedPollingWorker/build" \
+            node ../NotificationsWorker/tests/storage-selection-runtime.mjs
+          node tests/lifecycle.mjs
+          node tests/digest-runtime.mjs
+          node tests/review-regressions.mjs
+          node tests/stage1-review.mjs
+          node tests/alerting.mjs
+          node tests/permit-reclaim.mjs
 
   services:
     name: Service (${{ matrix.name }})
@@ -499,18 +632,22 @@ jobs:
       - guards
       - rust
       - deterministic-integration
+      - postgres-integration
       - services
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
+      # Each lane ends as success, failure, cancelled or skipped; only success
+      # keeps the aggregate green, and every lane in needs is listed here.
       - name: Require every server lane to pass
         shell: bash
         run: |
           if [[ "${{ needs.guards.result }}" != "success" ||
                 "${{ needs.rust.result }}" != "success" ||
                 "${{ needs.deterministic-integration.result }}" != "success" ||
+                "${{ needs.postgres-integration.result }}" != "success" ||
                 "${{ needs.services.result }}" != "success" ]]; then
             echo "One or more Server CI lanes did not pass."
             exit 1

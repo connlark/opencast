@@ -16,7 +16,7 @@ enabled = false
 
 [triggers]
 # The scheduled handler reconciles durable delivery and prunes retention; it
-# does not poll feeds. Enable it only after your APNs, App Attest, D1, route,
+# does not poll feeds. Enable it only after your APNs, App Attest, PostgreSQL, route,
 # Queues and abuse controls are ready.
 crons = []
 
@@ -25,7 +25,9 @@ command = "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bi
 
 [vars]
 NOTIFICATION_ENVIRONMENT = "development"
-# Release brakes. Each one also needs its matching n_control row enabled in D1,
+# Storage is PostgreSQL through DB; an absent authority is refused.
+STORAGE_AUTHORITY = "postgres"
+# Release brakes. Each one also needs its matching n_control row enabled,
 # so a deployment with these set to "true" still does nothing until you open the
 # control deliberately. Leave them closed until the lane is fully configured.
 NOTIFICATION_EPISODE_ACTIVATION = "false"
@@ -41,12 +43,17 @@ APP_ATTEST_ENVIRONMENT = "development"
 APNS_ENVIRONMENT = "development"
 DEBUG_ENDPOINTS_ENABLED = "false"
 PUBLIC_NOTIFICATIONS_ENABLED = "false"
+# "true" answers 503 on every POST API route and skips scheduled maintenance.
+NOTIFICATION_MAINTENANCE_FREEZE = "false"
 
-[[d1_databases]]
-binding = "APP_ATTEST_DB"
-database_name = "your-notifications-db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
-migrations_dir = "migrations"
+# Development storage: `wrangler dev` reaches the local test topology
+# (postgres/local/local-postgres.sh up) on its opencast_dev clone as the
+# runtime role. The all-zero id is a local placeholder: create a Hyperdrive
+# configuration for your own database before deploying this lane.
+[[hyperdrive]]
+binding = "DB"
+id = "00000000000000000000000000000000"
+localConnectionString = "postgresql://opencast_local_runtime:opencast-local-runtime@127.0.0.1:55432/opencast_dev?sslmode=disable"
 
 [[mtls_certificates]]
 binding = "APNS_CERT"
@@ -56,9 +63,19 @@ certificate_id = "REPLACE_WITH_APNS_MTLS_CERTIFICATE_ID"
 name = "your-notifications-worker-prod-staging"
 workers_dev = true
 
+[env.prod-staging.build]
+command = "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release"
+
 [env.prod-staging.vars]
 NOTIFICATION_ENVIRONMENT = "prod-staging"
-# Release brakes: enabling later requires both these vars and D1 controls.
+# Storage is PostgreSQL through the DB Hyperdrive binding; an absent authority
+# is refused. The pin binds this lane to one database: set it to your
+# database's identity, or delete the line for an ungated deployment. The
+# REPLACE_WITH_* placeholder does not parse, so an unedited lane refuses
+# every storage call and writes nothing.
+STORAGE_AUTHORITY = "postgres"
+STORAGE_IDENTITY = "v1;prod-staging;postgres;pg:REPLACE_WITH_DATABASE_NAME:REPLACE_WITH_SYSTEM_IDENTIFIER"
+# Release brakes: enabling later requires both these vars and stored controls.
 NOTIFICATION_EPISODE_ACTIVATION = "false"
 NOTIFICATION_EPISODE_SEND = "false"
 NOTIFICATION_JOB_SEND = "false"
@@ -72,16 +89,16 @@ APP_ATTEST_ENVIRONMENT = "production"
 APNS_ENVIRONMENT = "production"
 DEBUG_ENDPOINTS_ENABLED = "false"
 PUBLIC_NOTIFICATIONS_ENABLED = "false"
+# "true" answers 503 on every POST API route and skips scheduled maintenance.
+NOTIFICATION_MAINTENANCE_FREEZE = "false"
 
 [env.prod-staging.triggers]
 # Enable only during an intentional proof after the lane is fully configured.
 crons = []
 
-[[env.prod-staging.d1_databases]]
-binding = "APP_ATTEST_DB"
-database_name = "your-notifications-db-prod-staging"
-database_id = "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID"
-migrations_dir = "migrations"
+[[env.prod-staging.hyperdrive]]
+binding = "DB"
+id = "REPLACE_WITH_PROD_STAGING_HYPERDRIVE_ID"
 
 [[env.prod-staging.mtls_certificates]]
 binding = "APNS_CERT"
@@ -95,9 +112,19 @@ workers_dev = false
 pattern = "notifications.example.com"
 custom_domain = true
 
+[env.production.build]
+command = "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release"
+
 [env.production.vars]
 NOTIFICATION_ENVIRONMENT = "production"
-# Release brakes: enabling later requires both these vars and D1 controls.
+# Storage is PostgreSQL through the DB Hyperdrive binding; an absent authority
+# is refused. The pin binds this lane to one database: set it to your
+# database's identity, or delete the line for an ungated deployment. The
+# REPLACE_WITH_* placeholder does not parse, so an unedited lane refuses
+# every storage call and writes nothing.
+STORAGE_AUTHORITY = "postgres"
+STORAGE_IDENTITY = "v1;production;postgres;pg:REPLACE_WITH_DATABASE_NAME:REPLACE_WITH_SYSTEM_IDENTIFIER"
+# Release brakes: enabling later requires both these vars and stored controls.
 NOTIFICATION_EPISODE_ACTIVATION = "false"
 NOTIFICATION_EPISODE_SEND = "false"
 NOTIFICATION_JOB_SEND = "false"
@@ -105,8 +132,8 @@ NOTIFICATION_JOB_ENROLLMENT = "false"
 NOTIFICATION_DISPATCHER_ADMISSION = "false"
 NOTIFICATION_CLEANUP = "false"
 NOTIFICATION_FEED_OBSERVATION = "false"
-# Kept off: the adaptive cadence is the production schedule. This switch exists
-# only for a bounded fixture experiment.
+# Kept off: the adaptive cadence is the production schedule. This switch is
+# disabled and retires in the next polling-engine release.
 NOTIFICATION_FIVE_MINUTE_POLLING = "false"
 APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
@@ -114,17 +141,17 @@ APP_ATTEST_ENVIRONMENT = "production"
 APNS_ENVIRONMENT = "production"
 DEBUG_ENDPOINTS_ENABLED = "false"
 PUBLIC_NOTIFICATIONS_ENABLED = "false"
+# "true" answers 503 on every POST API route and skips scheduled maintenance.
+NOTIFICATION_MAINTENANCE_FREEZE = "false"
 
 [env.production.triggers]
 # Delivery reconciliation and shared authentication/subscription retention.
 # For example: ["* * * * *"] after production readiness review.
 crons = []
 
-[[env.production.d1_databases]]
-binding = "APP_ATTEST_DB"
-database_name = "your-notifications-db-production"
-database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
-migrations_dir = "migrations"
+[[env.production.hyperdrive]]
+binding = "DB"
+id = "REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID"
 
 [[env.production.mtls_certificates]]
 binding = "APNS_CERT"

@@ -9,8 +9,9 @@ the private control, scheduled and Queue capabilities.
 
 NotificationsWorker owns enrollment, subscriptions and APNs delivery; this
 Worker owns RSS requests, observations and adaptive scheduling. Queues are
-wakeups, D1 is the authority, and both Workers share one D1 database and one R2
-bucket per lane.
+wakeups, PostgreSQL is the authority, and both Workers share one PostgreSQL
+database (each through its own `DB` Hyperdrive binding) and one R2 bucket per
+lane.
 
 This public copy is a template. It contains no deployed Worker names, routes,
 Cloudflare account resources, database IDs or credentials.
@@ -43,7 +44,7 @@ Cloudflare account resources, database IDs or credentials.
   begins only after the previous obligation settles. The feed row, not the
   message, is the recovery source.
 - **Unchanged is cheap.** A matched 304 or a semantically unchanged 200 only
-  updates the schedule: three D1 rows and no R2 operation. Rows and snapshots
+  updates the schedule: three database rows and no R2 operation. Rows and snapshots
   are created only once the complete body differs from the published scan's
   digest. A body over the 5 MiB buffer spills to one multipart scratch upload,
   which is aborted unless the feed changed.
@@ -71,7 +72,7 @@ Cloudflare account resources, database IDs or credentials.
 - **Cadence.** Each successful poll re-runs the adaptive policy: a 15-minute hot
   floor, 1-hour, 6-hour and 24-hour age tiers, and a cadence accelerator.
   Revoking user interest takes effect immediately.
-- **Cleanup.** A separate `*/2 * * * *` cron runs cleanup under a 180-second D1
+- **Cleanup.** A separate `*/2 * * * *` cron runs cleanup under a 180-second storage
   lease. Each run selects at most 200 objects, including scratch objects
   orphaned by a crash, and starts no new object after 25 seconds. Database
   retention still runs when that budget runs out, so object churn cannot starve
@@ -92,8 +93,10 @@ yarn install
 provision each one before deploying: the config only declares them. Each lane
 binds:
 
-- the **same D1 database** as the notifications lane (`APP_ATTEST_DB`);
-  migrations live in `../NotificationsWorker/migrations`;
+- the **same PostgreSQL database** as the notifications lane, through its own
+  Hyperdrive binding `DB` (`STORAGE_AUTHORITY = "postgres"` and, optionally,
+  the `STORAGE_IDENTITY` pin); the schema lives in
+  `../NotificationsWorker/postgres`;
 - the **same private R2 bucket** (`FEED_SNAPSHOTS`). Keep R2's default rule that
   aborts incomplete multipart uploads after seven days;
 - a **poll Queue and dead-letter Queue** (`POLL_QUEUE`) with four-day retention;
@@ -110,10 +113,10 @@ Advance it only together with the pinned toolchain.
 
 ### Enablement
 
-`dispatcher_admission` and `feed_observation` must be allowed by both the D1
+`dispatcher_admission` and `feed_observation` must be allowed by both the
 `n_control` row and the environment variable; `cleanup` gates garbage
-collection. `five_minute_polling` stays off: it exists only for the
-`tests/capacity.mjs` fixture experiment. The template ships every switch
+collection. `five_minute_polling` stays off: its code retires in the next
+polling-engine release. The template ships every switch
 `"false"` and `"crons": []`; a running lane needs both `"* * * * *"`
 (dispatch) and `"*/2 * * * *"` (cleanup). A changed cron list takes effect
 only after `yarn wrangler triggers deploy` for that environment, so check both
@@ -121,11 +124,9 @@ expressions on the live version. See the
 [notifications enablement table](../NotificationsWorker/README.md#enablement-is-a-dual-switch)
 for the full matrix and the statement that flips a row.
 
-Current binaries need migration `0028` or later. `0028` only adds columns (the
-permit counters and the dispatcher's alert state), so on a lane already at
-`0027` apply it, then deploy both Workers. Upgrading a lane from `0024`: apply
-`0025` alone, deploy **both** Workers, let old invocations and leases drain,
-then apply `0026` through `0028`.
+The schema and its install order live with NotificationsWorker (see its
+[storage setup](../NotificationsWorker/README.md#storage-setup)); after a
+schema change, deploy **both** Workers.
 
 ### Operator alerts
 
@@ -154,8 +155,8 @@ feed is over ten minutes late and five polls complete within five minutes.
 The per-minute rollup and `/stats` share these health predicates and report
 `late_600` and `late_baselines`; the rollup also counts `repairs`,
 `outstanding` and `admission_deferred` (eligible due scans left unreserved by
-the caps), and an obsolete delivery emits `poll_outcome` without a D1 write. Stall
-state lives in D1 and every transition is fenced there, so overlapping
+the caps), and an obsolete delivery emits `poll_outcome` without a storage write.
+Stall state lives in the database and every transition is fenced there, so overlapping
 dispatchers send each alert once and a failed send is retried rather than
 lost. Alerts carry counts, seconds and the lane name only, never feed IDs or
 URLs.
@@ -222,24 +223,44 @@ cargo check --locked --manifest-path Server/FeedPollingWorker/Cargo.toml \
   --target wasm32-unknown-unknown --lib
 yarn workspace @opencast/notifications-worker deploy:dry-run
 yarn workspace @opencast/feed-polling-worker deploy:dry-run
+bash Server/NotificationsWorker/postgres/local/local-postgres.sh up
 
 for suite in lifecycle digest-runtime review-regressions alerting \
     stage1-review permit-reclaim deadline-runtime interest preparation queue \
     evidence no-change recovery runtime cleanup equivalence livelock; do
   node "Server/FeedPollingWorker/tests/$suite.mjs" || break
 done
+(cd Server/FeedPollingWorker && worker-build --release --out-dir /tmp/opencast-polling-fixture-build --features storage-fixture)
+node Server/FeedPollingWorker/tests/hooks-runtime.mjs
 ```
 
 The crate is entirely `wasm32`-gated, so host `cargo test` builds an empty
 library and the wasm check is the real compile gate. Package **both** Workers
 before the runtime suites, and whenever the shared engine changes: the harness
-boots both against isolated Miniflare D1, R2 and Queues with mocked APNs. No
-test contacts a remote resource.
+boots both against a PostgreSQL clone of the local test topology's template
+(see the [notifications commands](../NotificationsWorker/README.md#commands)),
+isolated Miniflare R2 and Queues and mocked APNs. `OPENCAST_TEST_STORAGE` may
+be unset or `postgres`. No test contacts a remote resource.
 
-`capacity.mjs`, `maximum.mjs` and `cost.mjs` are measurement harnesses. They
+`capacity.mjs`, `deadline-load.mjs` and `maximum.mjs` are measurement harnesses. They
 need local loopback ports, write reports under `/private/tmp`, and should run
 one at a time. The default 2,000-feed capacity case uses the fastest
 production cadence (15 minutes); overload and the admission caps are covered
-by `livelock.mjs`. `maximum.mjs` covers the supported 100,000-item, 128 MiB
+by `livelock.mjs`; `deadline-load.mjs` audits native cancellation of hanging
+streams under load in one isolate. `maximum.mjs` covers the supported 100,000-item, 128 MiB
 envelope; `OPENCAST_OBSERVATION_SCALE=1` runs the notifications observation
 suite at the same scale.
+
+The test entry's fixture hooks (`tests/entry.mjs`, `fixtureHooks`) control
+timing a test cannot reach on the wire: the retry delay its real-queue path
+forwards (`/test/retry-delay`), key-scoped R2 delays and body holds
+(`slow_get:<ms>:<prefix>`, `hang_get:<prefix>`), a held FeedEvents reply body
+(`hold_service_body:<ms>`), a reply body held inside the isolate for the
+alert-webhook stub (`tests/webhook-stub.mjs`, with its idempotency ledger)
+and a synchronous isolate stall (`/test/stall`, scheduled from a wire-proxy
+fire by `controls.stall`). The polling Worker's `storage-fixture` feature
+(never in a shipped manifest) adds the polling loop's fixture clock and gate
+and the core's close delay behind private fixture routes;
+`harness(..., { pollingBuild })` runs that build. `hooks-runtime.mjs`
+qualifies every hook (`OPENCAST_POLLING_FIXTURE_BUILD` names the fixture
+build, default `/tmp/opencast-polling-fixture-build`).

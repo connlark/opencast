@@ -33,8 +33,10 @@
   "preview_urls": false,
   "vars": {
     "NOTIFICATION_ENVIRONMENT": "development",
+    // Storage is PostgreSQL through DB; an absent authority is refused.
+    "STORAGE_AUTHORITY": "postgres",
     // Both these vars and the matching n_control rows must allow an operation.
-    // Leave every switch closed until your D1, R2, Queues and the notifications
+    // Leave every switch closed until your PostgreSQL, R2, Queues and the notifications
     // Worker are provisioned, migrated and reachable.
     "NOTIFICATION_DISPATCHER_ADMISSION": "false",
     "NOTIFICATION_FEED_OBSERVATION": "false",
@@ -44,17 +46,20 @@
   "triggers": {
     // The dispatcher runs on a one-minute cron and cleanup on a separate
     // two-minute cron. Enable them with ["* * * * *", "*/2 * * * *"] only after
-    // App Attest, APNs, D1 migrations, the Queues and your abuse controls are
+    // App Attest, APNs, the PostgreSQL schema, the Queues and your abuse controls are
     // configured and the n_control rows are deliberately opened.
     "crons": []
   },
-  "d1_databases": [
+  // Development storage: `wrangler dev` reaches the local test topology
+  // (NotificationsWorker/postgres/local/local-postgres.sh up) on its
+  // opencast_dev clone as the runtime role. The all-zero id is a local
+  // placeholder: create a Hyperdrive configuration for the notifications
+  // lane's database before deploying this lane.
+  "hyperdrive": [
     {
-      "binding": "APP_ATTEST_DB",
-      // The same database the notifications lane uses; migrations live there.
-      "database_name": "your-notifications-db",
-      "database_id": "REPLACE_WITH_DEVELOPMENT_D1_DATABASE_ID",
-      "migrations_dir": "../NotificationsWorker/migrations"
+      "binding": "DB",
+      "id": "00000000000000000000000000000000",
+      "localConnectionString": "postgresql://opencast_local_runtime:opencast-local-runtime@127.0.0.1:55432/opencast_dev?sslmode=disable"
     }
   ],
   "r2_buckets": [
@@ -103,8 +108,17 @@
       "name": "your-feed-polling-worker-prod-staging",
       "workers_dev": false,
       "preview_urls": false,
+      "build": {
+        "command": "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release"
+      },
       "vars": {
         "NOTIFICATION_ENVIRONMENT": "prod-staging",
+        // Storage lives in PostgreSQL through the DB Hyperdrive binding. Set the pin
+        // to your database's identity, or delete it for an ungated deployment; the
+        // REPLACE_WITH_* placeholder does not parse, so an unedited lane refuses
+        // every storage call and writes nothing.
+        "STORAGE_AUTHORITY": "postgres",
+        "STORAGE_IDENTITY": "v1;prod-staging;postgres;pg:REPLACE_WITH_DATABASE_NAME:REPLACE_WITH_SYSTEM_IDENTIFIER",
         "NOTIFICATION_DISPATCHER_ADMISSION": "false",
         "NOTIFICATION_FEED_OBSERVATION": "false",
         "NOTIFICATION_FIVE_MINUTE_POLLING": "false",
@@ -113,12 +127,10 @@
       "triggers": {
         "crons": []
       },
-      "d1_databases": [
+      "hyperdrive": [
         {
-          "binding": "APP_ATTEST_DB",
-          "database_name": "your-notifications-db-prod-staging",
-          "database_id": "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID",
-          "migrations_dir": "../NotificationsWorker/migrations"
+          "binding": "DB",
+          "id": "REPLACE_WITH_PROD_STAGING_HYPERDRIVE_ID"
         }
       ],
       "r2_buckets": [
@@ -165,8 +177,17 @@
       "name": "your-feed-polling-worker-production",
       "workers_dev": false,
       "preview_urls": false,
+      "build": {
+        "command": "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release"
+      },
       "vars": {
         "NOTIFICATION_ENVIRONMENT": "production",
+        // Storage lives in PostgreSQL through the DB Hyperdrive binding. Set the pin
+        // to your database's identity, or delete it for an ungated deployment; the
+        // REPLACE_WITH_* placeholder does not parse, so an unedited lane refuses
+        // every storage call and writes nothing.
+        "STORAGE_AUTHORITY": "postgres",
+        "STORAGE_IDENTITY": "v1;production;postgres;pg:REPLACE_WITH_DATABASE_NAME:REPLACE_WITH_SYSTEM_IDENTIFIER",
         "NOTIFICATION_DISPATCHER_ADMISSION": "false",
         "NOTIFICATION_FEED_OBSERVATION": "false",
         "NOTIFICATION_FIVE_MINUTE_POLLING": "false",
@@ -175,12 +196,10 @@
       "triggers": {
         "crons": []
       },
-      "d1_databases": [
+      "hyperdrive": [
         {
-          "binding": "APP_ATTEST_DB",
-          "database_name": "your-notifications-db-production",
-          "database_id": "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID",
-          "migrations_dir": "../NotificationsWorker/migrations"
+          "binding": "DB",
+          "id": "REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID"
         }
       ],
       "r2_buckets": [

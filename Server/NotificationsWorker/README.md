@@ -9,10 +9,12 @@ This Worker owns App Attest registration, subscriptions, durable delivery and
 APNs. It does **not** fetch RSS: polling lives in the companion
 [`FeedPollingWorker`](../FeedPollingWorker/README.md), which links this crate as
 a library and calls back through a service binding. Deploy both for new-episode
-pushes. Queues are wakeups; D1 is the authority.
+pushes. Queues are wakeups; PostgreSQL, reached through a Hyperdrive binding
+(`DB`), is the authority.
 
 This public copy is a template. It contains no deployed Worker names, routes,
-D1 IDs, APNs credentials, device tokens or proof data.
+Hyperdrive or database identities, APNs credentials, device tokens or proof
+data.
 
 ## Setup
 
@@ -25,7 +27,8 @@ Replace every `REPLACE_WITH_...` value with your own Cloudflare and Apple
 resources, and provision each one before deploying: the config only declares
 them. Per lane you need:
 
-- a **D1 database** (`APP_ATTEST_DB`);
+- a **PostgreSQL database** reached through a **Hyperdrive configuration**
+  bound as `DB` (see [Storage setup](#storage-setup));
 - an **mTLS certificate** (`APNS_CERT`) for APNs;
 - an **R2 bucket** (`FEED_SNAPSHOTS`) for private feed history;
 - three **Queue producer/consumer pairs** with dead-letter queues:
@@ -50,14 +53,14 @@ yarn wrangler secret put CHALLENGE_SOURCE_HASH_KEY
 ```
 
 Keep public notifications, debug endpoints, cron and every `NOTIFICATION_*`
-switch off until App Attest, APNs, migrations, routes and abuse controls are
-ready.
+switch off until App Attest, APNs, the database schema, routes and abuse
+controls are ready.
 
 ### Enablement is a dual switch
 
 Each capability needs its `NOTIFICATION_*` variable in `wrangler.toml` **and**
-its row in the D1 `n_control` table, which the migrations seed disabled. The D1
-row is part of every write fence, so it is an independent brake. A deployment
+its row in the `n_control` table, which the schema seeds disabled. The row is
+part of every write fence, so it is an independent brake. A deployment
 with the variables `"true"` and `n_control` untouched starts cleanly and does
 nothing.
 
@@ -70,32 +73,37 @@ nothing.
 | `job_enrollment` | `NOTIFICATION_JOB_ENROLLMENT` | enrolling job notifications |
 | `job_send` | `NOTIFICATION_JOB_SEND` | sending job pushes |
 | `cleanup` | `NOTIFICATION_CLEANUP` | snapshot and observation garbage collection |
-| `five_minute_polling` | `NOTIFICATION_FIVE_MINUTE_POLLING` | a bounded fixture experiment; leave it off |
+| `five_minute_polling` | `NOTIFICATION_FIVE_MINUTE_POLLING` | disabled; retires in the next polling-engine release |
 
-Enable a row once the rest of the lane is ready:
-
-```sh
-yarn wrangler d1 execute your-notifications-db --remote \
-  --command "UPDATE n_control SET enabled=1, revision=revision+1 WHERE name='episode_send'"
-```
-
-### Migrations
+Enable a row once the rest of the lane is ready, as the schema owner (the
+runtime role can read the controls but not change them):
 
 ```sh
-yarn wrangler d1 migrations apply your-notifications-db --remote
+psql "<schema owner connection>" \
+  --command "UPDATE opencast.n_control SET enabled=1, revision=revision+1 WHERE name='episode_send'"
 ```
 
-A fresh database applies everything in one pass. An existing one must not:
-`0025` and `0026` are an expand/contract pair. Apply `0025` alone, deploy both
-Workers, let old invocations and leases drain, then apply `0026`. Current
-binaries need `0028` or later. `0027` adds registration confirmation (a
-column and a replacement `devices` trigger) and `0028` adds the feed-polling
-permit counters and dispatcher alert state. Neither rebuilds a table, so on a
-lane already past `0026` apply them in order, then deploy both Workers.
+### Storage setup
 
-Before running DDL of your own, inventory incoming foreign keys, indexes and
+Storage is PostgreSQL 16 or later with UTF8 server encoding; the Worker reaches
+it through a Hyperdrive configuration bound as `DB`. As the schema owner, apply
+`postgres/migrations/0001` through `0004` and the grant files to one runtime
+role, in the single-runtime-role order of
+[`postgres/README.md`](postgres/README.md). Create the Hyperdrive configuration
+with the runtime role's credentials, never the owner's, and put its ID in the
+lane's `[[hyperdrive]]` block. FeedPollingWorker binds its own `DB` to the same
+database.
+
+`STORAGE_AUTHORITY = "postgres"` selects this storage; an absent or any other
+value is refused at the first storage call. `STORAGE_IDENTITY` pins a version
+to one database, `v1;<lane>;postgres;pg:<database name>[:<system identifier>]`:
+set it to your database's identity, or delete the line for an ungated
+deployment. The template's `REPLACE_WITH_*` pin does not parse, so an unedited
+lane refuses every storage call and writes nothing.
+
+Migration files are immutable; a schema change is a new migration. Before
+running DDL of your own, inventory incoming foreign keys, indexes and
 triggers. `n_feed` has a cascading child table and must never be rebuilt.
-Migration files are immutable.
 
 ### Cron
 
@@ -111,18 +119,46 @@ yarn test
 yarn typecheck
 yarn deploy:dry-run
 python3 ../../scripts/check-feed-resource-policy.py
-node tests/storage-cleanup.mjs
-node tests/current-schema-upgrade.mjs
+bash postgres/local/local-postgres.sh up
+node postgres/local/test-local-postgres.mjs
+node tests/postgres/test-sql.mjs
+node tests/postgres/test-database.mjs
+node tests/postgres/test-storage.mjs
+node tests/postgres/test-proxy.mjs
 node tests/catalog-contract-runtime.mjs
 node tests/current-engine-runtime.mjs
 node tests/delivery-runtime.mjs
 node tests/observation-runtime.mjs
 node tests/feed-cancellation-runtime.mjs
+node tests/storage-gc-runtime.mjs
+node tests/identity-cache-runtime.mjs
 ```
 
-The `node` harnesses run the packaged Worker in workerd with isolated D1, R2
-and Queues and mocked APNs; they need no remote credentials. Run
-`yarn deploy:dry-run` first so `build/` exists. The contract oracles under
+`postgres/local/local-postgres.sh up` starts the local test topology: one
+container on `127.0.0.1:55432` (`OPENCAST_PG_PORT`) running PostgreSQL 18.6
+from its multi-platform index digest (your runtime runs your platform's entry),
+the schema installed into a connection-free template, and `opencast_dev`
+cloned from it. It uses Podman when installed, otherwise Docker;
+`OPENCAST_CONTAINER_RUNTIME=docker` chooses Docker Desktop explicitly (that path
+is not yet verified). With `OPENCAST_PG_PSQL=host` it uses your own psql
+against `OPENCAST_PG_HOST` and `OPENCAST_PG_PORT` instead, overriding any
+inherited `PG*` connection variable with a notice. Its passwords are fixed
+local constants, not secrets. `test-local-postgres.mjs` needs exclusive use of
+the topology: while it runs it changes the local roles' settings and the install
+marker (restoring both before it ends), so never run it beside another run of
+it, `install`, `reset`, `prune` or anything relying on those roles or the
+marker. Suites that only clone the template need no such serialization.
+
+The `node` harnesses run the packaged Worker in workerd with isolated R2 and
+Queues, mocked APNs and a PostgreSQL clone of the topology's template per
+instance; they need no remote credentials. `OPENCAST_TEST_STORAGE` may be unset
+or `postgres`; any other value is refused. Run `yarn deploy:dry-run` first so
+`build/` exists. `test-proxy.mjs` also needs the storage-fixture build
+(`worker-build --release --out-dir <dir> --no-default-features --features
+storage-fixture`, named by `OPENCAST_FIXTURE_BUILD`), and
+`storage-selection-runtime.mjs` takes both Workers' packaged builds
+(`OPENCAST_POSTGRES_BUILD`, `OPENCAST_POLLING_POSTGRES_BUILD`) and needs no
+database. The contract oracles under
 [`scripts/notifications-overhaul/`](../../scripts/notifications-overhaul/README.md)
 run with plain `node --test`.
 
@@ -143,7 +179,7 @@ Keep these intact when adapting the Worker:
   and global admission caps stay in place.
 - Queue messages and logs carry opaque IDs, counts, timing and disposition
   codes, never URLs, tokens or validators.
-- Never commit APNs keys, Cloudflare API tokens, D1 exports, device tokens, App
+- Never commit APNs keys, Cloudflare API tokens, database dumps, device tokens, App
   Attest key IDs, install IDs or private feed URLs.
 
 ## Endpoints
@@ -153,16 +189,16 @@ Public HTTP surface, App Attest protected unless noted:
 - `GET /health` returns `{ "message": "hello world" }`.
 - `POST /v1/app-attest/challenge` creates a one-time registration challenge.
 - `POST /v1/app-attest/register` verifies an Apple attestation and stores the
-  install's public key. The request carries the plaintext challenge; D1 stores
-  only its hash.
+  install's public key. The request carries the plaintext challenge; storage
+  keeps only its hash.
 - `POST /v1/devices/register` stores the current APNs token. Its APNs
   environment must match the lane, or the request returns
   `apns_environment_mismatch`.
 - `POST /v1/devices/unregister` disables the token. The raw token is cleared;
   its hash is kept for audit and dedupe.
 - `POST /v1/subscriptions/sync` replaces the install's full subscription set.
-  All of a sync's writes land in one `db.batch()` transaction, so a 200-feed
-  sync costs a handful of D1 subrequests. An unchanged live subscription is
+  All of a sync's writes land in one storage transaction of array
+  statements, so a 200-feed sync costs a handful of statements. An unchanged live subscription is
   rewritten at most once a day; a changed preference, a resubscribe or a new
   feed writes at once.
 - `POST /v1/install/delete` deletes the install's keys, challenges, devices,
@@ -213,7 +249,7 @@ and old servers interoperate.
 
 A `false` makes the client re-upload its current token in the same pass, which
 is how an endpoint the server disabled (after an APNs 410, say) recovers without
-a relaunch. Migration `0027` keeps `token_generation` when the endpoint is
+a relaunch. Registration confirmation keeps `token_generation` when the endpoint is
 unchanged, so a confirmation never invalidates a delivery claim. Each upload
 costs one App Attest assertion with the existing key, not a new attestation.
 There is no per-upload rate limit; the five-device cap still applies.
