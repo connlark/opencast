@@ -677,6 +677,57 @@ struct ArtworkLoaderTests {
         #expect(entry.metadata.lastValidation > oldDate)
     }
 
+    @Test("A thumbnail decode does not satisfy a larger request")
+    func thumbnailDecodeDoesNotSatisfyLargerRequest() async throws {
+        let data = try pngData(width: 1_600, height: 1_600)
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
+        let loader = try makeLoader(dataLoader: probe.load)
+        let url = URL(string: "https://example.com/thumbnail-only.png")!
+
+        // A list row decodes the cover as a thumbnail first.
+        let thumbnail = try #require(
+            try await loader.image(for: url, targetPixelSize: CGSize(width: 114, height: 114))
+        )
+        let largeRequest = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 1_024, height: 1_024))
+
+        #expect(pixelWidth(of: thumbnail) <= 114)
+        #expect(loader.bestCachedImage(for: largeRequest) === thumbnail)
+        #expect(loader.imageMeetingSize(for: largeRequest) == nil)
+
+        // The full-size decode then serves the larger request.
+        let large = try #require(try await loader.image(for: largeRequest))
+        #expect(pixelWidth(of: large) >= 1_024)
+        #expect(loader.imageMeetingSize(for: largeRequest) === large)
+        #expect(await probe.requestCount == 1)
+    }
+
+    @Test("Now Playing artwork is not served from a thumbnail cache")
+    func nowPlayingArtworkIgnoresThumbnailCache() async throws {
+        let data = try pngData(width: 1_600, height: 1_600)
+        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
+        let loader = try makeLoader(dataLoader: probe.load)
+        let url = URL(string: "https://example.com/lock-screen.png")!
+
+        _ = try await loader.image(for: url, targetPixelSize: CGSize(width: 114, height: 114))
+
+        let artworkPixelWidth = try await Task { @MainActor in
+            let nowPlayingLoader = SharedNowPlayingArtworkLoader(
+                artworkLoader: loader,
+                targetPixelSize: CGSize(width: 1_024, height: 1_024)
+            )
+
+            // The lock screen must not adopt the list row's thumbnail.
+            #expect(nowPlayingLoader.cachedArtwork(for: url) == nil)
+
+            let artwork = try await nowPlayingLoader.artwork(for: url)
+            let image = try #require(artwork.image(at: artwork.bounds.size))
+            return Int((image.size.width * image.scale).rounded(.up))
+        }.value
+
+        #expect(artworkPixelWidth >= 1_024)
+        #expect(await probe.requestCount == 1)
+    }
+
     @Test("UI and Now Playing artwork share disk bytes")
     func uiAndNowPlayingArtworkShareDiskBytes() async throws {
         let data = try pngData(width: 400, height: 400)

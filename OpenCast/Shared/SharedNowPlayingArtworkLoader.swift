@@ -43,7 +43,10 @@ nonisolated final class SharedNowPlayingArtworkLoader: NowPlayingArtworkLoading,
             return cachedArtwork
         }
 
-        guard let image = artworkLoader.bestCachedImage(for: request) else {
+        // Only a decode that reaches the Now Playing pixel size qualifies. A
+        // thumbnail cached by a list row would otherwise pin a low-resolution
+        // bitmap to the lock screen for the rest of the session.
+        guard let image = artworkLoader.imageMeetingSize(for: request) else {
             return nil
         }
 

@@ -60,6 +60,11 @@ actor ArtworkLoader {
         memoryCache.bestImage(for: request)
     }
 
+    /// The cached decode that actually reaches the request's pixel size.
+    nonisolated func imageMeetingSize(for request: ArtworkRequest) -> UIImage? {
+        memoryCache.imageMeetingSize(for: request)
+    }
+
     func image(
         for artworkURL: URL,
         targetPixelSize: CGSize,
