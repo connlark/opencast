@@ -295,6 +295,53 @@ struct PlaybackSettingsStoreTests {
             modelContext: freshContext
         )?.value == "keep")
     }
+
+    @Test("Requeue Interrupted Episode defaults off")
+    func requeueInterruptedEpisodeDefaultsOff() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let store = PlaybackSettingsStore()
+
+        store.load(modelContext: ModelContext(container), playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(store.isRequeueInterruptedEpisodeEnabled == false)
+    }
+
+    @Test("Requeue Interrupted Episode on persists and a fresh store reloads it")
+    func requeueInterruptedEpisodeOnPersistsAndReloads() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = PlaybackSettingsStore()
+        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(store.setRequeueInterruptedEpisodeEnabled(true, modelContext: context))
+
+        let reloadedStore = PlaybackSettingsStore()
+        reloadedStore.load(modelContext: ModelContext(container), playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(store.isRequeueInterruptedEpisodeEnabled)
+        #expect(store.lastErrorMessage == nil)
+        #expect(reloadedStore.isRequeueInterruptedEpisodeEnabled)
+    }
+
+    @Test("A Requeue Interrupted Episode save failure rolls back and surfaces an error")
+    func requeueInterruptedEpisodeSaveFailureRollsBackAndSurfacesError() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = PlaybackSettingsStore(save: { _ in
+            throw PlaybackSettingsSaveFailure()
+        })
+        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
+
+        let didPersist = store.setRequeueInterruptedEpisodeEnabled(true, modelContext: context)
+
+        #expect(!didPersist)
+        #expect(store.isRequeueInterruptedEpisodeEnabled == false)
+        #expect(store.lastErrorMessage?.contains("Unable to update Up Next behavior") == true)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.requeueInterruptedEpisodePreferenceKey,
+            modelContext: context
+        ) == nil)
+    }
 }
 
 private struct PlaybackSettingsSaveFailure: LocalizedError {

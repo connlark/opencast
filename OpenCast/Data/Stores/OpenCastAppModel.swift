@@ -741,12 +741,15 @@ final class OpenCastAppModel {
     }
 
     /// An explicit start position bypasses smart resume and the skip-intro
-    /// floor.
+    /// floor. `requeuesCurrentEpisode` is off for the queue's own advance,
+    /// which replaces a finished or skipped episode rather than interrupting
+    /// one; it only takes effect with the Up Next playback setting on.
     func playEpisode(
         _ episode: EpisodeListItemSnapshot,
         at startPosition: TimeInterval? = nil,
         presentsNowPlaying: Bool = true,
         sourcePlaylistID: String? = nil,
+        requeuesCurrentEpisode: Bool = true,
         modelContext: ModelContext
     ) throws {
         try play(
@@ -755,6 +758,7 @@ final class OpenCastAppModel {
             startPosition: startPosition,
             presentsNowPlaying: presentsNowPlaying,
             sourcePlaylistID: sourcePlaylistID,
+            requeuesCurrentEpisode: requeuesCurrentEpisode,
             modelContext: modelContext
         )
     }
@@ -792,6 +796,7 @@ final class OpenCastAppModel {
                     episode,
                     presentsNowPlaying: false,
                     sourcePlaylistID: item.sourcePlaylistID,
+                    requeuesCurrentEpisode: false,
                     modelContext: modelContext
                 )
                 return true
@@ -2692,6 +2697,14 @@ final class OpenCastAppModel {
         playbackSettings.setTapToPlayEnabled(isEnabled, modelContext: modelContext)
     }
 
+    @discardableResult
+    func setRequeueInterruptedEpisodeEnabled(
+        _ isEnabled: Bool,
+        modelContext: ModelContext
+    ) -> Bool {
+        playbackSettings.setRequeueInterruptedEpisodeEnabled(isEnabled, modelContext: modelContext)
+    }
+
     func runVoiceBoostDeviceProbeIfNeeded(modelContext: ModelContext) async {
         #if DEBUG
         guard runsVoiceBoostDeviceProbe, !hasRunVoiceBoostDeviceProbe else {
@@ -2822,10 +2835,17 @@ final class OpenCastAppModel {
         presentsNowPlaying: Bool = true,
         autoplay: Bool = true,
         sourcePlaylistID: String? = nil,
+        requeuesCurrentEpisode: Bool = true,
         modelContext: ModelContext
     ) throws {
         let episode = try resolvedPlaybackEpisode(for: snapshot, source: source, modelContext: modelContext)
         flushPlaybackProgress(modelContext: modelContext)
+        // Read after the flush, which decides whether the interrupted
+        // episode counts as played.
+        let interruptedEpisode = requeuesCurrentEpisode && playbackSettings.isRequeueInterruptedEpisodeEnabled
+            ? interruptedPlaybackEpisode(replacedBy: snapshot)
+            : nil
+        let interruptedSourcePlaylistID = currentPlaylistSourceID
         nowPlayingProbeMark("play-validated")
         applyVoiceBoostSetting(for: episode, modelContext: modelContext)
         let boundaries = playbackEpisodeBoundaries(forPodcastID: snapshot.podcastID)
@@ -2844,6 +2864,14 @@ final class OpenCastAppModel {
         currentPlaylistSourceID = sourcePlaylistID
             ?? upNextQueue.items.first { $0.episodeID == snapshot.episodeID }?.sourcePlaylistID
         _ = upNextQueue.remove(episodeID: snapshot.episodeID, modelContext: modelContext)
+        if let interruptedEpisode,
+           !upNextQueue.enqueueNext(
+               interruptedEpisode,
+               source: interruptedSourcePlaylistID,
+               modelContext: modelContext
+           ) {
+            lastUpNextError = upNextQueue.consumeLastErrorMessage()
+        }
         downloadCleanup.deferPlayedSweep(modelContext: modelContext)
         refreshPlaybackSkipZonesForCurrentEpisode()
         nowPlayingProbeMark("play-loaded")
@@ -2941,6 +2969,22 @@ final class OpenCastAppModel {
             skipIntroSeconds: settings.skipIntroSeconds,
             skipOutroSeconds: settings.skipOutroSeconds
         )
+    }
+
+    /// The loaded episode that starting `snapshot` would cut off, for the
+    /// head of Up Next so it resumes right after. Nil when nothing is loaded,
+    /// when `snapshot` is that episode (a restart), or when the flush just
+    /// marked it played: a finished episode has nothing to come back to.
+    private func interruptedPlaybackEpisode(
+        replacedBy snapshot: EpisodeListItemSnapshot
+    ) -> EpisodeListItemSnapshot? {
+        guard let current = currentPlaybackEpisodeSnapshot,
+              current.episodeID != snapshot.episodeID,
+              library.progressRecord(for: current.episodeID)?.isPlayed != true
+        else {
+            return nil
+        }
+        return current
     }
 
     private var currentPlaybackEpisodeSnapshot: EpisodeListItemSnapshot? {

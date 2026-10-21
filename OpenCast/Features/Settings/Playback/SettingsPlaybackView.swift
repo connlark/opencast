@@ -66,6 +66,15 @@ struct SettingsPlaybackView: View {
             } footer: {
                 Text("When off, tapping an episode opens its details and the play button beside it starts playback.")
             }
+
+            Section {
+                Toggle("Requeue Interrupted Episode", isOn: requeueInterruptedEpisodeBinding)
+                    .accessibilityIdentifier("playback-requeue-interrupted-episode-toggle")
+            } header: {
+                Text("Up Next")
+            } footer: {
+                Text("When on, starting another episode puts the one playing at the head of Up Next so it resumes afterward.")
+            }
         }
         .settingsSubscreen(title: "Playback")
     }
@@ -99,6 +108,14 @@ struct SettingsPlaybackView: View {
             appModel.playbackSettings.isTapToPlayEnabled
         } set: { isEnabled in
             _ = appModel.setTapToPlayEnabled(isEnabled, modelContext: modelContext)
+        }
+    }
+
+    private var requeueInterruptedEpisodeBinding: Binding<Bool> {
+        Binding {
+            appModel.playbackSettings.isRequeueInterruptedEpisodeEnabled
+        } set: { isEnabled in
+            _ = appModel.setRequeueInterruptedEpisodeEnabled(isEnabled, modelContext: modelContext)
         }
     }
 }

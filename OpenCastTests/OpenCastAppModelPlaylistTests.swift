@@ -1115,6 +1115,8 @@ struct OpenCastAppModelPlaylistTests {
         #expect(appModel.currentPlaylistSource == nil)
         #expect(try preferenceValues(forKey: PlaybackRestorePreferenceStore.episodeIDKey, in: fixture.container) == ["fourth"])
         #expect(try preferenceValues(forKey: PlaybackRestorePreferenceStore.sourcePlaylistIDKey, in: fixture.container).isEmpty)
+        // Requeueing the interrupted episode is off by default, so only the
+        // row still queued from the playlist remains.
         #expect(appModel.upNextQueue.items.map(\.sourcePlaylistID) == [Self.commuteID])
     }
 
