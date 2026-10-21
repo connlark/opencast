@@ -125,6 +125,8 @@ node tests/postgres/test-sql.mjs
 node tests/postgres/test-database.mjs
 node tests/postgres/test-storage.mjs
 node tests/postgres/test-proxy.mjs
+node tests/postgres/test-timing.mjs
+node tests/postgres/test-witness.mjs
 node tests/catalog-contract-runtime.mjs
 node tests/current-engine-runtime.mjs
 node tests/delivery-runtime.mjs
@@ -153,7 +155,8 @@ The `node` harnesses run the packaged Worker in workerd with isolated R2 and
 Queues, mocked APNs and a PostgreSQL clone of the topology's template per
 instance; they need no remote credentials. `OPENCAST_TEST_STORAGE` may be unset
 or `postgres`; any other value is refused. Run `yarn deploy:dry-run` first so
-`build/` exists. `test-proxy.mjs` also needs the storage-fixture build
+`build/` exists. `test-proxy.mjs`, `test-timing.mjs` and `test-witness.mjs`
+also need the storage-fixture build
 (`worker-build --release --out-dir <dir> --no-default-features --features
 storage-fixture`, named by `OPENCAST_FIXTURE_BUILD`), and
 `storage-selection-runtime.mjs` takes both Workers' packaged builds

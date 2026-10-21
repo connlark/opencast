@@ -213,6 +213,57 @@ operators privately and close temporary operator sessions afterward. Publisher
 errors keep their normal retry and backoff; do not confuse them with internal
 handling failures.
 
+### The storage timing witness
+
+Every polling invocation writes one `storage_phases` line (schema 2): dispatch,
+cleanup and dead-letter always; a consume under `poll_delivery`'s gate, on
+`failed` or `cancelled`, and for every consume of a feed whose opaque id's first
+hex nibble is below 4 (the provenance cohort). A consume is attributed only to a
+valid message: every exit of one writes its line, the environment brake's
+`polling_disabled` 503 included (its chain, outcome `refused` and no
+operation; the parser does not classify it as a storage failure), while a
+permanently invalid payload (an `invalid_wakeup` 400, an undecodable wakeup) or
+a legacy cleanup message writes none, having no valid chain or feed to name.
+It records, per invocation, every storage operation the Worker ran: an identity
+read as its own `identity` operation, each Unknown readback as a `readback` of
+the operation that started it, and the AbandonPoisoned executor as
+`interactive`. Each operation has its races (connect, read, the pipelined
+transaction with its steps and the gate's reply time, rollback, close). Each
+race carries the bound that limited it at its start (`limit`, `budget_ms`) and
+how it ended (`completed`, `timeout`, `cancelled`, `driver`, `database` or
+`dropped`). The line also carries:
+- the first failing race as `primary`, with the pre-primary validity snapshot
+  `prior` and up to four later `failures`;
+- `durations` of storage (the union of every storage interval, overlap counted
+  once), R2 (with its body reads), the FeedEvents POST, the alert exchange, the
+  publisher fetch, the queue sends, and `idle`, the wall less their union;
+- each consume's actions with coarse checkpoints (a drain's page offset, a
+  preparation's phase), its chain (the feed id, the polling generation, step,
+  attempts and a 16-hex digest of the Queue's message id), its continuation
+  send and its FeedEvents POST counts;
+- `scheduled_lag_ms`, from the cron's scheduled time, which the adapter passes
+  to `/dispatch` and `/cleanup` in the private `x-poll-scheduled-ms` header (a
+  diagnostic that bounds nothing; the public fetch stays 404).
+
+Strings are restricted to `[A-Za-z0-9_.-]` and every integer is bounded, so a
+line is never over 8,192 bytes. Past that ceiling the detail is trimmed in a
+fixed order: operation races, then operation entries, then actions, then
+`slowest`, then failures beyond two; then the compact form, at most 6,349
+bytes by `storage_phases/compact_width.py`'s model. An implementation defect
+writes `storage_phases_overflow` instead, never a larger line.
+
+`storage_phases/storage_phases_parse.py` reads the lines: it tags each failed
+row with every evidence class it matches (C0 cron lag, C1 connection setup, C2
+cumulative budget exhaustion, C3/C3' a slow write or a lost acknowledgement, C4
+R2, C5 gate contention, C6 idle, C7 overshoot, U unresolved). Each tag uses
+exactly the inputs that class names, and a missing input reads `unknown`. It
+also classifies send provenance (retry, ambiguous, unknown, exact) and gives
+the retry wait only between two retained consecutive attempts. Exact page
+repetition, prepare redo, skipped rows and the outcome of an `unknown`
+checkpoint are never inferred. A storage-fixture build also logs
+`storage_phases_cost` (each line's bytes and build time) for the runtime
+maxima control.
+
 ## Commands
 
 From the repository root, with the pinned Yarn, Node and Rust toolchains:
@@ -232,6 +283,8 @@ for suite in lifecycle digest-runtime review-regressions alerting \
 done
 (cd Server/FeedPollingWorker && worker-build --release --out-dir /tmp/opencast-polling-fixture-build --features storage-fixture)
 node Server/FeedPollingWorker/tests/hooks-runtime.mjs
+OPENCAST_POLLING_FIXTURE_BUILD=/tmp/opencast-polling-fixture-build STORAGE_PHASES_ROWS_OUT=/tmp/opencast-storage-phases-rows.jsonl node Server/FeedPollingWorker/tests/witness-runtime.mjs
+STORAGE_PHASES_ROWS=/tmp/opencast-storage-phases-rows.jsonl python3 -B -m unittest discover -s Server/FeedPollingWorker/storage_phases
 ```
 
 The crate is entirely `wasm32`-gated, so host `cargo test` builds an empty
@@ -263,4 +316,13 @@ fire by `controls.stall`). The polling Worker's `storage-fixture` feature
 and the core's close delay behind private fixture routes;
 `harness(..., { pollingBuild })` runs that build. `hooks-runtime.mjs`
 qualifies every hook (`OPENCAST_POLLING_FIXTURE_BUILD` names the fixture
-build, default `/tmp/opencast-polling-fixture-build`).
+build, default `/tmp/opencast-polling-fixture-build`). `witness-runtime.mjs`
+reads each invocation's `storage_phases` line against the wire proxy's own
+witness of the same operations: the guards, the intervals, the zero-budget and
+Date-jump controls, send provenance through the parser, and the runtime maxima.
+It has no default build: `OPENCAST_POLLING_FIXTURE_BUILD` must name the
+fixture build (its close-delay and maxima cases fail without it), and
+`WITNESS_CASES=<names>` runs a subset. `STORAGE_PHASES_ROWS_OUT=<file>` saves
+every line it read; the parser's unittest discovery with
+`STORAGE_PHASES_ROWS=<file>` then also parses each of them (the round trip;
+without it that one test is skipped).
