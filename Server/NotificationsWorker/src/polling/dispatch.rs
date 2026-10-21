@@ -332,7 +332,13 @@ pub(super) async fn send_alert(target: &AlertTarget, draft: AlertDraft<'_>) -> R
     Ok(AlertReply { delivered, status })
 }
 
-async fn send_alert_safely(target: &AlertTarget, draft: AlertDraft<'_>) -> AlertReply {
+async fn send_alert_safely(
+    timer: &crate::storage_witness::Timer,
+    target: &AlertTarget,
+    draft: AlertDraft<'_>,
+) -> AlertReply {
+    // The whole exchange, the reply body included: the segment no timer bounds.
+    let _alert = timer.span(crate::storage_witness::Category::Alert);
     match send_alert(target, draft).await {
         Ok(reply) => reply,
         Err(error) => {
@@ -416,7 +422,9 @@ async fn alert_dispatch(
     let lane_name = lane(env);
     let delivered = match transition {
         Some(super::policy::StallAlert::Armed) => {
-            let reply = send_alert_safely(&target, AlertDraft::Armed { lane: &lane_name }).await;
+            let reply =
+                send_alert_safely(&db.timer(), &target, AlertDraft::Armed { lane: &lane_name })
+                    .await;
             let marker = reply
                 .delivered
                 .then_some(("armed", AlertMarker::Armed { now: t }));
@@ -440,6 +448,7 @@ async fn alert_dispatch(
                 false
             } else {
                 let reply = send_alert_safely(
+                    &db.timer(),
                     &target,
                     AlertDraft::Onset {
                         lane: &lane_name,
@@ -483,6 +492,7 @@ async fn alert_dispatch(
                 false
             } else {
                 let reply = send_alert_safely(
+                    &db.timer(),
                     &target,
                     AlertDraft::Hourly {
                         lane: &lane_name,
@@ -512,6 +522,7 @@ async fn alert_dispatch(
         }
         Some(super::policy::StallAlert::Recovery { stall_since: since }) => {
             let reply = send_alert_safely(
+                &db.timer(),
                 &target,
                 AlertDraft::Recovery {
                     lane: &lane_name,
@@ -587,7 +598,14 @@ async fn reserve(
         .collect();
     let count = messages.len();
     for chunk in messages.chunks(100) {
-        if send(env, chunk.to_vec(), 0).await.is_err() {
+        let sent = db
+            .timer()
+            .time(
+                crate::storage_witness::Category::Queue,
+                send(env, chunk.to_vec(), 0),
+            )
+            .await;
+        if sent.is_err() {
             // The send outcome is unknown. Lapse only still-unsettled work;
             // the next tick repairs it and any delivered copy stays valid.
             let lost: Vec<_> = chunk

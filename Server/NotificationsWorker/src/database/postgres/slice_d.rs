@@ -6,6 +6,7 @@ pub(in crate::database) async fn execute(
     operation: &Operation,
     cancel: Cancellation,
     deadline: u64,
+    races: Option<&witness::Races>,
 ) -> Result<Response> {
     crate::database::slice_d::validate(operation)?;
     let started = now();
@@ -21,20 +22,10 @@ pub(in crate::database) async fn execute(
         }
         error
     };
-    if deadline <= started {
-        return Err(classify(Failure::new(Kind::Deadline, Phase::Connect)));
-    }
     // Dropping an unfinished connect closes its socket through the owned guard.
-    let connect = Database::connect(env, cancel, started);
-    let expiry = delay(deadline - started);
-    pin_mut!(connect, expiry);
-    let mut db = match select(connect, expiry).await {
-        Either::Left((connected, _)) => connected.map_err(classify)?,
-        Either::Right(((), _)) => {
-            return Err(classify(Failure::new(Kind::Deadline, Phase::Connect)));
-        }
-    };
-    db.cap_deadline(deadline);
+    let mut db = open(env, cancel, started, deadline, races)
+        .await
+        .map_err(classify)?;
     let mut metrics = Metrics::default();
     let result = if read {
         db.read_statement(&descriptor.statements[0])

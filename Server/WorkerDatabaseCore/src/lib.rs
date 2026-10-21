@@ -4,6 +4,7 @@
 #[cfg(all(target_arch = "wasm32", feature = "postgres"))]
 pub mod database;
 pub mod lifecycle;
+pub mod race;
 #[cfg(all(target_arch = "wasm32", feature = "postgres"))]
 mod socket;
 

@@ -38,7 +38,8 @@ pub async fn consume(env: &Env, db: &crate::database::Authority, generation: i64
     // Scratch has no database row. An aborted upload is never an object; this only
     // removes one completed by a scan that crashed before deleting it.
     let scratch =
-        crate::observation::scratch::sweep(&bucket, Date::now().as_millis(), &budget).await;
+        crate::observation::scratch::sweep(&bucket, Date::now().as_millis(), &budget, &db.timer())
+            .await;
     if let Ok(removed @ 1..) = scratch.as_ref() {
         console_warn!("{}", json!({"event":"feed_scratch_swept","count":removed}));
     }

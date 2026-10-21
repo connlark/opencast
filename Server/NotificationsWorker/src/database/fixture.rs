@@ -86,6 +86,14 @@ pub(crate) async fn handle(
     }
     let _cancellation_log = CancellationLog(request.inner().signal());
     let arrived = opencast_worker_database_core::database::now();
+    if let Some(route) = request
+        .url()?
+        .path()
+        .strip_prefix("/witness/")
+        .map(str::to_owned)
+    {
+        return super::fixture_witness::handle(&route, request, env, arrived).await;
+    }
     if request.url()?.path() == "/adapter" {
         return super::fixture_adapter::handle(request, env).await;
     }
@@ -128,7 +136,7 @@ pub(crate) async fn handle(
             // The enclosing run_with_abort_signal owns and synchronously drops
             // this entire future. Database's CloseGuard closes its JS transport
             // even when the abandoned request promise is never polled again.
-            postgres::execute(&env, &input.request, cancel::token(), deadline).await
+            postgres::execute(&env, &input.request, cancel::token(), deadline, None).await
         }
         _ => return worker::Response::error("unavailable_storage_authority", 503),
     };

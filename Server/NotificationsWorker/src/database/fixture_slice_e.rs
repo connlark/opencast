@@ -59,6 +59,8 @@ pub(crate) async fn handle(
             &env.bucket("SLICE_BUCKET")?,
             50,
             None,
+            // The fixture's own orchestration is never witnessed.
+            &crate::storage_witness::Timer::default(),
             |operation| collect_operation(&env, operation),
         )
         .await?;
@@ -93,6 +95,7 @@ pub(crate) async fn handle(
                 &input.request,
                 super::fixture::cancel::token(),
                 deadline,
+                None,
             )
             .await
         }
@@ -142,6 +145,7 @@ async fn collect_operation(env: &worker::Env, operation: Operation) -> worker::R
             pending().boxed_local().shared(),
             opencast_worker_database_core::database::now()
                 + opencast_worker_database_core::lifecycle::HANDLER_MS,
+            None,
         )
         .await
         .map_err(|failure| {

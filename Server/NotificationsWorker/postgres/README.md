@@ -87,6 +87,12 @@ held COMMIT or unit replies, operation-wide releases, handshake holds, the
 interactive hold, scheduled isolate stalls) are qualified by
 `tests/postgres/test-timing.mjs`, with the storage-fixture build's close delay
 and core cancellation (`/test/close-delay`, `/test/cancel-core`).
+The storage-fixture build's `/witness/<route>` runs one semantic operation
+under the storage timing witness with that core cancellation and answers with
+its `storage_phases` line; `tests/postgres/test-witness.mjs` fires both
+cancellation forms on an ordinary write and on the interactive executor, and
+fails, cancels and drops a readback after a lost COMMIT acknowledgement on
+slice_d's and slice_f's executors.
 The local roles' passwords are fixed constants, not secrets.
 
 The schema preserves the final D1 table/column/key/check/index definitions for

@@ -20,10 +20,17 @@ pub struct Timings {
     /// Parses of the response body: 1 for a probe or a single full pass, 2
     /// when a changed probe replayed it; 0 when no body was parsed.
     pub passes: Rc<Cell<u8>>,
+    /// The storage timing witness's handle (inert unless the step has one).
+    pub witness: crate::storage_witness::Timer,
 }
 impl Timings {
     pub fn publisher_span(&self) -> Span {
-        Span::new(self.publisher.clone(), Some(self.sink.clone()))
+        let mut span = Span::new(self.publisher.clone(), Some(self.sink.clone()));
+        span.witness = Some(
+            self.witness
+                .span(crate::storage_witness::Category::Publisher),
+        );
+        span
     }
 }
 /// A scan's storage flag and the time it has been set, a write still pending
@@ -60,6 +67,8 @@ pub struct Span {
     total: Rc<Cell<u64>>,
     excluded: Option<Rc<Cell<u64>>>,
     excluded_start: u64,
+    // The fetch's interval for the witness; recorded when this span drops.
+    witness: Option<crate::storage_witness::TimerSpan>,
 }
 impl Span {
     pub fn new(total: Rc<Cell<u64>>, excluded: Option<Rc<Cell<u64>>>) -> Self {
@@ -69,6 +78,7 @@ impl Span {
             total,
             excluded,
             excluded_start,
+            witness: None,
         }
     }
 }

@@ -15,7 +15,10 @@ export default class extends WorkerEntrypoint {
     const path = controller.cron === '* * * * *' ? 'dispatch'
       : controller.cron === '*/2 * * * *' ? 'cleanup' : undefined;
     if (!path) throw new Error('unknown_poll_cron');
-    const response = await invoke(this.ctx, this.env, new Request(`https://polling.invalid/${path}`, { method: 'POST' }));
+    // The scheduled time is a diagnostic for the storage timing witness only.
+    const response = await invoke(this.ctx, this.env, new Request(`https://polling.invalid/${path}`, {
+      method: 'POST', headers: { 'x-poll-scheduled-ms': String(controller.scheduledTime) },
+    }));
     if (!response.ok) throw new Error(`poll_${path}_failed`);
     await response.text();
   }

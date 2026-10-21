@@ -259,10 +259,30 @@ pub async fn execute(
     authority: &super::Authority,
     operation: Operation,
 ) -> worker::Result<Response> {
-    match authority.bound(operation.id(), operation.is_read()).await? {
+    let (backend, guard) = authority
+        .bound_op(
+            operation.id(),
+            operation.is_read(),
+            if matches!(operation, Operation::AbandonPoisoned { .. }) {
+                super::witness::Role::Interactive
+            } else {
+                super::witness::Role::Operation
+            },
+        )
+        .await?;
+    match backend {
         super::authority::Backend::Postgres(env) => {
             let (cancel, deadline) = authority.context();
-            let result = execute_postgres(env, &operation, cancel.clone(), deadline).await;
+            let result = execute_postgres(
+                env,
+                &operation,
+                cancel.clone(),
+                deadline,
+                guard.races().as_ref(),
+            )
+            .await;
+            // Recorded before any readback and before the public string.
+            guard.settle(&result);
             if result
                 .as_ref()
                 .is_err_and(|failure| failure.outcome == Outcome::Unknown)
@@ -279,7 +299,16 @@ pub async fn execute(
                     }]
                 };
                 for readback in readbacks {
-                    let observed = execute_postgres(env, &readback, cancel.clone(), deadline).await;
+                    let readback_guard = authority.readback_op(readback.id(), &guard);
+                    let observed = execute_postgres(
+                        env,
+                        &readback,
+                        cancel.clone(),
+                        deadline,
+                        readback_guard.races().as_ref(),
+                    )
+                    .await;
+                    readback_guard.settle(&observed);
                     // A digest of the witness rows, never a row value.
                     let witness = observed.as_ref().ok().map(|response| {
                         crate::database_identity::witness(
@@ -308,8 +337,9 @@ pub(super) async fn execute_postgres(
     operation: &Operation,
     cancel: opencast_worker_database_core::database::Cancellation,
     deadline: u64,
+    races: Option<&super::witness::Races>,
 ) -> Result<Response> {
-    super::postgres::slice_e::execute(env, operation, cancel, deadline).await
+    super::postgres::slice_e::execute(env, operation, cancel, deadline, races).await
 }
 
 pub(super) mod readback {
@@ -328,7 +358,7 @@ pub(super) mod readback {
         ExpireEvents { now, .. } => (vec![("n_event", "expires_at<=?1")], vec![integer(*now)]),
         TerminalizeEvents { now, .. } => (vec![("n_event", "fanout_complete=1 AND (terminal_at IS NULL OR terminal_at=?1)")], vec![integer(*now)]),
         ExpireDeletedInstalls { now, .. } => (vec![("n_deleted_install", "expires_at<=?1")], vec![integer(*now)]),
-        RetireEvent { source, event, .. } => (vec![("n_delivery_member", "source=?1 AND event_id=?2"), ("n_delivery", "source=?1 AND event_id=?2"), ("n_group_member", "source=?1 AND event_id=?2"), ("n_event", "source=?1 AND event_id=?2")], vec![text(source), text(event)]),
+        RetireEvent { source, event, .. } => (vec![("n_delivery_member", "source=?1 AND event_id=?2"), ("n_delivery", "(source=?1 AND event_id=?2) OR delivery_id IN(SELECT delivery_id FROM n_delivery_member WHERE source=?1 AND event_id=?2)"), ("n_group_member", "source=?1 AND event_id=?2"), ("n_event", "source=?1 AND event_id=?2")], vec![text(source), text(event)]),
         ExpireLegacyBridges { now, .. } => (vec![("n_legacy_bridge", "expires_at<=?1")], vec![integer(*now)]),
         ExpireTickets { now, .. } => (vec![("n_requester_ticket", "expires_at<=?1")], vec![integer(*now)]),
         RetireJobInterests { before, .. } => (vec![("n_job_interest", "register_before<?1")], vec![integer(*before)]),

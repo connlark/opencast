@@ -11,6 +11,7 @@ pub(in crate::database) async fn read(
     cancel: Cancellation,
     deadline: u64,
     system: bool,
+    races: Option<&witness::Races>,
 ) -> Result<Value> {
     let statement = Statement {
         sql: postgres_identity_sql(system),
@@ -23,19 +24,9 @@ pub(in crate::database) async fn read(
     };
     statement.validate().map_err(read_failure)?;
     let started = now();
-    if deadline <= started {
-        return Err(read_failure(Failure::new(Kind::Deadline, Phase::Connect)));
-    }
-    let connect = Database::connect(env, cancel, started);
-    let expiry = delay(deadline - started);
-    pin_mut!(connect, expiry);
-    let mut db = match select(connect, expiry).await {
-        Either::Left((connected, _)) => connected.map_err(read_failure)?,
-        Either::Right(((), _)) => {
-            return Err(read_failure(Failure::new(Kind::Deadline, Phase::Connect)));
-        }
-    };
-    db.cap_deadline(deadline);
+    let mut db = open(env, cancel, started, deadline, races)
+        .await
+        .map_err(read_failure)?;
     let result = db.read_statement(&statement).await;
     let (_spans, _cleanup) = db.finish().await;
     let row = result?

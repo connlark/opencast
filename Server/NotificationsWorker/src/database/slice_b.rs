@@ -302,10 +302,26 @@ pub async fn execute(
     authority: &super::Authority,
     operation: Operation,
 ) -> worker::Result<Response> {
-    match authority.bound(operation.id(), operation.is_read()).await? {
+    let (backend, guard) = authority
+        .bound_op(
+            operation.id(),
+            operation.is_read(),
+            super::witness::Role::Operation,
+        )
+        .await?;
+    match backend {
         super::authority::Backend::Postgres(env) => {
             let (cancel, deadline) = authority.context();
-            let result = execute_postgres(env, &operation, cancel.clone(), deadline).await;
+            let result = execute_postgres(
+                env,
+                &operation,
+                cancel.clone(),
+                deadline,
+                guard.races().as_ref(),
+            )
+            .await;
+            // Recorded before any readback and before the public string.
+            guard.settle(&result);
             result.map_err(|failure| {
                 worker::Error::RustError(format!(
                     "storage_{}_{:?}_{:?}",
@@ -322,6 +338,7 @@ pub(super) async fn execute_postgres(
     operation: &Operation,
     cancel: opencast_worker_database_core::database::Cancellation,
     deadline: u64,
+    races: Option<&super::witness::Races>,
 ) -> Result<Response> {
-    super::postgres::slice_b::execute(env, operation, cancel, deadline).await
+    super::postgres::slice_b::execute(env, operation, cancel, deadline, races).await
 }

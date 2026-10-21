@@ -25,6 +25,7 @@ export const M={
  manifest:s=>s.startsWith('INSERT INTO n_snapshot_ref'),
  sendAuthority:s=>s.startsWith('SELECT')&&s.includes('attempt_token_generation=(SELECT token_generation'),
  fanout:s=>s.startsWith('UPDATE n_event SET fanout_cursor='),
+ retire:s=>s.startsWith('DELETE FROM n_group_member WHERE source=$1'),
  register:s=>s.startsWith('INSERT INTO devices('),
  sync:s=>s.startsWith('UPDATE feed_subscriptions s SET notifications_enabled=0')||s.startsWith('INSERT INTO feed_subscriptions('),
  readObject:s=>s.startsWith('SELECT sha256,bytes FROM n_snapshot'),
@@ -49,7 +50,7 @@ export const SIDE={
 export const PROXY_NAMES={
  polling:new Set(['d1','hang_claim','hang_bookkeeping','hang_redelivery_stat','origin_status_d1','before_publish','stale_generation','stale_epoch','before_settle','stale_settle','after_settle','after_publish']),
  observation:new Set(['watchdog_read_hang','watchdog_read','before_checkpoint','after_checkpoint','before_publish','publish_rollback','stale_eligibility','stale_owner','lost_lease','manifest_reserve']),
- delivery:new Set(['reclaim_fanout','fail_batch','final_send_off']),
+ delivery:new Set(['reclaim_fanout','fail_batch','final_send_off','fail_retire']),
  cancellation:new Set(),
 };
 export const isStorageHook=(entry,name)=>PROXY_NAMES[entry]?.has(String(name).replace(/^always:/,''))??false;
@@ -123,6 +124,7 @@ export function match(state,op){
     if(f==='reclaim_fanout')return exact('D-reclaim_fanout','side-write-first',{side:'reclaim_fanout'});
     if(f==='fail_batch')return exact('D-fail_batch','fail-in-place');
    }
+   if(op.type==='txn'&&any(M.retire)&&f==='fail_retire')return exact('D-fail_retire','fail-in-place');
   }
   const h=state.auth;
   if(h&&op.type==='txn'&&((h.path==='/v1/devices/register'&&M.register(app[0]??''))||(h.path==='/v1/subscriptions/sync'&&any(M.sync))))

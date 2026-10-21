@@ -1,4 +1,5 @@
 mod production;
+use crate::race::{self, Limit, RaceEnd, RaceSink, RaceStart, RaceStatus};
 pub use production::{Reply, TransactionReply};
 
 use crate::{
@@ -10,7 +11,7 @@ use futures_util::{
     FutureExt, TryStreamExt,
 };
 use serde::Serialize;
-use std::{future::Future, rc::Rc, time::Duration};
+use std::{cell::Cell, future::Future, rc::Rc, time::Duration};
 use tokio_postgres::{
     types::{ToSql, Type},
     Client, Row,
@@ -46,6 +47,12 @@ pub struct Database {
     transaction_end: Option<u64>,
     rollback_error: Option<Failure>,
     pub spans: Vec<Span>,
+    // The witness only: which bound set handler_end, and where races go.
+    handler_window_end: u64,
+    authority_cap: Option<u64>,
+    transaction_cap: Option<u64>,
+    sink: Option<Rc<dyn RaceSink>>,
+    race: Cell<Option<usize>>,
 }
 
 impl Database {
@@ -105,6 +112,11 @@ impl Database {
             handler_end: handler_start + lifecycle::HANDLER_MS,
             transaction_end: None,
             rollback_error: None,
+            handler_window_end: handler_start + lifecycle::HANDLER_MS,
+            authority_cap: None,
+            transaction_cap: None,
+            sink: None,
+            race: Cell::new(None),
             spans: vec![Span {
                 boundary: "connect",
                 elapsed_ms: now().saturating_sub(start),
@@ -112,6 +124,62 @@ impl Database {
                 submitted: true,
             }],
         })
+    }
+
+    /// Report this segment's races (from now on) to `sink`. Without a sink the
+    /// segment records nothing beyond its spans.
+    pub fn witness(&mut self, sink: Rc<dyn RaceSink>) {
+        self.sink = Some(sink);
+    }
+
+    /// The bound a race started now would hit first, and its budget.
+    fn bound(&self, local: u64, local_limit: Limit) -> (u64, Limit) {
+        race::binding(
+            now(),
+            (local, local_limit),
+            &[
+                (self.transaction_end, Limit::TransactionMs),
+                (self.transaction_cap, Limit::TransactionMs),
+                (Some(self.handler_window_end), Limit::HandlerEnd),
+                (self.authority_cap, Limit::AuthorityDeadline),
+            ],
+        )
+    }
+
+    fn race_start(&self, boundary: &'static str, cleanup: bool, steps_total: Option<u32>) {
+        let Some(sink) = &self.sink else { return };
+        let (budget_ms, limit) = if cleanup {
+            (lifecycle::CLOSE_MS, Limit::CloseMs)
+        } else {
+            self.bound(lifecycle::STATEMENT_MS, Limit::StatementMs)
+        };
+        let boundary = match boundary {
+            "query" | "execute" => "statement",
+            boundary => boundary,
+        };
+        self.race.set(Some(sink.start(RaceStart {
+            boundary,
+            limit,
+            budget_ms,
+            start_ms: now(),
+            steps_total,
+        })));
+    }
+
+    fn race_end<T>(&self, result: &Result<T, Failure>, submitted: bool) {
+        let (Some(sink), Some(race)) = (&self.sink, self.race.take()) else {
+            return;
+        };
+        let failure = result.as_ref().err();
+        sink.finish(
+            race,
+            RaceEnd {
+                end_ms: now(),
+                status: RaceStatus::of(failure),
+                submitted,
+                sqlstate: failure.and_then(|failure| failure.sqlstate.clone()),
+            },
+        );
     }
 
     fn phase(&self) -> Phase {
@@ -150,6 +218,18 @@ impl Database {
             cancelled.unwrap_or_else(|| self.cancel.clone())
         };
         let mut submitted = false;
+        if boundary != "transaction" {
+            self.race_start(boundary, cleanup, None);
+        }
+        // The sink learns of submission at the same first poll, so a race whose
+        // future is dropped before it ends still reads submitted.
+        let witness = self.sink.clone().zip(self.race.get());
+        let work = async move {
+            if let Some((sink, race)) = witness {
+                sink.submitted(race);
+            }
+            work.await
+        };
         let result = lifecycle::drive_tracked(
             &mut self.driver,
             work,
@@ -159,6 +239,7 @@ impl Database {
             &mut submitted,
         )
         .await;
+        self.race_end(&result, submitted);
         self.spans.push(Span {
             boundary,
             elapsed_ms: now().saturating_sub(start),
@@ -229,9 +310,19 @@ impl Database {
             guard,
             mut spans,
             rollback_error,
+            sink,
             ..
         } = self;
         let start = now();
+        let race = sink.as_ref().map(|sink| {
+            sink.start(RaceStart {
+                boundary: "close",
+                limit: Limit::CloseMs,
+                budget_ms: lifecycle::CLOSE_MS,
+                start_ms: start,
+                steps_total: None,
+            })
+        });
         // Query/execute/COMMIT consume ReadyForQuery. Observe any ready driver
         // error before deliberately closing the edge transport. The live pilot
         // observed a close error when driving Terminate/writable shutdown instead;
@@ -258,6 +349,18 @@ impl Database {
         )
         .await;
         drop(client);
+        if let (Some(sink), Some(race)) = (&sink, race) {
+            let failure = closed.as_ref().err();
+            sink.finish(
+                race,
+                RaceEnd {
+                    end_ms: now(),
+                    status: RaceStatus::of(failure),
+                    submitted: true,
+                    sqlstate: None,
+                },
+            );
+        }
         spans.push(Span {
             boundary: "close",
             submitted: true,

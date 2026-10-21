@@ -37,7 +37,7 @@ pub async fn collect_bounded(
     if !crate::database::control(db, "cleanup").await? {
         return Ok(0);
     }
-    collect_enabled(bucket, limit, budget, |operation| {
+    collect_enabled(bucket, limit, budget, &db.timer(), |operation| {
         slice_e::execute(db, operation)
     })
     .await
@@ -49,6 +49,7 @@ pub(crate) async fn collect_enabled<F, Fut>(
     bucket: &Bucket,
     limit: usize,
     budget: Option<&Budget>,
+    timer: &crate::storage_witness::Timer,
     mut execute: F,
 ) -> Result<usize>
 where
@@ -99,7 +100,10 @@ where
             continue;
         }
         // A failed delete keeps gc_claimed and is retried by the next sweep.
-        if bucket.delete(key).await.is_ok() {
+        let deleted = timer
+            .time(crate::storage_witness::Category::R2, bucket.delete(key))
+            .await;
+        if deleted.is_ok() {
             execute(EOperation::MarkDeleted { key: key.into() }).await?;
         }
     }

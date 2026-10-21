@@ -183,7 +183,14 @@ impl Pending {
         }
         if let Some(key) = scratch {
             // A crash before this delete leaves one object for the sweeper.
-            store.bucket.delete(key).await?;
+            store
+                .db
+                .timer()
+                .time(
+                    crate::storage_witness::Category::R2,
+                    store.bucket.delete(key),
+                )
+                .await?;
         }
         Ok(spool)
     }
@@ -208,18 +215,33 @@ pub async fn read(bucket: &Bucket, key: &str, offset: usize, length: usize) -> R
     Ok(bytes)
 }
 /// Completed scratch objects survive only a crash between copy and delete.
-pub async fn sweep(bucket: &Bucket, now_ms: u64, budget: &super::gc::Budget) -> Result<usize> {
+pub async fn sweep(
+    bucket: &Bucket,
+    now_ms: u64,
+    budget: &super::gc::Budget,
+    timer: &crate::storage_witness::Timer,
+) -> Result<usize> {
     if budget.expired() {
         return Ok(0);
     }
-    let listed = bucket.list().prefix(PREFIX).limit(100).execute().await?;
+    let listed = timer
+        .time(
+            crate::storage_witness::Category::R2,
+            bucket.list().prefix(PREFIX).limit(100).execute(),
+        )
+        .await?;
     let mut removed = 0;
     for object in listed.objects() {
         if budget.expired() {
             break;
         }
         if object.uploaded().as_millis() + 3_600_000 <= now_ms {
-            bucket.delete(object.key()).await?;
+            timer
+                .time(
+                    crate::storage_witness::Category::R2,
+                    bucket.delete(object.key()),
+                )
+                .await?;
             removed += 1;
         }
     }

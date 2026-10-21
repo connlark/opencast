@@ -6,11 +6,12 @@ pub(in crate::database) async fn execute(
     operation: &Operation,
     cancel: Cancellation,
     deadline: u64,
+    races: Option<&witness::Races>,
 ) -> Result<Response> {
     crate::database::slice_e::validate(operation)?;
     let started = now();
     if let Operation::AbandonPoisoned { feed, now } = operation {
-        return poison::execute(env, feed, *now, cancel, deadline).await;
+        return poison::execute(env, feed, *now, cancel, deadline, races).await;
     }
     let descriptor = describe(operation);
     // Validate before opening a socket or submitting any statement.
@@ -24,20 +25,10 @@ pub(in crate::database) async fn execute(
         }
         error
     };
-    if deadline <= started {
-        return Err(classify(Failure::new(Kind::Deadline, Phase::Connect)));
-    }
     // Dropping an unfinished connect closes its socket through the owned guard.
-    let connect = Database::connect(env, cancel, started);
-    let expiry = delay(deadline - started);
-    pin_mut!(connect, expiry);
-    let mut db = match select(connect, expiry).await {
-        Either::Left((connected, _)) => connected.map_err(classify)?,
-        Either::Right(((), _)) => {
-            return Err(classify(Failure::new(Kind::Deadline, Phase::Connect)));
-        }
-    };
-    db.cap_deadline(deadline);
+    let mut db = open(env, cancel, started, deadline, races)
+        .await
+        .map_err(classify)?;
     let mut metrics = Metrics::default();
     let result = if read {
         db.read_statement(&descriptor.statements[0])
@@ -121,6 +112,22 @@ const PRUNE_INTERESTS: &str = "WITH matched AS MATERIALIZED (SELECT j.install_id
 // Capture that cardinality under the gate before the actual feed deletion.
 const PRUNE_FEEDS: &str = "WITH matched AS MATERIALIZED (SELECT f.feed_id,1+(SELECT COUNT(*) FROM n_burst b WHERE b.feed_id=f.feed_id) AS d1_changes FROM n_feed f WHERE f.feed_id IN(SELECT feed_id FROM n_feed f WHERE no_interest_since<$1 AND NOT EXISTS(SELECT 1 FROM n_interest WHERE feed_id=f.feed_id AND enabled=1) AND NOT EXISTS(SELECT 1 FROM n_event WHERE feed_id=f.feed_id) AND NOT EXISTS(SELECT 1 FROM n_delivery WHERE interest_key=f.feed_id) AND NOT EXISTS(SELECT 1 FROM n_snapshot WHERE feed_id=f.feed_id) AND NOT EXISTS(SELECT 1 FROM n_observation WHERE feed_id=f.feed_id) ORDER BY no_interest_since LIMIT 100)),changed AS (DELETE FROM n_feed f USING matched m WHERE f.feed_id=m.feed_id RETURNING m.d1_changes) SELECT COALESCE(SUM(d1_changes),0)::bigint AS d1_changes FROM changed";
 
+// A grouped delivery carries member rows of several events; its own
+// (source,event_id) is the anchor's. The anchor's RetireEvent keeps that
+// delivery, and so its event, while another event's member remains: skip it
+// here so it holds none of the 20 slots until its last member retires.
+// TerminalizeEvents stamps up to 100 events with one terminal_at; ties break
+// on (source,event_id) in byte order, never the heap's, so the order repeats.
+const READ_TERMINAL_EVENTS: &str = r#"SELECT source,event_id FROM n_event WHERE terminal_at<$1 AND NOT EXISTS(SELECT 1 FROM n_delivery d JOIN n_delivery_member m ON m.delivery_id=d.delivery_id WHERE d.source=n_event.source AND d.event_id=n_event.event_id AND NOT(m.source=n_event.source AND m.event_id=n_event.event_id)) ORDER BY terminal_at,source COLLATE "C",event_id COLLATE "C" LIMIT 20"#;
+
+// Remove the event's member rows, then every terminal delivery left with no
+// member of another event: its own deliveries and the ones it was merely a
+// member of, so a grouped delivery goes with its last member. One statement:
+// the n_delivery_member foreign-key check runs at the statement's end, after
+// the CTE's deletions. The outer DELETE reads the pre-statement snapshot, so
+// it excludes this event's own members instead of relying on the CTE.
+const RETIRE_DELIVERIES: &str = "WITH gone AS (DELETE FROM n_delivery_member WHERE source=$1 AND event_id=$2 RETURNING delivery_id) DELETE FROM n_delivery d WHERE (d.source=$1 AND d.event_id=$2 OR d.delivery_id IN(SELECT delivery_id FROM gone)) AND d.state NOT IN('pending','leased','uncertain','poisoned') AND NOT EXISTS(SELECT 1 FROM n_delivery_member m WHERE m.delivery_id=d.delivery_id AND NOT(m.source=$1 AND m.event_id=$2))";
+
 fn live(alias: &str) -> String {
     // A reused page is protected by *any* live manifest, not only its original
     // upload lease. Abandoned recovery evidence has its own seven-day grace.
@@ -147,8 +154,8 @@ fn describe(operation: &Operation) -> Descriptor {
         ReadDueDeliveries { now, episode } => Descriptor { statements: vec![Statement { sql: format!(r###"SELECT delivery_id,source,interest_generation FROM n_delivery WHERE source IN({sources}) AND state IN('pending','uncertain') AND failures<10 AND next_attempt_at<=$1 AND expires_at>$1{paused_clause} ORDER BY next_attempt_at LIMIT 100"###, sources=if *episode { "'feed_polling'" } else { "'ad_analysis','remote_transcription'" }, paused_clause=if *episode { r###" AND NOT EXISTS(SELECT 1 FROM n_feed f WHERE f.feed_id=n_delivery.interest_key AND f.send_paused=1)"### } else { "" }), parameters: vec![integer(*now)], count: CountRule::Any }] },
         TerminalizeEvents { now } => Descriptor { statements: vec![Statement { sql: r###"UPDATE n_event SET terminal_at=$1,envelope_json='{}' WHERE ctid IN(SELECT e.ctid FROM n_event e WHERE e.fanout_complete=1 AND e.terminal_at IS NULL AND NOT EXISTS(SELECT 1 FROM n_delivery d WHERE d.source=e.source AND d.event_id=e.event_id AND d.state IN('pending','leased','uncertain','poisoned')) LIMIT 100)"###.into(), parameters: vec![integer(*now)], count: CountRule::Any }] },
         ExpireDeletedInstalls { now } => Descriptor { statements: vec![Statement { sql: r###"DELETE FROM n_deleted_install WHERE fence IN(SELECT fence FROM n_deleted_install WHERE expires_at<=$1 LIMIT 100)"###.into(), parameters: vec![integer(*now)], count: CountRule::Any }] },
-        ReadTerminalEvents { before } => Descriptor { statements: vec![Statement { sql: r###"SELECT source,event_id FROM n_event WHERE terminal_at<$1 ORDER BY terminal_at LIMIT 20"###.into(), parameters: vec![integer(*before)], count: CountRule::Any }] },
-        RetireEvent { source, event } => Descriptor { statements: vec![Statement { sql: r###"DELETE FROM n_delivery_member WHERE source=$1 AND event_id=$2"###.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }, Statement { sql: r###"DELETE FROM n_delivery WHERE source=$1 AND event_id=$2 AND state NOT IN('pending','leased','uncertain','poisoned')"###.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }, Statement { sql: r###"DELETE FROM n_group_member WHERE source=$1 AND event_id=$2"###.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }, Statement { sql: r###"DELETE FROM n_event WHERE source=$1 AND event_id=$2 AND NOT EXISTS(SELECT 1 FROM n_delivery WHERE source=$1 AND event_id=$2)"###.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }] },
+        ReadTerminalEvents { before } => Descriptor { statements: vec![Statement { sql: READ_TERMINAL_EVENTS.into(), parameters: vec![integer(*before)], count: CountRule::Any }] },
+        RetireEvent { source, event } => Descriptor { statements: vec![Statement { sql: RETIRE_DELIVERIES.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }, Statement { sql: r###"DELETE FROM n_group_member WHERE source=$1 AND event_id=$2"###.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }, Statement { sql: r###"DELETE FROM n_event WHERE source=$1 AND event_id=$2 AND NOT EXISTS(SELECT 1 FROM n_delivery WHERE source=$1 AND event_id=$2)"###.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }] },
         ExpireLegacyBridges { now } => Descriptor { statements: vec![Statement { sql: r###"DELETE FROM n_legacy_bridge WHERE ctid IN(SELECT ctid FROM n_legacy_bridge WHERE expires_at<=$1 LIMIT 100)"###.into(), parameters: vec![integer(*now)], count: CountRule::Any }] },
         ExpireTickets { now } => Descriptor { statements: vec![Statement { sql: r###"DELETE FROM n_requester_ticket WHERE ticket_digest IN(SELECT ticket_digest FROM n_requester_ticket WHERE expires_at<=$1 LIMIT 100)"###.into(), parameters: vec![integer(*now)], count: CountRule::Any }] },
         RetireJobInterests { before } => Descriptor { statements: vec![Statement { sql: r###"DELETE FROM n_job_interest WHERE ctid IN(SELECT ctid FROM n_job_interest j WHERE register_before<$1 AND NOT EXISTS(SELECT 1 FROM n_event WHERE interest_id=j.interest_id) AND NOT EXISTS(SELECT 1 FROM n_delivery WHERE interest_key=j.interest_id) LIMIT 100)"###.into(), parameters: vec![integer(*before)], count: CountRule::Any }] },
@@ -202,21 +209,12 @@ mod poison {
         timestamp: i64,
         cancel: Cancellation,
         deadline: u64,
+        races: Option<&witness::Races>,
     ) -> Result<Response> {
         let started = now();
-        if deadline <= started {
-            return Err(Failure::new(Kind::Deadline, Phase::Connect));
-        }
-        let connect = Database::connect(env, cancel, started);
-        let expiry = delay(deadline - started);
-        pin_mut!(connect, expiry);
-        let mut db = match select(connect, expiry).await {
-            Either::Left((connected, _)) => connected?,
-            Either::Right(((), _)) => return Err(Failure::new(Kind::Deadline, Phase::Connect)),
-        };
-        db.cap_deadline(deadline);
+        let mut db = super::open(env, cancel, started, deadline, races).await?;
         let transaction_started = now();
-        db.cap_deadline(
+        db.cap_transaction(
             transaction_started
                 .saturating_add(opencast_worker_database_core::lifecycle::TRANSACTION_MS),
         );

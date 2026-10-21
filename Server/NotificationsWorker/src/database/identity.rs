@@ -60,13 +60,25 @@ async fn read(
     authority: &Authority,
     backend: &Backend<'_>,
     pin: &pure::Pin,
+    parent: Option<&super::witness::OpGuard>,
 ) -> Result<Live, Unreadable> {
     match backend {
         Backend::Postgres(env) => {
             let (cancel, deadline) = authority.context();
-            let row = super::postgres::identity::read(env, cancel, deadline, pin.reads_system())
-                .await
-                .map_err(Unreadable::Postgres)?;
+            let child = authority.identity_op(parent);
+            let row = super::postgres::identity::read(
+                env,
+                cancel,
+                deadline,
+                pin.reads_system(),
+                child.races().as_ref(),
+            )
+            .await;
+            match &row {
+                Ok(_) => child.done(1),
+                Err(failure) => child.failed(failure),
+            }
+            let row = row.map_err(Unreadable::Postgres)?;
             let text = |name: &str| row[name].as_str().map(String::from);
             match (text("database"), text("schema")) {
                 (Some(name), Some(schema)) => Ok(Live {
@@ -82,8 +94,13 @@ async fn read(
     }
 }
 
-async fn check(authority: &Authority, backend: &Backend<'_>) -> Check {
+async fn check(
+    authority: &Authority,
+    backend: &Backend<'_>,
+    parent: Option<&super::witness::OpGuard>,
+) -> Check {
     let Some(pin_text) = authority.identity_pin() else {
+        authority.note_identity("ungated");
         return Check::Ungated;
     };
     let key = format!("{}|{}", pure::backend_code(), pin_text.unwrap_or(""));
@@ -94,6 +111,7 @@ async fn check(authority: &Authority, backend: &Backend<'_>) -> Check {
             .map(|(_, verdict)| verdict.clone())
     });
     if let Some(verdict) = cached {
+        authority.note_identity("cached");
         return Check::Decided(verdict);
     }
     let environment = authority.identity_environment();
@@ -106,19 +124,24 @@ async fn check(authority: &Authority, backend: &Backend<'_>) -> Check {
         "schema": null,
         "fence": null,
     });
+    // A pin refused before any read is still this invocation's decision.
     let Some(pin) = pin_text.ok().and_then(pure::parse) else {
+        authority.note_identity("decided");
         return decide(key, Err(Reason::Pin), report);
     };
     if let Err(reason) = pure::admit(&pin, environment) {
+        authority.note_identity("decided");
         return decide(key, Err(reason), report);
     }
-    match read(authority, backend, &pin).await {
+    match read(authority, backend, &pin, parent).await {
         Ok(live) => {
+            authority.note_identity("decided");
             report["database"] = json!(live.database.text());
             report["schema"] = json!(live.schema);
             decide(key, pure::judge(&pin, &live), report)
         }
         Err(unreadable) => {
+            authority.note_identity("unreadable");
             report["verdict"] = json!("unreadable");
             report["reason"] = json!(match &unreadable {
                 Unreadable::Postgres(failure) => format!("{:?}", failure.kind),
@@ -144,8 +167,9 @@ pub(super) async fn admit(
     backend: &Backend<'_>,
     operation: &str,
     read: bool,
+    parent: Option<&super::witness::OpGuard>,
 ) -> worker::Result<()> {
-    match check(authority, backend).await {
+    match check(authority, backend, parent).await {
         Check::Ungated => Ok(()),
         Check::Decided(Verdict { accepted: true, .. }) => Ok(()),
         Check::Decided(_) => Err(worker::Error::RustError(format!(
@@ -162,7 +186,7 @@ pub(super) async fn admit(
 /// verdict), no gate lock, no write and no authentication.
 pub async fn readback(authority: &Authority) -> worker::Result<Value> {
     let backend = authority.backend()?;
-    Ok(match check(authority, &backend).await {
+    Ok(match check(authority, &backend, None).await {
         Check::Ungated => json!({
             "gated": false,
             "backend": pure::backend_code(),

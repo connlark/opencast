@@ -15,6 +15,8 @@ mod fixture_authority;
 mod fixture_slice_b;
 mod fixture_slice_c;
 mod fixture_slice_d;
+#[cfg(feature = "storage-fixture")]
+mod fixture_witness;
 pub mod observations;
 pub mod polling;
 mod postgres;
@@ -22,6 +24,7 @@ mod rows;
 pub mod slice_b;
 pub mod slice_c;
 pub mod slice_d;
+pub(crate) mod witness;
 
 use opencast_worker_database_core::{
     lifecycle::{Failure, Kind, Outcome, Phase},
@@ -120,10 +123,26 @@ pub async fn execute(
     authority: &self::Authority,
     operation: Operation,
 ) -> worker::Result<Response> {
-    match authority.bound(operation.id(), operation.is_read()).await? {
+    let (backend, guard) = authority
+        .bound_op(
+            operation.id(),
+            operation.is_read(),
+            witness::Role::Operation,
+        )
+        .await?;
+    match backend {
         self::authority::Backend::Postgres(env) => {
             let (cancel, deadline) = authority.context();
-            let result = execute_postgres(env, &operation, cancel.clone(), deadline).await;
+            let result = execute_postgres(
+                env,
+                &operation,
+                cancel.clone(),
+                deadline,
+                guard.races().as_ref(),
+            )
+            .await;
+            // Recorded before any readback and before the public string.
+            guard.settle(&result);
             result.map_err(|failure| {
                 worker::Error::RustError(format!(
                     "storage_{}_{:?}_{:?}",
@@ -144,8 +163,9 @@ pub(super) async fn execute_postgres(
     operation: &Operation,
     cancel: opencast_worker_database_core::database::Cancellation,
     deadline: u64,
+    races: Option<&witness::Races>,
 ) -> Result<Response> {
-    postgres::execute(env, operation, cancel, deadline).await
+    postgres::execute(env, operation, cancel, deadline, races).await
 }
 mod fixture_slice_e;
 mod fixture_slice_f;

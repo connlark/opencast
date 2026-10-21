@@ -121,6 +121,7 @@ impl ObserverSink {
             feed_id: probe.store.feed_id.clone(),
             storage: self.storage_pending.clone(),
             sink: self.timings.sink.clone(),
+            timer: self.timings.witness.clone(),
         })
     }
     /// Called immediately before each publisher request is sent. Until then a
@@ -170,7 +171,13 @@ impl ObserverSink {
             body.discard().await;
         }
         // A reader dropped mid-body leaves its upload only here.
-        scratch::abort(&self.spill).await;
+        self.timings
+            .witness
+            .time(
+                crate::storage_witness::Category::R2,
+                scratch::abort(&self.spill),
+            )
+            .await;
     }
 }
 fn enabled(env: &Env, name: &str) -> bool {

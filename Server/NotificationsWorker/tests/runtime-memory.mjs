@@ -46,6 +46,10 @@ export async function sampleRuntimeMemory(inspectorURL, targetName = 'notificati
     });
   }
   async function readMemory() {
+    // With the Runtime domain enabled, the inspector keeps the isolate's console
+    // messages for replay inside the very heap read here: drop them first, so a
+    // reading never counts this sampler's own retention of the Worker's logs.
+    await command('Runtime.discardConsoleEntries');
     const value = await command('Runtime.getHeapUsage');
     const wasm = await command('Runtime.evaluate', {
       contextId: contexts[0].id, expression: 'globalThis.__feedTransportAudit.wasmBytes ?? 0', returnByValue: true,

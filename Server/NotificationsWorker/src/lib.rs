@@ -11,6 +11,8 @@ pub mod database;
 mod database_identity;
 #[cfg(any(target_arch = "wasm32", test))]
 mod database_selection;
+mod storage_phases;
+mod storage_witness;
 
 #[cfg(all(feature = "storage-fixture", feature = "notification-entrypoint"))]
 compile_error!("storage-fixture must be built without notification-entrypoint");

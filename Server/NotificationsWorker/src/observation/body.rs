@@ -99,6 +99,8 @@ mod retained {
         pub feed_id: String,
         pub storage: Storage,
         pub sink: Rc<Cell<u64>>,
+        /// The storage timing witness's handle for the spill's R2 calls.
+        pub timer: crate::storage_witness::Timer,
     }
 
     /// Feeds every byte the parser reads into the accumulator. A full part is
@@ -136,6 +138,7 @@ mod retained {
                 Body::Spilled {
                     spill: self.spill,
                     bucket: self.scratch.bucket,
+                    timer: self.scratch.timer,
                     spilled: self.spilled,
                     tail,
                     object: None,
@@ -166,6 +169,7 @@ mod retained {
                 let (spill, scratch) = (this.spill.clone(), this.scratch.clone());
                 this.uploading = Some(Box::pin(async move {
                     let _span = Span::new(scratch.sink.clone(), None);
+                    let _r2 = scratch.timer.span(crate::storage_witness::Category::R2);
                     scratch::push_part(&spill, &scratch.bucket, &scratch.feed_id, part).await
                 }));
             }
@@ -183,6 +187,7 @@ mod retained {
         Spilled {
             spill: Spill,
             bucket: Bucket,
+            timer: crate::storage_witness::Timer,
             spilled: usize,
             tail: Vec<u8>,
             object: Option<String>,
@@ -196,14 +201,17 @@ mod retained {
             if let Body::Spilled {
                 spill,
                 bucket,
+                timer,
                 object,
                 ..
             } = self
             {
-                scratch::abort(&spill).await;
+                timer
+                    .time(crate::storage_witness::Category::R2, scratch::abort(&spill))
+                    .await;
                 if let Some(key) = object {
                     // Best effort: the cleanup cron sweeps a left object.
-                    Self::delete(&bucket, key).await;
+                    Self::delete(&bucket, &timer, key).await;
                 }
             }
         }
@@ -215,6 +223,7 @@ mod retained {
             if let Body::Spilled {
                 spill,
                 bucket,
+                timer,
                 spilled,
                 tail,
                 object: object @ None,
@@ -223,7 +232,12 @@ mod retained {
                 if !tail.is_empty() {
                     let part = std::mem::take(tail);
                     let length = part.len();
-                    scratch::push_final_part(spill, part).await?;
+                    timer
+                        .time(
+                            crate::storage_witness::Category::R2,
+                            scratch::push_final_part(spill, part),
+                        )
+                        .await?;
                     *spilled += length;
                 }
                 *object = spill
@@ -232,7 +246,11 @@ mod retained {
                     .map(str::to_string)
                     .ok_or_else(|| fault("scratch_missing"))
                     .map(Some)?;
-                scratch::complete(spill, bucket)
+                timer
+                    .time(
+                        crate::storage_witness::Category::R2,
+                        scratch::complete(spill, bucket),
+                    )
                     .await?
                     .ok_or_else(|| fault("scratch_missing"))?;
             }
@@ -241,14 +259,20 @@ mod retained {
         /// A reader over the whole body; a spilled body must be completed.
         pub fn reader(&self, storage: Storage) -> Result<BodyReader<'_>> {
             Ok(match self {
-                Body::Memory(bytes) => BodyReader::new(None, bytes, storage),
+                Body::Memory(bytes) => BodyReader::new(None, bytes, storage, Default::default()),
                 Body::Spilled {
                     bucket,
                     spilled,
                     tail,
                     object: Some(key),
+                    timer,
                     ..
-                } => BodyReader::new(Some((bucket.clone(), key.clone(), *spilled)), tail, storage),
+                } => BodyReader::new(
+                    Some((bucket.clone(), key.clone(), *spilled)),
+                    tail,
+                    storage,
+                    timer.clone(),
+                ),
                 Body::Spilled { object: None, .. } => return Err(fault("scratch_incomplete")),
             })
         }
@@ -265,15 +289,19 @@ mod retained {
         pub async fn delete_object(self) {
             if let Body::Spilled {
                 bucket,
+                timer,
                 object: Some(key),
                 ..
             } = self
             {
-                Self::delete(&bucket, key).await;
+                Self::delete(&bucket, &timer, key).await;
             }
         }
-        async fn delete(bucket: &Bucket, key: String) {
-            if bucket.delete(key).await.is_err() {
+        async fn delete(bucket: &Bucket, timer: &crate::storage_witness::Timer, key: String) {
+            let deleted = timer
+                .time(crate::storage_witness::Category::R2, bucket.delete(key))
+                .await;
+            if deleted.is_err() {
                 worker::console_warn!(
                     "{}",
                     serde_json::json!({"event":"feed_scratch_delete_failed"})
@@ -294,10 +322,17 @@ mod retained {
         offset: usize,
         storage: Storage,
         pending: Option<Pending<Vec<u8>>>,
+        timer: crate::storage_witness::Timer,
     }
     impl<'a> BodyReader<'a> {
-        fn new(object: Option<(Bucket, String, usize)>, tail: &'a [u8], storage: Storage) -> Self {
+        fn new(
+            object: Option<(Bucket, String, usize)>,
+            tail: &'a [u8],
+            storage: Storage,
+            timer: crate::storage_witness::Timer,
+        ) -> Self {
             Self {
+                timer,
                 object,
                 read: 0,
                 window: vec![],
@@ -335,7 +370,9 @@ mod retained {
                 };
                 if this.pending.is_none() {
                     let (bucket, key) = (bucket.clone(), key.clone());
+                    let timer = this.timer.clone();
                     this.pending = Some(Box::pin(async move {
+                        let _r2 = timer.span(crate::storage_witness::Category::R2);
                         scratch::read(&bucket, &key, offset, size).await
                     }));
                 }

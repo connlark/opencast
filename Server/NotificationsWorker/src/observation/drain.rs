@@ -31,6 +31,11 @@ pub async fn page(
         return Ok(());
     };
     let key = string(&observation, "snapshot_key");
+    // A page OFFSET inside this observation's manifest, never a page identity.
+    db.note(|witness, _| {
+        witness.checkpoint_start("drain", None, Some(int(&observation, "candidate_cursor")))
+    });
+    let r2 = db.timer().span(crate::storage_witness::Category::R2);
     let bytes = bucket
         .get(key)
         .execute()
@@ -40,6 +45,7 @@ pub async fn page(
         .ok_or_else(|| fault("snapshot_missing"))?
         .bytes()
         .await?;
+    r2.end();
     if checksum(&bytes) != string(&observation, "sha256") {
         return Err(fault("snapshot_integrity"));
     }
@@ -55,6 +61,7 @@ pub async fn page(
             start == cursor
         })
         .ok_or_else(|| fault("candidate_cursor"))?;
+    let r2 = db.timer().span(crate::storage_witness::Category::R2);
     let bytes = bucket
         .get(&page.key)
         .execute()
@@ -64,6 +71,7 @@ pub async fn page(
         .ok_or_else(|| fault("candidate_missing"))?
         .bytes()
         .await?;
+    r2.end();
     if checksum(&bytes) != page.sha256 || bytes.len() != page.bytes {
         return Err(fault("candidate_integrity"));
     }
@@ -99,7 +107,10 @@ pub async fn page(
         };
         records.push(serde_json::from_value(json!({"episode_id":candidate.episode_id,"event_id":event_id,"presentation_key":presentation_key,"first_observed_at":candidate.first_observed_at,"eligible_at":candidate.eligible_at,"expires_at":candidate.eligible_at+86400,"reason":candidate.reason,"fingerprint":candidate.fingerprint,"published_at":candidate.published_at,"metadata":display,"state":state}))?);
     }
-    storage::execute(
+    // The target is recorded before the write is awaited, so a delivery
+    // dropped mid-write keeps it as attempted, its outcome unknown.
+    db.note(|witness, _| witness.checkpoint_attempt("drain", None, Some(offset as i64)));
+    let drained = storage::execute(
         db,
         Operation::Drain {
             feed: feed_id.into(),
@@ -111,7 +122,9 @@ pub async fn page(
             records,
         },
     )
-    .await?;
+    .await;
+    db.note(|witness, _| witness.checkpoint_end());
+    drained?;
     mature(db, feed_id, lane).await?;
     Ok(())
 }
@@ -210,15 +223,26 @@ pub async fn outbox(db: &crate::database::Authority, env: &Env, feed_id: &str) -
                 "payload_json",
             ))));
         let request = Request::new_with_init("https://notification.invalid/v1/events", &init)?;
+        // The POST and its reply body, never the storage work that follows.
+        db.note(|witness, _| witness.context.posts.get_or_insert_with(Default::default).n += 1);
+        let posted = db.timer().span(crate::storage_witness::Category::Service);
         let result = service.fetch_request(request).await;
         match result {
             Ok(mut response) if response.status_code() == 200 || response.status_code() == 202 => {
                 let receipt: Value = response.json().await?;
+                posted.end();
                 if string(&receipt, "event_id") != event_id
                     || !wire::uuid(string(&receipt, "receipt_id"))
                     || !["accepted", "duplicate", "suppressed"]
                         .contains(&string(&receipt, "disposition"))
                 {
+                    db.note(|witness, _| {
+                        witness
+                            .context
+                            .posts
+                            .get_or_insert_with(Default::default)
+                            .retried += 1
+                    });
                     storage::execute(
                         db,
                         Operation::RetryOutbox {
@@ -231,6 +255,13 @@ pub async fn outbox(db: &crate::database::Authority, env: &Env, feed_id: &str) -
                     continue;
                 }
 
+                db.note(|witness, _| {
+                    witness
+                        .context
+                        .posts
+                        .get_or_insert_with(Default::default)
+                        .accepted += 1
+                });
                 storage::execute(
                     db,
                     Operation::AcceptOutbox {
@@ -242,6 +273,7 @@ pub async fn outbox(db: &crate::database::Authority, env: &Env, feed_id: &str) -
                 .count();
             }
             Ok(response) if response.status_code() == 409 => {
+                posted.end();
                 storage::execute(
                     db,
                     Operation::ConflictOutbox {
@@ -252,6 +284,14 @@ pub async fn outbox(db: &crate::database::Authority, env: &Env, feed_id: &str) -
                 .count();
             }
             _ => {
+                posted.end();
+                db.note(|witness, _| {
+                    witness
+                        .context
+                        .posts
+                        .get_or_insert_with(Default::default)
+                        .retried += 1
+                });
                 storage::execute(
                     db,
                     Operation::RetryOutbox {

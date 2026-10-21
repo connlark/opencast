@@ -411,10 +411,26 @@ pub async fn execute(
     authority: &super::Authority,
     operation: Operation,
 ) -> worker::Result<Response> {
-    match authority.bound(operation.id(), operation.is_read()).await? {
+    let (backend, guard) = authority
+        .bound_op(
+            operation.id(),
+            operation.is_read(),
+            super::witness::Role::Operation,
+        )
+        .await?;
+    match backend {
         super::authority::Backend::Postgres(env) => {
             let (cancel, deadline) = authority.context();
-            let result = execute_postgres(env, &operation, cancel.clone(), deadline).await;
+            let result = execute_postgres(
+                env,
+                &operation,
+                cancel.clone(),
+                deadline,
+                guard.races().as_ref(),
+            )
+            .await;
+            // Recorded before any readback and before the public string.
+            guard.settle(&result);
             if result
                 .as_ref()
                 .is_err_and(|failure| failure.outcome == Outcome::Unknown)
@@ -425,7 +441,16 @@ pub async fn execute(
                 // authorize a send/object deletion from a lost acknowledgement.
                 let readbacks = operation.readback();
                 for readback in readbacks {
-                    let observed = execute_postgres(env, &readback, cancel.clone(), deadline).await;
+                    let readback_guard = authority.readback_op(readback.id(), &guard);
+                    let observed = execute_postgres(
+                        env,
+                        &readback,
+                        cancel.clone(),
+                        deadline,
+                        readback_guard.races().as_ref(),
+                    )
+                    .await;
+                    readback_guard.settle(&observed);
                     // A digest of the witness rows, never a row value.
                     let witness = observed.as_ref().ok().map(|response| {
                         crate::database_identity::witness(
@@ -461,8 +486,9 @@ pub(super) async fn execute_postgres(
     operation: &Operation,
     cancel: opencast_worker_database_core::database::Cancellation,
     deadline: u64,
+    races: Option<&super::witness::Races>,
 ) -> Result<Response> {
-    super::postgres::slice_d::execute(env, operation, cancel, deadline).await
+    super::postgres::slice_d::execute(env, operation, cancel, deadline, races).await
 }
 
 // Full source projections: reject a missing, extra, null or mistyped field.

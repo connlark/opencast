@@ -99,22 +99,52 @@ pub async fn consume(
     db: crate::database::Authority,
 ) -> Result<Response> {
     let started = super::timing::now_ms();
-    let timings = super::timing::Timings::default();
+    // A bounded one-way digest of the Queue's own message id: the retry key.
+    let message_digest = message
+        .as_deref()
+        .map(|id| crate::observation::snapshot::checksum(id.as_bytes())[..16].to_owned());
+    let timings = super::timing::Timings {
+        witness: db.timer(),
+        ..Default::default()
+    };
+    let message_age_ms = enqueued_ms.map(|at| started.saturating_sub(at));
+    // The witness attributes a consume only to a message the step could run,
+    // by the same admission the exits below answer from: a permanently
+    // invalid payload or a legacy cleanup message writes no storage_phases
+    // line (no valid chain or feed to name).
+    let admitted = admission(&wake, &env);
+    let valid = admitted.is_ok();
+    if valid {
+        let chain = crate::storage_witness::Chain {
+            feed: wake.feed_id.clone(),
+            generation: wake.generation,
+            step: wake.step,
+            attempts,
+            message_digest,
+        };
+        db.note(|witness, _| {
+            witness.context.delivery_start = Some(started);
+            witness.context.chain = Some(chain);
+            witness.context.message_age_ms = message_age_ms;
+        });
+    }
     if !super::runtime::permitted_by_environment(&env) {
+        // The environment brake: an authorized exit before any storage call,
+        // written for a valid message like any other exit; its line reads
+        // outcome refused.
+        if valid {
+            db.note(|witness, _| {
+                witness.context.consume_outcome = Some("polling_disabled");
+                witness.context.consume_gated = true;
+            });
+        }
         return Response::error("polling_disabled", 503);
     }
-    if wake.schema_version != dispatch::SCHEMA_VERSION
-        || wake.environment != lane(&env)
-        || wake.generation < 1
-    {
-        return Response::error("invalid_wakeup", 400);
-    }
-    if wake.kind == "cleanup" {
+    match admitted {
+        Err(Inadmissible::Invalid) => return Response::error("invalid_wakeup", 400),
         // Compatibility with messages retained from the old cron.
-        return outcome("cleanup_ignored", None, None);
-    }
-    if wake.kind != "poll" || !wire::hex_id(&wake.feed_id) || wake.owner_epoch < 1 {
-        return Response::error("invalid_wakeup", 400);
+        Err(Inadmissible::LegacyCleanup) => return outcome("cleanup_ignored", None, None),
+        Ok(()) => {}
     }
     let claimed: Rc<RefCell<Option<Fence>>> = Default::default();
     let step_claimed = claimed.clone();
@@ -125,7 +155,9 @@ pub async fn consume(
         message,
         attempt: attempts,
     });
-    let step_db = db.capped_at(started.saturating_add(policy::STEP_DEADLINE_SECONDS * 1000));
+    let step_db = db
+        .capped_at(started.saturating_add(policy::STEP_DEADLINE_SECONDS * 1000))
+        .scoped(crate::database::witness::Scope::Step);
     let result = crate::invocation_owner::run_with_abort_signal_and_deadline(
         signal,
         async move {
@@ -247,7 +279,6 @@ pub async fn consume(
         );
     }
     let wall_ms = super::timing::now_ms().saturating_sub(started);
-    let message_age_ms = enqueued_ms.map(|at| started.saturating_sub(at));
     // Continuations and retries include deliberate delay. Only a first
     // delivery of a dispatcher wakeup has an undelayed send timestamp.
     let initial_queue_wait_ms = message_age_ms.filter(|_| wake.step == 0 && attempts == 1);
@@ -258,7 +289,14 @@ pub async fn consume(
     let passes = Some(timings.passes.get()).filter(|n| *n > 0);
     let plain = matches!(name, "unchanged" | "not_modified");
     let sampled = plain && policy::sampled(&wake.feed_id, wake.generation);
-    if !plain || sampled || wall_ms > 5000 || initial_queue_wait_ms.is_some_and(|ms| ms > 120_000) {
+    let gated =
+        !plain || sampled || wall_ms > 5000 || initial_queue_wait_ms.is_some_and(|ms| ms > 120_000);
+    db.note(|witness, _| {
+        witness.context.publisher_ms = Some(timings.publisher.get());
+        witness.context.consume_outcome = Some(name);
+        witness.context.consume_gated = gated;
+    });
+    if gated {
         console_log!(
             "{}",
             json!({"event":"poll_delivery","outcome":name,"feed":wake.feed_id,"origin":*timings.origin.borrow(),"step":wake.step,"attempts":attempts,"message_age_ms":message_age_ms,"initial_queue_wait_ms":initial_queue_wait_ms,"due_lag_seconds":due_lag_seconds,"wall_ms":wall_ms,"claim_ms":timings.claim.get(),"publisher_fetch_ms":timings.publisher.get(),"via":timings.via.get(),"passes":passes,"storage_ms":wall_ms.saturating_sub(timings.claim.get()).saturating_sub(timings.publisher.get()),"sample":if plain && wall_ms<=5000 && initial_queue_wait_ms.is_none_or(|ms|ms<=120_000) {policy::SUCCESS_LOG_SAMPLE} else {1}})
@@ -290,6 +328,33 @@ async fn release(
     .await?;
     Ok(())
 }
+/// Why a delivered message is not one the step could run.
+enum Inadmissible {
+    /// A permanently invalid payload: answered invalid_wakeup, 400.
+    Invalid,
+    /// A legacy cleanup message: answered cleanup_ignored.
+    LegacyCleanup,
+}
+
+/// The one admission the consume exits answer from, in their order: the
+/// payload's schema, environment and generation; a legacy cleanup message;
+/// the kind, feed id and owner epoch.
+fn admission(wake: &dispatch::Wakeup, env: &Env) -> std::result::Result<(), Inadmissible> {
+    if wake.schema_version != dispatch::SCHEMA_VERSION
+        || wake.environment != lane(env)
+        || wake.generation < 1
+    {
+        return Err(Inadmissible::Invalid);
+    }
+    if wake.kind == "cleanup" {
+        return Err(Inadmissible::LegacyCleanup);
+    }
+    if wake.kind != "poll" || !wire::hex_id(&wake.feed_id) || wake.owner_epoch < 1 {
+        return Err(Inadmissible::Invalid);
+    }
+    Ok(())
+}
+
 fn outcome(name: &str, via: Option<&str>, passes: Option<u8>) -> Result<Response> {
     Response::from_json(&json!({ "outcome": name, "via": via, "passes": passes }))
 }
@@ -375,6 +440,7 @@ async fn step(
     } else {
         return settle_idle(&db, &fence).await;
     };
+    db.note(|witness, now| witness.action_start(action, now));
     let mut response = observation::runtime::execute(
         &format!("/{action}"),
         &fence.feed,
@@ -387,6 +453,7 @@ async fn step(
         200 => {}
         // Memory admission pressure is never a handling failure.
         429 => {
+            db.note(|witness, now| witness.action_end("scan_busy", "yielded", None, now));
             stat(&db, crate::database::polling::Counter::ScanBusy).await?;
             let view = crate::feed_scan_admission::FeedScanPermit::view();
             console_log!(
@@ -406,15 +473,27 @@ async fn step(
         }
         // Another scan owns the feed. Look again when its lease can end.
         409 => {
+            db.note(|witness, now| witness.action_end("scan_held", "yielded", None, now));
             let delay = (int(&row, "lease_until") - t).clamp(5, 180);
             return proceed(&env, &db, &fence, &wake, delay, "scan_held").await;
         }
         _ => return Err(Error::RustError("poll_step_failed".into())),
     }
     if action != "scan" && action != "prepare" {
+        db.note(|witness, now| witness.action_end("continued", "completed", None, now));
         return proceed(&env, &db, &fence, &wake, 0, "continued").await;
     }
     let status: Value = response.json().await?;
+    let result = string(&status, "result").to_owned();
+    if !matches!(result.as_str(), "staged" | "idle" | "") {
+        // A deferred origin yields to its cooldown; every other result ends here.
+        let status = if result == "origin_deferred" {
+            "yielded"
+        } else {
+            "completed"
+        };
+        db.note(|witness, now| witness.action_end(&result, status, None, now));
+    }
     match string(&status, "result") {
         // The unchanged statement settled schedule and generation together.
         "not_modified" | "unchanged" => {
@@ -477,6 +556,15 @@ async fn step(
             let delay = waiting
                 .map(|w| int(&w, "processing_next_at").max(int(&w, "processing_until")) - now())
                 .unwrap_or(5);
+            // An idle preparation yields to its remaining wait; a staged one
+            // completed its step.
+            db.note(|witness, now| {
+                if result == "idle" || delay > 0 {
+                    witness.action_end(&result, "yielded", Some(delay.max(0)), now)
+                } else {
+                    witness.action_end(&result, "completed", None, now)
+                }
+            });
             proceed(&env, &db, &fence, &wake, delay, "staged").await
         }
     }
@@ -484,6 +572,7 @@ async fn step(
 
 /// Nothing is due for this generation any more.
 async fn settle_idle(db: &crate::database::Authority, fence: &Fence) -> Result<&'static str> {
+    db.note(|witness, now| witness.action_start("settle", now));
     let changed = database::execute(
         db,
         Operation::SettleIdle {
@@ -495,8 +584,10 @@ async fn settle_idle(db: &crate::database::Authority, fence: &Fence) -> Result<&
     .count();
     if changed == 0 {
         fence.rejected(db).await?;
+        db.note(|witness, now| witness.action_end("obsolete", "completed", None, now));
         return Ok("obsolete");
     }
+    db.note(|witness, now| witness.action_end("settled", "completed", None, now));
     Ok("settled")
 }
 
@@ -528,6 +619,29 @@ async fn proceed(
     }
     let mut next = wake.clone();
     next.step += 1;
-    dispatch::send(env, vec![next], delay as u32).await?;
+    let sent_step = next.step;
+    // Uncertain until the send's outcome is observed: a drop mid-send leaves it so.
+    db.note(|witness, _| {
+        witness.context.sent = Some(crate::storage_witness::Sent {
+            step: sent_step,
+            delay_s: delay,
+            result: "uncertain",
+        })
+    });
+    let sent = db
+        .timer()
+        .time(
+            crate::storage_witness::Category::Queue,
+            dispatch::send(env, vec![next], delay as u32),
+        )
+        .await;
+    db.note(|witness, _| {
+        if let Some(record) = witness.context.sent.as_mut() {
+            // An error from the Queue does not prove the message absent: a send
+            // that failed after enqueueing it delivers anyway.
+            record.result = if sent.is_ok() { "ok" } else { "uncertain" };
+        }
+    });
+    sent?;
     Ok(name)
 }

@@ -80,6 +80,7 @@ pub(super) async fn execute(
     operation: &Operation,
     cancel: Cancellation,
     deadline: u64,
+    races: Option<&witness::Races>,
 ) -> Result<Response> {
     validate(operation)?;
     let started = now();
@@ -95,20 +96,10 @@ pub(super) async fn execute(
         }
         error
     };
-    if deadline <= started {
-        return Err(classify(Failure::new(Kind::Deadline, Phase::Connect)));
-    }
     // Dropping an unfinished connect closes its socket through the owned guard.
-    let connect = Database::connect(env, cancel, started);
-    let expiry = delay(deadline - started);
-    pin_mut!(connect, expiry);
-    let mut db = match select(connect, expiry).await {
-        Either::Left((connected, _)) => connected.map_err(classify)?,
-        Either::Right(((), _)) => {
-            return Err(classify(Failure::new(Kind::Deadline, Phase::Connect)));
-        }
-    };
-    db.cap_deadline(deadline);
+    let mut db = open(env, cancel, started, deadline, races)
+        .await
+        .map_err(classify)?;
     let mut metrics = Metrics::default();
     let result = if read {
         db.read_statement(&descriptor.statements[0])
@@ -171,3 +162,49 @@ pub(super) async fn execute(
 }
 pub(super) mod slice_e;
 pub(super) mod slice_f;
+
+/// The segment's connection, capped by `deadline`; an expired deadline submits
+/// nothing. The witness records ONE connect race for the operation: the
+/// authority's expiry and the core's CONNECT_MS race are one record.
+pub(in crate::database) async fn open(
+    env: &worker::Env,
+    cancel: Cancellation,
+    started: u64,
+    deadline: u64,
+    races: Option<&witness::Races>,
+) -> Result<Database> {
+    let race = races.map(|races| (races, races.connect(started, deadline)));
+    let ended = |failure: Option<&Failure>, submitted: bool| {
+        if let Some((races, race)) = race {
+            races.connected(race, failure, submitted);
+        }
+    };
+    if deadline <= started {
+        let failure = Failure::new(Kind::Deadline, Phase::Connect);
+        ended(Some(&failure), false);
+        return Err(failure);
+    }
+    let connect = Database::connect(env, cancel, started);
+    let expiry = delay(deadline - started);
+    pin_mut!(connect, expiry);
+    let mut db = match select(connect, expiry).await {
+        Either::Left((Ok(db), _)) => {
+            ended(None, true);
+            db
+        }
+        Either::Left((Err(failure), _)) => {
+            ended(Some(&failure), true);
+            return Err(failure);
+        }
+        Either::Right(((), _)) => {
+            let failure = Failure::new(Kind::Deadline, Phase::Connect);
+            ended(Some(&failure), true);
+            return Err(failure);
+        }
+    };
+    db.cap_deadline(deadline);
+    if let Some(races) = races {
+        db.witness(races.sink());
+    }
+    Ok(db)
+}

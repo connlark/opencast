@@ -7,10 +7,12 @@ let timestamp = 1800000000000;
 let fault;
 const enqueued=[];
 const trace=[];
-// The binary's per-send APNs witness lines, with the console level each used.
-const witnesses=[];
+// The binary's per-send APNs witness lines, with the console level each used,
+// and the cron's maintenance lines: its summary and its two failure warnings.
+const witnesses=[],maintenance=[];
 for(const level of ['log','warn','error']){const native=console[level].bind(console);console[level]=(...args)=>{
-  try{const line=JSON.parse(args[0]);if(line?.event==='notification_apns_send')witnesses.push({level,...line});}catch{}
+  try{const line=JSON.parse(args[0]);if(line?.event==='notification_apns_send')witnesses.push({level,...line});if(line?.event==='notification_reconciliation')maintenance.push({level,line:line.event});}catch{}
+  if(typeof args[0]==='string'&&/^notification (retire|reconciliation) failed/.test(args[0]))maintenance.push({level,line:args[0]});
   native(...args);
 };}
 // The storage hooks act on the wire (tests/postgres/proxy.mjs), armed through
@@ -51,6 +53,7 @@ export default class extends Worker {
     if(path==='/test/queue-trace')return Response.json(trace);
     if(path==='/test/enqueued')return Response.json(enqueued);
     if(path==='/test/apns-witnesses')return Response.json(witnesses);
+    if(path==='/test/maintenance')return Response.json(maintenance);
     if (path === '/test/clock') { timestamp = Number(await request.text()) * 1000; return new Response('ok'); }
     if (path === '/test/queue') {
       const original=this.env.APNS_CERT;

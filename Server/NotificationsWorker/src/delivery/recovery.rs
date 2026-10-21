@@ -127,6 +127,9 @@ pub async fn reconcile(env: &Env, db: crate::database::Authority) -> Result<()> 
     // it is user erasure, independent of the periodic cleanup feature switch.
     slice_e::execute(&db, EOperation::ExpireDeletedInstalls { now: t }).await?;
     if crate::database::permitted(env, &db, "cleanup").await? {
+        // One event's failed retirement must not stall the others or the
+        // housekeeping below; the event stays terminal for a later pass.
+        let mut failed = 0;
         for e in slice_e::execute(
             &db,
             EOperation::ReadTerminalEvents {
@@ -136,14 +139,21 @@ pub async fn reconcile(env: &Env, db: crate::database::Authority) -> Result<()> 
         .await?
         .rows()
         {
-            slice_e::execute(
+            if slice_e::execute(
                 &db,
                 EOperation::RetireEvent {
                     source: string(&e, "source").into(),
                     event: string(&e, "event_id").into(),
                 },
             )
-            .await?;
+            .await
+            .is_err()
+            {
+                failed += 1;
+            }
+        }
+        if failed > 0 {
+            worker::console_warn!("notification retire failed count={}", failed);
         }
     }
     if crate::database::permitted(env, &db, "cleanup").await? {

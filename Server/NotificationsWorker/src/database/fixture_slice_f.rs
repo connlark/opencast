@@ -84,8 +84,14 @@ pub(crate) async fn handle(
             // The enclosing run_with_abort_signal owns and synchronously drops
             // this entire future. Database's CloseGuard closes its JS transport
             // even when the abandoned request promise is never polled again.
-            postgres::slice_f::execute(&env, &operation, pending().boxed_local().shared(), deadline)
-                .await
+            postgres::slice_f::execute(
+                &env,
+                &operation,
+                pending().boxed_local().shared(),
+                deadline,
+                None,
+            )
+            .await
         }
         _ => return worker::Response::error("unavailable_storage_authority", 503),
     };

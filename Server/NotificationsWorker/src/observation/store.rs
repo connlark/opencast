@@ -284,6 +284,7 @@ impl Store {
             .await?
             .first()
             .ok_or_else(|| fault("snapshot_unverified"))?;
+        let r2 = self.db.timer().span(crate::storage_witness::Category::R2);
         let bytes = self
             .bucket
             .get(key)
@@ -294,6 +295,7 @@ impl Store {
             .ok_or_else(|| fault("snapshot_body_missing"))?
             .bytes()
             .await?;
+        r2.end();
         if bytes.len() as i64 != int(&row, "bytes") || checksum(&bytes) != string(&row, "sha256") {
             return Err(fault("snapshot_integrity"));
         }
@@ -302,6 +304,7 @@ impl Store {
     /// Page descriptors came from a verified immutable manifest. Avoid a database
     /// lookup per read; the page body remains checked against its exact digest.
     pub async fn read(&self, page: &Page) -> Result<Vec<u8>> {
+        let r2 = self.db.timer().span(crate::storage_witness::Category::R2);
         let object = self
             .bucket
             .get(&page.key)
@@ -316,6 +319,7 @@ impl Store {
             .ok_or_else(|| fault("snapshot_body_missing"))?
             .bytes()
             .await?;
+        r2.end();
         if bytes.len() != page.bytes || checksum(&bytes) != page.sha256 {
             return Err(fault("snapshot_integrity"));
         }
@@ -372,6 +376,8 @@ impl Store {
         Ok(page)
     }
     async fn upload(&self, page: &Page, bytes: Vec<u8>) -> Result<()> {
+        let timer = self.db.timer();
+        let r2 = timer.span(crate::storage_witness::Category::R2);
         let created = self
             .bucket
             .put(&page.key, bytes)
@@ -382,9 +388,11 @@ impl Store {
             })
             .execute()
             .await?;
+        r2.end();
         if created.is_none() {
             // A lost upload response may leave the immutable key present. A
             // retry verifies it rather than overwriting its content/version.
+            let r2 = timer.span(crate::storage_witness::Category::R2);
             let existing = self
                 .bucket
                 .get(&page.key)
@@ -399,15 +407,18 @@ impl Store {
                 .ok_or_else(|| fault("snapshot_body_missing"))?
                 .bytes()
                 .await?;
+            r2.end();
             if checksum(&bytes) != page.sha256 {
                 return Err(fault("snapshot_immutable_conflict"));
             }
         }
+        let r2 = timer.span(crate::storage_witness::Category::R2);
         let head = self
             .bucket
             .head(&page.key)
             .await?
             .ok_or_else(|| fault("snapshot_head_missing"))?;
+        r2.end();
         if head.size() as usize != page.bytes {
             return Err(fault("snapshot_head_size"));
         }
@@ -684,7 +695,13 @@ impl Store {
             .await?;
         self.flush().await?;
         self.release_unused().await?;
-        if slice_b::execute(
+        let phase = preparation.phase();
+        // The checkpoint this transaction writes names the NEXT phase. It is
+        // recorded before the write is awaited (a dropped delivery keeps it as
+        // attempted, its outcome unknown); its status is that write's outcome.
+        self.db
+            .note(|witness, _| witness.checkpoint_attempt("prepare", Some(phase), None));
+        let checkpointed = slice_b::execute(
             &self.db,
             BOperation::Checkpoint {
                 scan: self.storage_scan(),
@@ -693,10 +710,9 @@ impl Store {
                 now: now(),
             },
         )
-        .await?
-        .count()
-            == 0
-        {
+        .await;
+        self.db.note(|witness, _| witness.checkpoint_end());
+        if checkpointed?.count() == 0 {
             if let Some(poll) = &self.poll {
                 poll.rejected(&self.db).await?;
             }

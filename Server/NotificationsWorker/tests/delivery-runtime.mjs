@@ -342,6 +342,102 @@ try {
    await sql("DELETE FROM n_delivery WHERE interest_key IN(?,?)",pausedFeed,activeFeed).run();
    await sql("DELETE FROM n_feed WHERE feed_id IN(?,?)",pausedFeed,activeFeed).run();
  });
+ // Event retirement on the cron. A grouped delivery's own (source,event_id) is
+ // its anchor event's and it carries member rows of several events, whose
+ // n_delivery_member.delivery_id references it with NO ACTION. Every seeded
+ // terminal_at is older than the suite's own (all >= T), so these events come
+ // first in ReadTerminalEvents' order.
+ const DAY=86400;
+ const reconcile=async()=>{const r=await worker.fetch('https://fixture.invalid/test/reconcile',{method:'POST'});assert.equal(r.status,200,await r.text());};
+ const maintenance=async()=>(await worker.fetch('https://fixture.invalid/test/maintenance')).json();
+ // The first SQLSTATE of each RetireEvent transaction on the wire that met an
+ // error; its n_group_member statement is the same before and after the fix.
+ const retireErrors=()=>storage.testStorage('notifications')({op:'witness'}).operations.filter(o=>o.sqlstate!==null&&o.statements.some(s=>s.startsWith('DELETE FROM n_group_member WHERE source=$1'))).map(o=>o.sqlstate);
+ const fireCount=()=>storage.testStorage('notifications')({op:'witness'}).fires.filter(f=>f.hook==='D-fail_retire').length;
+ const terminalEvent=(id,terminal)=>sql("INSERT INTO n_event(source,event_id,schema_version,kind,payload_digest,occurred_at,eligible_at,expires_at,receipt_id,fanout_complete,terminal_at) VALUES('feed_polling',?,1,'episode','digest',?,?,?,?,1,?)",id,terminal-DAY,terminal-DAY,terminal,'receipt-'+id,terminal).run();
+ const sentDelivery=(id,anchor,terminal,members)=>sql("INSERT INTO n_delivery(delivery_id,presentation_id,install_id,install_epoch,interest_key,interest_generation,state,expires_at,next_attempt_at,apns_id,collapse_id,source,event_id,terminal_at,member_count) VALUES(?,?,'retire',1,'retire',1,'accepted',?,?,?,?,'feed_polling',?,?,?)",id,'presentation-'+id,terminal,terminal-DAY,'apns-'+id,'collapse-'+id,anchor,terminal,members).run();
+ const member=(delivery,event)=>sql("INSERT INTO n_delivery_member(delivery_id,source,event_id,install_id,install_epoch,interest_generation) VALUES(?,'feed_polling',?,'retire',1,1)",delivery,event).run();
+ const left=async(events,deliveries)=>({
+   events:(await sql(`SELECT event_id FROM n_event WHERE event_id IN(${events.map(()=>'?').join(',')}) ORDER BY event_id`,...events).all()).results.map(r=>r.event_id),
+   deliveries:(await sql(`SELECT delivery_id FROM n_delivery WHERE delivery_id IN(${deliveries.map(()=>'?').join(',')}) ORDER BY delivery_id`,...deliveries).all()).results.map(r=>r.delivery_id),
+   members:(await sql(`SELECT delivery_id,event_id FROM n_delivery_member WHERE delivery_id IN(${deliveries.map(()=>'?').join(',')}) ORDER BY delivery_id,event_id`,...deliveries).all()).results.map(r=>`${r.delivery_id}/${r.event_id}`),
+ });
+ await sql("INSERT INTO n_install(install_id,epoch,enabled) VALUES('retire',1,1)").run();
+ await check('a grouped delivery anchor waits for its other member and never trips the member foreign key',async()=>{
+   // A anchors the delivery and is 31 days terminal; B, its other member, one day.
+   const A='retire-anchor',B='retire-member',grouped='retire-grouped',X=T;
+   await terminalEvent(A,X-31*DAY);await terminalEvent(B,X-DAY);
+   await sentDelivery(grouped,A,X-31*DAY,2);await member(grouped,A);await member(grouped,B);
+   await clock(X);await control('cleanup',1);
+   let seen=retireErrors().length,lines=(await maintenance()).length;await reconcile();
+   // main's SQL: A's RetireEvent fails on B's member row (23503), every minute.
+   assert.deepEqual(retireErrors().slice(seen),[],'no RetireEvent fails');
+   assert.deepEqual((await maintenance()).slice(lines),[{level:'log',line:'notification_reconciliation'}]);
+   assert.deepEqual(await left([A,B],[grouped]),{events:[A,B],deliveries:[grouped],members:[`${grouped}/${A}`,`${grouped}/${B}`]});
+   // 31 days later B retires; A, skipped when the pass read, follows on the next.
+   await clock(X+31*DAY);seen=retireErrors().length;await reconcile();
+   assert.deepEqual(retireErrors().slice(seen),[]);
+   assert.deepEqual(await left([A,B],[grouped]),{events:[A],deliveries:[grouped],members:[`${grouped}/${A}`]});
+   seen=retireErrors().length;await reconcile();
+   assert.deepEqual(retireErrors().slice(seen),[]);
+   assert.deepEqual(await left([A,B],[grouped]),{events:[],deliveries:[],members:[]});
+ });
+ await check('events tied on terminal_at retire in (source,event_id) order, a grouped member before or after its anchor',async()=>{
+   // TerminalizeEvents stamps up to 100 events with one terminal_at. Of these
+   // four tied events, member a sorts before its anchor b; anchor c sorts
+   // before its member d. Seeded in reverse, so heap order is not that order.
+   const X=T+31*DAY,at=X-32*DAY,g1='retire-tie-1',g2='retire-tie-2';
+   const [a,b,c,d]=['retire-tie-a-member','retire-tie-b-anchor','retire-tie-c-anchor','retire-tie-d-member'];
+   for(const id of [d,c,b,a])await terminalEvent(id,at);
+   await sentDelivery(g2,c,at,2);await member(g2,d);await member(g2,c);
+   await sentDelivery(g1,b,at,2);await member(g1,b);await member(g1,a);
+   await clock(X);await control('cleanup',1);
+   // Both anchors wait while their member's row remains. The one-shot fault
+   // fails the head of the order, a; d retires and leaves g2 to c.
+   const fired=fireCount(),lines=(await maintenance()).length;
+   await fault('fail_retire');await reconcile();
+   assert.equal(fireCount(),fired+1);
+   assert.deepEqual((await maintenance()).slice(lines),[{level:'warn',line:'notification retire failed count=1'},{level:'log',line:'notification_reconciliation'}]);
+   assert.deepEqual(await left([a,b,c,d],[g1,g2]),{events:[a,b,c],deliveries:[g1,g2],members:[`${g1}/${a}`,`${g1}/${b}`,`${g2}/${c}`]});
+   // Member first: a deletes only its member row and leaves g1 to b. Anchor
+   // first: c, skipped while d's row remained, now retires with g2.
+   let seen=retireErrors().length;await reconcile();
+   assert.deepEqual(retireErrors().slice(seen),[]);
+   assert.deepEqual(await left([a,b,c,d],[g1,g2]),{events:[b],deliveries:[g1],members:[`${g1}/${b}`]});
+   seen=retireErrors().length;await reconcile();
+   assert.deepEqual(retireErrors().slice(seen),[]);
+   assert.deepEqual(await left([a,b,c,d],[g1,g2]),{events:[],deliveries:[],members:[]});
+ });
+ await check('a delivery goes with its last member when its anchor already retired',async()=>{
+   // The anchor's event and member rows are gone; C's member row is the last.
+   const C='retire-last-member',orphan='retire-orphan',X=T+31*DAY;
+   await terminalEvent(C,X-31*DAY);
+   await sentDelivery(orphan,'retire-retired-anchor',X-31*DAY,2);await member(orphan,C);
+   await clock(X);await control('cleanup',1);const seen=retireErrors().length;await reconcile();
+   assert.deepEqual(retireErrors().slice(seen),[]);
+   // main's SQL deletes only deliveries anchored on C: this one would outlive
+   // its last member with no event left to retire it.
+   assert.deepEqual(await left([C,'retire-retired-anchor'],[orphan]),{events:[],deliveries:[],members:[]});
+ });
+ await check('a failed retirement leaves the rest of the pass, the housekeeping and the summary running',async()=>{
+   const first='retire-faulted',next='retire-next',X=T+31*DAY;
+   await terminalEvent(first,X-33*DAY);await sentDelivery(first,first,X-33*DAY,1);await member(first,first);
+   await terminalEvent(next,X-32*DAY);await sentDelivery(next,next,X-32*DAY,1);await member(next,next);
+   // ExpireTickets runs after the retire loop.
+   await sql("INSERT INTO n_requester_ticket(ticket_digest,producer,operation_id,requester_ref,issued_at,expires_at,environment) VALUES('retire-ticket','ad_analysis','retire-operation','requester',?,?,'development')",X-DAY,X-1).run();
+   await clock(X);await control('cleanup',1);const fired=fireCount();let lines=(await maintenance()).length;
+   // One-shot: the first RetireEvent transaction (the older event's) fails in place.
+   await fault('fail_retire');await reconcile();
+   assert.equal(fireCount(),fired+1);
+   // main's code: the error left reconcile() and scheduled maintenance warned instead.
+   assert.deepEqual((await maintenance()).slice(lines),[{level:'warn',line:'notification retire failed count=1'},{level:'log',line:'notification_reconciliation'}]);
+   assert.deepEqual(await left([first,next],[first,next]),{events:[first],deliveries:[first],members:[`${first}/${first}`]});
+   assert.equal((await sql("SELECT COUNT(*) AS n FROM n_requester_ticket WHERE ticket_digest='retire-ticket'").first()).n,0);
+   lines=(await maintenance()).length;await reconcile();
+   assert.deepEqual((await maintenance()).slice(lines),[{level:'log',line:'notification_reconciliation'}]);
+   assert.deepEqual(await left([first,next],[first,next]),{events:[],deliveries:[],members:[]});
+   await control('cleanup',0);await clock(T);await sql("DELETE FROM n_install WHERE install_id='retire'").run();
+ });
  await check('real Queue consumers repair a lost enqueue and expired lease from storage',async()=>{
    await sql("UPDATE n_delivery SET state='expired',lease_id=NULL,lease_until=NULL,terminal_at=? WHERE state IN('pending','uncertain','leased')",T+86400).run();
    await sql('UPDATE n_event SET fanout_complete=1,lease_id=NULL,lease_until=NULL').run();

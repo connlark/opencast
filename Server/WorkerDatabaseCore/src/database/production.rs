@@ -50,6 +50,14 @@ impl Database {
     /// deadline then bounds every later statement, transaction and poll budget.
     pub fn cap_deadline(&mut self, until: u64) {
         self.handler_end = self.handler_end.min(until);
+        self.authority_cap = Some(self.authority_cap.map_or(until, |cap| cap.min(until)));
+    }
+
+    /// The same narrowing as `cap_deadline`, for a caller's own transaction
+    /// window (the witness names it `transaction_ms`, not the authority).
+    pub fn cap_transaction(&mut self, until: u64) {
+        self.handler_end = self.handler_end.min(until);
+        self.transaction_cap = Some(self.transaction_cap.map_or(until, |cap| cap.min(until)));
     }
 
     /// Pure reads have no mutation outcome. A caller cannot use this method for
@@ -108,6 +116,9 @@ impl Database {
         let client = self.client.clone();
         let timings = Rc::new(RefCell::new(Vec::new()));
         let completed = timings.clone();
+        let steps_total = u32::try_from(statements.len() + 3).ok();
+        self.race_start("transaction", false, steps_total);
+        let witness = self.sink.clone().zip(self.race.get());
         let result = self
             .operation("transaction", Phase::Commit, false, None, async move {
                 let mut steps = vec![
@@ -133,9 +144,18 @@ impl Database {
                     .map(|(sql, parameters, phase, boundary)| {
                         let client = client.clone();
                         let completed = completed.clone();
+                        let witness = witness.clone();
                         async move {
                             let started = now();
                             let reply = query(&client, sql, parameters, phase).await;
+                            if let (Some((sink, race)), Ok(reply)) = (&witness, &reply) {
+                                // The gate's wait survives a later failure of the race.
+                                let gate_wait_us = (boundary == "gate")
+                                    .then(|| reply.rows.first())
+                                    .flatten()
+                                    .and_then(|row| row.try_get::<_, i64>("gate_wait_us").ok());
+                                sink.step(*race, boundary, now(), gate_wait_us);
+                            }
                             completed.borrow_mut().push(Span {
                                 boundary,
                                 elapsed_ms: now().saturating_sub(started),

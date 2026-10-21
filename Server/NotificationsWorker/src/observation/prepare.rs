@@ -59,6 +59,10 @@ pub struct Preparation {
     merge: MergeJob,
 }
 impl Preparation {
+    /// The phase the next step runs; a checkpoint names it (the witness reads it).
+    pub(crate) fn phase(&self) -> i64 {
+        self.phase as i64
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         previous: Manifest,
@@ -450,6 +454,10 @@ pub async fn step_fenced(
     else {
         return Ok(None);
     };
+    let phase = preparation.phase as i64;
+    store
+        .db
+        .note(|witness, _| witness.checkpoint_start("prepare", Some(phase), None));
     let result = async {
         match preparation.phase {
             0 | 1 => preparation.history(&mut store).await?,
