@@ -1059,7 +1059,9 @@ final class EpisodeAdAnalysisStore {
             && record.transcriptUpdatedAt.truncatedToWholeSeconds == document.updatedAt.truncatedToWholeSeconds
             && record.transcriptSegmentCount == transcriptSegmentCount
             && record.transcriptState == .completed
-            && fileStore.documentExists(relativePath: record.analysisRelativePath)
+            // A failed first attempt has no output document. Its error still
+            // belongs to these transcript inputs and must remain retryable.
+            && (record.state != .completed || fileStore.documentExists(relativePath: record.analysisRelativePath))
     }
 
     private nonisolated static func isCurrentAnalysisDocument(

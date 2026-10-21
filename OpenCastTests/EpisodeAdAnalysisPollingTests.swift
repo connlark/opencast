@@ -104,6 +104,118 @@ struct EpisodeAdAnalysisPollingTests {
         #expect(store.record(for: transcript.episodeID)?.failureKind == .capExceeded)
     }
 
+    @Test("A model timeout without an output document remains a Retry error after reopening the store")
+    func modelTimeoutRemainsRetryableAfterReopeningStore() async throws {
+        let directory = try makeTemporaryDirectory()
+        let configuration = ModelConfiguration(
+            schema: OpenCastModelContainerFactory.localSchema,
+            url: directory.appending(path: "LocalDeviceData.store"),
+            cloudKitDatabase: .none
+        )
+        let transcript = makeTranscript(episodeID: "poll-timeout-relaunch")
+        let files = EpisodeAdAnalysisFileStore(baseDirectory: directory)
+        let client = PollingEpisodeAdAnalysisClient(
+            submitSteps: [.accepted(pollAfter: 0)],
+            pollSteps: [.http(statusCode: 503, code: "gemini_timeout")]
+        )
+
+        do {
+            let container = try ModelContainer(
+                for: OpenCastModelContainerFactory.localSchema,
+                configurations: [configuration]
+            )
+            let context = ModelContext(container)
+            let store = makeStore(client: client, directory: directory)
+            store.startAnalysis(transcript: transcript, modelContext: context)
+            #expect(await waitUntil(store) {
+                !store.hasActiveJob && store.record(for: transcript.episodeID)?.state == .failed
+            })
+            let record = try #require(store.record(for: transcript.episodeID))
+            #expect(!files.documentExists(relativePath: record.analysisRelativePath))
+            guard case .failed(_, isStale: false) = store.jobState(for: transcript) else {
+                Issue.record("A timeout for the current transcript must be a current failure without an output file.")
+                return
+            }
+        }
+
+        let reopenedContainer = try ModelContainer(
+            for: OpenCastModelContainerFactory.localSchema,
+            configurations: [configuration]
+        )
+        let reloadedStore = makeStore(client: client, directory: directory)
+        reloadedStore.load(modelContext: ModelContext(reopenedContainer))
+        let detail = await reloadedStore.episodeDetailState(
+            for: transcript,
+            transcriptState: .completed,
+            analysisDocument: nil
+        )
+        guard case .failed(let record, isStale: false) = detail.jobState else {
+            Issue.record("Reopening must preserve the current timeout failure without an output file.")
+            return
+        }
+        #expect(record.errorMessage == "Promo/ad analysis failed (gemini_timeout).")
+        #expect(record.jobAcceptedAt == nil)
+        #expect(!detail.hasCurrentCompletedAnalysis)
+        #expect(!reloadedStore.hasActiveJob)
+        let counts = await client.counts()
+        #expect(counts.submit == 1)
+        #expect(counts.poll == 1)
+
+        let pipeline = try #require(EpisodePipelineState.make(
+            episodeID: transcript.episodeID,
+            queueStatus: .notQueued,
+            queueSnapshot: AdFreePassQueueSnapshot(),
+            downloadRecord: nil,
+            transcription: .unavailable,
+            analysis: detail.jobState
+        ))
+        #expect(pipeline.title == EpisodePipelineState.analysisFailedTitle)
+        #expect(pipeline.action == .retryAnalysis)
+        #expect(pipeline.steps == [EpisodePipelineStep(
+            kind: .detectAds,
+            status: .failed(message: EpisodePipelineState.analysisFailedMessage)
+        )])
+    }
+
+    @Test("A failed analysis without output stays stale when the transcript changes")
+    func failedAnalysisWithoutOutputStaysStaleForChangedTranscript() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        let client = PollingEpisodeAdAnalysisClient(
+            submitSteps: [.accepted(pollAfter: 0)],
+            pollSteps: [.http(statusCode: 503, code: "gemini_timeout")]
+        )
+        let store = makeStore(client: client, directory: directory)
+        var transcript = makeTranscript(episodeID: "poll-timeout-changed-transcript")
+        store.startAnalysis(transcript: transcript, modelContext: context)
+        #expect(await waitUntil(store) {
+            !store.hasActiveJob && store.record(for: transcript.episodeID)?.state == .failed
+        })
+
+        transcript.segments[0].text = "A different episode opening."
+        transcript.text = transcript.segments.map(\.text).joined(separator: " ")
+        let reloadedStore = makeStore(client: client, directory: directory)
+        reloadedStore.load(modelContext: ModelContext(container))
+        let detail = await reloadedStore.episodeDetailState(
+            for: transcript,
+            transcriptState: .completed,
+            analysisDocument: nil
+        )
+        guard case .failed(_, isStale: true) = detail.jobState else {
+            Issue.record("A failure for different transcript content must remain stale.")
+            return
+        }
+        #expect(EpisodePipelineState.make(
+            episodeID: transcript.episodeID,
+            queueStatus: .notQueued,
+            queueSnapshot: AdFreePassQueueSnapshot(),
+            downloadRecord: nil,
+            transcription: .unavailable,
+            analysis: detail.jobState
+        ) == nil)
+    }
+
     @Test("Lost submit response recovers its accepted revision handle")
     func lostSubmitResponseRecoversAcceptedRevisionHandle() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

@@ -517,12 +517,15 @@ fn serving_bundle_cache_and_quota_are_policy_specific() {
     );
     assert_eq!(AnalysisPolicy::V2.admission_tokens(&request(), 42), 42);
     assert!(AnalysisPolicy::V3.admission_tokens(&request(), 42) > 4 * 42);
-    use opencast_ad_analysis_worker::{job, retry, types, v3_windowing};
+    use opencast_ad_analysis_worker::{job, types, v3_windowing};
     let count = v3_windowing::window_count(types::MAX_SEGMENTS);
     assert_eq!(count, 9);
     let waves = count.div_ceil(v3_windowing::CONCURRENT_WINDOWS);
+    // V3's own allocation, not V2's fixed cap; tests/v3_timeout.rs covers
+    // every transcript size.
     let deadline = waves as u64
-        * ((V3_INITIAL_ATTEMPTS + V3_REPAIR_ATTEMPTS) as u64 * retry::GEMINI_CALL_TIMEOUT_SECONDS
+        * ((V3_INITIAL_ATTEMPTS + V3_REPAIR_ATTEMPTS) as u64
+            * AnalysisPolicy::V3.call_timeout_seconds(types::MAX_SEGMENTS)
             + V3_MAX_BACKOFF_SECONDS);
     assert_eq!(deadline, 570);
     assert_eq!(deadline + 30, job::JOB_RUNNING_DEADLINE_SECONDS as u64);

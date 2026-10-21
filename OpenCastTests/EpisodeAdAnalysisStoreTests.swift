@@ -929,6 +929,10 @@ struct EpisodeAdAnalysisStoreTests {
         await startAndWait(store: store, transcript: transcript, modelContext: context)
         let relativePath = try #require(store.record(for: transcript.episodeID)?.analysisRelativePath)
         try fileStore.delete(relativePath: relativePath)
+        guard case .completed(_, isStale: true) = store.jobState(for: transcript) else {
+            Issue.record("A completed analysis still requires its output document.")
+            return
+        }
 
         let reloadedStore = EpisodeAdAnalysisStore(
             client: FakeEpisodeAdAnalysisClient(),

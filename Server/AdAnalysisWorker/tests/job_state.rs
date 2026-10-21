@@ -393,7 +393,30 @@ fn revision_handles_bind_old_completed_records_and_failures_stay_readable() {
     );
     assert!(policy::poll_object_names("a3.unknown.fingerprint-123").is_none());
     assert!(policy::poll_object_names("a3.20260911b.../escape").is_none());
-    assert!(handle.starts_with("a3.20260924a."));
+    assert_eq!(handle, "a3.20261020b.fingerprint-123");
+    assert_eq!(
+        names[0],
+        "ad-analysis:v3:2026-10-20.2-medium-timeout:flash38-medium:w800:r1:job:fingerprint-123"
+    );
+    assert_eq!(
+        policy::poll_object_names("a3.20261020a.fingerprint-123").unwrap(),
+        vec![
+            "ad-analysis:v3:2026-10-20.1-low-thinking:flash38-low:w800:r1:job:fingerprint-123"
+                .to_string()
+        ]
+    );
+    assert!(policy::poll_object_names("a3.20261020b.../escape").is_none());
+    let previous =
+        "ad-analysis:v3:2026-09-24.1-dai-budget:flash38-medium:w800:r1:job:fingerprint-123";
+    assert_eq!(
+        policy::poll_object_names("a3.20260924a.fingerprint-123").unwrap(),
+        vec![previous.to_string()]
+    );
+    let untagged = policy::poll_object_names("fingerprint-123").unwrap();
+    assert!(!untagged.contains(&previous.to_string()));
+    assert!(!untagged.iter().any(|name| name.contains("low-thinking")));
+    assert_eq!(untagged.last(), Some(&names[0]));
+    assert!(policy::poll_object_names("a3.20261020a.../escape").is_none());
     assert_eq!(
         policy::poll_object_names("a3.20260911b.fingerprint-123").unwrap(),
         vec![

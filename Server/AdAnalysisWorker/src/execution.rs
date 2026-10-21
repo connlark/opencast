@@ -18,6 +18,7 @@ pub(crate) struct Execution {
     pub deadline_ms: u64,
     cancelled: Cell<bool>,
     revision: &'static str,
+    call_timeout_seconds: u64,
 }
 
 impl Execution {
@@ -25,7 +26,9 @@ impl Execution {
         env: &Env,
         caller_object: &str,
         profile: UsageLimitProfile,
+        policy: crate::policy::AnalysisPolicy,
         execution_tokens: u64,
+        segment_count: usize,
     ) -> Result<Rc<Self>, UpstreamError> {
         let now = now_ms();
         let run_id = opencast_app_attest_core::random::random_urlsafe_token(24)
@@ -34,10 +37,10 @@ impl Execution {
             post(env, caller_object, "/snapshot", &serde_json::json!({})).await?;
         let execution = Rc::new(Self {
             env: env.clone(),
+            call_timeout_seconds: policy.call_timeout_seconds(segment_count),
             deadline_ms: now + crate::policy::V3_EXECUTION_SECONDS * 1000,
             cancelled: Cell::new(false),
-            revision: if crate::worker_app::serving_policy(env) == crate::policy::AnalysisPolicy::V3
-            {
+            revision: if policy == crate::policy::AnalysisPolicy::V3 {
                 crate::policy::V3_REVISION
             } else {
                 crate::types::POLICY_NAME
@@ -60,6 +63,10 @@ impl Execution {
         Ok(execution)
     }
 
+    pub fn run_id(&self) -> &str {
+        &self.request.run_id
+    }
+
     pub fn cancel(&self) {
         self.cancelled.set(true);
     }
@@ -78,14 +85,14 @@ impl Execution {
             return Err(failure("analysis_deadline_exhausted"));
         }
         Ok(Duration::from_millis(
-            remaining.min(crate::retry::GEMINI_CALL_TIMEOUT_SECONDS * 1000),
+            remaining.min(self.call_timeout_seconds * 1000),
         ))
     }
 
     pub async fn backoff(&self, seconds: u64) -> Result<(), UpstreamError> {
         self.check()?;
         if seconds > crate::policy::V3_MAX_BACKOFF_SECONDS
-            || now_ms().saturating_add((seconds + crate::retry::GEMINI_CALL_TIMEOUT_SECONDS) * 1000)
+            || now_ms().saturating_add((seconds + self.call_timeout_seconds) * 1000)
                 > self.deadline_ms
         {
             return Err(failure("analysis_deadline_exhausted"));
@@ -121,7 +128,7 @@ impl Execution {
         let summary = self.update(Operation::Finish).await?;
         worker::console_log!(
             "{}",
-            serde_json::json!({"event":"ad_analysis_accounting", "policy_revision":self.revision, "accounting":summary})
+            serde_json::json!({"event":"ad_analysis_accounting", "policy_revision":self.revision, "run_id":self.run_id(), "accounting":summary})
         );
         Ok(summary)
     }

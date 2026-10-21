@@ -4,12 +4,12 @@ use crate::{promo_v3, types::AdAnalysisRequest};
 
 pub const POLICY_ENV_VAR: &str = "AD_ANALYSIS_POLICY";
 pub const V3_MODEL: &str = "gemini-3.8-flash";
-/// Bump for any deployed prompt/validator change, even when schema stays v3.
-/// `2026-09-24.1`: declared-runtime-aware episode ad budget (validation.rs),
-/// after the 25 % cap rejected correct results on ad-heavy DAI inventory.
-pub const V3_REVISION: &str = "2026-09-24.1-dai-budget";
-/// Served production 2026-09-18 → next deploy; its `a3.20260911b` handles stay
-/// addressable for their lifetime.
+/// Bump for any deployed prompt/validator/model-setting change, even when
+/// schema stays v3. Transport changes also isolate cached failures.
+pub const V3_REVISION: &str = "2026-10-20.2-medium-timeout";
+pub const V3_LOW_REVISION: &str = "2026-10-20.1-low-thinking";
+pub const V3_DAI_REVISION: &str = "2026-09-24.1-dai-budget";
+/// Previous revisions' handles stay addressable for their lifetime.
 pub const V3_RECOVERY_REVISION: &str = "2026-09-11.2-recovery";
 pub const V3_PREVIOUS_REVISION: &str = "2026-09-11.1-word-boundaries";
 pub const V3_INITIAL_ATTEMPTS: usize = 2;
@@ -17,6 +17,7 @@ pub const V3_REPAIR_ATTEMPTS: usize = 1;
 pub const V3_MAX_BACKOFF_SECONDS: u64 = 10;
 pub const V3_EXECUTION_SECONDS: u64 = 570;
 pub const V3_THINKING: &str = "medium";
+pub const V3_MAX_CALL_SECONDS: u64 = 120;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnalysisPolicy {
@@ -49,8 +50,23 @@ impl AnalysisPolicy {
     pub fn job_handle(self, fingerprint: &str) -> String {
         match self {
             Self::V2 => fingerprint.to_string(),
-            Self::V3 => format!("a3.20260924a.{fingerprint}"),
+            Self::V3 => format!("a3.20261020b.{fingerprint}"),
         }
+    }
+
+    /// Allocate the finite wall budget across worst-case waves, including the
+    /// transport retry and semantic repair. A short episode can wait for a
+    /// valid medium-thinking response without extending the whole-job deadline.
+    pub fn call_timeout_seconds(self, segment_count: usize) -> u64 {
+        if self == Self::V2 {
+            return crate::retry::GEMINI_CALL_TIMEOUT_SECONDS;
+        }
+        let waves = crate::v3_windowing::window_count(segment_count)
+            .div_ceil(crate::v3_windowing::CONCURRENT_WINDOWS) as u64;
+        let backoff = V3_MAX_BACKOFF_SECONDS * (V3_INITIAL_ATTEMPTS - 1) as u64;
+        ((V3_EXECUTION_SECONDS / waves).saturating_sub(backoff)
+            / (V3_INITIAL_ATTEMPTS + V3_REPAIR_ATTEMPTS) as u64)
+            .min(V3_MAX_CALL_SECONDS)
     }
 
     /// Finite execution allowance, distinct from the 120k SOURCE request cap.
@@ -87,9 +103,17 @@ impl AnalysisPolicy {
 /// revision namespace, and old tags keep resolving for their jobs' lifetimes.
 /// Untagged polls probe the pre-handle namespaces. No arbitrary DO names.
 pub fn poll_object_names(handle: &str) -> Option<Vec<String>> {
-    if let Some(fingerprint) = handle.strip_prefix("a3.20260924a.") {
+    if let Some(fingerprint) = handle.strip_prefix("a3.20261020b.") {
         return crate::job::valid_fingerprint(fingerprint)
             .then(|| vec![AnalysisPolicy::V3.job_object_name(fingerprint)]);
+    }
+    if let Some(fingerprint) = handle.strip_prefix("a3.20261020a.") {
+        return crate::job::valid_fingerprint(fingerprint)
+            .then(|| vec![low_v3_object_name(fingerprint)]);
+    }
+    if let Some(fingerprint) = handle.strip_prefix("a3.20260924a.") {
+        return crate::job::valid_fingerprint(fingerprint)
+            .then(|| vec![dai_v3_object_name(fingerprint)]);
     }
     if let Some(fingerprint) = handle.strip_prefix("a3.20260911b.") {
         return crate::job::valid_fingerprint(fingerprint).then(|| {
@@ -105,6 +129,9 @@ pub fn poll_object_names(handle: &str) -> Option<Vec<String>> {
     if handle.starts_with("a3.") || !crate::job::valid_fingerprint(handle) {
         return None;
     }
+    // Untagged clients submit to today's namespace. A superseded current
+    // namespace leaves this list (as 0911.2 did at the 09-24 bump): its retained
+    // record would make every resubmitted fingerprint 409 ambiguous.
     Some(vec![
         crate::job::job_object_name(handle),
         legacy_v3_object_name(handle),
@@ -112,6 +139,14 @@ pub fn poll_object_names(handle: &str) -> Option<Vec<String>> {
     ])
 }
 
+fn dai_v3_object_name(fingerprint: &str) -> String {
+    format!("ad-analysis:v3:{V3_DAI_REVISION}:flash38-medium:w800:r1:job:{fingerprint}")
+}
+
 fn legacy_v3_object_name(fingerprint: &str) -> String {
     format!("ad-analysis:v3:{V3_PREVIOUS_REVISION}:flash38-medium:w800:r1:job:{fingerprint}")
+}
+
+fn low_v3_object_name(fingerprint: &str) -> String {
+    format!("ad-analysis:v3:{V3_LOW_REVISION}:flash38-low:w800:r1:job:{fingerprint}")
 }

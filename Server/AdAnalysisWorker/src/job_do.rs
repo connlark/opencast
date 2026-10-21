@@ -165,11 +165,14 @@ impl AdAnalysisJob {
                 Delay::from(Duration::from_millis(SUBMIT_ADMISSION_WAIT_MILLIS)).await;
                 continue;
             };
+            let policy = crate::worker_app::serving_policy(&self.env);
             let execution = match Execution::admit(
                 &self.env,
                 &submit.usage_object_name,
                 submit.usage_profile,
+                policy,
                 submit.estimated_input_tokens,
+                submit.request.segments.len(),
             )
             .await
             {
@@ -177,7 +180,6 @@ impl AdAnalysisJob {
                 Err(error) => return json_body(error.status, &error.body),
             };
 
-            let policy = crate::worker_app::serving_policy(&self.env);
             let job_id = policy.job_handle(&submit.request.transcript.fingerprint);
             let started_at = now_seconds();
             let subjects = if submit.subject.is_empty() {

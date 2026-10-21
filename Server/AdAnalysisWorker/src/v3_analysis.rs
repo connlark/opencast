@@ -61,7 +61,7 @@ pub(crate) async fn run(
     // evidence intact; never buy a blanket episode replay or publish a subset.
     let mut validated = promo_v3::validate(&request, output);
     if !validated.is_complete() {
-        return Err(incomplete(&validated.issues));
+        return Err(incomplete(&execution, &validated.issues));
     }
     notices.append(&mut validated.notices);
     notices.sort();
@@ -87,7 +87,7 @@ async fn analyze_window(
     single: bool,
 ) -> Result<(usize, WindowOutcome), UpstreamError> {
     let payload = promo_v3::payload(&window, Some(V3_THINKING));
-    let body = call(
+    let mut first = call(
         key,
         &payload,
         index as u8 * 3,
@@ -95,7 +95,6 @@ async fn analyze_window(
         execution,
     )
     .await?;
-    let mut first = promo_v3::parse_response(&body);
     // A single-window global coverage/budget alarm gets the SAME one bounded
     // corrective opportunity as a receipt error, preserving both evidence gates.
     let validate = |output: Output| {
@@ -131,7 +130,7 @@ async fn analyze_window(
         .unwrap_or(json!({"unusable_previous_output": true}));
     let corrective =
         promo_v3::repair_payload(payload, &previous, &validation.issues).map_err(failure)?;
-    let body = call(
+    let repaired = call(
         key,
         &corrective,
         index as u8 * 3 + 2,
@@ -139,13 +138,12 @@ async fn analyze_window(
         execution,
     )
     .await?;
-    let repaired = promo_v3::parse_response(&body);
     let usage = combine_usage(first.usage.take(), repaired.usage);
     let Some(output) = repaired.output else {
-        return Err(incomplete(&[repaired
-            .issue
-            .unwrap_or("v3_missing_output")
-            .into()]));
+        return Err(incomplete(
+            execution,
+            &[repaired.issue.unwrap_or("v3_missing_output").into()],
+        ));
     };
     let mut checked = validate(output.clone());
     if !promo_v3::preserves_verified_breaks(&validation, &checked)
@@ -156,7 +154,7 @@ async fn analyze_window(
         checked.issues.push("v3_repair_lost_candidate".into());
     }
     if !checked.is_complete() {
-        return Err(incomplete(&checked.issues));
+        return Err(incomplete(execution, &checked.issues));
     }
     checked.notices.push("v3_semantic_repair".into());
     Ok((
@@ -175,23 +173,41 @@ async fn call(
     attempt_id: u8,
     attempts: usize,
     execution: &Execution,
-) -> Result<String, UpstreamError> {
+) -> Result<promo_v3::ParsedResponse, UpstreamError> {
     let serialized = payload.to_string();
     let estimate = (serialized.chars().count() as u64).div_ceil(4);
     let url = crate::prompt::gemini_generate_content_url(V3_MODEL);
     for attempt in 0..attempts {
         let id = attempt_id + attempt as u8;
         execution.dispatch(id, estimate).await?;
-        let response = call_gemini_once(key, &url, &serialized, execution.call_timeout()?).await;
+        let timeout = execution.call_timeout()?;
+        let started = crate::execution::now_ms();
+        let response = call_gemini_once(key, &url, &serialized, timeout)
+            .await
+            .map(|reply| (promo_v3::parse_response(&reply.text), reply));
+        // No transcript, API key, provider body, or caller identity in telemetry.
+        let (status, outcome, usage) = match &response {
+            Ok((parsed, reply)) => (Some(reply.status), "response", parsed.usage.as_ref()),
+            Err(error) => (None, error.body.error.as_str(), None),
+        };
+        worker::console_log!(
+            "{}",
+            serde_json::json!({
+                "event": "ad_analysis_attempt", "run_id": execution.run_id(),
+                "policy_revision": crate::policy::V3_REVISION, "model": V3_MODEL,
+                "thinking": crate::policy::V3_THINKING, "attempt": id,
+                "elapsed_ms": crate::execution::now_ms().saturating_sub(started),
+                "timeout_ms": timeout.as_millis() as u64, "outcome": outcome,
+                "upstream_status": status, "usage": usage,
+            })
+        );
         let delay = match response {
-            Ok(reply) => {
+            Ok((parsed, reply)) => {
                 // Record receipts before semantic validation, including failed
                 // windows and non-2xx bodies that carry valid usage metadata.
-                execution
-                    .receipt(id, promo_v3::parse_response(&reply.text).usage)
-                    .await?;
+                execution.receipt(id, parsed.usage.clone()).await?;
                 if (200..300).contains(&reply.status) {
-                    return Ok(reply.text);
+                    return Ok(parsed);
                 }
                 let error = crate::gemini::parse_error_envelope(&reply.text);
                 match classify_http_status(
@@ -221,11 +237,15 @@ async fn call(
     Err(failure("gemini_retry_exhausted"))
 }
 
-fn incomplete(issues: &[String]) -> UpstreamError {
+fn incomplete(execution: &Execution, issues: &[String]) -> UpstreamError {
     // Codes/IDs only; bounded independently of provider/transcript size.
     worker::console_error!(
         "{}",
-        serde_json::json!({"event":"ad_analysis_incomplete", "issues":issues.iter().take(64).collect::<Vec<_>>() })
+        serde_json::json!({
+            "event": "ad_analysis_incomplete", "run_id": execution.run_id(),
+            "policy_revision": crate::policy::V3_REVISION,
+            "issues": issues.iter().take(64).collect::<Vec<_>>(),
+        })
     );
     UpstreamError {
         status: 422,

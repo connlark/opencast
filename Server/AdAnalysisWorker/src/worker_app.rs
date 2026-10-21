@@ -487,10 +487,12 @@ async fn analyze_validated_request(
         env,
         usage_object_name,
         usage_profile,
+        policy,
         policy.admission_tokens(
             &validated.request,
             validated.estimate.estimated_input_tokens,
         ),
+        validated.request.segments.len(),
     )
     .await
     {

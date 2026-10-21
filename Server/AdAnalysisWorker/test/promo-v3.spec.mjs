@@ -121,6 +121,7 @@ it("serves the pinned v3 bundle and a complete validated break", async () => {
   const body = await response.json();
   expect(body.policy).toBe("promo_ad_breaks_v3");
   expect(body.model).toBe("gemini-3.8-flash");
+  expect(body.policy_revision).toBe("2026-10-20.2-medium-timeout");
   expect(body.spans).toHaveLength(1);
   expect(body.spans[0].start_boundary).toEqual({ segment_id: 20, quote: "I'm Mira" });
   expect(body.spans[0].end_boundary).toEqual({ segment_id: 50, quote: "wherever you get podcasts" });
@@ -146,6 +147,28 @@ it("includes a short mixed boundary without inventing a word timestamp", async (
   expect(body.spans[0].start_time).toBe(161);
   expect(body.warnings).toEqual(["v3_short_mixed_boundary_included:20-50"]);
 });
+
+it("accepts a medium response whose body finishes after the old 60-second cutoff", async () => {
+  let aborted = false;
+  responses.push((input, init) => {
+    (init?.signal ?? input.signal).addEventListener("abort", () => { aborted = true; });
+    return new Response(new ReadableStream({
+      async start(controller) {
+        await new Promise(resolve => setTimeout(resolve, 65_000));
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(reply([span]))));
+        controller.close();
+      },
+    }), { headers: { "content-type": "application/json" } });
+  });
+  const response = await analyze(request());
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body.spans).toHaveLength(1);
+  expect(body.accounting.dispatched_attempts).toBe(1);
+  expect(body.accounting.unknown_attempts).toBe(0);
+  expect(payloads).toHaveLength(1);
+  expect(aborted).toBe(false);
+}, 90_000);
 
 it("repairs a wrong existing boundary and accounts for both calls", async () => {
   responses.push(reply([{ ...span, start_segment_id: 10 }]), reply([span]));
@@ -424,7 +447,7 @@ it("retains validation failure on repeated polls/submits and accepts an explicit
   body.job_handle_version = 1;
   responses.push(reply([{...span, start_segment_id: 10}]), reply([]));
   const accepted = await (await analyze(body)).json();
-  expect(accepted.job_id).toBe(`a3.20260924a.${body.transcript.fingerprint}`);
+  expect(accepted.job_id).toBe(`a3.20261020b.${body.transcript.fingerprint}`);
   const poll = () => SELF.fetch(`${base}/v1/ad-analysis/jobs/${accepted.job_id}`, {
     method: "POST", headers, body: JSON.stringify({job_id: accepted.job_id})
   });
@@ -435,11 +458,11 @@ it("retains validation failure on repeated polls/submits and accepts an explicit
     await new Promise(resolve => setTimeout(resolve, 1));
   }
   expect(failed.status).toBe(422);
-  const failedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-09-24.1-dai-budget:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
+  const failedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-10-20.2-medium-timeout:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
   const failedRecord = await runInDurableObject(failedStub, async (_instance, state) => JSON.parse(await state.storage.get("job")));
   expect(failedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(1795);
   expect(failedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(1800);
-  expect(await failed.json()).toMatchObject({failure: {category: "validation_exhausted", retry_disposition: "explicit_retry", policy_revision: "2026-09-24.1-dai-budget"}, accounting: {request_count: 1, dispatched_attempts: 2}});
+  expect(await failed.json()).toMatchObject({failure: {category: "validation_exhausted", retry_disposition: "explicit_retry", policy_revision: "2026-10-20.2-medium-timeout"}, accounting: {request_count: 1, dispatched_attempts: 2}});
   expect((await poll()).status).toBe(422);
   expect((await analyze(body)).status).toBe(422);
   expect(payloads).toHaveLength(2);
@@ -453,34 +476,42 @@ it("retains validation failure on repeated polls/submits and accepts an explicit
   }
   expect(failed.status).toBe(200);
   expect(payloads).toHaveLength(3);
-  const completedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-09-24.1-dai-budget:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
+  const completedStub = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-10-20.2-medium-timeout:flash38-medium:w800:r1:job:${body.transcript.fingerprint}`);
   const completedRecord = await runInDurableObject(completedStub, async (_instance, state) => JSON.parse(await state.storage.get("job")));
   expect(completedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeGreaterThanOrEqual(86395);
   expect(completedRecord.purge_at - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(86400);
 
 });
 
-it("polls a retained revision-A record while new submissions select isolated revision B", async () => {
+it.each([
+  ["20260911a", "2026-09-11.1-word-boundaries", "medium"],
+  ["20260911b", "2026-09-11.2-recovery", "medium"],
+  ["20260924a", "2026-09-24.1-dai-budget", "medium"],
+  ["20261020a", "2026-10-20.1-low-thinking", "low"],
+])("polls retained revision %s while new submissions use the medium timeout fix", async (tag, revision, thinking) => {
   const body = request(true);
   body.job_handle_version = 1;
   const fingerprint = body.transcript.fingerprint;
-  const oldHandle = `a3.20260911a.${fingerprint}`;
-  const old = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:2026-09-11.1-word-boundaries:flash38-medium:w800:r1:job:${fingerprint}`);
+  const oldHandle = `a3.${tag}.${fingerprint}`;
+  const old = env.AD_ANALYSIS_JOB.getByName(`ad-analysis:v3:${revision}:flash38-${thinking}:w800:r1:job:${fingerprint}`);
   await runInDurableObject(old, async (_instance, state) => {
     await state.storage.put("job", JSON.stringify({state: "completed", job_id: fingerprint, subjects: [], content_hash: "", purge_at: Math.floor(Date.now()/1000) + 600,
-      result_json: JSON.stringify({policy: "promo_ad_breaks_v3", policy_revision: "2026-09-11.1-word-boundaries", spans: []})}));
+      result_json: JSON.stringify({policy: "promo_ad_breaks_v3", policy_revision: revision, spans: []})}));
   });
   const poll = id => SELF.fetch(`${base}/v1/ad-analysis/jobs/${id}`, {method: "POST", headers, body: JSON.stringify({job_id: id})});
-  expect((await (await poll(oldHandle)).json()).policy_revision).toBe("2026-09-11.1-word-boundaries");
+  expect((await (await poll(oldHandle)).json()).policy_revision).toBe(revision);
   expect(payloads).toHaveLength(0);
   responses.push(reply([span]));
-  expect((await (await analyze(body)).json()).job_id).toBe(`a3.20260924a.${fingerprint}`);
+  expect((await (await analyze(body)).json()).job_id).toBe(`a3.20261020b.${fingerprint}`);
   for (let i = 0; i < 1000; i++) {
-    if ((await poll(`a3.20260924a.${fingerprint}`)).status !== 202) break;
+    if ((await poll(`a3.20261020b.${fingerprint}`)).status !== 202) break;
     await new Promise(resolve => setTimeout(resolve, 1));
   }
-  expect((await (await poll(oldHandle)).json()).policy_revision).toBe("2026-09-11.1-word-boundaries");
-  expect((await poll(fingerprint)).status).toBe(409); // legacy ID cannot choose between bundles
+  expect((await (await poll(oldHandle)).json()).policy_revision).toBe(revision);
+  // Untagged polls probe only the pre-handle namespaces and today's. A
+  // superseded current namespace (0911b, 0924a, 1020a) keeps its tagged
+  // handle but must not make a resubmitted legacy fingerprint ambiguous.
+  expect((await poll(fingerprint)).status).toBe(tag === "20260911a" ? 409 : 200);
   expect((await poll(`a3.unknown.${fingerprint}`)).status).toBe(404);
   await runInDurableObject(old, async (_instance, state) => {
     const record = JSON.parse(await state.storage.get("job"));
@@ -583,10 +614,10 @@ it("times out a stalled response body, aborts its fetch, and bounds recovery", a
   const response = await analyze(request());
   expect(response.status).toBe(200);
   expect(aborted).toBe(true);
-  expect(performance.now() - start).toBeGreaterThanOrEqual(59_000);
+  expect(performance.now() - start).toBeGreaterThanOrEqual(119_000);
   expect(payloads).toHaveLength(2);
   expect(await response.json()).toMatchObject({accounting:{request_count:1, dispatched_attempts:2, unknown_attempts:1}});
-}, 90_000);
+}, 150_000);
 
 it("keeps an interrupted revision-A job addressable after revision B is selected", async () => {
   const fingerprint = crypto.randomUUID().replaceAll("-", "").repeat(2);

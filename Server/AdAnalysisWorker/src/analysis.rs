@@ -242,7 +242,7 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// One attempt under `GEMINI_CALL_TIMEOUT_SECONDS`. The deadline covers the
+/// One attempt under the caller's allocated timeout. The deadline covers the
 /// whole exchange — the send AND the body read (2026-09-04 review): headers
 /// that arrived promptly followed by a stalled body used to escape the
 /// timeout, and with it the ladder arithmetic the job deadline relies on.
