@@ -11,6 +11,10 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
     private var exactAliases: [String: String] = [:]
     /// `ArtworkRequest.imageKey` (URL) to the content key of its latest decode at any size.
     private var latestAliases: [String: String] = [:]
+    /// `ArtworkRequest.imageKey` (URL) to the biggest decode made for it. The
+    /// Now Playing surfaces need the largest bitmap the app holds, not the one
+    /// a list row happened to decode last.
+    private var largestAliases: [String: LargestDecode] = [:]
     private let aliasLock = NSLock()
     private let aliasLimit: Int
     private var memoryWarningObserver: MemoryWarningObserver?
@@ -52,6 +56,30 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
         images.object(forKey: key as NSString)
     }
 
+    /// The cached decode for the request's URL that actually reaches the
+    /// requested pixel size: the exact entry when one exists, otherwise the
+    /// biggest decode that is still large enough.
+    ///
+    /// A decode is only ever as large as its source, so the check runs against
+    /// the decoded bitmap rather than the requested size. Artwork whose source
+    /// is smaller than the request never qualifies — the caller has to load it
+    /// to find out.
+    func imageMeetingSize(for request: ArtworkRequest) -> UIImage? {
+        if let image = image(for: request), meetsPixelSize(image, request) {
+            return image
+        }
+
+        let decode = aliasLock.withLock { largestAliases[request.imageKey] }
+        guard let decode,
+              let image = image(forContentKey: decode.contentKey),
+              meetsPixelSize(image, request)
+        else {
+            return nil
+        }
+
+        return image
+    }
+
     func store(_ image: UIImage, forContentKey key: String) {
         images.setObject(image, forKey: key as NSString, cost: Self.cost(for: image))
     }
@@ -60,6 +88,7 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
         aliasLock.withLock {
             exactAliases[request.cacheKey] = key
             latestAliases[request.imageKey] = key
+            recordLargestDecode(request, contentKey: key)
             trimAliasesIfNeeded()
         }
     }
@@ -69,7 +98,25 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
         aliasLock.withLock {
             exactAliases.removeAll()
             latestAliases.removeAll()
+            largestAliases.removeAll()
         }
+    }
+
+    /// Keeps the biggest decode per URL. A thumbnail decoded after a
+    /// full-size one must not displace it.
+    private func recordLargestDecode(_ request: ArtworkRequest, contentKey: String) {
+        let candidate = LargestDecode(
+            contentKey: contentKey,
+            pixelWidth: request.pixelWidth,
+            pixelHeight: request.pixelHeight
+        )
+        if let existing = largestAliases[request.imageKey],
+           max(existing.pixelWidth, existing.pixelHeight)
+               >= max(candidate.pixelWidth, candidate.pixelHeight) {
+            return
+        }
+
+        largestAliases[request.imageKey] = candidate
     }
 
     /// Drops aliases whose image the store evicted; if live aliases alone exceed
@@ -88,6 +135,23 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
                 latestAliases[key] = nil
             }
         }
+        if largestAliases.count > aliasLimit {
+            largestAliases = largestAliases.filter { image(forContentKey: $0.value.contentKey) != nil }
+            while largestAliases.count > aliasLimit, let key = largestAliases.keys.first {
+                largestAliases[key] = nil
+            }
+        }
+    }
+
+    private func meetsPixelSize(_ image: UIImage, _ request: ArtworkRequest) -> Bool {
+        let scale = image.scale
+        guard scale > 0 else {
+            return false
+        }
+
+        let pixelWidth = Int((image.size.width * scale).rounded(.down))
+        let pixelHeight = Int((image.size.height * scale).rounded(.down))
+        return pixelWidth >= request.pixelWidth && pixelHeight >= request.pixelHeight
     }
 
     private static func cost(for image: UIImage) -> Int {
@@ -98,5 +162,13 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
         let pixelWidth = Int((image.size.width * image.scale).rounded(.up))
         let pixelHeight = Int((image.size.height * image.scale).rounded(.up))
         return max(pixelWidth * pixelHeight * 4, 1)
+    }
+
+    /// The biggest decode recorded for a URL, with the pixel size it was
+    /// requested at.
+    private struct LargestDecode {
+        let contentKey: String
+        let pixelWidth: Int
+        let pixelHeight: Int
     }
 }
