@@ -69,10 +69,6 @@ struct SubscriptionRowView: View {
 
             Spacer(minLength: 8)
 
-            if badgeCount > 0 {
-                LibraryNewEpisodeBadge(count: badgeCount)
-            }
-
             if isRefreshing {
                 ProgressView()
                     .controlSize(.small)
@@ -81,6 +77,10 @@ struct SubscriptionRowView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .accessibilityLabel("Last refresh had problems")
+            }
+
+            if badgeCount > 0 {
+                LibraryNewEpisodeBadge(count: badgeCount)
             }
         }
         .padding(.vertical, 4)
