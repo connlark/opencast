@@ -102,8 +102,10 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
         }
     }
 
-    /// Keeps the biggest decode per URL. A thumbnail decoded after a
-    /// full-size one must not displace it.
+    /// Keeps the biggest decode of the URL's current bytes. A thumbnail
+    /// decoded after a full-size one must not displace it, but a decode of
+    /// different bytes for the URL (a revalidation) does at any size: the
+    /// old bitmap can stay resident long after it stopped being the artwork.
     private func recordLargestDecode(_ request: ArtworkRequest, contentKey: String) {
         let candidate = LargestDecode(
             contentKey: contentKey,
@@ -111,6 +113,8 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
             pixelHeight: request.pixelHeight
         )
         if let existing = largestAliases[request.imageKey],
+           DecodedArtwork.sourceHash(fromContentKey: existing.contentKey)
+               == DecodedArtwork.sourceHash(fromContentKey: contentKey),
            max(existing.pixelWidth, existing.pixelHeight)
                >= max(candidate.pixelWidth, candidate.pixelHeight) {
             return

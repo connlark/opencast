@@ -82,6 +82,7 @@ struct ArtworkMemoryCacheTests {
         let cache = ArtworkMemoryCache(memoryWarningName: nil)
         let url = URL(string: "https://example.com/displaced.png")!
         let small = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 48, height: 48))
+        let medium = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 128, height: 128))
         let large = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 240, height: 240))
         let largeImage = makeImage(pixelSize: 240)
         let thumbnail = makeImage(pixelSize: 48)
@@ -90,7 +91,31 @@ struct ArtworkMemoryCacheTests {
         cache.store(thumbnail, forContentKey: "content#48x48")
         cache.alias(small, toContentKey: "content#48x48")
 
-        #expect(cache.imageMeetingSize(for: large) === largeImage)
+        // Nothing was decoded at 128, so only the biggest-decode record can answer.
+        #expect(cache.imageMeetingSize(for: medium) === largeImage)
+    }
+
+    @Test("New bytes at a URL replace its biggest decode at an equal or smaller size", arguments: [240, 160])
+    func replacementContentDisplacesBiggestDecode(replacementPixelSize: Int) {
+        let cache = ArtworkMemoryCache(memoryWarningName: nil)
+        let url = URL(string: "https://example.com/revalidated.png")!
+        let original = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 240, height: 240))
+        let replacement = ArtworkRequest(
+            url: url,
+            targetPixelSize: CGSize(width: replacementPixelSize, height: replacementPixelSize)
+        )
+        let medium = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 128, height: 128))
+        let originalKey = DecodedArtwork.contentKey(for: original, sourceHash: "original")
+        let replacementKey = DecodedArtwork.contentKey(for: replacement, sourceHash: "replacement")
+        let originalImage = makeImage(pixelSize: 240)
+        let replacementImage = makeImage(pixelSize: replacementPixelSize)
+        cache.store(originalImage, forContentKey: originalKey)
+        cache.alias(original, toContentKey: originalKey)
+        cache.store(replacementImage, forContentKey: replacementKey)
+        cache.alias(replacement, toContentKey: replacementKey)
+
+        // The original bitmap is still resident but is no longer the URL's content.
+        #expect(cache.imageMeetingSize(for: medium) === replacementImage)
     }
 
     @Test("Clearing drops images and aliases together")

@@ -355,6 +355,30 @@ struct OpenCastAppModelPlaylistTests {
         #expect(persisted.isEmpty)
     }
 
+    @Test("With requeue on, Play replaces Up Next without first requeueing the interrupted episode")
+    func playReplaceDoesNotRequeueTheInterruptedEpisode() async throws {
+        let saves = UpNextSaveProbe()
+        let fixture = try await makePlayableFixture(upNextQueue: UpNextQueueStore(saveModelContext: saves.save))
+        let appModel = fixture.appModel
+        let context = fixture.context
+        #expect(appModel.setRequeueInterruptedEpisodeEnabled(true, modelContext: context))
+        let fourth = try #require(appModel.episodeSnapshot(for: "fourth"))
+        try appModel.playEpisode(fourth, presentsNowPlaying: false, modelContext: context)
+        appModel.playback.seek(to: 10)
+        // A requeue of the interrupted episode would fail and leave its error behind.
+        saves.failingEpisodeID = "fourth"
+
+        let started = appModel.playPlaylist(Self.commuteID, modelContext: context)
+
+        #expect(started)
+        #expect(appModel.playback.currentEpisode?.id.rawValue == "first")
+        #expect(appModel.library.progressRecord(for: "fourth")?.position == 10)
+        #expect(appModel.upNextQueue.items.map(\.episodeID) == ["third"])
+        #expect(appModel.lastUpNextError == nil)
+        let persisted = try ModelContext(fixture.container).fetch(FetchDescriptor<UpNextQueueItemRecord>())
+        #expect(persisted.map(\.episodeID) == ["third"])
+    }
+
     @Test("Play tags every poured row with the playlist and records it as the source")
     func playReplaceTagsQueueAndRemembersSource() async throws {
         let fixture = try await makePlayableFixture()

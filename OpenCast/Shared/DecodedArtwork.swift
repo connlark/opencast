@@ -10,4 +10,9 @@ nonisolated struct DecodedArtwork: Sendable {
     static func contentKey(for request: ArtworkRequest, sourceHash: String) -> String {
         "\(sourceHash)#\(request.pixelWidth)x\(request.pixelHeight)"
     }
+
+    /// The source hash `contentKey(for:sourceHash:)` built `key` from.
+    static func sourceHash(fromContentKey key: String) -> Substring {
+        key[..<(key.lastIndex(of: "#") ?? key.endIndex)]
+    }
 }

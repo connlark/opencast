@@ -973,10 +973,13 @@ final class OpenCastAppModel {
         switch mode {
         case .replace:
             do {
+                // Up Next is cleared next, so a requeued interrupted episode
+                // would be deleted at once and could only leave an error.
                 try playEpisode(
                     first,
                     presentsNowPlaying: presentsNowPlaying,
                     sourcePlaylistID: playlistID,
+                    requeuesCurrentEpisode: false,
                     modelContext: modelContext
                 )
             } catch {
