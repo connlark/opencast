@@ -128,8 +128,10 @@ jobs:
             --test promo_v3 \
             --test prompt \
             --test routing \
+            --test v3_timeout \
             --test validation \
             --test windowing
+          python3 -B -m unittest discover -s scripts
 
       - name: Run public TranscriptAnalysisWorker host tests
         if: matrix.name == 'TranscriptAnalysisWorker'

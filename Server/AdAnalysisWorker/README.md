@@ -28,6 +28,10 @@ and pins its own model, ignoring `AD_ANALYSIS_GEMINI_MODEL`; any absent or
 unrecognized value serves v2, which reads that model override. Changing the
 policy also changes the cache namespace.
 
+v3 sizes each Gemini call's timeout from the job's 570-second wall budget:
+120 seconds for up to four transcript windows, 91 for five to eight, and 60
+for nine. v2 keeps a 60-second cap.
+
 Set required secrets with Wrangler; never commit their values:
 
 ```sh
@@ -64,6 +68,23 @@ Run locally after creating `wrangler.toml`:
 
 ```sh
 yarn dev
+```
+
+## Monitoring
+
+`scripts/watch_ad_analysis.py` prints a read-only JSON snapshot of the
+production and prod-staging Workers: `/health` plus Workers Observability
+attempt, latency, and accounting counts. It never submits a job and prints no
+raw log rows. It reads `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` from
+an env file; `--help` lists the arguments.
+
+```sh
+python3 scripts/watch_ad_analysis.py --credentials-env-file /path/to/operator.env \
+  --production-worker your-ad-analysis-worker-production \
+  --staging-worker your-ad-analysis-worker-prod-staging \
+  --production-health-url https://ad-analysis.example.com/health \
+  --staging-health-url https://ad-analysis-staging.example.com/health
+python3 -B -m unittest discover -s scripts
 ```
 
 ## Result retention
