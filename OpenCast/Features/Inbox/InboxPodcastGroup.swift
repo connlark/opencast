@@ -1,14 +1,19 @@
 import Foundation
 
-/// One show in the Group by Podcast Inbox: the subscription and how many of
-/// its episodes pass the current filter. Groups keep the Inbox's order, so a
-/// show appears where its newest matching episode would.
+/// One show in the Group by Podcast Inbox: the subscription and which of
+/// its episodes pass the current filter, newest first. Groups keep the
+/// Inbox's order, so a show appears where its newest matching episode would.
 struct InboxPodcastGroup: Identifiable {
     let subscription: SubscriptionRecord
-    let episodeCount: Int
+    /// The show's Inbox rows, in Inbox order; the row count is the badge.
+    let episodes: [EpisodeListItemSnapshot]
 
     var id: String {
         subscription.feedURL
+    }
+
+    var episodeCount: Int {
+        episodes.count
     }
 
     /// `episodes` are the filtered Inbox rows. An episode whose show is no
@@ -18,12 +23,12 @@ struct InboxPodcastGroup: Identifiable {
         subscriptions: [SubscriptionRecord]
     ) -> [InboxPodcastGroup] {
         var orderedPodcastIDs: [String] = []
-        var countsByPodcastID: [String: Int] = [:]
+        var episodesByPodcastID: [String: [EpisodeListItemSnapshot]] = [:]
         for episode in episodes {
-            if countsByPodcastID[episode.podcastID] == nil {
+            if episodesByPodcastID[episode.podcastID] == nil {
                 orderedPodcastIDs.append(episode.podcastID)
             }
-            countsByPodcastID[episode.podcastID, default: 0] += 1
+            episodesByPodcastID[episode.podcastID, default: []].append(episode)
         }
 
         let subscriptionsByFeedURL = Dictionary(
@@ -32,7 +37,7 @@ struct InboxPodcastGroup: Identifiable {
         )
         return orderedPodcastIDs.compactMap { podcastID in
             subscriptionsByFeedURL[podcastID].map { subscription in
-                InboxPodcastGroup(subscription: subscription, episodeCount: countsByPodcastID[podcastID, default: 0])
+                InboxPodcastGroup(subscription: subscription, episodes: episodesByPodcastID[podcastID, default: []])
             }
         }
     }
