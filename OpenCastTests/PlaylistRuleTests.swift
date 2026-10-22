@@ -10,6 +10,7 @@ struct PlaylistRuleTests {
 
     private static let everyClause = PlaylistRule(
         podcastIDs: [alphaID, bravoID],
+        priorityPodcastIDs: [bravoID],
         status: .inProgress,
         downloadedOnly: true,
         minimumMinutes: 15,
@@ -27,6 +28,7 @@ struct PlaylistRuleTests {
 
         #expect(rule.version == 1)
         #expect(rule.podcastIDs == nil)
+        #expect(rule.priorityPodcastIDs == nil)
         #expect(rule.status == .unplayed)
         #expect(!rule.downloadedOnly)
         #expect(rule.minimumMinutes == nil)
@@ -56,6 +58,7 @@ struct PlaylistRuleTests {
             Self.everyClause.encodedJSON()
                 == #"{"downloadedOnly":true,"limit":10,"maximumAgeDays":30,"maximumMinutes":45,"minimumMinutes":15,"#
                 + #""podcastIDs":["https://example.com/alpha.xml","https://example.com/bravo.xml"],"#
+                + #""priorityPodcastIDs":["https://example.com/bravo.xml"],"#
                 + #""sortOrder":"oldestFirst","status":"inProgress","version":1}"#
         )
         #expect(!Self.everyClause.encodedJSON().contains(#"\/"#))
@@ -68,6 +71,15 @@ struct PlaylistRuleTests {
 
         #expect(forward == backward)
         #expect(forward.encodedJSON() == backward.encodedJSON())
+    }
+
+    @Test("Priority order is part of the rule, so a different rank encodes differently")
+    func priorityOrderChangesEncoding() {
+        let alphaFirst = PlaylistRule(priorityPodcastIDs: [Self.alphaID, Self.bravoID]).normalized()
+        let bravoFirst = PlaylistRule(priorityPodcastIDs: [Self.bravoID, Self.alphaID]).normalized()
+
+        #expect(alphaFirst != bravoFirst)
+        #expect(alphaFirst.encodedJSON() != bravoFirst.encodedJSON())
     }
 
     @Test("A No Limit rule omits the limit and decodes back to No Limit, not the default 25")
@@ -91,12 +103,20 @@ struct PlaylistRuleTests {
         #expect(rule == PlaylistRule())
         #expect(rule.status == .unplayed)
         #expect(rule.podcastIDs == nil)
+        #expect(rule.priorityPodcastIDs == nil)
         #expect(!rule.downloadedOnly)
         #expect(rule.minimumMinutes == nil)
         #expect(rule.maximumMinutes == nil)
         #expect(rule.maximumAgeDays == nil)
         #expect(rule.sortOrder == .newestFirst)
         #expect(rule.limit == nil)
+    }
+
+    @Test("A rule naming only a priority decodes it with every other clause at its default")
+    func priorityDecodesFromAnOlderShape() throws {
+        let rule = try #require(PlaylistRule.decode(#"{"version":1,"priorityPodcastIDs":["https://example.com/alpha.xml"]}"#))
+
+        #expect(rule == PlaylistRule(priorityPodcastIDs: [Self.alphaID]))
     }
 
     @Test(
@@ -109,6 +129,7 @@ struct PlaylistRuleTests {
             #"{"version":1,"status":"someday"}"#,
             #"{"version":1,"sortOrder":"loudestFirst"}"#,
             #"{"version":1,"limit":"ten"}"#,
+            #"{"version":1,"priorityPodcastIDs":"alpha"}"#,
             "not json",
             "",
             "[1]",
@@ -128,13 +149,14 @@ struct PlaylistRuleTests {
 
     @Test("Decoding normalizes the stored rule")
     func decodeNormalizes() throws {
-        let json = #"{"version":1,"status":"downloaded","podcastIDs":[],"limit":0,"minimumMinutes":-5,"maximumAgeDays":-1}"#
+        let json = #"{"version":1,"status":"downloaded","podcastIDs":[],"priorityPodcastIDs":[],"limit":0,"minimumMinutes":-5,"maximumAgeDays":-1}"#
 
         let rule = try #require(PlaylistRule.decode(json))
 
         #expect(rule.status == .all)
         #expect(rule.downloadedOnly)
         #expect(rule.podcastIDs == nil)
+        #expect(rule.priorityPodcastIDs == nil)
         #expect(rule.limit == nil)
         #expect(rule.minimumMinutes == nil)
         #expect(rule.maximumAgeDays == nil)
@@ -149,6 +171,21 @@ struct PlaylistRuleTests {
         #expect(listed.normalized().podcastIDs == [Self.alphaID, Self.bravoID, Self.charlieID])
         #expect(PlaylistRule(podcastIDs: []).normalized().podcastIDs == nil)
         #expect(PlaylistRule(podcastIDs: nil).normalized().podcastIDs == nil)
+    }
+
+    @Test("Normalizing deduplicates priority IDs in rank order and keeps only the listed shows")
+    func normalizedPriorityIDsKeepOrderAndRespectShows() {
+        let ranked = [Self.charlieID, Self.alphaID, Self.charlieID, Self.bravoID]
+
+        #expect(PlaylistRule(priorityPodcastIDs: ranked).normalized().priorityPodcastIDs == [Self.charlieID, Self.alphaID, Self.bravoID])
+        #expect(
+            PlaylistRule(podcastIDs: [Self.bravoID, Self.alphaID], priorityPodcastIDs: ranked)
+                .normalized().priorityPodcastIDs == [Self.alphaID, Self.bravoID]
+        )
+        #expect(PlaylistRule(podcastIDs: [Self.alphaID], priorityPodcastIDs: [Self.bravoID]).normalized().priorityPodcastIDs == nil)
+        // An empty show list is All Shows, so the priority survives.
+        #expect(PlaylistRule(podcastIDs: [], priorityPodcastIDs: [Self.alphaID]).normalized().priorityPodcastIDs == [Self.alphaID])
+        #expect(PlaylistRule(priorityPodcastIDs: []).normalized().priorityPodcastIDs == nil)
     }
 
     @Test("Normalizing drops a zero or negative limit and negative lengths and ages")
@@ -205,6 +242,26 @@ struct PlaylistRuleTests {
         )
     }
 
+    @Test("Replacing a moved show rewrites the priority too, keeping its rank, and collapses repeats")
+    func replacingPodcastIDsInPriority() {
+        let priorityOnly = PlaylistRule(priorityPodcastIDs: [Self.bravoID, Self.alphaID])
+        let movedPriorityOnly = priorityOnly.replacingPodcastIDs(where: { $0 == Self.alphaID }, with: Self.charlieID)
+        #expect(movedPriorityOnly?.podcastIDs == nil)
+        #expect(movedPriorityOnly?.priorityPodcastIDs == [Self.bravoID, Self.charlieID])
+
+        let both = PlaylistRule(podcastIDs: [Self.alphaID, Self.bravoID], priorityPodcastIDs: [Self.alphaID])
+        let movedBoth = both.replacingPodcastIDs(where: { $0 == Self.alphaID }, with: Self.charlieID)
+        #expect(movedBoth?.podcastIDs == [Self.bravoID, Self.charlieID])
+        #expect(movedBoth?.priorityPodcastIDs == [Self.charlieID])
+
+        #expect(
+            PlaylistRule(priorityPodcastIDs: [Self.alphaID, Self.bravoID])
+                .replacingPodcastIDs(where: { $0 == Self.alphaID }, with: Self.bravoID)?
+                .priorityPodcastIDs == [Self.bravoID]
+        )
+        #expect(priorityOnly.replacingPodcastIDs(where: { $0 == Self.charlieID }, with: Self.alphaID) == nil)
+    }
+
     // MARK: - Titles
 
     @Test("The Episodes chip names the status and adds Downloaded for Downloaded Only")
@@ -242,6 +299,24 @@ struct PlaylistRuleTests {
         #expect(
             PlaylistRule(podcastIDs: ["https://example.com/departed.xml"])
                 .showsTitle(subscribedPodcastIDs: subscribed) == "No Shows"
+        )
+    }
+
+    @Test("The Priority chip counts only ranked shows that are still subscribed, in agreeing number")
+    func priorityTitles() {
+        let subscribed: Set = [Self.alphaID, Self.bravoID, Self.charlieID]
+        let departedID = "https://example.com/departed.xml"
+
+        #expect(PlaylistRule().priorityTitle(subscribedPodcastIDs: subscribed) == "No Priority")
+        #expect(PlaylistRule(priorityPodcastIDs: [Self.alphaID]).priorityTitle(subscribedPodcastIDs: subscribed) == "1 Show First")
+        #expect(
+            PlaylistRule(priorityPodcastIDs: [Self.alphaID, Self.bravoID])
+                .priorityTitle(subscribedPodcastIDs: subscribed) == "2 Shows First"
+        )
+        #expect(PlaylistRule(priorityPodcastIDs: [departedID]).priorityTitle(subscribedPodcastIDs: subscribed) == "No Priority")
+        #expect(
+            PlaylistRule(priorityPodcastIDs: [Self.alphaID, departedID])
+                .priorityTitle(subscribedPodcastIDs: subscribed) == "1 Show First"
         )
     }
 

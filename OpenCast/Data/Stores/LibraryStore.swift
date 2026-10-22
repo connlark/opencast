@@ -223,6 +223,15 @@ final class LibraryStore {
         episodes
     }
 
+    /// Subscriptions in the Library's title order, one per feed even while
+    /// sync twins of a subscription are waiting for repair.
+    var uniqueSubscriptions: [SubscriptionRecord] {
+        var seenFeedURLs = Set<String>()
+        return subscriptions.filter { subscription in
+            seenFeedURLs.insert(subscription.feedURL).inserted
+        }
+    }
+
     var latestRefreshOverall: RefreshLogSnapshot? {
         refreshLogs.first
     }

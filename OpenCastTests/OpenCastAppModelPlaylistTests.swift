@@ -195,14 +195,25 @@ struct OpenCastAppModelPlaylistTests {
         #expect(appModel.playlists.playlists == reloaded.playlists)
     }
 
-    @Test("A feed-address move carries a smart rule's shows onto the new feed URL without an edit")
+    @Test("A feed-address move carries a smart rule's shows and ranks onto the new feed URL without an edit")
     func feedMoveRekeysSmartRuleShows() async throws {
         let fixture = try await makeFeedMoveFixture()
         let appModel = try makeAppModel(library: fixture.makeLibrary())
         await appModel.ensureCoreStoresLoaded(modelContext: fixture.context)
         let otherFeedURL = "https://other.example.com/feed.xml"
         let smart = try createSmartPlaylist(
-            PlaylistRule(podcastIDs: [Self.departedFeedURL, otherFeedURL], status: .all),
+            PlaylistRule(
+                podcastIDs: [Self.departedFeedURL, otherFeedURL],
+                priorityPodcastIDs: [otherFeedURL, Self.departedFeedURL],
+                status: .all
+            ),
+            appModel: appModel,
+            context: fixture.context
+        )
+        // All Shows with only a priority: the move must still rewrite the rule.
+        let rankedOnly = try createSmartPlaylist(
+            PlaylistRule(priorityPodcastIDs: [Self.departedFeedURL], status: .all),
+            name: "Ranked",
             appModel: appModel,
             context: fixture.context
         )
@@ -216,7 +227,12 @@ struct OpenCastAppModelPlaylistTests {
 
         let migrated = try playlistSummary(smart.playlistID, appModel: appModel)
         #expect(migrated.rule?.podcastIDs == [Self.movedFeedURL, otherFeedURL])
+        #expect(migrated.rule?.priorityPodcastIDs == [otherFeedURL, Self.movedFeedURL])
         #expect(migrated.updatedAt == smart.updatedAt)
+        let migratedRankedOnly = try playlistSummary(rankedOnly.playlistID, appModel: appModel)
+        #expect(migratedRankedOnly.rule?.podcastIDs == nil)
+        #expect(migratedRankedOnly.rule?.priorityPodcastIDs == [Self.movedFeedURL])
+        #expect(migratedRankedOnly.updatedAt == rankedOnly.updatedAt)
         #expect(appModel.smartPlaylistEvaluation(for: migrated).episodes.map(\.episodeID) == [fixture.successorEpisodeID])
         let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
         reloaded.load(modelContext: ModelContext(fixture.container))
@@ -583,6 +599,62 @@ struct OpenCastAppModelPlaylistTests {
         #expect(appModel.lastPlaylistError == nil)
         #expect(appModel.lastPlaybackError == nil)
         #expect(appModel.lastUpNextError == nil)
+    }
+
+    @Test("Smart Play on a ranked rule plays the prioritized show first and queues the rest in rank order")
+    func smartPlayFollowsPriority() async throws {
+        let fixture = try await makePlayableFixture()
+        let appModel = fixture.appModel
+        let context = fixture.context
+        let otherFeedURL = try #require(URL(string: Self.otherPodcastID))
+        let otherPodcast = Podcast(id: PodcastID(rawValue: Self.otherPodcastID), feedURL: otherFeedURL, title: "Other Show")
+        try await fixture.cache.upsertCache(
+            from: FeedSnapshot(
+                podcast: otherPodcast,
+                episodes: ["other-a", "other-b"].map { id in
+                    Episode(
+                        id: EpisodeID(rawValue: id),
+                        podcastID: otherPodcast.id,
+                        podcastTitle: otherPodcast.title,
+                        title: "Episode \(id)",
+                        duration: 60,
+                        audioURL: URL(string: "https://example.com/\(id).mp3"),
+                        guid: id
+                    )
+                }
+            ),
+            refreshedAt: .now
+        )
+        context.insert(SubscriptionRecord(feedURL: Self.otherPodcastID, title: "Other Show"))
+        try context.save()
+        #expect(await appModel.library.load(modelContext: context))
+        let unranked = try createSmartPlaylist(PlaylistRule(status: .unplayed), appModel: appModel, context: context)
+        let ranked = try createSmartPlaylist(
+            PlaylistRule(priorityPodcastIDs: [Self.otherPodcastID], status: .unplayed),
+            name: "Ranked",
+            appModel: appModel,
+            context: context
+        )
+
+        // Without dates, Newest First falls back to titles, so the other
+        // show's episodes trail the playlist show's until ranked.
+        #expect(
+            appModel.smartPlaylistEvaluation(for: unranked).episodes.map(\.episodeID)
+                == ["first", "fourth", "other-a", "other-b", "silent", "third"]
+        )
+        #expect(
+            appModel.smartPlaylistEvaluation(for: ranked).episodes.map(\.episodeID)
+                == ["other-a", "other-b", "first", "fourth", "silent", "third"]
+        )
+
+        let started = appModel.playPlaylist(ranked.playlistID, modelContext: context)
+
+        #expect(started)
+        #expect(appModel.playback.currentEpisode?.id.rawValue == "other-a")
+        #expect(appModel.upNextQueue.items.map(\.episodeID) == ["other-b", "first", "fourth", "silent", "third"])
+        #expect(appModel.upNextQueue.items.allSatisfy { $0.sourcePlaylistID == ranked.playlistID })
+        #expect(appModel.lastPlaylistError == nil)
+        #expect(appModel.lastPlaybackError == nil)
     }
 
     @Test("Smart Play takes the rule's limited list, then skips its played episodes")

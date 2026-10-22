@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// A smart playlist's rule as six glass chips that edit it in place:
-/// Episodes, Shows, Sort, Length, Age and Limit. Each chip reads as its
-/// current value; Shows opens a sheet, the others a menu. The chips only
+/// A smart playlist's rule as seven glass chips that edit it in place:
+/// Episodes, Shows, Priority, Sort, Length, Age and Limit. Each chip reads
+/// as its current value; Shows and Priority open sheets, the others a menu. The chips only
 /// report a changed rule through `onChange`; the caller saves it. At
 /// accessibility sizes they stack one per line.
 struct SmartPlaylistRuleChips: View {
@@ -33,6 +33,7 @@ struct SmartPlaylistRuleChips: View {
             layout {
                 PlaylistEpisodesRuleMenu(rule: rule, onChange: commit)
                 PlaylistShowsRuleChip(rule: rule, onChange: commit)
+                PlaylistPriorityRuleChip(rule: rule, onChange: commit)
                 PlaylistRulePickerChip(
                     clause: "Sort",
                     systemImage: "arrow.up.arrow.down",

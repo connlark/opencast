@@ -1,12 +1,11 @@
 import SwiftUI
 
-/// One row of the Shows picker: a 40-point leading image, the title, and a
-/// checkmark while the row is included. The whole row is one button, and
-/// its accessibility label is the title alone.
+/// One row of the Shows or Priority picker: a 40-point leading image, the
+/// title, and a trailing checkmark, add or remove control. The whole row is
+/// one button, and its accessibility label is the title alone.
 struct PlaylistShowsPickerRow<Leading: View>: View {
     let title: String
-    let isSelected: Bool
-    /// The row's identifier suffix: a feed URL, or "all".
+    let accessory: PlaylistShowsPickerRowAccessory
     let identifier: String
     let action: () -> Void
     @ViewBuilder let leading: Leading
@@ -23,14 +22,40 @@ struct PlaylistShowsPickerRow<Leading: View>: View {
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                Image(systemName: "checkmark")
-                    .foregroundStyle(.tint)
-                    .opacity(isSelected ? 1 : 0)
+                trailingImage
                     .accessibilityHidden(true)
             }
             .contentShape(.rect)
         }
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityIdentifier("shows-picker-row-\(identifier)")
+        .accessibilityAddTraits(accessory == .checkmark(isSelected: true) ? .isSelected : [])
+        .accessibilityHint(accessibilityHint)
+        .accessibilityIdentifier(identifier)
+    }
+
+    @ViewBuilder
+    private var trailingImage: some View {
+        switch accessory {
+        case .checkmark(let isSelected):
+            Image(systemName: "checkmark")
+                .foregroundStyle(.tint)
+                .opacity(isSelected ? 1 : 0)
+        case .add:
+            Image(systemName: "plus.circle.fill")
+                .foregroundStyle(.tint)
+        case .remove:
+            Image(systemName: "minus.circle.fill")
+                .foregroundStyle(.red)
+        }
+    }
+
+    private var accessibilityHint: String {
+        switch accessory {
+        case .checkmark:
+            ""
+        case .add:
+            "Adds to First"
+        case .remove:
+            "Removes from First"
+        }
     }
 }

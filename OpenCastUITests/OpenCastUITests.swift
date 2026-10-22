@@ -24,6 +24,7 @@ final class OpenCastUITests: XCTestCase {
     private static let defaultSmartRuleChipLabels = [
         (clause: "Episodes", value: "Unplayed"),
         (clause: "Shows", value: "All Shows"),
+        (clause: "Priority", value: "No Priority"),
         (clause: "Sort", value: "Newest First"),
         (clause: "Length", value: "Any Length"),
         (clause: "Age", value: "Any Time"),
@@ -7250,6 +7251,78 @@ final class OpenCastUITests: XCTestCase {
         assertSmartRuleChips([(clause: "Shows", value: "All Shows")], in: app)
     }
 
+    /// Tapping shows in the Priority sheet ranks them in tap order; the
+    /// detail then lists the ranked shows' episodes first, rank beating the
+    /// date order, the ranking survives leaving the playlist, and removing
+    /// every ranked show returns the rule to No Priority.
+    @MainActor
+    func testSeededSmartPlaylistPriorityChipRanksShowsFirst() throws {
+        let app = makeSeededApp(seedsPlaylists: true, extraFeedCount: 2)
+        app.launch()
+        let defaultOrder = ["ui-test-episode-1", "ui-test-extra-episode-1", "ui-test-extra-episode-2"]
+        let firstExtraFeedURL = "https://example.com/ui-test-extra-1.xml"
+        let secondExtraFeedURL = "https://example.com/ui-test-extra-2.xml"
+
+        openPlaylistsCollection(in: app)
+        openSeededSmartPlaylist(in: app)
+        assertSmartRuleChips(Self.defaultSmartRuleChipLabels, in: app)
+        assertPlaylistCountLine(reads: "3 episodes", in: app)
+        assertSmartPlaylistRows(defaultOrder, in: app)
+        scrollToSmartRuleChips(revealing: "Priority", in: app)
+
+        openPriorityPicker(in: app)
+        attachSmokeScreenshot(named: "playlists_smart_priority_picker_open")
+        // Rank the older show first: rank must beat the date order.
+        for feedURL in [secondExtraFeedURL, firstExtraFeedURL] {
+            let row = priorityPickerRow("priority-picker-row-\(feedURL)", in: app)
+            assertHittable(row, named: "Priority picker row for \(feedURL)")
+            row.tap()
+            assertExists(
+                priorityPickerRow("priority-picker-first-\(feedURL)", in: app),
+                named: "First row for \(feedURL)"
+            )
+        }
+        let secondFirstRow = priorityPickerRow("priority-picker-first-\(secondExtraFeedURL)", in: app)
+        let firstFirstRow = priorityPickerRow("priority-picker-first-\(firstExtraFeedURL)", in: app)
+        XCTAssertLessThan(
+            secondFirstRow.frame.midY,
+            firstFirstRow.frame.midY,
+            "The first show tapped should rank above the second"
+        )
+        // A row that joined First as a cell moved from Shows had no handle.
+        let reorderHandles = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Reorder UI Test Extra Show"))
+        XCTAssertTrue(
+            waitUntil { reorderHandles.count == 2 },
+            "Each ranked show should have a reorder handle; found \(reorderHandles.count)"
+        )
+        attachSmokeScreenshot(named: "playlists_smart_priority_picker_first")
+        closePriorityPicker(in: app)
+
+        assertSmartRuleChips([(clause: "Priority", value: "2 Shows First")], in: app)
+        assertPlaylistCountLine(reads: "3 episodes", in: app)
+        assertSmartPlaylistRows(["ui-test-extra-episode-2", "ui-test-extra-episode-1", "ui-test-episode-1"], in: app)
+        attachSmokeScreenshot(named: "playlists_smart_priority_ranked")
+
+        // The store reseeds on relaunch, so reopening is how the saved rule shows.
+        tapBackButton(in: app)
+        assertExists(app.navigationBars["Playlists"], named: "Playlists collection after ranking shows")
+        openSeededSmartPlaylist(in: app)
+        assertSmartRuleChips([(clause: "Priority", value: "2 Shows First")], in: app)
+        openPriorityPicker(in: app)
+        for feedURL in [secondExtraFeedURL, firstExtraFeedURL] {
+            let firstRow = priorityPickerRow("priority-picker-first-\(feedURL)", in: app)
+            assertHittable(firstRow, named: "First row for \(feedURL) after reopening")
+            firstRow.tap()
+            assertExists(
+                priorityPickerRow("priority-picker-row-\(feedURL)", in: app),
+                named: "Shows row for \(feedURL) after removing it"
+            )
+        }
+        closePriorityPicker(in: app)
+        assertSmartRuleChips([(clause: "Priority", value: "No Priority")], in: app)
+        assertSmartPlaylistRows(defaultOrder, in: app)
+    }
+
     private static let transcriptIntelligenceAskEnableArgument = "--transcript-intelligence-ask-enabled"
     private static let askTitle = "Ask About This Episode"
 
@@ -9644,6 +9717,41 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(picker.waitForNonExistence(timeout: 5), "The Shows picker should close on Done", file: file, line: line)
     }
 
+    /// A row of the open Priority picker by identifier: a ranked show's First
+    /// row and its Shows row carry the same title.
+    @MainActor
+    private func priorityPickerRow(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: identifier).firstMatch
+    }
+
+    /// Taps the Priority chip and waits for its picker sheet.
+    @MainActor
+    private func openPriorityPicker(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let chip = smartRuleChip("Priority", in: app)
+        assertHittable(chip, named: "Smart Rule Priority chip", file: file, line: line)
+        // A push or scroll still in flight would take the tap instead.
+        XCTAssertTrue(waitForStableFrame(of: chip), "The Priority chip should settle before the tap", file: file, line: line)
+        chip.tap()
+        assertExists(app.navigationBars["Priority"], named: "Priority picker sheet", file: file, line: line)
+    }
+
+    @MainActor
+    private func closePriorityPicker(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let picker = app.navigationBars["Priority"]
+        let done = picker.buttons["Done"]
+        assertHittable(done, named: "Priority picker Done button", file: file, line: line)
+        done.tap()
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 5), "The Priority picker should close on Done", file: file, line: line)
+    }
+
     @MainActor
     private func smartPlaylistRow(_ episodeID: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: "playlist-episode-\(episodeID)").firstMatch
@@ -9736,17 +9844,21 @@ final class OpenCastUITests: XCTestCase {
         }
     }
 
+    /// Scrolls the detail back up until `clause`'s chip can take a tap; a
+    /// chip on a lower line can still sit under the title bar when the
+    /// Episodes chip is already reachable.
     @MainActor
     private func scrollToSmartRuleChips(
+        revealing clause: String = "Episodes",
         in app: XCUIApplication,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let chip = smartRuleChip("Episodes", in: app)
+        let chip = smartRuleChip(clause, in: app)
         for _ in 0..<4 where !(chip.exists && chip.isHittable) {
             app.swipeDown()
         }
-        assertHittable(chip, named: "Smart Rule Episodes chip after scrolling back", file: file, line: line)
+        assertHittable(chip, named: "Smart Rule \(clause) chip after scrolling back", file: file, line: line)
         // A tap while the list still decelerates only stops the scroll.
         XCTAssertTrue(waitForStableFrame(of: chip), "The chips should settle after scrolling back", file: file, line: line)
     }

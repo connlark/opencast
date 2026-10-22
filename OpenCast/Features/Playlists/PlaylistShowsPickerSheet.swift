@@ -19,7 +19,7 @@ struct PlaylistShowsPickerSheet: View {
 
     var body: some View {
         @Bindable var appModel = appModel
-        let shows = subscribedShows
+        let shows = appModel.library.uniqueSubscriptions
 
         NavigationStack {
             // Always attached: removing a conditional `.searchable` mid-update
@@ -63,8 +63,8 @@ struct PlaylistShowsPickerSheet: View {
                 Section {
                     PlaylistShowsPickerRow(
                         title: "All Shows",
-                        isSelected: rule.podcastIDs == nil,
-                        identifier: "all",
+                        accessory: .checkmark(isSelected: rule.podcastIDs == nil),
+                        identifier: "shows-picker-row-all",
                         action: pickAllShows
                     ) {
                         Image(systemName: "books.vertical")
@@ -82,11 +82,11 @@ struct PlaylistShowsPickerSheet: View {
                 ForEach(matches, id: \.feedURL) { show in
                     PlaylistShowsPickerRow(
                         title: show.title,
-                        isSelected: pickedIDs.contains(show.feedURL),
-                        identifier: show.feedURL,
+                        accessory: .checkmark(isSelected: pickedIDs.contains(show.feedURL)),
+                        identifier: "shows-picker-row-\(show.feedURL)",
                         action: { toggle(show.feedURL) }
                     ) {
-                        artwork(for: show)
+                        PlaylistShowsPickerArtwork(show: show)
                     }
                 }
             }
@@ -98,26 +98,6 @@ struct PlaylistShowsPickerSheet: View {
             }
         }
         .accessibilityIdentifier("Shows Picker")
-    }
-
-    private func artwork(for show: SubscriptionRecord) -> some View {
-        let podcastCache = appModel.library.podcastCache(for: show.feedURL)
-        return ArtworkPlaceholder(
-            title: show.title,
-            imageURL: podcastCache?.artworkURL ?? show.artworkURL,
-            size: 40,
-            preview: podcastCache.flatMap { appModel.library.artworkPreview(for: $0) }
-        )
-        .clipShape(.rect(cornerRadius: 8))
-    }
-
-    /// Subscribed shows in the Library's title order, one row per feed even
-    /// while sync twins of a subscription are waiting for repair.
-    private var subscribedShows: [SubscriptionRecord] {
-        var seenFeedURLs = Set<String>()
-        return appModel.library.subscriptions.filter { subscription in
-            seenFeedURLs.insert(subscription.feedURL).inserted
-        }
     }
 
     private func pickAllShows() {

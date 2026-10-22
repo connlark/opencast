@@ -50,22 +50,37 @@ enum SmartPlaylistEvaluator {
             return rule.status.includes(progress: library.progressSummary(for: episode), isDownloaded: false)
         }
 
-        // The episode ID settles ties, since Newest First has none of its own.
+        // Prioritized shows lead in rank order, then the sort order applies
+        // within each show and across the rest; the episode ID settles ties,
+        // since Newest First has none of its own. Normalization already
+        // deduplicated the rank list, which `uniqueKeysWithValues` requires.
         let sortOrder = rule.sortOrder
+        let rankByPodcastID = Dictionary(
+            uniqueKeysWithValues: (rule.priorityPodcastIDs ?? []).enumerated().map { ($1, $0) }
+        )
+        let unrankedPosition = rankByPodcastID.count
+        func rank(_ episode: EpisodeListItemSnapshot) -> Int {
+            rankByPodcastID[episode.podcastID] ?? unrankedPosition
+        }
         func precedes(_ lhs: EpisodeListItemSnapshot, _ rhs: EpisodeListItemSnapshot) -> Bool {
-            sortOrder.areInIncreasingOrder(lhs, rhs)
+            let lhsRank = rank(lhs)
+            let rhsRank = rank(rhs)
+            guard lhsRank == rhsRank else {
+                return lhsRank < rhsRank
+            }
+            return sortOrder.areInIncreasingOrder(lhs, rhs)
                 || (!sortOrder.areInIncreasingOrder(rhs, lhs) && lhs.episodeID < rhs.episodeID)
         }
 
         // Downloaded Only reads its handful of downloads instead of the whole
         // library. The library itself is already in Newest First order with
-        // the same episode ID tie-break, so that order needs no sort and stops
-        // at the limit.
+        // the same episode ID tie-break, so that order with no priority needs
+        // no sort and stops at the limit.
         let showIDs = rule.podcastIDs.map { Set($0) }
         let source = downloadedEpisodeIDs.map { episodeIDs in
             episodeIDs.compactMap { library.episode(with: $0) }
         } ?? library.episodes
-        let isInSourceOrder = downloadedEpisodeIDs == nil && sortOrder == .newestFirst
+        let isInSourceOrder = downloadedEpisodeIDs == nil && sortOrder == .newestFirst && rankByPodcastID.isEmpty
         let limit = rule.limit
         var episodes: [EpisodeListItemSnapshot] = []
         for episode in source {

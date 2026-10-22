@@ -16,6 +16,10 @@ nonisolated struct PlaylistRule: Codable, Hashable, Sendable {
     /// Canonical feed URLs; nil means every subscribed show and is never
     /// stored as an empty list.
     var podcastIDs: [String]?
+    /// Canonical feed URLs whose episodes come first, in this order; nil means
+    /// no priority and is never stored as an empty list. Only shows in
+    /// `podcastIDs` count while that list is set.
+    var priorityPodcastIDs: [String]?
     /// Never `.downloaded`: normalization moves it to `downloadedOnly`.
     var status: PodcastEpisodeFilter = .unplayed
     var downloadedOnly = false
@@ -31,6 +35,7 @@ nonisolated struct PlaylistRule: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case version
         case podcastIDs
+        case priorityPodcastIDs
         case status
         case downloadedOnly
         case minimumMinutes
@@ -60,6 +65,7 @@ nonisolated extension PlaylistRule {
         self.init(
             version: version,
             podcastIDs: try container.decodeIfPresent([String].self, forKey: .podcastIDs),
+            priorityPodcastIDs: try container.decodeIfPresent([String].self, forKey: .priorityPodcastIDs),
             status: try container.decodeIfPresent(PodcastEpisodeFilter.self, forKey: .status) ?? .unplayed,
             downloadedOnly: try container.decodeIfPresent(Bool.self, forKey: .downloadedOnly) ?? false,
             minimumMinutes: try container.decodeIfPresent(Int.self, forKey: .minimumMinutes),
@@ -92,13 +98,24 @@ nonisolated extension PlaylistRule {
     }
 
     /// The canonical form: show IDs deduplicated and sorted so toggle order
-    /// never changes the stored rule, out-of-range numbers dropped, and the
-    /// Downloaded filter moved to its own clause.
+    /// never changes the stored rule, priority IDs deduplicated in their rank
+    /// order and confined to the listed shows, out-of-range numbers dropped,
+    /// and the Downloaded filter moved to its own clause.
     func normalized() -> PlaylistRule {
         var rule = self
         if let podcastIDs {
             let uniqueIDs = Set(podcastIDs).sorted()
             rule.podcastIDs = uniqueIDs.isEmpty ? nil : uniqueIDs
+        }
+        // After the show IDs, so an empty show list has already become All
+        // Shows and keeps its priority.
+        if let priorityPodcastIDs {
+            let allowedIDs = rule.podcastIDs.map(Set.init)
+            var seenIDs = Set<String>()
+            let orderedIDs = priorityPodcastIDs.filter { podcastID in
+                (allowedIDs?.contains(podcastID) ?? true) && seenIDs.insert(podcastID).inserted
+            }
+            rule.priorityPodcastIDs = orderedIDs.isEmpty ? nil : orderedIDs
         }
         if let limit, limit <= 0 {
             rule.limit = nil
@@ -119,18 +136,21 @@ nonisolated extension PlaylistRule {
         return rule
     }
 
-    /// The normalized rule with every listed show that `isMoved` matches
-    /// replaced by `newPodcastID`, for a subscription that moved to a new
-    /// feed URL; nil when the rule lists none of them.
+    /// The normalized rule with every listed or prioritized show that
+    /// `isMoved` matches replaced by `newPodcastID`, for a subscription that
+    /// moved to a new feed URL; nil when the rule names none of them.
     func replacingPodcastIDs(
         where isMoved: (String) -> Bool,
         with newPodcastID: String
     ) -> PlaylistRule? {
-        guard let podcastIDs, podcastIDs.contains(where: isMoved) else {
+        let listsMovedShow = podcastIDs?.contains(where: isMoved) ?? false
+        let ranksMovedShow = priorityPodcastIDs?.contains(where: isMoved) ?? false
+        guard listsMovedShow || ranksMovedShow else {
             return nil
         }
         var rule = self
-        rule.podcastIDs = podcastIDs.map { isMoved($0) ? newPodcastID : $0 }
+        rule.podcastIDs = podcastIDs?.map { isMoved($0) ? newPodcastID : $0 }
+        rule.priorityPodcastIDs = priorityPodcastIDs?.map { isMoved($0) ? newPodcastID : $0 }
         return rule.normalized()
     }
 
@@ -161,6 +181,15 @@ nonisolated extension PlaylistRule {
             return "No Shows"
         }
         return String(AttributedString(localized: "^[\(count) Show](inflect: true)").characters)
+    }
+
+    /// "No Priority", "1 Show First", "2 Shows First"; counts only subscribed shows.
+    func priorityTitle(subscribedPodcastIDs: Set<String>) -> String {
+        let count = priorityPodcastIDs?.count(where: { subscribedPodcastIDs.contains($0) }) ?? 0
+        guard count > 0 else {
+            return "No Priority"
+        }
+        return String(AttributedString(localized: "^[\(count) Show](inflect: true) First").characters)
     }
 
     var sortTitle: String {
