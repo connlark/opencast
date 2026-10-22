@@ -60,6 +60,10 @@ enum OpenCastUITestSeedData {
     private static let playlistsEnvironmentKey = "OPENCAST_SEED_PLAYLISTS"
     private static let playlistQueueItemsEnvironmentKey = "OPENCAST_SEED_PLAYLIST_QUEUE_ITEMS"
     private static let playlistPlaybackSourceEnvironmentKey = "OPENCAST_SEED_PLAYLIST_PLAYBACK_SOURCE"
+    /// Gives each extra feed's episode a completed download of a different
+    /// size, so the Downloads storage bar has several shows to draw.
+    private static let extraFeedDownloadsEnvironmentKey = "OPENCAST_SEED_EXTRA_FEED_DOWNLOADS"
+    private static let extraFeedDownloadSeconds = [720, 480, 240, 150, 90, 45, 20, 10]
     private static let missingPlaylistPodcastID = "https://example.com/ui-test-removed-show.xml"
     private static let libraryRecentCompletedEpisodeID = "ui-test-recent-completed-episode"
     private static let secondsPerHour: TimeInterval = 60 * 60
@@ -90,6 +94,9 @@ enum OpenCastUITestSeedData {
         let usesBadAudioURL = ProcessInfo.processInfo.environment["OPENCAST_SEED_BAD_AUDIO_URL"] == "1"
         let usesLongShowNotes = ProcessInfo.processInfo.environment["OPENCAST_SEED_LONG_SHOW_NOTES"] == "1"
         let extraFeedCount = Int(ProcessInfo.processInfo.environment["OPENCAST_SEED_EXTRA_FEED_COUNT"] ?? "") ?? 0
+        let seedsExtraFeedDownloads = ProcessInfo.processInfo.environment[
+            extraFeedDownloadsEnvironmentKey
+        ] == "1"
         let overrideAudioFileURL = ProcessInfo.processInfo.environment["OPENCAST_SEED_AUDIO_FILE_URL"]
         let overriddenAudioDuration = Int(
             ProcessInfo.processInfo.environment["OPENCAST_SEED_AUDIO_DURATION_SECONDS"] ?? ""
@@ -242,6 +249,7 @@ enum OpenCastUITestSeedData {
 
         try seedExtraFeeds(
             count: extraFeedCount,
+            seedsCompletedDownloads: seedsExtraFeedDownloads,
             cacheStore: cacheStore,
             context: context,
             audioURL: audioURL,
@@ -397,6 +405,7 @@ enum OpenCastUITestSeedData {
                 state: .completed,
                 bytesReceived: Int64(data.count),
                 bytesExpected: Int64(data.count),
+                completedAt: refreshedAt,
                 createdAt: refreshedAt,
                 updatedAt: refreshedAt
             )
@@ -1001,6 +1010,7 @@ enum OpenCastUITestSeedData {
 
     private static func seedExtraFeeds(
         count: Int,
+        seedsCompletedDownloads: Bool,
         cacheStore: SQLiteLocalLibraryCacheStore,
         context: ModelContext,
         audioURL: String,
@@ -1058,7 +1068,56 @@ enum OpenCastUITestSeedData {
                 podcastArtworkPreview: resolvedArtworkPreview,
                 episodeArtworkPreviews: resolvedArtworkPreview.map { [episodeID: $0] } ?? [:]
             )
+            if seedsCompletedDownloads {
+                try seedCompletedDownload(
+                    episodeID: episodeID,
+                    podcastID: feedURL,
+                    sourceAudioURL: audioURL,
+                    durationSeconds: index <= extraFeedDownloadSeconds.count ? extraFeedDownloadSeconds[index - 1] : 10,
+                    context: context,
+                    completedAt: refreshedAt.addingTimeInterval(Double(-index))
+                )
+            }
         }
+    }
+
+    /// Writes a fresh WAV of `durationSeconds` straight into the episode's
+    /// download slot, leaving the shared seed audio file untouched.
+    private static func seedCompletedDownload(
+        episodeID: String,
+        podcastID: String,
+        sourceAudioURL: String,
+        durationSeconds: Int,
+        context: ModelContext,
+        completedAt: Date
+    ) throws {
+        let fileStore = EpisodeDownloadFileStore()
+        guard let sourceURL = URL(string: sourceAudioURL) else {
+            return
+        }
+        let relativePath = fileStore.relativePath(episodeID: episodeID, sourceAudioURL: sourceURL)
+        try fileStore.prepareDownloadsDirectory()
+        let fileURL = try PCM16WAVWriter.write(
+            to: fileStore.fileURL(relativePath: relativePath),
+            durationSeconds: durationSeconds
+        ) { phase in
+            sin(phase * 330 * 2 * .pi) * 0.2
+        }
+        let data = try Data(contentsOf: fileURL)
+        let download = EpisodeDownloadRecord(
+            episodeID: episodeID,
+            podcastID: podcastID,
+            sourceAudioURL: sourceAudioURL,
+            localRelativePath: relativePath,
+            state: .completed,
+            bytesReceived: Int64(data.count),
+            bytesExpected: Int64(data.count),
+            completedAt: completedAt,
+            createdAt: completedAt,
+            updatedAt: completedAt
+        )
+        download.sourceFileSHA256 = OpenCastSHA256.hash(data)
+        context.insert(download)
     }
 
     /// The main show's badge fixtures around its subscription 20 days before

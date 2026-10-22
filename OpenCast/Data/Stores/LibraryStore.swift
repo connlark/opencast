@@ -73,6 +73,9 @@ final class LibraryStore {
     var refreshCompletedToken: Int {
         feedRefreshes.refreshCompletedToken
     }
+    var contentRefreshToken: Int {
+        feedRefreshes.contentRefreshToken
+    }
     /// Set when a refresh could not reach the network at all; cleared by any
     /// refresh that reached a feed host and by `recoverConnectivity`.
     var lastRefreshWasOffline: Bool {

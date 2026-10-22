@@ -15,6 +15,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     @State private var connectivityRecoveryTask: Task<Void, Never>?
     @State private var hasPendingConnectivityRefresh = false
     @State private var deferredConnectivityRefreshTask: Task<Void, Never>?
+    @State private var autoDownloadSceneID = UUID()
 
     private static let postNowPlayingDismissMaintenanceDelay: TimeInterval = 0.75
     private static let inactiveTranscriptionInterruptionDelay: Duration = .seconds(2)
@@ -29,8 +30,12 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .task {
+                appModel.setAutoDownloadsScene(autoDownloadSceneID, isActive: scenePhase == .active)
                 appModel.configureBackgroundSessionExpirations(modelContext: modelContext)
                 await performInitialSetup()
+            }
+            .onDisappear {
+                appModel.removeAutoDownloadsScene(autoDownloadSceneID)
             }
             .onChange(of: scenePhase) { _, newPhase in
                 handleScenePhaseChange(newPhase)
@@ -45,6 +50,11 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             }
             .onChange(of: appModel.library.refreshCompletedToken) { _, _ in
                 appModel.adFreePass.probeCapDeferredQueueIfAllowed(trigger: .refreshCompleted)
+            }
+            .onChange(of: appModel.library.contentRefreshToken) { _, _ in
+                if scenePhase == .active {
+                    appModel.scheduleAutoDownloadPass(modelContext: modelContext)
+                }
             }
     }
 
@@ -75,6 +85,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             deferredTranscriptionInterruptionTask?.cancel()
             deferredTranscriptionInterruptionTask = nil
             hasFlushedProgressForLifecycleExit = false
+            appModel.setAutoDownloadsScene(autoDownloadSceneID, isActive: true)
             appModel.resumeEnvironmentalAdFreePassIfNeeded(modelContext: modelContext)
             appModel.reattachRemoteJobsIfNeeded(modelContext: modelContext, trigger: .sceneActivated)
             appModel.retryDeferredTranscriptAnalyses(modelContext: modelContext, trigger: .sceneActivated)
@@ -160,6 +171,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         appModel.library.refreshProgressRecords(modelContext: modelContext)
         appModel.refreshCurrentVoiceBoostSetting(modelContext: modelContext)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
+        appModel.trimDownloadsToKeepLimits(modelContext: modelContext)
         foregroundMaintenanceTask = Task {
             // Only the reload + duplicate-repair pass is gated; the cheaper,
             // internally throttled refreshes below always run on activation.
@@ -170,6 +182,11 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
                 }
             }
             await appModel.refreshLibraryIfStale(modelContext: modelContext)
+            guard !Task.isCancelled else {
+                return
+            }
+            // Wi-Fi may be back with nothing stale to refresh.
+            await appModel.runAutoDownloadPass(modelContext: modelContext)
             guard !Task.isCancelled else {
                 return
             }
@@ -224,15 +241,23 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         }
 
         connectivityRecoveryTask = Task {
-            var previousPathWasSatisfied: Bool?
-            for await pathIsSatisfied in NetworkPathObserver.pathSatisfactionUpdates() {
+            var previousPath: NetworkPathSnapshot?
+            for await path in NetworkPathObserver.pathUpdates() {
                 let decision = ConnectivityRecoveryPolicy(
-                    previousPathWasSatisfied: previousPathWasSatisfied,
-                    pathIsSatisfied: pathIsSatisfied,
+                    previousPathWasSatisfied: previousPath?.isSatisfied,
+                    pathIsSatisfied: path.isSatisfied,
                     lastRefreshWasOffline: appModel.library.lastRefreshWasOffline
                 ).decision
-                previousPathWasSatisfied = pathIsSatisfied
+                let reachedAutomaticDownloadNetwork = previousPath.map {
+                    !$0.allowsAutomaticDownloads && path.allowsAutomaticDownloads
+                } ?? false
+                previousPath = path
                 await recoverConnectivity(decision)
+                // Downloads deferred on cellular or Low Data Mode start once
+                // Wi-Fi is back.
+                if reachedAutomaticDownloadNetwork, !Task.isCancelled, appModel.isSceneActive {
+                    appModel.scheduleAutoDownloadPass(modelContext: modelContext)
+                }
             }
         }
     }
@@ -294,6 +319,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         connectivityRecoveryTask?.cancel()
         connectivityRecoveryTask = nil
         appModel.library.cancelConnectivityRecovery()
+        appModel.setAutoDownloadsScene(autoDownloadSceneID, isActive: false)
         deferredConnectivityRefreshTask?.cancel()
         deferredConnectivityRefreshTask = nil
         hasPendingForegroundMaintenance = false

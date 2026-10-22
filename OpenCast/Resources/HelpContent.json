@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-06T00:00:00Z",
+  "updatedAt": "2026-10-21T00:00:00Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -307,8 +307,8 @@
       "id": "storage",
       "title": "Storage",
       "symbol": "internaldrive",
-      "summary": "Automatic caches are capped; downloads are yours to manage.",
-      "updatedAt": "2026-09-12T00:00:00Z",
+      "summary": "Automatic caches are capped; downloads follow your limits.",
+      "updatedAt": "2026-10-21T00:00:00Z",
       "related": [
         "icloud-sync"
       ],
@@ -319,7 +319,15 @@
         },
         {
           "type": "paragraph",
-          "text": "Downloaded episodes are never removed automatically unless Delete Downloads After Played is on. Delete All Downloads removes the files but keeps your subscriptions and listening progress."
+          "text": "Downloaded episodes stay until you delete them, unless a limit removes them. Keep Downloaded, set for every show in Download Settings (the gear in Downloads) or for one show in its own download settings, keeps only a show's most recently downloaded episodes; when it has more, the oldest are removed. Delete Downloads After Played removes episodes once they're played. Neither removes the episode that's playing, or one being transcribed, scanned for ads, or whose transcript follows the downloaded audio."
+        },
+        {
+          "type": "paragraph",
+          "text": "A show set to Download New Episodes downloads its newest episode right away, then each new episode when the show refreshes while opencast is open, up to its limit at a time (three with No Limit). With Wi-Fi Only for Automatic Downloads on, these wait for Wi-Fi: on cellular or in Low Data Mode nothing is lost, they start on the next Wi-Fi refresh. Episodes you download yourself use any connection."
+        },
+        {
+          "type": "paragraph",
+          "text": "Delete All Downloads removes the files but keeps your subscriptions and listening progress."
         },
         {
           "type": "paragraph",

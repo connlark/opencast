@@ -13,6 +13,7 @@ struct PodcastActionsMenu: View {
     let downloadCount: Int
     let onSearch: () -> Void
     let onPlaybackSettings: () -> Void
+    let onDownloadSettings: () -> Void
     /// Nil hides Make a Playlist (hidden, never disabled): Apple Intelligence
     /// can never work here, the flag is off, or the show has too few episodes.
     let onMakePlaylist: (() -> Void)?
@@ -57,6 +58,8 @@ struct PodcastActionsMenu: View {
 
             Section {
                 Button("Skip Intro & Outro…", systemImage: "scissors", action: onPlaybackSettings)
+
+                Button("Download Settings…", systemImage: "arrow.down.circle", action: onDownloadSettings)
 
                 Toggle(
                     "Automatically Detect Ads",

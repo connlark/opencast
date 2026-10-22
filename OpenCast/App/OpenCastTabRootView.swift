@@ -71,7 +71,10 @@ struct OpenCastTabRootView: View {
             ) {
                 NavigationStack(path: $navigationPaths[.downloads]) {
                     DownloadsView(
-                        onOpenEpisode: openEpisode(on: .downloads)
+                        onOpenEpisode: openEpisode(on: .downloads),
+                        onOpenShowDownloadSettings: { feedURL in
+                            navigationPaths[.downloads].append(.podcastDownloadSettings(feedURL: feedURL))
+                        }
                     )
                     .withOpenCastDestinations(
                         onOpenEpisode: openEpisode(on: .downloads)
@@ -109,6 +112,7 @@ struct OpenCastTabRootView: View {
                 }
             }
         }
+        .environment(\.openDownloadSettings, OpenDownloadSettingsAction(perform: openDownloadSettings))
         .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(tabBarMinimizeBehavior)
         .tabViewBottomAccessory(isEnabled: showsTabAccessory) {
@@ -148,6 +152,11 @@ struct OpenCastTabRootView: View {
         if selectedTab == .playlists, horizontalSizeClass == .compact {
             selectedTab = .library
         }
+    }
+
+    private func openDownloadSettings() {
+        selectedTab = .downloads
+        navigationPaths[.downloads] = [.downloadSettings]
     }
 
     private func openEpisode(on section: AppSection) -> (String) -> Void {

@@ -129,6 +129,7 @@ enum AppStoreScreenshotSeedData {
             episodeTitle: AppStoreScreenshotSeedCatalog.primaryEpisodeTitle,
             podcastTitle: AppStoreScreenshotSeedCatalog.primaryPodcastTitle,
             duration: AppStoreScreenshotSeedCatalog.primaryEpisodeDuration,
+            completedAt: createdAt,
             createdAt: createdAt,
             updatedAt: createdAt
         )

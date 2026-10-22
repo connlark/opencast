@@ -311,6 +311,7 @@ struct PodcastDetailView: View {
                         downloadCount: downloadCount,
                         onSearch: showSearch,
                         onPlaybackSettings: showPlaybackSettings,
+                        onDownloadSettings: showDownloadSettings,
                         onMakePlaylist: makePlaylistAction(episodeCount: allEpisodes.count),
                         adAutoDetectBinding: adAutoDetectBinding,
                         isConfirmingAdAutoDetect: $isConfirmingAdAutoDetect,
@@ -329,6 +330,10 @@ struct PodcastDetailView: View {
 
     private func showPlaybackSettings() {
         sheetDestination = .podcastPlaybackSettings(feedURL: feedURL)
+    }
+
+    private func showDownloadSettings() {
+        sheetDestination = .podcastDownloadSettings(feedURL: feedURL)
     }
 
     private func makePlaylistAction(episodeCount: Int) -> (() -> Void)? {

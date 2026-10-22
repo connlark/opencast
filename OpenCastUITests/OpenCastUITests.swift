@@ -10,6 +10,7 @@ final class OpenCastUITests: XCTestCase {
         "episode-row-ui-test-queued-episode-\($0)"
     }
     private static let liveAdAnalysisEpisodeRowIdentifier = "episode-row-audio-illusion-that-proves-we-dont-experience-reality"
+    private static let seededFeedURL = "https://example.com/ui-test-feed.xml"
     private static let seededSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-feed.xml"
     private static let aardvarkSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-aardvark.xml"
     private static let zephyrSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-zephyr.xml"
@@ -3497,11 +3498,11 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "settings_sync")
 
         openSettingsScreen("Storage", in: app)
-        let downloadedEpisodesRow = app.staticTexts["Downloaded Episodes"]
-        scrollUntilExists(downloadedEpisodesRow, in: app)
+        let downloadsRow = app.buttons["Settings Row Downloads"]
+        scrollUntilExists(downloadsRow, in: app)
         assertExists(app.staticTexts["Feed Cache"], named: "Feed Cache row")
         assertExists(app.staticTexts["Artwork Cache"], named: "Artwork Cache row")
-        assertExists(downloadedEpisodesRow, named: "Downloaded Episodes row")
+        assertExists(downloadsRow, named: "Downloads routing row")
         attachSmokeScreenshot(named: "settings_storage")
 
         openSettings(in: app)
@@ -3546,12 +3547,18 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "episode_detail_downloaded_menu")
         dismissContextualMenu(in: app)
 
+        // Download settings live in the Downloads tab; Storage routes there.
         openSettingsScreen("Storage", in: app)
+        let downloadsRow = app.buttons["Settings Row Downloads"]
+        scrollUntilHittable(downloadsRow, in: app)
+        assertExists(elementContaining(label: "1 episode,", in: app), named: "Storage downloads summary")
+        downloadsRow.tap()
+        assertExists(app.navigationBars["Download Settings"], named: "Download Settings from Storage")
+        XCTAssertTrue(app.tabBars.buttons["Downloads"].isSelected, "Storage should switch to the Downloads tab")
         let deleteAllDownloadsButton = app.buttons["Delete All Downloads"]
         scrollUntilHittable(deleteAllDownloadsButton, in: app)
-        assertExists(app.staticTexts["Downloaded Episodes"], named: "Downloaded Episodes row")
         assertExists(deleteAllDownloadsButton, named: "Delete All Downloads button")
-        attachSmokeScreenshot(named: "settings_downloads")
+        attachSmokeScreenshot(named: "download_settings")
     }
 
     @MainActor
@@ -3568,16 +3575,20 @@ final class OpenCastUITests: XCTestCase {
         downloadsTab.tap()
 
         assertExists(app.navigationBars["Downloads"], named: "Downloads navigation bar")
-        assertExists(app.staticTexts["Downloaded Episodes"], named: "Downloads storage summary")
-        assertExists(app.staticTexts["Downloaded"], named: "Downloaded section")
-
-        let byPodcast = app.buttons["By Podcast"]
-        assertHittable(byPodcast, named: "By Podcast disclosure")
-        byPodcast.tap()
         assertExists(
-            app.descendants(matching: .any)["download-podcast-https://example.com/ui-test-feed.xml"],
-            named: "downloaded podcast breakdown"
+            app.descendants(matching: .any)["downloads-storage-graph"],
+            named: "Downloads storage graph"
         )
+        assertExists(elementContaining(label: "1 episode,", in: app), named: "Downloads storage caption")
+        assertExists(app.staticTexts["Downloaded"], named: "Downloaded section")
+        let legendRow = app.buttons["download-podcast-\(Self.seededFeedURL)"]
+        assertHittable(legendRow, named: "downloaded podcast legend row")
+        // The legend row opens the show's download settings; it must not
+        // join the list's episode selection (counted below).
+        legendRow.tap()
+        assertExists(app.navigationBars["UI Test Show"], named: "show download settings from the legend")
+        tapBackButton(in: app)
+        assertExists(app.navigationBars["Downloads"], named: "Downloads after the show's settings")
 
         let downloadedRowButton = app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
         scrollUntilHittable(downloadedRowButton, in: app)
@@ -3630,6 +3641,152 @@ final class OpenCastUITests: XCTestCase {
             named: "Done button after deleting the final completed download",
             timeout: 5
         )
+    }
+
+    @MainActor
+    func testSeededDownloadSettingsScreensAndPodcastMenuEntry() throws {
+        let app = makeSeededApp(seedsCompletedDownload: true)
+        app.launch()
+
+        openSection("Downloads", in: app)
+        let downloadsBar = app.navigationBars["Downloads"]
+        assertExists(downloadsBar, named: "Downloads navigation bar")
+        let settingsButton = downloadsBar.buttons["Download Settings"]
+        assertHittable(settingsButton, named: "Download Settings toolbar button")
+        settingsButton.tap()
+
+        assertExists(app.navigationBars["Download Settings"], named: "Download Settings screen")
+        let wifiOnly = app.switches["download-settings-wifi-only-toggle"]
+        assertExists(wifiOnly, named: "Wi-Fi Only toggle")
+        XCTAssertEqual(wifiOnly.value as? String, "1", "Wi-Fi Only for Automatic Downloads ships on")
+        assertExists(
+            app.descendants(matching: .any)["download-settings-keep-limit-picker"],
+            named: "default Keep Downloaded picker"
+        )
+        let autoDelete = app.switches["download-settings-auto-delete-toggle"]
+        assertExists(autoDelete, named: "Delete Downloads After Played toggle")
+        XCTAssertEqual(autoDelete.value as? String, "0", "Delete Downloads After Played ships off")
+        let showRow = app.buttons["download-settings-show-\(Self.seededFeedURL)"]
+        scrollUntilHittable(showRow, in: app)
+        assertExists(
+            elementContaining(label: "Manual · Default (No Limit)", in: app),
+            named: "show row summary before any change"
+        )
+        attachSmokeScreenshot(named: "download_settings_screen")
+        showRow.tap()
+
+        assertExists(app.navigationBars["UI Test Show"], named: "show download settings")
+        let autoDownload = app.switches["podcast-download-settings-auto-download-toggle"]
+        assertExists(autoDownload, named: "Download New Episodes toggle")
+        XCTAssertEqual(autoDownload.value as? String, "0", "Download New Episodes ships off")
+        let keepLimit = app.buttons["podcast-download-settings-keep-limit-picker"]
+        assertHittable(keepLimit, named: "show Keep Downloaded picker")
+        assertExists(elementContaining(label: "Default (No Limit)", in: app), named: "show limit following the default")
+        assertExists(elementContaining(label: "1 episode,", in: app), named: "show's downloaded summary")
+        assertExists(app.buttons["Delete This Show’s Downloads"], named: "Delete This Show's Downloads button")
+
+        keepLimit.tap()
+        let threeEpisodes = app.buttons["3 Episodes"].firstMatch
+        assertHittable(threeEpisodes, named: "3 Episodes limit option")
+        threeEpisodes.tap()
+        assertExists(elementContaining(label: "3 Episodes", in: app), named: "show limit after choosing 3 Episodes")
+        // The seeded show's only episode is already downloaded, so turning
+        // it on schedules nothing new to download.
+        tapToggle(autoDownload, to: true)
+        attachSmokeScreenshot(named: "podcast_download_settings_pushed")
+
+        tapBackButton(in: app)
+        assertExists(app.navigationBars["Download Settings"], named: "Download Settings after the show")
+        assertExists(
+            elementContaining(label: "Downloads new episodes · Keep 3", in: app),
+            named: "show row summary after the changes"
+        )
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+        let actionsButton = app.buttons["Podcast Actions"]
+        assertHittable(actionsButton, named: "podcast actions menu")
+        actionsButton.tap()
+        let menuEntry = app.buttons["Download Settings…"]
+        assertHittable(menuEntry, named: "Download Settings… menu action")
+        attachSmokeScreenshot(named: "podcast_actions_download_settings")
+        menuEntry.tap()
+
+        let sheetBar = app.navigationBars["UI Test Show"]
+        assertExists(sheetBar, named: "show download settings sheet")
+        assertExists(
+            app.switches["podcast-download-settings-auto-download-toggle"],
+            named: "Download New Episodes toggle in the sheet"
+        )
+        assertExists(elementContaining(label: "3 Episodes", in: app), named: "sheet showing the saved limit")
+        attachSmokeScreenshot(named: "podcast_download_settings_sheet")
+        let doneButton = sheetBar.buttons["Done"]
+        assertHittable(doneButton, named: "sheet Done button")
+        doneButton.tap()
+        // The show's own screen shares the sheet's title, so the sheet's
+        // Done button is what must go.
+        assertDoesNotExist(doneButton, named: "show download settings sheet after Done", timeout: 5)
+        assertHittable(actionsButton, named: "podcast detail after closing the sheet")
+    }
+
+    @MainActor
+    func testSeededDownloadsGroupByShowSectionShowsCountSizeAndLimitChip() throws {
+        let app = makeSeededApp(seedsCompletedDownload: true)
+        app.launch()
+
+        openSection("Downloads", in: app)
+        let downloadsBar = app.navigationBars["Downloads"]
+        assertExists(downloadsBar, named: "Downloads navigation bar")
+        assertExists(app.staticTexts["Downloaded"], named: "flat Downloaded section")
+
+        let options = downloadsBar.buttons["Download Options"]
+        assertHittable(options, named: "Download Options menu")
+        options.tap()
+        let groupByShow = app.buttons["Group by Show"].firstMatch
+        assertHittable(groupByShow, named: "Group by Show toggle")
+        groupByShow.tap()
+
+        let section = app.descendants(matching: .any)
+            .matching(identifier: "download-show-section-\(Self.seededFeedURL)")
+            .firstMatch
+        assertExists(section, named: "seeded show section")
+        // Scoped to the header: the storage legend renders the same text.
+        let sectionDetail = section.staticTexts
+            .matching(NSPredicate(format: "label MATCHES %@", "1 episode · [0-9.,]+ (bytes|KB|MB|GB)"))
+            .firstMatch
+        assertExists(sectionDetail, named: "show section count and size")
+        let chip = app.descendants(matching: .any)
+            .matching(identifier: "download-show-limit-\(Self.seededFeedURL)")
+            .firstMatch
+        assertExists(chip, named: "show section limit chip")
+        XCTAssertTrue(
+            chip.label.contains("No Limit"),
+            "The chip should name the default limit, got \(chip.label)"
+        )
+        let row = app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
+        assertExists(row, named: "download row inside the show section")
+        attachSmokeScreenshot(named: "downloads_group_by_show")
+
+        let toggle = app.buttons["download-show-toggle-\(Self.seededFeedURL)"]
+        assertHittable(toggle, named: "show section collapse control")
+        toggle.tap()
+        assertDoesNotExist(row, named: "download row in a collapsed section", timeout: 5)
+        assertExists(section, named: "collapsed show section header")
+        toggle.tap()
+        assertExists(row, named: "download row after expanding")
+
+        chip.tap()
+        assertExists(app.navigationBars["UI Test Show"], named: "show download settings from the chip")
+        tapBackButton(in: app)
+        assertExists(downloadsBar, named: "Downloads after the show's settings")
+
+        options.tap()
+        assertHittable(groupByShow, named: "Group by Show toggle to turn off")
+        groupByShow.tap()
+        assertExists(app.staticTexts["Downloaded"], named: "flat Downloaded section restored")
+        assertDoesNotExist(section, named: "show section after turning grouping off", timeout: 5)
     }
 
     @MainActor
@@ -4118,23 +4275,31 @@ final class OpenCastUITests: XCTestCase {
 
         openSettingsScreen("Storage", in: app)
 
-        let deleteAllDownloadsButton = app.buttons["Delete All Downloads"]
-        scrollUntilHittable(deleteAllDownloadsButton, in: app)
+        let downloadsRow = app.buttons["Settings Row Downloads"]
+        scrollUntilHittable(downloadsRow, in: app)
         assertExists(app.staticTexts["Feed Cache"], named: "Feed Cache row before cache clear")
         assertExists(app.staticTexts["Artwork Cache"], named: "Artwork Cache row before cache clear")
-        assertExists(deleteAllDownloadsButton, named: "Delete All Downloads before cache clear")
+        assertExists(elementContaining(label: "1 episode,", in: app), named: "Downloads summary before cache clear")
 
         let clearCachesButton = app.buttons["Clear Automatic Caches"].firstMatch
         scrollUntilHittable(clearCachesButton, in: app)
         clearCachesButton.tap()
         app.buttons["Clear Automatic Caches"].firstMatch.tap()
 
-        assertExists(deleteAllDownloadsButton, named: "Delete All Downloads after cache clear")
+        assertExists(elementContaining(label: "1 episode,", in: app), named: "Downloads summary after cache clear")
 
+        // Delete All lives in Download Settings, in the Downloads tab.
+        downloadsRow.tap()
+        assertExists(app.navigationBars["Download Settings"], named: "Download Settings from Storage")
+        let deleteAllDownloadsButton = app.buttons["Delete All Downloads"]
+        scrollUntilHittable(deleteAllDownloadsButton, in: app)
         deleteAllDownloadsButton.tap()
         app.buttons["Delete Downloads"].tap()
-
         assertDoesNotExist(deleteAllDownloadsButton, named: "Delete All Downloads after deleting downloads", timeout: 5)
+
+        openSettings(in: app)
+        assertExists(app.navigationBars["Storage"], named: "Storage kept in the Settings tab")
+        assertExists(elementContaining(label: "None", in: app), named: "Downloads summary after deleting downloads")
         assertExists(app.staticTexts["Feed Cache"], named: "Feed Cache row after deleting downloads")
         assertExists(app.staticTexts["Artwork Cache"], named: "Artwork Cache row after deleting downloads")
     }

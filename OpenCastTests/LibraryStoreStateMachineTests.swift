@@ -160,6 +160,38 @@ struct LibraryStoreStateMachineTests {
         #expect(store.refreshCompletedToken == 1)
     }
 
+    @Test("Every refresh that publishes content advances contentRefreshToken; only Refresh All advances the haptic token")
+    func contentRefreshTokenFollowsPublishedContent() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/content-token.xml"
+        let snapshot = makeSnapshot(feedURL: feedURL, episodeID: "content-token-episode")
+        let service = ScriptedFeedService(scripts: [
+            feedURL: [.success(snapshot), .failure("Feed exploded"), .success(snapshot), .success(snapshot)]
+        ])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Content Token"))
+        try context.save()
+        await store.load(modelContext: context)
+        #expect(store.contentRefreshToken == 0)
+
+        await store.refresh(feedURL: feedURL, modelContext: context)
+        #expect(store.contentRefreshToken == 1)
+        #expect(store.refreshCompletedToken == 0)
+
+        // A fetch failure only writes a refresh log.
+        await store.refresh(feedURL: feedURL, modelContext: context)
+        #expect(store.contentRefreshToken == 1)
+
+        await store.refreshAllIfStale(modelContext: context, now: .now.addingTimeInterval(7 * 86_400))
+        #expect(store.contentRefreshToken == 2)
+        #expect(store.refreshCompletedToken == 0)
+
+        await store.refreshAll(modelContext: context)
+        #expect(store.contentRefreshToken == 3)
+        #expect(store.refreshCompletedToken == 1)
+    }
+
     @Test("Repair and unsubscribe reset a failed store to idle")
     func repairAndUnsubscribeResetFailedStateToIdle() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

@@ -55,6 +55,10 @@ final class DownloadStore {
     @ObservationIgnored private var responseMetadataByToken: [String: EpisodeDownloadResponseMetadata] = [:]
     @ObservationIgnored private let stateChanges = StoreChangeNotifier()
     @ObservationIgnored var onEpisodeStateChanged: (@MainActor (String) -> Void)?
+    // Once per finished download, after its completed state is saved.
+    // `onEpisodeStateChanged` is no substitute: it fires on every state
+    // change and for every record a reload touches.
+    @ObservationIgnored var onDownloadCompleted: (@MainActor (EpisodeDownloadRecord, ModelContext) -> Void)?
     // Runs between launch reconciliation's file probes and their verdicts,
     // the window in which a fresh download can replace a probed record.
     @ObservationIgnored var afterReconcileProbesForTesting: (@MainActor () async -> Void)?
@@ -1249,11 +1253,13 @@ final class DownloadStore {
             record.bytesReceived = max(0, bytesReceived)
             record.bytesExpected = record.bytesExpected ?? record.bytesReceived
             record.errorMessage = nil
+            record.completedAt = .now
             record.updatedAt = .now
             clearTransientProgress(episodeID: episodeID)
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
             lastErrorMessage = nil
             lastErrorEpisodeID = nil
+            onDownloadCompleted?(record, modelContext)
         }
     }
 
@@ -1456,6 +1462,7 @@ final class DownloadStore {
                 record.bytesReceived = size
                 record.bytesExpected = size
                 record.errorMessage = nil
+                record.completedAt = .now
                 record.updatedAt = .now
                 changed = true
             case .pauseWithBytes(let resumableByteCount):

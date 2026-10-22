@@ -22,6 +22,11 @@ final class EpisodeDownloadRecord {
     var artworkURLString: String?
     var duration: TimeInterval?
     var publishedAt: Date?
+    /// When the file last finished downloading; the Keep Downloaded trim
+    /// keeps the most recent. Nil on records completed before this field
+    /// existed, which fall back to `createdAt`. `updatedAt` can't stand in:
+    /// validator refreshes and launch size repairs move it.
+    var completedAt: Date?
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
 
@@ -41,6 +46,7 @@ final class EpisodeDownloadRecord {
         artworkURLString: String? = nil,
         duration: TimeInterval? = nil,
         publishedAt: Date? = nil,
+        completedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -59,6 +65,7 @@ final class EpisodeDownloadRecord {
         self.artworkURLString = artworkURLString
         self.duration = duration
         self.publishedAt = publishedAt
+        self.completedAt = completedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

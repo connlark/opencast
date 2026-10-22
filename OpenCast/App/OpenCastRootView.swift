@@ -221,6 +221,11 @@ struct OpenCastRootView: View {
         appModel.restorePlaybackSurfaceIfNeeded(modelContext: modelContext)
         appModel.reattachRemoteJobsIfNeeded(modelContext: modelContext, trigger: .launch)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
+        appModel.trimDownloadsToKeepLimits(modelContext: modelContext)
+        // The activation pass can run before hydration and find no enabled
+        // show, and a fresh cache's launch refresh publishes nothing. The
+        // coordinator ignores the request unless the scene is active now.
+        appModel.scheduleAutoDownloadPass(modelContext: modelContext)
         isInitialSetupComplete = true
         SearchColdStartProbe.recordFirstUsableIfRequested()
         initialSetupGate.complete()
@@ -787,13 +792,13 @@ struct OpenCastRootView: View {
 
     private func isRouteInvalid(_ route: AppRoute) -> Bool {
         switch route {
-        case .podcastDetail(let feedURL, _):
+        case .podcastDetail(let feedURL, _), .podcastDownloadSettings(let feedURL):
             !appModel.library.isActivelySubscribed(to: feedURL)
         case .episodeDetail(let id), .episodeTranscript(let id), .episodeArtwork(let id):
             appModel.library.episode(with: id) == nil && appModel.downloads.record(for: id) == nil
         case .playlistDetail(let id):
             !appModel.playlists.playlists.contains { $0.playlistID == id }
-        case .adDetectionQueue, .playlists, .settings:
+        case .adDetectionQueue, .playlists, .settings, .downloadSettings:
             false
         }
     }

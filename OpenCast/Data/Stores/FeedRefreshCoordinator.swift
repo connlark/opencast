@@ -15,7 +15,12 @@ import SwiftData
 /// stay with the host store.
 @Observable
 final class FeedRefreshCoordinator {
+    /// Bumped only by a completed Refresh All; drives the refresh haptic.
     private(set) var refreshCompletedToken = 0
+    /// Bumped whenever any refresh flow republishes fetched feed content, so
+    /// work that follows new episodes (automatic downloads) runs after
+    /// single-feed, stale, missing-cache and reconnect refreshes too.
+    private(set) var contentRefreshToken = 0
     /// In-memory only: a relaunch retries every unreachable feed at once.
     private(set) var lastRefreshWasOffline = false
 
@@ -283,6 +288,7 @@ final class FeedRefreshCoordinator {
                 return false
             case .full:
                 try await host.reloadFromStore(modelContext: modelContext)
+                contentRefreshToken += 1
             case .logsOnly:
                 try await host.reloadRefreshLogsFromStore()
             }

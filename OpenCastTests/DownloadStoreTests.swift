@@ -461,10 +461,26 @@ struct DownloadStoreTests {
         try context.save()
         await appModel.library.load(modelContext: context)
         await downloadStore.load(modelContext: context)
+        for feedURL in [removedFeedURL, keptFeedURL] {
+            #expect(appModel.downloadSettings.setKeepLimitOverride(.two, forPodcastID: feedURL, modelContext: context))
+            #expect(appModel.downloadSettings.setAutoDownloadsNewEpisodes(
+                true,
+                forPodcastID: feedURL,
+                watermark: .distantPast,
+                modelContext: context
+            ))
+        }
 
         let outcome = await appModel.unsubscribe(feedURL: removedFeedURL, modelContext: context)
 
         #expect(outcome == .removed(warning: nil))
+        #expect(appModel.downloadSettings.autoDownloadPodcastIDs == [keptFeedURL])
+        #expect(appModel.downloadSettings.keepLimitOverride(forPodcastID: removedFeedURL) == nil)
+        #expect(appModel.downloadSettings.keepLimitOverride(forPodcastID: keptFeedURL) == .two)
+        let reloadedSettings = DownloadSettingsStore()
+        reloadedSettings.load(modelContext: context)
+        #expect(reloadedSettings.autoDownloadPodcastIDs == [keptFeedURL])
+        #expect(reloadedSettings.autoDownloadWatermark(forPodcastID: removedFeedURL) == nil)
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).map(\.podcastID) == [keptFeedURL])
         #expect(fileStore.fileExists(relativePath: removedPath) == false)
         #expect(fileStore.fileExists(relativePath: keptPath))
@@ -1309,6 +1325,298 @@ struct DownloadStoreTests {
         transcriptions.cancelTranscription(episodeID: episode.episodeID, modelContext: context)
     }
 
+    @Test("Keep Downloaded keeps a show's most recently completed downloads, by completion time")
+    func keepLimitTrimsByCompletionTime() async throws {
+        let fixture = try await KeepLimitFixture.make()
+        // createdAt runs the other way, so only completedAt can order these.
+        let showA = try (1...4).map { day in
+            try fixture.insert("trim-a-\(day)", podcastID: KeepLimitFixture.showA, completedDay: day, createdDay: 10 - day)
+        }
+        for day in 1...2 {
+            try fixture.insert("trim-b-\(day)", podcastID: KeepLimitFixture.showB, completedDay: day)
+        }
+        try await fixture.reload()
+        let deletedPaths = try showA.prefix(2).map { try #require($0.localRelativePath) }
+
+        #expect(fixture.appModel.setKeepLimitOverride(.two, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["trim-a-3", "trim-a-4"])
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showB) == ["trim-b-1", "trim-b-2"])
+        #expect(deletedPaths.allSatisfy { !fixture.fileStore.fileExists(relativePath: $0) })
+        #expect(try fixture.context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).count == 4)
+    }
+
+    @Test("Downloads completed before completedAt existed rank by when they were first requested")
+    func keepLimitFallsBackToCreatedAt() async throws {
+        let fixture = try await KeepLimitFixture.make()
+        for day in [1, 3, 5] {
+            try fixture.insert("legacy-\(day)", podcastID: KeepLimitFixture.showA, completedDay: nil, createdDay: day)
+        }
+        try fixture.insert("modern-4", podcastID: KeepLimitFixture.showA, completedDay: 4)
+        try await fixture.reload()
+
+        #expect(fixture.appModel.setDefaultKeepLimit(.two, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["legacy-5", "modern-4"])
+    }
+
+    @Test("The playing download is never trimmed and keeps its place above the limit")
+    func keepLimitKeepsPlayingDownload() async throws {
+        let fixture = try await KeepLimitFixture.make()
+        let oldest = try fixture.insert("playing-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        for day in 2...3 {
+            try fixture.insert("playing-\(day)", podcastID: KeepLimitFixture.showA, completedDay: day)
+        }
+        try await fixture.reload()
+        try fixture.appModel.playDownloadedEpisode(
+            fixture.episode("playing-1", podcastID: KeepLimitFixture.showA),
+            downloadRecord: oldest,
+            modelContext: fixture.context
+        )
+        defer { fixture.appModel.playback.unload() }
+
+        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["playing-1", "playing-3"])
+    }
+
+    @Test("The trim keeps a download that is being transcribed")
+    func keepLimitKeepsTranscribingDownload() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let transcriptions = EpisodeTranscriptionStore(
+            transcriber: HangingAutoDeleteEpisodeTranscriber(),
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        )
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let oldest = try fixture.insert("transcribing-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        try fixture.insert("transcribing-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
+        try await fixture.reload()
+        let localFileURL = try #require(fixture.downloads.localFileURL(for: oldest))
+        transcriptions.startTranscription(
+            fixture.episode("transcribing-1", podcastID: KeepLimitFixture.showA),
+            downloadRecord: oldest,
+            localFileURL: localFileURL,
+            engine: .appleSpeech,
+            modelIdentity: EpisodeTranscriptionModelIdentity(
+                modelIdentifier: "apple-speech-transcriber.en_US",
+                version: "iOS 26 test",
+                treeSHA256: "installed-en-US"
+            ),
+            languageCode: "en-US",
+            modelContext: fixture.context
+        )
+        #expect(await waitUntil { transcriptions.isActivelyTranscribing(episodeID: "transcribing-1") })
+
+        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["transcribing-1", "transcribing-2"])
+        transcriptions.cancelTranscription(episodeID: "transcribing-1", modelContext: fixture.context)
+    }
+
+    @Test("The trim keeps a download queued for an ad-free pass")
+    func keepLimitKeepsPassQueuedDownload() async throws {
+        let fixture = try await KeepLimitFixture.make(downloader: HangingEpisodeAudioDownloader())
+        try fixture.insert("pass-queued-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        try fixture.insert("pass-queued-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
+        try await fixture.reload()
+        let blocker = makeEpisode(episodeID: "pass-queued-blocker")
+        let queued = fixture.episode("pass-queued-1", podcastID: KeepLimitFixture.showA)
+        fixture.appModel.startAdFreePass(for: blocker, modelContext: fixture.context)
+        #expect(await waitUntil { fixture.appModel.adFreePass.activeEpisodeID == blocker.episodeID })
+        fixture.appModel.startAdFreePass(for: queued, modelContext: fixture.context)
+        #expect(await waitUntil {
+            if case .queued = fixture.appModel.adFreePass.queueStatus(for: queued.episodeID) {
+                return true
+            }
+            return false
+        })
+
+        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["pass-queued-1", "pass-queued-2"])
+        fixture.appModel.adFreePass.reset()
+        fixture.downloads.cancelDownload(episodeID: blocker.episodeID, modelContext: fixture.context)
+    }
+
+    @Test("The trim keeps a download a transcription request holds before transcribing starts")
+    func keepLimitKeepsReservedDownload() async throws {
+        let transcriptions = EpisodeTranscriptionStore()
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        try fixture.insert("reserved-local-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        try fixture.insert("reserved-remote-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
+        try fixture.insert("reserved-newest-3", podcastID: KeepLimitFixture.showA, completedDay: 3)
+        try await fixture.reload()
+        let local = try transcriptions.workCoordinator.reserveLocal(episodeID: "reserved-local-1").get()
+        let remote = try transcriptions.workCoordinator.reserveRemote(
+            episodeID: "reserved-remote-2",
+            activeLocalEpisodeID: nil
+        ).get()
+        #expect(!transcriptions.isActivelyTranscribing(episodeID: "reserved-local-1"))
+
+        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["reserved-local-1", "reserved-newest-3", "reserved-remote-2"])
+
+        transcriptions.workCoordinator.releaseLocal(local)
+        transcriptions.workCoordinator.releaseRemote(remote)
+        fixture.appModel.trimDownloadsToKeepLimits(modelContext: fixture.context)
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["reserved-newest-3"])
+    }
+
+    @Test("The trim keeps a download whose remote transcription job may still ask for an exact copy")
+    func keepLimitKeepsRemoteJobDownload() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "KeepLimitRemoteJob-\(UUID().uuidString)"))
+        let jobs = RemoteTranscriptionJobStore(defaults: defaults)
+        let fixture = try await KeepLimitFixture.make(remoteTranscriptionJobStore: jobs)
+        try fixture.insert("remote-job-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        try fixture.insert("remote-job-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
+        try await fixture.reload()
+        _ = jobs.reference(for: "remote-job-1")
+
+        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["remote-job-1", "remote-job-2"])
+    }
+
+    @Test("The trim keeps a download whose bytes a transcript describes")
+    func keepLimitKeepsTranscriptMatchedDownload() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let transcriptions = EpisodeTranscriptionStore(
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        )
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let matched = try fixture.insert("matched-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        matched.sourceFileSHA256 = String(repeating: "a", count: 64)
+        try fixture.insert("matched-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
+        fixture.context.insert(EpisodeTranscriptRecord(
+            episodeID: "matched-1",
+            podcastID: KeepLimitFixture.showA,
+            sourceAudioURL: matched.sourceAudioURL,
+            sourceFileSHA256: matched.sourceFileSHA256,
+            state: .completed
+        ))
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        #expect(transcriptions.record(for: "matched-1")?.sourceFileSHA256 == matched.sourceFileSHA256)
+
+        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["matched-1", "matched-2"])
+    }
+
+    @Test("Played state doesn't decide what the trim keeps")
+    func keepLimitIgnoresPlayedState() async throws {
+        let fixture = try await KeepLimitFixture.make()
+        try fixture.insert("played-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        try fixture.insert("played-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
+        try await fixture.reload()
+        #expect(fixture.library.markEpisodePlayed(
+            fixture.episode("played-2", podcastID: KeepLimitFixture.showA),
+            modelContext: fixture.context
+        ))
+
+        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["played-2"])
+    }
+
+    @Test("No Limit never trims, at launch or on activation")
+    func noLimitNeverTrims() async throws {
+        let fixture = try await KeepLimitFixture.make()
+        for day in 1...12 {
+            try fixture.insert("unlimited-\(day)", podcastID: KeepLimitFixture.showA, completedDay: day)
+        }
+        try await fixture.reload()
+
+        fixture.appModel.trimDownloadsToKeepLimits(modelContext: fixture.context)
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA).count == 12)
+    }
+
+    @Test("Changing the default trims every show without its own limit; a show's own limit wins")
+    func defaultLimitTrimsAllShowsAndOverrideWins() async throws {
+        let fixture = try await KeepLimitFixture.make()
+        for day in 1...4 {
+            try fixture.insert("default-a-\(day)", podcastID: KeepLimitFixture.showA, completedDay: day)
+            try fixture.insert("default-b-\(day)", podcastID: KeepLimitFixture.showB, completedDay: day)
+        }
+        try await fixture.reload()
+        #expect(fixture.appModel.downloadSettings.setKeepLimitOverride(
+            .three,
+            forPodcastID: KeepLimitFixture.showA,
+            modelContext: fixture.context
+        ))
+
+        #expect(fixture.appModel.setDefaultKeepLimit(.one, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["default-a-2", "default-a-3", "default-a-4"])
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showB) == ["default-b-4"])
+    }
+
+    @Test("Changing a show's limit trims only that show")
+    func showLimitTrimsOnlyThatShow() async throws {
+        let fixture = try await KeepLimitFixture.make()
+        for day in 1...3 {
+            try fixture.insert("scoped-a-\(day)", podcastID: KeepLimitFixture.showA, completedDay: day)
+            try fixture.insert("scoped-b-\(day)", podcastID: KeepLimitFixture.showB, completedDay: day)
+        }
+        try await fixture.reload()
+        // Saved without the app model, so nothing has trimmed show B yet.
+        #expect(fixture.appModel.downloadSettings.setDefaultKeepLimit(.one, modelContext: fixture.context))
+
+        #expect(fixture.appModel.setKeepLimitOverride(.two, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["scoped-a-2", "scoped-a-3"])
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showB).count == 3)
+    }
+
+    @Test("A finished download trims its show, outside the completion commit, and keeps itself")
+    func completionTrimsShow() async throws {
+        let fixture = try await KeepLimitFixture.make(
+            downloader: ChunkedEpisodeAudioDownloader(chunks: [Data("fresh".utf8)])
+        )
+        let episode = makeEpisode(episodeID: "completion-new")
+        try fixture.insert("completion-old", podcastID: episode.podcastID, completedDay: 1)
+        try await fixture.reload()
+        #expect(fixture.appModel.downloadSettings.setKeepLimitOverride(
+            .one,
+            forPodcastID: episode.podcastID,
+            modelContext: fixture.context
+        ))
+
+        fixture.downloads.startDownload(for: episode, modelContext: fixture.context)
+        try await fixture.downloads.waitForDownload(episodeID: episode.episodeID)
+
+        #expect(fixture.downloads.record(for: episode.episodeID)?.state == .completed)
+        #expect(fixture.downloads.record(for: episode.episodeID)?.completedAt != nil)
+        #expect(await waitUntil { fixture.downloads.record(for: "completion-old") == nil })
+        #expect(fixture.episodeIDs(for: episode.podcastID) == ["completion-new"])
+    }
+
+    @Test("onDownloadCompleted fires once per finished download, never for reloads or deletes")
+    func completionHookFiresOnce() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let store = DownloadStore(
+            downloader: ChunkedEpisodeAudioDownloader(chunks: [Data("abc".utf8), Data("def".utf8)]),
+            fileStore: fileStore
+        )
+        var completedEpisodeIDs: [String] = []
+        store.onDownloadCompleted = { record, _ in
+            completedEpisodeIDs.append(record.episodeID)
+        }
+        let episode = makeEpisode(episodeID: "hook-once")
+
+        store.startDownload(for: episode, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+        await store.load(modelContext: context)
+        let record = try #require(store.record(for: episode.episodeID))
+        store.deleteDownload(record, modelContext: context)
+
+        #expect(completedEpisodeIDs == [episode.episodeID])
+    }
+
     @Test("Pausing after a download completes leaves it completed")
     func pauseAfterFinalBytesLeavesCompletedRecord() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -1859,7 +2167,8 @@ struct DownloadStoreTests {
             localRelativePath: relativePath,
             state: .completed,
             bytesReceived: Int64(data.count),
-            bytesExpected: Int64(data.count)
+            bytesExpected: Int64(data.count),
+            completedAt: .now
         )
         context.insert(record)
         return record
@@ -2177,5 +2486,122 @@ private final class HangingAutoDeleteEpisodeTranscriber: EpisodeTranscribing, @u
     }
 
     func unload() async {
+    }
+}
+
+/// Completed downloads for two shows with chosen completion and request
+/// days, behind an app model whose cleanup coordinator runs the trim.
+@MainActor
+private final class KeepLimitFixture {
+    static let showA = "https://example.com/feed.xml"
+    static let showB = "https://example.com/other-feed.xml"
+    private static let base = Date(timeIntervalSince1970: 1_780_000_000)
+
+    let context: ModelContext
+    let fileStore: EpisodeDownloadFileStore
+    let downloads: DownloadStore
+    let library: LibraryStore
+    let appModel: OpenCastAppModel
+
+    private init(
+        context: ModelContext,
+        fileStore: EpisodeDownloadFileStore,
+        downloads: DownloadStore,
+        library: LibraryStore,
+        appModel: OpenCastAppModel
+    ) {
+        self.context = context
+        self.fileStore = fileStore
+        self.downloads = downloads
+        self.library = library
+        self.appModel = appModel
+    }
+
+    static func make(
+        downloader: any EpisodeAudioDownloading = URLSessionEpisodeAudioDownloader(),
+        transcriptions: EpisodeTranscriptionStore = EpisodeTranscriptionStore(),
+        remoteTranscriptionJobStore: RemoteTranscriptionJobStore? = nil
+    ) async throws -> KeepLimitFixture {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "OpenCastKeepLimitTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: directory)
+        let downloads = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        // Pass-arming tests need the fake scheduler: the real one traps on a
+        // second same-identifier registration in one host process.
+        let appModel = OpenCastAppModel(
+            library: library,
+            downloads: downloads,
+            transcriptions: transcriptions,
+            remoteTranscriptionJobStore: remoteTranscriptionJobStore ?? RemoteTranscriptionJobStore(
+                defaults: UserDefaults(suiteName: "KeepLimitFixture-\(UUID().uuidString)")!
+            ),
+            adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession(
+                scheduler: FakeAdFreePassContinuedTaskScheduler()
+            )
+        )
+        return KeepLimitFixture(
+            context: ModelContext(container),
+            fileStore: fileStore,
+            downloads: downloads,
+            library: library,
+            appModel: appModel
+        )
+    }
+
+    /// A nil `completedDay` stands for a record completed before the field
+    /// existed.
+    @discardableResult
+    func insert(
+        _ episodeID: String,
+        podcastID: String,
+        completedDay: Int?,
+        createdDay: Int = 0
+    ) throws -> EpisodeDownloadRecord {
+        let sourceAudioURL = URL(string: "https://example.com/\(episodeID).mp3")!
+        let relativePath = fileStore.relativePath(episodeID: episodeID, sourceAudioURL: sourceAudioURL)
+        let data = Data("downloaded \(episodeID)".utf8)
+        try fileStore.prepareDownloadsDirectory()
+        try data.write(to: fileStore.fileURL(relativePath: relativePath), options: .atomic)
+        let record = EpisodeDownloadRecord(
+            episodeID: episodeID,
+            podcastID: podcastID,
+            sourceAudioURL: sourceAudioURL.absoluteString,
+            localRelativePath: relativePath,
+            state: .completed,
+            bytesReceived: Int64(data.count),
+            bytesExpected: Int64(data.count),
+            completedAt: completedDay.map(Self.day),
+            createdAt: Self.day(createdDay)
+        )
+        context.insert(record)
+        return record
+    }
+
+    func reload() async throws {
+        try context.save()
+        await downloads.load(modelContext: context)
+    }
+
+    func episode(_ episodeID: String, podcastID: String) -> EpisodeListItemSnapshot {
+        .fixture(
+            episodeID: episodeID,
+            podcastID: podcastID,
+            audioURL: "https://example.com/\(episodeID).mp3",
+            guid: episodeID
+        )
+    }
+
+    func episodeIDs(for podcastID: String) -> [String] {
+        downloads.records
+            .filter { $0.podcastID == podcastID && $0.state == .completed }
+            .map(\.episodeID)
+            .sorted()
+    }
+
+    private static func day(_ day: Int) -> Date {
+        base.addingTimeInterval(Double(day) * 86_400)
     }
 }
