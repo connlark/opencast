@@ -95,7 +95,7 @@ struct NowPlayingView: View {
                         .layoutPriority(0)
 
                         ZStack(alignment: .top) {
-                            NowPlayingProgressSection()
+                            NowPlayingProgressSection(onShowChapters: { utilitySheet = .chapters })
                                 .padding(.top, accessibilityReduceMotion ? 30 : 0)
 
                             NowPlayingAutoSkipFeedbackView()
@@ -279,6 +279,12 @@ struct NowPlayingView: View {
                         .presentationDragIndicator(.visible)
                 case .upNext:
                     UpNextQueueView()
+                        .environment(appModel)
+                        .modelContext(modelContext)
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
+                case .chapters:
+                    NowPlayingChaptersView()
                         .environment(appModel)
                         .modelContext(modelContext)
                         .presentationDetents([.medium, .large])

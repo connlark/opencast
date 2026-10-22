@@ -124,6 +124,7 @@ final class OpenCastAppRuntime {
                 allowsAutomaticFeedRefresh: !launchConfiguration.usesInMemoryStore,
                 adFreePassPresentationOverride: launchConfiguration.adFreePassPresentationOverride,
                 adFreePassQueueOverride: launchConfiguration.adFreePassQueueOverride,
+                uiTestSeededChapters: launchConfiguration.seedsChapters ? OpenCastUITestSeedData.seededChapters : nil,
                 legacyLocalPlaylists: legacyLocalPlaylists
             )
             #if DEBUG

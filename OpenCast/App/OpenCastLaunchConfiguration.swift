@@ -7,6 +7,7 @@ struct OpenCastLaunchConfiguration {
     var seedsUITestData: Bool
     var seedsAppStoreScreenshotData: Bool
     var seedsCompletedDownload: Bool
+    var seedsChapters: Bool
     var seedsFailedDownload: Bool
     var seedsTranscriptionModelInstalled: Bool
     var seedsCompletedTranscript: Bool
@@ -76,6 +77,7 @@ struct OpenCastLaunchConfiguration {
             || environment["OPENCAST_SEED_APP_STORE_SCREENSHOTS"] == "1"
         let shouldSeedCompletedDownload = arguments.contains("--opencast-seed-completed-download")
             || environment["OPENCAST_SEED_COMPLETED_DOWNLOAD"] == "1"
+        let shouldSeedChapters = environment["OPENCAST_SEED_CHAPTERS"] == "1"
         let shouldSeedFailedDownload = arguments.contains("--opencast-seed-failed-download")
             || environment["OPENCAST_SEED_FAILED_DOWNLOAD"] == "1"
         let shouldSeedTranscriptionModelInstalled = arguments.contains("--opencast-seed-transcription-model")
@@ -173,6 +175,7 @@ struct OpenCastLaunchConfiguration {
             seedsUITestData: isUITesting && shouldSeedUITestData,
             seedsAppStoreScreenshotData: isUITesting && shouldSeedAppStoreScreenshotData,
             seedsCompletedDownload: isUITesting && shouldSeedCompletedDownload,
+            seedsChapters: isUITesting && shouldSeedChapters,
             seedsFailedDownload: isUITesting && shouldSeedFailedDownload,
             seedsTranscriptionModelInstalled: isUITesting && shouldSeedTranscriptionModelInstalled,
             seedsCompletedTranscript: isUITesting && shouldSeedCompletedTranscript,

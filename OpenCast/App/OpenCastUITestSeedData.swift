@@ -9,6 +9,14 @@ enum OpenCastUITestSeedData {
     static let podcastTitle = "UI Test Show"
     static let episodeID = "ui-test-episode-1"
     static let episodeTitle = "Deterministic UI Episode"
+    static let seededChapters = PlaybackChapterList(
+        chapters: [
+            EpisodeChapter(id: 0, title: "Cold Open", startTime: 0, endTime: 60),
+            EpisodeChapter(id: 1, title: "Main Topic", startTime: 60, endTime: 200),
+            EpisodeChapter(id: 2, title: "Wrap-Up", startTime: 200, endTime: 300),
+        ],
+        source: .embedded
+    )
     static let completedEpisodeID = "ui-test-episode-completed"
     static let completedEpisodeTitle = "Completed UI Episode"
     static let queuedEpisodeIDs = [
