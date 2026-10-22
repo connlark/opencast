@@ -93,7 +93,11 @@ public nonisolated struct PlaybackAdSkipPolicy: Sendable, Equatable {
         }
 
         switch intent {
-        case .scrub:
+        case .scrub, .chapter:
+            // The listener aimed here; the zone stays disarmed until they
+            // leave it. Skipping a chapter jump forward would trap Previous
+            // Chapter at the zone's end and could finish a paused episode
+            // through the outro cutoff.
             disarmedZoneID = zone.id
             return nil
         case .skipButton, .restore, .autoSkip:

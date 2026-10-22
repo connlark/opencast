@@ -139,6 +139,29 @@ struct PlaybackAdSkipPolicyTests {
     }
 
     @Test
+    func chapterLandingDisarmsLikeAScrub() {
+        // A chapter jump lands where the listener aimed. Skipping it forward
+        // would trap Previous Chapter at the zone's end and could finish a
+        // paused episode through the outro cutoff.
+        var policy = PlaybackAdSkipPolicy(zones: [zone(id: 1, start: 10, end: 20)])
+        let landing = policy.evaluate(
+            previousPosition: nil,
+            position: 12,
+            duration: 60,
+            cause: .seekLanding(.chapter)
+        )
+        let tick = policy.evaluate(
+            previousPosition: 12,
+            position: 13,
+            duration: 60,
+            cause: .acceptedTick
+        )
+
+        #expect(landing == nil)
+        #expect(tick == nil)
+    }
+
+    @Test
     func autoSkipLandingOnlyChainEvaluates() {
         var policy = PlaybackAdSkipPolicy(zones: [
             zone(id: 1, start: 10, end: 20),

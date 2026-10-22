@@ -117,7 +117,13 @@ struct EpisodeDetailView: View {
                 embeddedChapters = []
                 return
             }
-            embeddedChapters = (try? await AVAssetChapterReader.chapters(in: AVURLAsset(url: fileURL))) ?? []
+            let chapters = (try? await AVAssetChapterReader.chapters(in: AVURLAsset(url: fileURL))) ?? []
+            // The key changes when the download goes away or is replaced; a
+            // read started for the old file must not land on the new state.
+            guard !Task.isCancelled else {
+                return
+            }
+            embeddedChapters = chapters
         }
     }
 
@@ -132,7 +138,8 @@ struct EpisodeDetailView: View {
         guard let episode else {
             return nil
         }
-        return "\(episode.episodeID)|\(downloadedFileURL?.path ?? "")"
+        let sha256 = appModel.downloads.completedSourceIdentity(for: episode.episodeID)?.sha256 ?? ""
+        return "\(episode.episodeID)|\(downloadedFileURL?.path ?? "")|\(sha256)"
     }
 
     private var displayedEmbeddedChapters: [EpisodeChapter] {

@@ -24,6 +24,11 @@ public final class AVFoundationPlaybackController {
     )
 
     public private(set) var snapshot = PlaybackSnapshot()
+    /// Counts player-item installs and the unload: a load, a download
+    /// switch, a failed-item rebuild, `unload()`. Readers that derive state
+    /// from the item (chapters) key on it, so a list read off one item never
+    /// outlives that item.
+    public private(set) var currentItemGeneration = 0
     public private(set) var currentEpisode: Episode?
     public private(set) var state: PlaybackState = .idle
     public private(set) var position: TimeInterval = 0
@@ -432,6 +437,7 @@ public final class AVFoundationPlaybackController {
         clearExpiredSleepTimerRearm()
         player.pause()
         player.replaceCurrentItem(with: nil)
+        currentItemGeneration += 1
         currentVoiceBoostTap = nil
         pendingVoiceBoostContinuationState = nil
         currentItemLocalFileIdentity = nil
@@ -1118,6 +1124,7 @@ public final class AVFoundationPlaybackController {
     }
 
     private func observeCurrentItem(_ playerItem: AVPlayerItem) {
+        currentItemGeneration += 1
         let generation = currentItemObservationGeneration
         installPeriodicTimeObserver(for: playerItem, generation: generation)
         observeEnd(of: playerItem, generation: generation)
@@ -1597,7 +1604,7 @@ public final class AVFoundationPlaybackController {
         }
         let protectedSeekGeneration = playbackPositionProtection.startSeek(to: clamped)
         let itemGeneration = currentItemObservationGeneration
-        let time = CMTime(seconds: clamped, preferredTimescale: 600)
+        let time = Self.seekTime(for: clamped, landsExactly: mode.intent.landsExactly)
         let completion: @Sendable (Bool) -> Void = { [weak self] finished in
             Task { @MainActor [weak self] in
                 guard let self, currentItemObservationGeneration == itemGeneration else {
@@ -1612,17 +1619,27 @@ public final class AVFoundationPlaybackController {
             }
         }
 
-        switch mode {
-        case .userInitiated, .autoSkip:
-            player.seek(to: time, completionHandler: completion)
-        case .restoredPosition:
+        if mode.intent.landsExactly {
             player.seek(
                 to: time,
                 toleranceBefore: .zero,
                 toleranceAfter: .zero,
                 completionHandler: completion
             )
+        } else {
+            player.seek(to: time, completionHandler: completion)
         }
+    }
+
+    /// Exact landings round up to the next tick, never down: a chapter start
+    /// at 60.002 s would otherwise become 60.0017 s and read as the previous
+    /// chapter after an accurate seek. Tolerant seeks keep the nearest tick.
+    nonisolated static func seekTime(for seconds: TimeInterval, landsExactly: Bool) -> CMTime {
+        let timescale: CMTimeScale = 600
+        guard landsExactly else {
+            return CMTime(seconds: seconds, preferredTimescale: timescale)
+        }
+        return CMTime(value: CMTimeValue((seconds * Double(timescale)).rounded(.up)), timescale: timescale)
     }
 
     private func completeProtectedSeek(

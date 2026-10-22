@@ -43,10 +43,9 @@ nonisolated struct PlaybackChapterList: Equatable, Sendable {
         if position - current.startTime > Self.restartThreshold {
             return current
         }
-        guard let index = chapters.firstIndex(of: current), index > 0 else {
-            return nil
-        }
-        return chapters[index - 1]
+        // Chapters that share a start would bounce between themselves:
+        // step back to the last strictly earlier start.
+        return chapters.last { $0.startTime < current.startTime }
     }
 
     var timelineMarkers: [TimeInterval] {

@@ -14,7 +14,9 @@ final class PlaybackChaptersCoordinator {
     /// UI-test seam: served for every episode in place of any real lookup.
     @ObservationIgnored var uiTestOverride: PlaybackChapterList?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var itemObservationTask: Task<Void, Never>?
     @ObservationIgnored private var installedEpisodeID: String?
+    @ObservationIgnored private var installedItemGeneration: Int?
 
     init(
         playback: AVFoundationPlaybackController,
@@ -26,29 +28,41 @@ final class PlaybackChaptersCoordinator {
         self.library = library
         self.transcriptions = transcriptions
         self.transcriptAnalyses = transcriptAnalyses
+        startItemObservation()
+    }
+
+    deinit {
+        itemObservationTask?.cancel()
     }
 
     func refreshForCurrentEpisode() {
         refreshTask?.cancel()
         guard let episode = playback.currentEpisode else {
             refreshTask = nil
-            install(.empty, forEpisodeID: nil)
+            install(.empty, forEpisodeID: nil, itemGeneration: nil)
             return
         }
 
         let episodeID = episode.id.rawValue
-        if installedEpisodeID != episodeID {
-            install(.empty, forEpisodeID: episodeID)
+        let itemGeneration = playback.currentItemGeneration
+        // A list belongs to one player item. A download switch or a
+        // failed-item rebuild changes the audio under the same episode, so
+        // the old list clears until the new item's read lands.
+        if installedEpisodeID != episodeID || installedItemGeneration != itemGeneration {
+            install(.empty, forEpisodeID: episodeID, itemGeneration: itemGeneration)
         }
         refreshTask = Task { [weak self] in
             guard let self else {
                 return
             }
             let list = await load(episodeID: episodeID)
-            guard !Task.isCancelled, playback.currentEpisode?.id.rawValue == episodeID else {
+            guard !Task.isCancelled,
+                  playback.currentEpisode?.id.rawValue == episodeID,
+                  playback.currentItemGeneration == itemGeneration
+            else {
                 return
             }
-            install(list, forEpisodeID: episodeID)
+            install(list, forEpisodeID: episodeID, itemGeneration: itemGeneration)
         }
     }
 
@@ -57,6 +71,31 @@ final class PlaybackChaptersCoordinator {
             return
         }
         refreshForCurrentEpisode()
+    }
+
+    /// Awaits the in-flight refresh, if any. Test hook.
+    func waitForRefresh() async {
+        await refreshTask?.value
+    }
+
+    /// Follows the player item itself, because not every install goes
+    /// through the app model: a failed item is rebuilt inside the
+    /// controller, and `unload()` has no refresh call of its own.
+    private func startItemObservation() {
+        let playback = playback
+        itemObservationTask = Task { [weak self] in
+            var lastGeneration = playback.currentItemGeneration
+            for await generation in Observations({ playback.currentItemGeneration }) {
+                guard !Task.isCancelled, let self else {
+                    return
+                }
+                guard generation != lastGeneration else {
+                    continue
+                }
+                lastGeneration = generation
+                refreshForCurrentEpisode()
+            }
+        }
     }
 
     private func load(episodeID: String) async -> PlaybackChapterList {
@@ -91,12 +130,13 @@ final class PlaybackChaptersCoordinator {
         )
     }
 
-    private func install(_ list: PlaybackChapterList, forEpisodeID episodeID: String?) {
+    private func install(_ list: PlaybackChapterList, forEpisodeID episodeID: String?, itemGeneration: Int?) {
         guard playback.currentEpisode?.id.rawValue == episodeID else {
             return
         }
         current = list
         installedEpisodeID = episodeID
+        installedItemGeneration = itemGeneration
     }
 }
 

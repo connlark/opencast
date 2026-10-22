@@ -2295,12 +2295,17 @@ final class OpenCastAppModel {
             }
         }
 
-        playback.seek(to: chapter.startTime, intent: .scrub)
+        playback.seek(to: chapter.startTime, intent: .chapter)
     }
 
     /// Awaits the in-flight skip-zone refresh, if any. Test hook.
     func waitForSkipZoneRefresh() async {
         await skipZones.waitForRefresh()
+    }
+
+    /// Awaits the in-flight chapter refresh, if any. Test hook.
+    func waitForChapterRefresh() async {
+        await chapters.waitForRefresh()
     }
 
     func undoLastAutoSkip() {
