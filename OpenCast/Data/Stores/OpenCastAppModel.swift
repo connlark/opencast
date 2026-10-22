@@ -2771,6 +2771,15 @@ final class OpenCastAppModel {
         playbackSettings.setRequeueInterruptedEpisodeEnabled(isEnabled, modelContext: modelContext)
     }
 
+    @discardableResult
+    func setSleepTimerPreset(
+        _ duration: SleepTimerPresetDuration,
+        at index: Int,
+        modelContext: ModelContext
+    ) -> Bool {
+        playbackSettings.setSleepTimerPreset(duration, at: index, modelContext: modelContext)
+    }
+
     func runVoiceBoostDeviceProbeIfNeeded(modelContext: ModelContext) async {
         #if DEBUG
         guard runsVoiceBoostDeviceProbe, !hasRunVoiceBoostDeviceProbe else {

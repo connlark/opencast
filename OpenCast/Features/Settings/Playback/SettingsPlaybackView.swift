@@ -58,6 +58,11 @@ struct SettingsPlaybackView: View {
                 }
             }
 
+            Section("Sleep Timer") {
+                NavigationLink("Presets", value: AppRoute.settings(.sleepTimer))
+                    .accessibilityIdentifier("playback-sleep-timer-presets-row")
+            }
+
             Section {
                 Toggle("Tap to Play", isOn: tapToPlayBinding)
                     .accessibilityIdentifier("playback-tap-to-play-toggle")

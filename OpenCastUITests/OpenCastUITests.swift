@@ -1240,6 +1240,42 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededSleepTimerPresetsEditInSettingsAndSheet() throws {
+        let app = makeSeededApp()
+        app.launch()
+        openSettings(in: app)
+        app.buttons["Playback"].tap()
+        let presetsRow = app.buttons["playback-sleep-timer-presets-row"]
+        assertHittable(presetsRow, named: "Sleep Timer Presets row")
+        presetsRow.tap()
+        let firstPreset = app.buttons["sleep-timer-preset-1"]
+        assertHittable(firstPreset, named: "first sleep timer preset picker")
+        firstPreset.tap()
+        let twentyMinutesChoice = app.buttons["20 Minutes"]
+        assertHittable(twentyMinutesChoice, named: "20 Minutes preset choice")
+        twentyMinutesChoice.tap()
+
+        openInbox(in: app)
+        openSeededNowPlaying(in: app)
+        let sleepTimerButton = app.buttons["Sleep Timer"]
+        assertHittable(sleepTimerButton, named: "Sleep Timer control")
+        sleepTimerButton.tap()
+        let twentyMinutes = app.buttons["20 Minutes"]
+        assertHittable(twentyMinutes, named: "edited 20 Minutes sleep option")
+        assertDoesNotExist(app.buttons["5 Minutes"], named: "replaced 5 Minutes sleep option")
+
+        let editPresets = app.buttons["Edit Presets"]
+        assertHittable(editPresets, named: "Edit Presets button")
+        editPresets.tap()
+        assertExists(app.buttons["sleep-timer-preset-1"], named: "preset editor pushed inside the sheet")
+        app.navigationBars["Sleep Timer"].buttons.firstMatch.tap()
+
+        assertHittable(twentyMinutes, named: "20 Minutes sleep option after editing")
+        twentyMinutes.tap()
+        assertElementValueNotEqual(sleepTimerButton, "Off", named: "armed Sleep Timer control")
+    }
+
+    @MainActor
     func testSeededStopPlaybackFromMoreMenuRemovesCardAndMiniPlayer() throws {
         let app = makeSeededApp()
         app.launch()

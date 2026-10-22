@@ -342,6 +342,142 @@ struct PlaybackSettingsStoreTests {
             modelContext: context
         ) == nil)
     }
+
+    @Test("Sleep timer presets default to 5, 10, 15, 30, 45 and 60 minutes")
+    func sleepTimerPresetsDefault() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let store = PlaybackSettingsStore()
+
+        store.load(modelContext: ModelContext(container), playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(store.sleepTimerPresets == SleepTimerPresetDuration.defaults)
+    }
+
+    @Test("A sleep timer preset slot persists and a fresh store reloads it")
+    func sleepTimerPresetPersistsAndReloads() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = PlaybackSettingsStore()
+        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(store.setSleepTimerPreset(.twenty, at: 0, modelContext: context))
+        #expect(store.setSleepTimerPreset(.oneHundredTwenty, at: 5, modelContext: context))
+
+        let reloadedStore = PlaybackSettingsStore()
+        let freshContext = ModelContext(container)
+        reloadedStore.load(modelContext: freshContext, playback: PlaybackVoiceBoostControllerSpy())
+
+        let expected: [SleepTimerPresetDuration] = [.twenty, .ten, .fifteen, .thirty, .fortyFive, .oneHundredTwenty]
+        #expect(store.sleepTimerPresets == expected)
+        #expect(store.lastErrorMessage == nil)
+        #expect(reloadedStore.sleepTimerPresets == expected)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.sleepTimerPresetsPreferenceKey,
+            modelContext: freshContext
+        )?.value == "[20,10,15,30,45,120]")
+    }
+
+    @Test("A sleep timer preset already held by another slot or outside the six slots is refused")
+    func sleepTimerPresetRefusesDuplicatesAndBadSlots() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = PlaybackSettingsStore()
+        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(!store.setSleepTimerPreset(.ten, at: 0, modelContext: context))
+        #expect(!store.setSleepTimerPreset(.twenty, at: 6, modelContext: context))
+        #expect(!store.setSleepTimerPreset(.twenty, at: -1, modelContext: context))
+        #expect(store.setSleepTimerPreset(.five, at: 0, modelContext: context))
+
+        #expect(store.sleepTimerPresets == SleepTimerPresetDuration.defaults)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.sleepTimerPresetsPreferenceKey,
+            modelContext: context
+        ) == nil)
+    }
+
+    @Test(
+        "Unusable stored sleep timer presets load as defaults without rewriting storage",
+        arguments: [
+            "garbage",
+            "[5,10,15]",
+            "[5,10,15,30,45,61]",
+            "[5,5,15,30,45,60]",
+            "[5,10,15,30,45,60,90]"
+        ]
+    )
+    func unusableStoredSleepTimerPresetsLoadAsDefaults(storedValue: String) throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        context.insert(LocalPreferenceRecord(
+            key: PlaybackSettingsStore.sleepTimerPresetsPreferenceKey,
+            value: storedValue
+        ))
+        try context.save()
+        var saveCount = 0
+        let store = PlaybackSettingsStore(save: { context in
+            saveCount += 1
+            try context.save()
+        })
+
+        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
+
+        #expect(store.sleepTimerPresets == SleepTimerPresetDuration.defaults)
+        #expect(store.lastErrorMessage == nil)
+        #expect(saveCount == 0)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.sleepTimerPresetsPreferenceKey,
+            modelContext: ModelContext(container)
+        )?.value == storedValue)
+    }
+
+    @Test(
+        "A sleep timer preset save failure restores the shared context without discarding other edits",
+        arguments: [nil, "[20,10,15,30,45,60]"] as [String?]
+    )
+    func sleepTimerPresetSaveFailureRollsBackAndSurfacesError(storedValue: String?) throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let previousUpdatedAt = Date(timeIntervalSince1970: 1_000)
+        if let storedValue {
+            context.insert(LocalPreferenceRecord(
+                key: PlaybackSettingsStore.sleepTimerPresetsPreferenceKey,
+                value: storedValue,
+                updatedAt: previousUpdatedAt
+            ))
+            try context.save()
+        }
+        let unrelatedPreference = LocalPreferenceRecord(key: "unrelated.pending.preference", value: "keep")
+        context.insert(unrelatedPreference)
+        let store = PlaybackSettingsStore(save: { _ in
+            throw PlaybackSettingsSaveFailure()
+        })
+        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
+        let previousPresets = store.sleepTimerPresets
+
+        let didPersist = store.setSleepTimerPreset(.ninety, at: 2, modelContext: context)
+
+        #expect(!didPersist)
+        #expect(store.sleepTimerPresets == previousPresets)
+        #expect(store.lastErrorMessage?.contains("Unable to update sleep timer presets") == true)
+
+        let restoredRecord = try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.sleepTimerPresetsPreferenceKey,
+            modelContext: context
+        )
+        #expect(restoredRecord?.value == storedValue)
+        #expect(restoredRecord?.updatedAt == (storedValue == nil ? nil : previousUpdatedAt))
+
+        try context.save()
+        let freshContext = ModelContext(container)
+        let reloadedStore = PlaybackSettingsStore()
+        reloadedStore.load(modelContext: freshContext, playback: PlaybackVoiceBoostControllerSpy())
+        #expect(reloadedStore.sleepTimerPresets == previousPresets)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: unrelatedPreference.key,
+            modelContext: freshContext
+        )?.value == "keep")
+    }
 }
 
 private struct PlaybackSettingsSaveFailure: LocalizedError {

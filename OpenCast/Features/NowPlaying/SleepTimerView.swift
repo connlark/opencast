@@ -7,8 +7,11 @@ struct SleepTimerView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
 
+    @State private var isEditingPresets = false
+
     var body: some View {
         let mode = appModel.playback.sleepTimerMode
+        let options = SleepTimerOption.options(presets: appModel.playbackSettings.sleepTimerPresets)
 
         NavigationStack {
             List {
@@ -21,7 +24,7 @@ struct SleepTimerView: View {
                     }
                 }
                 Section {
-                    ForEach(SleepTimerOption.canonical) { option in
+                    ForEach(options) { option in
                         Button {
                             select(option)
                         } label: {
@@ -40,8 +43,20 @@ struct SleepTimerView: View {
                 }
             }
             .navigationTitle("Sleep Timer")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit Presets", systemImage: "pencil", action: editPresets)
+                }
+            }
+            .navigationDestination(isPresented: $isEditingPresets) {
+                SettingsSleepTimerView()
+            }
             .sensoryFeedback(.selection, trigger: mode)
         }
+    }
+
+    private func editPresets() {
+        isEditingPresets = true
     }
 
     private func select(_ option: SleepTimerOption) {

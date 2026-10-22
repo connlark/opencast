@@ -2,6 +2,7 @@ import Foundation
 
 enum SettingsRoute: Hashable {
     case playback
+    case sleepTimer
     case appIcon
     case notifications
     case transcription

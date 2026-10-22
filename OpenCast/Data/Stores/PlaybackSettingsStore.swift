@@ -10,6 +10,7 @@ final class PlaybackSettingsStore {
     static let autoSkipPromosAndAdsPreferenceKey = "playback.autoSkipPromosAndAds"
     static let tapToPlayPreferenceKey = "playback.episodeRow.tapToPlay"
     static let requeueInterruptedEpisodePreferenceKey = "playback.upNext.requeueInterruptedEpisode"
+    static let sleepTimerPresetsPreferenceKey = "playback.sleepTimer.presets"
     private static let voiceBoostEpisodeKeyPrefix = "playback.voiceBoost.episode."
     private static let skipBackwardIntervalKey = "playback.skip.backward"
     private static let skipForwardIntervalKey = "playback.skip.forward"
@@ -23,6 +24,9 @@ final class PlaybackSettingsStore {
     private(set) var isAutoSkipPromosAndAdsEnabled = true
     private(set) var isTapToPlayEnabled = true
     private(set) var isRequeueInterruptedEpisodeEnabled = false
+    /// Six distinct slots in the listener's order; the sleep timer sheet
+    /// sorts them.
+    private(set) var sleepTimerPresets = SleepTimerPresetDuration.defaults
     private(set) var lastErrorMessage: String?
     @ObservationIgnored private let playbackRatePersistenceOverride: ((Float, ModelContext) throws -> Void)?
     @ObservationIgnored private let save: (ModelContext) throws -> Void
@@ -74,6 +78,7 @@ final class PlaybackSettingsStore {
                 key: Self.requeueInterruptedEpisodePreferenceKey,
                 modelContext: modelContext
             ) ?? false
+            sleepTimerPresets = try storedSleepTimerPresets(modelContext: modelContext)
             isVoiceBoostEnabled = try resolvedVoiceBoostEnabled(
                 episodeID: episodeID,
                 modelContext: modelContext
@@ -87,6 +92,7 @@ final class PlaybackSettingsStore {
             isAutoSkipPromosAndAdsEnabled = true
             isTapToPlayEnabled = true
             isRequeueInterruptedEpisodeEnabled = false
+            sleepTimerPresets = SleepTimerPresetDuration.defaults
             isVoiceBoostEnabled = true
             playback.setRate(1)
             lastErrorMessage = "Unable to load playback settings: \(error.localizedDescription)"
@@ -276,6 +282,44 @@ final class PlaybackSettingsStore {
         )
     }
 
+    /// Puts `duration` in one of the six sleep timer preset slots. A
+    /// duration another slot already holds is refused, so the sheet always
+    /// lists six.
+    @discardableResult
+    func setSleepTimerPreset(
+        _ duration: SleepTimerPresetDuration,
+        at index: Int,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard sleepTimerPresets.indices.contains(index) else {
+            return false
+        }
+        guard sleepTimerPresets[index] != duration else {
+            return true
+        }
+        guard !sleepTimerPresets.contains(duration) else {
+            return false
+        }
+
+        let previousPresets = sleepTimerPresets
+        sleepTimerPresets[index] = duration
+
+        do {
+            let data = try JSONEncoder().encode(sleepTimerPresets)
+            try persistPreference(
+                String(decoding: data, as: UTF8.self),
+                key: Self.sleepTimerPresetsPreferenceKey,
+                modelContext: modelContext
+            )
+            lastErrorMessage = nil
+            return true
+        } catch {
+            sleepTimerPresets = previousPresets
+            lastErrorMessage = "Unable to update sleep timer presets: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     private func updateBooleanPreference(
         _ isEnabled: Bool,
         key: String,
@@ -292,41 +336,46 @@ final class PlaybackSettingsStore {
         assign(isEnabled)
 
         do {
-            let existingRecord = try LocalPreferenceRecord.preference(
-                forKey: key,
-                modelContext: modelContext
-            )
-            let record = existingRecord ?? LocalPreferenceRecord(
-                key: key,
-                value: isEnabled.description
-            )
-            let previousStoredValue = record.value
-            let previousUpdatedAt = record.updatedAt
-            if existingRecord == nil {
-                modelContext.insert(record)
-            }
-            record.value = isEnabled.description
-            record.updatedAt = .now
-
-            do {
-                try save(modelContext)
-            } catch {
-                // Undo only this preference; the shared context can contain
-                // unrelated edits that must survive a failed save.
-                if existingRecord != nil {
-                    record.value = previousStoredValue
-                    record.updatedAt = previousUpdatedAt
-                } else {
-                    modelContext.delete(record)
-                }
-                throw error
-            }
+            try persistPreference(isEnabled.description, key: key, modelContext: modelContext)
             lastErrorMessage = nil
             return true
         } catch {
             assign(previousValue)
             lastErrorMessage = "Unable to update \(failureDescription): \(error.localizedDescription)"
             return false
+        }
+    }
+
+    private func persistPreference(
+        _ value: String,
+        key: String,
+        modelContext: ModelContext
+    ) throws {
+        let existingRecord = try LocalPreferenceRecord.preference(
+            forKey: key,
+            modelContext: modelContext
+        )
+        let record = existingRecord ?? LocalPreferenceRecord(key: key, value: value)
+        let previousStoredValue = record.value
+        let previousUpdatedAt = record.updatedAt
+        if existingRecord == nil {
+            modelContext.insert(record)
+        }
+        record.value = value
+        record.updatedAt = .now
+
+        do {
+            try save(modelContext)
+        } catch {
+            // Undo only this preference; the shared context can contain
+            // unrelated edits that must survive a failed save.
+            if existingRecord != nil {
+                record.value = previousStoredValue
+                record.updatedAt = previousUpdatedAt
+            } else {
+                modelContext.delete(record)
+            }
+            throw error
         }
     }
 
@@ -467,6 +516,23 @@ final class PlaybackSettingsStore {
         }
 
         return option
+    }
+
+    /// Anything but six distinct known durations loads as the defaults and
+    /// leaves the stored value alone.
+    private func storedSleepTimerPresets(modelContext: ModelContext) throws -> [SleepTimerPresetDuration] {
+        guard let value = try preferenceRecord(
+            key: Self.sleepTimerPresetsPreferenceKey,
+            modelContext: modelContext
+        )?.value,
+              let presets = try? JSONDecoder().decode([SleepTimerPresetDuration].self, from: Data(value.utf8)),
+              presets.count == SleepTimerPresetDuration.defaults.count,
+              Set(presets).count == presets.count
+        else {
+            return SleepTimerPresetDuration.defaults
+        }
+
+        return presets
     }
 
     private func updateSkipOption(
