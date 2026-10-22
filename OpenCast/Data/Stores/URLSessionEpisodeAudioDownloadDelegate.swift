@@ -64,6 +64,11 @@ nonisolated final class URLSessionEpisodeAudioDownloadDelegate: NSObject, URLSes
         let responseDisposition = URLSessionResponseDispositionHandler(completionHandler)
         do {
             let normalizedResponse = OpenCastHTTPResponse(response)
+            // The normalized response drops the parsed filename, which
+            // handles RFC 5987 `filename*=`.
+            let suggestedFilename = normalizedResponse.headerValue("content-disposition") == nil
+                ? nil
+                : response.suggestedFilename
             let policy = EpisodeDownloadResumeResponsePolicy.evaluate(
                 statusCode: normalizedResponse.statusCode ?? -1,
                 resumeOffset: resumeOffset,
@@ -77,10 +82,15 @@ nonisolated final class URLSessionEpisodeAudioDownloadDelegate: NSObject, URLSes
                 try openFileForAppend()
                 self.bytesExpected = expectedBytes
                 validatesExpectedByteCount = true
-                let responseMetadata = responseMetadata(from: normalizedResponse)
+                let responseMetadata = responseMetadata(
+                    from: normalizedResponse,
+                    suggestedFilename: suggestedFilename
+                )
                 metadata = EpisodeDownloadResponseMetadata(
                     entityTag: responseMetadata.entityTag ?? resume?.entityTag,
-                    lastModified: responseMetadata.lastModified ?? resume?.lastModified
+                    lastModified: responseMetadata.lastModified ?? resume?.lastModified,
+                    suggestedFilename: responseMetadata.suggestedFilename,
+                    mimeType: responseMetadata.mimeType
                 )
             case .restart(let expectedBytes, false):
                 try validateContentEncoding(in: normalizedResponse)
@@ -90,7 +100,10 @@ nonisolated final class URLSessionEpisodeAudioDownloadDelegate: NSObject, URLSes
                 self.bytesExpected = expectedBytes
                     ?? (responseExpectedBytes >= 0 ? responseExpectedBytes : nil)
                 validatesExpectedByteCount = normalizedResponse.statusCode == 206
-                metadata = responseMetadata(from: normalizedResponse)
+                metadata = responseMetadata(
+                    from: normalizedResponse,
+                    suggestedFilename: suggestedFilename
+                )
             case .restart(_, true):
                 recordResponseError(RestartRequired())
                 responseDisposition.resolve(.cancel)
@@ -239,11 +252,14 @@ nonisolated final class URLSessionEpisodeAudioDownloadDelegate: NSObject, URLSes
     }
 
     private func responseMetadata(
-        from response: OpenCastHTTPResponse
+        from response: OpenCastHTTPResponse,
+        suggestedFilename: String?
     ) -> EpisodeDownloadResponseMetadata {
         EpisodeDownloadResponseMetadata(
             entityTag: response.headerValue("etag"),
-            lastModified: response.headerValue("last-modified")
+            lastModified: response.headerValue("last-modified"),
+            suggestedFilename: suggestedFilename,
+            mimeType: response.mimeType
         )
     }
 

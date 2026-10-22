@@ -1407,6 +1407,392 @@ struct DownloadStoreTests {
         #expect(store.completedSourceIdentity(for: "identity-legacy") == nil)
     }
 
+    @Test("An extension-less enclosure completes under the extension its bytes prove")
+    func extensionlessEnclosureCompletesUnderSniffedExtension() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let audio = EpisodeDownloadAudioFixtures.taggedMP3
+        let downloader = ChunkedEpisodeAudioDownloader(chunks: [audio.prefix(5), audio.dropFirst(5)])
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "extensionless", audioURL: Self.extensionlessAudioURL)
+
+        store.startDownload(for: episode, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        let relativePath = try #require(record.localRelativePath)
+        #expect(record.state == .completed)
+        #expect(relativePath.hasSuffix(".mp3"))
+        #expect(try Data(contentsOf: fileStore.fileURL(relativePath: relativePath)) == audio)
+        #expect(try downloadsDirectoryFileNames(fileStore) == ["extensionless.mp3"])
+    }
+
+    @Test("An unsniffable extension-less enclosure takes its Content-Disposition extension")
+    func unsniffableEnclosureTakesSuggestedFilenameExtension() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let downloader = ChunkedEpisodeAudioDownloader(
+            chunks: [Data("no recognizable header".utf8)],
+            metadata: EpisodeDownloadResponseMetadata(
+                entityTag: nil,
+                lastModified: nil,
+                suggestedFilename: "a.m4a",
+                mimeType: "application/octet-stream"
+            )
+        )
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "extensionless-named", audioURL: Self.extensionlessAudioURL)
+
+        store.startDownload(for: episode, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        #expect(record.state == .completed)
+        #expect(record.localRelativePath?.hasSuffix(".m4a") == true)
+        #expect(try downloadsDirectoryFileNames(fileStore) == ["extensionless-named.m4a"])
+    }
+
+    @Test("A pause after an extension-less enclosure's final bytes still settles the extension")
+    func pauseAfterFinalBytesSettlesExtension() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let audio = EpisodeDownloadAudioFixtures.taggedMP3
+        let store = DownloadStore(
+            downloader: CompletedBytesHangingEpisodeAudioDownloader(data: audio),
+            fileStore: fileStore
+        )
+        let episode = makeEpisode(episodeID: "extensionless-paused-complete", audioURL: Self.extensionlessAudioURL)
+
+        store.startDownload(for: episode, modelContext: context)
+        #expect(await waitUntil {
+            store.record(for: episode.episodeID)?.state == .downloading
+                && store.byteProgress(for: episode.episodeID)?.bytesReceived == Int64(audio.count)
+        })
+        store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        #expect(record.state == .completed)
+        #expect(record.localRelativePath?.hasSuffix(".mp3") == true)
+        #expect(try downloadsDirectoryFileNames(fileStore) == ["extensionless-paused-complete.mp3"])
+    }
+
+    @Test("A pause after an unsniffable enclosure's final bytes settles from the response hints")
+    func pauseAfterFinalBytesSettlesFromResponseHints() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let audio = Data("no recognizable header".utf8)
+        let store = DownloadStore(
+            downloader: CompletedBytesHangingEpisodeAudioDownloader(
+                data: audio,
+                metadata: EpisodeDownloadResponseMetadata(
+                    entityTag: nil,
+                    lastModified: nil,
+                    suggestedFilename: nil,
+                    mimeType: "audio/x-m4a"
+                )
+            ),
+            fileStore: fileStore
+        )
+        let episode = makeEpisode(episodeID: "extensionless-paused-hinted", audioURL: Self.extensionlessAudioURL)
+
+        store.startDownload(for: episode, modelContext: context)
+        #expect(await waitUntil {
+            store.record(for: episode.episodeID)?.state == .downloading
+                && store.byteProgress(for: episode.episodeID)?.bytesReceived == Int64(audio.count)
+        })
+        store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        #expect(record.state == .completed)
+        #expect(record.localRelativePath?.hasSuffix(".m4a") == true)
+        #expect(try downloadsDirectoryFileNames(fileStore) == ["extensionless-paused-hinted.m4a"])
+    }
+
+    @Test("Pausing and resuming an extension-less enclosure leaves one file named for its bytes")
+    func pauseResumeExtensionlessEnclosureSettlesOnce() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let firstChunk = EpisodeDownloadAudioFixtures.taggedMP3
+        let downloader = ResumableGatedEpisodeAudioDownloader(firstChunk: firstChunk)
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "extensionless-resume", audioURL: Self.extensionlessAudioURL)
+
+        store.startDownload(for: episode, modelContext: context)
+        #expect(await waitUntil {
+            store.byteProgress(for: episode.episodeID)?.bytesReceived == Int64(firstChunk.count)
+        })
+        store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+        try #require(store.record(for: episode.episodeID)?.state == .paused)
+
+        store.resumeDownload(episodeID: episode.episodeID, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        let relativePath = try #require(record.localRelativePath)
+        #expect(record.state == .completed)
+        #expect(relativePath.hasSuffix(".mp3"))
+        #expect(try Data(contentsOf: fileStore.fileURL(relativePath: relativePath)) == firstChunk + Data("def".utf8))
+        #expect(try downloadsDirectoryFileNames(fileStore) == ["extensionless-resume.mp3"])
+    }
+
+    @Test("Launch reconciliation renames a completed download whose bytes classify")
+    func reconcileRenamesClassifiableCompletedDownload() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let audio = EpisodeDownloadAudioFixtures.taggedMP3
+        let inserted = try insertCompletedDownload(
+            episodeID: "repair-classified",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: Self.extensionlessAudioURL)),
+            data: audio,
+            fileStore: fileStore,
+            context: context
+        )
+        inserted.sourceFileSHA256 = OpenCastSHA256.hash(audio)
+        let storedPath = try #require(inserted.localRelativePath)
+        try #require(storedPath.hasSuffix(".audio"))
+        try context.save()
+
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+
+        let record = try #require(store.record(for: "repair-classified"))
+        let repairedPath = try #require(record.localRelativePath)
+        #expect(store.lastErrorMessage == nil)
+        #expect(record.state == .completed)
+        #expect(repairedPath.hasSuffix(".mp3"))
+        #expect(try Data(contentsOf: fileStore.fileURL(relativePath: repairedPath)) == audio)
+        #expect(!fileStore.fileExists(relativePath: storedPath))
+        #expect(record.sourceFileSHA256 == OpenCastSHA256.hash(audio))
+        #expect(store.completedSourceIdentity(for: "repair-classified") != nil)
+    }
+
+    @Test("Launch reconciliation leaves an unclassifiable completed download alone")
+    func reconcileLeavesUnclassifiableCompletedDownload() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let inserted = try insertCompletedDownload(
+            episodeID: "repair-unclassified",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: Self.extensionlessAudioURL)),
+            fileStore: fileStore,
+            context: context
+        )
+        let storedPath = try #require(inserted.localRelativePath)
+        try context.save()
+
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+
+        let record = try #require(store.record(for: "repair-unclassified"))
+        #expect(store.lastErrorMessage == nil)
+        #expect(record.state == .completed)
+        #expect(record.localRelativePath == storedPath)
+        #expect(fileStore.fileExists(relativePath: storedPath))
+    }
+
+    @Test("Launch reconciliation re-points a completed record at its renamed sibling")
+    func reconcileRepointsCompletedRecordAtRenamedSibling() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let audio = EpisodeDownloadAudioFixtures.taggedMP3
+        let inserted = try insertCompletedDownload(
+            episodeID: "repair-sibling",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: Self.extensionlessAudioURL)),
+            data: audio,
+            fileStore: fileStore,
+            context: context
+        )
+        inserted.sourceFileSHA256 = OpenCastSHA256.hash(audio)
+        let storedPath = try #require(inserted.localRelativePath)
+        // The launch repair renamed the file and died before saving the record.
+        let siblingURL = fileStore.downloadsDirectory.appending(path: "repair-sibling.mp3")
+        try FileManager.default.moveItem(at: fileStore.fileURL(relativePath: storedPath), to: siblingURL)
+        try context.save()
+
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+
+        let record = try #require(store.record(for: "repair-sibling"))
+        let repairedPath = try #require(record.localRelativePath)
+        #expect(record.state == .completed)
+        #expect(repairedPath.hasSuffix(".mp3"))
+        #expect(try Data(contentsOf: fileStore.fileURL(relativePath: repairedPath)) == audio)
+        #expect(store.completedSourceIdentity(for: "repair-sibling")?.sha256 == OpenCastSHA256.hash(audio))
+    }
+
+    @Test("Launch reconciliation does not adopt an equal-size sibling whose bytes miss the recorded hash")
+    func reconcileIgnoresSiblingWithOtherBytes() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let audio = EpisodeDownloadAudioFixtures.taggedMP3
+        let inserted = try insertCompletedDownload(
+            episodeID: "repair-other-bytes",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: Self.extensionlessAudioURL)),
+            data: audio,
+            fileStore: fileStore,
+            context: context
+        )
+        inserted.sourceFileSHA256 = OpenCastSHA256.hash(audio)
+        let storedPath = try #require(inserted.localRelativePath)
+        try FileManager.default.removeItem(at: fileStore.fileURL(relativePath: storedPath))
+        // An earlier download kept under the same stem, with the same length.
+        var staleAudio = audio
+        staleAudio[staleAudio.endIndex - 1] ^= 0xFF
+        let siblingURL = fileStore.downloadsDirectory.appending(path: "repair-other-bytes.mp3")
+        try staleAudio.write(to: siblingURL, options: .atomic)
+        try context.save()
+
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+
+        let record = try #require(store.record(for: "repair-other-bytes"))
+        #expect(record.state == .missing)
+        #expect(record.localRelativePath == storedPath)
+        #expect(try Data(contentsOf: siblingURL) == staleAudio)
+    }
+
+    @Test("A download that completes while launch reconciliation probes keeps its record")
+    func reconcileSkipsVerdictsForReplacedRecords() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let staleAudio = EpisodeDownloadAudioFixtures.taggedMP3 + Data("stale".utf8)
+        let inserted = try insertCompletedDownload(
+            episodeID: "replaced-during-probe",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: Self.extensionlessAudioURL)),
+            data: staleAudio,
+            fileStore: fileStore,
+            context: context
+        )
+        inserted.sourceFileSHA256 = OpenCastSHA256.hash(staleAudio)
+        let storedPath = try #require(inserted.localRelativePath)
+        try FileManager.default.removeItem(at: fileStore.fileURL(relativePath: storedPath))
+        // An equal-size sibling with other bytes: the probe's verdict is
+        // `.markMissing`.
+        var siblingAudio = staleAudio
+        siblingAudio[siblingAudio.endIndex - 1] ^= 0xFF
+        try siblingAudio.write(
+            to: fileStore.downloadsDirectory.appending(path: "replaced-during-probe.mp3"),
+            options: .atomic
+        )
+        try context.save()
+
+        let freshAudio = EpisodeDownloadAudioFixtures.taggedMP3 + Data("fresh download".utf8)
+        let store = DownloadStore(
+            downloader: ChunkedEpisodeAudioDownloader(chunks: [freshAudio]),
+            fileStore: fileStore
+        )
+        let episode = makeEpisode(episodeID: "replaced-during-probe", audioURL: Self.extensionlessAudioURL)
+        store.afterReconcileProbesForTesting = {
+            store.startDownload(for: episode, modelContext: context)
+            try? await store.waitForDownload(episodeID: episode.episodeID)
+        }
+        await store.load(modelContext: context)
+
+        let record = try #require(store.record(for: episode.episodeID))
+        let relativePath = try #require(record.localRelativePath)
+        #expect(record.state == .completed)
+        #expect(record.sourceFileSHA256 == OpenCastSHA256.hash(freshAudio))
+        #expect(try Data(contentsOf: fileStore.fileURL(relativePath: relativePath)) == freshAudio)
+    }
+
+    @Test("Launch reconciliation never repairs two colliding stems onto one name")
+    func reconcileReservesRepairTargetsAcrossCollidingStems() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        // "collide x" and "collide-x" share the stem "collide-x"; the two
+        // enclosures differ only in their non-audio extensions.
+        let audioByEpisodeID = [
+            "collide x": EpisodeDownloadAudioFixtures.taggedMP3 + Data("first".utf8),
+            "collide-x": EpisodeDownloadAudioFixtures.taggedMP3 + Data("second".utf8),
+        ]
+        let sourceURLByEpisodeID = [
+            "collide x": try #require(URL(string: "https://example.com/get/first")),
+            "collide-x": try #require(URL(string: "https://example.com/get/second.php")),
+        ]
+        for (episodeID, audio) in audioByEpisodeID {
+            _ = try insertCompletedDownload(
+                episodeID: episodeID,
+                podcastID: "https://example.com/feed.xml",
+                sourceAudioURL: try #require(sourceURLByEpisodeID[episodeID]),
+                data: audio,
+                fileStore: fileStore,
+                context: context
+            )
+        }
+        try context.save()
+
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+
+        let records = try audioByEpisodeID.keys.map { try #require(store.record(for: $0)) }
+        let paths = records.compactMap(\.localRelativePath)
+        #expect(Set(paths).count == 2)
+        #expect(paths.count { $0.hasSuffix(".mp3") } == 1)
+        for record in records {
+            let relativePath = try #require(record.localRelativePath)
+            #expect(record.state == .completed)
+            #expect(try Data(contentsOf: fileStore.fileURL(relativePath: relativePath))
+                == audioByEpisodeID[record.episodeID])
+        }
+    }
+
+    @Test("Launch reconciliation does not adopt a sibling of the wrong size")
+    func reconcileIgnoresWrongSizeSibling() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let inserted = try insertCompletedDownload(
+            episodeID: "repair-wrong-size",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: Self.extensionlessAudioURL)),
+            data: Data("ID3 our audio".utf8),
+            fileStore: fileStore,
+            context: context
+        )
+        let storedPath = try #require(inserted.localRelativePath)
+        try FileManager.default.removeItem(at: fileStore.fileURL(relativePath: storedPath))
+        let foreignAudio = Data("ID3 somebody else's longer audio".utf8)
+        let siblingURL = fileStore.downloadsDirectory.appending(path: "repair-wrong-size.mp3")
+        try foreignAudio.write(to: siblingURL, options: .atomic)
+        try context.save()
+
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+
+        let record = try #require(store.record(for: "repair-wrong-size"))
+        #expect(record.state == .missing)
+        #expect(record.localRelativePath == storedPath)
+        #expect(try Data(contentsOf: siblingURL) == foreignAudio)
+    }
+
+    private static let extensionlessAudioURL = "https://example.com/get/abc?file=track.mp3"
+
+    private func downloadsDirectoryFileNames(_ fileStore: EpisodeDownloadFileStore) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(
+            at: fileStore.downloadsDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).map(\.lastPathComponent).sorted()
+    }
+
     private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
         makeEpisode(episodeID: episodeID, audioURL: "https://example.com/\(episodeID).mp3")
     }
@@ -1457,12 +1843,13 @@ struct DownloadStoreTests {
         episodeID: String,
         podcastID: String,
         sourceAudioURL: URL,
+        data: Data? = nil,
         fileStore: EpisodeDownloadFileStore,
         context: ModelContext
     ) throws -> EpisodeDownloadRecord {
         let relativePath = fileStore.relativePath(episodeID: episodeID, sourceAudioURL: sourceAudioURL)
         let fileURL = fileStore.fileURL(relativePath: relativePath)
-        let data = Data("downloaded \(episodeID)".utf8)
+        let data = data ?? Data("downloaded \(episodeID)".utf8)
         try fileStore.prepareDownloadsDirectory()
         try data.write(to: fileURL, options: .atomic)
         let record = EpisodeDownloadRecord(
@@ -1493,6 +1880,7 @@ struct DownloadStoreTests {
 
 private struct ChunkedEpisodeAudioDownloader: EpisodeAudioDownloading {
     let chunks: [Data]
+    var metadata = EpisodeDownloadResponseMetadata(entityTag: nil, lastModified: nil)
 
     @concurrent
     func download(
@@ -1502,7 +1890,7 @@ private struct ChunkedEpisodeAudioDownloader: EpisodeAudioDownloading {
         onResponseMetadata: @escaping @MainActor @Sendable (EpisodeDownloadResponseMetadata) -> Void,
         progress: @escaping @MainActor @Sendable (_ bytesReceived: Int64, _ bytesExpected: Int64?) -> Void
     ) async throws {
-        await onResponseMetadata(EpisodeDownloadResponseMetadata(entityTag: nil, lastModified: nil))
+        await onResponseMetadata(metadata)
         FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
         let fileHandle = try FileHandle(forWritingTo: temporaryURL)
         defer {
@@ -1541,6 +1929,9 @@ private struct HangingEpisodeAudioDownloader: EpisodeAudioDownloading {
 }
 
 private struct CompletedBytesHangingEpisodeAudioDownloader: EpisodeAudioDownloading {
+    var data = Data("complete".utf8)
+    var metadata = EpisodeDownloadResponseMetadata(entityTag: nil, lastModified: nil)
+
     @concurrent
     func download(
         from sourceURL: URL,
@@ -1549,8 +1940,7 @@ private struct CompletedBytesHangingEpisodeAudioDownloader: EpisodeAudioDownload
         onResponseMetadata: @escaping @MainActor @Sendable (EpisodeDownloadResponseMetadata) -> Void,
         progress: @escaping @MainActor @Sendable (_ bytesReceived: Int64, _ bytesExpected: Int64?) -> Void
     ) async throws {
-        let data = Data("complete".utf8)
-        await onResponseMetadata(EpisodeDownloadResponseMetadata(entityTag: nil, lastModified: nil))
+        await onResponseMetadata(metadata)
         try data.write(to: temporaryURL, options: .atomic)
         await progress(Int64(data.count), Int64(data.count))
         while true {
@@ -1562,7 +1952,12 @@ private struct CompletedBytesHangingEpisodeAudioDownloader: EpisodeAudioDownload
 
 nonisolated private final class ResumableGatedEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
     private let lock = NSLock()
+    private let firstChunk: Data
     private var recordedResumeContexts: [EpisodeDownloadResumeContext?] = []
+
+    init(firstChunk: Data = Data("abc".utf8)) {
+        self.firstChunk = firstChunk
+    }
 
     nonisolated func download(
         from sourceURL: URL,
@@ -1577,9 +1972,11 @@ nonisolated private final class ResumableGatedEpisodeAudioDownloader: EpisodeAud
             lastModified: "Wed, 01 Jul 2026 00:00:00 GMT"
         ))
 
+        let secondChunk = Data("def".utf8)
+        let totalByteCount = Int64(firstChunk.count + secondChunk.count)
         if resume == nil {
-            try Data("abc".utf8).write(to: temporaryURL, options: .atomic)
-            await progress(3, 6)
+            try firstChunk.write(to: temporaryURL, options: .atomic)
+            await progress(Int64(firstChunk.count), totalByteCount)
             while true {
                 try Task.checkCancellation()
                 try await Task.sleep(for: .seconds(1))
@@ -1591,8 +1988,8 @@ nonisolated private final class ResumableGatedEpisodeAudioDownloader: EpisodeAud
             try? fileHandle.close()
         }
         try fileHandle.seekToEnd()
-        try fileHandle.write(contentsOf: Data("def".utf8))
-        await progress(6, 6)
+        try fileHandle.write(contentsOf: secondChunk)
+        await progress(totalByteCount, totalByteCount)
     }
 
     nonisolated func resumeContexts() -> [EpisodeDownloadResumeContext] {

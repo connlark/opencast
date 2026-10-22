@@ -1,5 +1,6 @@
 import Foundation
 import OpenCastCore
+import OpenCastTranscription
 import os
 import Testing
 @testable import OpenCast
@@ -400,6 +401,161 @@ struct EpisodeDownloadInfrastructureTests {
         #expect(metadataDelivered.withLock { $0 })
     }
 
+    @Test("Response metadata carries the Content-Disposition filename only when the header is sent")
+    func delegateCapturesFormatHints() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try #require(URL(string: "https://example.com/get/abc"))
+
+        let named = try await deliveredMetadata(
+            for: try #require(HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Length": "6",
+                    "Content-Disposition": "attachment; filename=\"a.m4a\"",
+                    "Content-Type": "application/json",
+                ]
+            )),
+            in: directory
+        )
+        #expect(named?.suggestedFilename == "a.m4a")
+        #expect(named?.mimeType == "application/json")
+
+        let unnamed = try await deliveredMetadata(
+            for: try #require(HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Length": "6", "Content-Type": "audio/mpeg"]
+            )),
+            in: directory
+        )
+        #expect(unnamed?.suggestedFilename == nil)
+        #expect(unnamed?.mimeType == "audio/mpeg")
+
+        let resumed = try await deliveredMetadata(
+            for: try #require(HTTPURLResponse(
+                url: url,
+                statusCode: 206,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Range": "bytes 3-5/6",
+                    "Content-Disposition": "attachment; filename=\"b.mp3\"",
+                ]
+            )),
+            resumeOffset: 3,
+            in: directory
+        )
+        #expect(resumed?.suggestedFilename == "b.mp3")
+        #expect(resumed?.entityTag == "\"version-1\"")
+    }
+
+    @Test("Settled path names an extension-less download after its bytes, then its response")
+    func settledPathNamesExtensionlessDownloads() throws {
+        let baseDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: baseDirectory) }
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: baseDirectory)
+        try fileStore.prepareDownloadsDirectory()
+        let fileURL = fileStore.temporaryFileURL(episodeID: "settle", token: "token")
+        let extensionlessURL = try #require(URL(string: "https://example.com/get/abc?file=track.mp3"))
+        let phpURL = try #require(URL(string: "https://example.com/feed/episode.php"))
+        let mp3URL = try #require(URL(string: "https://example.com/episode.mp3"))
+        func settledExtension(
+            _ header: Data,
+            sourceURL: URL? = nil,
+            suggestedFilename: String? = nil,
+            mimeType: String? = nil
+        ) throws -> String {
+            try (header + Data(repeating: 0x00, count: 16)).write(to: fileURL)
+            let relativePath = fileStore.settledRelativePath(
+                episodeID: "settle",
+                sourceAudioURL: sourceURL ?? extensionlessURL,
+                responseMetadata: EpisodeDownloadResponseMetadata(
+                    entityTag: nil,
+                    lastModified: nil,
+                    suggestedFilename: suggestedFilename,
+                    mimeType: mimeType
+                ),
+                fileURL: fileURL
+            )
+            #expect(relativePath.hasPrefix("\(EpisodeDownloadFileStore.directoryName)/settle."))
+            return URL(filePath: relativePath).pathExtension
+        }
+        let fixtures = EpisodeDownloadAudioFixtures.self
+        let taggedMP3 = fixtures.taggedMP3
+        let taggedADTS = fixtures.id3Tagged(fixtures.adtsFrameHeader)
+        let mpeg4 = Data([0x00, 0x00, 0x00, 0x20] + Array("ftypM4A ".utf8))
+        let unrecognized = Data([0x12, 0x34, 0x56, 0x78])
+        // "ID3" with an invalid version byte: not a tag, so it proves nothing.
+        let malformedTag = Data("ID3".utf8) + Data([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+
+        #expect(try settledExtension(Data(fixtures.mpegFrameHeader)) == "mp3")
+        #expect(try settledExtension(Data(fixtures.adtsFrameHeader)) == "aac")
+        #expect(try settledExtension(taggedMP3) == "mp3")
+        #expect(try settledExtension(taggedADTS) == "aac")
+        #expect(try settledExtension(fixtures.id3Tagged(fixtures.mpegFrameHeader, bodyByteCount: 20_000)) == "mp3")
+        #expect(try settledExtension(fixtures.id3Tagged(fixtures.adtsFrameHeader, trailingPadding: 300)) == "aac")
+        #expect(try settledExtension(mpeg4) == "m4a")
+        #expect(try settledExtension(Data("OggS".utf8)) == "ogg")
+        #expect(try settledExtension(Data("RIFF".utf8) + Data([0x24, 0, 0, 0]) + Data("WAVE".utf8)) == "wav")
+        #expect(try settledExtension(Data("fLaC".utf8)) == "flac")
+        #expect(try settledExtension(Data("FORM".utf8) + Data([0, 0, 0, 0]) + Data("AIFF".utf8)) == "aiff")
+        #expect(try settledExtension(Data("caff".utf8)) == "caf")
+        #expect(try settledExtension(unrecognized) == EpisodeDownloadFileStore.fallbackExtension)
+        #expect(try settledExtension(unrecognized, suggestedFilename: "x.m4a", mimeType: "application/json") == "m4a")
+        #expect(try settledExtension(unrecognized, mimeType: "audio/mpeg") == "mp3")
+        #expect(try settledExtension(unrecognized, mimeType: "audio/x-m4a") == "m4a")
+        #expect(try settledExtension(unrecognized, mimeType: "audio/mp4; codecs=mp4a.40.2") == "m4a")
+        #expect(try settledExtension(unrecognized, suggestedFilename: "x.json", mimeType: "application/json")
+            == EpisodeDownloadFileStore.fallbackExtension)
+        #expect(try settledExtension(malformedTag) == EpisodeDownloadFileStore.fallbackExtension)
+        #expect(try settledExtension(malformedTag, mimeType: "audio/aac") == "aac")
+        #expect(try settledExtension(taggedMP3, sourceURL: phpURL) == "mp3")
+        #expect(try settledExtension(mpeg4, sourceURL: mp3URL) == "mp3")
+        #expect(try settledExtension(taggedMP3, suggestedFilename: "x.m4a") == "mp3")
+        #expect(try settledExtension(taggedADTS, suggestedFilename: "x.mp3", mimeType: "audio/mpeg") == "aac")
+    }
+
+    @Test("Completed sibling probe matches only an unclaimed audio file of the recorded size and hash")
+    func completedSiblingProbe() throws {
+        let baseDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: baseDirectory) }
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: baseDirectory)
+        try fileStore.prepareDownloadsDirectory()
+        let episodeID = "sibling"
+        let audio = Data("ID3 sibling audio".utf8)
+        let size = Int64(audio.count)
+        let hash = OpenCastSHA256.hash(audio)
+        func probe(sha256: String = "", excluding: Set<String> = []) -> String? {
+            fileStore.completedSiblingRelativePath(
+                episodeID: episodeID,
+                expectedSize: size,
+                expectedSHA256: sha256,
+                excluding: excluding
+            )
+        }
+        try audio.write(to: fileStore.temporaryFileURL(episodeID: episodeID, token: "token"))
+        try audio.write(to: fileStore.pausedPartialFileURL(episodeID: episodeID))
+        #expect(probe() == nil)
+
+        let wrongSizePath = fileStore.relativePath(episodeID: episodeID, extension: "m4a")
+        try Data("ID3 a longer sibling".utf8).write(to: fileStore.fileURL(relativePath: wrongSizePath))
+        #expect(probe() == nil)
+
+        // Same size, other bytes: only a record without a hash may adopt it.
+        let staleSiblingPath = fileStore.relativePath(episodeID: episodeID, extension: "aac")
+        try Data("ID3 stale sibling".utf8).write(to: fileStore.fileURL(relativePath: staleSiblingPath))
+        #expect(probe() == staleSiblingPath)
+        #expect(probe(sha256: hash) == nil)
+
+        let siblingPath = fileStore.relativePath(episodeID: episodeID, extension: "mp3")
+        try audio.write(to: fileStore.fileURL(relativePath: siblingPath))
+        #expect(probe(sha256: hash) == siblingPath)
+        #expect(probe(sha256: hash, excluding: [siblingPath]) == nil)
+    }
+
     @Test("Resume response policy handles partial, full, and unsatisfiable responses")
     func resumeResponsePolicyHandlesExpectedResponses() {
         #expect(
@@ -564,6 +720,40 @@ struct EpisodeDownloadInfrastructureTests {
         let fileStore = EpisodeDownloadFileStore(baseDirectory: baseDirectory)
 
         #expect(try fileStore.adoptNewestTemporaryPartial(episodeID: "missing") == nil)
+    }
+
+    private func deliveredMetadata(
+        for response: HTTPURLResponse,
+        resumeOffset: Int64 = 0,
+        in directory: URL
+    ) async throws -> EpisodeDownloadResponseMetadata? {
+        let temporaryURL = directory.appending(path: "\(UUID().uuidString).partial")
+        try Data(repeating: 0x61, count: Int(resumeOffset)).write(to: temporaryURL)
+        let (_, progressContinuation) = AsyncStream<URLSessionEpisodeAudioDownloadDelegate.ProgressUpdate>.makeStream()
+        let delivered = OSAllocatedUnfairLock<EpisodeDownloadResponseMetadata?>(initialState: nil)
+        let delegate = URLSessionEpisodeAudioDownloadDelegate(
+            temporaryURL: temporaryURL,
+            resumeOffset: resumeOffset,
+            resume: resumeOffset > 0
+                ? EpisodeDownloadResumeContext(offset: resumeOffset, entityTag: "\"version-1\"", lastModified: nil)
+                : nil,
+            progressInterval: .milliseconds(250),
+            progressContinuation: progressContinuation,
+            onResponseMetadata: { metadata in
+                delivered.withLock { $0 = metadata }
+            }
+        )
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let dataTask = session.dataTask(with: try #require(response.url))
+
+        let disposition = await withCheckedContinuation { continuation in
+            delegate.urlSession(session, dataTask: dataTask, didReceive: response) { disposition in
+                continuation.resume(returning: disposition)
+            }
+        }
+        #expect(disposition == .allow)
+        return delivered.withLock { $0 }
     }
 
     private func makeTemporaryDirectory() throws -> URL {

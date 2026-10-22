@@ -1,7 +1,9 @@
 import Foundation
+import OpenCastTranscription
 
 struct EpisodeDownloadFileStore: Sendable {
     nonisolated static let directoryName = "EpisodeDownloads"
+    nonisolated static let fallbackExtension = "audio"
 
     let baseDirectory: URL
 
@@ -14,8 +16,68 @@ struct EpisodeDownloadFileStore: Sendable {
     }
 
     nonisolated func relativePath(episodeID: String, sourceAudioURL: URL) -> String {
-        let extensionName = safeExtension(from: sourceAudioURL)
-        return "\(Self.directoryName)/\(safeStem(episodeID: episodeID)).\(extensionName)"
+        relativePath(episodeID: episodeID, extension: safeExtension(from: sourceAudioURL))
+    }
+
+    nonisolated func relativePath(episodeID: String, extension extensionName: String) -> String {
+        "\(Self.directoryName)/\(safeStem(episodeID: episodeID)).\(extensionName)"
+    }
+
+    /// The completed file's name. A known audio extension on the enclosure
+    /// URL wins, so mainstream hosts keep today's names. Otherwise the bytes
+    /// decide first, because they are the one signal a fresh download, a
+    /// resume whose 206 omits the headers, and the launch repair all share;
+    /// then the Content-Disposition filename, then an audio Content-Type.
+    nonisolated func settledRelativePath(
+        episodeID: String,
+        sourceAudioURL: URL,
+        responseMetadata: EpisodeDownloadResponseMetadata?,
+        fileURL: URL
+    ) -> String {
+        if EpisodeDownloadAudioFormat.isKnownAudioExtension(sourceAudioURL.pathExtension) {
+            return relativePath(episodeID: episodeID, sourceAudioURL: sourceAudioURL)
+        }
+        let extensionName = EpisodeDownloadAudioFormat.sniff(fileAt: fileURL)?.fileExtension
+            ?? EpisodeDownloadAudioFormat.fromFilename(responseMetadata?.suggestedFilename)
+            ?? EpisodeDownloadAudioFormat.fromMIMEType(responseMetadata?.mimeType)?.fileExtension
+            ?? Self.fallbackExtension
+        return relativePath(episodeID: episodeID, extension: extensionName)
+    }
+
+    nonisolated func needsExtensionRepair(relativePath: String) -> Bool {
+        !EpisodeDownloadAudioFormat.isKnownAudioExtension(fileURL(relativePath: relativePath).pathExtension)
+    }
+
+    /// A completed file under the episode's stem with a known audio extension
+    /// and exactly the recorded size and hash, for a record whose stored path
+    /// vanished in the launch repair's rename-then-save window. Stems are
+    /// lossy and a stale earlier download can keep the stem, so the size, the
+    /// hash (when the record has one) and the paths other records claim keep
+    /// the probe from adopting bytes that are not the record's.
+    nonisolated func completedSiblingRelativePath(
+        episodeID: String,
+        expectedSize: Int64,
+        expectedSHA256: String,
+        excluding excludedRelativePaths: Set<String>
+    ) -> String? {
+        guard expectedSize > 0 else {
+            return nil
+        }
+        return EpisodeDownloadAudioFormat.knownExtensions.sorted()
+            .lazy
+            .map { relativePath(episodeID: episodeID, extension: $0) }
+            .first { candidate in
+                let candidateURL = fileURL(relativePath: candidate)
+                guard !excludedRelativePaths.contains(candidate),
+                      let values = try? candidateURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                      values.isRegularFile == true,
+                      values.fileSize.map(Int64.init) == expectedSize
+                else {
+                    return false
+                }
+                return expectedSHA256.isEmpty
+                    || (try? OpenCastSHA256.hashFile(at: candidateURL)) == expectedSHA256
+            }
     }
 
     nonisolated func fileURL(relativePath: String) -> URL {
@@ -201,8 +263,8 @@ struct EpisodeDownloadFileStore: Sendable {
             return localRelativePath
         }
 
-        let extensionName = sourceURL.pathExtension.isEmpty ? "audio" : sourceURL.pathExtension
-        let newRelativePath = "\(Self.directoryName)/\(safeStem(episodeID: newEpisodeID)).\(extensionName)"
+        let extensionName = sourceURL.pathExtension.isEmpty ? Self.fallbackExtension : sourceURL.pathExtension
+        let newRelativePath = relativePath(episodeID: newEpisodeID, extension: extensionName)
         let destinationURL = fileURL(relativePath: newRelativePath)
         try removeItemIfPresent(at: destinationURL)
         try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
@@ -285,6 +347,6 @@ struct EpisodeDownloadFileStore: Sendable {
             value.unicodeScalars.append(scalar)
         }
 
-        return value.isEmpty || value == "partial" ? "audio" : String(value.prefix(12))
+        return value.isEmpty || value == "partial" ? Self.fallbackExtension : String(value.prefix(12))
     }
 }
