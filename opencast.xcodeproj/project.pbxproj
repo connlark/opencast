@@ -10,31 +10,16 @@
 		013CA7D0036479D9C055E61D /* ResumeWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B8D930945FAD5C4384C9167 /* ResumeWidgetView.swift */; };
 		04F96C796531DBB2FB21BD77 /* ResumeWidgetEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C6C49AEC88516661DAA219 /* ResumeWidgetEntry.swift */; };
 		13AB9CF5E4F576BDFDEA83EB /* ResumeWidgetProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ADC9EA0833D889E83D30AA8 /* ResumeWidgetProvider.swift */; };
-		3D202B0EF0340961D72790A8 /* ResumeWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE562EA9B50391FB2A7C2564 /* ResumeWidgetSnapshot.swift */; };
 		776B90882D81388942F64354 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EEEC57972BE60B1502C491A0 /* Foundation.framework */; };
 		A10000000000000000000001 /* OpenCastCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* OpenCastCore */; };
 		A10000000000000000000003 /* OpenCastPlayback in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* OpenCastPlayback */; };
 		A10000000000000000000034 /* OpenCastNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000033 /* OpenCastNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A10000000000000000000044 /* OpenCastTranscription in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000046 /* OpenCastTranscription */; };
 		A10000000000000000000045 /* OpenCastTranscription in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000046 /* OpenCastTranscription */; };
-		B20000000000000000000013 /* OpenCastNotificationService/ImageFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000010 /* OpenCastNotificationService/ImageFormat.swift */; };
-		B20000000000000000000014 /* OpenCastNotificationService/NotificationAttachmentFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000011 /* OpenCastNotificationService/NotificationAttachmentFactory.swift */; };
-		B20000000000000000000015 /* OpenCastNotificationService/NotificationPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000012 /* OpenCastNotificationService/NotificationPayload.swift */; };
 		B20000000000000000000016 /* OpenCastCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* OpenCastCore */; };
 		B20000000000000000000017 /* OpenCastPlayback in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* OpenCastPlayback */; };
-		B2000000000000000000002B /* OpenCastNotificationService/NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000002A /* OpenCastNotificationService/NotificationService.swift */; };
-		B2000000000000000000002D /* OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000002C /* OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift */; };
 		C30000000000000000000001 /* OpenCastNotificationContent.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C30000000000000000000004 /* OpenCastNotificationContent.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		C30000000000000000000002 /* OpenCastNotificationContent/EpisodeNotificationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000005 /* OpenCastNotificationContent/EpisodeNotificationViewModel.swift */; };
 		C3000000000000000000001D /* UserNotificationsUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C3000000000000000000001E /* UserNotificationsUI.framework */; };
-		C30000000000000000000020 /* OpenCastNotificationContent/EpisodeNotificationArtworkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000022 /* OpenCastNotificationContent/EpisodeNotificationArtworkView.swift */; };
-		C30000000000000000000021 /* OpenCastNotificationContent/EpisodeNotificationCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000023 /* OpenCastNotificationContent/EpisodeNotificationCardView.swift */; };
-		C30000000000000000000024 /* OpenCastNotificationContent/EpisodeNotificationViewModel+Preview.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000025 /* OpenCastNotificationContent/EpisodeNotificationViewModel+Preview.swift */; };
-		D40000000000000000000001 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40000000000000000000004 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift */; };
-		D40000000000000000000002 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40000000000000000000004 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift */; };
-		D40000000000000000000003 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40000000000000000000004 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift */; };
-		D40000000000000000000005 /* OpenCastNotificationService/ArtworkDownloadAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40000000000000000000007 /* OpenCastNotificationService/ArtworkDownloadAccumulator.swift */; };
-		D40000000000000000000006 /* OpenCastNotificationService/ArtworkDownloadRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40000000000000000000008 /* OpenCastNotificationService/ArtworkDownloadRequest.swift */; };
 		DC491ADBB27ACC9D7C41E635 /* OpenCastWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 192CD3FA3C8CE63DAC9FCE45 /* OpenCastWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		EA933FBA0878F5C212123D6E /* OpenCastResumeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D8080B3436C189323BFF97 /* OpenCastResumeWidget.swift */; };
 /* End PBXBuildFile section */
@@ -112,21 +97,8 @@
 		A10000000000000000000033 /* OpenCastNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OpenCastNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A79CF2197DE30D17D4348C0D /* OpenCastWidgets.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = OpenCastWidgets.entitlements; sourceTree = "<group>"; };
 		B20000000000000000000001 /* OpenCastNotificationServiceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OpenCastNotificationServiceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		B20000000000000000000010 /* OpenCastNotificationService/ImageFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/ImageFormat.swift; sourceTree = "<group>"; };
-		B20000000000000000000011 /* OpenCastNotificationService/NotificationAttachmentFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/NotificationAttachmentFactory.swift; sourceTree = "<group>"; };
-		B20000000000000000000012 /* OpenCastNotificationService/NotificationPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/NotificationPayload.swift; sourceTree = "<group>"; };
-		B2000000000000000000002A /* OpenCastNotificationService/NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/NotificationService.swift; sourceTree = "<group>"; };
-		B2000000000000000000002C /* OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift; sourceTree = "<group>"; };
 		C30000000000000000000004 /* OpenCastNotificationContent.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OpenCastNotificationContent.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		C30000000000000000000005 /* OpenCastNotificationContent/EpisodeNotificationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationContent/EpisodeNotificationViewModel.swift; sourceTree = "<group>"; };
 		C3000000000000000000001E /* UserNotificationsUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotificationsUI.framework; path = System/Library/Frameworks/UserNotificationsUI.framework; sourceTree = SDKROOT; };
-		C30000000000000000000022 /* OpenCastNotificationContent/EpisodeNotificationArtworkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationContent/EpisodeNotificationArtworkView.swift; sourceTree = "<group>"; };
-		C30000000000000000000023 /* OpenCastNotificationContent/EpisodeNotificationCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationContent/EpisodeNotificationCardView.swift; sourceTree = "<group>"; };
-		C30000000000000000000025 /* OpenCastNotificationContent/EpisodeNotificationViewModel+Preview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OpenCastNotificationContent/EpisodeNotificationViewModel+Preview.swift"; sourceTree = "<group>"; };
-		D40000000000000000000004 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift; sourceTree = "<group>"; };
-		D40000000000000000000007 /* OpenCastNotificationService/ArtworkDownloadAccumulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/ArtworkDownloadAccumulator.swift; sourceTree = "<group>"; };
-		D40000000000000000000008 /* OpenCastNotificationService/ArtworkDownloadRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCastNotificationService/ArtworkDownloadRequest.swift; sourceTree = "<group>"; };
-		EE562EA9B50391FB2A7C2564 /* ResumeWidgetSnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ResumeWidgetSnapshot.swift; path = OpenCast/Widgets/ResumeWidgetSnapshot.swift; sourceTree = "<group>"; };
 		EEEC57972BE60B1502C491A0 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		F2D8080B3436C189323BFF97 /* OpenCastResumeWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OpenCastResumeWidget.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -153,15 +125,66 @@
 			);
 			target = C30000000000000000000009 /* OpenCastNotificationContent */;
 		};
+		E50000000000000000000001 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Notifications/NotificationArtworkAttachmentIdentifier.swift,
+			);
+			target = A1000000000000000000003C /* OpenCastNotificationService */;
+		};
+		E50000000000000000000002 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Notifications/NotificationArtworkAttachmentIdentifier.swift,
+			);
+			target = C30000000000000000000009 /* OpenCastNotificationContent */;
+		};
+		E50000000000000000000003 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Notifications/NotificationArtworkAttachmentIdentifier.swift,
+			);
+			target = B20000000000000000000006 /* OpenCastNotificationServiceTests */;
+		};
+		E50000000000000000000004 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Widgets/ResumeWidgetSnapshot.swift,
+			);
+			target = 1D39CDDBA120927557BB72D1 /* OpenCastWidgets */;
+		};
+		E50000000000000000000005 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				ArtworkDownloadAccumulator.swift,
+				ArtworkDownloadByteCapDelegate.swift,
+				ArtworkDownloadRequest.swift,
+				ImageFormat.swift,
+				NotificationAttachmentFactory.swift,
+				NotificationPayload.swift,
+				NotificationService.swift,
+			);
+			target = B20000000000000000000006 /* OpenCastNotificationServiceTests */;
+		};
+		E50000000000000000000006 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				EpisodeNotificationArtworkView.swift,
+				EpisodeNotificationCardView.swift,
+				EpisodeNotificationViewModel.swift,
+				"EpisodeNotificationViewModel+Preview.swift",
+			);
+			target = B20000000000000000000006 /* OpenCastNotificationServiceTests */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		A1000000000000000000000C /* OpenCast */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A1000000000000000000002D /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = OpenCast; sourceTree = "<group>"; };
+		A1000000000000000000000C /* OpenCast */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A1000000000000000000002D /* PBXFileSystemSynchronizedBuildFileExceptionSet */, E50000000000000000000001 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, E50000000000000000000002 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, E50000000000000000000003 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, E50000000000000000000004 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = OpenCast; sourceTree = "<group>"; };
 		A1000000000000000000000D /* OpenCastTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = OpenCastTests; sourceTree = "<group>"; };
 		A1000000000000000000000E /* OpenCastUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = OpenCastUITests; sourceTree = "<group>"; };
-		A10000000000000000000038 /* OpenCastNotificationService */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A10000000000000000000037 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = OpenCastNotificationService; sourceTree = "<group>"; };
+		A10000000000000000000038 /* OpenCastNotificationService */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A10000000000000000000037 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, E50000000000000000000005 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = OpenCastNotificationService; sourceTree = "<group>"; };
 		B20000000000000000000002 /* OpenCastNotificationServiceTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = OpenCastNotificationServiceTests; sourceTree = "<group>"; };
-		C30000000000000000000007 /* OpenCastNotificationContent */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C30000000000000000000006 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = OpenCastNotificationContent; sourceTree = "<group>"; };
+		C30000000000000000000007 /* OpenCastNotificationContent */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C30000000000000000000006 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, E50000000000000000000006 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = OpenCastNotificationContent; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -229,6 +252,7 @@
 			isa = PBXGroup;
 			children = (
 				EEEC57972BE60B1502C491A0 /* Foundation.framework */,
+				C3000000000000000000001E /* UserNotificationsUI.framework */,
 			);
 			name = iOS;
 			sourceTree = "<group>";
@@ -260,15 +284,13 @@
 				A1000000000000000000000C /* OpenCast */,
 				A10000000000000000000038 /* OpenCastNotificationService */,
 				C30000000000000000000007 /* OpenCastNotificationContent */,
+				47581C8F56081E48C609223F /* OpenCastWidgets */,
 				B20000000000000000000002 /* OpenCastNotificationServiceTests */,
 				A1000000000000000000000D /* OpenCastTests */,
 				A1000000000000000000000E /* OpenCastUITests */,
 				A10000000000000000000013 /* Packages */,
-				A10000000000000000000014 /* Products */,
-				B3DF43342FE8A1090089FE77 /* Recovered References */,
 				63B0F4656B957D1718E7708B /* Frameworks */,
-				47581C8F56081E48C609223F /* OpenCastWidgets */,
-				EE562EA9B50391FB2A7C2564 /* ResumeWidgetSnapshot.swift */,
+				A10000000000000000000014 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
@@ -291,26 +313,6 @@
 				192CD3FA3C8CE63DAC9FCE45 /* OpenCastWidgets.appex */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		B3DF43342FE8A1090089FE77 /* Recovered References */ = {
-			isa = PBXGroup;
-			children = (
-				B20000000000000000000010 /* OpenCastNotificationService/ImageFormat.swift */,
-				B20000000000000000000011 /* OpenCastNotificationService/NotificationAttachmentFactory.swift */,
-				B20000000000000000000012 /* OpenCastNotificationService/NotificationPayload.swift */,
-				B2000000000000000000002A /* OpenCastNotificationService/NotificationService.swift */,
-				B2000000000000000000002C /* OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift */,
-				D40000000000000000000007 /* OpenCastNotificationService/ArtworkDownloadAccumulator.swift */,
-				D40000000000000000000008 /* OpenCastNotificationService/ArtworkDownloadRequest.swift */,
-				D40000000000000000000004 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift */,
-				C3000000000000000000001E /* UserNotificationsUI.framework */,
-				C30000000000000000000005 /* OpenCastNotificationContent/EpisodeNotificationViewModel.swift */,
-				C30000000000000000000022 /* OpenCastNotificationContent/EpisodeNotificationArtworkView.swift */,
-				C30000000000000000000023 /* OpenCastNotificationContent/EpisodeNotificationCardView.swift */,
-				C30000000000000000000025 /* OpenCastNotificationContent/EpisodeNotificationViewModel+Preview.swift */,
-			);
-			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -660,7 +662,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D40000000000000000000001 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -668,18 +669,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D40000000000000000000003 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift in Sources */,
-				D40000000000000000000005 /* OpenCastNotificationService/ArtworkDownloadAccumulator.swift in Sources */,
-				D40000000000000000000006 /* OpenCastNotificationService/ArtworkDownloadRequest.swift in Sources */,
-				B20000000000000000000013 /* OpenCastNotificationService/ImageFormat.swift in Sources */,
-				B20000000000000000000014 /* OpenCastNotificationService/NotificationAttachmentFactory.swift in Sources */,
-				B20000000000000000000015 /* OpenCastNotificationService/NotificationPayload.swift in Sources */,
-				B2000000000000000000002B /* OpenCastNotificationService/NotificationService.swift in Sources */,
-				B2000000000000000000002D /* OpenCastNotificationService/ArtworkDownloadByteCapDelegate.swift in Sources */,
-				C30000000000000000000020 /* OpenCastNotificationContent/EpisodeNotificationArtworkView.swift in Sources */,
-				C30000000000000000000021 /* OpenCastNotificationContent/EpisodeNotificationCardView.swift in Sources */,
-				C30000000000000000000002 /* OpenCastNotificationContent/EpisodeNotificationViewModel.swift in Sources */,
-				C30000000000000000000024 /* OpenCastNotificationContent/EpisodeNotificationViewModel+Preview.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -687,7 +676,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				D40000000000000000000002 /* OpenCast/Notifications/NotificationArtworkAttachmentIdentifier.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -699,7 +687,6 @@
 				04F96C796531DBB2FB21BD77 /* ResumeWidgetEntry.swift in Sources */,
 				13AB9CF5E4F576BDFDEA83EB /* ResumeWidgetProvider.swift in Sources */,
 				013CA7D0036479D9C055E61D /* ResumeWidgetView.swift in Sources */,
-				3D202B0EF0340961D72790A8 /* ResumeWidgetSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
