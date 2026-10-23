@@ -1447,6 +1447,7 @@ final class OpenCastUITests: XCTestCase {
         app.launch()
 
         assertExists(app.tabBars.buttons["Library"], named: "Library tab")
+        enableTabBarMinimizeOnScroll(in: app)
         app.tabBars.buttons["Inbox"].tap()
 
         let inboxEpisode = seededEpisodeRow(in: app)
@@ -5207,6 +5208,7 @@ final class OpenCastUITests: XCTestCase {
         let app = makeSeededApp(seedsUpNextQueue: true, extraFeedCount: 12)
         app.launch()
 
+        enableTabBarMinimizeOnScroll(in: app)
         openInbox(in: app)
         let accessory = app.buttons["Open Up Next"]
         let miniPlayer = app.buttons["Open Now Playing"]
@@ -7010,13 +7012,19 @@ final class OpenCastUITests: XCTestCase {
             waitUntil(timeout: 30) { completedRow.exists || anyDeterministicRow.exists },
             "Deterministic UI Episode should be downloading or downloaded"
         )
+        assertExists(completedRow, named: "completed Deterministic UI Episode download", timeout: 10)
+        attachSmokeScreenshot(named: "playlists_download_all_downloads_tab")
+
+        // The storage summary lives on the Storage screen off the Downloads toolbar.
+        let storageButton = app.navigationBars["Downloads"].buttons["Storage"]
+        assertHittable(storageButton, named: "Downloads Storage button")
+        storageButton.tap()
+        assertExists(app.navigationBars["Storage"], named: "Downloads Storage screen")
         assertExists(
             elementContaining(label: "4 episodes,", in: app),
             named: "four completed downloads in the storage summary",
             timeout: 30
         )
-        assertExists(completedRow, named: "completed Deterministic UI Episode download", timeout: 10)
-        attachSmokeScreenshot(named: "playlists_download_all_downloads_tab")
     }
 
     /// At accessibility sizes the controls fill the card, so the source pill
@@ -9384,6 +9392,19 @@ final class OpenCastUITests: XCTestCase {
         }
         let expectation = XCTNSPredicateExpectation(predicate: changed, object: toggle)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, file: file, line: line)
+    }
+
+    /// Minimizing the tab bar on scroll is opt-in (Look & Feel); the tab
+    /// accessory collapses to its inline placement only with it on.
+    @MainActor
+    private func enableTabBarMinimizeOnScroll(in app: XCUIApplication) {
+        openSettingsScreen("Look & Feel", in: app)
+        let toggle = app.switches.matching(
+            NSPredicate(format: "label CONTAINS %@", "Minimize Tab Bar on Scroll")
+        ).firstMatch
+        assertExists(toggle, named: "Minimize Tab Bar on Scroll toggle")
+        scrollUntilHittable(toggle, in: app, maxSwipes: 3)
+        tapToggle(toggle, to: true)
     }
 
     @MainActor
