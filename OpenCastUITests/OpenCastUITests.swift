@@ -1943,13 +1943,18 @@ final class OpenCastUITests: XCTestCase {
         assertExists(list, named: "Library list after choosing Automatic at compact width")
         assertDoesNotExist(grid, named: "Library grid after choosing Automatic at compact width")
 
-        openSettings(in: app)
+        openSettingsScreen("Look & Feel", in: app)
         let badgesToggle = app.switches.matching(
             NSPredicate(format: "label CONTAINS %@", "New Episode Badges")
         ).firstMatch
         assertExists(badgesToggle, named: "New Episode Badges toggle")
         scrollUntilHittable(badgesToggle, in: app, maxSwipes: 3)
         assertToggle(badgesToggle, isOn: true)
+        let minimizeTabBarToggle = app.switches.matching(
+            NSPredicate(format: "label CONTAINS %@", "Minimize Tab Bar on Scroll")
+        ).firstMatch
+        assertExists(minimizeTabBarToggle, named: "Minimize Tab Bar on Scroll toggle")
+        assertToggle(minimizeTabBarToggle, isOn: false)
         tapToggle(badgesToggle, to: false)
 
         openLibrary(in: app)
@@ -1957,8 +1962,8 @@ final class OpenCastUITests: XCTestCase {
         assertNewEpisodeValue(of: zephyr, is: "", named: "Zephyr row with badges off")
         attachSmokeScreenshot(named: "library_compact_list_badges_hidden")
 
-        openSettings(in: app)
-        assertHittable(badgesToggle, named: "New Episode Badges toggle after returning to Settings")
+        openSettingsScreen("Look & Feel", in: app)
+        assertHittable(badgesToggle, named: "New Episode Badges toggle after returning to Look & Feel")
         tapToggle(badgesToggle, to: true)
         openLibrary(in: app)
         assertNewEpisodeValue(of: mainShow, is: "3 new episodes", named: "UI Test Show row with badges back on")

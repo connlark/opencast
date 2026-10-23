@@ -200,7 +200,11 @@ struct OpenCastTabRootView: View {
         )
     }
 
+    /// Off unless chosen in Look & Feel: minimizing moves the bottom accessory
+    /// inline, and every minimize or expand re-lays out the navigation stack
+    /// inside the scroll callback, 40–55 ms main-thread stalls on an iPhone
+    /// SE, felt as a stutter when a scroll starts or reaches the top.
     private var tabBarMinimizeBehavior: TabBarMinimizeBehavior {
-        selectedTab == .settings ? .never : .onScrollDown
+        appModel.appearanceSettings.minimizesTabBarOnScroll && selectedTab != .settings ? .onScrollDown : .never
     }
 }

@@ -12,8 +12,7 @@ struct SettingsHubGeneralSection: View {
                 route: .notifications,
                 value: notificationsValue
             )
-            SettingsAppearancePickerRow()
-            SettingsNewEpisodeBadgesToggleRow()
+            SettingsNavigationRow(title: "Look & Feel", systemImage: "paintpalette", route: .lookAndFeel)
             SettingsNavigationRow(
                 title: "App Icon",
                 systemImage: "app",
