@@ -75,8 +75,10 @@ yarn dev
 `scripts/watch_ad_analysis.py` prints a read-only JSON snapshot of the
 production and prod-staging Workers: `/health` plus Workers Observability
 attempt, latency, and accounting counts. It never submits a job and prints no
-raw log rows. It reads `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` from
-an env file; `--help` lists the arguments.
+raw log rows. It also counts accounting exchange errors, unavailable job reads,
+alarm errors, storage resets and `exceededWallTime` outcomes; platform error
+text is matched, never printed. It reads `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN` from an env file; `--help` lists the arguments.
 
 ```sh
 python3 scripts/watch_ad_analysis.py --credentials-env-file /path/to/operator.env \
@@ -94,6 +96,35 @@ record keeps a 30-minute lifetime. The stored expiry is authoritative: polls,
 cached submissions and content-proven subject joins never extend it, and a read
 past expiry returns 404 even if the cleanup alarm is late. An explicit
 submission may start a new run. The response schema carries no expiry field.
+
+## Transient failures
+
+If the job Durable Object throws instead of answering a submit or poll (for
+example, a storage operation that times out and resets the object), the Worker
+answers 503 `{"error":"job_unavailable"}`, not a plain-text 500. The body
+deliberately carries no `failure` category: a failed read is not a job outcome,
+and the job's durable record is unaffected. The app keeps polling the same job
+handle on a bounded backoff instead of resubmitting.
+
+Each exchange with the usage limiter has five seconds. A timeout, a failed
+fetch, or a response that does not decode carries no limiter decision, so the
+exchange is tried once more after 250 ms through a fresh stub. Decoded limiter
+refusals (caps, identity errors) are never retried. A retried dispatch refused
+as `attempt_already_dispatched` proves the first try committed, so the Gemini
+call still runs exactly once. Two failed tries end the run with
+`usage_limiter_error`.
+
+These paths log structured events, with platform error text truncated to 200
+characters:
+
+- `ad_analysis_job_unavailable`: `op` (submit or poll) and the error.
+- `ad_analysis_accounting_error`: `op`, `kind` (timeout, transport, decode, or
+  status), the HTTP `status` and limiter `code` when present, `attempt` (0 or
+  1), `elapsed_ms`, `run_id`, and `policy_revision`.
+- `ad_analysis_alarm_error`: `op` and the error, for alarm storage failures
+  that return to the Worker. A storage operation that hangs until the platform
+  resets the object never returns, so it appears only as the platform's
+  exception row and an `exceededWallTime` outcome.
 
 ## Security Defaults
 
