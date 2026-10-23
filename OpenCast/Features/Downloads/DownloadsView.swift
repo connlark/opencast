@@ -21,8 +21,6 @@ struct DownloadsView: View {
     @State private var collapsedShowIDs: Set<String> = []
 
     let onOpenEpisode: (String) -> Void
-    /// Opens a show's download settings, from the storage legend.
-    let onOpenShowDownloadSettings: (String) -> Void
 
     var body: some View {
         let allDownloads = DownloadsListModel.make(
@@ -46,12 +44,6 @@ struct DownloadsView: View {
         )
         let searchResults = searchSession.displayedResults(for: searchTaskKey)
         let library = appModel.library
-        let storageModel = DownloadsStorageGraphModel.make(
-            breakdowns: DownloadsPodcastBreakdown.make(
-                items: allDownloads.downloaded,
-                isSubscribed: { library.isActivelySubscribed(to: $0) }
-            )
-        )
         let grouping = appModel.downloadSettings.listGrouping
         // A search lists matches across shows, as the Inbox does.
         let showGroups = grouping == .byShow && !hasSearchQuery
@@ -62,16 +54,6 @@ struct DownloadsView: View {
             : nil
 
         List(selection: $selectedEpisodeIDs) {
-            if !allDownloads.downloaded.isEmpty {
-                Section("Storage") {
-                    DownloadsStorageHeaderView(
-                        model: storageModel,
-                        onOpenShowSettings: onOpenShowDownloadSettings
-                    )
-                    .disabled(editMode == .active)
-                }
-            }
-
             // Download Options' Group by Show saves a setting; a failed save
             // reports here beside, never instead of, a download error.
             let downloadErrorMessage = appModel.downloads.lastErrorMessage
@@ -191,6 +173,14 @@ struct DownloadsView: View {
                     onRemovePlayed: removePlayedDownloads
                 )
                 .disabled(editMode == .active)
+            }
+            .visibilityPriority(.low)
+
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink(value: AppRoute.downloadStorage) {
+                    Label("Storage", systemImage: "internaldrive")
+                }
+                .disabled(editMode == .active || allDownloads.downloaded.isEmpty)
             }
             .visibilityPriority(.low)
 

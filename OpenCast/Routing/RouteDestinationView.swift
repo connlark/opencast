@@ -32,6 +32,8 @@ struct RouteDestinationView: View {
             SettingsRouteDestinationView(route: route)
         case .downloadSettings:
             DownloadSettingsView()
+        case .downloadStorage:
+            DownloadsStorageView()
         case .podcastDownloadSettings(let feedURL):
             PodcastDownloadSettingsView(feedURL: feedURL)
         }

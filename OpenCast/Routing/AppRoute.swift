@@ -14,6 +14,7 @@ enum AppRoute: Hashable {
     case playlistDetail(id: String)
     case settings(SettingsRoute)
     case downloadSettings
+    case downloadStorage
     case podcastDownloadSettings(feedURL: String)
 
     /// Whether `other` leads to the screen this route does. A show is the

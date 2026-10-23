@@ -4,8 +4,8 @@ struct DownloadsStorageGraphSegment: Identifiable {
     static let otherID = "downloads-storage-other"
 
     let id: String
-    /// The 1-based position in the bar, drawn in the segment and on its
-    /// legend marker.
+    /// The 1-based position in the bar. Differentiate Without Color draws
+    /// it in the segment and on its legend marker.
     let number: Int
     let title: String
     let byteCount: Int64

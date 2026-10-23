@@ -3581,20 +3581,26 @@ final class OpenCastUITests: XCTestCase {
         downloadsTab.tap()
 
         assertExists(app.navigationBars["Downloads"], named: "Downloads navigation bar")
+        assertExists(app.staticTexts["Downloaded"], named: "Downloaded section")
+        let storageButton = app.navigationBars["Downloads"].buttons["Storage"]
+        assertHittable(storageButton, named: "Downloads Storage button")
+        storageButton.tap()
+        assertExists(app.navigationBars["Storage"], named: "Downloads Storage screen")
         assertExists(
             app.descendants(matching: .any)["downloads-storage-graph"],
             named: "Downloads storage graph"
         )
         assertExists(elementContaining(label: "1 episode,", in: app), named: "Downloads storage caption")
-        assertExists(app.staticTexts["Downloaded"], named: "Downloaded section")
         let legendRow = app.buttons["download-podcast-\(Self.seededFeedURL)"]
         assertHittable(legendRow, named: "downloaded podcast legend row")
-        // The legend row opens the show's download settings; it must not
-        // join the list's episode selection (counted below).
+        // One tap pushes the show's download settings once, so one Back
+        // returns to Storage.
         legendRow.tap()
         assertExists(app.navigationBars["UI Test Show"], named: "show download settings from the legend")
         tapBackButton(in: app)
-        assertExists(app.navigationBars["Downloads"], named: "Downloads after the show's settings")
+        assertExists(app.navigationBars["Storage"], named: "Storage after the show's settings")
+        tapBackButton(in: app)
+        assertExists(app.navigationBars["Downloads"], named: "Downloads after Storage")
 
         let downloadedRowButton = app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
         scrollUntilHittable(downloadedRowButton, in: app)
@@ -3628,7 +3634,8 @@ final class OpenCastUITests: XCTestCase {
 
         assertExists(miniPlayer, named: "mini-player after selecting a download")
 
-        let deleteSelected = app.buttons["Delete Selected (1)"]
+        let deleteSelected = app.buttons["downloads-delete-selected"]
+        XCTAssertEqual(deleteSelected.label, "Delete (1)")
         assertMiniPlayerDoesNotCover(
             deleteSelected,
             named: "Delete Selected edit action",
@@ -5441,7 +5448,7 @@ final class OpenCastUITests: XCTestCase {
         let app = makeSeededApp(forcesDarkMode: false, forcesLightMode: true)
         app.launch()
 
-        openSettingsScreen("App Icon", expecting: "App Icon", in: app)
+        openAppIconScreen(in: app)
         let violetOption = app.buttons["App Icon Option Violet"]
         let emberOption = app.buttons["App Icon Option Ember"]
         assertHittable(violetOption, named: "Violet app icon option")
@@ -5465,13 +5472,13 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertFalse(emberOption.isSelected, "Ember should no longer be selected")
         attachSmokeScreenshot(named: "settings_app_icon_violet")
 
-        returnToSettingsHub(in: app)
-        let hubRow = app.buttons["Settings Row App Icon"].firstMatch
-        XCTAssertTrue(settingsHubRow(hubRow, showsValue: "Violet"), "App Icon hub row should show Violet")
+        tapBackButton(in: app)
+        let appIconRow = app.buttons["Settings Row App Icon"].firstMatch
+        XCTAssertTrue(settingsRow(appIconRow, showsValue: "Violet"), "Look & Feel's App Icon row should show Violet")
 
         app.terminate()
         app.launch()
-        openSettingsScreen("App Icon", expecting: "App Icon", in: app)
+        openAppIconScreen(in: app)
         XCTAssertTrue(waitForSelection(of: violetOption), "Violet should survive a relaunch")
 
         emberOption.tap()
@@ -5479,8 +5486,8 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(waitForSelection(of: emberOption), "Ember should be selected after tapping it")
         needsPrimaryAppIconRestore = false
 
-        returnToSettingsHub(in: app)
-        XCTAssertTrue(settingsHubRow(hubRow, showsValue: "Ember"), "App Icon hub row should return to Ember")
+        tapBackButton(in: app)
+        XCTAssertTrue(settingsRow(appIconRow, showsValue: "Ember"), "Look & Feel's App Icon row should return to Ember")
     }
 
     @MainActor
@@ -5592,17 +5599,18 @@ final class OpenCastUITests: XCTestCase {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
+    /// App Icon lives inside Look & Feel, one push below the Settings hub.
     @MainActor
-    private func returnToSettingsHub(in app: XCUIApplication) {
-        openSection("Settings", in: app)
-        if !app.navigationBars["Settings"].waitForExistence(timeout: 2) {
-            openSection("Settings", in: app)
-        }
-        assertExists(app.navigationBars["Settings"], named: "Settings hub navigation bar")
+    private func openAppIconScreen(in app: XCUIApplication) {
+        openSettingsScreen("Look & Feel", in: app)
+        let appIconRow = app.buttons["Settings Row App Icon"].firstMatch
+        assertHittable(appIconRow, named: "App Icon row in Look & Feel")
+        appIconRow.tap()
+        assertExists(app.navigationBars["App Icon"], named: "App Icon screen")
     }
 
     @MainActor
-    private func settingsHubRow(_ row: XCUIElement, showsValue value: String, timeout: TimeInterval = 5) -> Bool {
+    private func settingsRow(_ row: XCUIElement, showsValue value: String, timeout: TimeInterval = 5) -> Bool {
         let deadline = Date.now.addingTimeInterval(timeout)
         repeat {
             if row.exists,
@@ -5639,6 +5647,11 @@ final class OpenCastUITests: XCTestCase {
         if !app.navigationBars["Settings"].waitForExistence(timeout: 2) {
             settingsTab.tap()
         }
+        let lookAndFeelRow = app.buttons["Settings Row Look & Feel"].firstMatch
+        guard lookAndFeelRow.waitForExistence(timeout: 5) else {
+            return
+        }
+        lookAndFeelRow.tap()
         let appIconRow = app.buttons["Settings Row App Icon"].firstMatch
         guard appIconRow.waitForExistence(timeout: 5) else {
             return

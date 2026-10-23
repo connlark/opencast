@@ -4,7 +4,6 @@ import SwiftUI
 /// when expanded.
 struct DownloadsStorageOtherRow: View {
     let segment: DownloadsStorageGraphSegment
-    let onOpenSettings: (DownloadsPodcastBreakdown) -> Void
     let onDelete: (DownloadsPodcastBreakdown) -> Void
 
     var body: some View {
@@ -13,7 +12,6 @@ struct DownloadsStorageOtherRow: View {
                 DownloadsStorageLegendRow(
                     breakdown: breakdown,
                     segment: nil,
-                    onOpenSettings: { onOpenSettings(breakdown) },
                     onDelete: { onDelete(breakdown) }
                 )
             }
@@ -35,7 +33,5 @@ struct DownloadsStorageOtherRow: View {
             // the identifiers of the shows it lists.
             .accessibilityIdentifier("downloads-storage-other")
         }
-        // As in `DownloadsStorageLegendRow`: a tap expands, never selects.
-        .selectionDisabled()
     }
 }

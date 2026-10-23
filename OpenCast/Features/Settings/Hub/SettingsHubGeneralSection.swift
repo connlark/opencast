@@ -13,12 +13,6 @@ struct SettingsHubGeneralSection: View {
                 value: notificationsValue
             )
             SettingsNavigationRow(title: "Look & Feel", systemImage: "paintpalette", route: .lookAndFeel)
-            SettingsNavigationRow(
-                title: "App Icon",
-                systemImage: "app",
-                route: .appIcon,
-                value: appModel.appIcon.selection.title
-            )
         }
     }
 

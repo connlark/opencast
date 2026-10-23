@@ -3,9 +3,6 @@ import SwiftUI
 /// A show in the storage legend: its swatch, size, episode count and Keep
 /// Downloaded limit. A subscribed show opens its download settings; one
 /// that left the library stays a plain row, still deletable by swipe.
-///
-/// The row is a button rather than a `NavigationLink`: in the Downloads
-/// list, which binds a selection, a link row pushed its screen twice.
 struct DownloadsStorageLegendRow: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -13,7 +10,6 @@ struct DownloadsStorageLegendRow: View {
     let breakdown: DownloadsPodcastBreakdown
     /// Nil inside Other, whose shows share Other's swatch.
     let segment: DownloadsStorageGraphSegment?
-    let onOpenSettings: () -> Void
     let onDelete: () -> Void
 
     private var podcastCache: PodcastCacheSnapshot? {
@@ -25,24 +21,12 @@ struct DownloadsStorageLegendRow: View {
             if breakdown.isOrphaned {
                 content
             } else {
-                Button(action: onOpenSettings) {
-                    HStack(spacing: 8) {
-                        content
-                        Image(systemName: "chevron.forward")
-                            .font(.footnote.bold())
-                            .foregroundStyle(.tertiary)
-                            .accessibilityHidden(true)
-                    }
-                    // A button tints its label; rows read in the label color.
-                    .foregroundStyle(Color.primary)
+                NavigationLink(value: AppRoute.podcastDownloadSettings(feedURL: breakdown.podcastID)) {
+                    content
                 }
             }
         }
         .accessibilityIdentifier("download-podcast-\(breakdown.podcastID)")
-        // The Downloads list selects episodes by ID, and a ForEach of these
-        // rows would tag each with its podcast ID; a tap must open the show,
-        // never join the episode selection.
-        .selectionDisabled()
         .swipeActions(edge: .trailing) {
             Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
         }

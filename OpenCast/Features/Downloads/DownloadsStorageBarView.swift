@@ -9,6 +9,7 @@ struct DownloadsStorageBarView: View {
     /// The narrowest segment that still fits its number.
     private static let minimumNumberedSegmentWidth = 24.0
 
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .caption) private var barHeight = 16
@@ -51,9 +52,12 @@ struct DownloadsStorageBarView: View {
         .animation(reduceMotion ? nil : .snappy, value: model.animationKey)
     }
 
-    /// Accessibility sizes outgrow the bar, so the legend alone carries the
-    /// numbers there.
+    /// Numbers appear only with Differentiate Without Color, where color
+    /// can't pair a segment with its legend row. Accessibility sizes outgrow
+    /// the bar, so the legend alone carries the numbers there.
     private func showsNumber(inSegmentOfWidth width: Double) -> Bool {
-        !dynamicTypeSize.isAccessibilitySize && width >= Self.minimumNumberedSegmentWidth
+        differentiateWithoutColor
+            && !dynamicTypeSize.isAccessibilitySize
+            && width >= Self.minimumNumberedSegmentWidth
     }
 }

@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// Edit mode's actions under the list. They confirm with alerts: from
+/// this bar a confirmation dialog's popover sits beside its button and
+/// zooms in from the wrong point.
 struct DownloadsEditActionsView: View {
     let selectedCount: Int
     let playedDownloadCount: Int
@@ -12,18 +15,20 @@ struct DownloadsEditActionsView: View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
                 Button(
-                    "Delete Selected (\(selectedCount))",
+                    deleteTitle,
                     systemImage: "trash",
                     role: .destructive,
                     action: confirmDeleteSelected
                 )
+                .lineLimit(1)
                 .buttonStyle(.glassProminent)
                 .tint(.red)
                 .disabled(selectedCount == 0)
-                .confirmationDialog(
+                .accessibilityInputLabels(["Delete", "Delete Selected"])
+                .accessibilityIdentifier("downloads-delete-selected")
+                .alert(
                     "Delete selected downloads?",
-                    isPresented: $isConfirmingDeleteSelected,
-                    titleVisibility: .visible
+                    isPresented: $isConfirmingDeleteSelected
                 ) {
                     Button("Delete Selected", role: .destructive, action: onDeleteSelected)
                     Button("Cancel", role: .cancel) {}
@@ -39,13 +44,13 @@ struct DownloadsEditActionsView: View {
                     role: .destructive,
                     action: confirmRemovePlayed
                 )
+                .lineLimit(1)
                 .buttonStyle(.glass)
                 .tint(.red)
                 .disabled(playedDownloadCount == 0)
-                .confirmationDialog(
+                .alert(
                     "Remove played downloads?",
-                    isPresented: $isConfirmingRemovePlayed,
-                    titleVisibility: .visible
+                    isPresented: $isConfirmingRemovePlayed
                 ) {
                     Button("Remove Played", role: .destructive, action: onRemovePlayed)
                     Button("Cancel", role: .cancel) {}
@@ -54,6 +59,12 @@ struct DownloadsEditActionsView: View {
                 }
             }
         }
+    }
+
+    /// Short enough to stay on one line beside Remove Played; the count
+    /// appears once something is selected.
+    private var deleteTitle: String {
+        selectedCount == 0 ? "Delete" : "Delete (\(selectedCount))"
     }
 
     private func confirmDeleteSelected() {
