@@ -24,6 +24,7 @@ import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {Client,GATE,encodeParameter,scramClientFirst,scramClientFinal,verifyServerFinal,PostgresError} from './pg.mjs';
 import {DESTROY_MS,WireProxy} from './proxy.mjs';
 import {INTERACTIVE_FIRST} from './hooks.mjs';
+import {until} from './timing.mjs';
 import {openStorage} from '../storage.mjs';
 
 if(process.env.OPENCAST_TEST_STORAGE!==undefined&&process.env.OPENCAST_TEST_STORAGE!=='postgres')throw Error('test-timing.mjs runs postgres storage: launch it without OPENCAST_TEST_STORAGE');
@@ -172,11 +173,12 @@ await test('statement arming: malformed armings are refused and recorded; an unf
 
 await test('controls.stall: run(ms) starts start_ms after the named arming\'s fire, with its own arming and fire; refused shapes; an unfired stall fails teardown',async()=>{
  const s=syn('stall'),arm=s.ts({op:'arm',kind:'statement',action:'hold-request',match:'SELECT f.origin_key',release_after_ms:400});
- const runs=[],stall=proxy.controls.stall(s.alias,{after:arm.arming,start_ms:50,ms:100,run:async ms=>{runs.push(now());await sleep(ms);return {ms};}});
+ const runs=[],stall=proxy.controls.stall(s.alias,{after:arm.arming,start_ms:50,ms:100,run:async ms=>{const t=now();runs.push(t);await until(t+ms);return {ms};}});
  const c=await viaProxy(s.alias);assert.equal((await c.query(CLAIM,[FEED])).rows.length,1);await c.close();
  const w=await waitFor('the stall end',()=>{const v=s.witness(),g=v.fires.find(x=>x.arming===stall.arming);return g?.stall.end&&v;});
  const f=w.fires.find(x=>x.arming===arm.arming),g=w.fires.find(x=>x.arming===stall.arming);
  assert.deepEqual([g.hook,g.action,g.parent,g.stall.after_fire,g.stall.worker,runs.length],['stall','stall:50:100',f.id,f.id,{ms:100},1]);
+ report.push(`controls.stall: start ${(g.stall.start-f.at).toFixed(1)} ms after the fire (start_ms 50), end-start ${(g.stall.end-g.stall.start).toFixed(1)} ms (ms 100)`);
  assert.ok(g.stall.start-f.at>=50&&g.stall.start-f.at<50+EPSILON_MS/5&&g.stall.end-g.stall.start>=100,JSON.stringify(g.stall));
  assert.deepEqual(w.timing.events.filter(e=>e.kind.startsWith('stall')).map(e=>e.kind),['stall-start','stall-end']);
  assert.throws(()=>proxy.controls.stall(s.alias,{after:'A0',start_ms:0,ms:1,run:()=>{}}),/no arming A0/);
@@ -186,6 +188,18 @@ await test('controls.stall: run(ms) starts start_ms after the named arming\'s fi
  assert.match(t.problems().join(),new RegExp(`arming ${unfired.arming} \\(stall stall:0:1\\) never fired`));
  t.ts({op:'expect',arming:held.arming});t.ts({op:'expect',arming:unfired.arming});assert.deepEqual(t.problems(),[]);
  assert.equal(s.problems().length,3,'the three refusals are recorded');
+});
+
+// until() paces on the clock the suites' bounds are stamped on. After a
+// synchronous spin, a Node timer of the same length can return before now()
+// has advanced its delay (reported, not asserted: Node's behaviour); until()
+// never does.
+await test('until: never resolves before its time on the proxy clock, where a sleep of the same length can',async()=>{
+ const spin=ms=>{const end=performance.now()+ms;while(performance.now()<end);};
+ const tally=async wait=>{let early=0,worst=Infinity;for(let i=0;i<300;i++){spin(0.7);const t=now();await wait(t);const d=now()-t-2;if(d<0)early++;worst=Math.min(worst,d);}return {early,worst};};
+ const u=await tally(t=>until(t+2)),n=await tally(()=>sleep(2));
+ report.push(`until self-check, 300 waits of 2 ms after a 0.7 ms spin: until ${u.early} early (worst ${u.worst.toFixed(3)} ms), sleep ${n.early} early (worst ${n.worst.toFixed(3)} ms)`);
+ assert.equal(u.early,0,`until resolved ${(-u.worst).toFixed(3)} ms before its time`);
 });
 
 // ================================================================ hold-commit-reply
@@ -344,10 +358,11 @@ for(const [px,via] of [[proxy,'direct'],[fragmenting,'fragmented']]){
    const o=await waitFor('the BEGIN reply',()=>{const x=tagsOf(s,arm.arming);return x?.tags.length===1&&x;});
    await sleep(150);assert.deepEqual(tagsOf(s,arm.arming).tags,['BEGIN'],'the gate is still waiting on the lock');
    const out=s.ts({op:'release-operation',operation:o.id});assert.deepEqual(out.relayed,[0]);
-   const released=out.released_at;await sleep(50);
+   const released=out.released_at;await until(released+50);
    await locker.query('COMMIT');
    assert.ok((await pending).every(x=>x.result));await c.close();
    const t=opOf(s.witness(),o.fire_id).timing;
+   report.push(`release-operation ${via}, late relays: the first ${(Math.min(...t.relays.slice(1).map(r=>r.at))-released).toFixed(1)} ms after the release (the unlock not before 50)`);
    assert.deepEqual([t.relays.map(r=>[r.unit,r.late]),t.late_relays,t.released_at],[[[0,false],[1,true],[2,true],[3,true],[4,true]],4,released]);
    assert.ok(t.relays.slice(1).every(r=>r.at>released+50));
    assert.equal(await success(FEED),302);assert.deepEqual(s.problems(),[]);

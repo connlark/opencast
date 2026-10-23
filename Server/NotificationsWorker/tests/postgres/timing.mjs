@@ -62,6 +62,7 @@
 // after a deadline; after release-operation, released_at and late_relays,
 // the replies relayed after the call returned, each relay marked late), and the alias's `timing.events` order the fires, relays,
 // held replies, releases and discards by one proxy-wide sequence.
+import {setTimeout as sleep} from 'node:timers/promises';
 import {ACTIONS,GATE_PREFIX,HOLDS,SIDE,isApplication} from './hooks.mjs';
 
 const now=()=>performance.timeOrigin+performance.now();
@@ -77,6 +78,10 @@ const releasable=action=>action==='hold-request'||action==='hold-response'||acti
 // operation and registered its hold, so even a time already passed waits for
 // the next turn.
 const at=(time,fn)=>{const tick=()=>{const left=time-now();if(left>0)setTimeout(tick,Math.ceil(left)).unref();else fn();};setImmediate(tick).unref();};
+// Resolve at the proxy clock's `time`, never before: the promise form of
+// `at` for a suite pacing its own writes against a bound measured on this
+// clock. Ref'd, unlike `at`, so a suite awaiting it keeps the loop alive.
+export const until=async time=>{for(let left;(left=time-now())>0;)await sleep(Math.ceil(left));};
 const label=sql=>sql?.startsWith(GATE_PREFIX)?'gate':sql??null;
 // The CommandComplete tag of one buffered unit reply.
 const tagOf=reply=>{const c=reply.find(m=>m[0]===0x43);return c?c.subarray(5,c.length-1).toString():null;};

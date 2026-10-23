@@ -1,9 +1,9 @@
 use futures_util::future::{select, Either};
 use std::{cell::Cell, rc::Rc, time::Duration};
-use worker::{Date, Delay, Env, Headers, Method, Request, RequestInit};
+use worker::{Date, Delay, Env, Headers, Method, Request, RequestInit, Stub};
 
 use crate::{
-    accounting::{self, Operation, Summary},
+    accounting::{self, ExchangeFailure, Operation, Summary},
     analysis::UpstreamError,
     types::{ErrorResponse, GeminiUsage},
     usage::{global_usage_object_name, UsageLimitProfile, USAGE_LIMITER_BINDING},
@@ -33,18 +33,29 @@ impl Execution {
         let now = now_ms();
         let run_id = opencast_app_attest_core::random::random_urlsafe_token(24)
             .map_err(|_| unavailable())?;
-        let legacy_caller: DailyUsage =
-            post(env, caller_object, "/snapshot", &serde_json::json!({})).await?;
+        let revision = if policy == crate::policy::AnalysisPolicy::V3 {
+            crate::policy::V3_REVISION
+        } else {
+            crate::types::POLICY_NAME
+        };
+        let legacy_caller: DailyUsage = post(
+            env,
+            caller_object,
+            "/snapshot",
+            &serde_json::json!({}),
+            Trace {
+                op: "snapshot",
+                run_id: &run_id,
+                revision,
+            },
+        )
+        .await?;
         let execution = Rc::new(Self {
             env: env.clone(),
             call_timeout_seconds: policy.call_timeout_seconds(segment_count),
             deadline_ms: now + crate::policy::V3_EXECUTION_SECONDS * 1000,
             cancelled: Cell::new(false),
-            revision: if policy == crate::policy::AnalysisPolicy::V3 {
-                crate::policy::V3_REVISION
-            } else {
-                crate::types::POLICY_NAME
-            },
+            revision,
             request: accounting::Request {
                 run_id,
                 subject: caller_object.into(),
@@ -109,8 +120,18 @@ impl Execution {
         })
         .await?;
         self.check()?;
-        self.update(Operation::Dispatch { attempt }).await?;
-        Ok(())
+        match self.update(Operation::Dispatch { attempt }).await {
+            Ok(_) => Ok(()),
+            Err(failed)
+                if accounting::dispatch_replay_committed(
+                    failed.attempt,
+                    &failed.error.body.error,
+                ) =>
+            {
+                Ok(())
+            }
+            Err(failed) => Err(failed.error),
+        }
     }
 
     pub async fn receipt(
@@ -133,7 +154,12 @@ impl Execution {
         Ok(summary)
     }
 
-    async fn update(&self, operation: Operation) -> Result<Summary, UpstreamError> {
+    async fn update(&self, operation: Operation) -> Result<Summary, Failed> {
+        let trace = Trace {
+            op: operation.name(),
+            run_id: self.run_id(),
+            revision: self.revision,
+        };
         let mut request = self.request.clone();
         request.operation = operation;
         post(
@@ -141,8 +167,36 @@ impl Execution {
             &global_usage_object_name(request.day),
             "/account",
             &request,
+            trace,
         )
         .await
+    }
+}
+
+/// Names a limiter exchange in content-free failure telemetry.
+#[derive(Clone, Copy)]
+struct Trace<'a> {
+    op: &'static str,
+    run_id: &'a str,
+    revision: &'static str,
+}
+
+/// A failed limiter exchange and the try that produced it.
+struct Failed {
+    error: UpstreamError,
+    attempt: u8,
+}
+
+/// Failures before any exchange (binding, stub, encoding) belong to the first try.
+impl From<UpstreamError> for Failed {
+    fn from(error: UpstreamError) -> Self {
+        Self { error, attempt: 0 }
+    }
+}
+
+impl From<Failed> for UpstreamError {
+    fn from(failed: Failed) -> Self {
+        failed.error
     }
 }
 
@@ -151,48 +205,91 @@ async fn post<T: serde::de::DeserializeOwned>(
     object: &str,
     path: &str,
     body: &impl serde::Serialize,
-) -> Result<T, UpstreamError> {
+    trace: Trace<'_>,
+) -> Result<T, Failed> {
     let namespace = env
         .durable_object(USAGE_LIMITER_BINDING)
         .map_err(|_| unavailable())?;
-    let stub = namespace.get_by_name(object).map_err(|_| unavailable())?;
+    let url = format!("https://usage-limiter.opencast.internal{path}");
+    let body = serde_json::to_string(body).map_err(|_| unavailable())?;
+    let mut attempt = 0;
+    loop {
+        // An infrastructure exception can leave a stub broken for good, so
+        // every try gets a fresh one.
+        let stub = namespace.get_by_name(object).map_err(|_| unavailable())?;
+        let request = limiter_request(&url, &body).map_err(|_| unavailable())?;
+        let started = now_ms();
+        let (failure, error) = match exchange(&stub, request).await {
+            Ok(value) => return Ok(value),
+            Err(failed) => failed,
+        };
+        worker::console_log!(
+            "{}",
+            serde_json::json!({
+                "event": "ad_analysis_accounting_error",
+                "op": trace.op,
+                "kind": failure.kind(),
+                "status": failure.status(),
+                "code": matches!(failure, ExchangeFailure::Status { .. }).then_some(&error.body.error),
+                "attempt": attempt,
+                "elapsed_ms": now_ms().saturating_sub(started),
+                "run_id": trace.run_id,
+                "policy_revision": trace.revision,
+            })
+        );
+        if !failure.retryable() || attempt + 1 >= accounting::EXCHANGE_ATTEMPTS {
+            return Err(Failed { error, attempt });
+        }
+        attempt += 1;
+        Delay::from(Duration::from_millis(250)).await;
+    }
+}
+
+fn limiter_request(url: &str, body: &str) -> worker::Result<Request> {
     let headers = Headers::new();
-    headers
-        .set("content-type", "application/json")
-        .map_err(|_| unavailable())?;
+    headers.set("content-type", "application/json")?;
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
         .with_headers(headers)
-        .with_body(Some(
-            serde_json::to_string(body)
-                .map_err(|_| unavailable())?
-                .into(),
-        ));
-    let request = Request::new_with_init(
-        &format!("https://usage-limiter.opencast.internal{path}"),
-        &init,
-    )
-    .map_err(|_| unavailable())?;
+        .with_body(Some(body.into()));
+    Request::new_with_init(url, &init)
+}
+
+/// One five-second exchange; a dropped timeout leaves no limiter decision.
+async fn exchange<T: serde::de::DeserializeOwned>(
+    stub: &Stub,
+    request: Request,
+) -> Result<T, (ExchangeFailure, UpstreamError)> {
     let exchange = std::pin::pin!(async {
         let mut response = stub
             .fetch_with_request(request)
             .await
-            .map_err(|_| unavailable())?;
-        if response.status_code() != 200 {
-            return Err(UpstreamError {
-                status: response.status_code(),
-                body: response
-                    .json()
-                    .await
-                    .unwrap_or_else(|_| ErrorResponse::new("usage_limiter_error")),
+            .map_err(|_| (ExchangeFailure::Transport, unavailable()))?;
+        let status = response.status_code();
+        if status != 200 {
+            return Err(match response.json().await {
+                Ok(body) => (
+                    ExchangeFailure::Status { status },
+                    UpstreamError { status, body },
+                ),
+                Err(_) => (
+                    ExchangeFailure::Decode { status },
+                    UpstreamError {
+                        status,
+                        body: ErrorResponse::new("usage_limiter_error"),
+                    },
+                ),
             });
         }
-        response.json().await.map_err(|_| unavailable())
+        response
+            .json()
+            .await
+            .map_err(|_| (ExchangeFailure::Decode { status }, unavailable()))
     });
     let timeout = std::pin::pin!(Delay::from(Duration::from_secs(5)));
     match select(exchange, timeout).await {
         Either::Left((result, _)) => result,
-        Either::Right(_) => Err(unavailable()),
+        Either::Right(_) => Err((ExchangeFailure::Timeout, unavailable())),
     }
 }
 

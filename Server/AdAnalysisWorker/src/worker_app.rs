@@ -569,7 +569,10 @@ async fn submit_async_job(
         request: validated.request,
     })?;
     let request = internal_post("https://ad-analysis-job.opencast.internal/submit", body)?;
-    let mut response = stub.fetch_with_request(request).await?;
+    let mut response = match stub.fetch_with_request(request).await {
+        Ok(response) => response,
+        Err(error) => return job_unavailable("submit", &error),
+    };
     if response.status_code() == 202 && !handles_supported {
         let mut body: serde_json::Value = response.json().await?;
         body["job_id"] = serde_json::Value::String(legacy_job_id);
@@ -708,7 +711,11 @@ async fn forward_job_poll(env: &Env, job_id: &str, subject: Option<String>) -> R
             "https://ad-analysis-job.opencast.internal/poll",
             body.clone(),
         )?;
-        let response = stub.fetch_with_request(request).await?;
+        // A throw cannot rule out a match, so later names are not probed.
+        let response = match stub.fetch_with_request(request).await {
+            Ok(response) => response,
+            Err(error) => return job_unavailable("poll", &error),
+        };
         if response.status_code() != 404 {
             if found.is_some() {
                 return json_error_code(409, "ambiguous_legacy_job");
@@ -720,6 +727,23 @@ async fn forward_job_poll(env: &Env, job_id: &str, subject: Option<String>) -> R
         return Ok(response);
     }
     json_error_code(404, "job_not_found")
+}
+
+/// The job object threw instead of answering (a storage stall or reset). Its
+/// durable record is intact, so the client keeps polling the same handle.
+/// Deliberately untyped: a failed read is not a job outcome, and
+/// RemoteTranscriptionWorker retries an untyped 5xx but finalizes a typed
+/// transient failure.
+fn job_unavailable(op: &'static str, error: &worker::Error) -> Result<Response> {
+    worker::console_log!(
+        "{}",
+        serde_json::json!({
+            "event": "ad_analysis_job_unavailable",
+            "op": op,
+            "error": crate::failure::log_excerpt(&error.to_string()),
+        })
+    );
+    json_error_code(503, "job_unavailable")
 }
 
 fn internal_post(url: &str, body: String) -> Result<Request> {

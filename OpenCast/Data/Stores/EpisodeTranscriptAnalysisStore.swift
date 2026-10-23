@@ -823,6 +823,9 @@ final class EpisodeTranscriptAnalysisStore {
             isTransientJobFailure: {
                 ($0 as? EpisodeTranscriptAnalysisHTTPError)?.isTransientJobFailure == true
             },
+            isTransientPollFailure: {
+                ($0 as? EpisodeTranscriptAnalysisHTTPError)?.isTransientPollFailure == true
+            },
             timedOutError: EpisodeTranscriptAnalysisError.analysisTimedOut,
             jobIDMismatchError: jobIDMismatchError()
         )

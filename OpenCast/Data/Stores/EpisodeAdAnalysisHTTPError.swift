@@ -14,6 +14,8 @@ struct EpisodeAdAnalysisHTTPError: LocalizedError, Sendable, Equatable {
         "job_failed_transient",
         "job_not_found"
     ]
+    static let jobUnavailableCode = "job_unavailable"
+    static let transientServerStatusCodes: Set<Int> = [500, 502, 503, 504]
 
     var statusCode: Int
     var code: String
@@ -27,6 +29,17 @@ struct EpisodeAdAnalysisHTTPError: LocalizedError, Sendable, Equatable {
 
     var isTransientJobFailure: Bool {
         failure?.category == .interruptedJob || Self.transientJobFailureCodes.contains(code)
+    }
+
+    /// A read of an accepted job that failed without a verdict: the worker's
+    /// untyped `job_unavailable` (its job object threw) or any untyped 5xx
+    /// such as the platform's plain-text 500. The poller retries the same
+    /// handle; a typed failure the job stored (`usage_limiter_error`,
+    /// `gemini_*`) stays terminal.
+    var isTransientPollFailure: Bool {
+        guard !isCapExceeded, !isTransientJobFailure else { return false }
+        return code == Self.jobUnavailableCode
+            || failure == nil && Self.transientServerStatusCodes.contains(statusCode)
     }
 
     var replayFailure: OpenCastAdAnalysisFailure? {

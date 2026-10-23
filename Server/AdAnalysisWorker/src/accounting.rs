@@ -30,6 +30,67 @@ pub enum Operation {
     Finish,
 }
 
+impl Operation {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Admit { .. } => "admit",
+            Self::Reserve { .. } => "reserve",
+            Self::Dispatch { .. } => "dispatch",
+            Self::Receipt { .. } => "receipt",
+            Self::Finish => "finish",
+        }
+    }
+}
+
+/// A limiter exchange is tried at most twice. Every operation but `Dispatch`
+/// replays to the same record, and `Dispatch` refuses its replay, so a second
+/// try can never mint allowance or a second provider call.
+pub const EXCHANGE_ATTEMPTS: u8 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExchangeFailure {
+    Timeout,
+    Transport,
+    /// A response arrived whose body did not decode.
+    Decode {
+        status: u16,
+    },
+    /// The limiter decided and refused.
+    Status {
+        status: u16,
+    },
+}
+
+impl ExchangeFailure {
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Transport => "transport",
+            Self::Decode { .. } => "decode",
+            Self::Status { .. } => "status",
+        }
+    }
+
+    pub fn status(self) -> Option<u16> {
+        match self {
+            Self::Timeout | Self::Transport => None,
+            Self::Decode { status } | Self::Status { status } => Some(status),
+        }
+    }
+
+    /// Only a decoded refusal is a limiter decision; the rest carry none.
+    pub fn retryable(self) -> bool {
+        !matches!(self, Self::Status { .. })
+    }
+}
+
+/// A retried `Dispatch` refused as already dispatched proves the first try
+/// committed, so the provider call proceeds exactly once. The same refusal on
+/// a first try stays an error.
+pub fn dispatch_replay_committed(exchange_attempt: u8, code: &str) -> bool {
+    exchange_attempt > 0 && code == "attempt_already_dispatched"
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Request {
     pub run_id: String,

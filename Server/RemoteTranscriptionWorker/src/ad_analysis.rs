@@ -757,6 +757,12 @@ mod tests {
                 AnalyzeOutcome::Retryable
             );
         }
+        // AdAnalysisWorker's answer when its job object throws (a storage
+        // stall) is untyped on purpose, so the ad phase keeps polling.
+        assert_eq!(
+            classify_analyze_response(503, br#"{"error":"job_unavailable"}"#),
+            AnalyzeOutcome::Retryable
+        );
     }
 
     #[test]

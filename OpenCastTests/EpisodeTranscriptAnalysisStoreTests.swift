@@ -214,6 +214,36 @@ struct EpisodeTranscriptAnalysisStoreTests {
         #expect(store.document(for: transcript.episodeID) == nil)
     }
 
+    @Test("Unanswered 5xx polls retry the accepted job until it completes, without a resubmit")
+    func unansweredServerErrorPollsRetryAcceptedJob() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let client = PollingEpisodeTranscriptAnalysisClient(pollFailures: [
+            EpisodeTranscriptAnalysisHTTPError(statusCode: 500, code: "http_500", detail: nil),
+            EpisodeTranscriptAnalysisHTTPError(statusCode: 503, code: "job_unavailable", detail: nil)
+        ])
+        let store = EpisodeTranscriptAnalysisStore(
+            client: client,
+            fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: try makeTemporaryDirectory()),
+            pollingSleep: { _ in }
+        )
+        let transcript = makeTranscriptDocument(episodeID: "chapters-poll-5xx")
+
+        store.startAnalysis(
+            transcript: transcript,
+            episodeTitle: "Episode Title",
+            podcastTitle: "Podcast Title",
+            modelContext: context
+        )
+
+        #expect(await waitUntil {
+            store.record(for: transcript.episodeID)?.state == .completed
+        })
+        let record = try #require(store.record(for: transcript.episodeID))
+        #expect(client.submitCount == 1)
+        #expect(client.polledJobIDs == Array(repeating: record.transcriptFingerprint, count: 3))
+    }
+
     @Test("A response from an unexpected policy fails cleanly")
     func unexpectedPolicyResponseFailsCleanly() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -1968,6 +1998,51 @@ private final class FakeEpisodeTranscriptAnalysisClient: EpisodeTranscriptAnalys
 
     func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
         throw EpisodeTranscriptAnalysisError.clientDisabled
+    }
+}
+
+/// Accepts every submit as its fingerprint job, fails the first polls with
+/// the scripted errors, then completes like `FakeEpisodeTranscriptAnalysisClient`.
+private final class PollingEpisodeTranscriptAnalysisClient: EpisodeTranscriptAnalysisClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private let completing = FakeEpisodeTranscriptAnalysisClient()
+    private var pendingFailures: [any Error]
+    private var lastRequest: EpisodeTranscriptAnalysisAPIRequest?
+    private var submits = 0
+    private var polls: [String] = []
+
+    init(pollFailures: [any Error]) {
+        pendingFailures = pollFailures
+    }
+
+    var submitCount: Int {
+        lock.withLock { submits }
+    }
+
+    var polledJobIDs: [String] {
+        lock.withLock { polls }
+    }
+
+    func analyze(_ request: EpisodeTranscriptAnalysisAPIRequest) async throws -> EpisodeTranscriptAnalysisSubmitOutcome {
+        lock.withLock {
+            submits += 1
+            lastRequest = request
+        }
+        return .accepted(jobID: request.transcript.fingerprint, pollAfter: 0)
+    }
+
+    func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
+        let (failure, request): ((any Error)?, EpisodeTranscriptAnalysisAPIRequest?) = lock.withLock {
+            polls.append(id)
+            return (pendingFailures.isEmpty ? nil : pendingFailures.removeFirst(), lastRequest)
+        }
+        if let failure {
+            throw failure
+        }
+        guard let request, case .completed(let response) = try await completing.analyze(request) else {
+            throw EpisodeTranscriptAnalysisError.clientDisabled
+        }
+        return .completed(response)
     }
 }
 

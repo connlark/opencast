@@ -232,3 +232,113 @@ fn day_rollover_keeps_the_original_bucket_and_disallows_old_day_new_admission() 
         Err("invalid_execution_allowance")
     );
 }
+#[test]
+fn a_retried_exchange_replays_every_operation_without_new_allowance() {
+    let usage = GeminiUsage {
+        prompt_token_count: 100,
+        candidates_token_count: 40,
+        thoughts_token_count: 10,
+        total_token_count: 150,
+    };
+    let admitted = admitted();
+    let reserved = apply(
+        Some(&admitted),
+        Operation::Reserve {
+            attempt: 0,
+            input_tokens: 1000,
+        },
+        86_401,
+    );
+    let dispatched = apply(Some(&reserved), Operation::Dispatch { attempt: 0 }, 86_402);
+    let reported = apply(
+        Some(&dispatched),
+        Operation::Receipt {
+            attempt: 0,
+            usage: usage.clone(),
+        },
+        86_403,
+    );
+    let finished = apply(Some(&reported), Operation::Finish, 86_404);
+    // The first try committed; its response was lost; the retry replays it.
+    for (committed, operation) in [
+        (
+            &admitted,
+            Operation::Admit {
+                execution_tokens: 30_000,
+                expires_at: 86_999,
+            },
+        ),
+        (
+            &reserved,
+            Operation::Reserve {
+                attempt: 0,
+                input_tokens: 1000,
+            },
+        ),
+        (&reported, Operation::Receipt { attempt: 0, usage }),
+        (&finished, Operation::Finish),
+    ] {
+        assert_eq!(
+            accounting::apply(
+                Some(committed),
+                &request(operation.clone()),
+                committed.charged(),
+                committed.charged(),
+                86_405
+            )
+            .as_ref(),
+            Ok(committed),
+            "{} must replay to the committed record",
+            operation.name()
+        );
+    }
+    let refused = accounting::apply(
+        Some(&dispatched),
+        &request(Operation::Dispatch { attempt: 0 }),
+        dispatched.charged(),
+        dispatched.charged(),
+        86_405,
+    )
+    .unwrap_err();
+    assert!(accounting::dispatch_replay_committed(1, refused));
+    assert!(!accounting::dispatch_replay_committed(0, refused));
+    assert!(!accounting::dispatch_replay_committed(
+        1,
+        "execution_expired"
+    ));
+    assert!(!accounting::dispatch_replay_committed(
+        1,
+        "usage_limiter_error"
+    ));
+}
+
+#[test]
+fn only_exchanges_without_a_limiter_decision_are_retried() {
+    use accounting::ExchangeFailure::{Decode, Status, Timeout, Transport};
+    assert_eq!(accounting::EXCHANGE_ATTEMPTS, 2);
+    for failure in [
+        Timeout,
+        Transport,
+        Decode { status: 200 },
+        Decode { status: 500 },
+    ] {
+        assert!(failure.retryable(), "{failure:?}");
+    }
+    assert!(!Status { status: 429 }.retryable());
+    assert!(!Status { status: 503 }.retryable());
+    assert_eq!(
+        [
+            Timeout,
+            Transport,
+            Decode { status: 200 },
+            Status { status: 429 }
+        ]
+        .map(|f| (f.kind(), f.status())),
+        [
+            ("timeout", None),
+            ("transport", None),
+            ("decode", Some(200)),
+            ("status", Some(429))
+        ]
+    );
+}

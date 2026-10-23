@@ -536,3 +536,16 @@ fn expired_failures_are_unavailable_but_live_failures_keep_retry_policy() {
     );
     assert!(running().unexpired(i64::MAX).is_some()); // watchdog owns execution expiry
 }
+
+#[test]
+fn a_thrown_job_object_answers_without_a_failure_category() {
+    // RemoteTranscriptionWorker finalizes a typed transient failure but keeps
+    // polling an untyped 5xx, and a failed read is not a job outcome.
+    use opencast_ad_analysis_worker::failure::AnalysisFailure;
+    use opencast_ad_analysis_worker::types::ErrorResponse;
+    assert_eq!(AnalysisFailure::for_code("job_unavailable"), None);
+    assert_eq!(
+        serde_json::to_string(&ErrorResponse::new("job_unavailable")).unwrap(),
+        r#"{"error":"job_unavailable"}"#
+    );
+}

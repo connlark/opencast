@@ -891,6 +891,7 @@ final class EpisodeAdAnalysisStore {
             timeout: timeout,
             sleep: sleep,
             isTransientJobFailure: { ($0 as? EpisodeAdAnalysisHTTPError)?.isTransientJobFailure == true },
+            isTransientPollFailure: { ($0 as? EpisodeAdAnalysisHTTPError)?.isTransientPollFailure == true },
             timedOutError: EpisodeAdAnalysisError.analysisTimedOut,
             jobIDMismatchError: jobIDMismatchError(),
             jobIDsMatch: EpisodeAdAnalysisJobHandle.sameInput
@@ -1171,8 +1172,46 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
+    /// Server codes whose typed transient failure means time ran out rather
+    /// than the service being unreachable.
+    private static let timedOutCodes: Set<String> = [
+        "gemini_timeout",
+        "analysis_deadline_exhausted",
+        "execution_expired"
+    ]
+
+    /// Typed category first, then code, then error type; the card's copy
+    /// follows the kind, while `errorMessage` keeps the code for Diagnostics.
     private static func failureKind(for error: Error) -> EpisodeAnalysisFailureKind {
-        (error as? EpisodeAdAnalysisHTTPError)?.isCapExceeded == true ? .capExceeded : .generic
+        if let httpError = error as? EpisodeAdAnalysisHTTPError {
+            if httpError.isCapExceeded {
+                return .capExceeded
+            }
+            switch httpError.replayFailure?.category {
+            case .capacity:
+                return .capExceeded
+            case .transientTransport:
+                return timedOutCodes.contains(httpError.code) ? .timedOut : .serviceUnavailable
+            case .interruptedJob:
+                return .interrupted
+            case .validationExhausted:
+                return .validationExhausted
+            case .unsupportedInput:
+                return .generic
+            case nil:
+                if httpError.isTransientJobFailure {
+                    return .interrupted
+                }
+                return httpError.isTransientPollFailure ? .serviceUnavailable : .generic
+            }
+        }
+        if error is URLError {
+            return .serviceUnavailable
+        }
+        if error as? EpisodeAdAnalysisError == .analysisTimedOut {
+            return .timedOut
+        }
+        return .generic
     }
 
     private static let reconcileMessages = AnalysisRecordReconcileMessages(
@@ -1185,7 +1224,8 @@ final class EpisodeAdAnalysisStore {
         AnalysisRecordReconciler(
             fileStore: fileStore,
             messages: Self.reconcileMessages,
-            resumeTTL: resumeTTL
+            resumeTTL: resumeTTL,
+            interruptedFailureKind: .interrupted
         )
     }
 

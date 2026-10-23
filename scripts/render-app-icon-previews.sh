@@ -51,20 +51,31 @@ downsample() {
     -strip -define png:exclude-chunks=date,time "PNG32:${output}"
 }
 
+# Xcode's canonical layout (empty 1x slots, sorted by scale) so opening the
+# catalog in Xcode doesn't rewrite every committed Contents.json.
 write_imageset_contents() {
   local imageset="$1" name="$2"
   cat > "${imageset}/Contents.json" <<JSON
 {
   "images" : [
     {
+      "idiom" : "universal",
+      "scale" : "1x"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "idiom" : "universal",
+      "scale" : "1x"
+    },
+    {
       "filename" : "AppIconPreview-${name}-light@2x.png",
       "idiom" : "universal",
       "scale" : "2x"
-    },
-    {
-      "filename" : "AppIconPreview-${name}-light@3x.png",
-      "idiom" : "universal",
-      "scale" : "3x"
     },
     {
       "appearances" : [
@@ -76,6 +87,11 @@ write_imageset_contents() {
       "filename" : "AppIconPreview-${name}-dark@2x.png",
       "idiom" : "universal",
       "scale" : "2x"
+    },
+    {
+      "filename" : "AppIconPreview-${name}-light@3x.png",
+      "idiom" : "universal",
+      "scale" : "3x"
     },
     {
       "appearances" : [

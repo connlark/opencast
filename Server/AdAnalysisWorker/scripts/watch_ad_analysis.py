@@ -160,7 +160,8 @@ def percentiles(values):
 def summarize(rows):
     attempts, outcomes, statuses, worker_outcomes, versions = [], Counter(), Counter(), Counter(), Counter()
     accounting, revisions, failures = Counter(), {}, []
-    accounting_records = validation_failures = over_60s = near_limit = 0
+    exchange_errors, job_unavailable, alarm_errors = Counter(), Counter(), Counter()
+    accounting_records = validation_failures = over_60s = near_limit = storage_resets = wall_time = 0
     for row in map(mapping, rows):
         source, worker, metadata = mapping(row.get("source")), mapping(row.get("$workers")), mapping(row.get("$metadata"))
         event = source.get("event")
@@ -174,6 +175,23 @@ def summarize(rows):
         if version:
             versions[safe_code(version)] += 1
         failed = (status is not None and (status >= 500 or status == 429)) or (outcome is not None and outcome not in ("ok", "canceled"))
+        # Platform exception text is matched here and never copied out.
+        if any(isinstance(text, str) and "caused object to be reset" in text for text in (metadata.get("message"), metadata.get("error"))):
+            storage_resets += 1
+            failed = True
+        wall_time += outcome == "exceededWallTime"
+        if event == "ad_analysis_accounting_error":
+            attempt = number(source.get("attempt"))
+            key = f"{safe_code(source.get('op'))}:{safe_code(source.get('kind'))}:{int(attempt) if attempt is not None else 'unknown'}"
+            code = source.get("code")
+            exchange_errors[f"{key}:{safe_code(code)}" if code is not None else key] += 1
+            failed = True
+        elif event == "ad_analysis_job_unavailable":
+            job_unavailable[safe_code(source.get("op"))] += 1
+            failed = True
+        elif event == "ad_analysis_alarm_error":
+            alarm_errors[safe_code(source.get("op"))] += 1
+            failed = True
         if event in ("ad_analysis_attempt", "ad_analysis_accounting", "ad_analysis_incomplete"):
             revision = safe_code(source.get("policy_revision"))
             bucket = revisions.setdefault(revision, {"attempts": 0, "accounting_records": 0, "unknown_attempts": 0, "outcomes": Counter(), "latencies": []})
@@ -214,6 +232,7 @@ def summarize(rows):
             failures.append({"timestamp": timestamp if timestamp is not None else safe_code(row.get("timestamp")), "request_id": safe_code(metadata.get("requestId")),
                 "trace_id": safe_code(metadata.get("traceId")), "run_id": safe_code(source.get("run_id")),
                 "event": safe_code(event), "outcome": safe_code(source.get("outcome")),
+                "op": safe_code(source.get("op")), "kind": safe_code(source.get("kind")),
                 "worker_outcome": safe_code(outcome),
                 "policy_revision": safe_code(source.get("policy_revision")), "http_status": status,
                 "upstream_status": number(source.get("upstream_status"))})
@@ -224,6 +243,8 @@ def summarize(rows):
         "accounting_records": accounting_records, "accounting_totals": accounting, "validation_failure_events": validation_failures,
         "by_policy_revision": revisions, "http_response_event_counts": statuses, "worker_outcome_event_counts": worker_outcomes,
         "worker_version_event_counts": versions, "failure_examples": failures,
+        "accounting_exchange_errors": exchange_errors, "job_unavailable_events": job_unavailable,
+        "alarm_error_events": alarm_errors, "storage_reset_rows": storage_resets, "exceeded_wall_time_rows": wall_time,
         "analysis_traffic_observed": bool(accounting_records or outcomes),
         "log_payload_truncation_observed": any(mapping(mapping(row).get("$workers")).get("truncated") is True for row in rows)}
 
@@ -281,7 +302,9 @@ def main():
             "HTTP polls and accounting records are not successful job counts; accounting also records failed analyses.",
             "Sampling, log retention, ingestion delay, and capped queries can hide events; no errors observed is not proof of absence.",
             "If analysis_traffic_observed is false, health alone does not verify Gemini analysis or client recovery.",
-            "Near-timeout attempts and unknown usage merit investigation; a successful response over 60 seconds demonstrates the extended wait."]}
+            "Near-timeout attempts and unknown usage merit investigation; a successful response over 60 seconds demonstrates the extended wait.",
+            "accounting_exchange_errors keys are op:kind:attempt, plus :code when the limiter's refusal decoded. A timeout, transport or decode key at attempt 1 is a retry that failed too (usage_limiter_error unless the op is finish); dispatch:status:1:attempt_already_dispatched is a recovered dispatch, not a failure.",
+            "job_unavailable_events are polls or submits answered 503 while the job object threw; storage_reset_rows count the platform's reset exception."]}
     print(json.dumps(result, indent=2, sort_keys=True))
     return int(any("error" in report["health"] or "error" in report["telemetry"] for report in reports))
 

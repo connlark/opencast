@@ -55,24 +55,33 @@ impl DurableObject for AdAnalysisJob {
     }
 
     async fn alarm(&self) -> Result<Response> {
-        let record = read_record(&self.state.storage()).await?;
+        let record = read_record(&self.state.storage())
+            .await
+            .map_err(alarm_error("read"))?;
         match alarm_decision(record.as_ref(), self.run_active.get(), now_seconds()) {
-            AlarmDecision::Purge => self.purge().await?,
+            AlarmDecision::Purge => self.purge().await.map_err(alarm_error("purge"))?,
             AlarmDecision::Heartbeat => {
                 self.state
                     .storage()
                     .set_alarm(Duration::from_secs(JOB_HEARTBEAT_SECONDS))
-                    .await?;
+                    .await
+                    .map_err(alarm_error("heartbeat"))?;
             }
             AlarmDecision::SchedulePurge { purge_at } => {
-                set_alarm_at(&self.state.storage(), purge_at).await?;
+                set_alarm_at(&self.state.storage(), purge_at)
+                    .await
+                    .map_err(alarm_error("schedule_purge"))?;
             }
             AlarmDecision::FailTransient { record } => {
                 let JobRecord::FailedTransient { purge_at, .. } = &record else {
                     unreachable!("alarm watchdog always creates a transient failure")
                 };
-                write_record(&self.state.storage(), &record).await?;
-                set_alarm_at(&self.state.storage(), *purge_at).await?;
+                write_record(&self.state.storage(), &record)
+                    .await
+                    .map_err(alarm_error("fail_transient"))?;
+                set_alarm_at(&self.state.storage(), *purge_at)
+                    .await
+                    .map_err(alarm_error("fail_transient"))?;
             }
         }
         Response::ok("")
@@ -433,6 +442,22 @@ async fn write_record(storage: &Storage, record: &JobRecord) -> Result<()> {
     storage
         .put(JOB_STORAGE_KEY, serde_json::to_string(record)?)
         .await
+}
+
+/// Only failures that return reach this; a storage operation that hangs until
+/// the platform resets the object never comes back to Rust.
+fn alarm_error(op: &'static str) -> impl FnOnce(worker::Error) -> worker::Error {
+    move |error| {
+        worker::console_log!(
+            "{}",
+            serde_json::json!({
+                "event": "ad_analysis_alarm_error",
+                "op": op,
+                "error": crate::failure::log_excerpt(&error.to_string()),
+            })
+        );
+        error
+    }
 }
 
 async fn set_alarm_at(storage: &Storage, target_seconds: i64) -> Result<()> {

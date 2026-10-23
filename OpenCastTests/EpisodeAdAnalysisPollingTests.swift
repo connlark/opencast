@@ -56,8 +56,167 @@ struct EpisodeAdAnalysisPollingTests {
         #expect(counts.poll == 1)
     }
 
-    @Test("Second transient poll failure becomes retryable generic failure")
-    func secondTransientPollFailureBecomesGenericFailure() async throws {
+    @Test("A job_unavailable poll keeps the accepted handle and completes without a resubmit")
+    func jobUnavailablePollKeepsHandleAndCompletes() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        let client = PollingEpisodeAdAnalysisClient(
+            submitSteps: [.accepted(pollAfter: 0, revision: "20261020b")],
+            pollSteps: [
+                .http(statusCode: 503, code: "job_unavailable"),
+                .completed
+            ]
+        )
+        let store = makeStore(client: client, directory: directory)
+        let transcript = makeTranscript(episodeID: "poll-job-unavailable")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+
+        #expect(await waitUntil(store) {
+            store.record(for: transcript.episodeID)?.state == .completed
+        })
+        let record = try #require(store.record(for: transcript.episodeID))
+        let counts = await client.counts()
+        let handle = "a3.20261020b.\(record.transcriptFingerprint)"
+        #expect(counts.submit == 1)
+        #expect(counts.poll == 2)
+        #expect(await client.recordedIdentifiers().polledJobIDs == [handle, handle])
+    }
+
+    @Test("Untyped 5xx polls retry the same handle until the job completes")
+    func untypedServerErrorPollsRetrySameHandle() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        let client = PollingEpisodeAdAnalysisClient(
+            submitSteps: [.accepted(pollAfter: 0)],
+            pollSteps: [
+                .http(statusCode: 500, code: "http_500"),
+                .running(pollAfter: 0),
+                .http(statusCode: 502, code: "http_502"),
+                .completed
+            ]
+        )
+        let store = makeStore(client: client, directory: directory)
+        let transcript = makeTranscript(episodeID: "poll-untyped-5xx")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+
+        #expect(await waitUntil(store) {
+            store.record(for: transcript.episodeID)?.state == .completed
+        })
+        let counts = await client.counts()
+        #expect(counts.submit == 1)
+        #expect(counts.poll == 4)
+    }
+
+    @Test("A job object that stays unavailable past the ladder fails as service unavailable")
+    func persistentJobUnavailableFailsAsServiceUnavailable() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        // Eight retries, so the ninth unavailable read is the one that fails.
+        let client = PollingEpisodeAdAnalysisClient(
+            submitSteps: [.accepted(pollAfter: 0)],
+            pollSteps: Array(repeating: .http(statusCode: 503, code: "job_unavailable"), count: 9)
+        )
+        let store = makeStore(client: client, directory: directory, pollingTimeout: .seconds(1_800))
+        let transcript = makeTranscript(episodeID: "poll-job-unavailable-exhausted")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+
+        #expect(await waitUntil(store) {
+            !store.hasActiveJob && store.record(for: transcript.episodeID)?.state == .failed
+        })
+        let record = try #require(store.record(for: transcript.episodeID))
+        let counts = await client.counts()
+        #expect(counts.submit == 1)
+        #expect(counts.poll == 9)
+        #expect(record.failureKind == .serviceUnavailable)
+        #expect(record.errorMessage == "Promo/ad analysis failed (job_unavailable).")
+    }
+
+    @Test("A stored usage_limiter_error stays terminal without a resubmit")
+    func storedUsageLimiterErrorIsTerminal() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        let client = PollingEpisodeAdAnalysisClient(
+            submitSteps: [.accepted(pollAfter: 0)],
+            pollSteps: [.http(statusCode: 503, code: "usage_limiter_error", failure: .transientTransport)]
+        )
+        let store = makeStore(client: client, directory: directory)
+        let transcript = makeTranscript(episodeID: "poll-usage-limiter-error")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+
+        #expect(await waitUntil(store) {
+            !store.hasActiveJob && store.record(for: transcript.episodeID)?.state == .failed
+        })
+        let record = try #require(store.record(for: transcript.episodeID))
+        let counts = await client.counts()
+        #expect(counts.submit == 1)
+        #expect(counts.poll == 1)
+        #expect(record.failureKind == .serviceUnavailable)
+    }
+
+    @Test("A job_unavailable submit fails without a repeat")
+    func jobUnavailableSubmitFailsWithoutRepeat() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        // The job object may have started the run before its answer was lost,
+        // and the worker restarts a failed run on an identical submit.
+        let client = PollingEpisodeAdAnalysisClient(
+            submitSteps: [
+                .http(statusCode: 503, code: "job_unavailable"),
+                .accepted(pollAfter: 0)
+            ],
+            pollSteps: [.completed]
+        )
+        let store = makeStore(client: client, directory: directory)
+        let transcript = makeTranscript(episodeID: "submit-job-unavailable")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+
+        #expect(await waitUntil(store) {
+            store.record(for: transcript.episodeID)?.state == .failed
+        })
+        let record = try #require(store.record(for: transcript.episodeID))
+        let counts = await client.counts()
+        #expect(counts.submit == 1)
+        #expect(counts.poll == 0)
+        #expect(record.failureKind == .serviceUnavailable)
+    }
+
+    @Test("An untyped 5xx submit is not repeated, since it can follow a started run")
+    func untypedServerErrorSubmitIsNotRepeated() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        // A repeat landing after that run failed would start a second paid run.
+        let client = PollingEpisodeAdAnalysisClient(
+            submitSteps: [.http(statusCode: 502, code: "http_502"), .accepted(pollAfter: 0)],
+            pollSteps: [.completed]
+        )
+        let store = makeStore(client: client, directory: directory)
+        let transcript = makeTranscript(episodeID: "submit-untyped-5xx")
+
+        store.startAnalysis(transcript: transcript, modelContext: context)
+
+        #expect(await waitUntil(store) {
+            store.record(for: transcript.episodeID)?.state == .failed
+        })
+        let record = try #require(store.record(for: transcript.episodeID))
+        let counts = await client.counts()
+        #expect(counts.submit == 1)
+        #expect(counts.poll == 0)
+        #expect(record.failureKind == .serviceUnavailable)
+    }
+
+    @Test("Second lost-job poll failure becomes a retryable interrupted failure")
+    func secondLostJobPollFailureBecomesInterruptedFailure() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let directory = try makeTemporaryDirectory()
@@ -80,7 +239,7 @@ struct EpisodeAdAnalysisPollingTests {
         let counts = await client.counts()
         #expect(counts.submit == 2)
         #expect(counts.poll == 2)
-        #expect(record.failureKind == .generic)
+        #expect(record.failureKind == .interrupted)
         #expect(record.jobAcceptedAt == nil)
     }
 
@@ -116,7 +275,7 @@ struct EpisodeAdAnalysisPollingTests {
         let files = EpisodeAdAnalysisFileStore(baseDirectory: directory)
         let client = PollingEpisodeAdAnalysisClient(
             submitSteps: [.accepted(pollAfter: 0)],
-            pollSteps: [.http(statusCode: 503, code: "gemini_timeout")]
+            pollSteps: [.http(statusCode: 503, code: "gemini_timeout", failure: .transientTransport)]
         )
 
         do {
@@ -154,6 +313,7 @@ struct EpisodeAdAnalysisPollingTests {
             return
         }
         #expect(record.errorMessage == "Promo/ad analysis failed (gemini_timeout).")
+        #expect(record.failureKind == .timedOut)
         #expect(record.jobAcceptedAt == nil)
         #expect(!detail.hasCurrentCompletedAnalysis)
         #expect(!reloadedStore.hasActiveJob)
@@ -173,7 +333,7 @@ struct EpisodeAdAnalysisPollingTests {
         #expect(pipeline.action == .retryAnalysis)
         #expect(pipeline.steps == [EpisodePipelineStep(
             kind: .detectAds,
-            status: .failed(message: EpisodePipelineState.analysisFailedMessage)
+            status: .failed(message: EpisodePipelineState.analysisFailedMessage(for: .timedOut))
         )])
     }
 
@@ -184,7 +344,7 @@ struct EpisodeAdAnalysisPollingTests {
         let directory = try makeTemporaryDirectory()
         let client = PollingEpisodeAdAnalysisClient(
             submitSteps: [.accepted(pollAfter: 0)],
-            pollSteps: [.http(statusCode: 503, code: "gemini_timeout")]
+            pollSteps: [.http(statusCode: 503, code: "gemini_timeout", failure: .transientTransport)]
         )
         let store = makeStore(client: client, directory: directory)
         var transcript = makeTranscript(episodeID: "poll-timeout-changed-transcript")
@@ -344,7 +504,7 @@ struct EpisodeAdAnalysisPollingTests {
         let counts = await client.counts()
         #expect(counts.poll == 0)
         #expect(record.errorMessage == EpisodeAdAnalysisError.analysisTimedOut.localizedDescription)
-        #expect(record.failureKind == .generic)
+        #expect(record.failureKind == .timedOut)
     }
 
     @Test("Three consecutive URL errors are tolerated")
@@ -480,7 +640,7 @@ struct EpisodeAdAnalysisPollingTests {
         for episodeID in [unaccepted.episodeID, queued.episodeID, expired.episodeID] {
             let reconciled = try #require(store.record(for: episodeID))
             #expect(reconciled.state == .failed)
-            #expect(reconciled.failureKind == .generic)
+            #expect(reconciled.failureKind == .interrupted)
             #expect(reconciled.jobAcceptedAt == nil)
             #expect(reconciled.errorMessage == "Promo/ad analysis was interrupted.")
         }
@@ -520,7 +680,7 @@ struct EpisodeAdAnalysisPollingTests {
         let counts = await client.counts()
         #expect(counts.submit == 0)
         #expect(counts.poll == 1)
-        #expect(failedRecord.failureKind == .generic)
+        #expect(failedRecord.failureKind == .interrupted)
         #expect(failedRecord.jobAcceptedAt == nil)
     }
 
@@ -664,6 +824,7 @@ struct EpisodeAdAnalysisPollingTests {
 private enum PollingSubmitStep: Sendable {
     case accepted(pollAfter: TimeInterval, revision: String? = nil)
     case completed
+    case http(statusCode: Int, code: String, failure: OpenCastAdAnalysisFailure? = nil)
     case urlError(URLError.Code)
     case cancelTaskAndLoseResponse
 }
@@ -671,9 +832,19 @@ private enum PollingSubmitStep: Sendable {
 private enum PollingPollStep: Sendable {
     case running(pollAfter: TimeInterval)
     case completed
-    case http(statusCode: Int, code: String)
+    /// `failure` mirrors the typed body the worker attaches to the codes it
+    /// classifies (`Server/AdAnalysisWorker/src/failure.rs`); nil is an
+    /// untyped body, like the platform's plain-text 500.
+    case http(statusCode: Int, code: String, failure: OpenCastAdAnalysisFailure? = nil)
     case urlError(URLError.Code)
     case suspend
+}
+
+private extension OpenCastAdAnalysisFailure {
+    static let transientTransport = OpenCastAdAnalysisFailure(
+        category: .transientTransport,
+        retryDisposition: .boundedRetry
+    )
 }
 
 private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
@@ -705,6 +876,8 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
             return .accepted(jobID: prefix + request.transcript.fingerprint, pollAfter: pollAfter)
         case .completed:
             return .completed(Self.response(requestID: request.requestID))
+        case .http(let statusCode, let code, let failure):
+            throw EpisodeAdAnalysisHTTPError(statusCode: statusCode, code: code, detail: nil, failure: failure)
         case .urlError(let code):
             throw URLError(code)
         case .cancelTaskAndLoseResponse:
@@ -726,8 +899,8 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
             return .running(pollAfter: pollAfter)
         case .completed:
             return .completed(Self.response(requestID: "polled-response"))
-        case .http(let statusCode, let code):
-            throw EpisodeAdAnalysisHTTPError(statusCode: statusCode, code: code, detail: nil)
+        case .http(let statusCode, let code, let failure):
+            throw EpisodeAdAnalysisHTTPError(statusCode: statusCode, code: code, detail: nil, failure: failure)
         case .urlError(let code):
             throw URLError(code)
         case .suspend:

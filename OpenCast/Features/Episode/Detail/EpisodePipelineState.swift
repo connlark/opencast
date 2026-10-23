@@ -36,6 +36,25 @@ struct EpisodePipelineState: Equatable {
     /// server needed it: a source mismatch or a failed origin fetch.
     static let cloudUploadFootnote = "Uploading your downloaded audio so ad skips match what you hear."
 
+    /// Fixed copy per persisted failure kind, so the reason survives a
+    /// relaunch; raw server strings never render on the card.
+    static func analysisFailedMessage(for kind: EpisodeAnalysisFailureKind?) -> String {
+        switch kind {
+        case .serviceUnavailable:
+            "Couldn't reach the ad detection service. Try again."
+        case .timedOut:
+            "Ad detection took too long. Try again."
+        case .interrupted:
+            "Ad detection was interrupted. Try again."
+        case .validationExhausted:
+            "Ad boundaries couldn't be verified for this transcript. You can still retry."
+        case .capExceeded:
+            "Ad detection has reached today's limit."
+        case .generic, .insufficientSeconds, nil:
+            analysisFailedMessage
+        }
+    }
+
     static func make(
         episodeID: String,
         queueStatus: AdFreePassQueueEpisodeStatus,
@@ -190,8 +209,8 @@ struct EpisodePipelineState: Equatable {
                 footnote: nil,
                 action: nil
             )
-        case .failed(_, isStale: false):
-            return soloFailure(kind: .detectAds, title: analysisFailedTitle, message: analysisFailedMessage, action: .retryAnalysis)
+        case .failed(let record, isStale: false):
+            return soloFailure(kind: .detectAds, title: analysisFailedTitle, message: analysisFailedMessage(for: record.failureKind), action: .retryAnalysis)
         case .failed, .completed, .unavailable, .ready, nil:
             return nil
         }
@@ -323,8 +342,8 @@ struct EpisodePipelineState: Equatable {
         default: .waiting
         }
         var detect: EpisodePipelineStepStatus = .waiting
-        if case .failed(_, isStale: false) = analysis {
-            detect = .failed(message: analysisFailedMessage)
+        if case .failed(let record, isStale: false) = analysis {
+            detect = .failed(message: analysisFailedMessage(for: record.failureKind))
         }
 
         // The queue outcome message names the failure when no persisted store

@@ -81,3 +81,8 @@ impl AnalysisFailure {
         })
     }
 }
+
+/// Bounds platform error text before it reaches a log line.
+pub fn log_excerpt(message: &str) -> String {
+    message.chars().take(200).collect()
+}

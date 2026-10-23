@@ -1,14 +1,23 @@
 {
   "images" : [
     {
+      "idiom" : "universal",
+      "scale" : "1x"
+    },
+    {
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ],
+      "idiom" : "universal",
+      "scale" : "1x"
+    },
+    {
       "filename" : "AppIconPreview-Fern-light@2x.png",
       "idiom" : "universal",
       "scale" : "2x"
-    },
-    {
-      "filename" : "AppIconPreview-Fern-light@3x.png",
-      "idiom" : "universal",
-      "scale" : "3x"
     },
     {
       "appearances" : [
@@ -20,6 +29,11 @@
       "filename" : "AppIconPreview-Fern-dark@2x.png",
       "idiom" : "universal",
       "scale" : "2x"
+    },
+    {
+      "filename" : "AppIconPreview-Fern-light@3x.png",
+      "idiom" : "universal",
+      "scale" : "3x"
     },
     {
       "appearances" : [

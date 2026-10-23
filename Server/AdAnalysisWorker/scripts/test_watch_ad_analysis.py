@@ -39,6 +39,31 @@ class WatchTests(unittest.TestCase):
         self.assertTrue(result["analysis_traffic_observed"])
         self.assertNotIn("successful_jobs", result)
 
+    def test_storage_stall_signals_are_counted_without_platform_text(self):
+        private = "Durable Object storage operation exceeded timeout which caused object to be reset. PRIVATE"
+        rows = [
+            {"$metadata": {"message": private}, "$workers": {"outcome": "exception"}},
+            {"$workers": {"outcome": "exceededWallTime"}},
+            {"source": {"event": "ad_analysis_job_unavailable", "op": "poll", "error": private}},
+            {"source": {"event": "ad_analysis_accounting_error", "op": "admit", "kind": "timeout", "attempt": 0,
+                        "run_id": "run-2", "policy_revision": "revision-1"}},
+            {"source": {"event": "ad_analysis_accounting_error", "op": "admit", "kind": "timeout", "attempt": 1,
+                        "run_id": "run-2", "policy_revision": "revision-1"}},
+            {"source": {"event": "ad_analysis_accounting_error", "op": "dispatch", "kind": "status", "attempt": 1,
+                        "code": "attempt_already_dispatched", "run_id": "run-3", "policy_revision": "revision-1"}},
+            {"source": {"event": "ad_analysis_alarm_error", "op": "read", "error": private}},
+        ]
+        result = watch.summarize(rows)
+        self.assertNotIn("PRIVATE", json.dumps(result))
+        self.assertEqual(result["storage_reset_rows"], 1)
+        self.assertEqual(result["exceeded_wall_time_rows"], 1)
+        self.assertEqual(result["job_unavailable_events"], {"poll": 1})
+        self.assertEqual(result["accounting_exchange_errors"], {"admit:timeout:0": 1, "admit:timeout:1": 1,
+                                                                "dispatch:status:1:attempt_already_dispatched": 1})
+        self.assertEqual(result["alarm_error_events"], {"read": 1})
+        self.assertEqual(len(result["failure_examples"]), 7)
+        self.assertEqual(result["failure_examples"][2]["op"], "poll")
+
     def test_capped_query_splits_deduplicates_and_stays_bounded(self):
         calls = []
         def query(start, end):

@@ -367,6 +367,48 @@ struct EpisodePipelineStateTests {
         #expect(state?.action == .retryAnalysis)
     }
 
+    @Test(
+        "A failed analysis names its persisted failure kind, solo and inside a failed pass",
+        arguments: [
+            (EpisodeAnalysisFailureKind.serviceUnavailable, "Couldn't reach the ad detection service. Try again."),
+            (.timedOut, "Ad detection took too long. Try again."),
+            (.interrupted, "Ad detection was interrupted. Try again."),
+            (.validationExhausted, "Ad boundaries couldn't be verified for this transcript. You can still retry."),
+            (.capExceeded, "Ad detection has reached today's limit."),
+            (.generic, "Ad detection couldn't finish.")
+        ] as [(EpisodeAnalysisFailureKind, String)]
+    )
+    func failedAnalysisCopyFollowsFailureKind(kind: EpisodeAnalysisFailureKind, message: String) {
+        let analysis = EpisodeAdAnalysisJobState.failed(analysisRecord(state: .failed, failureKind: kind), isStale: false)
+
+        let solo = makeState(analysis: analysis)
+        #expect(solo == EpisodePipelineState(
+            title: EpisodePipelineState.analysisFailedTitle,
+            steps: [EpisodePipelineStep(kind: .detectAds, status: .failed(message: message))],
+            footnote: nil,
+            action: .retryAnalysis
+        ))
+
+        let pass = makeState(
+            queueStatus: .failed(message: "Queue outcome."),
+            downloadRecord: downloadRecord(state: .completed),
+            transcription: .completed(transcriptRecord(state: .completed)),
+            analysis: analysis
+        )
+        #expect(pass?.title == EpisodePipelineState.passFailedTitle)
+        #expect(pass?.steps.last == EpisodePipelineStep(kind: .detectAds, status: .failed(message: message)))
+        #expect(pass?.action == .retryPass)
+    }
+
+    @Test("A failed analysis without a persisted kind keeps the generic copy")
+    func failedAnalysisWithoutKindKeepsGenericCopy() {
+        let state = makeState(analysis: .failed(analysisRecord(state: .failed), isStale: false))
+        #expect(state?.steps == [EpisodePipelineStep(
+            kind: .detectAds,
+            status: .failed(message: EpisodePipelineState.analysisFailedMessage)
+        )])
+    }
+
     @Test("A stale failed analysis hides the card")
     func staleFailedAnalysisHidesCard() {
         let state = makeState(analysis: .failed(analysisRecord(state: .failed), isStale: true))
@@ -597,7 +639,12 @@ struct EpisodePipelineStateTests {
         )
     }
 
-    private func analysisRecord(state: EpisodeAnalysisRecordState) -> EpisodeAdAnalysisRecord {
-        EpisodeAdAnalysisRecord(episodeID: episodeID, podcastID: "podcast", state: state)
+    private func analysisRecord(
+        state: EpisodeAnalysisRecordState,
+        failureKind: EpisodeAnalysisFailureKind? = nil
+    ) -> EpisodeAdAnalysisRecord {
+        let record = EpisodeAdAnalysisRecord(episodeID: episodeID, podcastID: "podcast", state: state)
+        record.failureKind = failureKind
+        return record
     }
 }

@@ -14,6 +14,9 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
     let fileStore: any AnalysisDocumentFileStore
     let messages: AnalysisRecordReconcileMessages
     let resumeTTL: TimeInterval
+    /// Kind written with `messages.interrupted`; document and transcript
+    /// repairs always fail as generic.
+    var interruptedFailureKind: EpisodeAnalysisFailureKind = .generic
     /// Store-specific repair of `.failed` rows, run after the shared
     /// `jobAcceptedAt` cleanup; returns whether it changed the record.
     var repairFailedRecord: (Record, Date) -> Bool = { _, _ in false }
@@ -40,14 +43,14 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
                     outcome.resumeContext = context
                     continue
                 }
-                fail(record, message: messages.interrupted, at: now)
+                fail(record, message: messages.interrupted, kind: interruptedFailureKind, at: now)
                 changed = true
             case .queued:
-                fail(record, message: messages.interrupted, at: now)
+                fail(record, message: messages.interrupted, kind: interruptedFailureKind, at: now)
                 changed = true
             case .completed:
                 guard fileStore.documentExists(relativePath: record.analysisRelativePath) else {
-                    fail(record, message: messages.documentMissing, at: now)
+                    fail(record, message: messages.documentMissing, kind: .generic, at: now)
                     changed = true
                     continue
                 }
@@ -114,7 +117,7 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
         }
 
         if winner.score == 2 {
-            fail(winner.record, message: messages.transcriptMismatch, at: .now)
+            fail(winner.record, message: messages.transcriptMismatch, kind: .generic, at: .now)
         }
         if let podcastID = EpisodeSidecarRepair.preferredPodcastID(
             orderedCandidates: ordered.map(\.record.podcastID),
@@ -136,10 +139,10 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
         return deletedRecords
     }
 
-    private func fail(_ record: Record, message: String, at now: Date) {
+    private func fail(_ record: Record, message: String, kind: EpisodeAnalysisFailureKind, at now: Date) {
         record.state = .failed
         record.errorMessage = message
-        record.failureKind = .generic
+        record.failureKind = kind
         record.jobAcceptedAt = nil
         record.updatedAt = now
     }

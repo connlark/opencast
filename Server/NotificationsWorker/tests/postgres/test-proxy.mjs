@@ -33,6 +33,7 @@ import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {Client,GATE,encodeParameter,scramClientFirst,scramClientFinal,verifyServerFinal,PostgresError} from './pg.mjs';
 import {INTERACTIVE_FIRST} from './hooks.mjs';
 import {DESTROY_MS} from './proxy.mjs';
+import {until} from './timing.mjs';
 import {openStorage} from '../storage.mjs';
 import {compatibilityDate,compatibilityFlags} from '../runtime-compatibility.mjs';
 
@@ -427,9 +428,9 @@ await test('counters: 800 single-statement reads in one window report 800 and fa
 // timer started, so close - fire falls short of 4,000 by that much.
 await test('deadline delayed frame: the held unit 300 ms after Z; close - Z_relay >= 4000 while close - fire < 4000',async()=>{
  const s=syn('polling');s.ts({op:'arm',kind:'fault',name:'hang_claim'});
- const r=await raw(s.alias);await sleep(300);await r.write(unit(CLAIM,[FEED]));
+ const r=await raw(s.alias);await until(r.readyAt+300);await r.write(unit(CLAIM,[FEED]));
  // The Worker's operation timer started at its connect (after Z): its 4,000 ms deadline, then finish closes.
- await sleep(Math.max(0,r.readyAt+4000-now()));r.socket.destroy();
+ await until(r.readyAt+4000);r.socket.destroy();
  const f=await waitFor('the discard',()=>{const x=s.witness().fires[0];return x?.discarded&&x;});
  const o=opOf(s.witness(),f.id),offset=o.fire-o.Z_relay,lower=o.close-o.Z_relay,span=o.close-o.fire;
  report.push(`deadline delayed frame: fire-Z_relay ${offset.toFixed(1)} ms, close-Z_relay ${lower.toFixed(1)} ms, close-fire ${span.toFixed(1)} ms`);

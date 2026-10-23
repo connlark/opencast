@@ -14,6 +14,8 @@ struct EpisodeTranscriptAnalysisHTTPError: LocalizedError, Sendable, Equatable {
         "job_failed_transient",
         "job_not_found"
     ]
+    static let jobUnavailableCode = "job_unavailable"
+    static let transientServerStatusCodes: Set<Int> = [500, 502, 503, 504]
     static let insufficientSecondsCode = "insufficient_transcription_seconds"
     static let bootstrapRequiredCode = "bootstrap_required"
 
@@ -27,6 +29,15 @@ struct EpisodeTranscriptAnalysisHTTPError: LocalizedError, Sendable, Equatable {
 
     var isTransientJobFailure: Bool {
         Self.transientJobFailureCodes.contains(code)
+    }
+
+    /// A read of an accepted job that failed without a verdict: an
+    /// unavailable job object or a 5xx with no JSON body (the client's
+    /// synthesized `http_<status>` code). The poller retries the same
+    /// handle; every coded worker error stays terminal.
+    var isTransientPollFailure: Bool {
+        code == Self.jobUnavailableCode
+            || code.hasPrefix("http_") && Self.transientServerStatusCodes.contains(statusCode)
     }
 
     /// Typed 402: the account cannot cover the run's charge (pay gate).
