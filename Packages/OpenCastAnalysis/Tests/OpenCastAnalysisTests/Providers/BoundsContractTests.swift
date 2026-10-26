@@ -98,7 +98,10 @@ struct BoundsContractTests {
             // Bare opening brackets, each followed by a quoted closing one.
             let unit = #"["]","#
             let mixed = String(repeating: unit, count: (1 << 20) / unit.utf8.count)
-            let start = ContinuousClock.now
+            // The work runs on this one thread, so its CPU time is the
+            // algorithm's cost whatever else the machine is doing; a
+            // wall clock on a shared CI runner once read 38 seconds for it.
+            let start = Self.threadCPUTime()
             let verdicts = [
                 GeminiAnalysisTransport.interpret(Self.geminiBody(answer: "{}", extra: #","x":\#(mixed)"#)).finishReason == .malformedResponse,
                 GeminiAnalysisTransport.interpret(Self.geminiBody(answer: mixed)).finishReason == .malformedResponse,
@@ -106,12 +109,21 @@ struct BoundsContractTests {
                     == AnalysisFinishReason.malformedResponse.rawValue,
                 SecretVerifier(secrets: [Self.key]).verifyRecordedText(mixed) == .exhausted,
             ]
-            return (verdicts, start.duration(to: .now))
+            return (verdicts, Self.threadCPUTime() - start)
         }
         for (index, holds) in verdicts.enumerated() {
             #expect(holds, "check \(index)")
         }
-        #expect(elapsed < .seconds(30))
+        // Linear scans of a megabyte take a few seconds of CPU; a parse that
+        // nested the brackets would not finish in hours.
+        #expect(elapsed < .seconds(60))
+    }
+
+    /// CPU time consumed by the calling thread so far.
+    static func threadCPUTime() -> Duration {
+        var time = timespec()
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time)
+        return .seconds(time.tv_sec) + .nanoseconds(time.tv_nsec)
     }
 
     @Test("An unterminated string in a provider body is malformed, whatever follows it")

@@ -101,7 +101,7 @@ struct URLSessionAnalysisHTTPClientTests {
         #expect(await result(request("hang.test"), timeout: 0.3) == .failure(.timeout))
         // The stub never answers: a client without the deadline would never
         // return, so the bound only has to be finite, not a guess at load.
-        #expect(started.duration(to: .now) < .seconds(30))
+        #expect(started.duration(to: .now) < .seconds(300))
         #expect(await result(request("hang.test"), timeout: 0) == .failure(.timeout))
     }
 

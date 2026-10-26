@@ -164,8 +164,10 @@ extension ReplayToolTests {
     /// How long a hook's child runs when nothing stops it. The stop tests
     /// bound the hook by this, not by a guess at scheduling delay: a stop
     /// path that works returns well before it at any machine load, and one
-    /// that waits for the child cannot.
-    static let childLifetimeSeconds = 30
+    /// that waits for the child cannot. Five minutes, because a three-core
+    /// CI runner once held the cooperative pool for 45 seconds while other
+    /// suites ran, which a 30-second lifetime read as waiting for the child.
+    static let childLifetimeSeconds = 300
 
     /// Whether the process `pid` is gone, waiting up to `seconds` for it.
     static func processGone(_ pid: pid_t, within seconds: Double = 3) async -> Bool {
