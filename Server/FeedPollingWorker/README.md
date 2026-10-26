@@ -115,8 +115,7 @@ Advance it only together with the pinned toolchain.
 
 `dispatcher_admission` and `feed_observation` must be allowed by both the
 `n_control` row and the environment variable; `cleanup` gates garbage
-collection. `five_minute_polling` stays off: its code retires in the next
-polling-engine release. The template ships every switch
+collection. The template ships every switch
 `"false"` and `"crons": []`; a running lane needs both `"* * * * *"`
 (dispatch) and `"*/2 * * * *"` (cleanup). A changed cron list takes effect
 only after `yarn wrangler triggers deploy` for that environment, so check both

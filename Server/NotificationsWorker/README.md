@@ -73,7 +73,6 @@ nothing.
 | `job_enrollment` | `NOTIFICATION_JOB_ENROLLMENT` | enrolling job notifications |
 | `job_send` | `NOTIFICATION_JOB_SEND` | sending job pushes |
 | `cleanup` | `NOTIFICATION_CLEANUP` | snapshot and observation garbage collection |
-| `five_minute_polling` | `NOTIFICATION_FIVE_MINUTE_POLLING` | disabled; retires in the next polling-engine release |
 
 Enable a row once the rest of the lane is ready, as the schema owner (the
 runtime role can read the controls but not change them):
