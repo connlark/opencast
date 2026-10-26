@@ -286,7 +286,9 @@ struct OpenCastAppModelRemoteReattachTests {
 
         #expect(device.api.createRequests.map(\.clientRequestID) == [reference.clientRequestID])
         #expect(device.api.createRequests.first?.enclosureURL == device.episode(episodeID).audioURL)
-        #expect((device.api.createRequests.first?.adAnalysisRequested == true) == (purpose == .adDetection))
+        // The replayed create asks for the transcript alone, whatever the purpose.
+        #expect(device.api.createRequests.first?.adAnalysisRequested == nil)
+        #expect(device.api.createRequests.first?.podcastID == nil)
         #expect(device.api.cancelCalls.map(\.jobID) == ["job-seeded-1"])
         #expect(device.api.serverState(of: "job-seeded-1") == .cancelled)
         #expect(device.api.mintedJobIDs == ["job-seeded-1"])
@@ -471,7 +473,10 @@ struct OpenCastAppModelRemoteReattachTests {
 
         #expect(await waitUntil { device.api.pollCalls.contains { $0.jobID == seed.jobID } })
         #expect(device.api.createRequests.map(\.clientRequestID) == [seed.reference.clientRequestID])
-        #expect(device.api.createRequests.first?.adAnalysisRequested == true)
+        // The re-attach create carries no ad-detection context; the server
+        // maps the request ID to the job it already has.
+        #expect(device.api.createRequests.first?.adAnalysisRequested == nil)
+        #expect(device.api.createRequests.first?.podcastID == nil)
         #expect(device.api.mintedJobIDs == [seed.jobID])
         #expect(device.api.cancelCalls.isEmpty)
         #expect(device.references().filter { $0.resolvedPurpose == .adDetection }.map(\.clientRequestID)

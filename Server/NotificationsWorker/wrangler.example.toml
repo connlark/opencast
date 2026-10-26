@@ -132,9 +132,6 @@ NOTIFICATION_JOB_ENROLLMENT = "false"
 NOTIFICATION_DISPATCHER_ADMISSION = "false"
 NOTIFICATION_CLEANUP = "false"
 NOTIFICATION_FEED_OBSERVATION = "false"
-# Kept off: the adaptive cadence is the production schedule. This switch is
-# disabled and retires in the next polling-engine release.
-NOTIFICATION_FIVE_MINUTE_POLLING = "false"
 APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
 APP_ATTEST_ENVIRONMENT = "production"

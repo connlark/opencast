@@ -56,8 +56,7 @@ final class RemoteTranscriptionPurchaseStore {
     private(set) var refundCandidates: [RemoteTranscriptionRefundCandidate] = []
 
     /// Fires after a redeem or a balance refresh applies more headroom, so
-    /// balance-deferred work (the Chapters & Summary pay gate) can re-probe
-    /// against the balance now in place (H8).
+    /// balance-deferred work can re-probe against the balance now in place.
     @ObservationIgnored var onBalanceIncreased: (() -> Void)?
 
     @ObservationIgnored private var appAccountToken: UUID?

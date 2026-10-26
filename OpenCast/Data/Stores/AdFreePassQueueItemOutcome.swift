@@ -5,6 +5,10 @@ struct AdFreePassQueueItemOutcome: Identifiable, Equatable {
         /// Cloud detection couldn't run; finished rows for this kind offer
         /// "Detect on this device instead".
         case cloudUnavailable(message: String)
+        /// Ad detection needed the listener's own key (no key, the trial
+        /// used or paused, its service unreachable, the Keychain locked).
+        /// The episode's analysis record keeps the reason across launches.
+        case keyRequired(AnalysisKeyRequiredReason)
     }
 
     let episodeID: String

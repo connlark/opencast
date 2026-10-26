@@ -66,21 +66,43 @@ nonisolated struct AppAttestAPIClient: Sendable {
         return try await send(path: path, body: body, timeout: timeout, response: response)
     }
 
+    /// The envelope's reply undecoded, whatever its status, with the body
+    /// read capped at `maximumBodyBytes`.
+    func sendAuthenticatedEnvelopeForRawResponse(
+        path: String,
+        installID: String,
+        keyID: String,
+        payload: String,
+        assertion: Data?,
+        timeout: TimeInterval?,
+        maximumBodyBytes: Int
+    ) async throws -> AppAttestRawHTTPResponse {
+        let body = AppAttestAuthenticatedEnvelope(
+            installID: installID,
+            keyID: keyID,
+            payload: payload,
+            assertion: assertion?.base64EncodedString()
+        )
+        let request = try postRequest(path: path, body: body, timeout: timeout)
+        let (data, urlResponse) = try await transport.data(for: request, maximumBodyBytes: maximumBodyBytes)
+        guard let httpResponse = urlResponse as? HTTPURLResponse else {
+            throw AppAttestHTTPError(statusCode: -1, code: "invalid_response", detail: nil)
+        }
+        return AppAttestRawHTTPResponse(
+            statusCode: httpResponse.statusCode,
+            retryAfter: httpResponse.value(forHTTPHeaderField: "retry-after"),
+            contentType: httpResponse.value(forHTTPHeaderField: "content-type"),
+            body: data
+        )
+    }
+
     func send<RequestBody: Encodable, ResponseBody: Decodable>(
         path: String,
         body: RequestBody,
         timeout: TimeInterval? = nil,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
-        var request = URLRequest(url: configuration.baseURL.appending(path: path))
-        request.httpMethod = "POST"
-        if let timeout {
-            request.timeoutInterval = timeout
-        }
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue("application/json", forHTTPHeaderField: "accept")
-        request.httpBody = try JSONEncoder().encode(body)
-
+        let request = try postRequest(path: path, body: body, timeout: timeout)
         let (data, urlResponse) = try await transport.data(for: request)
         guard let httpResponse = urlResponse as? HTTPURLResponse else {
             throw AppAttestHTTPError(statusCode: -1, code: "invalid_response", detail: nil)
@@ -97,5 +119,21 @@ nonisolated struct AppAttestAPIClient: Sendable {
         }
 
         return try JSONDecoder().decode(response, from: data)
+    }
+
+    private func postRequest<RequestBody: Encodable>(
+        path: String,
+        body: RequestBody,
+        timeout: TimeInterval?
+    ) throws -> URLRequest {
+        var request = URLRequest(url: configuration.baseURL.appending(path: path))
+        request.httpMethod = "POST"
+        if let timeout {
+            request.timeoutInterval = timeout
+        }
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue("application/json", forHTTPHeaderField: "accept")
+        request.httpBody = try JSONEncoder().encode(body)
+        return request
     }
 }

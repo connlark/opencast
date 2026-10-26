@@ -8,6 +8,10 @@ enum EpisodeAdAnalysisError: LocalizedError, Sendable, Equatable {
     case anotherJobActive
     case analysisTimedOut
     case unrecognizedSpanKind
+    /// No route reaches a model: the run needs the listener's own key.
+    case keyRequired(AnalysisKeyRequiredReason)
+    /// A run that did not survive the last process could not resume.
+    case runInterrupted
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +29,10 @@ enum EpisodeAdAnalysisError: LocalizedError, Sendable, Equatable {
             "Promo/ad analysis took too long. Try again."
         case .unrecognizedSpanKind:
             "Promo/ad analysis returned a span kind this version of OpenCast doesn't recognize."
+        case .keyRequired(let reason):
+            "Promo/ad analysis needs a key in Settings › AI Services (\(reason.rawValue))."
+        case .runInterrupted:
+            "Promo/ad analysis was interrupted."
         }
     }
 }

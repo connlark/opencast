@@ -24,6 +24,15 @@ AI Gateway unified billing charges a 5 % fee on credit purchase; that fee is
 outside this ledger (reported separately), and the `cf/*` rows are the
 providers' list prices passed through without markup.
 
+The 2026-10-23 frontier rows were verified that day:
+`claude-opus-5-5` against platform.claude.com/docs/en/about-claude/pricing
+($4 input, $5 5-minute cache write, $0.20 cache hit = 0.05x, $20 output; the
+full 1M context bills at standard rates, no long-context tier) and
+`gpt-6.1-sol` against developers.openai.com/api/docs/pricing ($2 input,
+$0.10 cached = 0.05x, $2.50 cache write, $10 output; its long-context tier
+is the generic OpenAI rule below). `gpt-6-astra` was re-verified unchanged
+on the same page the same day.
+
 Gemini 3.x promotional rates expire 2026-12-31 (they double 2027-01-01):
 every `gemini-3.` key refuses to price after that date. No search/tools,
 regional endpoint, batch, or audio pricing.
@@ -48,6 +57,9 @@ PRICES = {
     "gemini-3.5-flash": (1.5, 0.15, 1.5, 9),
     "gemini-3.8-flash": (0.75, 0.075, 0.75, 3.75),
     "gpt-6-astra": (10, 1, 12.5, 50),
+    # 2026-10-23 frontier rows, direct; see the docstring.
+    "gpt-6.1-sol": (2, 0.10, 2.5, 10),
+    "claude-opus-5-5": (4, 0.20, 5, 20),
     "gpt-5.6-sol": (4, 0.4, 5, 20),
     "gpt-5.6-terra": (2, 0.2, 2.5, 12),
     "gpt-5.6-luna": (0.2, 0.02, 0.25, 1.2),

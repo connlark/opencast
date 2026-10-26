@@ -86,10 +86,14 @@ class OpenAIResponsesAdapter(Adapter):
     provider = "openai"
     supported_thinking = ("default", "none", "low", "medium", "high")
 
-    def __init__(self, model, vendor_model=None, *, none_effort=None, **kwargs):
+    def __init__(self, model, vendor_model=None, *, none_effort=None, thinking=None, **kwargs):
         super().__init__(model, vendor_model, **kwargs)
         # gpt-6-luna: the effort `none` maps to (Step 0 smoke); None = send "none".
         self.none_effort = none_effort
+        # Models whose docs exclude an effort (gpt-6.1-sol: no `none`/`minimal`)
+        # register an allowlist so run.py rejects it before any count or call.
+        if thinking is not None:
+            self.supported_thinking = tuple(thinking)
 
     def effort(self, thinking):
         if thinking == "default":

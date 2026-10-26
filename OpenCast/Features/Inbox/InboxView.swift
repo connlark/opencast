@@ -221,7 +221,7 @@ private struct InboxAdDetectionToolbarStatus: View {
                 fractionCompleted: snapshot.fractionCompleted,
                 hasFailures: hasFailures
             )
-        case .pausedInterrupted, .awaitingModelConsent, .capDeferred:
+        case .pausedInterrupted, .awaitingModelConsent:
             .paused(hasFailures: hasFailures)
         }
     }
@@ -239,8 +239,6 @@ private struct InboxAdDetectionToolbarStatus: View {
             "\(percent)% — paused"
         case .awaitingModelConsent:
             "\(percent)% — waiting for the speech model"
-        case .capDeferred:
-            "\(percent)% — " + EpisodeAdFreePassPresentation.capDeferred.statusText
         }
     }
 }

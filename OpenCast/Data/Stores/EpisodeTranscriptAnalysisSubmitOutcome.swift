@@ -1,1 +1,0 @@
-typealias EpisodeTranscriptAnalysisSubmitOutcome = AnalysisJobSubmitOutcome<EpisodeTranscriptAnalysisAPIResponse>

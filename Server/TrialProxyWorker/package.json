@@ -1,0 +1,27 @@
+{
+  "name": "@opencast/trial-proxy-worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy:dry-run": "wrangler deploy --dry-run --outdir dist",
+    "deploy:dry-run:prod-staging": "wrangler deploy --env prod-staging --dry-run --outdir dist-prod-staging",
+    "deploy:dry-run:production": "wrangler deploy --env production --dry-run --outdir dist-production",
+    "deploy": "wrangler deploy",
+    "deploy:prod-staging": "wrangler deploy --env prod-staging",
+    "deploy:production": "wrangler deploy --env production",
+    "login": "wrangler login",
+    "test": "cargo test",
+    "typecheck": "cargo check --target wasm32-unknown-unknown --lib",
+    "build:worker": "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release",
+    "test:integration": "yarn run build:worker && vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "catalog:",
+    "@vitest/runner": "catalog:",
+    "@vitest/snapshot": "catalog:",
+    "miniflare": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

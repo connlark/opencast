@@ -4,9 +4,9 @@
 /// the pause — the system posts an unsuppressable "Task failed" banner when
 /// it revokes the continued-processing task, so this is the honest
 /// counterpart telling the user nothing is lost — and an expiration park of
-/// a cloud item says the server is still working. Cap deferral, model
-/// consent, a cloud user cancel and the other cloud parks stay silent (the
-/// queue screen carries those).
+/// a cloud item says the server is still working. Model consent, a cloud
+/// user cancel and the other cloud parks stay silent (the queue screen
+/// carries those).
 struct AdFreePassCompletionNotificationContent: Equatable {
     let title: String
     let body: String
@@ -24,7 +24,7 @@ struct AdFreePassCompletionNotificationContent: Equatable {
             title = copy.title
             body = copy.body
             return
-        case .cloudUserCancelled, .awaitingConsent, .capDeferred:
+        case .cloudUserCancelled, .awaitingConsent:
             return nil
         case .drained:
             break
@@ -36,7 +36,7 @@ struct AdFreePassCompletionNotificationContent: Equatable {
             switch outcome.kind {
             case .completed(let zoneCount):
                 completed.append((outcome.episodeTitle, zoneCount))
-            case .failed, .cloudUnavailable:
+            case .failed, .cloudUnavailable, .keyRequired:
                 failedCount += 1
             }
         }

@@ -18,6 +18,10 @@ worker-macros = "0.8"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
+# Host-only: the analysis policy generator imports the qualified constants,
+# prompts and schemas from the analysis workers instead of retyping them.
+opencast-ad-analysis-worker = { path = "../AdAnalysisWorker" }
+opencast-transcript-analysis-worker = { path = "../TranscriptAnalysisWorker" }
 zeroize = "1.8"
 
 [profile.release]

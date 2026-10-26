@@ -38,6 +38,29 @@ const _: () = assert!(
 pub const INACTIVITY_SECONDS: u64 = 5;
 pub const STEP_DEADLINE_SECONDS: u64 = 200;
 pub const BOOKKEEPING_DEADLINE_SECONDS: u64 = 20;
+/// One delivery runs at most this many actions, each from a fresh claim. A
+/// count bound sized for the seven-page ladder: a pre-staged scan's five
+/// preparation phases and seven full 100-candidate page drains are twelve; a
+/// small feed's whole chain (scan, five phases, a drain, an outbox, a settle)
+/// is nine. Past it the delivery yields `action_bound` and continues at once.
+pub const ACTION_BOUND: u32 = 12;
+/// No action after the first starts past this much of the delivery's own loop
+/// clock: the 200-second step less the 60 seconds a drain page or a
+/// preparation phase ordinarily needs under its HANDLER_MS-capped segments.
+/// A start policy, not a completion guarantee: a drain can mature 100
+/// releases and an outbox await ten service bodies, and no action has a
+/// finite bound of its own; the 200-second outer cancellation and its
+/// bookkeeping stay the protection. Past it the delivery yields `guard`.
+pub const ACTION_START_GUARD_MS: u64 = STEP_DEADLINE_SECONDS * 1000 - 60_000;
+/// No scan after the first action starts past this: the 200-second step less
+/// the scan permit's wait, the queued fetch and replay's shared deadline and
+/// five seconds. A start policy, not a completion guarantee: a scan reads
+/// before that race and finishes after it. Past it the delivery yields `guard`.
+pub const SCAN_START_GUARD_MS: u64 = STEP_DEADLINE_SECONDS * 1000
+    - SCAN_PERMIT_WAIT_MS
+    - SCAN_STORAGE_DEADLINE_SECONDS * 1000
+    - 5_000;
+const _: () = assert!(ACTION_START_GUARD_MS == 140_000 && SCAN_START_GUARD_MS == 65_000);
 /// A queued scan waits this long for its isolate's scan permit before it
 /// answers scan_busy. It covers every measured contention wait and baseline
 /// hold on both backends (rehearsal: waits to 9,366 ms, holds to
@@ -108,18 +131,6 @@ pub fn contention_delay(execution: &str) -> i64 {
         % 11) as i64
 }
 
-pub fn interval(now: i64, baseline: i64, latest: Option<i64>, cadence: Option<i64>) -> i64 {
-    let latest = latest.filter(|t| *t > 0 && *t <= now);
-    let active_window = (90 * 86400).max(cadence.unwrap_or(0).min(365 * 86400) * 2);
-    if now - baseline < 7 * 86400 || latest.is_some_and(|t| now - t <= active_window) {
-        300
-    } else if now - latest.unwrap_or(baseline) >= 365 * 86400 {
-        3600
-    } else {
-        1800
-    }
-}
-
 /// The feed schedule columns a Queue message is fenced and settled against.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScheduleInputs {
@@ -128,7 +139,6 @@ pub struct ScheduleInputs {
     pub credible_release_at: Option<i64>,
     pub credible_cadence: Option<i64>,
     pub publish_cadence: Option<i64>,
-    pub five_minute: bool,
 }
 /// Schedule fields committed in the same fenced statement as a poll outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,7 +152,7 @@ pub struct Settle {
 }
 /// Every successful poll re-runs the production adaptive policy on live
 /// inputs: a 15-minute hot floor, the 1-hour/6-hour/24-hour age tiers and the
-/// cadence accelerator. The five-minute policy is a disabled fixture switch.
+/// cadence accelerator.
 #[cfg(any(target_arch = "wasm32", test))]
 pub fn settle(
     feed_id: &str,
@@ -159,20 +169,11 @@ pub fn settle(
     };
     let credible_cadence = observed_credible_cadence.or(inputs.credible_cadence);
     let publish_cadence = observed_publish_cadence.or(inputs.publish_cadence);
-    let interval = if inputs.five_minute {
-        interval(
-            now,
-            inputs.baseline_at.unwrap_or(now),
-            release,
-            credible_cadence,
-        )
-    } else {
-        crate::poll_scheduling::poll_interval_seconds(
-            publish_cadence.or(credible_cadence),
-            release,
-            now,
-        )
-    };
+    let interval = crate::poll_scheduling::poll_interval_seconds(
+        publish_cadence.or(credible_cadence),
+        release,
+        now,
+    );
     Settle {
         due_at: next_due(feed_id, now.max(inputs.due_at), interval),
         interval,
@@ -197,7 +198,8 @@ pub fn next_due(feed_id: &str, now: i64, interval: i64) -> i64 {
 
 pub fn feed_retry_delay(failures: i64) -> i64 {
     // An unavailable feed must not consume more scan slots than a healthy
-    // five-minute feed, even when another publisher keeps the queue busy.
+    // feed polled every five minutes, even when another publisher keeps the
+    // queue busy.
     (300_i64 * (1_i64 << failures.clamp(0, 7))).min(21600)
 }
 
@@ -244,30 +246,6 @@ pub fn retry_after(value: &str, now: i64) -> Option<i64> {
 mod tests {
     use super::*;
     #[test]
-    fn active_dormant_and_unknown_do_not_depend_on_popularity() {
-        let now = 2000 * 86400;
-        assert_eq!(interval(now, now - 6 * 86400, None, None), 300);
-        assert_eq!(interval(now, now - 10 * 86400, None, None), 1800);
-        assert_eq!(
-            interval(
-                now,
-                now - 500 * 86400,
-                Some(now - 200 * 86400),
-                Some(120 * 86400)
-            ),
-            300
-        );
-        assert_eq!(
-            interval(now, now - 500 * 86400, Some(now - 400 * 86400), None),
-            3600
-        );
-        assert_eq!(
-            interval(now, now - 500 * 86400, Some(now - 100 * 86400), None),
-            1800
-        );
-        assert_eq!(interval(now, now - 10 * 86400, Some(0), None), 1800);
-    }
-    #[test]
     fn every_successful_poll_uses_the_adaptive_policy_with_a_fifteen_minute_floor() {
         let now = 2000 * 86400;
         let feed = "0badf00d";
@@ -310,21 +288,6 @@ mod tests {
         for settled in [at(Some(now - 3600), None, None), matured] {
             assert!(settled.due_at > now && settled.due_at <= now + settled.interval);
         }
-        // The disabled fixture switch is the only route to five minutes.
-        let five = settle(
-            feed,
-            &ScheduleInputs {
-                five_minute: true,
-                baseline_at: Some(now - 86400),
-                ..Default::default()
-            },
-            now,
-            "unchanged",
-            None,
-            None,
-            None,
-        );
-        assert_eq!(five.interval, 300);
         assert_eq!((0..640).filter(|g| sampled(feed, *g)).count(), 10);
     }
     #[test]

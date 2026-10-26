@@ -38,6 +38,14 @@ pub(crate) async fn stat(
     Ok(())
 }
 
+/// A non-polling handler's `storage_phases` line (the scheduled maintenance's
+/// reconciliation), written as the polling handlers' own is: always, with the
+/// outcome ok or failed.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn emit_storage_phases(db: &crate::database::Authority, ok: bool) {
+    runtime::emit(db, false, ok)
+}
+
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod watchdog;
 // Fixture builds only, last so a production build keeps its line numbers.

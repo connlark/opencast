@@ -78,12 +78,12 @@ struct AdFreePassCompletionNotificationSchedulerTests {
         }
     }
 
-    @Test("Deferred terminals never notify even when backgrounded and authorized")
+    @Test("The consent terminal never notifies even when backgrounded and authorized")
     func deferredTerminalsNeverNotify() async {
         let center = FakeAdFreePassNotificationCenter()
         let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
 
-        for terminal in [AdFreePassQueueTerminalOutcome.capDeferred, .awaitingConsent] {
+        for terminal in [AdFreePassQueueTerminalOutcome.awaitingConsent] {
             let decision = await scheduler.scheduleIfNeeded(
                 terminal: terminal,
                 outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)],

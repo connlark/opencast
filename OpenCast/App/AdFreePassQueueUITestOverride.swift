@@ -40,7 +40,7 @@ struct AdFreePassQueueUITestOverride: Equatable {
         case "transcribing":
             stage = .transcribing(progress(environment: environment))
         case "analyzing":
-            stage = .analyzing
+            stage = .analyzing(steps: nil)
         case "uploading":
             let (completedParts, totalParts) = uploadParts(environment: environment)
             stage = .cloudUploadingExactCopy(completedParts: completedParts, totalParts: totalParts)

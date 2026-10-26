@@ -295,22 +295,31 @@ struct OpenCastRemoteTranscriptionWireTests {
         #expect(OpenCastRemoteTranscriptionErrorCode.uploadUnavailable.wireValue == "upload_unavailable")
     }
 
-    @Test("Detect-ads create fields encode when set and are omitted when nil")
+    @Test("Server ad detection is off unless a create asks for it: the fields default to nil and are omitted")
     func adAnalysisCreateFieldsEncode() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
 
+        // The app builds every create, for every purpose, this way.
         let plain = OpenCastRemoteTranscriptionJobCreateRequest(
             clientRequestID: "req-1",
             episodeID: "ep-hash-1",
-            enclosureURL: "https://example.com/audio.mp3"
+            enclosureURL: "https://example.com/audio.mp3",
+            declaredDurationSeconds: 120,
+            languageCode: "en",
+            mediaProfile: 1
         )
+        #expect(plain.adAnalysisRequested == nil)
+        #expect(plain.podcastID == nil)
+        #expect(plain.episodeTitle == nil)
+        #expect(plain.podcastTitle == nil)
         let plainJSON = String(decoding: try encoder.encode(plain), as: UTF8.self)
         #expect(!plainJSON.contains("ad_analysis_requested"))
         #expect(!plainJSON.contains("podcast_id"))
         #expect(!plainJSON.contains("episode_title"))
         #expect(!plainJSON.contains("podcast_title"))
 
+        // A create that asks for it still encodes them.
         let detect = OpenCastRemoteTranscriptionJobCreateRequest(
             clientRequestID: "req-2",
             episodeID: "ep-hash-1",

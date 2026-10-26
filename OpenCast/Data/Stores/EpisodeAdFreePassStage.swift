@@ -7,7 +7,10 @@ enum EpisodeAdFreePassStage: Equatable {
     case installingModel(OpenCastWhisperModelInstallProgress)
     case installingSpeechAssets(fractionCompleted: Double)
     case transcribing(EpisodeTranscriptionProgress)
-    case analyzing
+    /// Ad detection runs on this device, for an on-device item and for a
+    /// cloud item once its transcript is delivered. `nil` steps until the
+    /// run's route is known.
+    case analyzing(steps: EpisodeAdFreePassAnalysisSteps?)
     // Cloud detect passes: the job is on the server and no local compute
     // runs; a manual start may still hold the continued-processing card.
     // Queued, verifying, uploading and waiting for credits are the
@@ -19,7 +22,8 @@ enum EpisodeAdFreePassStage: Equatable {
     case cloudUploadingExactCopy(completedParts: Int, totalParts: Int)
     case cloudWaitingForCredits
     case cloudTranscribing(RemoteTranscriptionActiveProgress?)
-    case cloudDetectingAds
+    /// The server is stitching and saving the transcript.
+    case cloudFinishing
     /// Cloud detection can't run right now (no credits, service off); the
     /// surface offers a one-tap on-device detect instead — never a silent
     /// switch.

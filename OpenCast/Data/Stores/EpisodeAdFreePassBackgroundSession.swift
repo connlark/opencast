@@ -16,8 +16,11 @@ final class EpisodeAdFreePassBackgroundSession {
     private static let logger = Logger(subsystem: "com.connor.opencast", category: "AdFreePassBackground")
     private static let title = "Skip Promos & Ads"
     private static let consentSubtitle = "Needs your OK to download the speech model - open OpenCast."
-    private static let capDeferredSubtitle = "Daily detection limit reached — continues tomorrow"
     private static let creepInterval: Duration = .seconds(2)
+    /// The card's `Progress` counts this many units per point of the
+    /// 0...1000 scale, so a slow analyzing step moves on every creep tick
+    /// even when its slice is a few points wide or the queue is long.
+    static let progressSubunitsPerUnit: Int64 = 1_000_000
 
     @ObservationIgnored private let scheduler: any AdFreePassContinuedTaskScheduling
     @ObservationIgnored private let forceForegroundOnly: @MainActor () -> Bool
@@ -26,7 +29,7 @@ final class EpisodeAdFreePassBackgroundSession {
     private var submittedRequiresGPU = false
     private var hasRegisteredLaunchHandler = false
     private var handle: (any AdFreePassContinuedTaskHandle)?
-    private var mapper = AdFreePassQueueProgressMapper()
+    private var mapper = AdFreePassQueueProgressMapper(subunitsPerUnit: EpisodeAdFreePassBackgroundSession.progressSubunitsPerUnit)
     private var stage: EpisodeAdFreePassStage = .idle
     private var queueContext = AdFreePassQueueContext()
     private var stageBeganAt = Date.now
@@ -260,7 +263,7 @@ final class EpisodeAdFreePassBackgroundSession {
 
         handle = launchedHandle
         state = .running
-        launchedHandle.progress.totalUnitCount = AdFreePassQueueProgressMapper.totalUnitCount
+        launchedHandle.progress.totalUnitCount = mapper.totalUnitCount
         launchedHandle.progress.completedUnitCount = mapper.completedUnitCount
         let launchRunSequence = runSequence
         let cancellationSource = cancellationSource
@@ -338,9 +341,6 @@ final class EpisodeAdFreePassBackgroundSession {
         case .awaitingConsent:
             handle.updateTitle(title(for: queueContext), subtitle: Self.consentSubtitle)
             complete(handle, success: false)
-        case .capDeferred:
-            handle.updateTitle(title(for: queueContext), subtitle: Self.capDeferredSubtitle)
-            complete(handle, success: false)
         case .interrupted, .remoteParked, .cloudUserCancelled:
             complete(handle, success: false)
         }
@@ -376,7 +376,7 @@ final class EpisodeAdFreePassBackgroundSession {
             return
         }
 
-        let units = mapper.update(
+        let units = mapper.tick(
             for: stage,
             queueContext: queueContext,
             stageElapsed: now().timeIntervalSince(stageBeganAt)
@@ -403,7 +403,9 @@ final class EpisodeAdFreePassBackgroundSession {
         AdFreePassBackgroundRunLog.record("submit cancelled reason=\(reason) identifier=\(Self.identifier)")
     }
 
-    private func recordAppliedStage(_ stage: EpisodeAdFreePassStage, completedUnits: Int64) {
+    private func recordAppliedStage(_ stage: EpisodeAdFreePassStage, completedUnits fineUnits: Int64) {
+        // Logged on the 0...1000 scale.
+        let completedUnits = fineUnits / Self.progressSubunitsPerUnit
         let summary = stage.backgroundRunLogDescription
         let previousUnits = lastLoggedCompletedUnits
         let shouldLog = summary != lastLoggedStageSummary
@@ -416,7 +418,7 @@ final class EpisodeAdFreePassBackgroundSession {
 
         lastLoggedStageSummary = summary
         lastLoggedCompletedUnits = completedUnits
-        AdFreePassBackgroundRunLog.record("stage applied units=\(completedUnits)/\(AdFreePassQueueProgressMapper.totalUnitCount) \(summary)")
+        AdFreePassBackgroundRunLog.record("stage applied units=\(completedUnits)/\(EpisodeAdFreePassProgressMapper.totalUnitCount) \(summary)")
     }
 
     private func title(for context: AdFreePassQueueContext) -> String {
@@ -478,7 +480,7 @@ private extension EpisodeAdFreePassStage {
         switch self {
         case .downloadingEpisode, .analyzing, .transcribing,
              .cloudQueued, .cloudVerifying, .cloudUploadingExactCopy, .cloudWaitingForCredits,
-             .cloudTranscribing, .cloudDetectingAds:
+             .cloudTranscribing, .cloudFinishing:
             // A server phase can hold one poll state for minutes; the creep
             // keeps the system from reading the card as stalled.
             true
@@ -557,8 +559,8 @@ private extension EpisodeAdFreePassPresentation {
             self = .cloudWaitingForCredits
         case .cloudTranscribing(let progress):
             self = .cloudTranscribing(progress)
-        case .cloudDetectingAds:
-            self = .cloudDetectingAds
+        case .cloudFinishing:
+            self = .cloudFinishing
         case .cloudUnavailable(let message):
             self = .cloudUnavailable(message)
         case .cloudParked(let reason):

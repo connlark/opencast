@@ -185,7 +185,7 @@ struct OpenCastLaunchConfigurationTests {
 
         #expect(ignoredConfiguration.adFreePassPresentationOverride == nil)
         #expect(enabledConfiguration.adFreePassPresentationOverride?.stage == .failed(
-            message: "Daily promo/ad analysis limit reached."
+            message: "Your provider is busy or at its limit. Try again later."
         ))
     }
 

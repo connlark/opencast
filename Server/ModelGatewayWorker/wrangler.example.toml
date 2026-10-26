@@ -19,6 +19,7 @@ command = "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bi
 
 [vars]
 MODEL_OBJECT_PREFIX = "opencast/models"
+POLICY_OBJECT_PREFIX = "opencast/policies"
 PUBLIC_MODEL_GATEWAY_ENABLED = "false"
 
 [[r2_buckets]]
@@ -31,6 +32,7 @@ workers_dev = true
 
 [env.prod-staging.vars]
 MODEL_OBJECT_PREFIX = "opencast/models"
+POLICY_OBJECT_PREFIX = "opencast/policies"
 PUBLIC_MODEL_GATEWAY_ENABLED = "false"
 
 [[env.prod-staging.r2_buckets]]
@@ -47,6 +49,7 @@ custom_domain = true
 
 [env.production.vars]
 MODEL_OBJECT_PREFIX = "opencast/models"
+POLICY_OBJECT_PREFIX = "opencast/policies"
 PUBLIC_MODEL_GATEWAY_ENABLED = "false"
 
 [[env.production.r2_buckets]]

@@ -855,11 +855,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
                 episode: environment.episode,
                 enclosureURL: environment.episode.audioURL!,
                 purpose: .adDetection,
-                adAnalysis: RemoteTranscriptionJobRunner.AdAnalysisContext(
-                    podcastID: environment.episode.podcastID,
-                    episodeTitle: environment.episode.title,
-                    podcastTitle: environment.episode.podcastTitle
-                ),
                 modelContext: environment.context,
                 onEvent: { _ in }
             )
@@ -869,6 +864,9 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         // cancelled and the reference dropped — the device fallback is honest.
         #expect(api.cancelledJobIDs == ["job-fake-1"])
         #expect(environment.store.references().isEmpty)
+        // A detect job asks the server for the transcript alone.
+        #expect(api.createRequests.count == 1)
+        #expect(api.createRequests.allSatisfy { $0.adAnalysisRequested == nil && $0.podcastID == nil })
     }
 
     @Test("Plain transcription keeps waiting through awaiting_credits and completes")
@@ -948,11 +946,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
                 episode: environment.episode,
                 enclosureURL: environment.episode.audioURL!,
                 purpose: .adDetection,
-                adAnalysis: RemoteTranscriptionJobRunner.AdAnalysisContext(
-                    podcastID: environment.episode.podcastID,
-                    episodeTitle: environment.episode.title,
-                    podcastTitle: environment.episode.podcastTitle
-                ),
                 modelContext: environment.context,
                 onEvent: { _ in }
             )
@@ -965,6 +958,8 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         #expect(reference.createState == .attached)
         #expect(reference.jobID == "job-fake-1")
         #expect(reference.lastExit == .connectionLost)
+        #expect(api.createRequests.count == 1)
+        #expect(api.createRequests.allSatisfy { $0.adAnalysisRequested == nil && $0.podcastID == nil })
     }
 
     @Test("Transport give-up keeps a plain transcription reference for re-attach")

@@ -440,8 +440,7 @@ pub struct ValidatedAnalysis {
 /// coalesced request must first satisfy every rule against submitted unit ids;
 /// only then are ids translated and the complete contract run again against
 /// the raw segments.
-#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
-pub(crate) fn validate_and_remap_model_output(
+pub fn validate_and_remap_model_output(
     original: &TranscriptAnalysisRequest,
     prepared: &PreparedAnalysisRequest<'_>,
     output: ModelOutput,
@@ -463,7 +462,6 @@ pub(crate) fn validate_and_remap_model_output(
     validate_model_output(original, mapped)
 }
 
-#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
 fn remap_model_output(output: ModelOutput, remap: &[UnitRemap]) -> Option<ModelOutput> {
     let chapters = output
         .chapters

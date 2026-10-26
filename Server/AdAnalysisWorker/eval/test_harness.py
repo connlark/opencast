@@ -14,7 +14,7 @@ from budget import MAX_AUTHORIZED_CAP, PRICES, Ledger, cost_usd, rates, verify
 EVAL = Path(__file__).resolve().parent
 # sha256 of json.dumps(budget.price_snapshot(), sort_keys=True, separators=(",", ":")).
 # A price edit must change this literal in the same commit (and reopen no ledger).
-PRICE_SNAPSHOT_SHA256 = "0dda41479332b472f40c88d3eeb76323d8021b101e031bd64e586194102cc593"
+PRICE_SNAPSHOT_SHA256 = "a5cf44c5708c5e586675da8528984ad8f32bab07ab0cce678990461a56ccbea0"
 DECISION_MODELS = {
     "@cf/cloudflare/clef",
     "@cf/cloudflare/clef-flash",
@@ -44,7 +44,7 @@ class PriceTableTests(unittest.TestCase):
 
     def test_bakeoff_rows_and_conventions(self):
         self.assertEqual(MAX_AUTHORIZED_CAP, 50)
-        self.assertEqual(len(PRICES), 22)
+        self.assertEqual(len(PRICES), 24)
         for model in DECISION_MODELS:
             row = PRICES[model]
             self.assertEqual(row[3], 0, model)
@@ -58,6 +58,13 @@ class PriceTableTests(unittest.TestCase):
         self.assertEqual(PRICES["cf/google/gemini-3.8-flash"], PRICES["gemini-3.8-flash"])
         for model in ("@cf/google/gemma-4-26b-a4b-it", "@cf/qwen/qwen3-30b-a3b-fp8", "@cf/openai/gpt-oss-120b"):
             self.assertEqual(len(set(PRICES[model][:3])), 1, model)
+        # 2026-10-23 frontier rows: vendor pages that day.
+        self.assertEqual(PRICES["claude-opus-5-5"], (4, 0.20, 5, 20))
+        self.assertEqual(PRICES["gpt-6.1-sol"], (2, 0.10, 2.5, 10))
+        # Opus 5.5 bills the full 1M context at standard rates; 6.1 Sol takes the
+        # generic OpenAI long-context step (x2 input classes, x1.5 output).
+        self.assertEqual(rates("claude-opus-5-5", 900_000), (4, 0.20, 5, 20))
+        self.assertEqual(rates("gpt-6.1-sol", 272_001), (4, 0.20, 5, 15))
         # September rows unchanged.
         for model, row in SEPTEMBER_PRICES.items():
             self.assertEqual(list(PRICES[model]), row)

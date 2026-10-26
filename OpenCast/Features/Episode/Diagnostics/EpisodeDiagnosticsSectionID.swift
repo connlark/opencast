@@ -13,6 +13,7 @@ nonisolated enum EpisodeDiagnosticsSectionID: String, CaseIterable, Identifiable
     case adSpans
     case zoneMatrix
     case chaptersSummary
+    case analysisRuns
     case feedProbe
     case enclosureProbe
 
@@ -40,6 +41,8 @@ nonisolated enum EpisodeDiagnosticsSectionID: String, CaseIterable, Identifiable
             "Zone Matrix"
         case .chaptersSummary:
             "Chapters & Summary"
+        case .analysisRuns:
+            "Analysis Runs"
         case .feedProbe:
             "Feed URL Probe"
         case .enclosureProbe:

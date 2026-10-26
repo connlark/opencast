@@ -13,6 +13,7 @@ struct DiagnosticsView: View {
     var body: some View {
         Form {
             PerformanceDiagnosticsSection()
+            AnalysisRunsDiagnosticsSection()
             DiagnosticsRepairSection(verifiedDownloadSummary: verifiedDownloadSummary)
 
             DiagnosticsRefreshLogsSection(refreshLogs: refreshLogs)

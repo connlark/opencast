@@ -73,12 +73,12 @@ struct EpisodeAdFreePassBackgroundSessionTests {
 
         session.arm(episodeTitle: "Ladder Episode")
         scheduler.launch(handle)
-        session.noteStage(.analyzing)
+        session.noteStage(.analyzing(steps: nil))
 
         #expect(scheduler.submittedGPUFlags == [true, false])
         #expect(session.requiresNonGPUCompute)
         #expect(session.isProtectingBackgroundExecution)
-        #expect(handle.titleUpdates.last?.subtitle == "Analyzing promos and ads...")
+        #expect(handle.titleUpdates.last?.subtitle == "Detecting ads")
     }
 
     @Test("An exhausted GPU retry ladder degrades to foreground-only")
@@ -89,7 +89,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
 
         session.arm(episodeTitle: "Exhausted Ladder Episode")
-        session.noteStage(.analyzing)
+        session.noteStage(.analyzing(steps: nil))
 
         #expect(scheduler.submittedGPUFlags == [true, false])
         #expect(!session.requiresNonGPUCompute)
@@ -134,14 +134,14 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         session.arm(episodeTitle: "Progress Episode")
         scheduler.launch(handle)
         session.noteStage(.transcribing(transcriptionProgress(0.75)))
-        #expect(handle.progress.completedUnitCount == 737)
+        #expect(handle.adFreeUnits == 737)
 
         session.noteStage(.installingModel(installProgress(1)))
-        #expect(handle.progress.completedUnitCount == 737)
+        #expect(handle.adFreeUnits == 737)
 
-        session.noteStage(.analyzing)
-        #expect(handle.progress.completedUnitCount == 910)
-        #expect(handle.titleUpdates.last?.subtitle == "Analyzing promos and ads...")
+        session.noteStage(.analyzing(steps: nil))
+        #expect(handle.adFreeUnits == 910)
+        #expect(handle.titleUpdates.last?.subtitle == "Detecting ads")
         #expect(handle.titleUpdates.last?.title == "Skip Promos & Ads")
     }
 
@@ -157,20 +157,20 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         scheduler.launch(handle)
 
         session.noteStage(.cloudQueued)
-        #expect(handle.progress.completedUnitCount == 20)
+        #expect(handle.adFreeUnits == 20)
         session.noteStage(.cloudTranscribing(nil))
-        #expect(handle.progress.completedUnitCount == 250)
-        session.noteStage(.cloudDetectingAds)
-        #expect(handle.progress.completedUnitCount == 910)
-        #expect(handle.titleUpdates.last?.subtitle == EpisodeAdFreePassPresentation.cloudDetectingAds.statusText)
+        #expect(handle.adFreeUnits == 250)
+        session.noteStage(.cloudFinishing)
+        #expect(handle.adFreeUnits == 900)
+        #expect(handle.titleUpdates.last?.subtitle == "Finishing the transcript in the cloud")
 
         // A server phase can hold one poll state for minutes; the creep (one
         // tick every 2 s) keeps the system from reading the card as stalled.
         // The 10 s budget is several ticks.
-        #expect(await waitUntil(timeout: .seconds(10)) { handle.progress.completedUnitCount > 910 })
-        let crept = handle.progress.completedUnitCount
+        #expect(await waitUntil(timeout: .seconds(10)) { handle.adFreeUnits > 900 })
+        let crept = handle.adFreeUnits
         session.noteStage(.cloudTranscribing(nil))
-        #expect(handle.progress.completedUnitCount >= crept)
+        #expect(handle.adFreeUnits >= crept)
         #expect(handle.completions.isEmpty)
     }
 
@@ -184,12 +184,12 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         scheduler.launch(handle)
 
         session.noteStage(.cloudVerifying)
-        #expect(handle.progress.completedUnitCount == 20)
+        #expect(handle.adFreeUnits == 20)
         #expect(handle.titleUpdates.last?.subtitle == "Verifying audio…")
 
         // 20 s on the stage clock is 10 creep units, applied on the next tick.
         currentDate += 20
-        #expect(await waitUntil { handle.progress.completedUnitCount == 30 })
+        #expect(await waitUntil { handle.adFreeUnits == 30 })
 
         // A move to the upload and each part count keep that clock; a
         // restart here would hold the card at 30 until the system expired it.
@@ -198,14 +198,14 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         session.noteStage(.cloudUploadingExactCopy(completedParts: 1, totalParts: 3))
         #expect(handle.titleUpdates.last?.subtitle == "Uploading audio… 1 of 3 parts uploaded")
         currentDate += 20
-        #expect(await waitUntil { handle.progress.completedUnitCount == 40 })
+        #expect(await waitUntil { handle.adFreeUnits == 40 })
         session.noteStage(.cloudUploadingExactCopy(completedParts: 3, totalParts: 3))
         #expect(handle.titleUpdates.last?.subtitle == "Finishing audio upload…")
-        #expect(handle.progress.completedUnitCount == 40)
+        #expect(handle.adFreeUnits == 40)
 
         // Server transcription is a new band with its own clock.
         session.noteStage(.cloudTranscribing(nil))
-        #expect(handle.progress.completedUnitCount == 250)
+        #expect(handle.adFreeUnits == 250)
         #expect(handle.completions.isEmpty)
     }
 
@@ -220,7 +220,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         defer { session.reset() }
 
         session.noteStage(.cloudUploadingExactCopy(completedParts: 0, totalParts: 10))
-        #expect(handle.progress.completedUnitCount == 20)
+        #expect(handle.adFreeUnits == 20)
 
         // Synchronous events cannot yield to the timer; each event must
         // apply the elapsed preparation time itself.
@@ -229,7 +229,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
             session.noteStage(.cloudUploadingExactCopy(completedParts: completedParts, totalParts: 10))
         }
 
-        #expect(handle.progress.completedUnitCount == 24)
+        #expect(handle.adFreeUnits == 24)
         #expect(handle.titleUpdates.last?.subtitle == "Uploading audio… 8 of 10 parts uploaded")
         #expect(handle.completions.isEmpty)
     }
@@ -277,7 +277,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
 
         #expect(scheduler.submitCallCount == 1)
         #expect(handle.completions == [true])
-        #expect(handle.progress.completedUnitCount == 1_000)
+        #expect(handle.adFreeUnits == 1_000)
         #expect(!session.isProtectingBackgroundExecution)
     }
 
@@ -293,7 +293,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
             .transcribing(transcriptionProgress(0.75)),
             queueContext: AdFreePassQueueContext(finishedItemCount: 0, totalItemCount: 2, episodeTitle: "First Episode")
         )
-        #expect(handle.progress.completedUnitCount == 368)
+        #expect(handle.adFreeUnits == 368)
 
         // Appending grows the denominator; progress holds flat rather than
         // running backwards.
@@ -301,19 +301,19 @@ struct EpisodeAdFreePassBackgroundSessionTests {
             .transcribing(transcriptionProgress(0.8)),
             queueContext: AdFreePassQueueContext(finishedItemCount: 0, totalItemCount: 3, episodeTitle: "First Episode")
         )
-        #expect(handle.progress.completedUnitCount == 368)
+        #expect(handle.adFreeUnits == 368)
 
         session.noteStage(
             .downloadingEpisode,
             queueContext: AdFreePassQueueContext(finishedItemCount: 1, totalItemCount: 3, episodeTitle: "Second Episode")
         )
-        #expect(handle.progress.completedUnitCount == 368)
+        #expect(handle.adFreeUnits == 368)
 
         session.noteStage(
             .downloadingEpisode,
             queueContext: AdFreePassQueueContext(finishedItemCount: 2, totalItemCount: 3, episodeTitle: "Third Episode")
         )
-        #expect(handle.progress.completedUnitCount == 673)
+        #expect(handle.adFreeUnits == 673)
     }
 
     @Test("Queue-terminal outcomes map to the settled success truth table")
@@ -326,8 +326,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
             (.remoteParked(.parked), false),
             (.remoteParked(.connectionLost), false),
             (.cloudUserCancelled, false),
-            (.awaitingConsent, false),
-            (.capDeferred, false)
+            (.awaitingConsent, false)
         ]
 
         for (outcome, expectedSuccess) in cases {
@@ -337,7 +336,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
 
             session.arm(episodeTitle: "Truth Table Episode")
             scheduler.launch(handle)
-            session.noteStage(.analyzing)
+            session.noteStage(.analyzing(steps: nil))
             session.noteQueueTerminal(outcome)
 
             #expect(handle.completions == [expectedSuccess], "outcome \(outcome)")
@@ -345,8 +344,8 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         }
     }
 
-    @Test("Consent and cap-deferred terminals publish the settled subtitles")
-    func consentAndCapDeferredTerminalSubtitles() {
+    @Test("The consent terminal publishes its settled subtitle")
+    func consentTerminalSubtitle() {
         let scheduler = FakeAdFreePassContinuedTaskScheduler()
         let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
         let handle = FakeAdFreePassContinuedTaskHandle()
@@ -359,18 +358,86 @@ struct EpisodeAdFreePassBackgroundSessionTests {
 
         #expect(handle.completions == [false])
         #expect(handle.titleUpdates.last?.subtitle == "Needs your OK to download the speech model - open OpenCast.")
+    }
 
-        let capScheduler = FakeAdFreePassContinuedTaskScheduler()
-        let capSession = EpisodeAdFreePassBackgroundSession(scheduler: capScheduler)
-        let capHandle = FakeAdFreePassContinuedTaskHandle()
+    @Test("Device ad detection creeps inside each step's slice over the step budget and moves with every answered step")
+    func analyzingStepsCreepInsideTheirSlice() async {
+        var currentDate = Date(timeIntervalSince1970: 1_000_000)
+        let scheduler = FakeAdFreePassContinuedTaskScheduler()
+        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler, now: { currentDate })
+        let handle = FakeAdFreePassContinuedTaskHandle()
+        session.arm(episodeTitle: "Long Episode")
+        scheduler.launch(handle)
+        defer { session.reset() }
 
-        capSession.arm(episodeTitle: "Cap Episode")
-        capScheduler.launch(capHandle)
-        capSession.noteStage(.analyzing)
-        capSession.noteQueueTerminal(.capDeferred)
+        // Slice 910 to 923 with 12 units of room, paced over 100 s.
+        session.noteStage(.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 5, stepBudgetSeconds: 100)))
+        #expect(handle.adFreeUnits == 910)
+        #expect(handle.titleUpdates.last?.subtitle == "Detecting ads")
 
-        #expect(capHandle.completions == [false])
-        #expect(capHandle.titleUpdates.last?.subtitle == "Daily detection limit reached — continues tomorrow")
+        // A tenth of the budget is one unit, applied on the next 2 s tick.
+        currentDate += 10
+        #expect(await waitUntil { handle.adFreeUnits == 911 })
+        currentDate += 40
+        #expect(await waitUntil { handle.adFreeUnits == 916 })
+        // Past the budget it parks one unit short of the slice end (923),
+        // not at the band's ceiling.
+        currentDate += 600
+        #expect(await waitUntil { handle.adFreeUnits == 922 })
+
+        // The next answered step opens its slice at once on a fresh clock.
+        session.noteStage(.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 5, stepBudgetSeconds: 100)))
+        #expect(handle.adFreeUnits == 923)
+        currentDate += 25
+        #expect(await waitUntil { handle.adFreeUnits == 926 })
+        #expect(handle.completions.isEmpty)
+    }
+
+    @Test("A many-window run's card moves on every creep tick across a long step, below the step's end")
+    func manyWindowCardMovesOnEveryTick() async {
+        var currentDate = Date(timeIntervalSince1970: 1_000_000)
+        let scheduler = FakeAdFreePassContinuedTaskScheduler()
+        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler, now: { currentDate })
+        let handle = FakeAdFreePassContinuedTaskHandle()
+        session.arm(episodeTitle: "Long Episode")
+        scheduler.launch(handle)
+        defer { session.reset() }
+        let subunits = EpisodeAdFreePassBackgroundSession.progressSubunitsPerUnit
+        #expect(handle.progress.totalUnitCount == 1_000 * subunits)
+
+        // Forty windows and the step to come, third of five in the queue:
+        // the step's slice is two points of the 0...1000 scale (925 to 927),
+        // under half a point of the card.
+        let context = AdFreePassQueueContext(finishedItemCount: 2, totalItemCount: 5, episodeTitle: "Long Episode")
+        session.noteStage(
+            .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 10, total: 41, stepBudgetSeconds: 250)),
+            queueContext: context
+        )
+        let start = handle.progress.completedUnitCount
+        // The step's end, as the card counts it.
+        let stepEnd = (2 * 1_000 * subunits + (910 * subunits + 65 * subunits * 11 / 41)) / 5
+        #expect(start == (2 * 1_000 * subunits + (910 * subunits + 65 * subunits * 10 / 41)) / 5)
+
+        // Each tick 2 s along the clock moves the card, while the 0...1000
+        // view of it stands still.
+        var previous = start
+        for _ in 1...3 {
+            currentDate += 2
+            #expect(await waitUntil { handle.progress.completedUnitCount > previous })
+            previous = handle.progress.completedUnitCount
+        }
+        #expect(handle.adFreeUnits == start / subunits)
+
+        // Late in the 250 s budget it still moves on every tick, short of
+        // the step's end.
+        currentDate += 230
+        for _ in 1...2 {
+            #expect(await waitUntil { handle.progress.completedUnitCount > previous })
+            previous = handle.progress.completedUnitCount
+            #expect(previous < stepEnd)
+            currentDate += 2
+        }
+        #expect(handle.completions.isEmpty)
     }
 
     @Test("Expiration invokes the interruption hook and completes unsuccessfully")
@@ -420,7 +487,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         scheduler.launch(handle)
 
         #expect(handle.completions == [true])
-        #expect(handle.progress.completedUnitCount == 1_000)
+        #expect(handle.adFreeUnits == 1_000)
         #expect(!session.isProtectingBackgroundExecution)
     }
 
@@ -455,7 +522,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         )
         scheduler.launch(handle)
 
-        #expect(handle.progress.completedUnitCount == 787)
+        #expect(handle.adFreeUnits == 787)
         #expect(handle.titleUpdates.last?.title == "Detecting ads — 2 of 2 · Second Episode")
         #expect(session.isProtectingBackgroundExecution)
     }
@@ -500,14 +567,14 @@ struct EpisodeAdFreePassBackgroundSessionTests {
 
         session.arm(episodeTitle: "Duplicate Stage Episode")
         scheduler.launch(handle)
-        session.noteStage(.analyzing)
+        session.noteStage(.analyzing(steps: nil))
         let updateCount = handle.titleUpdates.count
-        let completedUnits = handle.progress.completedUnitCount
+        let completedUnits = handle.adFreeUnits
 
-        session.noteStage(.analyzing)
+        session.noteStage(.analyzing(steps: nil))
 
         #expect(handle.titleUpdates.count == updateCount)
-        #expect(handle.progress.completedUnitCount == completedUnits)
+        #expect(handle.adFreeUnits == completedUnits)
     }
 
     private func installProgress(_ fraction: Double) -> OpenCastWhisperModelInstallProgress {
@@ -537,4 +604,11 @@ struct EpisodeAdFreePassBackgroundSessionTests {
 
 private enum ProbeError: Error {
     case submission
+}
+
+extension FakeAdFreePassContinuedTaskHandle {
+    /// The ad-free card's progress on the 0...1000 scale.
+    var adFreeUnits: Int64 {
+        progress.completedUnitCount / EpisodeAdFreePassBackgroundSession.progressSubunitsPerUnit
+    }
 }

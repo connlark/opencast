@@ -1,0 +1,35 @@
+{
+  "description": "Shared key page cases for the analysis policy bundle. A provider's key_url is checked on its raw text by both the generator's relational check and the app's clamp: 9 to 256 bytes of visible ASCII, https://, a host of lowercase letters, digits, dots and hyphens, then nothing or a path that starts with / and holds no .., //, ?, #, backslash, @, % or space. The JSON schema only checks the type and the length.",
+  "accepted": [
+    "https://aistudio.google.com/app/apikey",
+    "https://platform.openai.com/settings/organization/api-keys",
+    "https://platform.openai.com/api-keys",
+    "https://example.com",
+    "https://example.com/",
+    "https://example.com/{keys}",
+    "https://example.com/[keys]",
+    "https://example.com/a-b_c.d~e!$&'()*+,;=:",
+    "https://platform.openai.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ],
+  "rejected": [
+    "http://aistudio.google.com/app/apikey",
+    "https://",
+    "https://éxample.com/keys",
+    "https://xn--xample-9ua.com/keys/é",
+    "https://AIStudio.google.com/app/apikey",
+    "https://example.com/%61",
+    "https://example.com/keys\n",
+    "https://example.com/k eys",
+    "https://example.com/é",
+    "https://user@example.com/keys",
+    "https://example.com:8443/keys",
+    "https://example.com/keys?hl=en",
+    "https://example.com/keys#top",
+    "https://example.com/a/../keys",
+    "https://example.com//keys",
+    "https://example.com/a\\b",
+    "javascript:alert(1)",
+    "aistudio.google.com/app/apikey",
+    "https://platform.openai.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ]
+}

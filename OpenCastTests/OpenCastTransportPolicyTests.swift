@@ -25,6 +25,7 @@ struct OpenCastTransportPolicyTests {
             "com.connor.opencast.ad-free-pass",
             "com.connor.opencast.transcript-generation",
             "com.connor.opencast.remote-transcription",
+            "com.connor.opencast.chapters-summary",
         ])
         #expect(!backgroundModes.contains("processing"))
     }

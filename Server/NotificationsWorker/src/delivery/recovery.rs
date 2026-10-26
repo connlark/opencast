@@ -130,6 +130,7 @@ pub async fn reconcile(env: &Env, db: crate::database::Authority) -> Result<()> 
         // One event's failed retirement must not stall the others or the
         // housekeeping below; the event stays terminal for a later pass.
         let mut failed = 0;
+        let mut last = None;
         for e in slice_e::execute(
             &db,
             EOperation::ReadTerminalEvents {
@@ -139,21 +140,28 @@ pub async fn reconcile(env: &Env, db: crate::database::Authority) -> Result<()> 
         .await?
         .rows()
         {
-            if slice_e::execute(
+            let source = string(&e, "source");
+            if let Err(error) = slice_e::execute(
                 &db,
                 EOperation::RetireEvent {
-                    source: string(&e, "source").into(),
+                    source: source.into(),
                     event: string(&e, "event_id").into(),
                 },
             )
             .await
-            .is_err()
             {
                 failed += 1;
+                // The fixed storage token (operation, kind, outcome), never feed data.
+                last = Some((error.to_string(), source.to_owned()));
             }
         }
-        if failed > 0 {
-            worker::console_warn!("notification retire failed count={}", failed);
+        if let Some((error, source)) = last {
+            worker::console_warn!(
+                "notification retire failed count={} last_error={} source={}",
+                failed,
+                error,
+                source
+            );
         }
     }
     if crate::database::permitted(env, &db, "cleanup").await? {

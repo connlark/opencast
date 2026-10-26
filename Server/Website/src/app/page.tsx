@@ -180,7 +180,7 @@ export default function HomePage() {
                     Transcripts on your device, with tap-to-seek and
                     follow-along highlighting. Search everything ever said in
                     your library. Chapters and summaries on request (optional,
-                    paid).
+                    with your own AI key).
                   </p>
                 </div>
                 <div className="transcript-preview" aria-hidden="true">

@@ -13,7 +13,6 @@ struct AdDetectionQueuePresentation: Equatable {
     enum Affordance: Equatable {
         case continueInBackground
         case backgroundContinuationArmed
-        case retryCapDeferred
         case resumeInterrupted
         case downloadModelConsent(byteCount: Int64)
     }
@@ -22,7 +21,6 @@ struct AdDetectionQueuePresentation: Equatable {
         enum Status: Equatable {
             case running(statusText: String)
             case queued(ahead: Int)
-            case capDeferred
             case awaitingConsent
             case interrupted
             case completed(zoneCount: Int)
@@ -48,8 +46,6 @@ struct AdDetectionQueuePresentation: Equatable {
                 statusText
             case .queued(let ahead):
                 EpisodeAdFreePassPresentation.queued(ahead: ahead).statusText
-            case .capDeferred:
-                EpisodeAdFreePassPresentation.capDeferred.statusText
             case .awaitingConsent:
                 "Waiting for the speech model."
             case .interrupted:
@@ -66,10 +62,15 @@ struct AdDetectionQueuePresentation: Equatable {
         }
     }
 
+    /// Says what to do when an item of this drain needed the listener's
+    /// own key; shown above the queue whatever its state.
+    static let keyRequiredNotice = "Add a key in Settings › AI Services to keep detecting ads"
+
     let indicator: Indicator
     let rows: [Row]
     let finishedRows: [Row]
     let affordance: Affordance?
+    let keyRequiredNotice: String?
     let fractionCompleted: Double
     let accessibilityValue: String
 
@@ -97,10 +98,13 @@ struct AdDetectionQueuePresentation: Equatable {
         case .awaitingModelConsent:
             indicator = .paused(hasFailures: hasFailures)
             affordance = .downloadModelConsent(byteCount: snapshot.pendingModelConsentByteCount ?? 0)
-        case .capDeferred:
-            indicator = .paused(hasFailures: hasFailures)
-            affordance = .retryCapDeferred
         }
+        keyRequiredNotice = snapshot.outcomes.contains { outcome in
+            if case .keyRequired = outcome.kind {
+                return true
+            }
+            return false
+        } ? Self.keyRequiredNotice : nil
 
         var rows: [Row] = []
         if let activeEpisodeID = snapshot.activeEpisodeID {
@@ -118,8 +122,6 @@ struct AdDetectionQueuePresentation: Equatable {
                 status = .remoteParked(reason)
             } else if index == 0, snapshot.activeEpisodeID == nil {
                 switch snapshot.state {
-                case .capDeferred:
-                    status = .capDeferred
                 case .awaitingModelConsent:
                     status = .awaitingConsent
                 case .pausedInterrupted:
@@ -152,6 +154,10 @@ struct AdDetectionQueuePresentation: Equatable {
                         .failed(message: message)
                     case .cloudUnavailable(let message):
                         .cloudUnavailable(message: message)
+                    case .keyRequired(let reason):
+                        .failed(message: EpisodePipelineState.analysisFailedMessage(
+                            for: EpisodeAnalysisFailureKind(keyRequired: reason)
+                        ))
                     }
                 }()
             )
@@ -169,8 +175,6 @@ struct AdDetectionQueuePresentation: Equatable {
             accessibilityValue = "\(percent)% — paused"
         case .awaitingModelConsent:
             accessibilityValue = "\(percent)% — waiting for the speech model"
-        case .capDeferred:
-            accessibilityValue = "\(percent)% — " + EpisodeAdFreePassPresentation.capDeferred.statusText
         }
     }
 
@@ -203,8 +207,8 @@ struct AdDetectionQueuePresentation: Equatable {
             EpisodeAdFreePassPresentation.cloudWaitingForCredits.statusText
         case .cloudTranscribing(let progress):
             EpisodeAdFreePassPresentation.cloudTranscribing(progress).statusText
-        case .cloudDetectingAds:
-            EpisodeAdFreePassPresentation.cloudDetectingAds.statusText
+        case .cloudFinishing:
+            EpisodeAdFreePassPresentation.cloudFinishing.statusText
         case .cloudUnavailable(let message):
             message
         case .cloudParked(let reason):

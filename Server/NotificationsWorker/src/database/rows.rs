@@ -21,7 +21,6 @@ const CLAIM: &[Field] = &[
     ("preparing", Integer),
     ("draining", Integer),
     ("outboxing", Integer),
-    ("five_minute", Integer),
 ];
 const ROLLUP: &[Field] = &[
     ("overdue", Integer),

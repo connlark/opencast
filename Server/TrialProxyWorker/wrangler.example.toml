@@ -1,0 +1,148 @@
+name = "your-trial-proxy-worker"
+main = "build/index.js"
+compatibility_date = "2026-09-30"
+workers_dev = true
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Workers Logs attaches the request URL, path and method to every logged
+# event, invocation records off or not (measured 2026-09-22), and a client
+# controls the URL. So the Worker refuses any query string and any
+# x-goog-api-key header before routing, without a log line; every line it
+# does log is its own closed vocabulary under a fixed route path.
+[observability.logs]
+enabled = true
+invocation_logs = false
+
+[observability.traces]
+enabled = false
+
+[build]
+command = "cargo install -q --locked \"worker-build@0.8.7\" && \"$HOME/.cargo/bin/worker-build\" --release"
+
+# Vars are not inherited by named environments: every lane sets every one.
+# TRIAL_PROXY_ENABLED stays "false" until the lane's D1 database, secrets and
+# App Attest identifiers are in place; while it is off every route but
+# /health answers trial_disabled.
+[vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "development"
+TRIAL_PROXY_ENABLED = "false"
+TRIAL_ALERT_LANE = "dev"
+TRIAL_MODE_STARTS_AT = "2027-01-01T00:00:00Z"
+TRIAL_LIFETIME_UNITS = "5"
+# Each lane has its own ledger: the non-production lanes get a small share.
+TRIAL_MONTHLY_CEILING_USD = "5"
+TRIAL_PRICE_TABLE = '[{"model":"gemini-3.8-flash","effective_from":"2026-01-01T00:00:00Z","input_usd_per_million":0.75,"output_usd_per_million":3.75,"max_input_tokens":1048576},{"model":"gemini-3.8-flash","effective_from":"2027-01-01T00:00:00Z","input_usd_per_million":1.5,"output_usd_per_million":7.5,"max_input_tokens":1048576}]'
+TRIAL_RUN_MAX_WINDOWS = "12"
+TRIAL_RUN_MAX_INPUT_TOKENS = "400000"
+TRIAL_BODY_MAX_BYTES = "1572864"
+TRIAL_OPEN_DAILY_REQUESTS = "60"
+TRIAL_OPEN_DAILY_INPUT_TOKENS = "1600000"
+TRIAL_BEARER_DAILY_REQUESTS = "40"
+TRIAL_BEARER_DAILY_INPUT_TOKENS = "2000000"
+
+[[d1_databases]]
+binding = "TRIAL_DB"
+database_name = "your-trial-proxy-db"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
+
+[[durable_objects.bindings]]
+name = "TRIAL_LEDGER"
+class_name = "TrialLedger"
+
+# Declarative class exports (replaces the legacy migrations array). This map is
+# the source of truth: a class missing here is deprovisioned, not ignored.
+[exports.TrialLedger]
+type = "durable-object"
+storage = "sqlite"
+
+[env.prod-staging]
+name = "your-trial-proxy-worker-prod-staging"
+workers_dev = true
+
+[env.prod-staging.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+TRIAL_PROXY_ENABLED = "false"
+TRIAL_ALERT_LANE = "prod-staging"
+TRIAL_MODE_STARTS_AT = "2027-01-01T00:00:00Z"
+TRIAL_LIFETIME_UNITS = "5"
+TRIAL_MONTHLY_CEILING_USD = "5"
+TRIAL_PRICE_TABLE = '[{"model":"gemini-3.8-flash","effective_from":"2026-01-01T00:00:00Z","input_usd_per_million":0.75,"output_usd_per_million":3.75,"max_input_tokens":1048576},{"model":"gemini-3.8-flash","effective_from":"2027-01-01T00:00:00Z","input_usd_per_million":1.5,"output_usd_per_million":7.5,"max_input_tokens":1048576}]'
+TRIAL_RUN_MAX_WINDOWS = "12"
+TRIAL_RUN_MAX_INPUT_TOKENS = "400000"
+TRIAL_BODY_MAX_BYTES = "1572864"
+TRIAL_OPEN_DAILY_REQUESTS = "60"
+TRIAL_OPEN_DAILY_INPUT_TOKENS = "1600000"
+TRIAL_BEARER_DAILY_REQUESTS = "40"
+TRIAL_BEARER_DAILY_INPUT_TOKENS = "2000000"
+
+[[env.prod-staging.d1_databases]]
+binding = "TRIAL_DB"
+database_name = "your-trial-proxy-db-prod-staging"
+database_id = "REPLACE_WITH_PROD_STAGING_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[env.prod-staging.durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
+
+[[env.prod-staging.durable_objects.bindings]]
+name = "TRIAL_LEDGER"
+class_name = "TrialLedger"
+
+[env.prod-staging.exports.TrialLedger]
+type = "durable-object"
+storage = "sqlite"
+
+[env.production]
+name = "your-trial-proxy-worker-production"
+workers_dev = false
+
+[[env.production.routes]]
+pattern = "trial-proxy.example.com"
+custom_domain = true
+
+[env.production.vars]
+APPLE_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
+APPLE_BUNDLE_ID = "REPLACE_WITH_APP_BUNDLE_ID"
+APP_ATTEST_ENVIRONMENT = "production"
+TRIAL_PROXY_ENABLED = "false"
+TRIAL_ALERT_LANE = "production"
+# The flip is a date, not a deploy: set from the first production deploy.
+TRIAL_MODE_STARTS_AT = "2027-01-01T00:00:00Z"
+TRIAL_LIFETIME_UNITS = "5"
+TRIAL_MONTHLY_CEILING_USD = "50"
+TRIAL_PRICE_TABLE = '[{"model":"gemini-3.8-flash","effective_from":"2026-01-01T00:00:00Z","input_usd_per_million":0.75,"output_usd_per_million":3.75,"max_input_tokens":1048576},{"model":"gemini-3.8-flash","effective_from":"2027-01-01T00:00:00Z","input_usd_per_million":1.5,"output_usd_per_million":7.5,"max_input_tokens":1048576}]'
+TRIAL_RUN_MAX_WINDOWS = "12"
+TRIAL_RUN_MAX_INPUT_TOKENS = "400000"
+TRIAL_BODY_MAX_BYTES = "1572864"
+TRIAL_OPEN_DAILY_REQUESTS = "300"
+TRIAL_OPEN_DAILY_INPUT_TOKENS = "8000000"
+TRIAL_BEARER_DAILY_REQUESTS = "40"
+TRIAL_BEARER_DAILY_INPUT_TOKENS = "2000000"
+
+[[env.production.d1_databases]]
+binding = "TRIAL_DB"
+database_name = "your-trial-proxy-db-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[env.production.durable_objects]
+code_update_strategy = { mode = "deferred", max_delay = 300 }
+
+[[env.production.durable_objects.bindings]]
+name = "TRIAL_LEDGER"
+class_name = "TrialLedger"
+
+[env.production.exports.TrialLedger]
+type = "durable-object"
+storage = "sqlite"

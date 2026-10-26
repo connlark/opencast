@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "opencast analysis policy bundle, schema version 1",
+  "description": "Prompts, response schemas, model entries, timeouts and limits for on-device ad detection and Chapters & Summary. Numeric bounds are the app's hard bounds: each maximum is the limit the workers' validators were qualified with, so a bundle may only tighten. Relational rules (overlap under half the window, run budget at least one call, one entry per provider, the trial model naming a google ad-detection entry, pinned provider hosts, auth styles and thinking levels, prompts and response schemas at most 65,536 UTF-8 bytes) are checked by verify_policy and by the app.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "bundle_version", "generated_at", "min_app_build", "features", "providers", "trial"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "bundle_version": { "type": "integer", "minimum": 1 },
+    "generated_at": { "type": "string", "format": "date-time", "minLength": 20, "maxLength": 32 },
+    "min_app_build": { "type": "integer", "minimum": 0 },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ad_detection", "chapters_summary"],
+      "properties": {
+        "ad_detection": { "$ref": "#/$defs/ad_detection" },
+        "chapters_summary": { "$ref": "#/$defs/chapters_summary" }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/provider_endpoint" }
+    },
+    "trial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint", "starts_at", "lifetime_units", "model"],
+      "properties": {
+        "endpoint": { "type": "string", "minLength": 9, "maxLength": 256 },
+        "starts_at": { "type": "string", "format": "date-time", "minLength": 20, "maxLength": 32 },
+        "lifetime_units": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "model": { "$ref": "#/$defs/model_id" }
+      }
+    },
+    "notice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["starts_at"],
+      "properties": {
+        "starts_at": { "type": "string", "format": "date-time", "minLength": 20, "maxLength": 32 }
+      }
+    }
+  },
+  "$defs": {
+    "model_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "label": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "prompt": { "type": "string", "minLength": 1, "maxLength": 65536 },
+    "thinking": { "enum": ["none", "low", "medium", "high"] },
+    "provider": { "enum": ["google", "openai"] },
+    "per_call_timeout_seconds": { "type": "integer", "minimum": 10, "maximum": 300 },
+    "run_budget_seconds": { "type": "integer", "minimum": 10, "maximum": 600 },
+    "ad_model_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model_id", "label", "thinking", "max_output_tokens", "per_call_timeout_seconds", "run_budget_seconds"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "model_id": { "$ref": "#/$defs/model_id" },
+        "label": { "$ref": "#/$defs/label" },
+        "thinking": { "$ref": "#/$defs/thinking" },
+        "max_output_tokens": { "type": "integer", "minimum": 1024, "maximum": 16384 },
+        "per_call_timeout_seconds": { "$ref": "#/$defs/per_call_timeout_seconds" },
+        "run_budget_seconds": { "$ref": "#/$defs/run_budget_seconds" }
+      }
+    },
+    "chapters_model_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model_id", "label", "thinking", "max_output_tokens", "per_call_timeout_seconds", "run_budget_seconds"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "model_id": { "$ref": "#/$defs/model_id" },
+        "label": { "$ref": "#/$defs/label" },
+        "thinking": { "$ref": "#/$defs/thinking" },
+        "max_output_tokens": { "type": "integer", "minimum": 1024, "maximum": 32768 },
+        "per_call_timeout_seconds": { "$ref": "#/$defs/per_call_timeout_seconds" },
+        "run_budget_seconds": { "$ref": "#/$defs/run_budget_seconds" }
+      }
+    },
+    "ad_detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "revision", "prompt", "response_schema", "window", "limits", "repair", "qualified_models"],
+      "properties": {
+        "policy": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "prompt": { "$ref": "#/$defs/prompt" },
+        "response_schema": { "type": "object" },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["segments", "overlap", "max_in_flight"],
+          "properties": {
+            "segments": { "type": "integer", "minimum": 200, "maximum": 800 },
+            "overlap": { "type": "integer", "minimum": 60, "maximum": 120 },
+            "max_in_flight": { "type": "integer", "minimum": 1, "maximum": 4 }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["spans_per_window", "max_break_seconds", "budget_fraction", "budget_floor_seconds", "evidence_words"],
+          "properties": {
+            "spans_per_window": { "type": "integer", "minimum": 1, "maximum": 32 },
+            "max_break_seconds": { "type": "number", "minimum": 15, "maximum": 600 },
+            "budget_fraction": { "type": "number", "minimum": 0, "maximum": 0.4 },
+            "budget_floor_seconds": { "type": "number", "minimum": 0, "maximum": 600 },
+            "evidence_words": { "type": "integer", "minimum": 2, "maximum": 32 }
+          }
+        },
+        "repair": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attempts", "feedback_bytes"],
+          "properties": {
+            "attempts": { "type": "integer", "minimum": 0, "maximum": 1 },
+            "feedback_bytes": { "type": "integer", "minimum": 1, "maximum": 32768 }
+          }
+        },
+        "qualified_models": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/ad_model_entry" } }
+      }
+    },
+    "chapters_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "revision", "prompt", "response_schema", "coalescing", "chapter_cap", "allowed_models"],
+      "properties": {
+        "policy": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "prompt": { "$ref": "#/$defs/prompt" },
+        "response_schema": { "type": "object" },
+        "coalescing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["above_segments", "unit_seconds", "unit_chars", "gap_seconds", "max_units"],
+          "properties": {
+            "above_segments": { "type": "integer", "minimum": 1399, "maximum": 1399 },
+            "unit_seconds": { "type": "number", "minimum": 5, "maximum": 5 },
+            "unit_chars": { "type": "integer", "minimum": 700, "maximum": 700 },
+            "gap_seconds": { "type": "number", "minimum": 1.5, "maximum": 1.5 },
+            "max_units": { "type": "integer", "minimum": 1, "maximum": 2400 }
+          }
+        },
+        "chapter_cap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "seconds_per_chapter"],
+          "properties": {
+            "min": { "type": "integer", "minimum": 1, "maximum": 3 },
+            "seconds_per_chapter": { "type": "number", "minimum": 240, "maximum": 300 }
+          }
+        },
+        "allowed_models": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/chapters_model_entry" } }
+      }
+    },
+    "provider_endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_url", "auth", "generate_path", "count_tokens_path", "version_headers"],
+      "properties": {
+        "base_url": { "type": "string", "minLength": 9, "maxLength": 256 },
+        "auth": { "enum": ["x-goog-api-key", "bearer"] },
+        "generate_path": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "count_tokens_path": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "version_headers": {
+          "type": "object",
+          "maxProperties": 8,
+          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "key_url": { "type": "string", "minLength": 9, "maxLength": 256 }
+      }
+    }
+  }
+}

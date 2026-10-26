@@ -1,6 +1,12 @@
+#[cfg(not(target_arch = "wasm32"))]
+pub mod analysis_policy;
 pub mod manifest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod manifest_signature;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod policy_schema;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod policy_swift;
 pub mod route;
 
 #[cfg(target_arch = "wasm32")]

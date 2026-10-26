@@ -2,7 +2,9 @@
 
 Every evidence class is computed from ONE row and exactly the inputs its table
 names (row objects, root scalars, and the reader-joined platform metadata); a
-class whose input is missing is "unknown", never silently false. The C2
+class whose input is missing is "unknown", never silently false, except that
+inside a present race an absent always-written member reads as the null the
+Worker wrote (RACE_ALWAYS_WRITTEN). The C2
 predicate is the same function for every caller. Recovery terms are reported
 only where the fields carry them; everything else is "unknown". A
 `storage_phases_overflow` line is unavailable evidence, never a zero row.
@@ -30,6 +32,14 @@ class Rejected(ValueError):
 # An absent key, as against an explicit null: an absent input is unavailable
 # evidence (unknown), while a null means what the schema says it means.
 MISSING = object()
+
+# The race members the Worker writes on every race, null when the race has
+# none (Server/NotificationsWorker/src/storage_phases.rs:98-106: `opt(None)` and
+# the `map_or(Value::Null, ..)` arms). The retained Workers Logs representation
+# drops null-valued members, and trimming removes whole lists and objects, never
+# one member of a race that survives: inside a PRESENT race, an absent member of
+# this set is that null. Everything else keeps absent = unknown.
+RACE_ALWAYS_WRITTEN = ('submitted', 'steps_total', 'steps_completed', 'gate_reply_at_ms', 'gate_wait_us', 'sqlstate')
 
 # The objects every schema-2 row carries, and the ones that may be null.
 OBJECTS = ('durations', 'ops', 'budget', 'summary', 'recovery')
@@ -79,6 +89,13 @@ def _at(row, *path):
             return MISSING
         row = row[key]
     return row
+
+
+def _member(race, key):
+    """A member of a present race: an absent always-written member reads as null."""
+    if isinstance(race, dict) and key not in race and key in RACE_ALWAYS_WRITTEN:
+        return None
+    return _at(race, key)
 
 
 def _any(*values):
@@ -155,13 +172,13 @@ def _write_classes(race):
     if race is None:
         return False, False
     write = _all(_is(_at(race, 'boundary'), 'transaction'), _is(_at(race, 'status'), 'timeout'),
-                 _is(_at(race, 'submitted'), True))
+                 _is(_member(race, 'submitted'), True))
     if write is not True:
         return write, write
-    total, done = _at(race, 'steps_total'), _at(race, 'steps_completed')
+    total, done = _member(race, 'steps_total'), _member(race, 'steps_completed')
     if total in (None, MISSING) or done in (None, MISSING):
         return UNKNOWN, UNKNOWN
-    gate = _at(race, 'gate_reply_at_ms')
+    gate = _member(race, 'gate_reply_at_ms')
     # All but COMMIT complete, or the gate's reply never came after BEGIN's.
     lost = _any(done == total - 1, UNKNOWN if gate is MISSING else (gate is None and done >= 1))
     # The application statement never completed: BEGIN and the gate at most.

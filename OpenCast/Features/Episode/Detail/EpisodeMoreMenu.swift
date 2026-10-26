@@ -7,6 +7,7 @@ import SwiftUI
 struct EpisodeMoreMenu: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
+    @Environment(AnalysisKeyNoticeGate.self) private var noticeGate: AnalysisKeyNoticeGate?
 
     let episode: EpisodeListItemSnapshot
     let isPlayed: Bool
@@ -194,6 +195,14 @@ struct EpisodeMoreMenu: View {
     }
 
     private func detectAdsOnly() {
+        guard let noticeGate else {
+            analyzeTranscript()
+            return
+        }
+        noticeGate.run(appModel: appModel, analyzeTranscript)
+    }
+
+    private func analyzeTranscript() {
         Task {
             let document: EpisodeTranscriptDocument
             do {

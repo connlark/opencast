@@ -26,6 +26,12 @@ class AnthropicMessagesAdapter(Adapter):
         "output_tokens_details.thinking_tokens when present (0 otherwise), already in output_tokens"
     )
 
+    def __init__(self, model, vendor_model=None, *, thinking=None, **kwargs):
+        super().__init__(model, vendor_model, **kwargs)
+        # Models that reject `thinking: disabled` (Opus 5.5) register without "none".
+        if thinking is not None:
+            self.supported_thinking = tuple(thinking)
+
     def provider_thinking(self, thinking):
         if thinking == "none":
             return {"thinking": {"type": "disabled"}, "effort": "low"}

@@ -183,19 +183,7 @@ pub async fn consume(
                 feed: step_wake.feed_id.clone(),
                 epoch: step_wake.owner_epoch,
                 generation: step_wake.generation,
-                schedule: policy::ScheduleInputs {
-                    due_at: int(&row, "due_at"),
-                    baseline_at: row["baseline_at"].as_i64(),
-                    credible_release_at: row["credible_release_at"].as_i64(),
-                    credible_cadence: row["credible_cadence"].as_i64(),
-                    publish_cadence: row["publish_cadence"].as_i64(),
-                    five_minute: int(&row, "five_minute") == 1
-                        && super::runtime::flag(
-                            &step_env,
-                            "NOTIFICATION_FIVE_MINUTE_POLLING",
-                            true,
-                        ),
-                },
+                schedule: schedule(&row),
                 reached: Default::default(),
                 scan_lease: Default::default(),
                 timings: step_timings,
@@ -209,7 +197,7 @@ pub async fn consume(
                 );
             }
             *step_claimed.borrow_mut() = Some(fence.clone());
-            step(step_env, fence, step_wake, row, db).await
+            run_actions(step_env, fence, step_wake, row, db).await
         },
         policy::STEP_DEADLINE_SECONDS,
         wake.step,
@@ -413,33 +401,128 @@ async fn claim(db: &crate::database::Authority, wake: &dispatch::Wakeup) -> Resu
     .first())
 }
 
-/// One bounded step. The action is derived from durable observation state, so
-/// a redelivered or re-dispatched message resumes exactly where work stopped.
-async fn step(
+/// The claim's schedule inputs: the routing and cadence fields a settle reads.
+fn schedule(row: &Value) -> policy::ScheduleInputs {
+    policy::ScheduleInputs {
+        due_at: int(row, "due_at"),
+        baseline_at: row["baseline_at"].as_i64(),
+        credible_release_at: row["credible_release_at"].as_i64(),
+        credible_cadence: row["credible_cadence"].as_i64(),
+        publish_cadence: row["publish_cadence"].as_i64(),
+    }
+}
+
+/// The delivery's own loop clock: monotonic time, never the `Date` the
+/// storage deadlines read; a fixture build adds the test's offset.
+fn loop_now_ms() -> f64 {
+    #[cfg(feature = "fixture-hooks")]
+    return super::fixture::loop_now_ms();
+    #[cfg(not(feature = "fixture-hooks"))]
+    super::timing::monotonic_ms()
+}
+
+/// What one action leaves the loop to do.
+enum Next {
+    /// Durable progress is saved and nothing waits: the next action follows.
+    Continue,
+    /// The delivery ends with this outcome, its one continuation sent if any.
+    Done(&'static str),
+}
+
+/// The bounded action loop. Each action is derived from a fresh claim of
+/// durable observation state, so a redelivered or re-dispatched message
+/// resumes exactly where work stopped, and runs under its own checkpoint,
+/// fence, lease and permit. A waiting result, a guard or the action bound
+/// sends the one continuation; a terminal result sends none.
+async fn run_actions(
     env: Env,
-    fence: Fence,
+    mut fence: Fence,
     wake: dispatch::Wakeup,
-    row: Value,
+    mut row: Value,
     db: crate::database::Authority,
 ) -> Result<&'static str> {
     if wake.step >= policy::MAX_STEPS {
         return Err(Error::RustError("poll_step_limit".into()));
     }
-    let t = now();
-    let scan_due = int(&row, "due_at") <= t + 30 && int(&row, "retry_at") <= t;
-    // Finish a published observation before another scan; future releases and
-    // accepted-observation outboxes never wait for a failing publisher.
-    let action = if int(&row, "draining") == 1 {
-        "drain"
-    } else if int(&row, "preparing") == 1 {
-        "prepare"
-    } else if int(&row, "outboxing") == 1 {
-        "outbox"
-    } else if scan_due {
-        "scan"
-    } else {
-        return settle_idle(&db, &fence).await;
-    };
+    let started = loop_now_ms();
+    for k in 1..=policy::ACTION_BOUND {
+        if k > 1 {
+            // A completed boundary, where a fixture build's armed gate holds.
+            #[cfg(feature = "fixture-hooks")]
+            super::fixture::loop_gate().await;
+            // Epoch and generation stay the wake's; the routing inputs are
+            // the row's. No row: the fence was lost, the reservation settled
+            // or released, or the feed paused or lost its interest.
+            let claim_span = super::timing::Span::new(fence.timings.claim.clone(), None);
+            let fresh = claim(&db, &wake).await?;
+            drop(claim_span);
+            let Some(fresh) = fresh else {
+                fence.rejected(&db).await?;
+                return Ok("obsolete");
+            };
+            fence.schedule = schedule(&fresh);
+            row = fresh;
+        }
+        let t = now();
+        let scan_due = int(&row, "due_at") <= t + 30 && int(&row, "retry_at") <= t;
+        // Finish a published observation before another scan; future releases and
+        // accepted-observation outboxes never wait for a failing publisher.
+        let action = if int(&row, "draining") == 1 {
+            "drain"
+        } else if int(&row, "preparing") == 1 {
+            "prepare"
+        } else if int(&row, "outboxing") == 1 {
+            "outbox"
+        } else if scan_due {
+            "scan"
+        } else {
+            "settle"
+        };
+        if k > 1 {
+            let elapsed = loop_now_ms() - started;
+            if elapsed > policy::ACTION_START_GUARD_MS as f64
+                || (action == "scan" && elapsed > policy::SCAN_START_GUARD_MS as f64)
+            {
+                return proceed(&env, &db, &fence, &wake, 0, "guard").await;
+            }
+        }
+        // This chain's reservation, renewed before every action, so a retry
+        // has its own five minutes before its first (possibly long) action.
+        let renewed = database::execute(
+            &db,
+            Operation::RenewContinuation {
+                fence: fence.storage(),
+                delay: 0,
+                now: t,
+            },
+        )
+        .await?
+        .count();
+        if renewed == 0 {
+            fence.rejected(&db).await?;
+            return Ok("obsolete");
+        }
+        match act(&env, &fence, &wake, &row, action, t, &db).await? {
+            Next::Continue => {}
+            Next::Done(name) => return Ok(name),
+        }
+    }
+    proceed(&env, &db, &fence, &wake, 0, "action_bound").await
+}
+
+/// One action of the loop, with the claim it was chosen from.
+async fn act(
+    env: &Env,
+    fence: &Fence,
+    wake: &dispatch::Wakeup,
+    row: &Value,
+    action: &'static str,
+    t: i64,
+    db: &crate::database::Authority,
+) -> Result<Next> {
+    if action == "settle" {
+        return settle_idle(db, fence).await.map(Next::Done);
+    }
     db.note(|witness, now| witness.action_start(action, now));
     let mut response = observation::runtime::execute(
         &format!("/{action}"),
@@ -454,7 +537,7 @@ async fn step(
         // Memory admission pressure is never a handling failure.
         429 => {
             db.note(|witness, now| witness.action_end("scan_busy", "yielded", None, now));
-            stat(&db, crate::database::polling::Counter::ScanBusy).await?;
+            stat(db, crate::database::polling::Counter::ScanBusy).await?;
             let view = crate::feed_scan_admission::FeedScanPermit::view();
             console_log!(
                 "{}",
@@ -469,19 +552,23 @@ async fn step(
             } else {
                 policy::contention_delay(&format!("{}{}", fence.feed, wake.step))
             };
-            return proceed(&env, &db, &fence, &wake, delay, "scan_busy").await;
+            return proceed(env, db, fence, wake, delay, "scan_busy")
+                .await
+                .map(Next::Done);
         }
         // Another scan owns the feed. Look again when its lease can end.
         409 => {
             db.note(|witness, now| witness.action_end("scan_held", "yielded", None, now));
-            let delay = (int(&row, "lease_until") - t).clamp(5, 180);
-            return proceed(&env, &db, &fence, &wake, delay, "scan_held").await;
+            let delay = (int(row, "lease_until") - t).clamp(5, 180);
+            return proceed(env, db, fence, wake, delay, "scan_held")
+                .await
+                .map(Next::Done);
         }
         _ => return Err(Error::RustError("poll_step_failed".into())),
     }
     if action != "scan" && action != "prepare" {
         db.note(|witness, now| witness.action_end("continued", "completed", None, now));
-        return proceed(&env, &db, &fence, &wake, 0, "continued").await;
+        return Ok(Next::Continue);
     }
     let status: Value = response.json().await?;
     let result = string(&status, "result").to_owned();
@@ -494,13 +581,13 @@ async fn step(
         };
         db.note(|witness, now| witness.action_end(&result, status, None, now));
     }
-    match string(&status, "result") {
+    Ok(match string(&status, "result") {
         // The unchanged statement settled schedule and generation together.
         "not_modified" | "unchanged" => {
             if status["settled"] != true {
-                return Ok("obsolete");
+                return Ok(Next::Done("obsolete"));
             }
-            Ok(if string(&status, "result") == "unchanged" {
+            Next::Done(if string(&status, "result") == "unchanged" {
                 "unchanged"
             } else {
                 "not_modified"
@@ -513,17 +600,18 @@ async fn step(
             );
             // A candidate-free publication settled itself; otherwise drain.
             if status["settled"] == true {
-                return Ok("published");
+                Next::Done("published")
+            } else {
+                Next::Continue
             }
-            proceed(&env, &db, &fence, &wake, 0, "published").await
         }
-        "publisher_failed" => Ok("publisher_failed"),
+        "publisher_failed" => Next::Done("publisher_failed"),
         "origin_deferred" => {
             let until = status["cooldown_until"].as_i64().unwrap_or(0);
             if until > t + 60 {
                 // A publisher cooldown is schedule state, not a held message.
                 let changed = database::execute(
-                    &db,
+                    db,
                     Operation::SettleCooldown {
                         fence: fence.storage(),
                         until,
@@ -533,26 +621,27 @@ async fn step(
                 .await?
                 .count();
                 if changed == 0 {
-                    fence.rejected(&db).await?;
+                    fence.rejected(db).await?;
                 }
-                return Ok("origin_cooldown");
+                return Ok(Next::Done("origin_cooldown"));
             }
             let delay =
                 policy::contention_delay(&format!("{}{}", fence.feed, wake.step)).max(until - t);
-            proceed(&env, &db, &fence, &wake, delay, "origin_deferred").await
+            Next::Done(proceed(env, db, fence, wake, delay, "origin_deferred").await?)
         }
-        "lost_fence" => Ok("obsolete"),
+        "lost_fence" => Next::Done("obsolete"),
         // Staged, or a preparation step that checkpointed or found nothing to
         // resume: look at the durable state again.
         _ => {
             let waiting = crate::database::slice_b::execute(
-                &db,
+                db,
                 crate::database::slice_b::Operation::ReadPreparationWait {
                     feed: fence.feed.clone(),
                 },
             )
             .await?
             .first();
+            let measured = waiting.is_some();
             let delay = waiting
                 .map(|w| int(&w, "processing_next_at").max(int(&w, "processing_until")) - now())
                 .unwrap_or(5);
@@ -565,9 +654,16 @@ async fn step(
                     witness.action_end(&result, "completed", None, now)
                 }
             });
-            proceed(&env, &db, &fence, &wake, delay, "staged").await
+            // A staged step with nothing left to wait for continues at once;
+            // an idle preparation could not take its claim and yields, so the
+            // loop never retries it in the same delivery.
+            if result == "staged" && measured && delay <= 0 {
+                Next::Continue
+            } else {
+                Next::Done(proceed(env, db, fence, wake, delay, "staged").await?)
+            }
         }
-    }
+    })
 }
 
 /// Nothing is due for this generation any more.

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { harness,item,rss } from './harness.mjs';
+import { POLLING_FIXTURE,stopAfter } from './action-boundary.mjs';
 let version=1;
-const h=await harness(()=>new Response(rss([item('base',h.now-100),...(version>1?Array.from({length:130},(_,i)=>item(`new-${i}`,h.now-10)):[])]),{headers:{etag:`"v${version}"`}}));
+// One action per delivery (the loop stopped at its first boundary) up to the
+// published, undrained observation whose continuation is then lost.
+const h=await harness(()=>new Response(rss([item('base',h.now-100),...(version>1?Array.from({length:130},(_,i)=>item(`new-${i}`,h.now-10)):[])]),{headers:{etag:`"v${version}"`}}),{pollingBuild:POLLING_FIXTURE});
 try {
   const feed=await h.add('https://interest.example.com/feed');
   await h.invoke('test/dispatch');await h.drain();
@@ -11,7 +14,7 @@ try {
   for(let i=0;i<50;i++){
     const wakes=await h.polls();old=wakes[0]??old;
     if((await h.first("SELECT COUNT(*) AS n FROM n_observation WHERE state='published' AND drain_complete=0")).n)break;
-    for(const wake of wakes)await h.consume(wake);
+    for(const wake of wakes)await stopAfter(h,wake,1);
   }
   assert.equal((await h.first("SELECT candidate_count FROM n_observation WHERE state='published' ORDER BY generation DESC LIMIT 1")).candidate_count,130);
   assert.ok(old);
@@ -21,10 +24,10 @@ try {
   await h.run('UPDATE n_feed SET eligibility_generation=eligibility_generation+1,due_at=? WHERE feed_id=?',h.now,feed);
   await h.invoke('clock','301');await h.invoke('test/dispatch');
   const before=h.fetches.length;
-  assert.notEqual((await h.consume(old)).outcome,'obsolete','a retained continuation remains useful for the published drain');
+  assert.notEqual((await stopAfter(h,old,1)).outcome,'obsolete','a retained continuation remains useful for the published drain');
   const wakes=await h.polls();assert.ok(wakes.length);
   assert.equal(wakes[0].generation,old.generation,'repair preserves the unsettled generation');
-  await h.consume(wakes[0]);
+  await stopAfter(h,wakes[0],1);
   assert.equal(h.fetches.length,before,'finish published drain before another network scan');
   await h.drain();await h.deliver(true);
   assert.equal((await h.first('SELECT COUNT(*) AS n FROM n_event')).n,130);

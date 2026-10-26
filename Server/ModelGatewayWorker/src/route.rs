@@ -11,6 +11,17 @@ pub const HEALTH_PATH: &str = "/health";
 pub const MANIFEST_PATH: &str = "/v1/models/manifest";
 pub const MANIFEST_SIGNATURE_PATH: &str = "/v1/models/manifest.sig";
 pub const ASSET_PREFIX: &str = "/v1/models/assets/";
+pub const ANALYSIS_POLICY_PATH: &str = "/v1/policies/analysis";
+pub const ANALYSIS_POLICY_SIGNATURE_PATH: &str = "/v1/policies/analysis.sig";
+/// `/v1/policies/analysis/{version}.json` and `.json.sig`: one version's
+/// immutable copy.
+pub const ANALYSIS_POLICY_VERSION_PREFIX: &str = "/v1/policies/analysis/";
+/// Mutable policy documents: always revalidated, never held by the edge.
+pub const MUTABLE_POLICY_CACHE_CONTROL: &str = "no-cache";
+/// A version's bundle and signature never change once published.
+pub const IMMUTABLE_POLICY_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+/// R2 prefix for policy documents when `POLICY_OBJECT_PREFIX` is unset.
+pub const DEFAULT_POLICY_OBJECT_PREFIX: &str = "opencast/policies";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
@@ -38,9 +49,24 @@ pub struct AssetRoute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteAction {
     Static(StaticResponse),
-    Manifest { object_key: String, head: bool },
-    ManifestSignature { object_key: String, head: bool },
-    Asset { route: AssetRoute, head: bool },
+    Manifest {
+        object_key: String,
+        head: bool,
+    },
+    ManifestSignature {
+        object_key: String,
+        head: bool,
+    },
+    /// An analysis policy document; its object key comes from the policy
+    /// prefix ([`PolicyDocument::object_key`]).
+    AnalysisPolicy {
+        document: PolicyDocument,
+        head: bool,
+    },
+    Asset {
+        route: AssetRoute,
+        head: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +108,20 @@ pub fn route_request(
 
     if path == MANIFEST_SIGNATURE_PATH {
         return handle_manifest_signature(method, object_prefix);
+    }
+
+    if let Some(document) = PolicyDocument::from_path(path) {
+        return match method {
+            "GET" => RouteAction::AnalysisPolicy {
+                document,
+                head: false,
+            },
+            "HEAD" => RouteAction::AnalysisPolicy {
+                document,
+                head: true,
+            },
+            _ => RouteAction::Static(method_not_allowed("GET, HEAD")),
+        };
     }
 
     if let Some(suffix) = path.strip_prefix(ASSET_PREFIX) {
@@ -193,6 +233,67 @@ pub fn manifest_signature_object_key(object_prefix: &str) -> String {
     join_object_key(object_prefix, "manifests/current.json.sig")
 }
 
+/// One analysis policy document.
+///
+/// The app fetches the mutable current signature, whose envelope names a
+/// bundle version and its digest, then that version's immutable bundle, and
+/// verifies the signature over those bytes: the two can never come from
+/// different generations. `current.json` is for people and the smoke check;
+/// the app never pairs it with a signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyDocument {
+    CurrentBundle,
+    CurrentSignature,
+    VersionBundle(u32),
+    VersionSignature(u32),
+}
+
+impl PolicyDocument {
+    /// The document a request path names; versions are positive decimal
+    /// integers without leading zeros, up to `u32::MAX` (the bundle's range).
+    pub fn from_path(path: &str) -> Option<Self> {
+        match path {
+            ANALYSIS_POLICY_PATH => return Some(Self::CurrentBundle),
+            ANALYSIS_POLICY_SIGNATURE_PATH => return Some(Self::CurrentSignature),
+            _ => {}
+        }
+        let name = path.strip_prefix(ANALYSIS_POLICY_VERSION_PREFIX)?;
+        let (version, signature) = match name.strip_suffix(".json.sig") {
+            Some(version) => (version, true),
+            None => (name.strip_suffix(".json")?, false),
+        };
+        let valid = !version.starts_with('0') && version.bytes().all(|byte| byte.is_ascii_digit());
+        let version: u32 = valid.then(|| version.parse().ok()).flatten()?;
+        Some(if signature {
+            Self::VersionSignature(version)
+        } else {
+            Self::VersionBundle(version)
+        })
+    }
+
+    pub fn object_key(self, policy_prefix: &str) -> String {
+        let name = match self {
+            Self::CurrentBundle => "analysis/current.json".to_string(),
+            Self::CurrentSignature => "analysis/current.json.sig".to_string(),
+            Self::VersionBundle(version) => format!("analysis/v{version}.json"),
+            Self::VersionSignature(version) => format!("analysis/v{version}.json.sig"),
+        };
+        join_object_key(policy_prefix, &name)
+    }
+
+    pub fn is_immutable(self) -> bool {
+        matches!(self, Self::VersionBundle(_) | Self::VersionSignature(_))
+    }
+
+    pub fn cache_control(self) -> &'static str {
+        if self.is_immutable() {
+            IMMUTABLE_POLICY_CACHE_CONTROL
+        } else {
+            MUTABLE_POLICY_CACHE_CONTROL
+        }
+    }
+}
+
 fn handle_health(method: &str) -> StaticResponse {
     if method != "GET" {
         return method_not_allowed("GET");
@@ -276,7 +377,12 @@ fn valid_path_segment(segment: &str) -> bool {
 }
 
 fn model_gateway_path(path: &str) -> bool {
-    path == MANIFEST_PATH || path == MANIFEST_SIGNATURE_PATH || path.starts_with(ASSET_PREFIX)
+    path == MANIFEST_PATH
+        || path == MANIFEST_SIGNATURE_PATH
+        || path == ANALYSIS_POLICY_PATH
+        || path == ANALYSIS_POLICY_SIGNATURE_PATH
+        || path.starts_with(ANALYSIS_POLICY_VERSION_PREFIX)
+        || path.starts_with(ASSET_PREFIX)
 }
 
 fn content_type_for_path(path: &str) -> &'static str {

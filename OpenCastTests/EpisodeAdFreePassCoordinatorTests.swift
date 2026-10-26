@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastAnalysisProviders
 import OpenCastTranscription
 import SwiftData
 import Testing
@@ -18,17 +19,12 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(EpisodeAdAnalysisControlsView.outdatedStatusTitle == "Outdated — run again")
     }
 
-    @Test("Queued and cap-deferred presentations carry the settled copy")
-    func queuedAndCapDeferredPresentationCopy() {
+    @Test("Queued presentations carry the settled copy")
+    func queuedPresentationCopy() {
         let queued = EpisodeAdFreePassPresentation.queued(ahead: 2)
         #expect(queued.statusText == "Queued — 2 ahead")
         #expect(!queued.isPrimaryActionEnabled)
         #expect(EpisodeAdFreePassPresentation.queued(ahead: 0).statusText == "Queued")
-
-        let capDeferred = EpisodeAdFreePassPresentation.capDeferred
-        #expect(capDeferred.statusText == "Daily detection limit reached — continues tomorrow")
-        #expect(capDeferred.primaryActionTitle == "Retry")
-        #expect(capDeferred.isPrimaryActionEnabled)
     }
 
     @Test("First tap downloads episode and parks at model consent; second tap finishes transcript and analysis")
@@ -67,7 +63,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         })
         #expect(fixture.modelInstaller.installCallCount == 1)
         #expect(fixture.transcriptions.document(for: episode.episodeID) != nil)
-        #expect(fixture.analysisClient.requestCount == 1)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
         #expect(refreshCount == 1)
         #expect(fixture.coordinator.queueState == .idle)
         #expect(await waitUntil {
@@ -117,15 +113,18 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(fixture.coordinator.drainOutcomes.map(\.episodeID) == [
             first.episodeID, autoFront.episodeID, second.episodeID, third.episodeID
         ])
-        #expect(fixture.analysisClient.requestCount == 4)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 4)
     }
 
     @Test("A per-episode failure records the outcome and the queue continues")
     func failureIsolationContinuesQueue() async throws {
-        let analysisClient = AdFreePassAnalysisClient(failingRequestIndexes: [2])
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answerForRun = { run in
+            run == 2 ? .failure(.rejected(status: 400), status: 400, listener: .requestRejected) : nil
+        }
         let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisClient: analysisClient
+            analysisEnvironment: analysisEnvironment
         )
         let first = makeEpisode(episodeID: "queue-isolation-1")
         let second = makeEpisode(episodeID: "queue-isolation-2")
@@ -282,21 +281,21 @@ struct EpisodeAdFreePassCoordinatorTests {
             fixture.adAnalyses.record(for: analyzed.episodeID)?.state == .completed
                 && fixture.coordinator.queueState == .idle
         })
-        #expect(fixture.analysisClient.requestCount == 1)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
 
         fixture.enqueue(analyzed, origin: .auto)
         #expect(await waitUntil {
             fixture.coordinator.queueItems.isEmpty
                 && fixture.coordinator.activeEpisodeID == nil
         })
-        #expect(fixture.analysisClient.requestCount == 1)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
 
         fixture.enqueue(fresh, origin: .auto)
         #expect(await waitUntil {
             fixture.adAnalyses.record(for: fresh.episodeID)?.state == .completed
                 && fixture.coordinator.queueState == .idle
         })
-        #expect(fixture.analysisClient.requestCount == 2)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 2)
     }
 
     @Test("Model consent pauses the whole queue and the consent tap resumes the drain")
@@ -717,7 +716,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         })
         #expect(transcriber.requestCount == 1)
         #expect(transcriber.lastRequest?.resumeStart == 2)
-        #expect(fixture.analysisClient.requestCount == 1)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
     }
 
     @Test("Environmental interruption presentation uses background pause copy")
@@ -757,15 +756,21 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(presentation.primaryActionTitle == "Resume")
     }
 
-    @Test("Non-cap analysis failures surface their message as a per-episode failure")
-    func nonCapAnalysisFailureSurfacesMessage() async throws {
-        let serverError = EpisodeAdAnalysisHTTPError(statusCode: 500, code: "internal", detail: nil)
+    @Test("An analysis failure surfaces its message as a per-episode failure")
+    func analysisFailureSurfacesMessage() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answer = .failure(.rejected(status: 400), status: 400, listener: .invalidKey)
         let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisClient: AdFreePassAnalysisClient(error: serverError)
+            analysisEnvironment: analysisEnvironment
         )
-        let episode = makeEpisode(episodeID: "ad-free-server-error")
-        let expectedMessage = serverError.localizedDescription
+        let episode = makeEpisode(episodeID: "ad-free-provider-error")
+        let expectedMessage = EpisodeAdAnalysisHTTPError(
+            statusCode: 503,
+            code: "gemini_http_error",
+            detail: nil,
+            listenerFailure: .invalidKey
+        ).localizedDescription
 
         fixture.enqueue(episode)
 
@@ -776,151 +781,425 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(fixture.coordinator.queueState == .idle)
     }
 
-    @Test("A cap rejection pauses the queue in capDeferred, retaining and persisting the head item")
-    func capRejectionPausesQueueRetainingHead() async throws {
-        let capError = EpisodeAdAnalysisHTTPError(
-            statusCode: 429,
-            code: "daily_request_cap_exceeded",
-            detail: nil
-        )
-        let analysisClient = AdFreePassAnalysisClient(error: capError)
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisClient: analysisClient,
-            container: container,
-            context: context
-        )
-        let first = makeEpisode(episodeID: "queue-cap-1")
-        let second = makeEpisode(episodeID: "queue-cap-2")
+    @Test("An item the listener started that needs a key ends with its reason, the drain goes on, and each one opens the key screen")
+    func keyRequiredManualItemsEachPresent() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.route = .keyRequired(.trialExhausted)
+        let downloader = GatedEpisodeAudioDownloader()
+        let fixture = try await makeFixture(downloader: downloader, analysisEnvironment: analysisEnvironment)
+        let first = makeEpisode(episodeID: "key-required-1")
+        let second = makeEpisode(episodeID: "key-required-2")
+        let third = makeEpisode(episodeID: "key-required-3")
+        var presentedReasons: [AnalysisKeyRequiredReason] = []
         var terminals: [AdFreePassQueueTerminalOutcome] = []
+        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
         fixture.coordinator.onQueueTerminal = { terminals.append($0) }
 
         fixture.enqueue(first)
+        #expect(await waitUntil { fixture.coordinator.activeEpisodeID == first.episodeID })
         fixture.enqueue(second)
+        fixture.enqueue(third)
+        downloader.release(urlContaining: first.episodeID)
+        #expect(await waitUntil { fixture.coordinator.drainOutcomes.count == 1 })
+        #expect(fixture.coordinator.drainOutcomes[0].kind == .keyRequired(.trialExhausted))
+        #expect(fixture.coordinator.queueStatus(for: first.episodeID) == .keyRequired(.trialExhausted))
+        #expect(fixture.adAnalyses.record(for: first.episodeID)?.failureKind == .keyRequiredTrialExhausted)
+        #expect(presentedReasons == [.trialExhausted])
 
-        #expect(await waitUntil {
-            fixture.coordinator.queueState == .capDeferred
-        })
+        // Terminal for that item only: the next manual one presents again in
+        // the same drain, and one that finds a route completes.
+        analysisEnvironment.route = .keyRequired(.noKey)
+        downloader.release(urlContaining: second.episodeID)
+        #expect(await waitUntil { fixture.coordinator.drainOutcomes.count == 2 })
+        #expect(fixture.coordinator.drainOutcomes[1].kind == .keyRequired(.noKey))
+        #expect(presentedReasons == [.trialExhausted, .noKey])
+        analysisEnvironment.route = .direct(provider: .google)
+        downloader.release(urlContaining: third.episodeID)
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 3 })
+        #expect(fixture.coordinator.drainOutcomes.map(\.episodeID) == [first.episodeID, second.episodeID, third.episodeID])
+        #expect(fixture.coordinator.drainOutcomes[2].kind == .completed(zoneCount: 1))
+        #expect(terminals == [.drained(completedCount: 1, failedCount: 2)])
+        #expect(presentedReasons == [.trialExhausted, .noKey])
+        // The store never presented on its own; the drain did.
+        #expect(analysisEnvironment.presentedReasons.isEmpty)
+        #expect(try fixture.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).isEmpty)
+
+        // The card names the reason; the episode can be tried again.
+        let expectedMessage = "Your free analyses are used. Add a key in Settings › AI Services."
+        #expect(fixture.presentation(for: first).stage == .failed(message: expectedMessage))
+        #expect(fixture.presentation(for: first).primaryActionTitle == "Retry")
+    }
+
+    @Test("An automatic item that needs a key ends silently, with its reason on the queue")
+    func keyRequiredAutoItemNeverPresents() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.route = .keyRequired(.trialExhausted)
+        let downloader = GatedEpisodeAudioDownloader()
+        let fixture = try await makeFixture(downloader: downloader, analysisEnvironment: analysisEnvironment)
+        let first = makeEpisode(episodeID: "key-required-auto-1")
+        let second = makeEpisode(episodeID: "key-required-auto-2")
+        var presentedReasons: [AnalysisKeyRequiredReason] = []
+        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
+
+        fixture.enqueue(first, origin: .auto)
+        #expect(await waitUntil { fixture.coordinator.activeEpisodeID == first.episodeID })
+        fixture.enqueue(second, origin: .auto)
+        downloader.release(urlContaining: first.episodeID)
+        downloader.release(urlContaining: second.episodeID)
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 2 })
+
+        #expect(presentedReasons.isEmpty)
+        #expect(analysisEnvironment.presentedReasons.isEmpty)
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.keyRequired(.trialExhausted), .keyRequired(.trialExhausted)])
+        #expect(fixture.coordinator.queueStatus(for: first.episodeID) == .keyRequired(.trialExhausted))
+        #expect(fixture.adAnalyses.record(for: first.episodeID)?.failureKind == .keyRequiredTrialExhausted)
+        let queue = AdDetectionQueuePresentation(snapshot: fixture.coordinator.queueSnapshot, isBackgroundSessionArmed: false)
+        #expect(queue.keyRequiredNotice == AdDetectionQueuePresentation.keyRequiredNotice)
+
+        // The listener's own tap on the same episode presents.
+        fixture.enqueue(first)
+        #expect(await waitUntil { presentedReasons == [.trialExhausted] })
+    }
+
+    @Test("Removing the key in AI Services ends the listener's item at once as needing a key, without the key screen")
+    func keyRemovedInAppEndsItemWithoutKeyScreen() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answer = .hold
+        let downloader = GatedEpisodeAudioDownloader()
+        let fixture = try await makeFixture(downloader: downloader, analysisEnvironment: analysisEnvironment)
+        let episode = makeEpisode(episodeID: "key-removed-in-app")
+        var presentedReasons: [AnalysisKeyRequiredReason] = []
+        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
+
+        fixture.enqueue(episode)
+        downloader.release(urlContaining: episode.episodeID)
+        #expect(await waitUntil { analysisEnvironment.sends.count == 1 })
+        #expect(fixture.adAnalyses.activeDirectProvider == .google)
+        fixture.adAnalyses.cancelActiveRun(reason: .keyRemoved)
+
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1 })
+        #expect(fixture.coordinator.drainOutcomes[0].kind == .keyRequired(.noKey))
+        #expect(fixture.coordinator.queueStatus(for: episode.episodeID) == .keyRequired(.noKey))
+        #expect(fixture.adAnalyses.record(for: episode.episodeID)?.failureKind == .keyRequiredNoKey)
+        #expect(fixture.presentation(for: episode).stage == .failed(message: "Add a key in Settings › AI Services to detect ads."))
+        #expect(analysisEnvironment.latestRun?.state == .failed)
+        #expect(analysisEnvironment.latestRun?.listenerFailure == AnalysisProviderFailure.keyRequired.rawValue)
+        #expect(presentedReasons.isEmpty)
+        #expect(analysisEnvironment.presentedReasons.isEmpty)
+
+        // The listener's next tap on the episode, still without a key, presents.
+        analysisEnvironment.route = .keyRequired(.noKey)
+        fixture.enqueue(episode)
+        #expect(await waitUntil { presentedReasons == [.noKey] })
+    }
+
+    @Test("A restored manual item that needs a key ends silently, and the listener's re-tap presents")
+    func keyRequiredRestoredItemNeverPresents() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.route = .keyRequired(.noKey)
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            analysisEnvironment: analysisEnvironment,
+            container: container,
+            context: context
+        )
+        let episode = makeEpisode(episodeID: "key-required-restored")
+        var presentedReasons: [AnalysisKeyRequiredReason] = []
+        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
+        context.insert(AdFreePassQueueItemRecord(
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            originRawValue: AdFreePassQueueOrigin.manual.rawValue,
+            sequence: 1
+        ))
+        try context.save()
+
+        fixture.coordinator.restorePersistedQueue(
+            resolveEpisode: { $0 == episode.episodeID ? episode : nil },
+            downloads: fixture.downloads,
+            transcriptionModels: fixture.transcriptionModels,
+            appleSpeechAssets: fixture.appleSpeechAssets,
+            transcriptions: fixture.transcriptions,
+            adAnalyses: fixture.adAnalyses,
+            modelContext: context,
+            podcastLanguageCode: { _ in nil },
+            refreshSkipZones: { _ in 1 }
+        )
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1 })
+        #expect(fixture.coordinator.queueStatus(for: episode.episodeID) == .keyRequired(.noKey))
+        #expect(presentedReasons.isEmpty)
+
+        fixture.enqueue(episode)
+        #expect(await waitUntil { presentedReasons == [.noKey] })
+    }
+
+    @Test("An environmentally resumed item that needs a key ends silently; the listener's next item still presents")
+    func keyRequiredEnvironmentalResumeNeverPresents() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.route = .keyRequired(.trialPaused)
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            transcriber: ComputeFailureEpisodeTranscriber(failingRequestCount: 2),
+            analysisEnvironment: analysisEnvironment,
+            failureEnvironment: EpisodeTranscriptionFailureEnvironment(
+                sceneState: .background,
+                isProtectedDataAvailable: true
+            )
+        )
+        let first = makeEpisode(episodeID: "key-required-environmental-1")
+        let second = makeEpisode(episodeID: "key-required-environmental-2")
+        // The item whose outcome was just recorded is the one presenting.
+        var presentedEpisodeIDs: [String?] = []
+        fixture.coordinator.onKeyRequired = { _ in
+            presentedEpisodeIDs.append(fixture.coordinator.drainOutcomes.last?.episodeID)
+        }
+
+        fixture.enqueue(first)
+        fixture.enqueue(second)
+        #expect(await waitUntil { fixture.coordinator.isQueuePausedForEnvironmentalInterrupt })
         #expect(fixture.coordinator.queueItems.map(\.episodeID) == [first.episodeID, second.episodeID])
-        #expect(terminals == [.capDeferred])
-        #expect(fixture.coordinator.queueStatus(for: first.episodeID) == .capDeferred)
-        #expect(fixture.presentation(for: first) == .capDeferred)
-        #expect(fixture.presentation(for: second).statusText == "Queued — 1 ahead")
-        #expect(fixture.adAnalyses.record(for: first.episodeID)?.failureKind == .capExceeded)
-        // The head item never left the persisted queue: the deferral must
-        // survive an overnight quit.
-        let persisted = try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
-        #expect(persisted.count == 2)
-        #expect(analysisClient.requestCount == 1)
+
+        fixture.coordinator.resumeQueueForEnvironmentalAutoResume()
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 2 })
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.keyRequired(.trialPaused), .keyRequired(.trialPaused)])
+        // The resumed head was the app's run; the second never started
+        // before and is still the listener's.
+        #expect(presentedEpisodeIDs == [second.episodeID])
     }
 
-    @Test("While cap-deferred, at most one automatic probe per foreground session")
-    func capProbeOncePerForegroundSession() async throws {
-        let capError = EpisodeAdAnalysisHTTPError(
-            statusCode: 429,
-            code: "global_capacity_exhausted",
-            detail: nil
-        )
-        let analysisClient = AdFreePassAnalysisClient(error: capError)
+    @Test("Cancelling the pass stops its device run, and a re-tap starts a fresh one")
+    func cancelStopsDeviceRun() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answer = .hold
         let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisClient: analysisClient
+            analysisEnvironment: analysisEnvironment
         )
-        let episode = makeEpisode(episodeID: "queue-cap-probe")
+        let episode = makeEpisode(episodeID: "ad-free-cancel-run")
 
         fixture.enqueue(episode)
-        #expect(await waitUntil {
-            fixture.coordinator.queueState == .capDeferred
-        })
-        #expect(analysisClient.requestCount == 1)
+        #expect(await waitUntil { analysisEnvironment.sends.count == 1 })
+        #expect(fixture.adAnalyses.isRunning(for: episode.episodeID))
 
-        // The failed call was this foreground session's probe: automatic
-        // triggers hold until the next background→foreground cycle.
-        fixture.coordinator.probeCapDeferredQueueIfAllowed(trigger: .sceneActivated)
-        fixture.coordinator.probeCapDeferredQueueIfAllowed(trigger: .refreshCompleted)
-        #expect(fixture.coordinator.queueState == .capDeferred)
-        #expect(analysisClient.requestCount == 1)
+        fixture.coordinator.cancelActivePass()
 
-        fixture.coordinator.handleForegroundReturn()
-        fixture.coordinator.probeCapDeferredQueueIfAllowed(trigger: .sceneActivated)
-        #expect(await waitUntil {
-            analysisClient.requestCount == 2 && fixture.coordinator.queueState == .capDeferred
-        })
+        // The held send saw the cancellation: the run stopped and its record
+        // ended cancelled, not resumable.
+        #expect(await waitUntil { !fixture.adAnalyses.hasActiveJob })
+        #expect(analysisEnvironment.latestRun?.state == .cancelled)
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.activeEpisodeID == nil })
+        #expect(analysisEnvironment.sends.count == 1)
 
-        fixture.coordinator.probeCapDeferredQueueIfAllowed(trigger: .refreshCompleted)
-        #expect(analysisClient.requestCount == 2)
+        // The episode's record stays running until a start moves it on; a
+        // re-tap starts a new run instead of waiting on it.
+        analysisEnvironment.answer = .sponsorRead
+        fixture.enqueue(episode)
+        #expect(await waitUntil { fixture.adAnalyses.record(for: episode.episodeID)?.state == .completed })
+        #expect(analysisEnvironment.resolvedRunIDs.count == 2)
     }
 
-    @Test("A manual tap on the deferred episode always probes")
-    func manualTapOnDeferredEpisodeAlwaysProbes() async throws {
-        let capError = EpisodeAdAnalysisHTTPError(
-            statusCode: 429,
-            code: "daily_request_cap_exceeded",
-            detail: nil
-        )
-        let analysisClient = AdFreePassAnalysisClient(error: capError)
+    @Test("A card expiry stops the device run and keeps it resumable")
+    func expiryStopsDeviceRunResumably() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answer = .hold
         let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisClient: analysisClient
+            analysisEnvironment: analysisEnvironment
         )
-        let episode = makeEpisode(episodeID: "queue-cap-manual")
+        let scheduler = FakeAdFreePassContinuedTaskScheduler()
+        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
+        let handle = FakeAdFreePassContinuedTaskHandle()
+        fixture.coordinator.onStageChange = { stage, context in session.noteStage(stage, queueContext: context) }
+        let episode = makeEpisode(episodeID: "ad-free-expire-run")
 
         fixture.enqueue(episode)
-        #expect(await waitUntil {
-            fixture.coordinator.queueState == .capDeferred
-        })
-        #expect(analysisClient.requestCount == 1)
+        session.arm(episodeTitle: episode.title, cancellationSource: fixture.coordinator.cancellationSource)
+        scheduler.launch(handle)
+        #expect(await waitUntil { analysisEnvironment.sends.count == 1 })
 
-        fixture.enqueue(episode)
+        handle.expire()
 
-        #expect(await waitUntil {
-            analysisClient.requestCount == 2 && fixture.coordinator.queueState == .capDeferred
-        })
+        #expect(await waitUntil { !fixture.adAnalyses.hasActiveJob })
+        #expect(analysisEnvironment.latestRun?.state == .expired)
+        #expect(await waitUntil { fixture.coordinator.activeEpisodeID == nil })
+        #expect(handle.completions == [false])
     }
 
-    @Test("A successful probe after the window resets drains the remainder of the queue")
-    func successfulProbeDrainsRemainder() async throws {
-        let capError = EpisodeAdAnalysisHTTPError(
-            statusCode: 429,
-            code: "daily_request_cap_exceeded",
-            detail: nil
-        )
-        let analysisClient = AdFreePassAnalysisClient(error: capError)
+    @Test("A queue an earlier build left deferred at its daily limit restores as an ordinary queue and drains")
+    func capDeferredQueueFromEarlierBuildRestores() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
+        let head = makeEpisode(episodeID: "earlier-build-deferred-head")
+        let next = makeEpisode(episodeID: "earlier-build-deferred-next")
+        // What a deferred queue left behind: its kept head and the rest in
+        // order, with the head's analysis failed at the daily limit.
+        context.insert(AdFreePassQueueItemRecord(
+            episodeID: head.episodeID,
+            podcastID: head.podcastID,
+            originRawValue: "manual",
+            sequence: 1
+        ))
+        context.insert(AdFreePassQueueItemRecord(
+            episodeID: next.episodeID,
+            podcastID: next.podcastID,
+            originRawValue: "auto",
+            sequence: 2
+        ))
+        let capped = EpisodeAdAnalysisRecord(episodeID: head.episodeID, podcastID: head.podcastID, state: .failed)
+        capped.failureKind = .capExceeded
+        context.insert(capped)
+        try context.save()
         let fixture = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisClient: analysisClient,
             container: container,
             context: context
         )
-        let first = makeEpisode(episodeID: "queue-cap-resume-1")
-        let second = makeEpisode(episodeID: "queue-cap-resume-2")
         var terminals: [AdFreePassQueueTerminalOutcome] = []
         fixture.coordinator.onQueueTerminal = { terminals.append($0) }
+        let episodesByID = [head.episodeID: head, next.episodeID: next]
 
-        fixture.enqueue(first)
-        fixture.enqueue(second)
-        #expect(await waitUntil {
-            fixture.coordinator.queueState == .capDeferred
-        })
+        fixture.coordinator.restorePersistedQueue(
+            resolveEpisode: { episodesByID[$0] },
+            downloads: fixture.downloads,
+            transcriptionModels: fixture.transcriptionModels,
+            appleSpeechAssets: fixture.appleSpeechAssets,
+            transcriptions: fixture.transcriptions,
+            adAnalyses: fixture.adAnalyses,
+            modelContext: context,
+            podcastLanguageCode: { _ in nil },
+            refreshSkipZones: { _ in 1 }
+        )
 
-        // The cap window reset: the next foreground session's probe succeeds
-        // and the queue auto-resumes through the remainder.
-        analysisClient.error = nil
-        fixture.coordinator.handleForegroundReturn()
-        fixture.coordinator.probeCapDeferredQueueIfAllowed(trigger: .sceneActivated)
-
+        #expect(fixture.coordinator.queueState == .running)
         #expect(await waitUntil {
             fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 2
         })
-        #expect(fixture.adAnalyses.record(for: first.episodeID)?.state == .completed)
-        #expect(fixture.adAnalyses.record(for: second.episodeID)?.state == .completed)
-        #expect(terminals == [.capDeferred, .drained(completedCount: 2, failedCount: 0)])
-        let persisted = try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
-        #expect(persisted.isEmpty)
+        #expect(fixture.coordinator.drainOutcomes.map(\.episodeID) == [head.episodeID, next.episodeID])
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1), .completed(zoneCount: 1)])
+        #expect(terminals == [.drained(completedCount: 2, failedCount: 0)])
+        #expect(fixture.adAnalyses.record(for: head.episodeID)?.state == .completed)
+        #expect(try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).isEmpty)
+    }
+
+    @Test("The analyzing stage carries the run's steps as each window is answered")
+    func analyzingStageCarriesRunSteps() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        let gate = AsyncTestGate()
+        analysisEnvironment.gate = gate
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            analysisEnvironment: analysisEnvironment
+        )
+        var stages: [EpisodeAdFreePassStage] = []
+        fixture.coordinator.onStageChange = { stage, _ in stages.append(stage) }
+        let episode = makeEpisode(episodeID: "ad-free-steps")
+
+        fixture.enqueue(episode)
+        #expect(await waitUntil { analysisEnvironment.sends.count == 1 })
+        // One window and, while the run goes, the step still to come.
+        let started = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 2))
+        #expect(await waitUntil { fixture.coordinator.currentStage == started })
+        #expect(fixture.coordinator.queueSnapshot.fractionCompleted == 0.91)
+
+        await gate.release()
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle })
+        #expect(stages.contains(started))
+        #expect(stages.last == .completed(zoneCount: 1))
+    }
+
+    @Test("A window whose answer fails validation holds the pass below the band's end while its repair is slow")
+    func slowRepairHoldsBelowTheBandEnd() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answerForRequest = { request in
+            request.purpose == .adRepair(index: 0) ? .hold : .unverifiableBreak
+        }
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            analysisEnvironment: analysisEnvironment
+        )
+        var currentDate = Date(timeIntervalSince1970: 1_000_000)
+        let scheduler = FakeAdFreePassContinuedTaskScheduler()
+        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler, now: { currentDate })
+        let handle = FakeAdFreePassContinuedTaskHandle()
+        fixture.coordinator.onStageChange = { stage, context in session.noteStage(stage, queueContext: context) }
+        let episode = makeEpisode(episodeID: "ad-free-slow-repair")
+
+        fixture.enqueue(episode)
+        session.arm(episodeTitle: episode.title, cancellationSource: fixture.coordinator.cancellationSource)
+        scheduler.launch(handle)
+        defer { session.reset() }
+        #expect(await waitUntil { analysisEnvironment.sends.count(of: .adRepair(index: 0)) == 1 })
+
+        // The window's reply counted it answered; the repair is still out.
+        let repairing = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 2))
+        #expect(await waitUntil { fixture.coordinator.currentStage == repairing })
+        #expect(fixture.coordinator.queueSnapshot.fractionCompleted == 0.942)
+        #expect(await waitUntil { handle.adFreeUnits == 942 })
+        // Halfway through the repair's budget the card has moved; long past
+        // it, the card waits one unit short of the band's end.
+        currentDate += AdAnalysisRunProgress.defaultStepBudgetSeconds / 2
+        #expect(await waitUntil { handle.adFreeUnits == 958 })
+        currentDate += 3_600
+        #expect(await waitUntil { handle.adFreeUnits == 974 })
+        #expect(handle.adFreeUnits < 975)
+        #expect(fixture.adAnalyses.isRunning(for: episode.episodeID))
+
+        fixture.coordinator.cancelActivePass()
+        #expect(await waitUntil { !fixture.adAnalyses.hasActiveJob })
+    }
+
+    @Test("The listener's Resume of an automatic item paused in the background makes it theirs: a key-required end opens the key screen")
+    func listenerResumeOfAutomaticItemPresents() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.route = .keyRequired(.trialExhausted)
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            transcriber: ComputeFailureEpisodeTranscriber(failingRequestCount: 2),
+            analysisEnvironment: analysisEnvironment,
+            failureEnvironment: EpisodeTranscriptionFailureEnvironment(
+                sceneState: .background,
+                isProtectedDataAvailable: true
+            )
+        )
+        let episode = makeEpisode(episodeID: "key-required-auto-resumed")
+        var presentedReasons: [AnalysisKeyRequiredReason] = []
+        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
+
+        fixture.enqueue(episode, origin: .auto)
+        #expect(await waitUntil { fixture.coordinator.isQueuePausedForEnvironmentalInterrupt })
+        #expect(fixture.coordinator.queueItems.first?.origin == .auto)
+
+        fixture.coordinator.resumePausedQueue()
+
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1 })
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.keyRequired(.trialExhausted)])
+        #expect(presentedReasons == [.trialExhausted])
+    }
+
+    @Test("The consent tap on an automatic item makes it the listener's: a key-required end opens the key screen")
+    func consentTapOnAutomaticItemPresents() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.route = .keyRequired(.noKey)
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            analysisEnvironment: analysisEnvironment,
+            modelInstalled: false
+        )
+        let episode = makeEpisode(episodeID: "key-required-auto-consent")
+        var presentedReasons: [AnalysisKeyRequiredReason] = []
+        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
+
+        fixture.enqueue(episode, origin: .auto)
+        #expect(await waitUntil { fixture.coordinator.queueState == .awaitingModelConsent })
+        #expect(presentedReasons.isEmpty)
+
+        fixture.coordinator.resumePausedQueue()
+
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1 })
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.keyRequired(.noKey)])
+        #expect(presentedReasons == [.noKey])
     }
 
     @Test("Completed transcript is reused by the default path without re-transcribing or re-analyzing")
@@ -941,7 +1220,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             refreshCount == 1 && fixture.coordinator.activeEpisodeID == nil
         })
         #expect(transcriber.requestCount == 1)
-        #expect(fixture.analysisClient.requestCount == 1)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
 
         fixture.enqueue(episode, refreshSkipZones: {
             refreshCount += 1
@@ -952,7 +1231,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         })
 
         #expect(transcriber.requestCount == 1)
-        #expect(fixture.analysisClient.requestCount == 1)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
     }
 
     @Test("Explicit engine override re-transcribes despite a completed transcript from another engine")
@@ -1181,7 +1460,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         let transcriptions: EpisodeTranscriptionStore
         let adAnalyses: EpisodeAdAnalysisStore
         let coordinator: EpisodeAdFreePassCoordinator
-        let analysisClient: AdFreePassAnalysisClient
+        let analysisEnvironment: ScriptedAdAnalysisRunEnvironment
         let modelInstaller: AdFreePassTranscriptionModelInstaller
 
         func loadStores() async {
@@ -1232,7 +1511,7 @@ struct EpisodeAdFreePassCoordinatorTests {
     private func makeFixture(
         downloader: any EpisodeAudioDownloading,
         transcriber: any EpisodeTranscribing = CompletingEpisodeTranscriber(),
-        analysisClient: AdFreePassAnalysisClient = AdFreePassAnalysisClient(),
+        analysisEnvironment: ScriptedAdAnalysisRunEnvironment = ScriptedAdAnalysisRunEnvironment(),
         modelInstalled: Bool = true,
         appleSpeechAvailable: Bool = false,
         failureEnvironment: EpisodeTranscriptionFailureEnvironment = .foreground,
@@ -1264,13 +1543,14 @@ struct EpisodeAdFreePassCoordinatorTests {
                 failureEnvironment: { failureEnvironment }
             ),
             adAnalyses: EpisodeAdAnalysisStore(
-                client: analysisClient,
-                fileStore: EpisodeAdAnalysisFileStore(baseDirectory: directory)
+                client: UnpolledAdAnalysisClient(),
+                fileStore: EpisodeAdAnalysisFileStore(baseDirectory: directory),
+                runEnvironment: analysisEnvironment
             ),
             coordinator: EpisodeAdFreePassCoordinator(
                 launchPreparationGate: launchPreparationGate
             ),
-            analysisClient: analysisClient,
+            analysisEnvironment: analysisEnvironment,
             modelInstaller: modelInstaller
         )
         if loadsStores {
@@ -1689,51 +1969,5 @@ private final class ComputeFailureEpisodeTranscriber: EpisodeTranscribing, @unch
         return requests
             .filter { $0.sourceAudioURL.contains(fragment) }
             .map(\.computeProfile)
-    }
-}
-
-private final class AdFreePassAnalysisClient: EpisodeAdAnalysisClient, @unchecked Sendable {
-    var requestCount = 0
-    var error: Error?
-    let failingRequestIndexes: Set<Int>
-
-    init(error: Error? = nil, failingRequestIndexes: Set<Int> = []) {
-        self.error = error
-        self.failingRequestIndexes = failingRequestIndexes
-    }
-
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
-        requestCount += 1
-        if let error {
-            throw error
-        }
-        if failingRequestIndexes.contains(requestCount) {
-            throw EpisodeAdAnalysisHTTPError(statusCode: 500, code: "internal", detail: "probe failure")
-        }
-
-        return .completed(EpisodeAdAnalysisAPIResponse(
-            schemaVersion: 1,
-            requestID: request.requestID,
-            model: "gemini-3.5-flash",
-            policy: EpisodeAdAnalysisContract.expectedPolicy,
-            spans: [
-                EpisodeAdAnalysisAPIAdSpan(
-                    kind: .hostReadAd,
-                    label: "Test Sponsor",
-                    startSegmentID: 1,
-                    endSegmentID: 1,
-                    startTime: 2,
-                    endTime: 4,
-                    confidence: 0.95,
-                    evidenceQuote: "brought to you"
-                )
-            ],
-            warnings: [],
-            usage: nil
-        ))
-    }
-
-    func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
-        throw EpisodeAdAnalysisError.clientDisabled
     }
 }

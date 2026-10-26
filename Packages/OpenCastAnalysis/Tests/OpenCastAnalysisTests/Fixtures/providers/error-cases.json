@@ -1,0 +1,377 @@
+{
+  "note": "Provider error exchanges and how each is classified for the pipeline (transport) and the listener. Each case says whether it was recorded from a live call (scrubbed) or constructed from the provider's documented shape. No key material.",
+  "cases": [
+    {
+      "name": "gemini-invalid-key",
+      "provider": "google",
+      "source": "recorded 2026-10-24 from a free live probe of generateContent/responses with a fake key of the provider's shape; rebuilt from the recorded status and closed error fields (the message is never recorded)",
+      "status": 400,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":400,\"status\":\"INVALID_ARGUMENT\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"API_KEY_INVALID\"}]}}",
+      "expect": {
+        "transport": "rejected:400",
+        "listener": "invalid_key"
+      }
+    },
+    {
+      "name": "gemini-permission-denied",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 403,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":403,\"message\":\"Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.\",\"status\":\"PERMISSION_DENIED\"}}",
+      "expect": {
+        "transport": "rejected:403",
+        "listener": "invalid_key"
+      }
+    },
+    {
+      "name": "gemini-billing-disabled",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 403,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":403,\"message\":\"This API method requires billing to be enabled. Please enable billing on project #0 by visiting the console then retry.\",\"status\":\"PERMISSION_DENIED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"BILLING_DISABLED\"}]}}",
+      "expect": {
+        "transport": "rejected:403",
+        "listener": "billing_or_quota"
+      }
+    },
+    {
+      "name": "gemini-quota-exhausted",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 429,
+      "retry_after": "20",
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details.\",\"status\":\"RESOURCE_EXHAUSTED\"}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      }
+    },
+    {
+      "name": "gemini-per-minute-quota",
+      "provider": "google",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.Help\",\"links\":[{\"description\":\"Learn more about Gemini API quotas\",\"url\":\"https://ai.google.dev/gemini-api/docs/rate-limits\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"12s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:12",
+        "listener": "rate_limited"
+      }
+    },
+    {
+      "name": "gemini-per-day-quota",
+      "provider": "google",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"250\"}]},{\"@type\":\"type.googleapis.com/google.rpc.Help\",\"links\":[{\"description\":\"Learn more about Gemini API quotas\",\"url\":\"https://ai.google.dev/gemini-api/docs/rate-limits\"}]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "daily_limit"
+      }
+    },
+    {
+      "name": "gemini-rate-limited-retry-after",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 429,
+      "retry_after": "7",
+      "body": "{\"error\":{\"code\":429,\"message\":\"Too many requests; slow down.\",\"status\":\"RESOURCE_EXHAUSTED\"}}",
+      "expect": {
+        "transport": "retryable:429:7",
+        "listener": "rate_limited"
+      }
+    },
+    {
+      "name": "gemini-rate-limited-no-retry-after",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"Too many requests; slow down.\",\"status\":\"RESOURCE_EXHAUSTED\"}}",
+      "expect": {
+        "transport": "retryable:429:none",
+        "listener": "rate_limited"
+      }
+    },
+    {
+      "name": "gemini-rate-limited-retry-after-capped",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 429,
+      "retry_after": "120",
+      "body": "{\"error\":{\"code\":429,\"message\":\"Too many requests; slow down.\",\"status\":\"RESOURCE_EXHAUSTED\"}}",
+      "expect": {
+        "transport": "retryable:429:30",
+        "listener": "rate_limited"
+      }
+    },
+    {
+      "name": "gemini-unknown-model",
+      "provider": "google",
+      "source": "recorded 2026-10-24 from a free live probe of generateContent/responses with the bakeoff key and model id gemini-nonexistent-probe; rebuilt from the recorded status and closed error fields (the message is never recorded)",
+      "status": 404,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":404,\"status\":\"NOT_FOUND\"}}",
+      "expect": {
+        "transport": "rejected:404",
+        "listener": "model_unavailable"
+      }
+    },
+    {
+      "name": "gemini-model-bad-argument",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 400,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":400,\"message\":\"Thinking level is not supported for this model.\",\"status\":\"INVALID_ARGUMENT\"}}",
+      "expect": {
+        "transport": "rejected:400",
+        "listener": "model_unavailable"
+      }
+    },
+    {
+      "name": "gemini-bad-request",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 400,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":400,\"message\":\"Invalid JSON payload received.\",\"status\":\"INVALID_ARGUMENT\"}}",
+      "expect": {
+        "transport": "rejected:400",
+        "listener": "request_rejected"
+      }
+    },
+    {
+      "name": "gemini-overloaded-503",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 503,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":503,\"message\":\"The model is overloaded. Please try again later.\",\"status\":\"UNAVAILABLE\"}}",
+      "expect": {
+        "transport": "retryable:503:none",
+        "listener": "overloaded"
+      }
+    },
+    {
+      "name": "gemini-internal-500",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "status": 500,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":500,\"message\":\"An internal error has occurred.\",\"status\":\"INTERNAL\"}}",
+      "expect": {
+        "transport": "retryable:500:none",
+        "listener": "overloaded"
+      }
+    },
+    {
+      "name": "gemini-timeout",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "failure": "timeout",
+      "expect": {
+        "transport": "timeout",
+        "listener": "timeout"
+      }
+    },
+    {
+      "name": "gemini-unreachable",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "failure": "network",
+      "expect": {
+        "transport": "network",
+        "listener": "unreachable"
+      }
+    },
+    {
+      "name": "gemini-oversized",
+      "provider": "google",
+      "source": "constructed from the provider's documented error shape",
+      "failure": "oversized_body",
+      "expect": {
+        "transport": "oversized_body",
+        "listener": "malformed_answer"
+      }
+    },
+    {
+      "name": "openai-invalid-key",
+      "provider": "openai",
+      "source": "recorded 2026-10-24 from a free live probe of generateContent/responses with a fake key of the provider's shape; rebuilt from the recorded status and closed error fields (the message is never recorded)",
+      "status": 401,
+      "retry_after": null,
+      "body": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"invalid_api_key\",\"param\":null}}",
+      "expect": {
+        "transport": "rejected:401",
+        "listener": "invalid_key"
+      }
+    },
+    {
+      "name": "openai-insufficient-quota",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"message\":\"You exceeded your current quota, please check your plan and billing details.\",\"type\":\"insufficient_quota\",\"param\":null,\"code\":\"insufficient_quota\"}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      }
+    },
+    {
+      "name": "openai-rate-limited-retry-after",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 429,
+      "retry_after": "12",
+      "body": "{\"error\":{\"message\":\"Rate limit reached on tokens per min (TPM). Please try again in 12s.\",\"type\":\"tokens\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}",
+      "expect": {
+        "transport": "retryable:429:12",
+        "listener": "rate_limited"
+      }
+    },
+    {
+      "name": "openai-rate-limited-no-retry-after",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"message\":\"Rate limit reached on requests per min (RPM).\",\"type\":\"requests\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}",
+      "expect": {
+        "transport": "retryable:429:none",
+        "listener": "rate_limited"
+      }
+    },
+    {
+      "name": "openai-unknown-model",
+      "provider": "openai",
+      "source": "recorded 2026-10-24 from a free live probe of generateContent/responses with the bakeoff key and model id gpt-nonexistent-probe; rebuilt from the recorded status and closed error fields (the message is never recorded)",
+      "status": 404,
+      "retry_after": null,
+      "body": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"model_not_found\",\"param\":null}}",
+      "expect": {
+        "transport": "rejected:404",
+        "listener": "model_unavailable"
+      }
+    },
+    {
+      "name": "openai-bad-model-parameter",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 400,
+      "retry_after": null,
+      "body": "{\"error\":{\"message\":\"Unsupported model.\",\"type\":\"invalid_request_error\",\"param\":\"model\",\"code\":null}}",
+      "expect": {
+        "transport": "rejected:400",
+        "listener": "model_unavailable"
+      }
+    },
+    {
+      "name": "openai-bad-request",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 400,
+      "retry_after": null,
+      "body": "{\"error\":{\"message\":\"Unsupported value: 'reasoning.effort'.\",\"type\":\"invalid_request_error\",\"param\":\"reasoning.effort\",\"code\":\"unsupported_value\"}}",
+      "expect": {
+        "transport": "rejected:400",
+        "listener": "request_rejected"
+      }
+    },
+    {
+      "name": "openai-region",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 403,
+      "retry_after": null,
+      "body": "{\"error\":{\"message\":\"Country, region, or territory not supported\",\"type\":\"request_forbidden\",\"param\":null,\"code\":\"unsupported_country_region_territory\"}}",
+      "expect": {
+        "transport": "rejected:403",
+        "listener": "request_rejected"
+      }
+    },
+    {
+      "name": "openai-permission",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 403,
+      "retry_after": null,
+      "body": "{\"error\":{\"message\":\"You have insufficient permissions for this operation.\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":null}}",
+      "expect": {
+        "transport": "rejected:403",
+        "listener": "invalid_key"
+      }
+    },
+    {
+      "name": "openai-overloaded-503",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 503,
+      "retry_after": null,
+      "body": "{\"error\":{\"message\":\"The engine is currently overloaded, please try again later.\",\"type\":\"server_error\",\"param\":null,\"code\":null}}",
+      "expect": {
+        "transport": "retryable:503:none",
+        "listener": "overloaded"
+      }
+    },
+    {
+      "name": "openai-overloaded-529",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 529,
+      "retry_after": "3",
+      "body": "{\"error\":{\"message\":\"Overloaded\",\"type\":\"server_error\",\"param\":null,\"code\":null}}",
+      "expect": {
+        "transport": "retryable:529:3",
+        "listener": "overloaded"
+      }
+    },
+    {
+      "name": "openai-internal-500",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "status": 500,
+      "retry_after": null,
+      "body": "{\"error\":{\"message\":\"The server had an error while processing your request.\",\"type\":\"server_error\",\"param\":null,\"code\":null}}",
+      "expect": {
+        "transport": "retryable:500:none",
+        "listener": "overloaded"
+      }
+    },
+    {
+      "name": "openai-timeout",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "failure": "timeout",
+      "expect": {
+        "transport": "timeout",
+        "listener": "timeout"
+      }
+    },
+    {
+      "name": "openai-unreachable",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "failure": "network",
+      "expect": {
+        "transport": "network",
+        "listener": "unreachable"
+      }
+    },
+    {
+      "name": "openai-oversized",
+      "provider": "openai",
+      "source": "constructed from the provider's documented error shape",
+      "failure": "oversized_body",
+      "expect": {
+        "transport": "oversized_body",
+        "listener": "malformed_answer"
+      }
+    }
+  ]
+}

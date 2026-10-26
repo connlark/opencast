@@ -18,6 +18,10 @@ struct SheetDestinationView: View {
             AddToPlaylistSheet(episodeID: episodeID)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        case .analysisKeyRequired(let request):
+            AnalysisKeyRequiredView(request: request)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         case .episodeDiagnostics(let episodeID):
             EpisodeDiagnosticsSheet(episodeID: episodeID)
         case .helpTopic(let id):

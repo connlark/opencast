@@ -163,19 +163,47 @@ class MissingInputs(unittest.TestCase):
 
     def test_incomplete_transaction_operands(self):
         self.assertEqual((p.tags(self.write())['C3'], p.tags(self.write())["C3'"]), (True, False))
-        for key in ('boundary', 'status', 'submitted', 'steps_total', 'steps_completed'):
+        for key in ('boundary', 'status', 'steps_total', 'steps_completed'):
             tags = p.tags(self.without('primary__race__' + key, primary__race=self.write()['primary']['race']))
             self.assertEqual((tags['C3'], tags["C3'"]), (p.UNKNOWN, p.UNKNOWN), key)
-        # Without the gate's reply time, BEGIN complete and not all but COMMIT:
-        # the lost acknowledgement is unknown, and so is the slow write.
+        # An always-written member absent from a present race is the null the
+        # Worker wrote: `submitted` null is no submitted write.
+        tags = p.tags(self.without('primary__race__submitted', primary__race=self.write()['primary']['race']))
+        self.assertEqual((tags['C3'], tags["C3'"]), (False, False))
+        # Without the gate's reply time (its null dropped), BEGIN complete and not
+        # all but COMMIT: the gate never replied, a lost acknowledgement.
         tags = p.tags(self.without('primary__race__gate_reply_at_ms', primary__race=self.write()['primary']['race']))
-        self.assertEqual((tags['C3'], tags["C3'"]), (p.UNKNOWN, p.UNKNOWN))
+        self.assertEqual((tags['C3'], tags["C3'"]), (False, True))
         # Decisive: all but COMMIT is C3' whatever the gate field; a read is neither.
         held = self.write(steps_completed=3)
         del held['primary']['race']['gate_reply_at_ms']
         self.assertEqual((p.tags(held)['C3'], p.tags(held)["C3'"]), (False, True))
         read = self.without('primary__race__submitted')
         self.assertEqual((p.tags(read)['C3'], p.tags(read)["C3'"]), (False, False))
+
+    def test_any_handler_parses(self):
+        # The parser validates shape, never handler membership: the
+        # Notifications maintenance line reads like any other.
+        kind, value = p.parse(json.dumps(row(handler='maintenance', outcome='failed')))
+        self.assertEqual((kind, value['handler']), ('row', 'maintenance'))
+        self.assertIn('C2', p.tags(value))
+
+    def test_race_level_null_rule(self):
+        # The link 5 window's transaction timeouts with no gate key: a dropped
+        # null decides them. Zero of four steps is a slow write, one a lost
+        # acknowledgement; an explicit null reads the same.
+        for done, expected in ((0, (True, False)), (1, (False, True))):
+            absent = self.write(steps_completed=done)
+            del absent['primary']['race']['gate_reply_at_ms']
+            explicit = self.write(steps_completed=done, gate_reply_at_ms=None)
+            for case in (absent, explicit):
+                self.assertEqual((p.tags(case)['C3'], p.tags(case)["C3'"]), expected, done)
+        # The rule is race-level only: a trimmed row (no race) stays unknown, and
+        # so does an absent member outside the always-written set.
+        trimmed = self.without('primary__race')
+        self.assertEqual((p.tags(trimmed)['C3'], p.tags(trimmed)["C3'"]), (p.UNKNOWN, p.UNKNOWN))
+        self.assertEqual(p.tags(self.without('primary__race__status', primary__race=self.write()['primary']['race']))['C3'], p.UNKNOWN)
+        self.assertEqual(set(p.RACE_ALWAYS_WRITTEN), {'submitted', 'steps_total', 'steps_completed', 'gate_reply_at_ms', 'gate_wait_us', 'sqlstate'})
 
     def test_overshoot_null_is_no_timeout_and_absent_is_unknown(self):
         self.assertIs(p.tags(row(summary__overshoot_ms_max=None, primary__overshoot_ms=None))['C7'], False)

@@ -31,6 +31,77 @@ struct AdFreePassQueueProgressMapperTests {
         #expect(units == 787)
     }
 
+    @Test("The queue moves with each answered analysis step of its current item")
+    func compositeMovesWithAnalysisSteps() {
+        var mapper = AdFreePassQueueProgressMapper()
+        let context = AdFreePassQueueContext(finishedItemCount: 1, totalItemCount: 2, episodeTitle: "B")
+        // Per-episode 910 + 65 × 1/4 = 926; composite (1000 + 926) / 2 = 963.
+        #expect(mapper.update(
+            for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 4)),
+            queueContext: context
+        ) == 963)
+        // 910 + 65 × 3/4 = 958; (1000 + 958) / 2 = 979.
+        #expect(mapper.update(
+            for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 3, total: 4)),
+            queueContext: context
+        ) == 979)
+    }
+
+    @Test("On a fine scale each creep tick of a long step moves the queue, never past one unit short of the step's end")
+    func fineScaleTicksMoveAcrossALongStep() {
+        let subunits: Int64 = 1_000_000
+        var mapper = AdFreePassQueueProgressMapper(subunitsPerUnit: subunits)
+        #expect(mapper.totalUnitCount == 1_000 * subunits)
+        let context = AdFreePassQueueContext(finishedItemCount: 2, totalItemCount: 5, episodeTitle: "C")
+        let stage = EpisodeAdFreePassStage.analyzing(
+            steps: EpisodeAdFreePassAnalysisSteps(completed: 10, total: 41, stepBudgetSeconds: 250)
+        )
+        // The band edges are the 0...1000 points times the scale.
+        let start = mapper.update(for: stage, queueContext: context)
+        #expect(start == (2 * 1_000 * subunits + 910 * subunits + 65 * subunits * 10 / 41) / 5)
+        let ceiling = (2 * 1_000 * subunits + 910 * subunits + 65 * subunits * 11 / 41 - 1) / 5
+
+        // Every 2 s tick across the 250 s budget moves it.
+        var previous = start
+        for tick in 1...125 {
+            let units = mapper.tick(for: stage, queueContext: context, stageElapsed: Double(tick * 2))
+            #expect(units > previous, "tick \(tick)")
+            #expect(units <= ceiling, "tick \(tick)")
+            previous = units
+        }
+        // A tick whose clock has not moved still moves it; past the budget
+        // it stops one unit short of the step's end, and never goes back.
+        #expect(mapper.tick(for: stage, queueContext: context, stageElapsed: 250) == ceiling)
+        #expect(mapper.tick(for: stage, queueContext: context, stageElapsed: 10_000) == ceiling)
+        #expect(mapper.update(for: stage, queueContext: context, stageElapsed: 0) == ceiling)
+
+        var stalled = AdFreePassQueueProgressMapper(subunitsPerUnit: subunits)
+        let opened = stalled.update(for: stage, queueContext: context)
+        #expect(stalled.tick(for: stage, queueContext: context, stageElapsed: 0) == opened + 1)
+
+        // Other stages tick like updates.
+        var holding = AdFreePassQueueProgressMapper(subunitsPerUnit: subunits)
+        let held = holding.update(for: .interrupted, queueContext: context)
+        #expect(holding.tick(for: .interrupted, queueContext: context, stageElapsed: 60) == held)
+    }
+
+    @Test("The fine scale maps every other stage onto its 0...1000 point times the scale")
+    func fineScaleMapsBandEdges() {
+        let subunits: Int64 = 1_000_000
+        var fine = AdFreePassQueueProgressMapper(subunitsPerUnit: subunits)
+        var coarse = AdFreePassQueueProgressMapper()
+        let context = AdFreePassQueueContext(finishedItemCount: 1, totalItemCount: 2, episodeTitle: "B")
+        for stage: EpisodeAdFreePassStage in [
+            .downloadingEpisode, .transcribing(Self.transcriptionProgress(0.5)), .cloudFinishing, .completed(zoneCount: 1),
+        ] {
+            let coarseUnits = coarse.update(for: stage, queueContext: context, stageElapsed: 10)
+            let fineUnits = fine.update(for: stage, queueContext: context, stageElapsed: 10)
+            #expect(fineUnits / subunits == coarseUnits, "stage \(stage)")
+        }
+        #expect(fine.markDrained() == 1_000 * subunits)
+        #expect(fine.fractionCompleted == 1)
+    }
+
     @Test("Appending items mid-run holds the composite flat until real progress catches up")
     func appendingHoldsCompositeFlat() {
         var mapper = AdFreePassQueueProgressMapper()
@@ -73,7 +144,7 @@ struct AdFreePassQueueProgressMapperTests {
     func markDrainedPinsToTotal() {
         var mapper = AdFreePassQueueProgressMapper()
         _ = mapper.update(
-            for: .analyzing,
+            for: .analyzing(steps: nil),
             queueContext: AdFreePassQueueContext(finishedItemCount: 0, totalItemCount: 2, episodeTitle: "A")
         )
         #expect(mapper.markDrained() == 1_000)
@@ -84,7 +155,7 @@ struct AdFreePassQueueProgressMapperTests {
     func resetClearsState() {
         var mapper = AdFreePassQueueProgressMapper()
         _ = mapper.update(
-            for: .analyzing,
+            for: .analyzing(steps: nil),
             queueContext: AdFreePassQueueContext(finishedItemCount: 1, totalItemCount: 2, episodeTitle: "A")
         )
         mapper.reset()
@@ -100,8 +171,10 @@ struct AdFreePassQueueProgressMapperTests {
             (.installingSpeechAssets(fractionCompleted: 0.4), 0),
             (.transcribing(transcriptionProgress(0.25)), 0),
             (.transcribing(transcriptionProgress(0.8)), 0),
-            (.analyzing, 0),
-            (.analyzing, 30),
+            (.analyzing(steps: nil), 0),
+            (.analyzing(steps: nil), 30),
+            (.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 4)), 0),
+            (.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 3, total: 4)), 30),
             (.completed(zoneCount: 3), 0)
         ]
     }

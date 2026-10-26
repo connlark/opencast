@@ -3,5 +3,4 @@ enum AdFreePassQueueState: Equatable {
     case running
     case pausedInterrupted
     case awaitingModelConsent
-    case capDeferred
 }

@@ -12,7 +12,6 @@ pub async fn control(db: &crate::database::Authority, name: &str) -> Result<bool
         "job_send" => Control::JobSend,
         "cleanup" => Control::Cleanup,
         "diagnostic_send" => Control::DiagnosticSend,
-        "five_minute_polling" => Control::FiveMinutePolling,
         _ => return Err(worker::Error::RustError("invalid_storage_control".into())),
     };
     Ok(super::execute(db, Operation::ReadControl { control })

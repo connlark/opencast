@@ -53,7 +53,7 @@ pub(crate) const POSTGRES_SCHEMA: &str =
 /// SHA-256 of the shipped PostgreSQL migration files, concatenated in order.
 #[cfg(test)]
 pub(crate) const POSTGRES_MIGRATIONS: &str =
-    "77b7c7aab8abd453429dccd0c9b39ceb1d24406d012800d53cdf52715919d7d5";
+    "29538044238a354c3cd76082c02989ef05178a9c7c02ab219a7b0345b6795b4b";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Database {
@@ -494,6 +494,7 @@ mod tests {
             "0002_slice_b.sql",
             "0003_delivery_member.sql",
             "0004_identity_delivery_support.sql",
+            "0005_retire_five_minute_polling.sql",
         ] {
             postgres.update(std::fs::read(root.join("postgres/migrations").join(name)).unwrap());
         }
@@ -501,10 +502,12 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect();
+        // A new migration re-pins POSTGRES_MIGRATIONS, and POSTGRES_SCHEMA only
+        // when it changes the catalog (0005 deletes a seed row: data only).
         assert_eq!(
             shipped.len(),
-            4,
-            "a new PostgreSQL migration needs a new POSTGRES_SCHEMA"
+            5,
+            "a new PostgreSQL migration re-pins POSTGRES_MIGRATIONS (and POSTGRES_SCHEMA when it changes the catalog)"
         );
         // Editing a migration changes this digest: regenerate POSTGRES_SCHEMA
         // from a fresh install of the edited files, then update both constants.

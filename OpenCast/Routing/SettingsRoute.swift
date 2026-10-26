@@ -8,6 +8,7 @@ enum SettingsRoute: Hashable {
     case notifications
     case transcription
     case adSkipping
+    case aiServices
     case credits
     case sync
     case storage

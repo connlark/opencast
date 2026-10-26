@@ -13,6 +13,10 @@ pub const MAX_BREAK_SECONDS: f64 = 600.0;
 pub const MAX_BREAKS_PER_WINDOW: usize = 32;
 pub const MAX_MODEL_JSON_BYTES: usize = 100_000;
 pub const MAX_REPAIR_FEEDBACK_BYTES: usize = 32_768;
+/// Longest accepted evidence quote, in normalized words. The prompt asks for
+/// 2-12 words; normalization splits contractions and hyphens, so the bound is
+/// wider than the guidance.
+pub const MAX_EVIDENCE_WORDS: usize = 32;
 /// Prefer removing the full ad opening/sign-off over a few seconds of adjacent
 /// program speech. This caps the entire segment, not guessed word-level time.
 pub const MAX_MIXED_BOUNDARY_SECONDS: f64 = 10.0;
@@ -118,8 +122,8 @@ pub fn preserves_candidate_evidence(
                 .collect::<Vec<_>>()
                 .join(" "),
         );
-        let locatable_cue =
-            (2..=32).contains(&cue.len()) && source_words.windows(cue.len()).any(|w| w == cue);
+        let locatable_cue = (2..=MAX_EVIDENCE_WORDS).contains(&cue.len())
+            && source_words.windows(cue.len()).any(|w| w == cue);
         // An evidence-mismatch repair must be allowed to correct an invented
         // quote. In that case require a separately verified original boundary
         // inside the repaired interval, not the impossible invented quote.
@@ -439,7 +443,10 @@ fn validate_scope(request: &AdAnalysisRequest, output: Output, entire_request: b
         // 2–12 words is prompt guidance, not a safety boundary. Normalization
         // splits contractions/hyphens; allow bounded verbatim receipts up to 32
         // normalized words rather than rejecting correct 12-natural-word cues.
-        if cue.len() < 2 || cue.len() > 32 || !content.windows(cue.len()).any(|w| w == cue) {
+        if cue.len() < 2
+            || cue.len() > MAX_EVIDENCE_WORDS
+            || !content.windows(cue.len()).any(|w| w == cue)
+        {
             result.issues.push(format!("v3_evidence_mismatch:{tag}"));
             continue;
         }

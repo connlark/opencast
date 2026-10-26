@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenCastAnalysis
 import OpenCastTranscription
 import SwiftData
 
@@ -16,18 +17,40 @@ final class EpisodeTranscriptAnalysisStore {
     /// migration collisions). Diagnostics-only; never names episodes.
     private(set) var duplicateRepairCount = 0
 
+    /// Drains jobs the analysis service accepted before this build ran the
+    /// analysis on the device; nothing submits new work there.
     @ObservationIgnored private let client: any EpisodeTranscriptAnalysisClient
     @ObservationIgnored private let fileStore: EpisodeTranscriptAnalysisFileStore
-    @ObservationIgnored private let analysisUnavailableMessage: String?
     @ObservationIgnored private let poller: AnalysisJobPoller<EpisodeTranscriptAnalysisAPIResponse>
+    /// How long an interrupted device run may resume with its run id.
     @ObservationIgnored private let resumeTTL: TimeInterval
+    /// How long after acceptance a service job is still drained: the service
+    /// keeps a finished result for a day.
+    @ObservationIgnored private let serverJobDrainWindow: TimeInterval
     @ObservationIgnored private let resumeInitialPollAfter: TimeInterval
     @ObservationIgnored private let preparationGate: @Sendable () async throws -> Void
     @ObservationIgnored private var activeTask: Task<Void, Never>?
     private var activeEpisodeID: String?
     @ObservationIgnored private var activeRunID: UUID?
+    /// The run id the active device run sends under (its run record's id).
+    @ObservationIgnored private var activeRequestRunID: String?
+    /// The listener removed the active run's key in AI Services.
+    @ObservationIgnored private var activeRunKeyRemoved = false
     @ObservationIgnored private let failures = AnalysisFailureSurface()
     @ObservationIgnored var onEpisodeStateChanged: ((String) -> Void)?
+    /// Runs an analysis on the device. Set by the app model once its analysis
+    /// members exist; tests inject a fake.
+    @ObservationIgnored var producer: (any ChaptersSummaryProducing)?
+    /// The dispatched run a `.running` record would resume, read from the
+    /// run records.
+    @ObservationIgnored var dispatchedRunLookup: (String) -> ChaptersSummaryDispatchedRun? = { _ in nil }
+    /// Episodes with a Chapters & Summary run still open (dispatched or
+    /// expired), read from the run records.
+    @ObservationIgnored var openRunEpisodeIDs: () -> [String] = { [] }
+    /// A run's background card expired and left its record `.running`. The
+    /// app model resumes it at once when the app is already in the
+    /// foreground; otherwise the next activation does.
+    @ObservationIgnored var onRunInterrupted: ((ModelContext) -> Void)?
 
     init(
         fileStore: EpisodeTranscriptAnalysisFileStore = EpisodeTranscriptAnalysisFileStore(),
@@ -40,25 +63,23 @@ final class EpisodeTranscriptAnalysisStore {
             configuration: configuration,
             transport: transport
         )
-        analysisUnavailableMessage = configuration.analysisUnavailableMessage
         #else
         // Release resolves its lane from the StoreKit environment at first
-        // use (sandbox installs must reach prod-staging billing), so no
-        // concrete lane can be pinned here; the start gate reflects only
-        // what is knowable synchronously.
+        // use (sandbox installs must reach prod-staging), so no concrete
+        // lane can be pinned here.
         client = TranscriptAnalysisRoutedAPIClient(clientFactory: { configuration in
             URLSessionEpisodeTranscriptAnalysisClient(
                 configuration: configuration,
                 transport: transport
             )
         })
-        analysisUnavailableMessage = TranscriptAnalysisBackendConfiguration.releaseAnalysisUnavailableMessage
         #endif
         self.fileStore = fileStore
         poller = Self.makePoller(timeout: .seconds(1_800)) { duration in
             try await Task.sleep(for: duration)
         }
         resumeTTL = 3_600
+        serverJobDrainWindow = 86_400
         resumeInitialPollAfter = 1
         self.preparationGate = preparationGate
     }
@@ -66,9 +87,9 @@ final class EpisodeTranscriptAnalysisStore {
     init(
         client: any EpisodeTranscriptAnalysisClient,
         fileStore: EpisodeTranscriptAnalysisFileStore = EpisodeTranscriptAnalysisFileStore(),
-        analysisUnavailableMessage: String? = nil,
         pollingTimeout: Duration = .seconds(1_800),
         resumeTTL: TimeInterval = 3_600,
+        serverJobDrainWindow: TimeInterval = 86_400,
         resumeInitialPollAfter: TimeInterval = 1,
         pollingSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
             try await Task.sleep(for: duration)
@@ -77,23 +98,15 @@ final class EpisodeTranscriptAnalysisStore {
     ) {
         self.client = client
         self.fileStore = fileStore
-        self.analysisUnavailableMessage = analysisUnavailableMessage
         poller = Self.makePoller(timeout: pollingTimeout, sleep: pollingSleep)
         self.resumeTTL = resumeTTL
+        self.serverJobDrainWindow = serverJobDrainWindow
         self.resumeInitialPollAfter = resumeInitialPollAfter
         self.preparationGate = preparationGate
     }
 
     deinit {
         activeTask?.cancel()
-    }
-
-    var canStartAnalysis: Bool {
-        analysisUnavailableMessage == nil
-    }
-
-    var analysisStartUnavailableMessage: String? {
-        analysisUnavailableMessage
     }
 
     var hasActiveJob: Bool {
@@ -120,21 +133,64 @@ final class EpisodeTranscriptAnalysisStore {
         activeTask?.cancel()
     }
 
+    /// Ends the active device run at once when it sends with the listener's
+    /// key for `provider`, right after the listener removed that key in AI
+    /// Services: its usage is counted, its run record fails as needing a
+    /// key, and so does the episode's record, without the key screen (the
+    /// listener is where keys are added). A trial run or a run on another
+    /// provider goes on.
+    func cancelActiveRun(onProvider provider: AnalysisProvider) {
+        guard let activeTask,
+              let runID = activeRequestRunID,
+              producer?.stopForKeyRemoval(runID: runID, provider: provider) == true
+        else {
+            return
+        }
+        activeRunKeyRemoved = true
+        activeTask.cancel()
+    }
+
     func load(modelContext: ModelContext) {
         do {
-            // Read consent before reconciling: the reconcile pass demotes
-            // deferrals that predate the acknowledgement.
             hasAcknowledgedGenerateDisclosure = try Self.isGenerateDisclosureAcknowledged(
                 modelContext: modelContext
             )
             let resumeContext = try reconcile(modelContext: modelContext)
             try recordSet.reload(modelContext: modelContext)
+            closeStrandedRuns(modelContext: modelContext)
+            producer?.recordUnaccountedUsage(modelContext: modelContext)
             failures.reset()
             if let resumeContext {
                 startResumingAnalysis(resumeContext, modelContext: modelContext)
             }
         } catch {
             failures.record(error)
+        }
+    }
+
+    /// Closes every open run no `.running` record will resume, so no run
+    /// record or kept reply outlives its analysis. A process that stopped
+    /// between installing a document and closing its run left that run open:
+    /// the installed document names it, and it closes as finished. Any other
+    /// open run whose record is gone, failed or completed by another run
+    /// closes as cancelled.
+    private func closeStrandedRuns(modelContext: ModelContext) {
+        guard let producer else {
+            return
+        }
+        for episodeID in Set(openRunEpisodeIDs()) {
+            guard let run = dispatchedRunLookup(episodeID) else {
+                continue
+            }
+            let record = record(for: episodeID)
+            if record?.state == .running, record?.jobAcceptedAt == nil {
+                continue
+            }
+            if record?.state == .completed, document(for: episodeID)?.requestID == run.runID {
+                producer.finishInstalled(runID: run.runID)
+            } else {
+                producer.abandon(runID: run.runID, modelContext: modelContext)
+            }
         }
     }
 
@@ -182,23 +238,16 @@ final class EpisodeTranscriptAnalysisStore {
         failures.message(for: episodeID)
     }
 
-    /// Records whose last run hit the worker's typed daily cap: deferred, not
-    /// failed. The launch and foreground-session sweeps probe these again.
-    /// Both bucket properties are consent-safe by construction: reconcile
-    /// demotes any typed deferral that predates the generate disclosure
-    /// acknowledgement, so every record here traces back to a manual start.
-    var capDeferredEpisodeIDs: [String] {
+    /// Episodes whose `.running` record belongs to an interrupted device run
+    /// (a background card expiry, or a relaunch that kept it), not to the
+    /// run in flight or to a service job being drained.
+    var resumableEpisodeIDs: [String] {
         records
-            .filter { $0.state == .failed && $0.failureKind == .capExceeded }
-            .map(\.episodeID)
-    }
-
-    /// Records denied by the worker's typed pay-gate 402: deferred, not
-    /// failed. Retried on the foreground probe and whenever the shared
-    /// transcription balance increases (H8).
-    var insufficientSecondsDeferredEpisodeIDs: [String] {
-        records
-            .filter { $0.state == .failed && $0.failureKind == .insufficientSeconds }
+            .filter { record in
+                record.state == .running
+                    && record.jobAcceptedAt == nil
+                    && !isRunning(for: record.episodeID)
+            }
             .map(\.episodeID)
     }
 
@@ -371,9 +420,6 @@ final class EpisodeTranscriptAnalysisStore {
         }
 
         guard let record = record(for: document.episodeID) else {
-            if let analysisUnavailableMessage {
-                return .unavailable(analysisUnavailableMessage)
-            }
             return .ready
         }
 
@@ -411,33 +457,99 @@ final class EpisodeTranscriptAnalysisStore {
         episodeTitle: String,
         podcastTitle: String,
         transcriptState: EpisodeTranscriptState? = .completed,
-        allowShared: Bool = false,
+        startedByListener: Bool = true,
         modelContext: ModelContext
     ) {
         guard activeTask == nil else {
             failures.record(EpisodeTranscriptAnalysisError.anotherJobActive, episodeID: document.episodeID)
             return
         }
-        if let analysisUnavailableMessage {
-            failures.record(message: analysisUnavailableMessage, episodeID: document.episodeID)
-            return
-        }
         guard transcriptState == .completed else {
             failures.record(EpisodeTranscriptAnalysisError.transcriptNotCompleted, episodeID: document.episodeID)
             return
         }
+        beginRun(
+            transcript: document,
+            episodeTitle: episodeTitle,
+            podcastTitle: podcastTitle,
+            resuming: nil,
+            startedByListener: startedByListener,
+            modelContext: modelContext
+        )
+    }
 
+    /// Re-runs the interrupted device run of a `.running` record with its run
+    /// id. A run that outlived the resume window, or whose run record is
+    /// gone, ends the record as interrupted instead.
+    func resumeAnalysis(
+        transcript document: EpisodeTranscriptDocument,
+        episodeTitle: String,
+        podcastTitle: String,
+        startedByListener: Bool = false,
+        modelContext: ModelContext
+    ) {
+        guard activeTask == nil,
+              resumableEpisodeIDs.contains(document.episodeID)
+        else {
+            return
+        }
+        guard let run = dispatchedRunLookup(document.episodeID),
+              Date.now.timeIntervalSince(run.startedAt) <= resumeTTL
+        else {
+            abandonResume(episodeID: document.episodeID, modelContext: modelContext)
+            return
+        }
+        beginRun(
+            transcript: document,
+            episodeTitle: episodeTitle,
+            podcastTitle: podcastTitle,
+            resuming: run,
+            startedByListener: startedByListener,
+            modelContext: modelContext
+        )
+    }
+
+    /// Ends an interrupted device run that can no longer resume: its run
+    /// record closes and the episode offers Generate again.
+    func abandonResume(episodeID: String, modelContext: ModelContext) {
+        guard resumableEpisodeIDs.contains(episodeID) else {
+            return
+        }
+        if let run = dispatchedRunLookup(episodeID) {
+            producer?.abandon(runID: run.runID, modelContext: modelContext)
+        }
+        markFailed(
+            episodeID: episodeID,
+            relativePath: nil,
+            failure: Self.interruptedFailure,
+            modelContext: modelContext
+        )
+    }
+
+    private func beginRun(
+        transcript document: EpisodeTranscriptDocument,
+        episodeTitle: String,
+        podcastTitle: String,
+        resuming run: ChaptersSummaryDispatchedRun?,
+        startedByListener: Bool,
+        modelContext: ModelContext
+    ) {
         failures.clear(episodeID: document.episodeID)
-        let runID = UUID()
+        let ownerID = UUID()
+        let requestRunID = run?.runID ?? UUID().uuidString
         activeEpisodeID = document.episodeID
-        activeRunID = runID
+        activeRunID = ownerID
+        activeRequestRunID = requestRunID
+        activeRunKeyRemoved = false
         activeTask = Task {
             await runAnalysis(
-                runID: runID,
+                ownerID: ownerID,
+                requestRunID: requestRunID,
                 transcript: document,
                 episodeTitle: episodeTitle,
                 podcastTitle: podcastTitle,
-                allowShared: allowShared,
+                resuming: run,
+                startedByListener: startedByListener,
                 modelContext: modelContext
             )
         }
@@ -448,6 +560,10 @@ final class EpisodeTranscriptAnalysisStore {
     func deleteAnalysis(episodeID: String, modelContext: ModelContext) {
         if activeEpisodeID == episodeID {
             activeTask?.cancel()
+        } else if let run = dispatchedRunLookup(episodeID) {
+            // Whatever state the record reached, its open run and kept
+            // reply go with it.
+            producer?.abandon(runID: run.runID, modelContext: modelContext)
         }
 
         do {
@@ -471,6 +587,8 @@ final class EpisodeTranscriptAnalysisStore {
         for record in records {
             if activeEpisodeID == record.episodeID {
                 activeTask?.cancel()
+            } else if let run = dispatchedRunLookup(record.episodeID) {
+                producer?.abandon(runID: run.runID, modelContext: modelContext)
             }
             try fileStore.delete(relativePath: record.analysisRelativePath)
             try fileStore.deleteAnalyses(forEpisodeID: record.episodeID)
@@ -546,23 +664,36 @@ final class EpisodeTranscriptAnalysisStore {
     }
 
     private func runAnalysis(
-        runID: UUID,
+        ownerID: UUID,
+        requestRunID: String,
         transcript document: EpisodeTranscriptDocument,
         episodeTitle: String,
         podcastTitle: String,
-        allowShared: Bool,
+        resuming run: ChaptersSummaryDispatchedRun?,
+        startedByListener: Bool,
         modelContext: ModelContext
     ) async {
+        var isInterrupted = false
         defer {
-            if ownsActiveRun(episodeID: document.episodeID, runID: runID) {
+            if ownsActiveRun(episodeID: document.episodeID, runID: ownerID) {
                 activeTask = nil
                 activeEpisodeID = nil
                 activeRunID = nil
+                activeRequestRunID = nil
+                activeRunKeyRemoved = false
                 failures.stateChanges.notify()
+                if isInterrupted {
+                    onRunInterrupted?(modelContext)
+                }
             }
         }
 
         guard !Task.isCancelled else {
+            endCancelledRun(resuming: run, episodeID: document.episodeID, modelContext: modelContext)
+            return
+        }
+        guard let producer else {
+            failures.record(EpisodeTranscriptAnalysisError.clientDisabled, episodeID: document.episodeID)
             return
         }
 
@@ -572,12 +703,26 @@ final class EpisodeTranscriptAnalysisStore {
                 transcript: document,
                 episodeTitle: episodeTitle,
                 podcastTitle: podcastTitle,
-                allowShared: allowShared
+                runID: requestRunID,
+                isResume: run != nil,
+                startedByListener: startedByListener
             )
             relativePath = preparation.relativePath
             try Task.checkCancellation()
-            guard ownsActiveRun(episodeID: document.episodeID, runID: runID) else {
+            guard ownsActiveRun(episodeID: document.episodeID, runID: ownerID) else {
                 throw CancellationError()
+            }
+            if let run, run.transcriptFingerprint != preparation.fingerprint {
+                // The transcript changed under the interrupted run: its
+                // answer would describe other text.
+                producer.abandon(runID: run.runID, modelContext: modelContext)
+                markFailed(
+                    episodeID: document.episodeID,
+                    relativePath: nil,
+                    failure: Self.interruptedFailure,
+                    modelContext: modelContext
+                )
+                return
             }
 
             try upsertRecord(
@@ -598,62 +743,65 @@ final class EpisodeTranscriptAnalysisStore {
             )
             try commit(episodeID: document.episodeID, modelContext: modelContext, resort: true)
 
-            let submitOutcome: EpisodeTranscriptAnalysisSubmitOutcome
-            do {
-                submitOutcome = try await analyzeRepairingAccountLink(preparation.request)
-            } catch is URLError {
-                // A lost submit response is recovered through the poll loop:
-                // the job ID is the transcript fingerprint, so it is known
-                // without the response. If the submit landed, polling attaches
-                // to the running job (or re-reads the completed result, which
-                // the worker serves idempotently until its TTL purge); if it
-                // never landed, the poll's job_not_found resubmit path starts
-                // it fresh.
-                submitOutcome = .accepted(jobID: preparation.fingerprint, pollAfter: 1)
-            }
-            let response: EpisodeTranscriptAnalysisAPIResponse
-            switch submitOutcome {
-            case .completed(let completedResponse):
-                response = completedResponse
-            case .accepted(let jobID, let pollAfter):
-                guard jobID == preparation.fingerprint else {
-                    throw Self.jobIDMismatchError()
-                }
-                try persistAcceptedJob(
-                    episodeID: document.episodeID,
-                    fingerprint: preparation.fingerprint,
-                    modelContext: modelContext
-                )
-                response = try await pollUntilCompleted(
-                    jobID: jobID,
-                    initialPollAfter: pollAfter,
-                    resubmit: {
-                        try await self.analyzeRepairingAccountLink(preparation.request)
-                    }
-                )
-            }
+            let result = await producer.run(preparation.request, modelContext: modelContext)
             try Task.checkCancellation()
-            guard ownsActiveRun(episodeID: document.episodeID, runID: runID) else {
+            guard ownsActiveRun(episodeID: document.episodeID, runID: ownerID) else {
                 throw CancellationError()
             }
 
-            let analysisDocument = makeDocument(
-                transcript: document,
-                response: response,
-                fingerprint: preparation.fingerprint,
-                transcriptSegmentCount: preparation.segments.count
-            )
-            try completeAnalysis(
-                episodeID: document.episodeID,
-                fingerprint: preparation.fingerprint,
-                relativePath: preparation.relativePath,
-                document: analysisDocument,
-                response: response,
-                modelContext: modelContext
-            )
-            failures.clear(episodeID: document.episodeID)
+            switch result {
+            case .completed(let response, let completion):
+                // Closing the run deletes its kept reply, so it waits until
+                // the document is installed.
+                let analysisDocument = makeDocument(
+                    transcript: document,
+                    response: response,
+                    fingerprint: preparation.fingerprint,
+                    transcriptSegmentCount: preparation.segments.count
+                )
+                do {
+                    try completeAnalysis(
+                        episodeID: document.episodeID,
+                        fingerprint: preparation.fingerprint,
+                        relativePath: preparation.relativePath,
+                        document: analysisDocument,
+                        response: response,
+                        modelContext: modelContext
+                    )
+                } catch is CancellationError {
+                    // The record was deleted or its transcript changed:
+                    // nothing is left to install the answer into.
+                    producer.abandon(runID: completion.runID, modelContext: modelContext)
+                    throw CancellationError()
+                } catch let error as EpisodeTranscriptAnalysisHTTPError {
+                    // The answer's contract is not this build's.
+                    producer.fail(completion, code: .unsupportedSchemaVersion)
+                    throw error
+                } catch {
+                    // A storage failure: the run stays open with its reply
+                    // kept and the record stays running, so the next launch
+                    // or activation installs the answer without another send.
+                    failures.record(error, episodeID: document.episodeID)
+                    return
+                }
+                producer.finish(completion)
+                failures.clear(episodeID: document.episodeID)
+            case .failed(let failure):
+                markFailed(
+                    episodeID: document.episodeID,
+                    relativePath: relativePath,
+                    failure: failure,
+                    modelContext: modelContext
+                )
+            case .expired:
+                // The record stays `.running` and the run resumes with the
+                // same id.
+                isInterrupted = true
+            case .cancelled:
+                endCancelledRun(resuming: run, episodeID: document.episodeID, modelContext: modelContext)
+            }
         } catch is CancellationError {
-            return
+            endCancelledRun(resuming: run, episodeID: document.episodeID, modelContext: modelContext)
         } catch {
             markFailed(
                 episodeID: document.episodeID,
@@ -669,7 +817,9 @@ final class EpisodeTranscriptAnalysisStore {
         transcript document: EpisodeTranscriptDocument,
         episodeTitle: String,
         podcastTitle: String,
-        allowShared: Bool
+        runID: String,
+        isResume: Bool,
+        startedByListener: Bool
     ) async throws -> EpisodeTranscriptAnalysisPreparation {
         try await preparationGate()
         try Task.checkCancellation()
@@ -686,14 +836,22 @@ final class EpisodeTranscriptAnalysisStore {
             episodeID: document.episodeID,
             transcriptFingerprint: fingerprint
         )
-        let request = Self.makeRequest(
-            transcript: document,
+        let request = ChaptersSummaryRunRequest(
+            runID: runID,
+            isResume: isResume,
+            startedByListener: startedByListener,
+            episodeID: document.episodeID,
+            podcastID: document.podcastID,
             episodeTitle: episodeTitle,
-            podcastTitle: podcastTitle,
-            allowShared: allowShared,
-            segments: segments,
-            fingerprint: fingerprint,
-            requestID: UUID().uuidString
+            transcriptFingerprint: fingerprint,
+            analysisRequest: Self.makeRequest(
+                transcript: document,
+                episodeTitle: episodeTitle,
+                podcastTitle: podcastTitle,
+                segments: segments,
+                fingerprint: fingerprint,
+                requestID: runID
+            )
         )
         try Task.checkCancellation()
 
@@ -716,6 +874,9 @@ final class EpisodeTranscriptAnalysisStore {
         let runID = UUID()
         activeEpisodeID = context.episodeID
         activeRunID = runID
+        // A service job sends nothing with the listener's key.
+        activeRequestRunID = nil
+        activeRunKeyRemoved = false
         activeTask = Task {
             await runResumedAnalysis(
                 runID: runID,
@@ -742,8 +903,7 @@ final class EpisodeTranscriptAnalysisStore {
         do {
             let response = try await pollUntilCompleted(
                 jobID: context.transcriptFingerprint,
-                initialPollAfter: resumeInitialPollAfter,
-                resubmit: nil
+                initialPollAfter: resumeInitialPollAfter
             )
             try Task.checkCancellation()
             guard ownsActiveRun(episodeID: context.episodeID, runID: runID) else {
@@ -779,29 +939,9 @@ final class EpisodeTranscriptAnalysisStore {
         }
     }
 
-    private func persistAcceptedJob(
-        episodeID: String,
-        fingerprint: String,
-        modelContext: ModelContext
-    ) throws {
-        guard let record = try recordSet.fetchStoredRecord(
-            episodeID: episodeID,
-            modelContext: modelContext
-        ), record.state == .running,
-           record.transcriptFingerprint == fingerprint
-        else {
-            throw CancellationError()
-        }
-
-        record.jobAcceptedAt = .now
-        record.updatedAt = .now
-        try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
-    }
-
     private func pollUntilCompleted(
         jobID: String,
-        initialPollAfter: TimeInterval,
-        resubmit: (@Sendable () async throws -> EpisodeTranscriptAnalysisSubmitOutcome)?
+        initialPollAfter: TimeInterval
     ) async throws -> EpisodeTranscriptAnalysisAPIResponse {
         try await poller.pollUntilCompleted(
             jobID: jobID,
@@ -809,7 +949,7 @@ final class EpisodeTranscriptAnalysisStore {
             poll: { [client] jobID in
                 try await client.pollJob(id: jobID)
             },
-            resubmit: resubmit
+            resubmit: nil
         )
     }
 
@@ -883,34 +1023,30 @@ final class EpisodeTranscriptAnalysisStore {
         transcript document: EpisodeTranscriptDocument,
         episodeTitle: String,
         podcastTitle: String,
-        allowShared: Bool,
         segments: [OpenCastTranscriptSegment],
         fingerprint: String,
         requestID: String
-    ) -> EpisodeTranscriptAnalysisAPIRequest {
-        EpisodeTranscriptAnalysisAPIRequest(
-            schemaVersion: EpisodeTranscriptAnalysisContract.schemaVersion,
+    ) -> TranscriptAnalysisRequest {
+        TranscriptAnalysisRequest(
             requestID: requestID,
             episodeID: document.episodeID,
             podcastID: document.podcastID,
             episodeTitle: episodeTitle,
             podcastTitle: podcastTitle,
-            asyncSupported: true,
-            allowShared: allowShared,
-            transcript: EpisodeTranscriptAnalysisAPITranscriptMetadata(
+            transcript: TranscriptAnalysisTranscript(
                 languageCode: document.languageCode,
                 audioDuration: document.audioDuration,
                 modelIdentifier: document.modelIdentifier,
                 modelVersion: document.modelVersion,
                 modelTreeSHA256: document.modelTreeSHA256,
                 fingerprint: fingerprint,
-                updatedAt: document.updatedAt,
+                updatedAt: document.updatedAt.formatted(.iso8601),
                 state: EpisodeTranscriptAnalysisContract.completedTranscriptState,
                 segmentCount: segments.count
             ),
             segments: segments.map { segment in
-                EpisodeTranscriptAnalysisAPISegment(
-                    id: segment.id,
+                AnalysisSegment(
+                    id: Int64(segment.id),
                     start: segment.start,
                     end: segment.end,
                     text: segment.text
@@ -1081,57 +1217,111 @@ final class EpisodeTranscriptAnalysisStore {
         return record
     }
 
+    /// A drained service job, or the store's own document write, failed.
     private func markFailed(
         episodeID: String,
         relativePath: String?,
         error: Error,
         modelContext: ModelContext
     ) {
+        persistFailure(
+            episodeID: episodeID,
+            relativePath: relativePath,
+            kind: .generic,
+            message: Self.failureMessage(for: error),
+            modelContext: modelContext
+        )
+    }
+
+    /// A service error keeps only its code, and only when it is a plain
+    /// identifier: its detail text never reaches the record.
+    private static func failureMessage(for error: Error) -> String {
+        guard let serviceError = error as? EpisodeTranscriptAnalysisHTTPError else {
+            return error.localizedDescription
+        }
+        let code = serviceError.code
+        let isPlainCode = (1...64).contains(code.count)
+            && code.unicodeScalars.allSatisfy { scalar in
+                ("a"..."z").contains(scalar) || ("0"..."9").contains(scalar) || scalar == "_"
+            }
+        return "Chapters & Summary failed (\(isPlainCode ? code : "service_error"))."
+    }
+
+    private func markFailed(
+        episodeID: String,
+        relativePath: String?,
+        failure: ChaptersSummaryRunFailure,
+        modelContext: ModelContext
+    ) {
+        persistFailure(
+            episodeID: episodeID,
+            relativePath: relativePath,
+            kind: failure.kind,
+            message: failure.message,
+            modelContext: modelContext
+        )
+    }
+
+    private func persistFailure(
+        episodeID: String,
+        relativePath: String?,
+        kind: EpisodeAnalysisFailureKind,
+        message: String,
+        modelContext: ModelContext
+    ) {
         do {
             guard let record = try recordSet.fetchStoredRecord(episodeID: episodeID, modelContext: modelContext) else {
-                failures.record(error, episodeID: episodeID)
+                failures.record(message: message, episodeID: episodeID)
                 return
             }
             record.state = .failed
-            record.errorMessage = error.localizedDescription
-            record.failureKind = Self.failureKind(for: error)
+            record.errorMessage = message
+            record.failureKind = kind
             record.jobAcceptedAt = nil
             record.analysisRelativePath = relativePath ?? record.analysisRelativePath
             record.updatedAt = .now
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
-            failures.record(error, episodeID: episodeID)
+            failures.record(message: message, episodeID: episodeID)
         } catch {
             failures.record(error, episodeID: episodeID)
         }
     }
 
-    private static func failureKind(for error: Error) -> EpisodeAnalysisFailureKind {
-        guard let httpError = error as? EpisodeTranscriptAnalysisHTTPError else {
-            return .generic
+    /// A cancelled run never resumes, at whatever point it stopped: a resumed
+    /// run's record closes even when the cancellation came before the
+    /// producer saw it. Delete and the data nuke remove the episode's record
+    /// themselves; any other cancellation ends a record it left `.running`
+    /// so the episode offers Generate again. A run whose key the listener
+    /// removed in AI Services closes as needing a key, and its record fails
+    /// as when a send finds the key gone, so its card and queue row say so.
+    private func endCancelledRun(
+        resuming run: ChaptersSummaryDispatchedRun?,
+        episodeID: String,
+        modelContext: ModelContext
+    ) {
+        let keyRemoved = activeRunKeyRemoved
+        if let runID = keyRemoved ? activeRequestRunID : run?.runID {
+            producer?.abandon(runID: runID, modelContext: modelContext)
         }
-        if httpError.isCapExceeded {
-            return .capExceeded
+        guard let record = try? recordSet.fetchStoredRecord(episodeID: episodeID, modelContext: modelContext),
+              record.state == .running,
+              record.jobAcceptedAt == nil
+        else {
+            return
         }
-        if httpError.isInsufficientSeconds {
-            return .insufficientSeconds
+        if keyRemoved {
+            markFailed(episodeID: episodeID, relativePath: nil, failure: Self.keyRemovedFailure, modelContext: modelContext)
+            return
         }
-        return .generic
+        record.state = .failed
+        record.errorMessage = Self.interruptedFailure.message
+        record.failureKind = Self.interruptedFailure.kind
+        record.updatedAt = .now
+        try? commit(episodeID: episodeID, modelContext: modelContext, resort: true)
     }
 
-    /// One transparent link repair: a `bootstrap_required` 403 means the
-    /// worker doesn't know this install→account link yet (or it went stale),
-    /// so bootstrap and retry once. Every other error propagates unchanged.
-    private func analyzeRepairingAccountLink(
-        _ request: EpisodeTranscriptAnalysisAPIRequest
-    ) async throws -> EpisodeTranscriptAnalysisSubmitOutcome {
-        do {
-            return try await client.analyze(request)
-        } catch let error as EpisodeTranscriptAnalysisHTTPError where error.isBootstrapRequired {
-            try await client.bootstrapAccount()
-            try Task.checkCancellation()
-            return try await client.analyze(request)
-        }
-    }
+    private static let interruptedFailure = ChaptersSummaryFailureMapping.interrupted
+    private static let keyRemovedFailure = ChaptersSummaryFailureMapping.failure(keyRequired: .noKey)
 
     private static let reconcileMessages = AnalysisRecordReconcileMessages(
         interrupted: "Chapters & Summary was interrupted.",
@@ -1140,28 +1330,29 @@ final class EpisodeTranscriptAnalysisStore {
     )
 
     private var reconciler: AnalysisRecordReconciler<EpisodeTranscriptAnalysisRecord> {
-        // Typed deferrals are consent-bearing: the retry sweeps re-upload
-        // their transcripts without a fresh tap. Every run starts behind the
-        // generate disclosure, so before it has ever been acknowledged no
-        // deferral can come from this install's own manual runs — it was
-        // inherited from the retired per-show auto-run model, whose opt-in
-        // (possibly since withdrawn) no longer authorizes an upload. Demote
-        // to a plain failure; the episode re-offers Generate and a fresh tap
-        // re-consents.
-        let hasAcknowledgedGenerateDisclosure = hasAcknowledgedGenerateDisclosure
+        let dispatchedRunLookup = dispatchedRunLookup
+        let resumeTTL = resumeTTL
         return AnalysisRecordReconciler(
             fileStore: fileStore,
             messages: Self.reconcileMessages,
-            resumeTTL: resumeTTL,
+            resumeTTL: serverJobDrainWindow,
+            // Chapters & Summary no longer defers on a daily cap or on
+            // credit: a record an earlier build left deferred is a plain
+            // failure, and the episode offers Generate again.
             repairFailedRecord: { record, now in
-                guard !hasAcknowledgedGenerateDisclosure,
-                      record.failureKind == .capExceeded || record.failureKind == .insufficientSeconds
-                else {
+                guard record.failureKind == .capExceeded || record.failureKind == .insufficientSeconds else {
                     return false
                 }
                 record.failureKind = .generic
                 record.updatedAt = now
                 return true
+            },
+            resumesDeviceRun: { record, now in
+                guard let run = dispatchedRunLookup(record.episodeID) else {
+                    return false
+                }
+                return run.transcriptFingerprint == record.transcriptFingerprint
+                    && now.timeIntervalSince(run.startedAt) <= resumeTTL
             }
         )
     }

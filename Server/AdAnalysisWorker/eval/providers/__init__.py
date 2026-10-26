@@ -22,12 +22,22 @@ _ADAPTERS = [
     GeminiAdapter("gemini-3.1-flash-lite", thinking_budget=True),
     GeminiAdapter("gemini-2.5-flash-lite", thinking_budget=True),
     OpenAIResponsesAdapter("gpt-6-astra"),
+    # 2026-10-23: id confirmed from GET /v1/models; the model page lists efforts
+    # low..max with `none` and `minimal` unsupported; context 1,050,000.
+    OpenAIResponsesAdapter(
+        "gpt-6.1-sol", thinking=("default", "low", "medium", "high"), context_limit=1_050_000
+    ),
     OpenAIResponsesAdapter("gpt-5.6-sol"),
     OpenAIResponsesAdapter("gpt-5.6-terra"),
     OpenAIResponsesAdapter("gpt-5.6-luna"),
     # Step 0: gpt-6-luna rejects "minimal" (400); it accepts none..max.
     OpenAIResponsesAdapter("gpt-6-luna", context_limit=922_000),
     AnthropicMessagesAdapter("claude-haiku-5-5", context_limit=1_000_000),
+    # 2026-10-23: Opus 5.5 returns 400 for `thinking: disabled`
+    # at every effort, so `none` is not offered; adaptive + effort only.
+    AnthropicMessagesAdapter(
+        "claude-opus-5-5", context_limit=1_000_000, thinking=("low", "medium", "high")
+    ),
     # AI Gateway unified billing (Cloudflare REST, cf-aig-gateway-id).
     CFGatewayChatAdapter(
         "cf/openai/gpt-6-luna",

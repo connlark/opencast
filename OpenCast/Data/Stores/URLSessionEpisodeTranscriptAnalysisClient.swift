@@ -1,36 +1,26 @@
 import DeviceCheck
 import Foundation
 
+/// Reads Chapters & Summary jobs the analysis service accepted before this
+/// build ran the analysis on the device. Nothing here submits work: a server
+/// job is only ever polled to completion.
 nonisolated struct URLSessionEpisodeTranscriptAnalysisClient: EpisodeTranscriptAnalysisClient {
-    private static let analyzePath = "/v1/transcript-analysis/transcript"
-    private static let bootstrapPath = "/v1/transcript-analysis/account/bootstrap"
-
-    /// Async-capable submits return promptly (202, or a cached completed
-    /// result); the generous ceiling covers App Attest handshakes and large
-    /// cached-result bodies, not model time.
-    static let analyzeTimeout: TimeInterval = 90
     static let pollTimeout: TimeInterval = 30
-    static let bootstrapTimeout: TimeInterval = 30
 
     let configuration: TranscriptAnalysisBackendConfiguration
     let transport: any EpisodeTranscriptAnalysisHTTPTransport
     private let appAttestService: any AppAttestServiceProtocol
     private let appAttestCredentialService: AppAttestCredentialService?
     private let appAttestSecureClient: AppAttestSecureAPIClient?
-    private let appTransactionJWSProvider: @Sendable () async -> String?
 
     init(
         configuration: TranscriptAnalysisBackendConfiguration = .current,
         transport: any EpisodeTranscriptAnalysisHTTPTransport & AppAttestHTTPTransport = URLSession.shared,
-        appAttestService: any AppAttestServiceProtocol = DeviceCheckAppAttestService.shared,
-        appTransactionJWSProvider: @escaping @Sendable () async -> String? = {
-            (try? await RemoteTranscriptionAppTransactionProvider.currentJWS()) ?? nil
-        }
+        appAttestService: any AppAttestServiceProtocol = DeviceCheckAppAttestService.shared
     ) {
         self.configuration = configuration
         self.transport = transport
         self.appAttestService = appAttestService
-        self.appTransactionJWSProvider = appTransactionJWSProvider
         switch configuration.authentication {
         #if DEBUG
         case .bearer:
@@ -58,56 +48,6 @@ nonisolated struct URLSessionEpisodeTranscriptAnalysisClient: EpisodeTranscriptA
         }
     }
 
-    func analyze(_ requestBody: EpisodeTranscriptAnalysisAPIRequest) async throws -> EpisodeTranscriptAnalysisSubmitOutcome {
-        guard configuration.isEnabled else {
-            throw EpisodeTranscriptAnalysisError.clientDisabled
-        }
-
-        #if DEBUG
-        if Self.forcesCapRejection(
-            environment: ProcessInfo.processInfo.environment,
-            arguments: ProcessInfo.processInfo.arguments
-        ) {
-            throw EpisodeTranscriptAnalysisHTTPError(
-                statusCode: 429,
-                code: "daily_request_cap_exceeded",
-                detail: "Forced by OPENCAST_TRANSCRIPT_ANALYSIS_FORCE_CAP"
-            )
-        }
-        #endif
-
-        let outcome = switch configuration.authentication {
-        #if DEBUG
-        case .bearer(let clientToken):
-            try await sendWithBearer(
-                path: Self.analyzePath,
-                payload: requestBody,
-                timeout: Self.analyzeTimeout,
-                clientToken: clientToken,
-                response: EpisodeTranscriptAnalysisSubmitOutcome.self
-            )
-        #endif
-        case .appAttest:
-            try await sendWithAppAttest(
-                path: Self.analyzePath,
-                payload: requestBody,
-                timeout: Self.analyzeTimeout,
-                response: EpisodeTranscriptAnalysisSubmitOutcome.self
-            )
-        }
-
-        if case .accepted(let jobID, _) = outcome,
-           jobID != requestBody.transcript.fingerprint
-        {
-            throw EpisodeTranscriptAnalysisHTTPError(
-                statusCode: -1,
-                code: "job_id_mismatch",
-                detail: nil
-            )
-        }
-        return outcome
-    }
-
     func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
         guard configuration.isEnabled else {
             throw EpisodeTranscriptAnalysisError.clientDisabled
@@ -132,33 +72,6 @@ nonisolated struct URLSessionEpisodeTranscriptAnalysisClient: EpisodeTranscriptA
                 payload: requestBody,
                 timeout: Self.pollTimeout,
                 response: EpisodeTranscriptAnalysisJobPollOutcome.self
-            )
-        }
-    }
-
-    func bootstrapAccount() async throws {
-        guard configuration.isEnabled else {
-            throw EpisodeTranscriptAnalysisError.clientDisabled
-        }
-
-        switch configuration.authentication {
-        #if DEBUG
-        case .bearer:
-            // The bearer probe lane is billing-exempt and has no install
-            // identity; the worker serves bootstrap only inside an App
-            // Attest envelope.
-            throw EpisodeTranscriptAnalysisError.appAttestUnavailable
-        #endif
-        case .appAttest:
-            let requestBody = EpisodeTranscriptAnalysisAPIBootstrapRequest(
-                schemaVersion: EpisodeTranscriptAnalysisContract.schemaVersion,
-                appTransactionJWS: await appTransactionJWSProvider()
-            )
-            _ = try await sendWithAppAttest(
-                path: Self.bootstrapPath,
-                payload: requestBody,
-                timeout: Self.bootstrapTimeout,
-                response: EpisodeTranscriptAnalysisAPIBootstrapResponse.self
             )
         }
     }
@@ -219,15 +132,6 @@ nonisolated struct URLSessionEpisodeTranscriptAnalysisClient: EpisodeTranscriptA
             )
         }
     }
-
-    #if DEBUG
-    /// The documented way to reproduce cap-deferral states without spending
-    /// real worker requests. Environment variable or launch argument.
-    static func forcesCapRejection(environment: [String: String], arguments: [String]) -> Bool {
-        environment["OPENCAST_TRANSCRIPT_ANALYSIS_FORCE_CAP"] == "1"
-            || arguments.contains("-OPENCAST_TRANSCRIPT_ANALYSIS_FORCE_CAP")
-    }
-    #endif
 
     private static func jobPath(_ id: String) -> String {
         "/v1/transcript-analysis/jobs/\(id)"

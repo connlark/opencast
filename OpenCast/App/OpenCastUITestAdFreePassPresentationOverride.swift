@@ -47,7 +47,7 @@ enum OpenCastUITestAdFreePassPresentationOverride {
         case "interrupted":
             return .interrupted
         case "failed":
-            return .failed("Daily promo/ad analysis limit reached.")
+            return .failed(EpisodePipelineState.analysisFailedMessage(for: .providerLimited))
         case "unavailable":
             return .unavailable("No episode playing.")
         default:

@@ -1,27 +1,34 @@
 use crate::route::{
     content_range_header, edge_cacheable, if_none_match_matches,
     json_response as static_json_response, parse_range_header, route_request,
-    unsatisfied_content_range_header, Header as StaticHeader, RangeError, RangeSelection,
-    RouteAction, StaticResponse, JSON_CONTENT_TYPE, OBJECT_NOT_FOUND_JSON,
-    RANGE_NOT_SATISFIABLE_JSON,
+    unsatisfied_content_range_header, Header as StaticHeader, PolicyDocument, RangeError,
+    RangeSelection, RouteAction, StaticResponse, DEFAULT_POLICY_OBJECT_PREFIX, JSON_CONTENT_TYPE,
+    OBJECT_NOT_FOUND_JSON, RANGE_NOT_SATISFIABLE_JSON,
 };
 use worker::{console_error, Cache, Context, Env, Headers, Method, Request, Response, Result};
 
 const MODEL_BUCKET: &str = "MODEL_BUCKET";
 const MODEL_OBJECT_PREFIX: &str = "MODEL_OBJECT_PREFIX";
+const POLICY_OBJECT_PREFIX: &str = "POLICY_OBJECT_PREFIX";
 const PUBLIC_MODEL_GATEWAY_ENABLED: &str = "PUBLIC_MODEL_GATEWAY_ENABLED";
 
 struct GatewayConfig {
     object_prefix: String,
+    policy_prefix: String,
     enabled: bool,
 }
 
 impl GatewayConfig {
     fn from_env(env: &Env) -> Result<Self> {
         let object_prefix = env.var(MODEL_OBJECT_PREFIX)?.to_string();
+        let policy_prefix = env.var(POLICY_OBJECT_PREFIX).map_or_else(
+            |_| DEFAULT_POLICY_OBJECT_PREFIX.to_string(),
+            |value| value.to_string(),
+        );
         let enabled = env.var(PUBLIC_MODEL_GATEWAY_ENABLED)?.to_string() == "true";
         Ok(Self {
             object_prefix,
+            policy_prefix,
             enabled,
         })
     }
@@ -47,6 +54,9 @@ pub async fn handle_request(req: Request, env: Env, ctx: Context) -> Result<Resp
         RouteAction::Manifest { object_key, head }
         | RouteAction::ManifestSignature { object_key, head } => {
             serve_manifest(&gateway, &object_key, head).await
+        }
+        RouteAction::AnalysisPolicy { document, head } => {
+            serve_policy(&gateway, &config.policy_prefix, document, head).await
         }
         RouteAction::Asset { route, head } => {
             serve_asset(
@@ -113,7 +123,60 @@ async fn serve_manifest(gateway: &Gateway<'_>, object_key: &str, head: bool) -> 
             .empty());
     }
 
-    serve_cached_full_body(gateway, object_key, JSON_CONTENT_TYPE).await
+    serve_cached_full_body(gateway, object_key, JSON_CONTENT_TYPE, None).await
+}
+
+/// Policy documents carry their own cache rule. A version's copies are
+/// immutable and go through the edge cache; the current documents are
+/// revalidated on every request and always read from R2, so a publish is
+/// visible at once and the edge never pairs generations.
+async fn serve_policy(
+    gateway: &Gateway<'_>,
+    policy_prefix: &str,
+    document: PolicyDocument,
+    head: bool,
+) -> Result<Response> {
+    let object_key = document.object_key(policy_prefix);
+    let cache_control = document.cache_control();
+    let bucket = gateway.env.bucket(MODEL_BUCKET)?;
+    if head {
+        let Some(object) = bucket.head(&object_key).await? else {
+            return json_error(404, OBJECT_NOT_FOUND_JSON);
+        };
+        let headers = object_headers(&object, JSON_CONTENT_TYPE, object.size(), None)?;
+        headers.set("cache-control", cache_control)?;
+        if gateway.conditional.matches(&object.http_etag()) {
+            return not_modified(headers);
+        }
+        return Ok(Response::builder()
+            .with_status(200)
+            .with_headers(headers)
+            .empty());
+    }
+    if document.is_immutable() {
+        return serve_cached_full_body(
+            gateway,
+            &object_key,
+            JSON_CONTENT_TYPE,
+            Some(cache_control),
+        )
+        .await;
+    }
+    let Some(object) = bucket.get(&object_key).execute().await? else {
+        return json_error(404, OBJECT_NOT_FOUND_JSON);
+    };
+    let headers = object_headers(&object, JSON_CONTENT_TYPE, object.size(), None)?;
+    headers.set("cache-control", cache_control)?;
+    if gateway.conditional.matches(&object.http_etag()) {
+        return not_modified(headers);
+    }
+    let Some(body) = object.body() else {
+        return json_error(404, OBJECT_NOT_FOUND_JSON);
+    };
+    Ok(Response::builder()
+        .with_status(200)
+        .with_headers(headers)
+        .body(body.response_body()?))
 }
 
 async fn serve_asset(
@@ -154,7 +217,7 @@ async fn serve_asset(
                         .with_headers(headers)
                         .empty())
                 } else {
-                    serve_cached_full_body(gateway, object_key, content_type).await
+                    serve_cached_full_body(gateway, object_key, content_type, None).await
                 }
             }
             RangeSelection::Partial(range) => {
@@ -198,7 +261,7 @@ async fn serve_asset(
         return json_error(405, crate::route::METHOD_NOT_ALLOWED_JSON);
     }
 
-    serve_cached_full_body(gateway, object_key, content_type).await
+    serve_cached_full_body(gateway, object_key, content_type, None).await
 }
 
 /// GET path for the manifest and whole assets: fronted by the edge Cache API
@@ -215,6 +278,7 @@ async fn serve_cached_full_body(
     gateway: &Gateway<'_>,
     object_key: &str,
     content_type: &'static str,
+    cache_control: Option<&'static str>,
 ) -> Result<Response> {
     let conditional = &gateway.conditional;
     let cache = Cache::default();
@@ -234,6 +298,9 @@ async fn serve_cached_full_body(
     let etag = object.http_etag();
     let size = object.size();
     let headers = object_headers(&object, content_type, size, None)?;
+    if let Some(cache_control) = cache_control {
+        headers.set("cache-control", cache_control)?;
+    }
     let Some(body) = object.body() else {
         return json_error(404, OBJECT_NOT_FOUND_JSON);
     };

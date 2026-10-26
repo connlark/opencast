@@ -3,12 +3,10 @@
 /// generate disclosure — the dialog must never claim something that isn't
 /// live.
 enum TranscriptAnalysisFeatureFlags {
-    /// Cross-user result sharing (`SHARED_RESULTS_ENABLED` on the worker).
-    /// While false the client sends `allow_shared: false` on every request.
-    nonisolated static let isSharingEnabled = false
-    /// Pay gate: runs charge transcription minutes at the configured flat
-    /// rate. Lit only after every lane a billing-aware build talks to runs
-    /// worker billing (`BILLING_REQUIRED`), and the flag also lights the
-    /// ready-state cost label and the needs-minutes surfaces.
-    nonisolated static let chargesTranscriptionMinutes = true
+    /// Chapters & Summary runs on the device with the listener's own provider
+    /// key (or the free trial), so it no longer charges transcription
+    /// minutes. While false the ready-state cost label, the needs-minutes
+    /// surfaces and the disclosure's minutes sentence stay dark; the billing
+    /// rate stays pinned until the analysis service retires.
+    nonisolated static let chargesTranscriptionMinutes = false
 }

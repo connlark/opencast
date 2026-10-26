@@ -397,7 +397,7 @@ try {
    const fired=fireCount(),lines=(await maintenance()).length;
    await fault('fail_retire');await reconcile();
    assert.equal(fireCount(),fired+1);
-   assert.deepEqual((await maintenance()).slice(lines),[{level:'warn',line:'notification retire failed count=1'},{level:'log',line:'notification_reconciliation'}]);
+   assert.deepEqual((await maintenance()).slice(lines),[{level:'warn',line:'notification retire failed count=1 last_error=storage_B05_Database_NotCommitted source=feed_polling'},{level:'log',line:'notification_reconciliation'}]);
    assert.deepEqual(await left([a,b,c,d],[g1,g2]),{events:[a,b,c],deliveries:[g1,g2],members:[`${g1}/${a}`,`${g1}/${b}`,`${g2}/${c}`]});
    // Member first: a deletes only its member row and leaves g1 to b. Anchor
    // first: c, skipped while d's row remained, now retires with g2.
@@ -430,7 +430,7 @@ try {
    await fault('fail_retire');await reconcile();
    assert.equal(fireCount(),fired+1);
    // main's code: the error left reconcile() and scheduled maintenance warned instead.
-   assert.deepEqual((await maintenance()).slice(lines),[{level:'warn',line:'notification retire failed count=1'},{level:'log',line:'notification_reconciliation'}]);
+   assert.deepEqual((await maintenance()).slice(lines),[{level:'warn',line:'notification retire failed count=1 last_error=storage_B05_Database_NotCommitted source=feed_polling'},{level:'log',line:'notification_reconciliation'}]);
    assert.deepEqual(await left([first,next],[first,next]),{events:[first],deliveries:[first],members:[`${first}/${first}`]});
    assert.equal((await sql("SELECT COUNT(*) AS n FROM n_requester_ticket WHERE ticket_digest='retire-ticket'").first()).n,0);
    lines=(await maintenance()).length;await reconcile();

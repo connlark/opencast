@@ -74,6 +74,8 @@ class RegistryTests(unittest.TestCase):
             "gemini-3.8-flash": ("default", "low", "medium", "high"),
             "gemini-2.5-flash-lite": ("default", "none", "low", "medium", "high"),
             "claude-haiku-5-5": ("none", "low", "medium", "high"),
+            "claude-opus-5-5": ("low", "medium", "high"),
+            "gpt-6.1-sol": ("default", "low", "medium", "high"),
             "@cf/google/gemma-4-26b-a4b-it": ("default", "none", "low", "medium", "high"),
             "@cf/qwen/qwen3-30b-a3b-fp8": ("default", "none", "low", "medium", "high"),
             "@cf/openai/gpt-oss-120b": ("default", "low", "medium", "high"),
@@ -88,6 +90,14 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(MODELS["gemini-3.1-flash-lite"].provider_thinking("high"), {"thinkingBudget": 16384})
         self.assertEqual(MODELS["gpt-6-luna"].provider_thinking("none"), {"effort": "none"})
         self.assertEqual(MODELS["gpt-6-luna"].provider_thinking("default"), {"effort": "low"})
+        self.assertEqual(
+            MODELS["claude-opus-5-5"].provider_thinking("medium"),
+            {"thinking": {"type": "adaptive"}, "effort": "medium"},
+        )
+        self.assertEqual(MODELS["claude-opus-5-5"].vendor_model, "claude-opus-5-5")
+        self.assertEqual(MODELS["gpt-6.1-sol"].vendor_model, "gpt-6.1-sol")
+        self.assertEqual(MODELS["gpt-6.1-sol"].provider_thinking("medium"), {"effort": "medium"})
+        self.assertNotIn("none", SUPPORTED_THINKING["gpt-6.1-sol"])
 
     def main_exit(self, *argv):
         old = sys.argv
@@ -104,6 +114,8 @@ class RegistryTests(unittest.TestCase):
         cases = [
             (["--model", "gemini-3.8-flash", "--policy", "promo_ad_breaks_v3", "--thinking", "none"], "supports --thinking"),
             (["--model", "claude-haiku-5-5", "--policy", "promo_ad_breaks_v3"], "supports --thinking"),
+            (["--model", "gpt-6.1-sol", "--policy", "promo_ad_breaks_v3", "--thinking", "none"], "supports --thinking"),
+            (["--model", "claude-opus-5-5", "--policy", "promo_ad_breaks_v3", "--thinking", "none"], "supports --thinking"),
             (["--model", "@cf/openai/gpt-oss-120b", "--policy", "promo_ad_breaks_v3", "--thinking", "none"], "supports --thinking"),
             (["--model", "pplx-decider-latest", "--policy", "promo_ad_breaks_v3", "--repair"], "--repair does not apply"),
             (["--model", "typesafe/jev", "--policy", "promo_ad_breaks_v2"], "v3 policy only"),

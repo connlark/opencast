@@ -1,0 +1,30 @@
+[package]
+name = "opencast-trial-proxy-worker"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+publish = false
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+futures-util = "0.3"
+opencast-app-attest-core = { path = "../AppAttestCore" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2"
+worker = { version = "0.8", features = ["d1"] }
+worker-macros = "0.8"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+base64 = "0.23"
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"] }
+rusqlite = "0.40.1"
+sha2 = "0.10"
+
+[profile.release]
+lto = true
+strip = "debuginfo"
+codegen-units = 1

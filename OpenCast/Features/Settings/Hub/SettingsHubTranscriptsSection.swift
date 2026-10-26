@@ -18,6 +18,12 @@ struct SettingsHubTranscriptsSection: View {
                 value: adSkippingValue
             )
             SettingsNavigationRow(
+                title: AIServicesCopy.screenTitle,
+                systemImage: "key",
+                route: .aiServices,
+                value: AIServicesCopy.hubValue(hasSavedKey: appModel.analysisKeys.hasSavedKey)
+            )
+            SettingsNavigationRow(
                 title: "Credits",
                 systemImage: "creditcard",
                 route: .credits,

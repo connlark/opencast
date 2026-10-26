@@ -50,6 +50,24 @@ struct EpisodePipelineState: Equatable {
             "Ad boundaries couldn't be verified for this transcript. You can still retry."
         case .capExceeded:
             "Ad detection has reached today's limit."
+        case .providerRejectedKey:
+            "Your provider didn't accept the key. Check it in Settings › AI Services."
+        case .providerLimited:
+            "Your provider is busy or at its limit. Try again later."
+        case .providerUnavailable:
+            "Couldn't reach your provider. Try again."
+        case .keyRequiredNoKey:
+            "Add a key in Settings › AI Services to detect ads."
+        case .keyRequiredTrialExhausted:
+            "Your free analyses are used. Add a key in Settings › AI Services."
+        case .keyRequiredTrialPaused:
+            "Free analyses are paused for now. Add a key in Settings › AI Services."
+        case .keyRequiredTrialRunBound:
+            "This episode is too long for a free analysis. Add a key in Settings › AI Services."
+        case .keyRequiredProxyUnavailable:
+            "Couldn't reach the free analysis service. Add a key in Settings › AI Services, or try again later."
+        case .keyRequiredKeychainUnreadable:
+            "Your saved key couldn't be read. Unlock your device and try again."
         case .generic, .insufficientSeconds, nil:
             analysisFailedMessage
         }
@@ -102,19 +120,6 @@ struct EpisodePipelineState: Equatable {
             )
         }
 
-        if queueStatus == .capDeferred {
-            return EpisodePipelineState(
-                title: passTitle,
-                steps: passSteps(
-                    download: completedOrWaiting(downloadRecord),
-                    transcribe: transcriptDone(transcription) ? .done : .waiting,
-                    detect: .waiting
-                ),
-                footnote: EpisodeAdFreePassPresentation.capDeferred.statusText,
-                action: .retryQueue
-            )
-        }
-
         if case .queued(let ahead) = queueStatus {
             return EpisodePipelineState(
                 title: passTitle,
@@ -131,6 +136,15 @@ struct EpisodePipelineState: Equatable {
         if case .failed(let message) = queueStatus {
             return failedPassState(
                 message: message,
+                downloadRecord: downloadRecord,
+                transcription: transcription,
+                analysis: analysis
+            )
+        }
+
+        if case .keyRequired(let reason) = queueStatus {
+            return failedPassState(
+                message: analysisFailedMessage(for: EpisodeAnalysisFailureKind(keyRequired: reason)),
                 downloadRecord: downloadRecord,
                 transcription: transcription,
                 analysis: analysis
@@ -294,10 +308,14 @@ struct EpisodePipelineState: Equatable {
                 footnote: nil,
                 action: .cancelPass
             )
-        case .cloudDetectingAds:
+        case .cloudFinishing:
             return EpisodePipelineState(
                 title: passTitle,
-                steps: passSteps(download: .done, transcribe: .done, detect: .running(fraction: nil, detail: nil)),
+                steps: passSteps(
+                    download: .done,
+                    transcribe: .running(fraction: nil, detail: EpisodeAdFreePassPresentation.cloudFinishing.statusText),
+                    detect: .waiting
+                ),
                 footnote: nil,
                 action: .cancelPass
             )

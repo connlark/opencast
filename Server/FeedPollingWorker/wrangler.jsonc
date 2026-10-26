@@ -40,7 +40,6 @@
     // Worker are provisioned, migrated and reachable.
     "NOTIFICATION_DISPATCHER_ADMISSION": "false",
     "NOTIFICATION_FEED_OBSERVATION": "false",
-    "NOTIFICATION_FIVE_MINUTE_POLLING": "false",
     "NOTIFICATION_CLEANUP": "false"
   },
   "triggers": {
@@ -121,7 +120,6 @@
         "STORAGE_IDENTITY": "v1;prod-staging;postgres;pg:REPLACE_WITH_DATABASE_NAME:REPLACE_WITH_SYSTEM_IDENTIFIER",
         "NOTIFICATION_DISPATCHER_ADMISSION": "false",
         "NOTIFICATION_FEED_OBSERVATION": "false",
-        "NOTIFICATION_FIVE_MINUTE_POLLING": "false",
         "NOTIFICATION_CLEANUP": "false"
       },
       "triggers": {
@@ -190,7 +188,6 @@
         "STORAGE_IDENTITY": "v1;production;postgres;pg:REPLACE_WITH_DATABASE_NAME:REPLACE_WITH_SYSTEM_IDENTIFIER",
         "NOTIFICATION_DISPATCHER_ADMISSION": "false",
         "NOTIFICATION_FEED_OBSERVATION": "false",
-        "NOTIFICATION_FIVE_MINUTE_POLLING": "false",
         "NOTIFICATION_CLEANUP": "false"
       },
       "triggers": {

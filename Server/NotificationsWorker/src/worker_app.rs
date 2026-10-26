@@ -277,25 +277,67 @@ pub async fn handle_scheduled(env: Env, scheduled_at: i64) -> Result<()> {
         worker::console_log!("{}", json!({"event": "scheduled_maintenance_frozen"}));
         return Ok(());
     }
+    let arrived = crate::polling::timing::now_ms();
+    let perf_arrived = crate::polling::timing::monotonic_ms();
     let db = crate::database::Authority::new(
         &env,
         None,
-        crate::database::Authority::default_deadline(crate::polling::timing::now_ms()),
+        crate::database::Authority::default_deadline(arrived),
     )?;
     // Join instead of short-circuiting: maintenance and the independent read
-    // both run even when the other fails. Watchdog I/O has its own deadlines.
+    // both run even when the other fails. Watchdog I/O has its own deadlines;
+    // this Authority is the watchdog's, and maintenance builds its own.
     let (_, maintenance) = futures_util::future::join(
-        crate::polling::watchdog::check(&env, scheduled_at, db.clone()),
-        scheduled_maintenance(&env, db),
+        crate::polling::watchdog::check(&env, scheduled_at, db),
+        scheduled_maintenance(&env, scheduled_at, arrived, perf_arrived),
     )
     .await;
     maintenance
 }
 
-async fn scheduled_maintenance(env: &Env, db: crate::database::Authority) -> Result<()> {
-    if crate::delivery::reconcile(env, db.clone()).await.is_err() {
-        worker::console_warn!("notification reconciliation failed; continuing maintenance");
+/// Two sequential storage budgets of HANDLER_MS each: reconciliation's, then
+/// the control read's and the prunes', so a reconciliation that spends its
+/// budget no longer defers retention. Queue sends sit outside any Authority;
+/// no invocation wall bound is claimed. Reconciliation alone is witnessed:
+/// its `storage_phases` line (handler `maintenance`) is written when it
+/// returns; retention has its own `scheduled retention:` line.
+async fn scheduled_maintenance(
+    env: &Env,
+    scheduled_at: i64,
+    arrived: u64,
+    perf_arrived: f64,
+) -> Result<()> {
+    let reconcile = crate::database::Authority::new(
+        env,
+        None,
+        crate::database::Authority::default_deadline(crate::polling::timing::now_ms()),
+    )?
+    .witnessed(arrived, perf_arrived);
+    reconcile.note(|witness, _| {
+        witness.context.handler = "maintenance";
+        witness.context.handler_main_ms = opencast_worker_database_core::lifecycle::HANDLER_MS;
+        witness.context.budget_scope = "main";
+        witness.context.budget_source = "HANDLER_MS";
+    });
+    // The cron's scheduled time arrives in seconds; the witness takes milliseconds.
+    reconcile.note_scheduled(
+        u64::try_from(scheduled_at)
+            .ok()
+            .and_then(|seconds| seconds.checked_mul(1000)),
+    );
+    let reconciled = crate::delivery::reconcile(env, reconcile.clone()).await;
+    crate::polling::emit_storage_phases(&reconcile, reconciled.is_ok());
+    if let Err(error) = reconciled {
+        worker::console_warn!(
+            "notification reconciliation failed; continuing maintenance: {}",
+            error
+        );
     }
+    let db = crate::database::Authority::new(
+        env,
+        None,
+        crate::database::Authority::default_deadline(crate::polling::timing::now_ms()),
+    )?;
     let now = now_seconds();
     if !crate::database::permitted(env, &db, "cleanup").await? {
         return Ok(());

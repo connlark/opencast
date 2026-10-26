@@ -75,6 +75,7 @@ struct OpenCastRootView: View {
                 pruneNavigationPaths: pruneNavigationPaths,
                 presentNowPlaying: presentNowPlaying,
                 dismissNowPlaying: dismissNowPlaying,
+                openAIServicesSettings: openAIServicesSettings,
                 openExternalURL: openExternalURL
             )
         )
@@ -208,6 +209,9 @@ struct OpenCastRootView: View {
         Task {
             await appModel.syncStatus.refreshAccountStatus(force: true)
         }
+        Task {
+            await appModel.refreshAnalysisPolicyIfDue()
+        }
         await appModel.ensurePlaybackSurfaceLoaded(modelContext: modelContext)
         appModel.appearanceSettings.load(modelContext: modelContext)
         appModel.recentSearches.load(modelContext: modelContext)
@@ -297,6 +301,11 @@ struct OpenCastRootView: View {
     private func openRouteInLibrary(_ route: AppRoute) {
         selectedTab = .library
         navigationPaths[.library] = [route]
+    }
+
+    private func openAIServicesSettings() {
+        selectedTab = .settings
+        navigationPaths[.settings] = [.settings(.aiServices)]
     }
 
     private func consumeRemoteEpisodeNotificationRoutes() async {

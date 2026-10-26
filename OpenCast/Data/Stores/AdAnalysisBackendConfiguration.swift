@@ -1,30 +1,10 @@
-import DeviceCheck
 import Foundation
 
+/// Where an earlier build's accepted ad-analysis jobs are read from.
 struct AdAnalysisBackendConfiguration: Sendable {
     let workerBaseURL: URL
     let authentication: AdAnalysisBackendAuthentication
     let isEnabled: Bool
-
-    var analysisUnavailableMessage: String? {
-        analysisUnavailableMessage(appAttestSupported: DCAppAttestService.shared.isSupported)
-    }
-
-    func analysisUnavailableMessage(appAttestSupported: Bool) -> String? {
-        guard isEnabled else {
-            return EpisodeAdAnalysisError.clientDisabled.localizedDescription
-        }
-        switch authentication {
-        #if DEBUG
-        case .bearer:
-            return nil
-        #endif
-        case .appAttest:
-            return appAttestSupported
-                ? nil
-                : EpisodeAdAnalysisError.appAttestUnavailable.localizedDescription
-        }
-    }
 
     nonisolated static let current: Self = {
         #if INTERNAL_NOTIFICATIONS_DIAGNOSTICS

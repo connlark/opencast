@@ -10,7 +10,6 @@ enum EpisodePipelineAction: Equatable {
     case resumeQueue
     case resumeDownload
     case resumeTranscription
-    case retryQueue
     case retryPass
     case retryDownload
     case retryTranscription
@@ -31,7 +30,7 @@ enum EpisodePipelineAction: Equatable {
             }
         case .resumeQueue, .resumeDownload, .resumeTranscription:
             "Resume"
-        case .retryQueue, .retryPass, .retryDownload, .retryTranscription, .retryAnalysis:
+        case .retryPass, .retryDownload, .retryTranscription, .retryAnalysis:
             "Retry"
         case .removeFromQueue:
             "Remove from Queue"

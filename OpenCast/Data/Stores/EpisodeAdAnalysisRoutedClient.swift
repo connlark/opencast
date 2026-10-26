@@ -1,7 +1,8 @@
 import Foundation
 
-/// Pin submits and subsequent polls to the same StoreKit environment as the
-/// cloud transcription path. Unknown environments never guess production.
+/// Pin polls of a job an earlier build started to the same StoreKit
+/// environment as the cloud transcription path. Unknown environments never
+/// guess production.
 actor EpisodeAdAnalysisRoutedClient: EpisodeAdAnalysisClient {
     private let environmentProvider: @Sendable () async throws -> RemoteTranscriptionStoreEnvironment
     private let clientFactory: @Sendable (AdAnalysisBackendConfiguration) -> any EpisodeAdAnalysisClient
@@ -18,16 +19,8 @@ actor EpisodeAdAnalysisRoutedClient: EpisodeAdAnalysisClient {
         self.clientFactory = clientFactory
     }
 
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
-        try await client().analyze(request)
-    }
-
     func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
         try await client().pollJob(id: id)
-    }
-
-    func servingPolicyRevision() async throws -> String? {
-        try await client().servingPolicyRevision()
     }
 
     private func client() async throws -> any EpisodeAdAnalysisClient {

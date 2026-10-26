@@ -59,6 +59,12 @@ Optionally, `reader-stats-grant.sql` (same `-v reader_role=`, but run by the
 grant predefined-role membership) grants that role `pg_read_all_stats WITH INHERIT
 TRUE` for the dashboard's session-state view; no table or write access.
 
+`migrations/0005_retire_five_minute_polling.sql` is data only: it deletes the
+retired `five_minute_polling` control row that 0001 seeds. Apply it once as
+the owner after the release whose claim no longer reads that row (an earlier
+binary reads it COALESCEd to zero, so the row is inert until then); the local
+topology's template keeps the twelve-file order above.
+
 Local topology: `local/local-postgres.sh up` runs one PostgreSQL 18.6 container
 on 127.0.0.1:55432 (Podman first; Docker Desktop through
 `OPENCAST_CONTAINER_RUNTIME=docker`, a path not yet verified on a Docker daemon)

@@ -1,0 +1,65 @@
+{
+  "description": "Shared timestamp cases for the analysis policy bundle. Both the generator's relational check and the app's bundle decoder accept exactly the canonical UTC form YYYY-MM-DDTHH:MM:SSZ with a real calendar date; each valid value lists its Unix seconds.",
+  "valid": [
+    {
+      "value": "2026-10-24T00:00:00Z",
+      "unix_seconds": 1792800000
+    },
+    {
+      "value": "2027-01-01T00:00:00Z",
+      "unix_seconds": 1798761600
+    },
+    {
+      "value": "2028-02-29T23:59:59Z",
+      "unix_seconds": 1835481599
+    },
+    {
+      "value": "2000-02-29T12:00:00Z",
+      "unix_seconds": 951825600
+    },
+    {
+      "value": "1970-01-01T00:00:00Z",
+      "unix_seconds": 0
+    },
+    {
+      "value": "1969-12-31T23:59:59Z",
+      "unix_seconds": -1
+    },
+    {
+      "value": "9999-12-31T23:59:59Z",
+      "unix_seconds": 253402300799
+    }
+  ],
+  "invalid": [
+    "xxxxxxxxxxxxxxxxxxxx",
+    "",
+    "2026-10-24",
+    "2026-10-24T00:00:00",
+    "2026-10-24 00:00:00Z",
+    "2026-10-24t00:00:00z",
+    "2026-10-24T00:00:00z",
+    "2026-10-24T00:00:00.123Z",
+    "2026-10-24T01:02:03+02:00",
+    "2026-10-24T00:00:00+00:00",
+    "2027-02-29T00:00:00Z",
+    "1900-02-29T00:00:00Z",
+    "2026-02-30T00:00:00Z",
+    "2026-04-31T00:00:00Z",
+    "2026-13-01T00:00:00Z",
+    "2026-00-10T00:00:00Z",
+    "2026-10-00T00:00:00Z",
+    "2026-10-24T24:00:00Z",
+    "2026-10-24T00:60:00Z",
+    "2026-10-24T00:00:60Z",
+    "2026-1-24T00:00:00Z",
+    "26-10-24T00:00:00Z",
+    " 2026-10-24T00:00:00Z",
+    "2026-10-24T00:00:00Z ",
+    "2026-10-24T00:00:00ZZ",
+    "+2026-10-24T00:00:00Z",
+    "2026-10-24T00:00:00GMT",
+    "2026-é-24T00:00:00Z",
+    "２026-10-24T00:00:00Z",
+    "-026-10-24T00:00:00Z"
+  ]
+}

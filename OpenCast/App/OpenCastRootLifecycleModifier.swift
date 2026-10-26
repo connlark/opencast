@@ -48,9 +48,6 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
                     appModel.lastPlaybackError = message
                 }
             }
-            .onChange(of: appModel.library.refreshCompletedToken) { _, _ in
-                appModel.adFreePass.probeCapDeferredQueueIfAllowed(trigger: .refreshCompleted)
-            }
             .onChange(of: appModel.library.contentRefreshToken) { _, _ in
                 if scenePhase == .active {
                     appModel.scheduleAutoDownloadPass(modelContext: modelContext)
@@ -79,7 +76,6 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             if transcriptionInterruptionDecision == .interruptNow {
                 interruptActiveTranscriptionForLifecycleExit()
             }
-            appModel.resetTranscriptAnalysisForegroundProbe()
             flushProgressForLifecycleExitIfNeeded()
         case .active:
             deferredTranscriptionInterruptionTask?.cancel()
@@ -88,8 +84,9 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             appModel.setAutoDownloadsScene(autoDownloadSceneID, isActive: true)
             appModel.resumeEnvironmentalAdFreePassIfNeeded(modelContext: modelContext)
             appModel.reattachRemoteJobsIfNeeded(modelContext: modelContext, trigger: .sceneActivated)
-            appModel.retryDeferredTranscriptAnalyses(modelContext: modelContext, trigger: .sceneActivated)
+            appModel.resumeInterruptedTranscriptAnalyses(modelContext: modelContext)
             appModel.transcriptIntelligence.refreshAvailability()
+            appModel.analysisUsage.refreshCurrentMonth()
             startForegroundSyncedDataRefresh()
             runOrDeferForegroundMaintenance()
             startConnectivityRecovery()
@@ -181,6 +178,10 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
                     return
                 }
             }
+            await appModel.analysisKeys.refreshPresences()
+            guard !Task.isCancelled else {
+                return
+            }
             await appModel.refreshLibraryIfStale(modelContext: modelContext)
             guard !Task.isCancelled else {
                 return
@@ -202,6 +203,10 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
                 activePodcastIDs: appModel.library.activePodcastIDs,
                 modelContext: modelContext
             )
+            guard !Task.isCancelled else {
+                return
+            }
+            await appModel.refreshAnalysisPolicyIfDue()
             guard !Task.isCancelled else {
                 return
             }

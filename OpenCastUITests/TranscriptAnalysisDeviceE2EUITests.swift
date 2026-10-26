@@ -17,12 +17,19 @@ import XCTest
 /// - 03: a `podcast:chapters` feed suppresses generation and explains
 ///   (creator metadata wins) — served by the grafted exercise feed, whose
 ///   "Bridge Three" declares creator chapters.
+/// - 04: Generate runs on the device under the continued-processing card:
+///   the app goes to the Home Screen mid-run, the run finishes in the
+///   background, the cards render on return and Episode Diagnostics shows
+///   the run finished under the card. With no key saved the run takes the
+///   trial route, so the build's trial service lane must accept this
+///   device's App Attest environment.
 final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
     private static let optInEnvironmentKey = "OPENCAST_DEVICE_E2E"
 
     /// Real show for legs 01/02: short daily episodes keep on-device
     /// transcription in the minutes range.
     private static let realShowFeedURL = "https://feeds.npr.org/510318/podcast.xml"
+    private static let realShowName = "Up First from NPR"
     private static var realShowRowPredicate: NSPredicate {
         NSPredicate(
             format: "identifier BEGINSWITH %@ AND identifier CONTAINS %@",
@@ -185,10 +192,9 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
                 staticText(containing: "shared with other listeners", in: app).exists,
                 "sharing sentence must be absent while the sharing flag is dark"
             )
-            assertExists(
-                staticText(containing: "Uses transcription minutes.", in: app),
-                named: "disclosure minutes sentence",
-                timeout: 5
+            XCTAssertFalse(
+                staticText(containing: "transcription minutes", in: app).exists,
+                "minutes sentence must be absent: generation no longer charges transcription time"
             )
             attachTimestampedSmokeScreenshot(named: "02-disclosure-dialog")
             let confirm = app.buttons["Generate"].firstMatch
@@ -265,6 +271,87 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
             "creator-chapters episode must not auto-run an analysis"
         )
         attachTimestampedSmokeScreenshot(named: "03-generation-suppressed")
+    }
+
+    @MainActor
+    func testDeviceE2E04GenerateFinishesInTheBackground() throws {
+        try skipUnlessDeviceE2E()
+        let app = launchRealApp()
+
+        // The show's newest episode from the Inbox when it is there (a
+        // large library's lazy grid can keep the show's row out of reach);
+        // the library route otherwise.
+        let episodeTitle: String
+        if let inboxTitle = openInboxEpisode(ofShow: Self.realShowName, in: app) {
+            episodeTitle = inboxTitle
+        } else {
+            openShowPage(matching: Self.realShowRowPredicate, subscribingTo: Self.realShowFeedURL, in: app)
+            episodeTitle = openEpisodeDetail(at: 0, in: app)
+        }
+        resetTranscriptIfPresent(in: app)
+        downloadAndStartTranscript(in: app)
+        XCTAssertTrue(
+            waitForTranscriptCompleted(in: app, timeout: 1200),
+            "on-device transcription should complete"
+        )
+
+        let generate = app.buttons[Self.generateButtonTitle]
+        sweepDetail(in: app) { generate.exists }
+        assertExists(generate, named: "Generate button below the show notes", timeout: 20)
+        scrollIntoMiddleBand(generate, in: app)
+        generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        // The key notice (no key saved): run the held tap with Later.
+        let later = app.buttons["AI Key Notice Later"]
+        if later.waitForExistence(timeout: 5) {
+            later.tap()
+        }
+        if staticText(containing: "Generate Chapters & Summary?", in: app).waitForExistence(timeout: 8) {
+            let confirm = app.buttons["Generate"].firstMatch
+            assertExists(confirm, named: "disclosure Generate confirmation", timeout: 5)
+            confirm.tap()
+        }
+        assertExists(
+            staticText(containing: Self.runningCopy, in: app),
+            named: "running state after Generate",
+            timeout: 60
+        )
+        attachTimestampedSmokeScreenshot(named: "04-generating-before-home")
+
+        // Leave for the Home Screen while the run is in flight; the card
+        // keeps it going.
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 150)
+        app.activate()
+
+        XCTAssertTrue(
+            waitForGeneratedCards(in: app, timeout: 600),
+            "the run started before Home should have produced chapters + summary cards for \(episodeTitle)"
+        )
+        attachTimestampedSmokeScreenshot(named: "04-cards-after-return")
+
+        app.swipeDown()
+        openEpisodeActionsMenu(in: app)
+        let diagnostics = app.buttons["Episode Diagnostics"].firstMatch
+        assertExists(diagnostics, named: "Episode Diagnostics entry", timeout: 10)
+        diagnostics.tap()
+        let background = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Chapters & Summary · Background, Yes")
+        ).firstMatch
+        for _ in 0..<30 where !(background.exists && background.isHittable) {
+            app.swipeUp()
+        }
+        attachTimestampedSmokeScreenshot(named: "04-diagnostics-analysis-runs")
+        assertExists(background, named: "run record finished under the card", timeout: 5)
+        // The run's route and billed counts (numbers only) for the spend record.
+        for label in ["Chapters & Summary · Route", "Chapters & Summary · Tokens", "Chapters & Summary · Run ID"] {
+            let row = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+            if row.exists {
+                let attachment = XCTAttachment(string: row.label)
+                attachment.name = "04-\(label)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
     }
 
     /// Diagnostics probe, not a gate: captures the Downloads screen so a
@@ -387,8 +474,13 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
                 return
             }
             let tabButton = app.tabBars.buttons["Library"].firstMatch
+            // At regular width (iPad) the tabs are sidebar rows, not tab-bar
+            // buttons.
+            let sidebarRow = app.cells.matching(NSPredicate(format: "label == %@", "Library")).firstMatch
             if tabButton.waitForExistence(timeout: 5), tabButton.isHittable {
                 tabButton.tap()
+            } else if sidebarRow.exists, sidebarRow.isHittable {
+                sidebarRow.tap()
             } else {
                 let fallback = app.buttons["Library"].firstMatch
                 if fallback.exists, fallback.isHittable {
@@ -452,7 +544,13 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         var row = libraryRow(matching: predicate, in: app)
         if row == nil {
             subscribe(to: feedURL, in: app)
-            row = libraryRow(matching: predicate, in: app)
+            // A long feed can take a while to land in the library.
+            for _ in 0..<6 where row == nil {
+                row = libraryRow(matching: predicate, in: app)
+                if row == nil {
+                    sleep(15)
+                }
+            }
         }
         guard let row else {
             XCTFail("subscription row should exist after subscribing to \(feedURL)")
@@ -517,6 +615,11 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
             app.navigationBars["Library"].buttons["Add"].firstMatch,
             app.buttons["Add"].firstMatch
         ]
+        // A library scrolled away from the top collapses its navigation bar
+        // and its buttons with it (iPad): scroll back up first.
+        for _ in 0..<10 where !candidates[0].exists {
+            app.swipeDown()
+        }
         for candidate in candidates {
             if candidate.waitForExistence(timeout: 3), candidate.isHittable {
                 candidate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -572,6 +675,41 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         for _ in 0..<6 where !(row.exists && row.isHittable) {
             app.swipeUp()
             row = rows.element(boundBy: index)
+        }
+        let label = row.label
+        openDetail(from: row, in: app)
+        return label
+    }
+
+    /// Scrolls until `element` sits in the window's middle band. A control
+    /// below the visible area still exists, and a coordinate tap on it lands
+    /// outside the window (recorded on the iPad).
+    @MainActor
+    private func scrollIntoMiddleBand(_ element: XCUIElement, in app: XCUIApplication) {
+        let window = app.windows.firstMatch.frame
+        for _ in 0..<8 {
+            let frame = element.frame
+            if frame.maxY > window.maxY - window.height * 0.2 {
+                app.swipeUp()
+            } else if frame.minY < window.minY + window.height * 0.15 {
+                app.swipeDown()
+            } else {
+                return
+            }
+        }
+    }
+
+    /// Opens the newest Inbox episode of `show` (the launch screen) in
+    /// detail and returns its row label; `nil` when the Inbox holds none.
+    @MainActor
+    private func openInboxEpisode(ofShow show: String, in app: XCUIApplication) -> String? {
+        dismissBlockingAlertsIfPresent()
+        let row = episodeRows(in: app).matching(NSPredicate(format: "label CONTAINS %@", show)).firstMatch
+        guard row.waitForExistence(timeout: 15) else {
+            return nil
+        }
+        for _ in 0..<6 where !row.isHittable {
+            app.swipeUp()
         }
         let label = row.label
         openDetail(from: row, in: app)

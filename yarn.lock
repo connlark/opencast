@@ -1349,6 +1349,19 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@opencast/trial-proxy-worker@workspace:Server/TrialProxyWorker":
+  version: 0.0.0-use.local
+  resolution: "@opencast/trial-proxy-worker@workspace:Server/TrialProxyWorker"
+  dependencies:
+    "@cloudflare/vitest-plugin": "catalog:"
+    "@vitest/runner": "catalog:"
+    "@vitest/snapshot": "catalog:"
+    miniflare: "catalog:"
+    vitest: "catalog:"
+    wrangler: "catalog:"
+  languageName: unknown
+  linkType: soft
+
 "@opencast/website@workspace:Server/Website":
   version: 0.0.0-use.local
   resolution: "@opencast/website@workspace:Server/Website"

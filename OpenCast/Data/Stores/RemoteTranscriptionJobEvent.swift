@@ -10,7 +10,8 @@ nonisolated enum RemoteTranscriptionJobEvent: Equatable {
     case queuedRemotely
     case waitingForCredits
     case processing(RemoteTranscriptionActiveProgress)
-    /// Chained server-side ad detection after stitching (detect jobs only).
+    /// Server ad detection after stitching, which only a detect job an
+    /// earlier build created still asks for.
     case detectingAds
     case uploadingExactCopy(completedParts: Int, totalParts: Int)
     case saving

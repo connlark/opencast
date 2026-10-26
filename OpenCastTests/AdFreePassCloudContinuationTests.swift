@@ -410,11 +410,13 @@ struct AdFreePassCloudContinuationTests {
         #expect(transcribing.steps.last?.status == .waiting)
 
         transcribingPoll.release()
-        #expect(await waitUntil { process.pass.currentStage == .cloudDetectingAds })
+        // A job an earlier build created still runs server ad detection;
+        // it reads as the transcript finishing.
+        #expect(await waitUntil { process.pass.currentStage == .cloudFinishing })
         #expect(process.pipeline(for: episode.episodeID)?.steps.map(\.status) == [
             .done,
-            .done,
-            .running(fraction: nil, detail: nil),
+            .running(fraction: nil, detail: "Finishing the transcript in the cloud"),
+            .waiting,
         ])
         #expect(process.pipeline(for: episode.episodeID)?.footnote == nil)
         // Nothing here armed or submitted a continued-processing card.
@@ -424,6 +426,73 @@ struct AdFreePassCloudContinuationTests {
         #expect(await process.waitForDrainToStop())
         #expect(await waitUntil { api.cancelCalls.count == 1 })
         #expect(process.pipeline(for: episode.episodeID)?.footnote != EpisodePipelineState.cloudUploadFootnote)
+    }
+
+    @Test("A cloud item asks the server for the transcript alone, then detects ads on this device with moving progress, and a cancel stops that run")
+    func cloudItemDetectsOnDeviceAfterDelivery() async throws {
+        let episodeID = "ep-cloud-device-phase"
+        let api = deliveringAPI(episodeID: episodeID, segmentCount: 900)
+        let device = try await makeDevice(episodeIDs: [episodeID], api: api)
+        let analysis = ScriptedAdAnalysisRunEnvironment()
+        // The first window answers; the second holds until the run stops.
+        analysis.answerForRequest = { request in
+            request.purpose == .adWindow(index: 1) ? .hold : .sponsorRead
+        }
+        device.adAnalyses.runEnvironment = analysis
+        device.adAnalyses.load(modelContext: device.context)
+        let process = device.launch()
+
+        process.enqueueCloud(device.episode(episodeID))
+        let handle = process.armAndLaunch()
+
+        // Two windows and, while the run goes, the step still to come.
+        let halfway = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 3))
+        #expect(await waitUntil { process.pass.currentStage == halfway })
+        #expect(api.createRequests.count == 1)
+        #expect(api.createRequests.allSatisfy { $0.adAnalysisRequested == nil && $0.podcastID == nil })
+        #expect(analysis.resolvedRunIDs == [nil])
+        // This phase is work on this device.
+        #expect(process.pass.holdsOnDeviceWork)
+        #expect(!process.pass.isActiveItemOnServerOnly)
+        // 910 + 65 × 1/3: the card and the queue moved with the answered window.
+        #expect(handle.adFreeUnits >= 931)
+        #expect(process.pass.queueSnapshot.fractionCompleted >= 0.931)
+        #expect(process.pipeline(for: episodeID)?.steps.map(\.status) == [
+            .done,
+            .done,
+            .running(fraction: nil, detail: nil),
+        ])
+        #expect(process.soundLab(for: device.episode(episodeID)).statusText == "Detecting ads")
+
+        process.pass.cancelActivePass()
+
+        #expect(await waitUntil { !device.adAnalyses.hasActiveJob })
+        #expect(analysis.latestRun?.state == .cancelled)
+        #expect(analysis.sends.count(of: .adWindow(index: 1)) == 1)
+        #expect(await process.waitForDrainToStop())
+    }
+
+    @Test(
+        "A server ad block a job from an earlier build delivers: a completed one is imported with no device run; a failed or missing one runs ad detection on this device",
+        arguments: [ServerAdBlock.completed, .failedAtCapacity, .missing]
+    )
+    func earlierBuildServerAdBlock(block: ServerAdBlock) async throws {
+        let episodeID = "ep-cloud-block-\(block.rawValue)"
+        let api = deliveringAPI(episodeID: episodeID, segmentCount: 2, adAnalysis: block.outcome)
+        let device = try await makeDevice(episodeIDs: [episodeID], api: api)
+        let analysis = ScriptedAdAnalysisRunEnvironment()
+        device.adAnalyses.runEnvironment = analysis
+        device.adAnalyses.load(modelContext: device.context)
+        let process = device.launch()
+
+        process.enqueueCloud(device.episode(episodeID))
+
+        #expect(await process.waitForDrainToStop())
+        #expect(process.pass.drainOutcomes.map(\.kind) == [.completed(zoneCount: 0)])
+        #expect(process.terminals.values == [.drained(completedCount: 1, failedCount: 0)])
+        #expect(device.adAnalyses.record(for: episodeID)?.state == .completed)
+        #expect(analysis.resolvedRunIDs.count == (block == .completed ? 0 : 1))
+        #expect(analysis.sends.count == (block == .completed ? 0 : 1))
     }
 
     @Test("The next queued episode never presents the previous episode's last stage before its own first event")
@@ -709,6 +778,35 @@ struct AdFreePassCloudContinuationTests {
         rig.appModel.adFreePass.reset()
     }
 
+    @Test("Once a cloud item's ad detection runs here, its live card protects it, and the card's expiry keeps that run resumable")
+    func cloudDevicePhaseIsProtectedLocalWork() async throws {
+        let episodeID = "ep-app-device-phase"
+        let api = deliveringAPI(episodeID: episodeID, segmentCount: 2)
+        let device = try await makeDevice(episodeIDs: [episodeID], api: api)
+        let rig = makeAppModel(device)
+        let analysis = ScriptedAdAnalysisRunEnvironment()
+        analysis.answer = .hold
+        device.adAnalyses.runEnvironment = analysis
+        device.adAnalyses.load(modelContext: device.context)
+        let handle = FakeAdFreePassContinuedTaskHandle()
+
+        rig.appModel.startAdFreePass(for: device.episode(episodeID), modelContext: device.context, mode: .cloud)
+        #expect(await waitUntil { rig.appModel.adFreePassBackgroundSession.isArmed })
+        rig.adFreeScheduler.launch(handle)
+        #expect(await waitUntil { analysis.sends.count == 1 })
+
+        #expect(rig.appModel.adFreePassBackgroundSession.isProtectingBackgroundExecution)
+        #expect(rig.appModel.isProtectingLocalBackgroundWork)
+        #expect(rig.appModel.adFreePass.holdsOnDeviceWork)
+
+        handle.expire()
+
+        #expect(await waitUntil { !device.adAnalyses.hasActiveJob })
+        #expect(analysis.latestRun?.state == .expired)
+        #expect(await waitUntil { rig.appModel.adFreePass.activeEpisodeID == nil })
+        rig.appModel.adFreePass.reset()
+    }
+
     @Test("Scene activation re-attaches a parked cloud head foreground-only, through the same job")
     func activationResumesParkedCloudHead() async throws {
         let device = try await makeDevice(episodeIDs: ["ep-app-activate"], api: RemoteJobRecoveryFixture.cloudParked.makeAPI())
@@ -827,6 +925,62 @@ struct AdFreePassCloudContinuationTests {
         )
     }
 
+    /// A server that delivers a transcript consistent with the episode's
+    /// download (two-second segments of two words each), with `adAnalysis`
+    /// as the result's server ad block.
+    private func deliveringAPI(
+        episodeID: String,
+        segmentCount: Int,
+        adAnalysis: OpenCastRemoteTranscriptionAdAnalysisOutcome? = nil
+    ) -> RemoteJobFaultInjectingAPI {
+        let data = Data("remote audio bytes \(episodeID)".utf8)
+        let identity = OpenCastRemoteTranscriptionSourceIdentity(
+            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            byteCount: Int64(data.count)
+        )
+        let segments = (0..<segmentCount).map { index in
+            let start = Double(index * 2)
+            return OpenCastRemoteTranscriptSegment(
+                id: index,
+                start: start,
+                end: start + 2,
+                text: "Part \(index).",
+                words: [
+                    OpenCastRemoteTranscriptWord(start: start, end: start + 1, text: "Part"),
+                    OpenCastRemoteTranscriptWord(start: start + 1, end: start + 2, text: "\(index)."),
+                ]
+            )
+        }
+        let text = segments.map(\.text).joined(separator: " ")
+        let result = OpenCastRemoteTranscriptionResult(
+            schemaVersion: 1,
+            sourceIdentity: identity,
+            languageCode: "en",
+            durationSeconds: Double(segmentCount * 2),
+            text: text,
+            segments: segments,
+            provenance: OpenCastRemoteTranscriptionModelProvenance(
+                provider: "cloudflare-workers-ai",
+                modelIdentifier: "@cf/openai/whisper-large-v3-turbo",
+                modelRevision: nil,
+                servingContractVersion: "1",
+                requestSettingsSHA256: String(repeating: "a", count: 64),
+                chunkManifestSHA256: String(repeating: "b", count: 64),
+                normalizedTranscriptSHA256: OpenCastRemoteTranscriptNormalization.normalizedTranscriptSHA256(text),
+                pipelineVersion: "stitch-v3"
+            ),
+            warnings: []
+        )
+        return RemoteJobFaultInjectingAPI(
+            pollScript: [OpenCastRemoteTranscriptionJobStatus(jobID: "", state: .resultReady)],
+            resultResponse: OpenCastRemoteTranscriptionResultResponse(
+                schemaVersion: 1,
+                result: result,
+                adAnalysis: adAnalysis
+            )
+        )
+    }
+
     /// The episode card, the Ad Detection queue row and the Sound Lab row
     /// agree on the running upload's copy; only the card adds the footnote.
     private func expectUploadSurfaces(
@@ -854,6 +1008,37 @@ struct AdFreePassCloudContinuationTests {
             .appending(path: "OpenCastCloudContinuationTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+/// The ad block a delivered result carries.
+enum ServerAdBlock: String, Sendable, CaseIterable {
+    case completed
+    case failedAtCapacity
+    case missing
+
+    var outcome: OpenCastRemoteTranscriptionAdAnalysisOutcome? {
+        switch self {
+        case .completed:
+            .completed(OpenCastRemoteTranscriptionAdAnalysisSuccess(
+                model: "gemini-3.5-flash",
+                policy: EpisodeAdAnalysisContract.expectedPolicy,
+                spans: [OpenCastRemoteTranscriptionAdAnalysisSpan(
+                    kind: "host_read_ad",
+                    label: "Sponsor",
+                    startSegmentID: 0,
+                    endSegmentID: 1,
+                    startTime: 0,
+                    endTime: 4,
+                    confidence: 0.9,
+                    evidenceQuote: "Part 0."
+                )]
+            ))
+        case .failedAtCapacity:
+            .failed(errorCode: "ad_analysis_capacity")
+        case .missing:
+            nil
+        }
     }
 }
 

@@ -120,7 +120,8 @@ try {
     // slow storage can no longer spend the publisher's fifteen-second deadline.
     await due(storage); const [wake] = await h.polls();
     await h.invoke('fault', 'slow_get');
-    assert.equal((await h.consume(wake)).outcome, 'staged');
+    // The scan staged, and the same delivery prepared and published it.
+    assert.equal((await h.consume(wake)).outcome, 'published');
     assert.equal((await h.first('SELECT poll_failures FROM n_feed WHERE feed_id=?', storage)).poll_failures, 0);
     await h.drain();
   }

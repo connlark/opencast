@@ -9,6 +9,9 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
     struct Outcome {
         var resumeContext: AnalysisResumeContext?
         var repairedGroupCount = 0
+        /// The episode whose `.running` record a device run will resume (at
+        /// most one, and none when a server job resumes).
+        var deviceResumeEpisodeIDs: [String] = []
     }
 
     let fileStore: any AnalysisDocumentFileStore
@@ -20,6 +23,10 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
     /// Store-specific repair of `.failed` rows, run after the shared
     /// `jobAcceptedAt` cleanup; returns whether it changed the record.
     var repairFailedRecord: (Record, Date) -> Bool = { _, _ in false }
+    /// Whether a `.running` record with no accepted server job belongs to a
+    /// device run that resumes from its run record; such a record stays
+    /// running and is reported in `Outcome.deviceResumeEpisodeIDs`.
+    var resumesDeviceRun: (Record, Date) -> Bool = { _, _ in false }
 
     func reconcile(_ records: [Record], modelContext: ModelContext) throws -> Outcome {
         var fetchedRecords = records
@@ -35,12 +42,19 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
         for record in fetchedRecords {
             switch record.state {
             case .running:
-                if outcome.resumeContext == nil,
+                // One resumed run per launch, server drain or device run,
+                // whichever record comes first; the rest are interrupted.
+                let slotFree = outcome.resumeContext == nil && outcome.deviceResumeEpisodeIDs.isEmpty
+                if slotFree,
                    let jobAcceptedAt = record.jobAcceptedAt,
                    now.timeIntervalSince(jobAcceptedAt) <= resumeTTL,
                    let context = AnalysisResumeContext(record: record)
                 {
                     outcome.resumeContext = context
+                    continue
+                }
+                if slotFree, record.jobAcceptedAt == nil, resumesDeviceRun(record, now) {
+                    outcome.deviceResumeEpisodeIDs.append(record.episodeID)
                     continue
                 }
                 fail(record, message: messages.interrupted, kind: interruptedFailureKind, at: now)

@@ -63,7 +63,6 @@ struct NowPlayingSoundLabAdFreePassRowModelTests {
     func actionableStagesKeepActionWords() {
         #expect(NowPlayingSoundLabAdFreePassRowModel(presentation: .interrupted).title == "Resume")
         #expect(NowPlayingSoundLabAdFreePassRowModel(presentation: .failed("It broke.")).title == "Retry")
-        #expect(NowPlayingSoundLabAdFreePassRowModel(presentation: .capDeferred).title == "Retry")
         #expect(NowPlayingSoundLabAdFreePassRowModel(presentation: .completed(zoneCount: 3)).title == "Reanalyze")
     }
 
@@ -79,7 +78,7 @@ struct NowPlayingSoundLabAdFreePassRowModelTests {
         let completed = NowPlayingSoundLabAdFreePassRowModel(presentation: .completed(zoneCount: 1))
         let failed = NowPlayingSoundLabAdFreePassRowModel(presentation: .failed("It broke."))
         let unavailable = NowPlayingSoundLabAdFreePassRowModel(presentation: .unavailable("No episode playing."))
-        let deferred = NowPlayingSoundLabAdFreePassRowModel(presentation: .capDeferred)
+        let deferred = NowPlayingSoundLabAdFreePassRowModel(presentation: .remoteParked(.connectionLost))
         let checking = NowPlayingSoundLabAdFreePassRowModel(presentation: .checkingAnalysis)
 
         #expect(transcribing.phase == .running)

@@ -40,7 +40,6 @@ pub enum Control {
     JobSend,
     Cleanup,
     DiagnosticSend,
-    FiveMinutePolling,
 }
 impl Control {
     pub(super) fn name(self) -> &'static str {
@@ -53,7 +52,6 @@ impl Control {
             Self::JobSend => "job_send",
             Self::Cleanup => "cleanup",
             Self::DiagnosticSend => "diagnostic_send",
-            Self::FiveMinutePolling => "five_minute_polling",
         }
     }
 }

@@ -105,9 +105,11 @@ struct AdDetectionModePolicyTests {
             estimate: nil
         )
         #expect(EpisodeAdFreePassProgressMapper.units(for: .cloudTranscribing(halfway)) == 575)
-        #expect(EpisodeAdFreePassProgressMapper.units(for: .cloudDetectingAds) == 910)
+        // The server finishing the transcript creeps up to, never into, the
+        // band of the device ad detection that follows it.
+        #expect(EpisodeAdFreePassProgressMapper.units(for: .cloudFinishing) == 900)
         #expect(
-            EpisodeAdFreePassProgressMapper.units(for: .cloudDetectingAds, stageElapsed: 600) == 975
+            EpisodeAdFreePassProgressMapper.units(for: .cloudFinishing, stageElapsed: 600) == 909
         )
         #expect(
             EpisodeAdFreePassProgressMapper.units(

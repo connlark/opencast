@@ -1,0 +1,713 @@
+{
+  "note": "Gemini 429 RESOURCE_EXHAUSTED exchanges with google.rpc error details and how the device classifies each for the pipeline (transport) and the listener. All constructed from Google's documented error-details shape; no live free-tier 429 has been recorded yet. No key material.",
+  "cases": [
+    {
+      "name": "minute-retry-info",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.Help\",\"links\":[{\"description\":\"Learn more about Gemini API quotas\",\"url\":\"https://ai.google.dev/gemini-api/docs/rate-limits\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"12s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:12",
+        "listener": "rate_limited"
+      },
+      "why": "a per-minute limit paces with RetryInfo's delay"
+    },
+    {
+      "name": "minute-retry-info-capped",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.Help\",\"links\":[{\"description\":\"Learn more about Gemini API quotas\",\"url\":\"https://ai.google.dev/gemini-api/docs/rate-limits\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"43s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:30",
+        "listener": "rate_limited"
+      },
+      "why": "delays cap at 30 s like Retry-After"
+    },
+    {
+      "name": "minute-fraction-rounds-up",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"7.2s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:8",
+        "listener": "rate_limited"
+      },
+      "why": "fractional seconds round up"
+    },
+    {
+      "name": "minute-tiny-fraction",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"0.000340s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:1",
+        "listener": "rate_limited"
+      },
+      "why": "any fraction waits a whole second"
+    },
+    {
+      "name": "minute-oversized-delay",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"86400s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:30",
+        "listener": "rate_limited"
+      },
+      "why": "an oversized delay caps at 30 s"
+    },
+    {
+      "name": "minute-huge-delay",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"99999999999999999999999s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:30",
+        "listener": "rate_limited"
+      },
+      "why": "a delay too large to read still caps"
+    },
+    {
+      "name": "minute-header-precedence",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": "5",
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"20s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:5",
+        "listener": "rate_limited"
+      },
+      "why": "a readable Retry-After header wins over RetryInfo"
+    },
+    {
+      "name": "minute-bad-header-falls-back",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": "soon",
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"9s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:9",
+        "listener": "rate_limited"
+      },
+      "why": "an unreadable header falls back to RetryInfo"
+    },
+    {
+      "name": "minute-header-only",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": "20",
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]}]}}",
+      "expect": {
+        "transport": "retryable:429:20",
+        "listener": "rate_limited"
+      },
+      "why": "the header alone sets the delay"
+    },
+    {
+      "name": "minute-no-delay",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]}]}}",
+      "expect": {
+        "transport": "retryable:429:none",
+        "listener": "rate_limited"
+      },
+      "why": "no delay given: paced, serial, no cooldown"
+    },
+    {
+      "name": "minute-malformed-retry-delay",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"soon\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "an unreadable RetryInfo is a malformed shape: the services' classification stands"
+    },
+    {
+      "name": "minute-negative-retry-delay",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"-5s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a negative delay is unreadable: the services' classification stands"
+    },
+    {
+      "name": "minute-retry-delay-not-string",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":5}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a non-string retryDelay is unreadable"
+    },
+    {
+      "name": "minute-retry-info-without-delay",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\"}]}}",
+      "expect": {
+        "transport": "retryable:429:none",
+        "listener": "rate_limited"
+      },
+      "why": "an absent retryDelay is no delay, not a malformed one"
+    },
+    {
+      "name": "minute-two-retry-infos",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"5s\"},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"20s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:20",
+        "listener": "rate_limited"
+      },
+      "why": "the longest of several delays"
+    },
+    {
+      "name": "minute-quota-value-object",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":{}}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "an unreadable allocation is a malformed shape"
+    },
+    {
+      "name": "minute-quota-value-unknown",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"unknown\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "an unreadable allocation is a malformed shape"
+    },
+    {
+      "name": "minute-quota-value-negative",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":-1}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a negative allocation is unreadable"
+    },
+    {
+      "name": "minute-quota-value-negative-text",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"-1\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a negative allocation is unreadable"
+    },
+    {
+      "name": "minute-quota-value-fraction",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15.5\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a fractional allocation is unreadable"
+    },
+    {
+      "name": "minute-quota-value-null",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":null}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:6",
+        "listener": "rate_limited"
+      },
+      "why": "a null allocation is absent, not malformed"
+    },
+    {
+      "name": "minute-quota-value-absent",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"}}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:6",
+        "listener": "rate_limited"
+      },
+      "why": "an absent allocation does not block the reading"
+    },
+    {
+      "name": "minute-quota-value-number",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":15}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:6",
+        "listener": "rate_limited"
+      },
+      "why": "a numeric allocation reads like the string form"
+    },
+    {
+      "name": "minute-quota-value-overflow-text",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"18446744073709551616\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "an allocation past the int64 range is unreadable, not absent"
+    },
+    {
+      "name": "minute-quota-value-overflow-number",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":18446744073709551616}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "an allocation past the int64 range is unreadable, not absent"
+    },
+    {
+      "name": "minute-quota-value-above-int64-text",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"9223372036854775808\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "int64 max plus one is out of range"
+    },
+    {
+      "name": "minute-quota-value-above-int64-number",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":9223372036854775808}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "int64 max plus one is out of range"
+    },
+    {
+      "name": "minute-quota-value-large-double",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":1e+19}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a double past the int64 range is out of range"
+    },
+    {
+      "name": "minute-quota-value-int64-max-text",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"9223372036854775807\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:6",
+        "listener": "rate_limited"
+      },
+      "why": "int64 max is a readable allocation"
+    },
+    {
+      "name": "minute-quota-value-int64-max-number",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":9223372036854775807}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:6",
+        "listener": "rate_limited"
+      },
+      "why": "int64 max is a readable allocation"
+    },
+    {
+      "name": "minute-quota-value-integral-double",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":15.0}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:6",
+        "listener": "rate_limited"
+      },
+      "why": "an integral number reads like the integer"
+    },
+    {
+      "name": "minute-quota-id-not-string",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaId\":[\"GenerateRequestsPerMinute\"]}]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a non-string quotaId is unreadable"
+    },
+    {
+      "name": "minute-violation-not-object",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"},\"junk\"]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a violation that is not an object is malformed"
+    },
+    {
+      "name": "minute-detail-not-object",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},\"junk\"]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a detail that is not an object is malformed"
+    },
+    {
+      "name": "minute-detail-without-type",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"reason\":\"x\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a detail without a type is malformed"
+    },
+    {
+      "name": "minute-error-info-reason-not-string",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":5}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "an unreadable ErrorInfo reason could be a billing reason"
+    },
+    {
+      "name": "minute-message-not-string",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":5,\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:none",
+        "listener": "rate_limited"
+      },
+      "why": "an unreadable message is a malformed envelope: the services' classification (a plain retry) stands"
+    },
+    {
+      "name": "delay-overflow-fraction",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"18446744073709551615.1s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:30",
+        "listener": "rate_limited"
+      },
+      "why": "the largest whole second plus a fraction caps, never wraps to 0"
+    },
+    {
+      "name": "delay-largest-whole",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"18446744073709551615s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:30",
+        "listener": "rate_limited"
+      },
+      "why": "the largest whole second caps"
+    },
+    {
+      "name": "delay-just-under-cap",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"29.000000001s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:30",
+        "listener": "rate_limited"
+      },
+      "why": "29 s and a fraction round up to the cap"
+    },
+    {
+      "name": "delay-at-cap",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"30s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:30",
+        "listener": "rate_limited"
+      },
+      "why": "exactly the cap"
+    },
+    {
+      "name": "delay-zero",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"0s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:0",
+        "listener": "rate_limited"
+      },
+      "why": "a zero delay is a delay of zero"
+    },
+    {
+      "name": "minute-requests-and-tokens",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"},{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateContentInputTokensPerModelPerMinute-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"250000\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"3s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:3",
+        "listener": "rate_limited"
+      },
+      "why": "every violation per-minute"
+    },
+    {
+      "name": "daily",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"250\"}]},{\"@type\":\"type.googleapis.com/google.rpc.Help\",\"links\":[{\"description\":\"Learn more about Gemini API quotas\",\"url\":\"https://ai.google.dev/gemini-api/docs/rate-limits\"}]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "daily_limit"
+      },
+      "why": "a per-day limit is final until the reset"
+    },
+    {
+      "name": "daily-with-one-second-retry-info",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"250\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"1s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "daily_limit"
+      },
+      "why": "RetryInfo alone never makes a daily limit temporary"
+    },
+    {
+      "name": "daily-without-quota-text",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"Resource has been exhausted.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"250\"}]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "daily_limit"
+      },
+      "why": "the structured daily violation decides even when the services' text check would retry"
+    },
+    {
+      "name": "mixed-minute-and-day",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"},{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"250\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"30s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "daily_limit"
+      },
+      "why": "daily takes precedence over minute"
+    },
+    {
+      "name": "zero-allocation-minute",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.8-flash\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"0\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"10s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a zero allocation needs billing; the services' classification stands"
+    },
+    {
+      "name": "zero-allocation-daily",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"0\"}]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a zero daily allocation needs billing too"
+    },
+    {
+      "name": "billing-error-info",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"BILLING_DISABLED\",\"domain\":\"googleapis.com\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "an explicit billing reason keeps the services' classification"
+    },
+    {
+      "name": "billing-text-without-details",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\"}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "no details: the services' classification stands"
+    },
+    {
+      "name": "malformed-details",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":\"not-a-list\"}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "unreadable details change nothing"
+    },
+    {
+      "name": "malformed-violation",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaId\":5}]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a violation without a readable quotaId changes nothing"
+    },
+    {
+      "name": "empty-violations",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "no violations change nothing"
+    },
+    {
+      "name": "unknown-interval",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"5s\"}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "a quota that names no interval keeps the services' classification"
+    },
+    {
+      "name": "minute-and-unknown",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"},{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "not every violation is per-minute"
+    },
+    {
+      "name": "conflicting-interval",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerDayPerProject\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]}]}}",
+      "expect": {
+        "transport": "quota_exhausted",
+        "listener": "billing_or_quota"
+      },
+      "why": "one id naming both intervals is conflicting"
+    },
+    {
+      "name": "minute-without-status",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"6s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:none",
+        "listener": "rate_limited"
+      },
+      "why": "without RESOURCE_EXHAUSTED the details are not read; the services' classification (a plain retry) stands"
+    },
+    {
+      "name": "minute-no-quota-text",
+      "source": "constructed from Google's documented google.rpc error-details shape (QuotaFailure violations with quotaId, RetryInfo retryDelay); not a live recording",
+      "status": 429,
+      "retry_after": null,
+      "body": "{\"error\":{\"code\":429,\"message\":\"Resource has been exhausted.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.8-flash\"},\"quotaValue\":\"15\"}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"4s\"}]}}",
+      "expect": {
+        "transport": "retryable:429:4",
+        "listener": "rate_limited"
+      },
+      "why": "paced as before, now with RetryInfo's delay"
+    }
+  ]
+}

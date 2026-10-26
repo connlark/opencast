@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { harness,item,rss } from './harness.mjs';
+import { POLLING_FIXTURE,stopAfter } from './action-boundary.mjs';
 let version=1;
-const h=await harness(()=>new Response(rss([...Array.from({length:100},(_,i)=>item(`episode-${i}`,h.now-100-i)),...(version>1?[item('backfill',h.now-4*86400)]:[])]),{headers:{etag:`"v${version}"`}}));
+const h=await harness(()=>new Response(rss([...Array.from({length:100},(_,i)=>item(`episode-${i}`,h.now-100-i)),...(version>1?[item('backfill',h.now-4*86400)]:[])]),{headers:{etag:`"v${version}"`}}),{pollingBuild:POLLING_FIXTURE});
 try {
   const feed=await h.add('https://preparation.example.com/feed');
   await h.invoke('test/dispatch');await h.drain();
   version=2;await h.run('UPDATE n_feed SET due_at=?',h.now);await h.invoke('test/dispatch');
-  for(const wake of await h.polls())assert.equal((await h.consume(wake)).outcome,'staged');
+  // The scan alone: the loop stopped at its first boundary, the preparation staged.
+  for(const wake of await h.polls())assert.equal((await stopAfter(h,wake,1)).outcome,'guard');
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM n_observation WHERE state='staging' AND valid_eof=1")).n,1);
   const requests=h.fetches.length;
   await h.run("UPDATE n_observation SET processing_failures=9 WHERE state='staging' AND valid_eof=1");

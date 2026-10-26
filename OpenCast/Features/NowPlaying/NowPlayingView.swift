@@ -15,6 +15,7 @@ struct NowPlayingView: View {
     @State private var remoteEstimateRequest: RemoteTranscriptionStartPreviewRequest?
     @State private var remoteTranscriptionStartErrorMessage: String?
     @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
+    @State private var noticeGate = AnalysisKeyNoticeGate()
     @State private var naturalContentHeight: CGFloat?
     @State private var scrollPosition = ScrollPosition(edge: .top)
 
@@ -258,6 +259,7 @@ struct NowPlayingView: View {
             .tint(.accentColor)
             .foregroundStyle(.primary)
             .adDetectionModeDialog(episode: $adDetectionModePromptEpisode)
+            .analysisKeyNotice(gate: noticeGate)
             .sensoryFeedback(.impact(flexibility: .soft), trigger: playPauseFeedback)
             .sensoryFeedback(.selection, trigger: skipFeedback)
             .accessibilityAction(.escape) {
@@ -552,10 +554,18 @@ struct NowPlayingView: View {
         appModel.playback.skip(by: appModel.playbackSettings.skipForwardOption.seconds)
     }
 
+    /// A tap held by the key notice acts only on the episode it was made
+    /// for: playback may have moved on while the notice was up.
     private func startAdFreePass() {
-        adDetectionModePromptEpisode = appModel.startOrContinueAdFreePassForCurrentEpisodeResolvingMode(
-            modelContext: modelContext
-        )
+        let episodeID = currentEpisodeID
+        noticeGate.run(appModel: appModel) {
+            guard currentEpisodeID == episodeID else {
+                return
+            }
+            adDetectionModePromptEpisode = appModel.startOrContinueAdFreePassForCurrentEpisodeResolvingMode(
+                modelContext: modelContext
+            )
+        }
     }
 
     private func presentRemoteTranscriptionEstimate() {

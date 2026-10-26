@@ -1,4 +1,6 @@
 import Foundation
+import OpenCastAnalysis
+import OpenCastAnalysisProviders
 import OpenCastCore
 import OpenCastPlayback
 import OSLog
@@ -60,6 +62,9 @@ final class OpenCastAppRuntime {
             if launchConfiguration.seedsOnboardingCompleted {
                 try OpenCastUITestSeedData.seedOnboardingCompleted(in: modelContainer)
             }
+            if launchConfiguration.seedsAnalysisKeyNoticeSeen {
+                try AnalysisUITestFixtures.seedKeyNoticeSeen(in: modelContainer)
+            }
             if launchConfiguration.schedulesNotificationLookFixture {
                 UITestNotificationLookFixtureScheduler.schedule()
             }
@@ -115,6 +120,17 @@ final class OpenCastAppRuntime {
                 appleSpeechAssets: appleSpeechAssets,
                 transcriptions: transcriptions,
                 transcriptIntelligence: Self.transcriptIntelligenceStore(launchConfiguration: launchConfiguration),
+                analysisPolicy: Self.analysisPolicyStore(launchConfiguration: launchConfiguration),
+                analysisKeys: Self.analysisKeyStore(launchConfiguration: launchConfiguration),
+                analysisKeyNotice: AnalysisKeyNoticeStore(trialStatus: launchConfiguration.uiTestAnalysisTrialStatus),
+                analysisKeyRequired: Self.analysisKeyRequiredPresenter(launchConfiguration: launchConfiguration),
+                analysisKeyTester: Self.analysisKeyTester(launchConfiguration: launchConfiguration),
+                analysisRuns: Self.analysisRunRecordStore(launchConfiguration: launchConfiguration),
+                analysisTrialConnection: Self.analysisTrialConnection(launchConfiguration: launchConfiguration),
+                analysisTransportFixture: launchConfiguration.uiTestAnalysisTransport,
+                analysisContinuedTaskScheduler: launchConfiguration.uiTestChaptersSummarySession
+                    .map(UITestAnalysisContinuedTaskScheduler.init(mode:)),
+                analysisTrialStatusDefaults: Self.analysisTrialStatusDefaults(launchConfiguration: launchConfiguration),
                 playback: playback,
                 onboardingState: onboardingState,
                 voiceBoostDiagnostics: voiceBoostDiagnostics,
@@ -176,6 +192,94 @@ final class OpenCastAppRuntime {
         return TranscriptIntelligenceStore()
     }
 
+    // UI tests never reach the Keychain or the network: the keys live in
+    // memory, the policy is a fixed variant and the key test answers at once.
+    private static func analysisPolicyStore(
+        launchConfiguration: OpenCastLaunchConfiguration
+    ) -> AnalysisPolicySnapshotStore {
+        guard launchConfiguration.usesInMemoryStore else {
+            return .live()
+        }
+        return .fixed(launchConfiguration.uiTestAnalysisPolicy ?? .baked)
+    }
+
+    private static func analysisKeyStore(
+        launchConfiguration: OpenCastLaunchConfiguration
+    ) -> AnalysisProviderKeyStore {
+        guard launchConfiguration.usesInMemoryStore else {
+            return AnalysisProviderKeyStore(storage: KeychainAnalysisProviderKeyStorage())
+        }
+        let syncs = !launchConfiguration.seedsAnalysisKeysLocalOnly
+        var seeded: [AnalysisProvider: (AnalysisProviderKey, syncs: Bool)] = [:]
+        for provider in launchConfiguration.seededAnalysisKeyProviders {
+            seeded[provider] = (AnalysisUITestFixtures.key(for: provider), syncs: syncs)
+        }
+        let fault = launchConfiguration.uiTestAnalysisKeyStorageFailures
+            .map(AnalysisUITestFixtures.keyStorageFault(failing:))
+        return AnalysisProviderKeyStore(storage: InMemoryAnalysisProviderKeyStorage(seeded: seeded, fault: fault))
+    }
+
+    private static func analysisKeyRequiredPresenter(
+        launchConfiguration: OpenCastLaunchConfiguration
+    ) -> AnalysisKeyRequiredPresenter {
+        let presenter = AnalysisKeyRequiredPresenter()
+        if let feature = launchConfiguration.uiTestAnalysisKeyRequiredFeature {
+            presenter.present(
+                feature: feature,
+                trialStatus: launchConfiguration.uiTestAnalysisTrialStatus ?? .exhausted
+            )
+        }
+        return presenter
+    }
+
+    /// UI tests keep run records in a directory of their own launch.
+    private static func analysisRunRecordStore(launchConfiguration: OpenCastLaunchConfiguration) -> AnalysisRunRecordStore {
+        guard launchConfiguration.usesInMemoryStore else { return AnalysisRunRecordStore() }
+        return AnalysisRunRecordStore(
+            directory: FileManager.default.temporaryDirectory.appending(path: "AnalysisRuns-\(UUID().uuidString)", directoryHint: .isDirectory)
+        )
+    }
+
+    /// UI tests cache the trial status in a suite of their own launch, so a
+    /// status an earlier launch read never outlives it.
+    private static func analysisTrialStatusDefaults(launchConfiguration: OpenCastLaunchConfiguration) -> UserDefaults {
+        guard launchConfiguration.usesInMemoryStore,
+              let suite = UserDefaults(suiteName: "opencast.uitest.trial-status.\(UUID().uuidString)")
+        else {
+            return .standard
+        }
+        return suite
+    }
+
+    /// UI tests answer the trial status from the seeded one and never reach
+    /// the trial service.
+    private static func analysisTrialConnection(launchConfiguration: OpenCastLaunchConfiguration) -> AnalysisTrialConnection {
+        guard launchConfiguration.usesInMemoryStore else { return AnalysisTrialConnection() }
+        let trial = (launchConfiguration.uiTestAnalysisPolicy ?? .baked).bundle.trial
+        let status: AnalysisTrialProxyStatus = switch launchConfiguration.uiTestAnalysisTrialStatus {
+        case .unitsLeft(let units)?:
+            AnalysisTrialProxyStatus(mode: .trial, unitsRemaining: max(units, 0), startsAt: trial.startsAt, monthPaused: false)
+        case .exhausted?:
+            AnalysisTrialProxyStatus(mode: .trial, unitsRemaining: 0, startsAt: trial.startsAt, monthPaused: false)
+        case .notStarted?, nil:
+            AnalysisTrialProxyStatus(mode: .open, unitsRemaining: trial.lifetimeUnits, startsAt: trial.startsAt, monthPaused: false)
+        }
+        return AnalysisTrialConnection(fixtureStatus: status, isFixture: true)
+    }
+
+    private static func analysisKeyTester(
+        launchConfiguration: OpenCastLaunchConfiguration
+    ) -> any AnalysisKeyTesting {
+        guard launchConfiguration.usesInMemoryStore else {
+            return AnalysisProviderKeyTester()
+        }
+        return FixedAnalysisKeyTester(
+            results: launchConfiguration.uiTestAnalysisKeyTestResults ?? [.accepted],
+            delay: .milliseconds(launchConfiguration.uiTestAnalysisKeyTestDelayMilliseconds ?? 0),
+            gate: launchConfiguration.uiTestAnalysisKeyTestGated ? AnalysisKeyTestReleaseGate() : nil
+        )
+    }
+
     private static func makeAppleSpeechAssetStore() -> AppleSpeechAssetStore {
         #if DEBUG
         if let forcedProvider = DebugForcedAppleSpeechAssetProvider.requestedProvider {
@@ -200,7 +304,7 @@ final class OpenCastAppRuntime {
 
     #if DEBUG || INTERNAL_NOTIFICATIONS_DIAGNOSTICS
     private static func deleteAdAnalysisAppAttestCredentials() throws {
-        for keychainService in AdAnalysisAppAttestKeychainServices.all {
+        for keychainService in AdAnalysisAppAttestKeychainServices.all + TrialProxyAppAttestKeychainServices.all {
             try AppAttestKeychain(service: keychainService).deleteAll()
         }
     }

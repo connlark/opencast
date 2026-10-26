@@ -77,8 +77,8 @@ extension EpisodeAdFreePassStage {
             "installingSpeechAssets fraction=\(fractionCompleted.backgroundLogNumber)"
         case .transcribing(let progress):
             "transcribing completed=\(progress.completedDuration.backgroundLogSeconds) audio=\(progress.audioDuration.backgroundLogSeconds) checkpoints=\(progress.checkpointCount) window=\(progress.currentWindowIndex.map(String.init) ?? "nil")"
-        case .analyzing:
-            "analyzing"
+        case .analyzing(let steps):
+            "analyzing steps=\(steps.map { "\($0.completed)/\($0.total)" } ?? "nil")"
         case .cloudQueued:
             "cloudQueued"
         case .cloudVerifying:
@@ -89,8 +89,8 @@ extension EpisodeAdFreePassStage {
             "cloudWaitingForCredits"
         case .cloudTranscribing(let progress):
             "cloudTranscribing fraction=\((progress?.fractionCompleted ?? 0).backgroundLogNumber)"
-        case .cloudDetectingAds:
-            "cloudDetectingAds"
+        case .cloudFinishing:
+            "cloudFinishing"
         case .cloudUnavailable(let message):
             "cloudUnavailable message=\(message)"
         case .cloudParked(let reason):
@@ -133,8 +133,8 @@ extension EpisodeAdFreePassStage {
             "cloudWaitingForCredits"
         case .cloudTranscribing:
             "cloudTranscribing"
-        case .cloudDetectingAds:
-            "cloudDetectingAds"
+        case .cloudFinishing:
+            "cloudFinishing"
         case .cloudUnavailable:
             "cloudUnavailable"
         case .cloudParked:

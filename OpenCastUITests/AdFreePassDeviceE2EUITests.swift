@@ -1,9 +1,9 @@
 import XCTest
 
 /// Opt-in device E2E coverage for the ad-detection queue. Runs against a
-/// physical device with the real on-disk store, real network, and a
-/// self-hosted development Worker (App Attest) — no `--opencast-ui-testing`
-/// seams. Each test is meant to run one-at-a-time via
+/// physical device with the real on-disk store, real network, and the
+/// device's own analysis route (its saved key, else the free analyses) — no
+/// `--opencast-ui-testing` seams. Each test is meant to run one-at-a-time via
 /// `-only-testing` with `TEST_RUNNER_OPENCAST_DEVICE_E2E=1`; the class skips
 /// everywhere else so simulator regression runs are unaffected.
 ///
@@ -24,7 +24,6 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
     private static let cancelEpisodeB = "Example Cancel Episode B"
     private static let armingEpisodeA = "Example Arming Episode A"
     private static let armingEpisodeB = "Example Arming Episode B"
-    private static let capEpisode = "Example Cap Episode"
     private static let persistenceEpisodeA = "Example Persistence Episode A"
     private static let persistenceEpisodeB = "Example Persistence Episode B"
     // (Both persistence titles rely on fresh twins if their first copies get
@@ -39,7 +38,6 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
 
     private static let liveActivityTitleFragment = "Detecting ads"
     private static let soloActivityTitle = "Skip Promos & Ads"
-    private static let capDeferredCopy = "Daily detection limit reached — continues tomorrow"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -187,19 +185,12 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
     /// "Continue in Background" arms it mid-run, seeded at the current
     /// composite progress, and the drain completes backgrounded.
     ///
-    /// Choreography (recorded findings force it): the toolbar indicator's
-    /// running state is un-tappable on this layout, so the mock worker
-    /// (`TEST_RUNNER_OPENCAST_E2E_MOCK_ANALYSIS_URL`) 429s the first
-    /// analysis to park the restored queue capDeferred — whose paused
-    /// indicator taps fine. With the queue screen ALREADY OPEN, Retry
-    /// probes into the mock's delayed-response stall, the queue runs
-    /// un-armed, and Continue in Background appears on the open screen.
+    /// The running indicator rebuilds on every progress tick, so the queue
+    /// screen opens through `tryOpenQueueScreen`'s short-tap bursts, retried
+    /// until the restored drain is running with the screen open.
     @MainActor
     func testDeviceE2E03QueueScreenArmingMidRun() throws {
         try skipUnlessDeviceE2E()
-        guard let mockURL = ProcessInfo.processInfo.environment["OPENCAST_E2E_MOCK_ANALYSIS_URL"] else {
-            throw XCTSkip("Set TEST_RUNNER_OPENCAST_E2E_MOCK_ANALYSIS_URL to the stateful mock worker for the arming gate.")
-        }
 
         let app = makeRealApp()
         app.launch()
@@ -211,40 +202,18 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 10)
         app.terminate()
 
-        // Restored session against the mock: item 1 transcribes, its first
-        // analysis 429s, and the queue parks capDeferred.
-        let restored = makeRealApp(environment: [
-            "OPENCAST_AD_ANALYSIS_BASE_URL": mockURL,
-            "OPENCAST_AD_ANALYSIS_CLIENT_TOKEN": "example-arming-mock-token"
-        ])
+        // The restored session drains un-armed; Continue in Background
+        // shows on the open queue screen while it runs.
+        let restored = makeRealApp()
         restored.launch()
-        var parked = false
-        let parkDeadline = Date().addingTimeInterval(300)
-        while Date() < parkDeadline, !parked {
-            if tryOpenQueueScreen(in: restored),
-               staticText(containing: Self.capDeferredCopy, in: restored).waitForExistence(timeout: 3) {
-                parked = true
-                break
-            }
-            Thread.sleep(forTimeInterval: 5)
-        }
-        XCTAssertTrue(parked, "restored queue should park capDeferred against the mock's first 429")
-        attachTimestampedSmokeScreenshot(named: "03-parked-cap-deferred")
-
-        // Retry probes into the mock's stall; the queue runs un-armed with
-        // the screen already open, so Continue in Background is reachable.
-        let retryButton = restored.buttons["Retry"]
-        assertExists(retryButton, named: "cap Retry affordance", timeout: 10)
-        retryButton.tap()
-
         let continueButton = restored.buttons["Continue in Background"]
         let armedLabel = staticText(containing: "Continues in the background.", in: restored)
-        let armDeadline = Date().addingTimeInterval(200)
+        let armDeadline = Date().addingTimeInterval(300)
         while Date() < armDeadline, !armedLabel.exists {
-            if continueButton.exists, continueButton.isHittable {
+            if tryOpenQueueScreen(in: restored),
+               continueButton.waitForExistence(timeout: 3),
+               continueButton.isHittable {
                 continueButton.tap()
-            } else if retryButton.exists, retryButton.isHittable {
-                retryButton.tap()
             }
             _ = armedLabel.waitForExistence(timeout: 2)
         }
@@ -276,50 +245,6 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         restored.activate()
         assertAdsDetected(for: Self.armingEpisodeA, in: restored)
         assertAdsDetected(for: Self.armingEpisodeB, in: restored)
-    }
-
-    /// Cap-deferral on device via the force hook: queue pauses with the
-    /// settled copy; a fresh session (no hook) probes once and the deferred
-    /// item completes.
-    @MainActor
-    func testDeviceE2E04CapDeferralAndNextSessionProbe() throws {
-        try skipUnlessDeviceE2E()
-        let cappedApp = makeRealApp(environment: ["OPENCAST_ADANALYSIS_FORCE_CAP": "1"])
-        cappedApp.launch()
-        settleAnyRestoredQueue(in: cappedApp)
-        resetEpisodeAnalysis(for: Self.capEpisode, in: cappedApp)
-
-        detectAds(on: Self.capEpisode, in: cappedApp)
-
-        // The running indicator is un-tappable mid-drain (recorded finding),
-        // so poll until the forced cap parks the queue — the paused pill
-        // taps fine.
-        var parked = false
-        let parkDeadline = Date().addingTimeInterval(600)
-        while Date() < parkDeadline, !parked {
-            if tryOpenQueueScreen(in: cappedApp),
-               staticText(containing: Self.capDeferredCopy, in: cappedApp).waitForExistence(timeout: 3) {
-                parked = true
-                break
-            }
-            Thread.sleep(forTimeInterval: 5)
-        }
-        XCTAssertTrue(parked, "forced cap should park the queue with the settled copy")
-        assertExists(cappedApp.buttons["Retry"], named: "cap Retry affordance", timeout: 10)
-        attachTimestampedSmokeScreenshot(named: "04-cap-deferred-queue-screen")
-
-        // Relaunch without the hook: the restored session is allowed one
-        // probe, which retries the deferred item on its own — the resumed
-        // drain keeps the indicator un-tappable, so completion is asserted
-        // from the Inbox indicator settling plus the menu state.
-        let app = makeRealApp()
-        app.launch()
-        XCTAssertTrue(
-            waitForQueueDrainToFinish(in: app, timeout: 900),
-            "probe should retry the deferred item and complete it"
-        )
-        attachTimestampedSmokeScreenshot(named: "04-deferred-item-completed-after-probe")
-        assertAdsDetected(for: Self.capEpisode, in: app)
     }
 
     /// Persistence: force-quit with items pending, relaunch restores them,
@@ -449,12 +374,6 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
     @MainActor
     private func makeRealApp(environment: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
-        // A runner-side override can point the analysis leg at a local mock
-        // Worker while transcription remains real and on-device.
-        if let override = ProcessInfo.processInfo.environment["OPENCAST_E2E_ANALYSIS_OVERRIDE_URL"] {
-            app.launchEnvironment["OPENCAST_AD_ANALYSIS_BASE_URL"] = override
-            app.launchEnvironment["OPENCAST_AD_ANALYSIS_CLIENT_TOKEN"] = "example-device-e2e-token"
-        }
         for (key, value) in environment {
             app.launchEnvironment[key] = value
         }

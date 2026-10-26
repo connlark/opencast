@@ -10,12 +10,14 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
     let onViewDetails: (EpisodeListItemSnapshot) -> Void
 
     @State private var modePromptEpisode: EpisodeListItemSnapshot?
+    @State private var noticeGate = AnalysisKeyNoticeGate()
 
     func body(content: Content) -> some View {
         let isPlayed = appModel.library.progressRecord(for: episode.episodeID)?.isPlayed == true
 
         content
             .adDetectionModeDialog(episode: $modePromptEpisode)
+            .analysisKeyNotice(gate: noticeGate)
             .contextMenu {
             let isCurrentlyPlaying = appModel.playback.currentEpisode?.id.rawValue == episode.episodeID
             Section {
@@ -99,8 +101,10 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
     }
 
     private func detectAds() {
-        if appModel.startAdFreePassResolvingMode(for: episode, modelContext: modelContext) {
-            modePromptEpisode = episode
+        noticeGate.run(appModel: appModel) {
+            if appModel.startAdFreePassResolvingMode(for: episode, modelContext: modelContext) {
+                modePromptEpisode = episode
+            }
         }
     }
 }

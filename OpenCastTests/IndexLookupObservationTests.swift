@@ -143,20 +143,12 @@ struct IndexLookupObservationTests {
 }
 
 private struct IdleAdAnalysisClient: EpisodeAdAnalysisClient {
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
-        throw CancellationError()
-    }
-
     func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
         throw CancellationError()
     }
 }
 
 private struct IdleTranscriptAnalysisClient: EpisodeTranscriptAnalysisClient {
-    func analyze(_ request: EpisodeTranscriptAnalysisAPIRequest) async throws -> EpisodeTranscriptAnalysisSubmitOutcome {
-        throw CancellationError()
-    }
-
     func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
         throw CancellationError()
     }

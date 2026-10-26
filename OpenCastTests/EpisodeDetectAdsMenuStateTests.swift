@@ -16,7 +16,8 @@ struct EpisodeDetectAdsMenuStateTests {
             (.completed(zoneCount: 3), false, .detected),
             (.failed(message: "probe"), false, .detect),
             (.failed(message: "probe"), true, .detected),
-            (.capDeferred, false, .queued),
+            (.keyRequired(.noKey), false, .detect),
+            (.keyRequired(.trialExhausted), true, .detected),
             (.remoteParked(.parked), false, .queued)
         ]
 

@@ -1,15 +1,16 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-21T00:00:00Z",
+  "updatedAt": "2026-10-25T19:03:07Z",
   "topics": [
     {
       "id": "why-we-charge",
       "title": "Why some features cost money",
       "symbol": "dollarsign.circle",
       "summary": "Open source, no ads, and cloud work priced at cost.",
-      "updatedAt": "2026-09-12T00:00:00Z",
+      "updatedAt": "2026-10-25T19:03:07Z",
       "related": [
-        "credits"
+        "credits",
+        "ai-keys"
       ],
       "blocks": [
         {
@@ -22,7 +23,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Cloud transcription runs on Cloudflare Workers AI. Ad detection and Chapters & Summary use Google's Gemini models. Those are the only features that use **transcription credits** or cost opencast money per episode."
+          "text": "Cloud transcription runs on Cloudflare Workers AI and uses **transcription credits**. From version 2026.11.1 it is the only feature that does: ad detection and Chapters & Summary run on your device and call Google Gemini or OpenAI with an API key you add in Settings › AI Services, so your provider bills your own account. Until January 1, 2027 they also work without a key; after that, every install keeps five free analyses, then asks for one. In versions before 2026.11.1, ad detection and Chapters & Summary use Google's Gemini models through opencast's own services, and Chapters & Summary uses credits."
         },
         {
           "type": "bullets",
@@ -36,7 +37,7 @@
           "type": "callout",
           "symbol": "lock.shield",
           "title": "What leaves your device",
-          "text": "A cloud transcription job receives only that episode's audio. Ad detection and Chapters & Summary receive only the transcript text, never the audio. Your subscriptions, listening history, and account details stay on your device."
+          "text": "A cloud transcription job receives only that episode's audio. Ad detection and Chapters & Summary receive only the transcript text, sometimes with the episode and show titles, never the audio. With your own key, transcript text goes from your device to the provider you chose. During the free analyses it passes through opencast's trial service, which adds opencast's key and stores none of it. Your subscriptions, listening history, and account details stay on your device."
         },
         {
           "type": "link",
@@ -50,7 +51,7 @@
       "title": "How credits work",
       "symbol": "clock.arrow.circlepath",
       "summary": "Hours are estimated before a job and settled when it finishes.",
-      "updatedAt": "2026-09-12T00:00:00Z",
+      "updatedAt": "2026-10-25T00:00:00Z",
       "related": [
         "why-we-charge",
         "ad-detection"
@@ -68,9 +69,12 @@
           "type": "bullets",
           "items": [
             "Cloud transcription (Cloudflare Workers AI) charges the episode's length.",
-            "Cloud ad detection charges the episode's length and delivers the transcript too.",
-            "Chapters & Summary (Google Gemini) charges about 2.2 hours of credit per hour of episode."
+            "Cloud ad detection charges the episode's length and delivers the transcript too."
           ]
+        },
+        {
+          "type": "paragraph",
+          "text": "From version 2026.11.1, Chapters & Summary uses your own API key instead of credits; in versions before 2026.11.1, it uses about 2.2 hours of credit per hour of episode."
         },
         {
           "type": "paragraph",
@@ -123,10 +127,11 @@
       "title": "Ad detection",
       "symbol": "forward.end",
       "summary": "Find promo and ad breaks on your device or in the cloud.",
-      "updatedAt": "2026-09-12T00:00:00Z",
+      "updatedAt": "2026-10-25T00:00:00Z",
       "related": [
         "credits",
-        "transcription-engines"
+        "transcription-engines",
+        "ai-keys"
       ],
       "blocks": [
         {
@@ -147,11 +152,106 @@
         },
         {
           "type": "paragraph",
-          "text": "In both modes the transcript text is sent to opencast's ad-analysis service, which uses Google's Gemini models to find the breaks. The audio itself never leaves your device unless you chose the cloud option."
+          "text": "From version 2026.11.1, in both modes your device sends the transcript text to Google Gemini or OpenAI with the API key you add in Settings › AI Services, and opencast's servers are not in that path. Without a key it goes through opencast's trial service, which adds opencast's Google key and stores none of the text: until January 1, 2027 with no limit per install, then for five free analyses per install. In versions before 2026.11.1, the transcript text is sent to opencast's ad-analysis service, which uses Google's Gemini models to find the breaks. The audio itself never leaves your device unless you chose the cloud option."
         },
         {
           "type": "paragraph",
           "text": "Automatic skips apply only when the downloaded audio matches the analyzed transcript, so a re-edited episode never skips at the wrong spot."
+        }
+      ]
+    },
+    {
+      "id": "ai-keys",
+      "title": "Using your own API key",
+      "symbol": "key",
+      "summary": "Ad detection and Chapters & Summary on your own Google or OpenAI account.",
+      "updatedAt": "2026-10-25T19:03:07Z",
+      "minAppBuild": 301,
+      "related": [
+        "ad-detection",
+        "why-we-charge"
+      ],
+      "blocks": [
+        {
+          "type": "paragraph",
+          "text": "Ad detection and Chapters & Summary run on your device and call the AI provider whose key you add in **Settings › AI Services**: Google Gemini or OpenAI. Your device sends the transcript text straight to that provider, sometimes with the episode and show titles, never the audio, and opencast never sees your key. Recap and Ask use Apple's Private Cloud Compute and need no key."
+        },
+        {
+          "type": "heading",
+          "text": "Getting a key"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "**Google Gemini**: create a key in Google AI Studio. A Gemini key is free to create.",
+            "**OpenAI**: create a key on the API keys page of your OpenAI account. OpenAI bills API use to that account.",
+            "In Settings › AI Services, open the provider, paste the key, tap **Test** to check it, then **Save**.",
+            "With keys for both providers, choose which one each feature uses under **Provider**."
+          ]
+        },
+        {
+          "type": "link",
+          "title": "Get a Gemini key",
+          "url": "https://aistudio.google.com/app/apikey"
+        },
+        {
+          "type": "link",
+          "title": "Get an OpenAI key",
+          "url": "https://platform.openai.com/settings/organization/api-keys"
+        },
+        {
+          "type": "heading",
+          "text": "What it costs"
+        },
+        {
+          "type": "paragraph",
+          "text": "Your provider bills your own account at its API prices; opencast charges nothing for these features. Google's free tier costs nothing within its limits, which are low: opencast slows down to stay inside the per-minute limit, so a long episode takes longer, and a key that reaches its daily limit can't run another analysis until the limit resets. Settings › AI Services shows the tokens each run used, counted on your device. Your provider's dashboard is the bill."
+        },
+        {
+          "type": "heading",
+          "text": "Your key on your devices"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "With **Sync with iCloud Keychain** on, the default, the key is saved in your iCloud Keychain and works on your other devices that use iCloud Keychain.",
+            "With it off, the key stays on this device only. Turning sync off for a synced key keeps it here and removes the synced copy from your other devices.",
+            "A key kept on this device only is the one used here, even when a synced key also exists. If you remove it, a synced key from another device can still be used here.",
+            "When a synced copy is also on your other devices beside this device's own key, the key screen offers **Remove synced copy**, which removes it from your other devices and keeps the key here."
+          ]
+        },
+        {
+          "type": "heading",
+          "text": "Removing a key"
+        },
+        {
+          "type": "paragraph",
+          "text": "Open the provider in Settings › AI Services and choose **Remove Key**. When a synced copy exists, removing the key deletes it everywhere: on this device and on your other devices that use iCloud Keychain. **Delete Data** doesn't remove your keys, and keys stay in the Keychain after you delete the app, so remove them here when you no longer want them."
+        },
+        {
+          "type": "heading",
+          "text": "Free analyses"
+        },
+        {
+          "type": "paragraph",
+          "text": "Without a key, ad detection and Chapters & Summary go through opencast's trial service, which adds opencast's own Google key. Until January 1, 2027 they work without a key. After that, every install keeps five free analyses across both features, then asks for a key. One analysis is one Detect Ads or Chapters & Summary run on one episode, and a run that picks up again after an interruption doesn't count twice."
+        },
+        {
+          "type": "heading",
+          "text": "Privacy"
+        },
+        {
+          "type": "bullets",
+          "items": [
+            "**Google Gemini**: on Google's free tier, Google may use what you send and its answers to improve its products, and human reviewers may read them. With a paid Gemini key, Google doesn't use your prompts or responses to improve its products, and logs them for a limited period only to detect abuse and meet legal requirements.",
+            "**OpenAI**: OpenAI doesn't use API data to train its models unless you opt in, and keeps abuse-monitoring logs for up to 30 days.",
+            "**Free analyses**: the trial service holds the text in memory only for the request and stores no results. To count free analyses it keeps this install's App Attest key and, under one-way hashes, how many free analyses the install has used and each run's feature, times, token counts and cost, plus daily and monthly totals that carry no identifier; Google does not use trial requests to improve its products."
+          ]
+        },
+        {
+          "type": "link",
+          "title": "Privacy Policy: Your AI provider",
+          "url": "https://support.opencast.mobile/privacy#ad-detection-and-chapters"
         }
       ]
     },
@@ -201,7 +301,7 @@
       "title": "Recap and Ask",
       "symbol": "apple.intelligence",
       "summary": "Summaries and answers from an episode's transcript, on Apple Intelligence.",
-      "updatedAt": "2026-09-26T00:00:00Z",
+      "updatedAt": "2026-10-25T00:00:00Z",
       "minAppBuild": 270,
       "related": [
         "transcription-engines",
@@ -223,7 +323,8 @@
           "items": [
             "Apple's model may decline a passage. opencast shows a short notice, does not retry, and an Ask conversation keeps going.",
             "Recaps are cached on this device so a repeat tap answers at once; Ask conversations are not saved. **Delete Data** clears the cache and the one-time notice.",
-            "Nothing runs until you tap Recap or Ask. Turning off Apple Intelligence in iOS Settings stops both."
+            "Nothing runs until you tap Recap or Ask. Turning off Apple Intelligence in iOS Settings stops both.",
+            "Neither feature needs an API key."
           ]
         },
         {
@@ -238,7 +339,7 @@
       "title": "Make a Playlist with Apple Intelligence",
       "symbol": "sparkles",
       "summary": "Playlists drafted from one show's episode list, on Apple Intelligence.",
-      "updatedAt": "2026-10-06T00:00:00Z",
+      "updatedAt": "2026-10-25T00:00:00Z",
       "minAppBuild": 284,
       "related": [
         "recap-and-ask"
@@ -269,7 +370,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Make a Playlist is labelled Beta. Apple's model may decline a request; opencast tries once more before telling you, and you can then try again or choose **Try a Simpler Answer**, an experimental retry that asks only for episode numbers and names the playlists on your device. Results may vary. It uses the same Apple Intelligence allowance as Recap and Ask, with nothing to buy, and turning off Apple Intelligence in iOS Settings stops it."
+          "text": "Make a Playlist is labelled Beta. Apple's model may decline a request; opencast tries once more before telling you, and you can then try again or choose **Try a Simpler Answer**, an experimental retry that asks only for episode numbers and names the playlists on your device. Results may vary. It uses the same Apple Intelligence allowance as Recap and Ask, with nothing to buy and no API key, and turning off Apple Intelligence in iOS Settings stops it."
         },
         {
           "type": "link",

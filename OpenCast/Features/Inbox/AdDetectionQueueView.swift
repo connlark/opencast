@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The Ad Detection queue screen: live per-episode status for the active,
 /// pending, and finished items of the current drain session, plus the
-/// queue-level affordances (continue in background, cap retry, resume,
-/// model consent).
+/// queue-level affordances (continue in background, resume, model
+/// consent) and what to do when an item needed the listener's own key.
 struct AdDetectionQueueView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -24,6 +24,13 @@ struct AdDetectionQueueView: View {
                     description: Text("Detect ads from an episode's context menu, or turn on automatic detection for a show.")
                 )
             } else {
+                if let keyRequiredNotice = presentation.keyRequiredNotice {
+                    Section {
+                        Label(keyRequiredNotice, systemImage: "key")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if let affordance = presentation.affordance {
                     Section {
                         affordanceRow(affordance)
@@ -63,15 +70,6 @@ struct AdDetectionQueueView: View {
         case .backgroundContinuationArmed:
             Label("Continues in the background.", systemImage: "checkmark.circle")
                 .foregroundStyle(.secondary)
-        case .retryCapDeferred:
-            VStack(alignment: .leading, spacing: 8) {
-                Label(
-                    EpisodeAdFreePassPresentation.capDeferred.statusText,
-                    systemImage: "hourglass"
-                )
-                .foregroundStyle(.secondary)
-                Button("Retry", action: resumeQueue)
-            }
         case .resumeInterrupted:
             Button("Resume", systemImage: "play.circle", action: resumeQueue)
         case .downloadModelConsent(let byteCount):

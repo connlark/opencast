@@ -451,6 +451,13 @@ enum OpenCastUITestSeedData {
                 context: context,
                 createdAt: refreshedAt
             )
+            if OpenCastUITestSeedChaptersDocument.isEnabled {
+                try OpenCastUITestSeedChaptersDocument.seed(
+                    in: context,
+                    transcriptDocument: transcriptDocument,
+                    createdAt: refreshedAt
+                )
+            }
             if shouldSeedCompletedAdAnalysis {
                 try seedCompletedAdAnalysis(
                     transcript: transcriptDocument,

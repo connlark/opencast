@@ -9,6 +9,7 @@ extension EpisodeAdFreePassCoordinator {
         transcriptionEngine: AdFreePassTranscriptionEngine = .productDefault,
         podcastLanguageCode: String?,
         mode: AdDetectionMode,
+        presentsKeyScreen: Bool = true,
         prepareBackgroundSession: @escaping @MainActor () -> Void = {},
         refreshSkipZones: @escaping @MainActor () async -> Int
     ) {
@@ -27,6 +28,7 @@ extension EpisodeAdFreePassCoordinator {
             remoteRunner: context.remoteRunner,
             remoteJobStore: context.remoteJobStore,
             remotePurchases: context.remotePurchases,
+            presentsKeyScreen: presentsKeyScreen,
             prepareBackgroundSession: prepareBackgroundSession,
             refreshSkipZones: refreshSkipZones
         )

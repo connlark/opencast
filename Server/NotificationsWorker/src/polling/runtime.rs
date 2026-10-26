@@ -54,7 +54,7 @@ async fn wakeup(request: &mut Request) -> Result<Option<super::dispatch::Wakeup>
 }
 /// Writes the invocation's `storage_phases` line when its gate says so: after
 /// the handler returned, its error path included.
-fn emit(db: &crate::database::Authority, consume: bool, ok: bool) {
+pub(super) fn emit(db: &crate::database::Authority, consume: bool, ok: bool) {
     let Some((outcome, gated)) = db.witness_emission(consume, ok) else {
         return;
     };

@@ -1,13 +1,9 @@
 import DeviceCheck
 import Foundation
 
+/// Polls a job an earlier build started, through the build's bearer token
+/// (Debug) or App Attest.
 nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
-    private static let analyzePath = "/v1/ad-analysis/transcript"
-
-    /// Async-capable submits return promptly (202, or a cached completed
-    /// result); the generous ceiling covers App Attest handshakes and large
-    /// cached-result bodies, not model time.
-    static let analyzeTimeout: TimeInterval = 90
     static let pollTimeout: TimeInterval = 30
 
     let configuration: AdAnalysisBackendConfiguration
@@ -51,56 +47,6 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
         }
     }
 
-    func analyze(_ requestBody: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
-        guard configuration.isEnabled else {
-            throw EpisodeAdAnalysisError.clientDisabled
-        }
-
-        #if DEBUG
-        if Self.forcesCapRejection(
-            environment: ProcessInfo.processInfo.environment,
-            arguments: ProcessInfo.processInfo.arguments
-        ) {
-            throw EpisodeAdAnalysisHTTPError(
-                statusCode: 429,
-                code: "daily_request_cap_exceeded",
-                detail: "Forced by OPENCAST_ADANALYSIS_FORCE_CAP"
-            )
-        }
-        #endif
-
-        let outcome = switch configuration.authentication {
-        #if DEBUG
-        case .bearer(let clientToken):
-            try await sendWithBearer(
-                path: Self.analyzePath,
-                payload: requestBody,
-                timeout: Self.analyzeTimeout,
-                clientToken: clientToken,
-                response: EpisodeAdAnalysisSubmitOutcome.self
-            )
-        #endif
-        case .appAttest:
-            try await sendWithAppAttest(
-                path: Self.analyzePath,
-                payload: requestBody,
-                timeout: Self.analyzeTimeout,
-                response: EpisodeAdAnalysisSubmitOutcome.self
-            )
-        }
-
-        if case .accepted(let jobID, _) = outcome,
-           !EpisodeAdAnalysisJobHandle.matches(jobID, fingerprint: requestBody.transcript.fingerprint)
-        {
-            throw EpisodeAdAnalysisHTTPError(
-                statusCode: -1,
-                code: "job_id_mismatch",
-                detail: nil
-            )
-        }
-        return outcome
-    }
-
     func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
         guard configuration.isEnabled else {
             throw EpisodeAdAnalysisError.clientDisabled
@@ -127,17 +73,6 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
                 response: EpisodeAdAnalysisJobPollOutcome.self
             )
         }
-    }
-
-    func servingPolicyRevision() async throws -> String? {
-        var request = URLRequest(url: configuration.workerBaseURL.appending(path: "health"))
-        request.timeoutInterval = 10
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        let (data, response) = try await transport.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 4096 else { return nil }
-        struct Health: Decodable { var policy_revision: String? }
-        let revision = try JSONDecoder().decode(Health.self, from: data).policy_revision
-        return revision.flatMap { $0.utf8.count <= 96 ? $0 : nil }
     }
 
     #if DEBUG
@@ -198,15 +133,6 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
         }
     }
 
-    #if DEBUG
-    /// The documented way to reproduce cap states without spending real
-    /// worker requests. Environment variable or launch argument.
-    static func forcesCapRejection(environment: [String: String], arguments: [String]) -> Bool {
-        environment["OPENCAST_ADANALYSIS_FORCE_CAP"] == "1"
-            || arguments.contains("-OPENCAST_ADANALYSIS_FORCE_CAP")
-    }
-    #endif
-
     private static func jobPath(_ id: String) -> String {
         "/v1/ad-analysis/jobs/\(id)"
     }
@@ -221,14 +147,7 @@ nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let errorResponse = try? EpisodeAdAnalysisJSONCoding.decoder()
-                .decode(EpisodeAdAnalysisAPIErrorResponse.self, from: data)
-            throw EpisodeAdAnalysisHTTPError(
-                statusCode: httpResponse.statusCode,
-                code: errorResponse?.error ?? "http_\(httpResponse.statusCode)",
-                detail: errorResponse?.detail,
-                failure: errorResponse?.failure
-            )
+            throw EpisodeAdAnalysisHTTPError(statusCode: httpResponse.statusCode, body: data)
         }
 
         return try EpisodeAdAnalysisJSONCoding.decoder().decode(response, from: data)

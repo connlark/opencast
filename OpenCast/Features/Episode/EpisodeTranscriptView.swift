@@ -24,6 +24,7 @@ struct EpisodeTranscriptView: View {
     @State private var isSearchPresented = false
     @State private var recapMenuState = TranscriptRecapMenuState()
     @State private var sheetDestination: SheetDestination?
+    @State private var noticeGate = AnalysisKeyNoticeGate()
 
     var body: some View {
         Group {
@@ -48,6 +49,7 @@ struct EpisodeTranscriptView: View {
                 }
             }
         }
+        .analysisKeyNotice(gate: noticeGate)
         .navigationTitle("Transcript")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -344,7 +346,13 @@ struct EpisodeTranscriptView: View {
         dismiss()
     }
 
+    /// Analyze Promos & Ads and its retry and re-analyse variants: held
+    /// behind the one-time key notice like every other analysis start.
     private func analyzeAds() {
+        noticeGate.run(appModel: appModel, startAdAnalysis)
+    }
+
+    private func startAdAnalysis() {
         guard let document else {
             return
         }

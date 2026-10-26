@@ -69,6 +69,9 @@ struct EpisodeDiagnosticsModelTests {
         #expect(rowValue(model.state(for: .transcript), "Segments") == "2")
         #expect(rowValue(model.state(for: .adAnalysis), "Current For Transcript") == "Yes")
         #expect(rowValue(model.state(for: .adAnalysis), "Policy") == EpisodeAdAnalysisContract.expectedPolicy)
+        // No run record yet: the block says so rather than staying loading.
+        #expect(rowValue(model.state(for: .analysisRuns), "Status") == "No analysis runs for this episode.")
+        #expect(model.reportText().contains("== Chapters & Summary ==\nStatus: No chapters/summary record.\n\n== Analysis Runs =="))
 
         let spansState = model.state(for: .adSpans)
         let spanRow = try #require(rowValue(spansState, "Span #1 — Host Read"))
@@ -505,6 +508,7 @@ struct EpisodeDiagnosticsModelTests {
                 client: UnusedEpisodeAdAnalysisClient(),
                 fileStore: adAnalysisFileStore
             ),
+            analysisRuns: AnalysisRunRecordStore(directory: temporaryDirectory.appending(path: "AnalysisRuns")),
             allowsAutomaticFeedRefresh: false
         )
         return Fixture(
@@ -845,10 +849,6 @@ private actor SpyNetworkProber: EpisodeDiagnosticsNetworkProbing {
 }
 
 private struct UnusedEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
-        throw EpisodeAdAnalysisError.clientDisabled
-    }
-
     func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
         throw EpisodeAdAnalysisError.clientDisabled
     }

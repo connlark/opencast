@@ -1,1 +1,0 @@
-typealias EpisodeAdAnalysisSubmitOutcome = AnalysisJobSubmitOutcome<EpisodeAdAnalysisAPIResponse>

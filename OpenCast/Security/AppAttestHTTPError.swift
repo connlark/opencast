@@ -7,6 +7,9 @@ nonisolated struct AppAttestHTTPError: Error, LocalizedError, Equatable, Sendabl
     let detail: String?
     var failure: OpenCastAdAnalysisFailure? = nil
 
+    /// A capped read stopped at its cap.
+    static let responseTooLarge = AppAttestHTTPError(statusCode: -1, code: "response_too_large", detail: nil)
+
     var errorDescription: String? {
         if let detail, !detail.isEmpty {
             return "Server returned \(statusCode): \(code) (\(detail))"

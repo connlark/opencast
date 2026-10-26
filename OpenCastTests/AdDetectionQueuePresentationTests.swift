@@ -40,7 +40,7 @@ struct AdDetectionQueuePresentationTests {
         )
         #expect(runningWithFailure.indicator == .running(fractionCompleted: 0.5, hasFailures: true))
 
-        for state in [AdFreePassQueueState.pausedInterrupted, .awaitingModelConsent, .capDeferred] {
+        for state in [AdFreePassQueueState.pausedInterrupted, .awaitingModelConsent] {
             let paused = makePresentation(state: state, pendingItems: [makeItem(episodeID: "head")])
             #expect(paused.indicator == .paused(hasFailures: false), "state \(state)")
         }
@@ -69,10 +69,6 @@ struct AdDetectionQueuePresentationTests {
             ).affordance
                 == .downloadModelConsent(byteCount: 78_900_000)
         )
-        #expect(
-            makePresentation(state: .capDeferred, pendingItems: [makeItem(episodeID: "a")]).affordance
-                == .retryCapDeferred
-        )
     }
 
     @Test("Rows carry the active stage text, queue positions, and pause reasons")
@@ -81,23 +77,15 @@ struct AdDetectionQueuePresentationTests {
             state: .running,
             activeEpisodeID: "active",
             activeEpisodeTitle: "Active Episode",
-            currentStage: .analyzing,
+            currentStage: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 3)),
             pendingItems: [makeItem(episodeID: "next"), makeItem(episodeID: "later")]
         )
         #expect(running.rows.map(\.episodeID) == ["active", "next", "later"])
-        #expect(running.rows[0].status == .running(statusText: "Analyzing promos and ads..."))
+        #expect(running.rows[0].status == .running(statusText: "Detecting ads"))
         #expect(running.rows[0].episodeTitle == "Active Episode")
         #expect(running.rows[1].status == .queued(ahead: 1))
         #expect(running.rows[1].statusText == "Queued — 1 ahead")
         #expect(running.rows[2].status == .queued(ahead: 2))
-
-        let capDeferred = makePresentation(
-            state: .capDeferred,
-            pendingItems: [makeItem(episodeID: "head"), makeItem(episodeID: "second")]
-        )
-        #expect(capDeferred.rows[0].status == .capDeferred)
-        #expect(capDeferred.rows[0].statusText == "Daily detection limit reached — continues tomorrow")
-        #expect(capDeferred.rows[1].status == .queued(ahead: 1))
 
         let consent = makePresentation(
             state: .awaitingModelConsent,
@@ -138,7 +126,7 @@ struct AdDetectionQueuePresentationTests {
         #expect(AdDetectionQueuePresentation.statusText(for: nil) == "Preparing...")
         #expect(AdDetectionQueuePresentation.statusText(for: .idle) == "Preparing...")
         #expect(AdDetectionQueuePresentation.statusText(for: .downloadingEpisode) == "Downloading episode...")
-        #expect(AdDetectionQueuePresentation.statusText(for: .analyzing) == "Analyzing promos and ads...")
+        #expect(AdDetectionQueuePresentation.statusText(for: .analyzing(steps: nil)) == "Detecting ads")
         #expect(AdDetectionQueuePresentation.statusText(for: .completed(zoneCount: 2)) == "2 zones marked.")
         #expect(AdDetectionQueuePresentation.statusText(for: .failed(message: "probe")) == "probe")
         #expect(
@@ -166,14 +154,6 @@ struct AdDetectionQueuePresentationTests {
                 outcomes: [completedOutcome(episodeID: "a")]
             ).accessibilityValue
                 == "Finished — 2 detected, 1 failed"
-        )
-        #expect(
-            makePresentation(
-                state: .capDeferred,
-                fractionCompleted: 0.25,
-                pendingItems: [makeItem(episodeID: "a")]
-            ).accessibilityValue
-                == "25% — Daily detection limit reached — continues tomorrow"
         )
     }
 
@@ -238,8 +218,8 @@ struct AdDetectionQueuePresentationTests {
                 == "Transcribing on the server..."
         )
         #expect(
-            AdDetectionQueuePresentation.statusText(for: .cloudDetectingAds)
-                == EpisodeAdFreePassPresentation.cloudDetectingAds.statusText
+            AdDetectionQueuePresentation.statusText(for: .cloudFinishing)
+                == "Finishing the transcript in the cloud"
         )
         #expect(
             AdDetectionQueuePresentation.statusText(for: .cloudUnavailable(message: "No credits."))
@@ -267,6 +247,43 @@ struct AdDetectionQueuePresentationTests {
         )
         #expect(presentation.finishedRows[0].statusText == "Cloud detection is off.")
         #expect(presentation.indicator == .finished(hasFailures: true))
+    }
+
+    @Test("A key-required item says what to do above the queue in every state and fails its row with the reason")
+    func keyRequiredOutcomeShowsNoticeAndReasonRow() {
+        let keyRequired = AdFreePassQueueItemOutcome(
+            episodeID: "needs-key",
+            episodeTitle: "Episode needs-key",
+            artworkURL: nil,
+            kind: .keyRequired(.trialExhausted),
+            completionDeliveryOwner: .local
+        )
+        let finished = makePresentation(
+            state: .idle,
+            completedCount: 1,
+            failedCount: 1,
+            outcomes: [completedOutcome(episodeID: "done"), keyRequired]
+        )
+        #expect(finished.keyRequiredNotice == "Add a key in Settings › AI Services to keep detecting ads")
+        #expect(finished.finishedRows[1].status == .failed(
+            message: "Your free analyses are used. Add a key in Settings › AI Services."
+        ))
+        #expect(finished.indicator == .finished(hasFailures: true))
+
+        let stillRunning = makePresentation(
+            state: .running,
+            activeEpisodeID: "next",
+            failedCount: 1,
+            outcomes: [keyRequired]
+        )
+        #expect(stillRunning.keyRequiredNotice == AdDetectionQueuePresentation.keyRequiredNotice)
+        #expect(stillRunning.affordance == .continueInBackground)
+
+        #expect(makePresentation(
+            state: .idle,
+            failedCount: 1,
+            outcomes: [failedOutcome(episodeID: "broken")]
+        ).keyRequiredNotice == nil)
     }
 
     private func makePresentation(

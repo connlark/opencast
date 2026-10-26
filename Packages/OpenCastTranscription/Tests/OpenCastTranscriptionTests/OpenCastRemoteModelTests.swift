@@ -362,6 +362,24 @@ struct OpenCastRemoteModelTests {
         )
     }
 
+    /// The analysis package carries its own copy of this verifier; both must
+    /// accept the same production-signed bytes.
+    @Test("Pinned verifier validates the checked-in analysis policy signature")
+    func pinnedVerifierValidatesCheckedInAnalysisPolicySignature() throws {
+        let policyDirectory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "Server/ModelGatewayWorker/manifests/analysis-policy")
+
+        try OpenCastRemoteModelManifestVerifier.pinned.verify(
+            manifestData: try Data(contentsOf: policyDirectory.appending(path: "v1.json")),
+            signatureData: try Data(contentsOf: policyDirectory.appending(path: "v1.json.sig"))
+        )
+    }
+
     @Test(
         "Optional large-v3 signed remote install probe",
         .enabled(if: ProcessInfo.processInfo.environment["OPENCAST_TRANSCRIPTION_INSTALL_LARGE_V3"] == "1")

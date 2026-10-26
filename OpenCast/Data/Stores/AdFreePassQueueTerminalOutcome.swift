@@ -8,5 +8,4 @@ enum AdFreePassQueueTerminalOutcome: Equatable {
     /// The person cancelled the running cloud item.
     case cloudUserCancelled
     case awaitingConsent
-    case capDeferred
 }

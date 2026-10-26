@@ -4,10 +4,10 @@ import Testing
 @MainActor
 @Suite("Ad-free pass completion notification content")
 struct AdFreePassCompletionNotificationContentTests {
-    @Test("Deferred and consent terminals stay silent")
+    @Test("The consent terminal stays silent")
     func silentTerminalsNeverNotify() {
         let outcomes = [completedOutcome(episodeID: "a", zoneCount: 2)]
-        for terminal in [AdFreePassQueueTerminalOutcome.capDeferred, .awaitingConsent] {
+        for terminal in [AdFreePassQueueTerminalOutcome.awaitingConsent] {
             #expect(
                 AdFreePassCompletionNotificationContent(terminal: terminal, outcomes: outcomes) == nil,
                 "terminal \(terminal)"
@@ -149,6 +149,19 @@ struct AdFreePassCompletionNotificationContentTests {
         ]))
         #expect(allFailed.title == "Ad detection finished")
         #expect(allFailed.body == "2 episodes couldn't be analyzed.")
+
+        // An episode that needed the listener's key counts as not analyzed.
+        let keyRequired = try #require(makeContent(outcomes: [
+            completedOutcome(episodeID: "a", zoneCount: 3),
+            AdFreePassQueueItemOutcome(
+                episodeID: "b",
+                episodeTitle: "Episode b",
+                artworkURL: nil,
+                kind: .keyRequired(.noKey),
+                completionDeliveryOwner: .local
+            ),
+        ]))
+        #expect(keyRequired.body == "1 episode couldn't be analyzed.")
     }
 
     // MARK: - Fixtures
@@ -162,7 +175,7 @@ struct AdFreePassCompletionNotificationContentTests {
             switch outcome.kind {
             case .completed:
                 completedCount += 1
-            case .failed, .cloudUnavailable:
+            case .failed, .cloudUnavailable, .keyRequired:
                 failedCount += 1
             }
         }

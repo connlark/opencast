@@ -73,6 +73,7 @@ final class EpisodeDiagnosticsModel {
         )
         setSection(.playback, .loaded(playbackSection(snapshot: playbackSnapshot)))
         setSection(.chaptersSummary, .loaded(chaptersSummarySection(appModel: appModel)))
+        setSection(.analysisRuns, .loaded(analysisRunsSection(appModel: appModel)))
 
         let downloadRecord = appModel.downloads.record(for: episodeID)
         let downloadFileURL = downloadRecord.flatMap { appModel.downloads.diagnosticsFileURL(for: $0) }

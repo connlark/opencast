@@ -71,8 +71,8 @@ vendor_model, input_count, latency_ms, finish_reason`.
 | Model keys | Route | Wire | Schema |
 |---|---|---|---|
 | `gemini-3.5-flash`, `gemini-3.8-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-flash-lite` | direct, `x-goog-api-key` | `generateContent`, `countTokens` | `responseJsonSchema` |
-| `gpt-6-astra`, `gpt-5.6-*`, `gpt-6-luna` | direct, Bearer | Responses, `/responses/input_tokens` | strict `json_schema` |
-| `claude-haiku-5-5` | direct, `x-api-key` + `anthropic-version` | `/v1/messages`, `count_tokens` (with `output_config` + `thinking`) | `output_config.format` json_schema |
+| `gpt-6-astra`, `gpt-6.1-sol`, `gpt-5.6-*`, `gpt-6-luna` | direct, Bearer | Responses, `/responses/input_tokens` | strict `json_schema` |
+| `claude-haiku-5-5`, `claude-opus-5-5` (no `none`: Opus 5.5 rejects `thinking: disabled`) | direct, `x-api-key` + `anthropic-version` | `/v1/messages`, `count_tokens` (with `output_config` + `thinking`) | `output_config.format` json_schema |
 | `cf/openai/gpt-6-luna`, `cf/google/gemini-3.8-flash` | AI Gateway unified billing: `api.cloudflare.com/.../ai/v1/chat/completions`, Bearer + `cf-aig-gateway-id` | chat completions, estimated | strict (openai) / validator-only (google) |
 | `cf/anthropic/claude-haiku-5.5` | same gateway, `.../ai/v1/messages` | Anthropic Messages, estimated | validator-only |
 | `@cf/google/gemma-4-26b-a4b-it`, `@cf/qwen/qwen3-30b-a3b-fp8`, `@cf/openai/gpt-oss-120b` | Workers AI `.../ai/run/{model}`, Bearer (postpaid, no gateway) | chat `messages` + `json_schema {name, strict, schema}`, estimated, `max_tokens` fitted to context (256,000 / 32,768 / 128,000) | validator-only |
@@ -87,8 +87,8 @@ Thinking matrix (`--thinking`; anything else is rejected before any call):
 |---|---|---|---|
 | Gemini 3.x Flash | model default | rejected | `thinkingLevel` |
 | Gemini lite (3.1, 2.5) | model default | `thinkingBudget: 0` | `thinkingBudget` 1024 / 4096 / 16384 |
-| OpenAI Responses | `reasoning.effort: low` | `effort: none` (gpt-6-luna rejects `minimal`) | `effort` |
-| Anthropic (direct and gateway) | rejected | `thinking: disabled` + `effort: low` | `thinking: adaptive` + `output_config.effort` |
+| OpenAI Responses | `reasoning.effort: low` | `effort: none` (gpt-6-luna rejects `minimal`; `gpt-6.1-sol` rejects `none` and `minimal`, so `none` is not offered) | `effort` |
+| Anthropic (direct and gateway) | rejected | `thinking: disabled` + `effort: low` (not offered on `claude-opus-5-5`, a 400) | `thinking: adaptive` + `output_config.effort` |
 | Gateway `openai/*` | `reasoning_effort: low` | `reasoning_effort: none` | `reasoning_effort` |
 | Gateway `google/*` | omitted | rejected | `reasoning_effort` |
 | Workers AI gemma-4 / qwen3 | model default (thinks; `provider_thinking: null`) | `chat_template_kwargs.enable_thinking: false` | `enable_thinking: true` |

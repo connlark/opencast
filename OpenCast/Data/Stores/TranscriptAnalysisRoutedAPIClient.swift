@@ -1,6 +1,7 @@
 import Foundation
 
-/// Release-only lane router for Chapters & Summary. It resolves the StoreKit
+/// Release-only lane router for draining Chapters & Summary jobs the service
+/// accepted before the update. It resolves the StoreKit
 /// environment once, then pins every request for this process to one
 /// concrete client — sandbox/TestFlight installs must exercise prod-staging
 /// billing, production installs the production lane. An unknown or failed
@@ -26,18 +27,8 @@ actor TranscriptAnalysisRoutedAPIClient: EpisodeTranscriptAnalysisClient {
         self.clientFactory = clientFactory
     }
 
-    func analyze(
-        _ request: EpisodeTranscriptAnalysisAPIRequest
-    ) async throws -> EpisodeTranscriptAnalysisSubmitOutcome {
-        try await client().analyze(request)
-    }
-
     func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
         try await client().pollJob(id: id)
-    }
-
-    func bootstrapAccount() async throws {
-        try await client().bootstrapAccount()
     }
 
     private func client() async throws -> any EpisodeTranscriptAnalysisClient {

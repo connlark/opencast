@@ -22,15 +22,16 @@ const config = JSON.parse(jsonc(await readFile(new URL('../wrangler.jsonc', impo
 // and the delivery Worker (NotificationsWorker/tests/storage.mjs). The harness
 // owns it: close(), or the suites' existing h.instance.dispose(), disposes
 // Miniflare and then the storage.
-// `logs: true` also keeps every Worker's JSON log events in h.logs, each still
-// printed as Miniflare prints it. `direct: true` binds PostgreSQL without the
+// `logs: true` also keeps every Worker's JSON log events in h.logs and every
+// message, JSON or plain, as {level, message} in h.raw, each still printed as
+// Miniflare prints it. `direct: true` binds PostgreSQL without the
 // wire proxy: no storage hook and no storage counter, so only for a suite whose
 // source arms none and asserts none.
 export async function harness(outbound, options = {}) {
   // Retired options fail loudly rather than run a different suite than asked.
   if ('persist' in options) throw Error('harness: persist was retired: each harness owns one transient PostgreSQL clone');
   if ('fiveMinute' in options) throw Error('harness: fiveMinute was retired: the polling suites run the production cadence');
-  const sends = [], fetches = [], events = [], alerts = [], logs = [];
+  const sends = [], fetches = [], events = [], alerts = [], logs = [], raw = [];
   let instance;
   const storage = await openStorage();
   const modules = (worker, entry) => [
@@ -45,8 +46,7 @@ export async function harness(outbound, options = {}) {
       r2Buckets: { FEED_SNAPSHOTS: 'isolated-snapshots' },
       queueProducers: { POLL_QUEUE: 'isolated-poll' },
       ...(options.realQueues?{queueConsumers:{'isolated-poll':{maxBatchSize:1,maxConcurrency:2,maxBatchTimeout:0.1,maxRetries:3,retryDelay:options.retryDelay??1,deadLetterQueue:'isolated-poll-dlq'},'isolated-poll-dlq':{maxBatchSize:10,maxBatchTimeout:0.1}}}:{}),
-      // Production shape: the five-minute switch stays off.
-      bindings: { TEST_REAL_QUEUE: options.realQueues?'true':'false',NOTIFICATION_ENVIRONMENT: options.environment ?? 'development', NOTIFICATION_DISPATCHER_ADMISSION: 'true', NOTIFICATION_FEED_OBSERVATION: 'true', NOTIFICATION_FIVE_MINUTE_POLLING: 'false', NOTIFICATION_CLEANUP: 'true', ...(options.alertSecrets ?? {}) },
+      bindings: { TEST_REAL_QUEUE: options.realQueues?'true':'false',NOTIFICATION_ENVIRONMENT: options.environment ?? 'development', NOTIFICATION_DISPATCHER_ADMISSION: 'true', NOTIFICATION_FEED_OBSERVATION: 'true', NOTIFICATION_CLEANUP: 'true', ...(options.alertSecrets ?? {}) },
       serviceBindings: { NOTIFICATION_EVENTS: options.realQueues?{name:'delivery-runtime',entrypoint:'FeedEvents'}:async request => {
         const body = await request.text(); events.push(JSON.parse(body));
         const worker = await instance.getWorker('delivery-runtime');
@@ -74,7 +74,7 @@ export async function harness(outbound, options = {}) {
     // Bound after the replicas are copied: each Worker gets its own alias and,
     // for these instrumented entries, its own TEST_STORAGE.
     const bound = workers.map(worker => storage.bind(worker, { direct: !!options.direct }));
-    const handleStructuredLogs = ({ level, message }) => { try { const event = JSON.parse(message); if (event?.event) logs.push(event); } catch {} (level === 'error' || level === 'warn' ? console.error : console.log)(message); };
+    const handleStructuredLogs = ({ level, message }) => { raw.push({ level, message }); try { const event = JSON.parse(message); if (event?.event) logs.push(event); } catch {} (level === 'error' || level === 'warn' ? console.error : console.log)(message); };
     instance = new Miniflare(convertV4MiniflareOptions({ cf: false, unsafeTriggerHandlers: true, inspectorPort: 0, ...(options.logs ? { handleStructuredLogs } : {}), workers: bound }));
     disposeInstance = instance.dispose.bind(instance);
     instance.dispose = close;
@@ -149,7 +149,7 @@ export async function harness(outbound, options = {}) {
     if(settle && (await first("SELECT COUNT(*) AS n FROM n_delivery WHERE state IN('pending','uncertain')")).n)await new Promise(resolve=>setTimeout(resolve,1000));
     }
   }
-  return { instance, db, run, first, rows, invoke, add, consume, polls, drain, deliver, sends, fetches, events, alerts, logs, now, storage, close };
+  return { instance, db, run, first, rows, invoke, add, consume, polls, drain, deliver, sends, fetches, events, alerts, logs, raw, now, storage, close };
 }
 // `description` is emitted verbatim (wrap markup in CDATA); omitted, the item is unchanged.
 export const item = (id, at, title = `Episode ${id}`, description) => `<item><guid>${id}</guid><title>${title}</title>${description == null ? '' : `<description>${description}</description>`}${at == null ? '' : `<pubDate>${new Date(at * 1000).toUTCString()}</pubDate>`}<enclosure url="https://audio.example.com/${id}.mp3"/></item>`;

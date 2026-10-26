@@ -33,7 +33,7 @@ export const metadata: Metadata = createPageMetadata({
 });
 
 const effectiveDate = "June 21, 2026";
-const lastUpdated = "October 6, 2026";
+const lastUpdated = "October 25, 2026";
 
 // The in-app notice shown once before the first Recap or Ask request. The
 // sentences below are the app's own words and the section repeats them
@@ -54,7 +54,7 @@ const tocItems = [
   { id: "feeds-audio-and-search", label: "Feeds, audio, artwork, and search" },
   { id: "new-episode-notifications", label: "New episode notifications" },
   { id: "cloud-transcription", label: "Cloud transcription" },
-  { id: "ad-detection-and-chapters", label: "Ad detection and Chapters & Summary" },
+  { id: "ad-detection-and-chapters", label: "Your AI provider" },
   { id: "recap-and-ask", label: "Recap and Ask on Apple Intelligence" },
   { id: "ai-playlists", label: "Make a Playlist on Apple Intelligence" },
   { id: "purchases", label: "Purchases" },
@@ -160,14 +160,16 @@ export default function PrivacyPage() {
                 <span>
                   Every cloud feature is opt-in. When you use one, opencast
                   sends only what that job needs and deletes it when the job
-                  is done.
+                  is done. With your own AI key, the text goes straight to
+                  your provider instead, under its terms.
                 </span>
               </li>
               <li>
                 <Check aria-hidden="true" />
                 <span>
-                  The app and every service it talks to are open source, so
-                  you can check each claim on this page against the code.
+                  The app and every opencast service it talks to are open
+                  source, so you can check each claim on this page against the
+                  code.
                 </span>
               </li>
             </ul>
@@ -353,42 +355,76 @@ export default function PrivacyPage() {
                 id="ad-detection-and-chapters"
                 index="06"
                 icon={<Sparkles aria-hidden="true" />}
-                title="Ad detection and Chapters & Summary"
-                tags={[optIn, { label: "Google Gemini" }]}
+                title="Your AI provider"
+                tags={[optIn, { label: "Google Gemini" }, { label: "OpenAI" }]}
               >
                 <p>
-                  Detect Ads and Chapters &amp; Summary send transcript text,
-                  never audio, to opencast&apos;s analysis services, which use
-                  Google&apos;s Gemini models to find ad breaks or to write
-                  chapters and a summary. The same is true of on-device ad
-                  detection: the transcript is made on your phone, and only its
-                  text is analyzed.
+                  Detect Ads and Chapters &amp; Summary run on your device and
+                  send transcript text, never audio, directly to the AI
+                  provider whose key you added (Google or OpenAI).
+                  opencast&apos;s servers are not in that path and never see
+                  your key. The provider processes the text under its own API
+                  terms.
+                </p>
+                <p>
+                  Without a key, these requests go through opencast&apos;s
+                  trial service, with no limit per install until January 1,
+                  2027 and for five free analyses per install after that. The
+                  trial service adds opencast&apos;s own Google key and
+                  forwards your request. It holds the transcript in memory for
+                  the request only and stores no results, and its logs record
+                  event names and counts, never text.
+                </p>
+                <p>
+                  To count free analyses and stay within its monthly budget, it
+                  keeps this install&apos;s App Attest key (see How services
+                  verify the app) and, under one-way hashes of the install and
+                  of each run, how many free analyses the install has used and
+                  each run&apos;s feature, times, token counts, and cost. The
+                  install&apos;s count and the runs that used a free analysis
+                  are kept for as long as the trial service runs, other runs
+                  for up to 90 days. Daily and monthly totals of requests,
+                  tokens, and cost, which carry no install or run identifier,
+                  are also kept for as long as the service runs.
                 </p>
                 <ul className="policy-list">
                   <li>
-                    The episode and show titles may go along as context. Full
-                    transcripts and raw model responses are held in memory for
-                    the run and never written to storage.
+                    The episode and show titles may go along as context.
+                    Results come straight back to your device and are kept
+                    only there.
                   </li>
                   <li>
-                    Finished results, meaning ad spans with short evidence
-                    quotes, chapter titles, and summaries, are kept for up to
-                    24 hours so the app can collect them, then purged. Failed
-                    runs are cleared within 30 minutes.
+                    Your key is stored in your device&apos;s Keychain, and in
+                    your iCloud Keychain when sync is on, which Apple encrypts
+                    end to end. It is never sent to opencast. Delete Data does
+                    not remove it; remove it in Settings › AI Services.
                   </li>
                   <li>
-                    Google processes the text under its Gemini API terms.
-                    opencast keeps no copy of it.
+                    Google, under its Gemini API terms: on the free tier it may
+                    use what you send and its answers to improve its products,
+                    and human reviewers may read them; with a paid key it does
+                    not use your prompts or responses to improve its products,
+                    and logs them for a limited period only to detect abuse and
+                    meet legal requirements. Google does not use trial requests
+                    to improve its products.
                   </li>
                   <li>
-                    Usage limits are tracked per anonymous install with daily
-                    counters that clear after 48 hours.
+                    OpenAI, under its API terms: API data is not used to train
+                    its models unless you opt in, and abuse-monitoring logs are
+                    kept for up to 30 days.
+                  </li>
+                  <li>
+                    Until opencast&apos;s previous analysis services retire in
+                    2027, older app versions still use them:
+                    they keep finished results for up to 24 hours and failed
+                    runs for 30 minutes, and count usage per anonymous install
+                    with daily counters that clear after 48 hours.
                   </li>
                 </ul>
                 <DataPathFacts
-                  leaves="Transcript text, plus the episode and show titles."
-                  receiver="opencast's analysis services, which call Google's Gemini models."
-                  kept="Transcripts in memory for the run only. Results up to 24 hours, failed runs 30 minutes."
+                  leaves="Transcript text, sometimes with the episode and show titles."
+                  receiver="The provider whose key you added, straight from your device. Without a key, opencast's trial service, which forwards it to Google."
+                  kept="By your provider under its API terms. The trial service keeps no text and no results; its hashed install count and the runs that used a free analysis for as long as it runs, other runs up to 90 days, and daily and monthly totals with no identifiers for as long as it runs."
                 />
               </PolicyArticleSection>
 
@@ -644,7 +680,8 @@ export default function PrivacyPage() {
                 title="Open source"
               >
                 <p>
-                  The app and every service it talks to are open source. Read
+                  The app and every opencast service it talks to are open
+                  source. Read
                   the code on{" "}
                   <Link href={githubURL} className="font-semibold text-foreground">
                     GitHub

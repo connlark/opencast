@@ -39,9 +39,8 @@ struct TranscriptAnalysisRoutedAPIClientTests {
             }
         )
 
-        _ = try await router.analyze(RoutedStubEpisodeTranscriptAnalysisClient.request)
         _ = try await router.pollJob(id: "job")
-        try await router.bootstrapAccount()
+        _ = try await router.pollJob(id: "job")
 
         #expect(await environmentCalls.value == 1)
         #expect(factoryConfigurations.configurations.count == 1)
@@ -49,7 +48,7 @@ struct TranscriptAnalysisRoutedAPIClientTests {
             factoryConfigurations.configurations.first?.workerBaseURL
                 == TranscriptAnalysisBackendConfiguration.prodStaging.workerBaseURL
         )
-        #expect(stub.events == ["analyze", "poll", "bootstrap"])
+        #expect(stub.events == ["poll", "poll"])
     }
 
     @Test("Unresolvable environment fails closed without constructing a client")
@@ -64,7 +63,7 @@ struct TranscriptAnalysisRoutedAPIClientTests {
         )
 
         await #expect(throws: EpisodeTranscriptAnalysisError.clientDisabled) {
-            _ = try await router.analyze(RoutedStubEpisodeTranscriptAnalysisClient.request)
+            _ = try await router.pollJob(id: "job")
         }
         #expect(factoryConfigurations.configurations.isEmpty)
     }
@@ -94,44 +93,10 @@ private final class ConfigurationBox: @unchecked Sendable {
 }
 
 private final class RoutedStubEpisodeTranscriptAnalysisClient: EpisodeTranscriptAnalysisClient, @unchecked Sendable {
-    static let request = EpisodeTranscriptAnalysisAPIRequest(
-        schemaVersion: 1,
-        requestID: "routed-request",
-        episodeID: "routed-episode",
-        podcastID: "https://example.com/routed.xml",
-        episodeTitle: "Episode",
-        podcastTitle: "Podcast",
-        asyncSupported: true,
-        allowShared: false,
-        transcript: EpisodeTranscriptAnalysisAPITranscriptMetadata(
-            languageCode: "en",
-            audioDuration: 10,
-            modelIdentifier: "model",
-            modelVersion: "v1",
-            modelTreeSHA256: "tree",
-            fingerprint: "routed-fingerprint",
-            updatedAt: Date(timeIntervalSince1970: 1_780_000_000),
-            state: "completed",
-            segmentCount: 1
-        ),
-        segments: [
-            EpisodeTranscriptAnalysisAPISegment(id: 0, start: 0, end: 10, text: "Hello.")
-        ]
-    )
-
     private(set) var events: [String] = []
-
-    func analyze(_ request: EpisodeTranscriptAnalysisAPIRequest) async throws -> EpisodeTranscriptAnalysisSubmitOutcome {
-        events.append("analyze")
-        return .accepted(jobID: request.transcript.fingerprint, pollAfter: 1)
-    }
 
     func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
         events.append("poll")
         return .running(pollAfter: 1)
-    }
-
-    func bootstrapAccount() async throws {
-        events.append("bootstrap")
     }
 }

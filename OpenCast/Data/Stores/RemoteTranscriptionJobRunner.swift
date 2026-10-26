@@ -27,14 +27,6 @@ import SwiftData
 final class RemoteTranscriptionJobRunner {
     typealias UploadSessionFactory = (_ jobID: String, _ sourceFileURL: URL) -> RemoteTranscriptionUploadSession
 
-    /// Extra create-request context for a detect-ads job: the server chains
-    /// ad detection after stitching under this podcast identity.
-    struct AdAnalysisContext {
-        let podcastID: String
-        let episodeTitle: String?
-        let podcastTitle: String?
-    }
-
     /// How a user-authorized cancel resolved against the server.
     enum UserCancelResolution: Equatable {
         /// One `/cancel` reached the server (any landed answer counts); the
@@ -147,7 +139,6 @@ final class RemoteTranscriptionJobRunner {
         episode: EpisodeListItemSnapshot,
         enclosureURL: String,
         purpose: RemoteTranscriptionJobPurpose = .transcription,
-        adAnalysis: AdAnalysisContext? = nil,
         modelContext: ModelContext,
         onEvent: @escaping (RemoteTranscriptionJobEvent) -> Void
     ) async throws -> RemoteTranscriptionJobRunOutcome {
@@ -182,8 +173,7 @@ final class RemoteTranscriptionJobRunner {
             let request = createRequest(
                 episode: episode,
                 enclosureURL: enclosureURL,
-                clientRequestID: reference.clientRequestID,
-                adAnalysis: adAnalysis
+                clientRequestID: reference.clientRequestID
             )
             createRequests[key] = request
             // A cancel that lands before this point never marks an attempt,
@@ -420,11 +410,13 @@ final class RemoteTranscriptionJobRunner {
 
     // MARK: Legs
 
+    /// Every purpose asks the server for a transcript only: ad detection
+    /// runs on the device after delivery, so no create sets
+    /// `ad_analysis_requested`.
     private func createRequest(
         episode: EpisodeListItemSnapshot,
         enclosureURL: String,
-        clientRequestID: String,
-        adAnalysis: AdAnalysisContext?
+        clientRequestID: String
     ) -> OpenCastRemoteTranscriptionJobCreateRequest {
         OpenCastRemoteTranscriptionJobCreateRequest(
             clientRequestID: clientRequestID,
@@ -433,18 +425,13 @@ final class RemoteTranscriptionJobRunner {
             declaredDurationSeconds: episode.duration,
             languageCode: "en",
             sourceIdentity: downloads.completedSourceIdentity(for: episode.episodeID),
-            adAnalysisRequested: adAnalysis != nil ? true : nil,
-            podcastID: adAnalysis?.podcastID,
-            episodeTitle: adAnalysis?.episodeTitle,
-            podcastTitle: adAnalysis?.podcastTitle,
             mediaProfile: OpenCastMediaRequestProfile.version
         )
     }
 
-    /// The same create request an earlier process sent for this reference,
-    /// rebuilt from the episode: same client request ID and, for a detect
-    /// job, the same ad-analysis context. The server maps the ID to the job
-    /// it already has.
+    /// A create request for this reference, rebuilt from the episode with
+    /// the same client request ID. The server maps the ID to the job it
+    /// already has, whatever the first create asked for.
     private func replayCreateRequest(
         for episode: EpisodeListItemSnapshot?,
         key: ReferenceKey,
@@ -457,18 +444,10 @@ final class RemoteTranscriptionJobRunner {
         else {
             return nil
         }
-        let adAnalysis = key.purpose == .adDetection
-            ? AdAnalysisContext(
-                podcastID: episode.podcastID,
-                episodeTitle: episode.title,
-                podcastTitle: episode.podcastTitle
-            )
-            : nil
         return createRequest(
             episode: episode,
             enclosureURL: enclosureURL,
-            clientRequestID: clientRequestID,
-            adAnalysis: adAnalysis
+            clientRequestID: clientRequestID
         )
     }
 

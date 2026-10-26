@@ -7,7 +7,8 @@ import { writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { harness, item, rss } from './harness.mjs';
+import { harness, hash, item, rss } from './harness.mjs';
+import { POLLING_FIXTURE, stopAfter } from './action-boundary.mjs';
 
 let passed = 0, failed = 0;
 const report = [];
@@ -152,20 +153,37 @@ async function stepUntil(h, stop, limit = 50) {
   }
   throw Error('the chain did not reach its stop');
 }
+// A feed URL whose opaque id falls in the provenance cohort (first hex nibble
+// below 4), so each of its consumes writes a line: a delivery the loop carries
+// on into an unchanged scan is otherwise only sampled.
+const cohort = base => { for (let i = 0; ; i++) { const url = `${base}-${i}`; if (parseInt(hash(['feed-v1', url])[0], 16) < 4) return url; } };
+// The same, one action per delivery (the loop stopped at its first boundary,
+// a storage-fixture build): `stop` reads that action's result; returns the last.
+async function stepActions(h, stop, limit = 50) {
+  for (let i = 0; i < limit; i++) {
+    const [wake] = await h.polls();
+    if (!wake) break;
+    const from = h.logs.length;
+    const last = await stopAfter(h, wake, 1);
+    last.result = (await line(h, 'consume', from)).action[0]?.result;
+    if (stop(last.result)) return last;
+  }
+  throw Error('the chain did not reach its stop');
+}
 
 await test('drain-r2: the drain action carries its own R2 evidence: r2_calls 2 (manifest and page), r2_ms over a 1,500 ms key-scoped hold on the candidate page get', async () => {
   let items = [item('base', Math.floor(Date.now() / 1000) - 86_400)];
-  const h = await harness(() => new Response(rss(items)), { logs: true });
+  const h = await harness(() => new Response(rss(items)), { logs: true, pollingBuild: POLLING_FIXTURE });
   await within(h, async () => {
-    const feed = await h.add('https://witness.example.com/drain-r2');
+    const feed = await h.add(cohort('https://witness.example.com/drain-r2'));
     await h.invoke('test/dispatch'); await h.drain();
     // A changed feed: three new recent episodes, then the chain up to its publication.
     const t = Math.floor(Date.now() / 1000);
     items = [item('n1', t - 60), item('n2', t - 50), item('n3', t - 40), ...items];
     await h.run('UPDATE n_feed SET due_at=0,retry_at=0,dispatch_until=0 WHERE feed_id=?', feed);
     await h.invoke('test/dispatch');
-    const published = await stepUntil(h, outcome => outcome === 'published');
-    assert.equal(published?.outcome, 'published');
+    const published = await stepActions(h, result => result === 'published');
+    assert.equal(published?.result, 'published');
     const observation = await h.first("SELECT snapshot_key FROM n_observation WHERE feed_id=? AND state='published' AND drain_complete=0", feed);
     assert.ok(observation, 'a published, undrained observation');
     const bucket = await h.instance.getR2Bucket('FEED_SNAPSHOTS', 'polling-runtime');
@@ -468,7 +486,7 @@ function joins(rows) {
 // its next scan stages a continuation.
 async function changedFeed(h, name, setItems, count = 3) {
   const t = Math.floor(Date.now() / 1000);
-  const feed = await h.add(`https://witness.example.com/${name}`);
+  const feed = await h.add(cohort(`https://witness.example.com/${name}`));
   setItems([item('base', t - 86_400)]);
   await h.invoke('test/dispatch'); await h.drain();
   const fresh = count === 3 ? [item('n1', t - 60), item('n2', t - 50), item('n3', t - 40)]
@@ -481,7 +499,7 @@ async function changedFeed(h, name, setItems, count = 3) {
 
 await test('send-provenance: send provenance on real chains through the shipped parser: an uncertain duplicate is ambiguous, a commit lost before the send leaves one exact sender, a withheld predecessor is unknown', async () => {
   let items = [];
-  const h = await harness(() => new Response(rss(items)), { logs: true });
+  const h = await harness(() => new Response(rss(items)), { logs: true, pollingBuild: POLLING_FIXTURE });
   await within(h, async () => {
     const ts = h.storage.testStorage('polling-runtime');
     const consumes = from => lines(h, 'consume', from);
@@ -489,9 +507,10 @@ await test('send-provenance: send provenance on real chains through the shipped 
     const feed = await changedFeed(h, 'send-provenance', next => { items = next; });
     let from = h.logs.length;
     const [wake] = (await h.polls()).filter(w => w.feed_id === feed);
+    // One action per delivery, so each sends its continuation at its first boundary.
     await h.invoke('fault', 'after_enqueue');
-    assert.equal((await h.consume(wake)).status, 500);
-    assert.equal((await h.consume(wake, { attempts: 2 })).status, 200);
+    assert.equal((await stopAfter(h, wake, 1)).status, 500);
+    assert.equal((await stopAfter(h, wake, 1, { attempts: 2 })).status, 200);
     const pending = (await h.polls()).filter(w => w.feed_id === feed && w.step === 1);
     assert.equal(pending.length, 2, 'two producing sends of step 1');
     await h.consume(pending[0]);
@@ -505,9 +524,11 @@ await test('send-provenance: send provenance on real chains through the shipped 
     const other = await changedFeed(h, 'send-provenance-other', next => { items = next; });
     from = h.logs.length;
     const [first] = (await h.polls()).filter(w => w.feed_id === other);
-    const arm = ts({ op: 'arm', kind: 'statement', action: 'drop-commit-ack', match: 'UPDATE n_feed SET dispatch_until=$2 WHERE' });
-    assert.equal((await h.consume(first)).status, 500);
-    assert.equal((await h.consume(first, { attempts: 2 })).status, 200);
+    // The continuation's renewal: the second of the delivery (the first renews
+    // the reservation before its action).
+    const arm = ts({ op: 'arm', kind: 'statement', action: 'drop-commit-ack', match: 'UPDATE n_feed SET dispatch_until=$2 WHERE', skip: 1 });
+    assert.equal((await stopAfter(h, first, 1)).status, 500);
+    assert.equal((await stopAfter(h, first, 1, { attempts: 2 })).status, 200);
     const [successor] = (await h.polls()).filter(w => w.feed_id === other && w.step === 1);
     await h.consume(successor);
     rows = consumes(from);
@@ -601,12 +622,13 @@ await test('owner-abort: a write\'s first application statement held (hold-unit-
   });
 });
 
-// A changed feed taken through its chain to publication; the next wakeup is
-// its drain delivery. Returns the feed and that wakeup.
+// A changed feed taken through its chain to publication, one action per
+// delivery; the next wakeup is its drain delivery. Returns the feed and that
+// wakeup. A storage-fixture build (stepActions).
 async function publishedDrain(h, name, setItems, count = 3) {
   const feed = await changedFeed(h, name, setItems, count);
-  const published = await stepUntil(h, outcome => outcome === 'published');
-  assert.equal(published?.outcome, 'published');
+  const published = await stepActions(h, result => result === 'published');
+  assert.equal(published?.result, 'published');
   const [wake] = (await h.polls()).filter(w => w.feed_id === feed);
   assert.ok(wake, 'the drain delivery');
   return { feed, wake };
@@ -616,7 +638,7 @@ const OUTBOX_RELEASE = 'INSERT INTO n_outbox(source,event_id,observation_id';
 for (const [form, action] of [['after the replies to BEGIN and the gate', 'hold-unit-reply:0'], ['after submission, before any reply', 'hold-forever']]) {
   await test(`aborted-outbox-release: the drain delivery's outbox release held ${form}, then the delivery aborted: the dropped transaction is attempted and unknown, never acknowledged`, async () => {
     let items = [];
-    const h = await harness(() => new Response(rss(items)), { logs: true });
+    const h = await harness(() => new Response(rss(items)), { logs: true, pollingBuild: POLLING_FIXTURE });
     await within(h, async () => {
       const ts = h.storage.testStorage('polling-runtime');
       const { wake } = await publishedDrain(h, `aborted-outbox-release-${action}`, next => { items = next; });
@@ -647,7 +669,7 @@ const PREPARE_CHECKPOINT = 'UPDATE n_observation SET preparation_key=$2';
 
 await test('aborted-drain-checkpoint: the drain checkpoint\'s COMMIT reply held (the server committed), then the delivery aborted: the action keeps the attempted target with status unknown, never committed, though the fixture reads the cursor back durable', async () => {
   let items = [];
-  const h = await harness(() => new Response(rss(items)), { logs: true });
+  const h = await harness(() => new Response(rss(items)), { logs: true, pollingBuild: POLLING_FIXTURE });
   await within(h, async () => {
     const ts = h.storage.testStorage('polling-runtime');
     const { feed, wake } = await publishedDrain(h, 'aborted-drain-checkpoint', next => { items = next; });
@@ -847,17 +869,26 @@ const histories = {};
 for (const [history, action] of [['committed', 'hold-commit-reply'], ['never-committed', 'hold-forever']]) {
   await test(`uncertain-checkpoint (${history}): a phase-3 checkpoint whose outcome the delivery never learns: its line keeps start phase-2 and end phase-3 unknown, the retry resumes at a durable phase-3, and only the fixture tells the histories apart`, async () => {
     let items = [];
-    const h = await harness(() => new Response(rss(items)), { logs: true });
+    const h = await harness(() => new Response(rss(items)), { logs: true, pollingBuild: POLLING_FIXTURE });
     await within(h, async () => {
       const ts = h.storage.testStorage('polling-runtime');
       const feed = await changedFeed(h, `uncertain-checkpoint-${history}`, next => { items = next; });
       // A failed preparation waits out its backoff (processing_next_at, 300 s)
       // before the next delivery may prepare: the Worker's Date moves past it.
       const backoff = () => h.invoke('clock', '301');
-      // Each delivery runs one preparation phase: the scan writes the phase-0
-      // checkpoint and each later delivery the next one, so the one writing
-      // phase-3 (the fourth) is A, which resumed at a durable phase-2.
+      // The scan writes the phase-0 checkpoint and each preparation phase the
+      // next one, so the fourth write names phase-3: A is the delivery holding
+      // it, its last action the phase that started at a durable phase-2.
       const arm = ts({ op: 'arm', kind: 'statement', action, match: PREPARE_CHECKPOINT, skip: 3, ...(action === 'hold-commit-reply' ? { forever: true } : {}) });
+      // One action per delivery through the first three writes, so A starts
+      // at the durable phase-2 pointer.
+      const opsAt = ts({ op: 'witness' }).operations.length;
+      const written = () => ts({ op: 'witness' }).operations.slice(opsAt).filter(o => (o.statements?.[0] ?? '').startsWith(PREPARE_CHECKPOINT)).length;
+      for (let i = 0; i < 10 && written() < 3; i++) {
+        const [wake] = (await h.polls()).filter(w => w.feed_id === feed);
+        assert.ok(wake, 'the chain reached its phase-2 checkpoint');
+        await stopAfter(h, wake, 1);
+      }
       let a, wakeA, before;
       for (let i = 0; i < 20 && !a?.fire; i++) {
         const [wake] = (await h.polls()).filter(w => w.feed_id === feed);
@@ -880,7 +911,7 @@ for (const [history, action] of [['committed', 'hold-commit-reply'], ['never-com
         // phase-3 checkpoint committed.
         await backoff();
         const fromD = h.logs.length;
-        const d = await h.consume(wakeA, { headers: { 'x-poll-message-id': `history-${history}-b` } });
+        const d = await stopAfter(h, wakeA, 1, { headers: { 'x-poll-message-id': `history-${history}-b` } });
         assert.equal(d.status, 200, d.text);
         duplicate = await line(h, 'consume', fromD);
         const own = duplicate.recovery.first_action;
@@ -937,7 +968,7 @@ const drains = {};
 for (const [history, action] of [['repeated', 'hold-forever'], ['advanced', 'hold-commit-reply']]) {
   await test(`drain-history (${history}): a failed first-page drain and its resumption: the parser never infers page repetition, only the coarse cursor comparison; the fixture's own evidence separates the histories`, async () => {
     let items = [];
-    const h = await harness(() => new Response(rss(items)), { logs: true });
+    const h = await harness(() => new Response(rss(items)), { logs: true, pollingBuild: POLLING_FIXTURE });
     await within(h, async () => {
       const ts = h.storage.testStorage('polling-runtime');
       const { feed, wake } = await publishedDrain(h, `drain-history-${history}`, next => { items = next; }, 150);
@@ -995,7 +1026,7 @@ await test('runtime-maxima: the runtime maxima, bytes and build time measured on
   await within(h, async () => {
     const t = Math.floor(Date.now() / 1000);
     const chain = async (name, count) => {
-      const feed = await h.add(`https://witness.example.com/${name}`);
+      const feed = await h.add(cohort(`https://witness.example.com/${name}`));
       items = [item('base', t - 86_400)];
       await h.invoke('test/dispatch'); await h.drain();
       items = [...Array.from({ length: count }, (_, i) => item(`${name}-${i}`, t - 60 - i)), item('base', t - 86_400)];

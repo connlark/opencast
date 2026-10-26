@@ -14,7 +14,15 @@ const SUPPORTED_SCHEMA_VERSION = 1;
 const ISO_8601_SECONDS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // Fail closed: link targets must be hosts the public repository may name.
-const PUBLIC_LINK_HOSTS = new Set(["support.opencast.mobile", "opencast.mobile", "github.com", "apple.com"]);
+// The two provider key pages are exact hosts, never their parent domains.
+const PUBLIC_LINK_HOSTS = new Set([
+  "support.opencast.mobile",
+  "opencast.mobile",
+  "github.com",
+  "apple.com",
+  "aistudio.google.com",
+  "platform.openai.com",
+]);
 const BLOCK_FIELDS = {
   heading: ["text"],
   paragraph: ["text"],

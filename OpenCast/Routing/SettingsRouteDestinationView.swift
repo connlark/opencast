@@ -19,6 +19,8 @@ struct SettingsRouteDestinationView: View {
             SettingsTranscriptionView()
         case .adSkipping:
             SettingsAdSkippingView()
+        case .aiServices:
+            SettingsAIServicesView()
         case .credits:
             SettingsCreditsView()
         case .sync:

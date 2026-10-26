@@ -22,4 +22,45 @@ enum EpisodeAnalysisFailureKind: String {
     case interrupted
     /// The model's ad boundaries failed validation after every repair.
     case validationExhausted
+    /// The provider refused the listener's key, or its account needs
+    /// billing or quota.
+    case providerRejectedKey
+    /// The provider is rate limited, at its daily limit, or overloaded.
+    case providerLimited
+    /// The model is unavailable to the key, or the provider could not be
+    /// reached.
+    case providerUnavailable
+    /// No route: one case per `AnalysisKeyRequiredReason`, so the reason
+    /// survives a relaunch.
+    case keyRequiredNoKey
+    case keyRequiredTrialExhausted
+    case keyRequiredTrialPaused
+    case keyRequiredTrialRunBound
+    case keyRequiredProxyUnavailable
+    case keyRequiredKeychainUnreadable
+
+    init(keyRequired reason: AnalysisKeyRequiredReason) {
+        self = switch reason {
+        case .noKey: .keyRequiredNoKey
+        case .trialExhausted: .keyRequiredTrialExhausted
+        case .trialPaused: .keyRequiredTrialPaused
+        case .trialRunBound: .keyRequiredTrialRunBound
+        case .proxyUnavailable: .keyRequiredProxyUnavailable
+        case .keychainUnreadable: .keyRequiredKeychainUnreadable
+        }
+    }
+
+    var keyRequiredReason: AnalysisKeyRequiredReason? {
+        switch self {
+        case .keyRequiredNoKey: .noKey
+        case .keyRequiredTrialExhausted: .trialExhausted
+        case .keyRequiredTrialPaused: .trialPaused
+        case .keyRequiredTrialRunBound: .trialRunBound
+        case .keyRequiredProxyUnavailable: .proxyUnavailable
+        case .keyRequiredKeychainUnreadable: .keychainUnreadable
+        case .generic, .capExceeded, .insufficientSeconds, .serviceUnavailable, .timedOut, .interrupted,
+             .validationExhausted, .providerRejectedKey, .providerLimited, .providerUnavailable:
+            nil
+        }
+    }
 }

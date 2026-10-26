@@ -22,6 +22,7 @@ struct EpisodeDetailView: View {
     @State private var isConfirmingGenerateDisclosure = false
     @State private var sheetDestination: SheetDestination?
     @State private var adDetectionModePromptEpisode: EpisodeListItemSnapshot?
+    @State private var noticeGate = AnalysisKeyNoticeGate()
     @State private var episodeActionErrorTitle = "Couldn’t Complete Action"
     @State private var episodeActionErrorMessage = ""
     @State private var isShowingEpisodeActionError = false
@@ -69,6 +70,8 @@ struct EpisodeDetailView: View {
                 }
             }
         }
+        // Outside the toolbar so its Episode Actions menu reads the gate.
+        .environment(noticeGate)
         .confirmationDialog(
             "Clear progress for \(episode?.title ?? "this episode")?",
             isPresented: $isConfirmingClearProgress,
@@ -212,7 +215,7 @@ struct EpisodeDetailView: View {
                     onResumeDownload: { resumeDownload(episode) },
                     onCancelDownload: { cancelDownload(episode) },
                     onDeleteDownload: { deleteDownload(episode) },
-                    onMakeAdFree: { makeAdFree(episode) }
+                    onMakeAdFree: { noticeGate.run(appModel: appModel) { makeAdFree(episode) } }
                 )
 
                 // Remote flow surface (dev-flag gated): live phase while a
@@ -304,7 +307,7 @@ struct EpisodeDetailView: View {
                 if !showsGeneratedCards,
                    let controlsPresentation = chaptersSummaryControlsPresentation(for: episode, key: chaptersKey) {
                     EpisodeChaptersSummaryControlsCard(presentation: controlsPresentation) {
-                        generateChaptersAndSummary(episode)
+                        noticeGate.run(appModel: appModel) { generateChaptersAndSummary(episode) }
                     }
                     .confirmationDialog(
                         TranscriptAnalysisGenerateDisclosureCopy.title,
@@ -325,6 +328,7 @@ struct EpisodeDetailView: View {
             .animation(.smooth, value: pipelineState)
         }
         .adDetectionModeDialog(episode: $adDetectionModePromptEpisode)
+        .analysisKeyNotice(gate: noticeGate)
         .background(alignment: .top) {
             EpisodeArtworkGlowBackground(preview: episode.artworkPreview)
         }
@@ -382,7 +386,7 @@ struct EpisodeDetailView: View {
             cancelDownload(episode)
         case .cancelTranscription:
             appModel.cancelEpisodeTranscription(episodeID: episode.episodeID, modelContext: modelContext)
-        case .downloadModel, .resumeQueue, .retryQueue:
+        case .downloadModel, .resumeQueue:
             appModel.adFreePass.resumePausedQueue()
         case .resumeDownload:
             resumeDownload(episode)
@@ -589,9 +593,9 @@ struct EpisodeDetailView: View {
     }
 
     /// Fail-open surface: failures render the ready state again (a manual tap
-    /// re-probes, which is also the cap-deferral retry path) — never an
-    /// error. The pay gate's insufficient-balance denial is the deliberate
-    /// exception: it renders the needs-minutes state with a buy path (H8).
+    /// retries) — never an error; Episode Diagnostics shows why a run failed.
+    /// The needs-minutes state with a buy path exists only while generation
+    /// charges transcription minutes.
     /// Offered for any episode with a completed transcript — generation is a
     /// per-episode manual action, with no show-wide setting gating it.
     private func chaptersSummaryControlsPresentation(
@@ -607,7 +611,9 @@ struct EpisodeDetailView: View {
         switch chaptersSection.jobState {
         case .running:
             return .running
-        case .failed(let record, _) where record.failureKind == .insufficientSeconds:
+        case .failed(let record, _)
+            where TranscriptAnalysisFeatureFlags.chargesTranscriptionMinutes
+            && record.failureKind == .insufficientSeconds:
             return .needsMinutes(chargeDescription: transcriptAnalysisNeedsMinutesDescription())
         case .ready, .completed, .failed:
             return .ready(costDescription: transcriptAnalysisCostDescription())
@@ -648,7 +654,12 @@ struct EpisodeDetailView: View {
         )
     }
 
+    /// With no way to run the analysis (no key, and no trial left) the key
+    /// screen opens instead of the disclosure.
     private func generateChaptersAndSummary(_ episode: EpisodeListItemSnapshot) {
+        guard !appModel.presentChaptersSummaryKeyScreenIfNoRoute() else {
+            return
+        }
         guard appModel.transcriptAnalyses.hasAcknowledgedGenerateDisclosure else {
             isConfirmingGenerateDisclosure = true
             return

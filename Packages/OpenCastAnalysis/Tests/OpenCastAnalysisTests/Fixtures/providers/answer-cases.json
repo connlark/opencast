@@ -1,0 +1,93 @@
+{
+  "note": "2xx provider answers the pipeline must fail closed on, run end to end on the synthetic carousel: a length-truncated answer and an answer that echoes the response schema instead of filling it. Request and response ids scrubbed. No key material.",
+  "cases": [
+    {
+      "name": "gemini-truncated-ads",
+      "provider": "google",
+      "feature": "ads",
+      "source": "constructed from the provider's documented response shape",
+      "body": "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"spans\\\":[{\\\"kind\\\":\\\"inserted_ad\\\",\\\"label\\\":\\\"Harbor Letters\\\",\\\"start_segment_id\\\":20,\\\"end_segme\"}],\"role\":\"model\"},\"finishReason\":\"MAX_TOKENS\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":900,\"candidatesTokenCount\":40,\"thoughtsTokenCount\":300,\"totalTokenCount\":1240},\"modelVersion\":\"gemini-3.8-flash\",\"responseId\":\"scrubbed\"}",
+      "expect": {
+        "failure": "ad_analysis_incomplete",
+        "finish_reason": "MAX_TOKENS"
+      }
+    },
+    {
+      "name": "gemini-schema-key-leak-ads",
+      "provider": "google",
+      "feature": "ads",
+      "source": "constructed from the provider's documented response shape",
+      "body": "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"spans\\\":{\\\"type\\\":\\\"array\\\",\\\"items\\\":{\\\"type\\\":\\\"object\\\"}}},\\\"required\\\":[\\\"spans\\\"],\\\"additionalProperties\\\":false}\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":900,\"candidatesTokenCount\":40,\"thoughtsTokenCount\":300,\"totalTokenCount\":1240},\"modelVersion\":\"gemini-3.8-flash\",\"responseId\":\"scrubbed\"}",
+      "expect": {
+        "failure": "ad_analysis_incomplete",
+        "finish_reason": "STOP"
+      }
+    },
+    {
+      "name": "gemini-truncated-chapters",
+      "provider": "google",
+      "feature": "chapters",
+      "source": "constructed from the provider's documented response shape",
+      "body": "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"chapters\\\":[{\\\"title\\\":\\\"Inspecting the planks\\\",\\\"start_segment_id\\\":10,\\\"end_segm\"}],\"role\":\"model\"},\"finishReason\":\"MAX_TOKENS\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":900,\"candidatesTokenCount\":40,\"thoughtsTokenCount\":300,\"totalTokenCount\":1240},\"modelVersion\":\"gemini-3.8-flash\",\"responseId\":\"scrubbed\"}",
+      "expect": {
+        "failure": "model_output_truncated",
+        "finish_reason": "MAX_TOKENS"
+      }
+    },
+    {
+      "name": "gemini-schema-key-leak-chapters",
+      "provider": "google",
+      "feature": "chapters",
+      "source": "constructed from the provider's documented response shape",
+      "body": "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"chapters\\\":{\\\"type\\\":\\\"array\\\"},\\\"summary\\\":{\\\"type\\\":\\\"object\\\"}},\\\"required\\\":[\\\"chapters\\\",\\\"summary\\\"]}\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":900,\"candidatesTokenCount\":40,\"thoughtsTokenCount\":300,\"totalTokenCount\":1240},\"modelVersion\":\"gemini-3.8-flash\",\"responseId\":\"scrubbed\"}",
+      "expect": {
+        "failure": "invalid_model_output",
+        "finish_reason": "STOP"
+      }
+    },
+    {
+      "name": "openai-truncated-ads",
+      "provider": "openai",
+      "feature": "ads",
+      "source": "constructed from the provider's documented response shape",
+      "body": "{\"id\":\"scrubbed\",\"object\":\"response\",\"status\":\"incomplete\",\"error\":null,\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"model\":\"gpt-6.1-sol\",\"output\":[{\"id\":\"scrubbed\",\"type\":\"reasoning\",\"summary\":[]},{\"id\":\"scrubbed\",\"type\":\"message\",\"status\":\"incomplete\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"{\\\"spans\\\":[{\\\"kind\\\":\\\"inserted_ad\\\",\\\"label\\\":\\\"Harbor Letters\\\",\\\"start_segment_id\\\":20,\\\"end_segme\"}]}],\"usage\":{\"input_tokens\":900,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":340,\"output_tokens_details\":{\"reasoning_tokens\":300},\"total_tokens\":1240}}",
+      "expect": {
+        "failure": "ad_analysis_incomplete",
+        "finish_reason": "MAX_TOKENS"
+      }
+    },
+    {
+      "name": "openai-schema-key-leak-ads",
+      "provider": "openai",
+      "feature": "ads",
+      "source": "constructed from the provider's documented response shape",
+      "body": "{\"id\":\"scrubbed\",\"object\":\"response\",\"status\":\"completed\",\"error\":null,\"incomplete_details\":null,\"model\":\"gpt-6.1-sol\",\"output\":[{\"id\":\"scrubbed\",\"type\":\"reasoning\",\"summary\":[]},{\"id\":\"scrubbed\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"spans\\\":{\\\"type\\\":\\\"array\\\",\\\"items\\\":{\\\"type\\\":\\\"object\\\"}}},\\\"required\\\":[\\\"spans\\\"],\\\"additionalProperties\\\":false}\"}]}],\"usage\":{\"input_tokens\":900,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":340,\"output_tokens_details\":{\"reasoning_tokens\":300},\"total_tokens\":1240}}",
+      "expect": {
+        "failure": "ad_analysis_incomplete",
+        "finish_reason": "STOP"
+      }
+    },
+    {
+      "name": "openai-truncated-chapters",
+      "provider": "openai",
+      "feature": "chapters",
+      "source": "constructed from the provider's documented response shape",
+      "body": "{\"id\":\"scrubbed\",\"object\":\"response\",\"status\":\"incomplete\",\"error\":null,\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"model\":\"gpt-6.1-sol\",\"output\":[{\"id\":\"scrubbed\",\"type\":\"reasoning\",\"summary\":[]},{\"id\":\"scrubbed\",\"type\":\"message\",\"status\":\"incomplete\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"{\\\"chapters\\\":[{\\\"title\\\":\\\"Inspecting the planks\\\",\\\"start_segment_id\\\":10,\\\"end_segm\"}]}],\"usage\":{\"input_tokens\":900,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":340,\"output_tokens_details\":{\"reasoning_tokens\":300},\"total_tokens\":1240}}",
+      "expect": {
+        "failure": "model_output_truncated",
+        "finish_reason": "MAX_TOKENS"
+      }
+    },
+    {
+      "name": "openai-schema-key-leak-chapters",
+      "provider": "openai",
+      "feature": "chapters",
+      "source": "constructed from the provider's documented response shape",
+      "body": "{\"id\":\"scrubbed\",\"object\":\"response\",\"status\":\"completed\",\"error\":null,\"incomplete_details\":null,\"model\":\"gpt-6.1-sol\",\"output\":[{\"id\":\"scrubbed\",\"type\":\"reasoning\",\"summary\":[]},{\"id\":\"scrubbed\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"annotations\":[],\"text\":\"{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"chapters\\\":{\\\"type\\\":\\\"array\\\"},\\\"summary\\\":{\\\"type\\\":\\\"object\\\"}},\\\"required\\\":[\\\"chapters\\\",\\\"summary\\\"]}\"}]}],\"usage\":{\"input_tokens\":900,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":340,\"output_tokens_details\":{\"reasoning_tokens\":300},\"total_tokens\":1240}}",
+      "expect": {
+        "failure": "invalid_model_output",
+        "finish_reason": "STOP"
+      }
+    }
+  ]
+}

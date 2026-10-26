@@ -8,6 +8,7 @@ struct OpenCastRootRoutingModifier: ViewModifier {
     let pruneNavigationPaths: () -> Void
     let presentNowPlaying: () -> Void
     let dismissNowPlaying: () -> Void
+    let openAIServicesSettings: () -> Void
     let openExternalURL: (URL) -> Void
 
     func body(content: Content) -> some View {
@@ -33,6 +34,16 @@ struct OpenCastRootRoutingModifier: ViewModifier {
             .onChange(of: appModel.addToPlaylistPresentationRequest) { _, request in
                 if let request {
                     sheetDestination = .addToPlaylist(episodeID: request.episodeID)
+                }
+            }
+            .onChange(of: appModel.aiServicesSettingsPresentationRequest) { _, _ in
+                sheetDestination = nil
+                dismissNowPlaying()
+                openAIServicesSettings()
+            }
+            .onChange(of: appModel.analysisKeyRequired.request, initial: true) { _, request in
+                if let request {
+                    sheetDestination = .analysisKeyRequired(request)
                 }
             }
             .onChange(of: appModel.hasNowPlayingPresentationContent, initial: true) { _, hasContent in

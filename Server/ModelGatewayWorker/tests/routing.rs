@@ -1,9 +1,11 @@
 use opencast_model_gateway_worker::route::{
     content_range_header, edge_cacheable, if_none_match_matches, manifest_object_key,
     manifest_signature_object_key, parse_range_header, route_request,
-    unsatisfied_content_range_header, ByteRange, Header, RangeError, RangeSelection, RouteAction,
-    BAD_PATH_JSON, GATEWAY_DISABLED_JSON, HEALTH_JSON, JSON_CONTENT_TYPE,
-    MAX_EDGE_CACHED_OBJECT_BYTES, METHOD_NOT_ALLOWED_JSON, NOT_FOUND_JSON,
+    unsatisfied_content_range_header, ByteRange, Header, PolicyDocument, RangeError,
+    RangeSelection, RouteAction, BAD_PATH_JSON, DEFAULT_POLICY_OBJECT_PREFIX,
+    GATEWAY_DISABLED_JSON, HEALTH_JSON, IMMUTABLE_POLICY_CACHE_CONTROL, JSON_CONTENT_TYPE,
+    MAX_EDGE_CACHED_OBJECT_BYTES, METHOD_NOT_ALLOWED_JSON, MUTABLE_POLICY_CACHE_CONTROL,
+    NOT_FOUND_JSON,
 };
 
 #[test]
@@ -286,4 +288,136 @@ fn static_response(action: RouteAction) -> opencast_model_gateway_worker::route:
         RouteAction::Static(response) => response,
         _ => panic!("expected static response"),
     }
+}
+
+const POLICY_PATHS: [(&str, PolicyDocument); 7] = [
+    ("/v1/policies/analysis", PolicyDocument::CurrentBundle),
+    (
+        "/v1/policies/analysis.sig",
+        PolicyDocument::CurrentSignature,
+    ),
+    (
+        "/v1/policies/analysis/1.json",
+        PolicyDocument::VersionBundle(1),
+    ),
+    (
+        "/v1/policies/analysis/1.json.sig",
+        PolicyDocument::VersionSignature(1),
+    ),
+    (
+        "/v1/policies/analysis/42.json",
+        PolicyDocument::VersionBundle(42),
+    ),
+    (
+        "/v1/policies/analysis/987654321.json.sig",
+        PolicyDocument::VersionSignature(987_654_321),
+    ),
+    (
+        "/v1/policies/analysis/4294967295.json",
+        PolicyDocument::VersionBundle(u32::MAX),
+    ),
+];
+
+#[test]
+fn analysis_policy_routes_map_get_and_head() {
+    for (path, document) in POLICY_PATHS {
+        for (method, head) in [("GET", false), ("HEAD", true)] {
+            assert_eq!(
+                route_request(method, path, true, "opencast/models"),
+                RouteAction::AnalysisPolicy { document, head },
+                "{method} {path}"
+            );
+        }
+    }
+}
+
+#[test]
+fn analysis_policy_routes_reject_other_methods_and_near_paths() {
+    for (path, _) in POLICY_PATHS {
+        let response = static_response(route_request("PUT", path, true, "opencast/models"));
+        assert_eq!(response.status, 405);
+        assert_eq!(response.body, METHOD_NOT_ALLOWED_JSON);
+        assert!(response
+            .headers
+            .iter()
+            .any(|header| header.name == "allow" && header.value == "GET, HEAD"));
+    }
+    for path in [
+        "/v1/policies/analysis/",
+        "/v1/policies/analysis.json",
+        "/v1/policies",
+        "/v1/policies/analysis/v1.json",
+        "/v1/policies/analysis/0.json",
+        "/v1/policies/analysis/01.json",
+        "/v1/policies/analysis/1.JSON",
+        "/v1/policies/analysis/1.json.sig.sig",
+        "/v1/policies/analysis/-1.json",
+        "/v1/policies/analysis/4294967296.json",
+        "/v1/policies/analysis/.json",
+        "/v1/policies/analysis/1/2.json",
+        "/v1/policies/analysis/current.json",
+    ] {
+        let response = static_response(route_request("GET", path, true, "opencast/models"));
+        assert_eq!(response.status, 404, "{path}");
+        assert_eq!(response.body, NOT_FOUND_JSON);
+    }
+}
+
+#[test]
+fn disabled_gateway_rejects_analysis_policy_routes() {
+    for (path, _) in POLICY_PATHS {
+        let response = static_response(route_request("GET", path, false, "opencast/models"));
+        assert_eq!(response.status, 503, "{path}");
+        assert_eq!(response.body, GATEWAY_DISABLED_JSON);
+    }
+}
+
+#[test]
+fn analysis_policy_object_keys_follow_the_policy_prefix() {
+    assert_eq!(DEFAULT_POLICY_OBJECT_PREFIX, "opencast/policies");
+    let keys = [
+        (
+            PolicyDocument::CurrentBundle,
+            "opencast/policies/analysis/current.json",
+        ),
+        (
+            PolicyDocument::CurrentSignature,
+            "opencast/policies/analysis/current.json.sig",
+        ),
+        (
+            PolicyDocument::VersionBundle(1),
+            "opencast/policies/analysis/v1.json",
+        ),
+        (
+            PolicyDocument::VersionSignature(12),
+            "opencast/policies/analysis/v12.json.sig",
+        ),
+    ];
+    for (document, key) in keys {
+        assert_eq!(document.object_key("/opencast/policies/"), key);
+    }
+}
+
+/// A version's copies never change, so the edge and clients may keep them;
+/// the current documents name which version is live and must be revalidated
+/// so a client never pairs a signature with a body from another generation.
+#[test]
+fn versioned_policy_documents_are_immutable_and_current_ones_revalidate() {
+    for document in [
+        PolicyDocument::VersionBundle(3),
+        PolicyDocument::VersionSignature(3),
+    ] {
+        assert!(document.is_immutable());
+        assert_eq!(document.cache_control(), IMMUTABLE_POLICY_CACHE_CONTROL);
+    }
+    for document in [
+        PolicyDocument::CurrentBundle,
+        PolicyDocument::CurrentSignature,
+    ] {
+        assert!(!document.is_immutable());
+        assert_eq!(document.cache_control(), MUTABLE_POLICY_CACHE_CONTROL);
+    }
+    assert!(IMMUTABLE_POLICY_CACHE_CONTROL.contains("immutable"));
+    assert!(IMMUTABLE_POLICY_CACHE_CONTROL.contains("max-age=31536000"));
+    assert_eq!(MUTABLE_POLICY_CACHE_CONTROL, "no-cache");
 }

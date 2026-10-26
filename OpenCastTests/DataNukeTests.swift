@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastAnalysis
 import OpenCastCore
 import OpenCastPlayback
 import OpenCastTranscription
@@ -241,9 +242,8 @@ struct DataNukeTests {
         )
         let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory)
         let adAnalysisFileStore = EpisodeAdAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
-        let client = HangingEpisodeTranscriptAnalysisClient()
         let transcriptAnalyses = EpisodeTranscriptAnalysisStore(
-            client: client,
+            client: ScriptedTranscriptAnalysisDrainClient(),
             fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
         )
         let appModel = OpenCastAppModel(
@@ -267,28 +267,31 @@ struct DataNukeTests {
             adAnalysisFileStore: adAnalysisFileStore,
             context: context
         ).episodeID
+        let producer = FakeChaptersSummaryProducer()
+        producer.holdsRuns = true
+        producer.attach(to: transcriptAnalyses)
         await appModel.library.load(modelContext: context)
         await appModel.downloads.load(modelContext: context)
         appModel.transcriptions.load(modelContext: context)
         appModel.transcriptAnalyses.load(modelContext: context)
 
-        // The first explicit run parks inside the hanging client; the second
+        // The first explicit run parks inside the producer; the second
         // queues behind it, leaving a suspended drain holding a pending
-        // episode when the nuke starts. Wait for the client call itself:
-        // the run reports isRunning before it reaches the client, and a nuke
-        // that lands in that gap cancels a run that never called it.
+        // episode when the nuke starts. Wait for the producer call itself:
+        // the run reports isRunning before it reaches the producer, and a
+        // nuke that lands in that gap cancels a run that never started.
         appModel.generateChaptersAndSummary(episodeID: episodeID, modelContext: context)
         try #require(await waitUntil {
-            transcriptAnalyses.isRunning(for: episodeID) && client.analyzeCallCount == 1
+            transcriptAnalyses.isRunning(for: episodeID) && producer.isHolding
         })
         appModel.generateChaptersAndSummary(episodeID: episodeID, modelContext: context)
 
         try await appModel.nukeAllData(modelContext: context)
 
         // Cancelling the active job wakes the suspended drain; it must not
-        // dequeue the pending episode and start a fresh network analysis
-        // mid-nuke.
-        #expect(client.analyzeCallCount == 1)
+        // dequeue the pending episode and start a fresh analysis mid-nuke.
+        #expect(producer.requests.count == 1)
+        #expect(producer.cancelledRunIDs.count == 1)
         #expect(!transcriptAnalyses.hasActiveJob)
         #expect(transcriptAnalyses.records.isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeTranscriptAnalysisRecord>()).isEmpty)
@@ -306,7 +309,7 @@ struct DataNukeTests {
             baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
         )
         let transcriptAnalyses = EpisodeTranscriptAnalysisStore(
-            client: HangingEpisodeTranscriptAnalysisClient(),
+            client: ScriptedTranscriptAnalysisDrainClient(),
             fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
         )
         let appModel = OpenCastAppModel(
@@ -336,6 +339,134 @@ struct DataNukeTests {
         // preference row is gone and the post-nuke reload reflects it.
         #expect(!transcriptAnalyses.hasAcknowledgedGenerateDisclosure)
         #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).isEmpty)
+    }
+
+    @Test("Delete Data leaves no usage behind: a billed run awaiting resume and a run whose usage never saved count nothing afterwards")
+    func nukeLeavesNoUsageFromRunJournals() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(
+            baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+        )
+        let runsDirectory = fileStore.baseDirectory.appending(path: "AnalysisRuns", directoryHint: .isDirectory)
+        let runs = AnalysisRunRecordStore(directory: runsDirectory)
+        let appModel = OpenCastAppModel(
+            cacheController: OpenCastCacheController(
+                rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+            ),
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(fileStore: fileStore),
+            transcriptions: EpisodeTranscriptionStore(
+                fileStore: EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory)
+            ),
+            adAnalyses: EpisodeAdAnalysisStore(
+                client: UnusedEpisodeAdAnalysisClient(),
+                fileStore: EpisodeAdAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
+            ),
+            transcriptAnalyses: EpisodeTranscriptAnalysisStore(
+                client: ScriptedTranscriptAnalysisDrainClient(),
+                fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
+            ),
+            analysisRuns: runs,
+            syncStatus: SyncStatusStore(
+                accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
+            ),
+            allowsAutomaticFeedRefresh: false
+        )
+        let chaptersPolicy = try #require(AnalysisPolicySnapshot.baked.chaptersSummary(provider: .google))
+        let adPolicy = try #require(AnalysisPolicySnapshot.baked.adDetection(provider: .google))
+        func directResolution(_ feature: AnalysisFeature, _ policy: AnalysisRoutePolicy) -> AnalysisRouteResolution {
+            AnalysisRouteResolution(
+                feature: feature,
+                route: .direct(provider: .google),
+                policy: policy,
+                key: AnalysisKeyFixtures.key(AnalysisKeyFixtures.googleText),
+                resumingRunID: nil,
+                trialExchange: nil
+            )
+        }
+
+        // Usage from earlier runs, which the wipe deletes.
+        appModel.analysisUsage.load(modelContext: context)
+        #expect(appModel.analysisUsage.record(
+            provider: .google,
+            feature: .chaptersSummary,
+            inputTokens: 1_000,
+            outputTokens: 100,
+            at: .now,
+            runID: "nuke-earlier-run",
+            modelContext: context
+        ))
+        // A billed Chapters & Summary run whose card expired, its record
+        // running and awaiting a resume.
+        let episodeID = "nuke-interrupted-chapters"
+        let interrupted = AnalysisRunRecord(
+            feature: .chaptersSummary,
+            episodeID: episodeID,
+            podcastID: seededFeedURL,
+            transcriptFingerprint: "nuke-fingerprint",
+            resolution: directResolution(.chaptersSummary, .chaptersSummary(chaptersPolicy)),
+            policy: .chaptersSummary(chaptersPolicy)
+        )
+        try runs.begin(interrupted)
+        runs.update(runID: interrupted.id) { record in
+            record.inputTokens = 420
+            record.outputTokens = 36
+        }
+        runs.markExpired(runID: interrupted.id)
+        context.insert(EpisodeTranscriptAnalysisRecord(
+            episodeID: episodeID,
+            podcastID: seededFeedURL,
+            transcriptFingerprint: "nuke-fingerprint",
+            state: .running,
+            analysisRelativePath: "EpisodeTranscriptAnalyses/\(episodeID)/nuke-fingerprint.json"
+        ))
+        try context.save()
+        appModel.transcriptAnalyses.load(modelContext: context)
+        #expect(appModel.transcriptAnalyses.resumableEpisodeIDs == [episodeID])
+        // An ad-detection run that ended in this process with its usage
+        // save failed: the next load would count it.
+        let unsaved = AnalysisRunRecord(
+            feature: .adDetection,
+            episodeID: "nuke-unsaved-ads",
+            podcastID: seededFeedURL,
+            transcriptFingerprint: "nuke-ad-fingerprint",
+            resolution: directResolution(.adDetection, .adDetection(adPolicy)),
+            policy: .adDetection(adPolicy)
+        )
+        try runs.begin(unsaved)
+        runs.update(runID: unsaved.id) { record in
+            record.inputTokens = 900
+            record.outputTokens = 80
+        }
+        runs.finish(
+            runID: unsaved.id,
+            outcome: .failed(AnalysisFailure(feature: .adDetection, code: .network, status: 502)),
+            listenerFailure: nil,
+            background: false
+        )
+        #expect(appModel.analysisUsage.usage(for: .google).monthInputTokens == 1_000)
+
+        try await appModel.nukeAllData(modelContext: context)
+
+        #expect(appModel.analysisUsage.usage(for: .google).monthInputTokens == 0)
+        #expect(appModel.analysisUsage.usage(for: .google).monthOutputTokens == 0)
+        #expect(appModel.analysisUsage.usage(for: .google).lastRun == nil)
+        #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).allSatisfy { record in
+            record.key != AnalysisUsageStore.preferenceKey(for: .google)
+        })
+        #expect(runs.records(limit: AnalysisRunRecordStore.maximumRecords).isEmpty)
+        #expect(try regularFiles(in: runsDirectory).isEmpty)
+
+        // The next launch's loads find nothing to count.
+        appModel.adAnalyses.load(modelContext: context)
+        appModel.transcriptAnalyses.load(modelContext: context)
+        let relaunched = AnalysisUsageStore()
+        relaunched.load(modelContext: context)
+        #expect(relaunched.usage(for: .google).monthInputTokens == 0)
+        #expect(relaunched.usage(for: .google).lastRun == nil)
+        #expect(try regularFiles(in: runsDirectory).isEmpty)
     }
 
     @Test("The row wipe credits the arbiter once, and an empty wipe credits nothing")
@@ -1187,26 +1318,7 @@ private actor GatedLocalLibraryCacheStore: LocalLibraryCacheStore {
     }
 }
 
-private final class HangingEpisodeTranscriptAnalysisClient: EpisodeTranscriptAnalysisClient, @unchecked Sendable {
-    private(set) var analyzeCallCount = 0
-
-    func analyze(_ request: EpisodeTranscriptAnalysisAPIRequest) async throws -> EpisodeTranscriptAnalysisSubmitOutcome {
-        analyzeCallCount += 1
-        // Parks until the nuke cancels the run; cancellation throws here.
-        try await Task.sleep(for: .seconds(600))
-        throw CancellationError()
-    }
-
-    func pollJob(id: String) async throws -> EpisodeTranscriptAnalysisJobPollOutcome {
-        throw EpisodeTranscriptAnalysisError.clientDisabled
-    }
-}
-
 private final class UnusedEpisodeAdAnalysisClient: EpisodeAdAnalysisClient, @unchecked Sendable {
-    func analyze(_ request: EpisodeAdAnalysisAPIRequest) async throws -> EpisodeAdAnalysisSubmitOutcome {
-        throw EpisodeAdAnalysisError.clientDisabled
-    }
-
     func pollJob(id: String) async throws -> EpisodeAdAnalysisJobPollOutcome {
         throw EpisodeAdAnalysisError.clientDisabled
     }

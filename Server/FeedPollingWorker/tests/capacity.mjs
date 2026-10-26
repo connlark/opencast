@@ -54,15 +54,19 @@ async function clock(at){
   const delivery=await h.instance.getWorker('delivery-runtime');
   await (await delivery.fetch('https://delivery.invalid/clock',{method:'POST',body:String(offset)})).text();
 }
-const SETTLED=new Set(['not_modified','unchanged','published']);
-let measuring=false,completedPolls=0;
+// A poll completes at its generation's terminal delivery: an unchanged scan, a
+// candidate-free publication, or a publication carried through its drain,
+// outbox and settle. Each (feed, generation) counts once, at its first such
+// delivery, so a chain is never counted twice.
+const SETTLED=new Set(['not_modified','unchanged','published','settled']);
+let measuring=false,completedPolls=0;const counted=new Set();
 // One Queue delivery under the consumer's policy: a failed response is retried
 // three times, then dead-lettered. The envelope's due time gives the lag.
 async function deliverWake(wake,replica){
   for(let attempts=1;;attempts++){
     const result=await h.consume(wake,{attempts,replica});
     if(result.status===200||result.status===400){
-      if(measuring&&wake.kind==='poll'&&SETTLED.has(result.outcome)){completedPolls++;lag.push(Math.max(0,logicalNow+Math.floor((performance.now()-clockAnchor)/1000)-wake.due_at));}
+      if(measuring&&wake.kind==='poll'&&SETTLED.has(result.outcome)&&!counted.has(`${wake.feed_id}:${wake.generation}`)){counted.add(`${wake.feed_id}:${wake.generation}`);completedPolls++;lag.push(Math.max(0,logicalNow+Math.floor((performance.now()-clockAnchor)/1000)-wake.due_at));}
       return;
     }
     if(attempts>3){await h.invoke('test/dead-letter',wake,undefined,replica);return;}

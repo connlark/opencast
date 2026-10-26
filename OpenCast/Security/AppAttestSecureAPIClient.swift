@@ -66,6 +66,70 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         }
     }
 
+    /// ``sendRawPayload(path:installID:keyID:payload:timeout:response:)``
+    /// with the reply undecoded: every status comes back as a response, and
+    /// the body is read capped at `maximumBodyBytes`. One gate turn spans
+    /// issuance, the post and the whole body read; a 401 `invalid_counter`
+    /// is sent again once inside the turn with a fresh assertion.
+    func sendRawPayloadForRawResponse(
+        path: String,
+        installID: String,
+        keyID: String,
+        payload: String,
+        timeout: TimeInterval?,
+        maximumBodyBytes: Int
+    ) async throws -> AppAttestRawHTTPResponse {
+        try await AppAttestAssertionGate.shared.withSerializedSend(keyID: keyID) {
+            let first = try await issueAssertionAndSendForRawResponse(
+                path: path,
+                installID: installID,
+                keyID: keyID,
+                payload: payload,
+                timeout: timeout,
+                maximumBodyBytes: maximumBodyBytes
+            )
+            guard first.isCounterRaceFailure else {
+                return first
+            }
+            return try await issueAssertionAndSendForRawResponse(
+                path: path,
+                installID: installID,
+                keyID: keyID,
+                payload: payload,
+                timeout: timeout,
+                maximumBodyBytes: maximumBodyBytes
+            )
+        }
+    }
+
+    private func issueAssertionAndSendForRawResponse(
+        path: String,
+        installID: String,
+        keyID: String,
+        payload: String,
+        timeout: TimeInterval?,
+        maximumBodyBytes: Int
+    ) async throws -> AppAttestRawHTTPResponse {
+        let clientDataHash = AppAttestRequestBinding.clientDataHash(
+            method: "POST",
+            path: path,
+            payload: payload
+        )
+        let assertion = try await appAttestService.generateAssertion(
+            keyID,
+            clientDataHash: clientDataHash
+        )
+        return try await apiClient.sendAuthenticatedEnvelopeForRawResponse(
+            path: path,
+            installID: installID,
+            keyID: keyID,
+            payload: payload,
+            assertion: assertion,
+            timeout: timeout,
+            maximumBodyBytes: maximumBodyBytes
+        )
+    }
+
     private func issueAssertionAndSend<ResponseBody: Decodable & Sendable>(
         path: String,
         installID: String,
