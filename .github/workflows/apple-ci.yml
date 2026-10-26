@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+  DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
 
 # Pull requests cancel their superseded runs. Pushes to main never do: every
 # commit there keeps its own run, so a follow-up push cannot erase its evidence.
@@ -45,6 +45,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          echo "Simulator SDK: ${sdk_version}"
           simulator_udid="$(
             xcrun simctl list devices available --json | python3 -c '
           import json
@@ -52,6 +54,7 @@ jobs:
           import sys
 
           payload = json.load(sys.stdin)
+          sdk_version = tuple(int(component) for component in sys.argv[1].split("."))
           candidates = []
           for runtime_identifier, devices in payload["devices"].items():
               match = re.search(r"iOS-(27(?:-\d+)*)$", runtime_identifier)
@@ -59,16 +62,20 @@ jobs:
                   continue
               version = tuple(int(component) for component in match.group(1).split("-"))
               for device in devices:
-                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
-                      candidates.append((version, device["name"], device["udid"]))
+                  name = device.get("name", "")
+                  # iPhone Duo changes size between poses and its first boot on
+                  # a hosted runner takes many minutes; the lanes want a
+                  # fixed-size iPhone. Prefer the runtime matching the SDK.
+                  if device.get("isAvailable") and name.startswith("iPhone") and "Duo" not in name:
+                      candidates.append((version == sdk_version, version, name, device["udid"]))
 
           if not candidates:
-              print("No available iPhone simulator with an iOS 27 runtime was found.", file=sys.stderr)
+              print("No available iPhone simulator (other than iPhone Duo) with an iOS 27 runtime was found.", file=sys.stderr)
               sys.exit(1)
 
           candidates.sort(reverse=True)
-          print(candidates[0][2])
-          '
+          print(candidates[0][3])
+          ' "${sdk_version}"
           )"
           echo "Selected iOS 27 simulator: ${simulator_udid}"
           echo "udid=${simulator_udid}" >> "${GITHUB_OUTPUT}"
@@ -178,6 +185,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          echo "Simulator SDK: ${sdk_version}"
           simulator_udid="$(
             xcrun simctl list devices available --json | python3 -c '
           import json
@@ -185,6 +194,7 @@ jobs:
           import sys
 
           payload = json.load(sys.stdin)
+          sdk_version = tuple(int(component) for component in sys.argv[1].split("."))
           candidates = []
           for runtime_identifier, devices in payload["devices"].items():
               match = re.search(r"iOS-(27(?:-\d+)*)$", runtime_identifier)
@@ -192,16 +202,20 @@ jobs:
                   continue
               version = tuple(int(component) for component in match.group(1).split("-"))
               for device in devices:
-                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
-                      candidates.append((version, device["name"], device["udid"]))
+                  name = device.get("name", "")
+                  # iPhone Duo changes size between poses and its first boot on
+                  # a hosted runner takes many minutes; the lanes want a
+                  # fixed-size iPhone. Prefer the runtime matching the SDK.
+                  if device.get("isAvailable") and name.startswith("iPhone") and "Duo" not in name:
+                      candidates.append((version == sdk_version, version, name, device["udid"]))
 
           if not candidates:
-              print("No available iPhone simulator with an iOS 27 runtime was found.", file=sys.stderr)
+              print("No available iPhone simulator (other than iPhone Duo) with an iOS 27 runtime was found.", file=sys.stderr)
               sys.exit(1)
 
           candidates.sort(reverse=True)
-          print(candidates[0][2])
-          '
+          print(candidates[0][3])
+          ' "${sdk_version}"
           )"
           echo "Selected iOS 27 simulator: ${simulator_udid}"
           echo "udid=${simulator_udid}" >> "${GITHUB_OUTPUT}"
