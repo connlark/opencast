@@ -55,6 +55,76 @@ Run locally after creating `wrangler.toml`:
 yarn dev
 ```
 
+## Analysis Policy
+
+The app's on-device ad detection and Chapters & Summary read their prompts,
+response schemas, model entries, timeouts and limits from one signed JSON
+document, the analysis policy bundle. The gateway serves it from R2 under
+`POLICY_OBJECT_PREFIX`:
+
+- `GET` / `HEAD /v1/policies/analysis` and `/v1/policies/analysis.sig`
+- `GET` / `HEAD /v1/policies/analysis/{version}.json` and `.json.sig`
+
+The current signature is a detached Ed25519 envelope (same key as the model
+manifest) that also names the bundle it signs: `bundle_version` and the
+SHA-256 of its exact bytes. The app reads that signature, fetches
+`/v1/policies/analysis/{bundle_version}.json`, checks the digest and verifies
+the signature over those bytes, so a signature can never be paired with
+another generation's bundle. Versioned documents are immutable and edge
+cached; the current signature and `/v1/policies/analysis` are `no-cache`, so a
+publish is visible at once. The app verifies the signature against its pinned
+key, rejects a bundle that needs a newer app build, rejects the whole bundle
+when any value is outside its hard bounds, and then falls back to the copy
+baked into the build. A bundle may only tighten what was qualified.
+
+`manifests/analysis-policy.schema.json` states the document and the bounds;
+`manifests/analysis-policy/vN.json` and `.sig` are the checked-in bundles the
+trial proxy embeds at build time. `tests/analysis_policy.rs` fails if a schema
+bound and a worker constant part ways, or if a checked-in bundle, the app's
+baked copy or the test fixtures differ from what the generator produces.
+
+`generate_policy` builds the bundle from the analysis workers' own constants,
+prompt file and schemas (host-only path dependencies on `AdAnalysisWorker` and
+`TranscriptAnalysisWorker`); the provider wire facts, key pages, trial block
+and notice start are named constants in `src/analysis_policy.rs`. Bump
+`--bundle-version` for every content change; the app never moves to a lower
+version. Sign with the same local key as the manifests:
+
+```sh
+OPENCAST_MODEL_MANIFEST_SIGNING_KEY_HEX="$(tr -d '\n' < /secure/path/model-manifest-signing-key.hex)" \
+cargo run --bin generate_policy -- \
+  --bundle-version 1 \
+  --generated-at 2026-10-24T00:00:00Z \
+  --min-app-build 301 \
+  --output manifests/analysis-policy/v1.json \
+  --signature-output manifests/analysis-policy/v1.json.sig \
+  --signature-key-id your-signing-key-id \
+  --swift-baked-output ../../Packages/OpenCastAnalysis/Sources/OpenCastAnalysis/Policy/BakedAnalysisPolicy.swift \
+  --swift-test-fixtures-output ../../Packages/OpenCastAnalysis/Tests/OpenCastAnalysisTests/Policy/AnalysisPolicyTestFixtures.swift
+```
+
+`--swift-baked-output` rewrites the copy the app ships with; only do that for
+the version the next build should carry. The test fixtures are signed with a
+throwaway key derived from a public label, never the deployment key. Bundle
+timestamps must be canonical UTC (`2026-10-24T00:00:00Z`).
+
+`verify_policy` re-checks a signed bundle the way the app does and reports
+whether it still matches the generator:
+
+```sh
+cargo run --bin verify_policy -- \
+  --input manifests/analysis-policy/v1.json \
+  --signature manifests/analysis-policy/v1.json.sig
+```
+
+Publish a version with `POLICY_VERSION=1 BUCKET=your-model-bucket
+./scripts/upload-analysis-policy.sh`. The script runs `verify_policy`, then
+`scripts/analysis-policy-publisher.mjs` writes the versioned bundle and
+signature with conditional creates (a version already holding different bytes
+aborts the publish before anything current changes), reads both back, writes
+`current.json` and flips `current.json.sig` last, so every client keeps
+verifying the previous version until the flip and a rerun is safe.
+
 ## Security Defaults
 
 - Keep the gateway read-only.
