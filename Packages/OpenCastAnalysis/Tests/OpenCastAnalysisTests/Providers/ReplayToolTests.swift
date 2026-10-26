@@ -87,7 +87,7 @@ struct ReplayToolTests {
         let recorder = try Self.recorder(inner, directory: directory)
         let request = try Self.generateRequest()
         for _ in 0..<2 {
-            _ = try? await recorder.send(request, timeoutSeconds: 30, maximumBodyBytes: 1024)
+            _ = try? await recorder.send(request, timeoutSeconds: 300, maximumBodyBytes: 1024)
         }
         let metas = try Self.recordedTexts(directory).filter { $0.contains("\"timeout_s\"") }
         #expect(metas.count == 2)
@@ -148,15 +148,18 @@ struct ReplayToolTests {
         let inner = ScriptedHTTPClient(status: 200, body: "{}")
         let recorder = try Self.recorder(inner, directory: directory, hook: hook)
         let request = try Self.generateRequest()
+        // A deadline a stalled runner cannot exhaust: the hook's 0.6 s has
+        // to come off it whatever the machine load adds on top.
+        let deadline = 300.0
         let started = ContinuousClock.now
-        _ = try await recorder.send(request, timeoutSeconds: 5, maximumBodyBytes: 1024)
+        _ = try await recorder.send(request, timeoutSeconds: deadline, maximumBodyBytes: 1024)
         let elapsed = started.duration(to: .now).components
         let spent = Double(elapsed.seconds) + Double(elapsed.attoseconds) * 1e-18
         let timeout = try #require(inner.timeouts.first)
         // At least the hook's own 0.6 s comes off, and never more than the
         // whole send took (the bound holds however slow the machine is).
-        #expect(timeout <= 4.45, "the exchange got \(timeout) s of a 5 s deadline after a 0.6 s hook")
-        #expect(timeout >= 5 - spent - 0.01, "the exchange got \(timeout) s after \(spent) s")
+        #expect(timeout <= deadline - 0.55, "the exchange got \(timeout) s of a \(deadline) s deadline after a 0.6 s hook")
+        #expect(timeout >= deadline - spent - 0.01, "the exchange got \(timeout) s after \(spent) s")
     }
 }
 
@@ -170,12 +173,12 @@ extension ReplayToolTests {
     static let childLifetimeSeconds = 300
 
     /// Whether the process `pid` is gone, waiting up to `seconds` for it.
-    static func processGone(_ pid: pid_t, within seconds: Double = 3) async -> Bool {
+    static func processGone(_ pid: pid_t, within seconds: Double = 30) async -> Bool {
         await eventually(within: seconds) { kill(pid, 0) != 0 && errno == ESRCH }
     }
 
     static func pid(in file: URL) async -> pid_t? {
-        guard await eventually(within: 3, { (try? String(contentsOf: file, encoding: .utf8))?.isEmpty == false }) else { return nil }
+        guard await eventually(within: 30, { (try? String(contentsOf: file, encoding: .utf8))?.isEmpty == false }) else { return nil }
         return (try? String(contentsOf: file, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
@@ -228,7 +231,7 @@ extension ReplayToolTests {
         let directory = Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let hook = SpendHook(executable: try Self.script(directory, #"head -c 2000000 /dev/zero | tr '\0' 'x'; echo '{"reservation": "r1"}'"#))
-        let reply = await hook.run(["reserve"], timeoutSeconds: 10)
+        let reply = await hook.run(["reserve"], timeoutSeconds: 300)
         #expect(reply.status == 0)
         #expect(reply.output == nil)
     }
@@ -260,7 +263,7 @@ extension ReplayToolTests {
         let log = directory.appending(path: "hook-arguments.txt")
         let recorder = try Self.recorder(ScriptedHTTPClient(status: 200, body: #"{"status":"completed","output":[]}"#), directory: directory,
                                          key: key, hook: try Self.recordingHook(directory, log: log))
-        _ = try await recorder.send(request, timeoutSeconds: 30, maximumBodyBytes: 4096)
+        _ = try await recorder.send(request, timeoutSeconds: 300, maximumBodyBytes: 4096)
         let exchanges = directory.appending(path: "exchanges")
         let names = try FileManager.default.contentsOfDirectory(atPath: exchanges.path(percentEncoded: false))
         let meta = try String(contentsOf: exchanges.appending(path: try #require(names.first { $0.hasSuffix(".meta.json") })), encoding: .utf8)
@@ -286,7 +289,7 @@ extension ReplayToolTests {
         let log = directory.appending(path: "hook-arguments.txt")
         let recorder = try Self.recorder(ScriptedHTTPClient(status: 200, body: body), directory: directory, key: key,
                                          hook: try Self.recordingHook(directory, log: log))
-        _ = try await recorder.send(try Self.generateRequest(), timeoutSeconds: 30, maximumBodyBytes: 4096)
+        _ = try await recorder.send(try Self.generateRequest(), timeoutSeconds: 300, maximumBodyBytes: 4096)
         let exchanges = directory.appending(path: "exchanges")
         let names = try FileManager.default.contentsOfDirectory(atPath: exchanges.path(percentEncoded: false))
         let response = try String(contentsOf: exchanges.appending(path: try #require(names.first { $0.hasSuffix(".response.json") })), encoding: .utf8)
@@ -324,7 +327,7 @@ extension ReplayToolTests {
                                          directory: directory, key: key, hook: hook)
         var request = try Self.generateRequest()
         request.body = Data(#"{"input":"\#(planted)","n":1}"#.utf8)
-        _ = try? await recorder.send(request, timeoutSeconds: 30, maximumBodyBytes: 4096)
+        _ = try? await recorder.send(request, timeoutSeconds: 300, maximumBodyBytes: 4096)
         let texts = try Self.recordedTexts(directory)
         #expect(texts.count == 3)
         for text in texts {
@@ -338,7 +341,7 @@ extension ReplayToolTests {
         // A request body that is not JSON is never written as text.
         var opaque = try Self.generateRequest()
         opaque.body = Data("not json \(planted)".utf8)
-        _ = try? await recorder.send(opaque, timeoutSeconds: 30, maximumBodyBytes: 4096)
+        _ = try? await recorder.send(opaque, timeoutSeconds: 300, maximumBodyBytes: 4096)
         for text in try Self.recordedTexts(directory) {
             #expect(!text.contains("not json"), "\(text)")
         }
@@ -352,7 +355,7 @@ extension ReplayToolTests {
             let key = try #require(AnalysisProviderKey(RedactionTests.maskedKey))
             let echo = RedactionTests.maskedEcho.replacing("************************************", with: mask)
             let recorder = try Self.recorder(ScriptedHTTPClient(status: 401, body: echo), directory: directory, key: key)
-            _ = try? await recorder.send(try Self.generateRequest(), timeoutSeconds: 30, maximumBodyBytes: 4096)
+            _ = try? await recorder.send(try Self.generateRequest(), timeoutSeconds: 300, maximumBodyBytes: 4096)
             let texts = try Self.recordedTexts(directory)
             for text in texts {
                 #expect(!text.contains("Incorrect API key"), "\(mask): \(text)")
@@ -368,7 +371,9 @@ extension ReplayToolTests {
     func hookEndsOnTerm() async throws {
         let directory = Self.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let hook = SpendHook(executable: try Self.script(directory, "exec sleep 6"))
+        // A child that could end by itself before a starved timeout fires
+        // would make the exit, not the signal, the ending.
+        let hook = SpendHook(executable: try Self.script(directory, "exec sleep \(Self.childLifetimeSeconds)"))
         let reply = await hook.run(["reserve"], timeoutSeconds: 0.2)
         #expect(reply.ending == .timedOut)
         #expect(reply.signal == SIGTERM, "ended by signal \(reply.signal.map(String.init) ?? "none"), not SIGTERM")

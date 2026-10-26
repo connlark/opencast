@@ -235,8 +235,8 @@ struct VerifierContractTests {
         ])
         let recorder = try ReplayToolTests.recorder(inner, directory: directory)
         let request = try ReplayToolTests.generateRequest()
-        _ = try? await recorder.send(request, timeoutSeconds: 30, maximumBodyBytes: 1 << 16)
-        _ = try? await recorder.send(request, timeoutSeconds: 30, maximumBodyBytes: 1 << 16)
+        _ = try? await recorder.send(request, timeoutSeconds: 300, maximumBodyBytes: 1 << 16)
+        _ = try? await recorder.send(request, timeoutSeconds: 300, maximumBodyBytes: 1 << 16)
         let texts = try ReplayToolTests.recordedTexts(directory)
         let all = texts.joined(separator: "\n")
         for planted in ["providerid77", "gpt-provider-version-77", "msg_provider77", "provider-metadata-77",

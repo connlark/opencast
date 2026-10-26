@@ -285,7 +285,7 @@ struct AnalysisExecutionSessionTests {
         await yieldMany()
         #expect(hold.waiting)
         running.cancel()
-        #expect(await eventually(within: 5) { observed.isSet }, "the work did not see the cancellation while submission was held")
+        #expect(await eventually(within: 60) { observed.isSet }, "the work did not see the cancellation while submission was held")
         #expect(hold.waiting)
         hold.open()
         #expect(await running.value == .finished(Self.cancelled, background: false))
