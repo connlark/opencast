@@ -27,11 +27,16 @@ final class OpenCastAppRuntime {
                 try Self.deleteAdAnalysisAppAttestCredentials()
             }
             #endif
-            // Read before the container opens, so the copy never depends on
-            // what that open does to the playlist tables it no longer maps.
-            let legacyLocalPlaylists = Self.legacyLocalPlaylists(launchConfiguration: launchConfiguration)
+            let stores = Self.resolveModelStores(
+                layout: .current(),
+                usesInMemoryStore: launchConfiguration.usesInMemoryStore,
+                relocate: { ModelStoreRelocation.relocate($0) },
+                relocationLog: ModelStoreRelocationLog(),
+                defaults: .standard
+            )
             modelContainer = try OpenCastModelContainerFactory.make(
-                inMemory: launchConfiguration.usesInMemoryStore
+                inMemory: launchConfiguration.usesInMemoryStore,
+                layout: stores.layout
             )
             // Seeds write cache data through the same store the app reads, so
             // harness data exercises upsertCache rather than the one-time
@@ -141,7 +146,7 @@ final class OpenCastAppRuntime {
                 adFreePassPresentationOverride: launchConfiguration.adFreePassPresentationOverride,
                 adFreePassQueueOverride: launchConfiguration.adFreePassQueueOverride,
                 uiTestSeededChapters: launchConfiguration.seedsChapters ? OpenCastUITestSeedData.seededChapters : nil,
-                legacyLocalPlaylists: legacyLocalPlaylists
+                legacyLocalPlaylists: stores.legacyLocalPlaylists
             )
             #if DEBUG
             if launchConfiguration.seedsUITestData {
@@ -156,21 +161,44 @@ final class OpenCastAppRuntime {
         }
     }
 
-    /// nil for an in-memory launch and once the copy has completed. A store
-    /// with nothing to copy yields an empty snapshot so the migration records
-    /// itself as done and later launches skip the file check. A failed read
-    /// must never reach the launch's `fatalError`: it is logged, yields nil,
-    /// and the next launch tries again.
+    /// Everything that must happen before the container opens, in order: the
+    /// relocation, one log line per store, then the legacy playlist read at
+    /// the local URL the relocation resolved, so the read sees the file the
+    /// container will open and never depends on what that open does to the
+    /// playlist tables it no longer maps. An in-memory launch does none of it;
+    /// its configurations never read the layout.
+    static func resolveModelStores(
+        layout: ModelStoreLayout,
+        usesInMemoryStore: Bool,
+        relocate: (ModelStoreLayout) -> (layout: ModelStoreLayout, results: [ModelStoreRelocationResult]),
+        relocationLog: ModelStoreRelocationLog,
+        defaults: UserDefaults
+    ) -> (layout: ModelStoreLayout, legacyLocalPlaylists: LegacyLocalPlaylistSnapshot?) {
+        guard !usesInMemoryStore else {
+            return (layout, nil)
+        }
+        let relocation = relocate(layout)
+        relocationLog.record(relocation.results)
+        return (
+            relocation.layout,
+            legacyLocalPlaylists(storeURL: relocation.layout.localStoreURL, defaults: defaults)
+        )
+    }
+
+    /// nil once the copy has completed. A store with nothing to copy yields an
+    /// empty snapshot so the migration records itself as done and later
+    /// launches skip the file check. A failed read must never reach the
+    /// launch's `fatalError`: it is logged, yields nil, and the next launch
+    /// tries again.
     private static func legacyLocalPlaylists(
-        launchConfiguration: OpenCastLaunchConfiguration
+        storeURL: URL,
+        defaults: UserDefaults
     ) -> LegacyLocalPlaylistSnapshot? {
-        guard !launchConfiguration.usesInMemoryStore,
-              !UserDefaults.standard.bool(forKey: PlaylistLocalStoreMigration.completedDefaultsKey)
-        else {
+        guard !defaults.bool(forKey: PlaylistLocalStoreMigration.completedDefaultsKey) else {
             return nil
         }
         do {
-            return try LegacyLocalPlaylistReader.read(storeURL: OpenCastModelContainerFactory.localStoreURL)
+            return try LegacyLocalPlaylistReader.read(storeURL: storeURL)
                 ?? LegacyLocalPlaylistSnapshot()
         } catch {
             Logger(subsystem: "com.connor.opencast", category: "PlaylistMigration")

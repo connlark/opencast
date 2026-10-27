@@ -118,7 +118,7 @@ struct OpenCastModelTests {
 
     @Test("The device-local store location names the local store file")
     func localStoreURLNamesTheLocalStore() {
-        #expect(OpenCastModelContainerFactory.localStoreURL.lastPathComponent == "LocalDeviceData.store")
+        #expect(ModelStoreLayout.current().localStoreURL.lastPathComponent == "LocalDeviceData.store")
     }
 
     @Test("Playlist records round-trip with typed kind and origin")
