@@ -43,6 +43,9 @@ final class OpenCastUITests: XCTestCase {
     private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
     private static let adFreePassPresentationOverrideEnvironmentKey = "OPENCAST_UI_TEST_AD_FREE_PASS_STAGE"
     private static let seedAdAnalysisSpanAtStartEnvironmentKey = "OPENCAST_SEED_AD_ANALYSIS_SPAN_AT_START"
+    private static let seedUpNextAutoAddEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD"
+    private static let seedUpNextAutoAddLimitEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD_LIMIT"
+    private static let seedUpNextQueueIncludesExtraFeedsEnvironmentKey = "OPENCAST_SEED_UP_NEXT_QUEUE_INCLUDES_EXTRA_FEEDS"
     private static let soundLabLaunchHoldEnvironmentKey =
         "OPENCAST_UI_TEST_SOUND_LAB_LAUNCH_HOLD_MILLISECONDS"
     private static let perEpisodeVoiceBoostModeValue = "perEpisode"
@@ -2247,6 +2250,9 @@ final class OpenCastUITests: XCTestCase {
 
         openPodcastPlaybackSettings(in: app)
         let reopenedNavigationBar = app.navigationBars["Playback Settings"]
+        // The Up Next section leaves the skip rows and Reset Both below the
+        // medium detent's edge.
+        reopenedNavigationBar.swipeUp()
         let reopenedIntroField = app.textFields["Skip Intro Duration"]
         let reopenedOutroField = app.textFields["Skip Outro Duration"]
         assertExists(reopenedIntroField, named: "reopened skip intro duration field")
@@ -2262,6 +2268,7 @@ final class OpenCastUITests: XCTestCase {
         assertDoesNotExist(reopenedNavigationBar, named: "playback settings after reset save")
 
         openPodcastPlaybackSettings(in: app)
+        app.navigationBars["Playback Settings"].swipeUp()
         XCTAssertEqual(app.textFields["Skip Intro Duration"].value as? String, "0:00")
         XCTAssertEqual(app.textFields["Skip Outro Duration"].value as? String, "0:00")
     }
@@ -2325,6 +2332,129 @@ final class OpenCastUITests: XCTestCase {
         miniPlayer.tap()
         assertNowPlayingOverlay(in: app)
         assertValue(of: speedButton, becomes: "1.25x", named: "Playback Speed after saving 1.25x for the show")
+    }
+
+    /// Add to Up Next saves with the sheet's Save. A show turned on starts
+    /// at Bottom, and turning it off takes Position in Queue away again.
+    @MainActor
+    func testSeededPodcastPlaybackSettingsAddToUpNextSaves() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+
+        openPodcastPlaybackSettings(in: app)
+        let navigationBar = app.navigationBars["Playback Settings"]
+        let addToUpNext = app.switches["podcast-playback-settings-add-to-up-next-toggle"]
+        let positionPicker = app.buttons["podcast-playback-settings-up-next-position-picker"]
+        assertHittable(addToUpNext, named: "Add to Up Next toggle")
+        assertToggle(addToUpNext, isOn: false)
+        assertDoesNotExist(positionPicker, named: "Position in Queue picker while Add to Up Next is off")
+        assertExists(
+            staticText(
+                labeled: "\(Self.autoAddRuleSentence(limit: "100", onlyAddsToTop: false)) Change the limit in Settings › Playback › Auto Add to Up Next.",
+                in: app
+            ),
+            named: "Up Next footer with the Stop Adding rule at 100 episodes"
+        )
+
+        tapToggle(addToUpNext, to: true)
+        assertHittable(positionPicker, named: "Position in Queue picker")
+        assertPicker(positionPicker, reads: "Bottom", named: "Position in Queue for a show just turned on")
+        positionPicker.tap()
+        let top = app.buttons["Top"].firstMatch
+        assertHittable(top, named: "Top position choice")
+        top.tap()
+        assertPicker(positionPicker, reads: "Top", named: "Position in Queue after choosing Top")
+        navigationBar.buttons["Save"].tap()
+        assertDoesNotExist(navigationBar, named: "playback settings after saving Top")
+
+        openPodcastPlaybackSettings(in: app)
+        assertHittable(addToUpNext, named: "Add to Up Next toggle after reopening")
+        assertToggle(addToUpNext, isOn: true)
+        assertHittable(positionPicker, named: "Position in Queue picker after reopening")
+        assertPicker(positionPicker, reads: "Top", named: "Position in Queue after reopening")
+
+        tapToggle(addToUpNext, to: false)
+        assertDoesNotExist(positionPicker, named: "Position in Queue picker after turning Add to Up Next off")
+        navigationBar.buttons["Save"].tap()
+        assertDoesNotExist(navigationBar, named: "playback settings after turning Add to Up Next off")
+
+        openPodcastPlaybackSettings(in: app)
+        assertHittable(addToUpNext, named: "Add to Up Next toggle after reopening it off")
+        assertToggle(addToUpNext, isOn: false)
+        assertDoesNotExist(positionPicker, named: "Position in Queue picker after reopening it off")
+    }
+
+    /// Settings › Playback › Auto Add to Up Next applies each choice on
+    /// change, its footer follows the limit and the rule, and the Playback
+    /// row counts the shows that are on.
+    @MainActor
+    func testSeededAutoAddSettingsScreenAppliesOnChange() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openSettingsScreen("Playback", in: app)
+        let autoAddRow = app.buttons["playback-auto-add-to-up-next-row"]
+        // The row sits in the last section; at the end of the scroll it
+        // clears the floating tab bar.
+        app.swipeUp()
+        assertHittable(autoAddRow, named: "Auto Add to Up Next row")
+        XCTAssertTrue(settingsRow(autoAddRow, showsValue: "Off"), "The Auto Add to Up Next row should read Off")
+        autoAddRow.tap()
+
+        let screenBar = app.navigationBars["Auto Add to Up Next"]
+        let limitPicker = app.buttons["up-next-auto-add-limit-picker"]
+        let limitReachedPicker = app.buttons["up-next-auto-add-limit-reached-picker"]
+        let showPicker = app.buttons["up-next-auto-add-show-\(Self.seededFeedURL)"]
+        assertExists(screenBar, named: "Auto Add to Up Next screen")
+        assertPicker(limitPicker, reads: "100 Episodes", named: "Auto Add Limit at its default")
+        assertPicker(limitReachedPicker, reads: "Stop Adding", named: "If Limit Reached at its default")
+        assertExists(
+            staticText(labeled: Self.autoAddRuleSentence(limit: "100", onlyAddsToTop: false), in: app),
+            named: "Stop Adding footer at 100 episodes"
+        )
+
+        choose("10 Episodes", from: limitPicker, named: "Auto Add Limit", in: app)
+        assertPicker(limitPicker, reads: "10 Episodes", named: "Auto Add Limit after choosing 10 Episodes")
+        assertExists(
+            staticText(labeled: Self.autoAddRuleSentence(limit: "10", onlyAddsToTop: false), in: app),
+            named: "Stop Adding footer at 10 episodes"
+        )
+        choose("Only Add to Top", from: limitReachedPicker, named: "If Limit Reached", in: app)
+        assertPicker(limitReachedPicker, reads: "Only Add to Top", named: "If Limit Reached after choosing Only Add to Top")
+        assertExists(
+            staticText(labeled: Self.autoAddRuleSentence(limit: "10", onlyAddsToTop: true), in: app),
+            named: "Only Add to Top footer at 10 episodes"
+        )
+        assertDoesNotExist(
+            staticText(labeled: Self.autoAddRuleSentence(limit: "10", onlyAddsToTop: false), in: app),
+            named: "Stop Adding footer after choosing Only Add to Top"
+        )
+
+        scrollUntilHittable(showPicker, in: app)
+        assertPicker(showPicker, reads: "Off", named: "seeded show before any change")
+        choose("Top", from: showPicker, named: "seeded show's Up Next position", in: app)
+        assertPicker(showPicker, reads: "Top", named: "seeded show after choosing Top")
+
+        tapBackButton(in: app)
+        assertExists(app.navigationBars["Playback"], named: "Playback screen after Auto Add to Up Next")
+        assertHittable(autoAddRow, named: "Auto Add to Up Next row after going back")
+        XCTAssertTrue(settingsRow(autoAddRow, showsValue: "1 show"), "The Auto Add to Up Next row should read 1 show")
+        autoAddRow.tap()
+
+        assertExists(screenBar, named: "Auto Add to Up Next screen reopened")
+        assertPicker(limitPicker, reads: "10 Episodes", named: "Auto Add Limit after reopening")
+        assertPicker(limitReachedPicker, reads: "Only Add to Top", named: "If Limit Reached after reopening")
+        assertExists(
+            staticText(labeled: Self.autoAddRuleSentence(limit: "10", onlyAddsToTop: true), in: app),
+            named: "Only Add to Top footer after reopening"
+        )
+        scrollUntilHittable(showPicker, in: app)
+        assertPicker(showPicker, reads: "Top", named: "seeded show after reopening")
     }
 
     @MainActor
@@ -5240,6 +5370,85 @@ final class OpenCastUITests: XCTestCase {
         assertQueuedRowsInUpNextSheet(remaining: [1, 3], in: app)
     }
 
+    /// The launch pass queues the seeded show's new episode after the three
+    /// hand-queued rows. Up Next opens from its tab accessory rather than
+    /// Now Playing: playing an episode takes it out of Up Next, and the
+    /// episode the pass adds is the one `openSeededNowPlaying` plays.
+    @MainActor
+    func testSeededAutoAddToUpNextQueuesNewEpisodesAtBottom() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launchEnvironment[Self.seedUpNextAutoAddEnvironmentKey] = "bottom"
+        app.launch()
+
+        let accessory = app.buttons["Open Up Next"]
+        assertHittable(accessory, named: "Up Next accessory")
+        assertValue(
+            of: accessory,
+            becomes: "Queued UI Episode 1, UI Test Show; 4 episodes queued",
+            named: "Up Next accessory after the launch pass"
+        )
+        accessory.tap()
+
+        let upNextBar = app.navigationBars["Up Next"]
+        assertExists(upNextBar, named: "Up Next sheet from the accessory")
+        upNextBar.swipeUp()
+        var rows: [XCUIElement] = []
+        for identifier in Self.seededQueuedEpisodeRowIdentifiers + [Self.seededEpisodeRowIdentifier] {
+            XCTAssertTrue(
+                waitUntil { hittableUpNextRow(identifier, in: app) != nil },
+                "\(identifier) should be in the Up Next sheet"
+            )
+            rows.append(try XCTUnwrap(hittableUpNextRow(identifier, in: app)))
+        }
+        for (earlier, later) in zip(rows, rows.dropFirst()) {
+            XCTAssertLessThan(
+                earlier.frame.midY,
+                later.frame.midY,
+                "\(later.identifier) should follow \(earlier.identifier) in Up Next"
+            )
+        }
+    }
+
+    /// Up Next already holds the limit of ten (the three seeded rows and the
+    /// seven extra shows' episodes), so under Stop Adding the launch pass
+    /// leaves the seeded show's new episode out.
+    @MainActor
+    func testSeededAutoAddLimitReachedStopsAdding() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true, extraFeedCount: 7)
+        app.launchEnvironment[Self.seedUpNextAutoAddEnvironmentKey] = "bottom"
+        app.launchEnvironment[Self.seedUpNextAutoAddLimitEnvironmentKey] = "10"
+        app.launchEnvironment[Self.seedUpNextQueueIncludesExtraFeedsEnvironmentKey] = "1"
+        app.launch()
+
+        let accessory = app.buttons["Open Up Next"]
+        let fullQueueValue = "Queued UI Episode 1, UI Test Show; 10 episodes queued"
+        assertHittable(accessory, named: "Up Next accessory")
+        assertValue(of: accessory, becomes: fullQueueValue, named: "Up Next accessory at the limit")
+        accessory.tap()
+
+        let upNextBar = app.navigationBars["Up Next"]
+        assertExists(upNextBar, named: "Up Next sheet from the accessory")
+        upNextBar.swipeUp()
+        let queuedIdentifiers = Self.seededQueuedEpisodeRowIdentifiers
+            + (1...7).map { "episode-row-ui-test-extra-episode-\($0)" }
+        for identifier in queuedIdentifiers {
+            for _ in 0..<4 where !waitUntil(timeout: 2, { hittableUpNextRow(identifier, in: app) != nil }) {
+                app.swipeUp()
+            }
+            XCTAssertNotNil(hittableUpNextRow(identifier, in: app), "\(identifier) should be in the Up Next sheet")
+        }
+        XCTAssertNil(
+            hittableUpNextRow(Self.seededEpisodeRowIdentifier, in: app),
+            "The seeded show's new episode should stay out of a full Up Next"
+        )
+
+        let dismissalStart = upNextBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let dismissalEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+        dismissalStart.press(forDuration: 0.05, thenDragTo: dismissalEnd)
+        assertDoesNotExist(upNextBar, named: "Up Next sheet after dismissal", timeout: 10)
+        assertValue(of: accessory, becomes: fullQueueValue, named: "Up Next accessory after the sheet closes")
+    }
+
     @MainActor
     func testSeededRestoredPlaybackWinsOverQueuedAccessory() throws {
         let app = makeSeededApp(seedsEpisodeProgress: true, seedsUpNextQueue: true)
@@ -5572,6 +5781,57 @@ final class OpenCastUITests: XCTestCase {
         assertHittable(appIconRow, named: "App Icon row in Look & Feel")
         appIconRow.tap()
         assertExists(app.navigationBars["App Icon"], named: "App Icon screen")
+    }
+
+    /// `UpNextAutoAddCopy`'s rule sentence for a limit as the footers show
+    /// it, such as "100" or "1,000".
+    private static func autoAddRuleSentence(limit: String, onlyAddsToTop: Bool) -> String {
+        onlyAddsToTop
+            ? "Automatically adds new episodes to Up Next. When Up Next reaches \(limit) episodes, new episodes added to the top remove the last episode in the queue; shows set to the bottom wait until Up Next is below the limit."
+            : "Automatically adds new episodes to Up Next. New episodes stop being added when Up Next reaches \(limit) episodes."
+    }
+
+    /// Opens a menu picker and picks a choice; the glass menu morphs in, so
+    /// the choice is tapped once it is hittable.
+    @MainActor
+    private func choose(
+        _ choice: String,
+        from picker: XCUIElement,
+        named name: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertHittable(picker, named: name, file: file, line: line)
+        picker.tap()
+        let item = app.buttons[choice].firstMatch
+        assertHittable(item, named: "\(choice) in \(name)", file: file, line: line)
+        item.tap()
+    }
+
+    /// An exact label match by predicate: subscript queries reject strings
+    /// longer than 128 characters, which the rule footers are.
+    @MainActor
+    private func staticText(labeled label: String, in app: XCUIApplication) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label == %@", label)).firstMatch
+    }
+
+    /// A Form menu picker shows its selection; the check reads the
+    /// picker element itself, as `settingsRow(_:showsValue:)` reads a row.
+    @MainActor
+    private func assertPicker(
+        _ picker: XCUIElement,
+        reads expected: String,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(
+            settingsRow(picker, showsValue: expected),
+            "\(name) should read \"\(expected)\"; label \"\(picker.label)\", value \"\(picker.value as? String ?? "nil")\"",
+            file: file,
+            line: line
+        )
     }
 
     @MainActor

@@ -68,13 +68,16 @@ extension OpenCastAppModel {
     }
 
     /// Each root scene's lifecycle reports its phase here, from its first
-    /// appearance to its removal.
+    /// appearance to its removal. It gates every automatic pass: downloads
+    /// and Auto Add to Up Next.
     func setAutoDownloadsScene(_ sceneID: UUID, isActive: Bool) {
         autoDownloads.setScene(sceneID, isActive: isActive)
+        upNextAutoAdd.setScene(sceneID, isActive: isActive)
     }
 
     func removeAutoDownloadsScene(_ sceneID: UUID) {
         autoDownloads.removeScene(sceneID)
+        upNextAutoAdd.removeScene(sceneID)
     }
 
     func trimDownloadsToKeepLimits(modelContext: ModelContext) {

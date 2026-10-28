@@ -4,6 +4,7 @@ import SwiftUI
 
 struct PodcastPlaybackSettingsView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
@@ -11,88 +12,126 @@ struct PodcastPlaybackSettingsView: View {
 
     @State private var isCustomSpeedOn = false
     @State private var customSpeed: Float = 1
+    @State private var isAutoAddOn = false
+    /// Bottom until the show has a position of its own, so a show turned
+    /// on here starts at Bottom.
+    @State private var autoAddPosition: UpNextAutoAddPosition = .bottom
     @State private var introText = "0:00"
     @State private var outroText = "0:00"
     @State private var errorMessage: String?
 
+    private static let errorRowID = "podcast-playback-settings-error"
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    Toggle("Custom Speed", isOn: $isCustomSpeedOn)
-                        .accessibilityIdentifier("podcast-playback-settings-custom-speed-toggle")
+            ScrollViewReader { proxy in
+                Form {
+                    Section {
+                        Toggle("Custom Speed", isOn: $isCustomSpeedOn)
+                            .accessibilityIdentifier("podcast-playback-settings-custom-speed-toggle")
 
-                    if isCustomSpeedOn {
-                        Picker("Speed", selection: $customSpeed) {
-                            ForEach(PlaybackRateSteps.steps, id: \.self) { speed in
-                                Text(speed.formattedSpeed)
-                                    .tag(speed)
+                        if isCustomSpeedOn {
+                            Picker("Speed", selection: $customSpeed) {
+                                ForEach(PlaybackRateSteps.steps, id: \.self) { speed in
+                                    Text(speed.formattedSpeed)
+                                        .tag(speed)
+                                }
                             }
+                            .accessibilityIdentifier("podcast-playback-settings-speed-picker")
                         }
-                        .accessibilityIdentifier("podcast-playback-settings-speed-picker")
-                    }
-                } header: {
-                    Text("Speed")
-                } footer: {
-                    Text(
-                        isCustomSpeedOn
-                            ? "Episodes of this show play at this speed. Changing the speed in Now Playing while this show is playing updates this show only."
-                            : "Episodes of this show play at your global speed."
-                    )
-                }
-
-                Section {
-                    PodcastPlaybackSkipRow(
-                        title: "Skip Intro",
-                        fieldAccessibilityIdentifier: "Skip Intro Duration",
-                        text: $introText,
-                        onDecrease: decreaseIntro,
-                        onIncrease: increaseIntro
-                    )
-
-                    PodcastPlaybackSkipRow(
-                        title: "Skip Outro",
-                        fieldAccessibilityIdentifier: "Skip Outro Duration",
-                        text: $outroText,
-                        onDecrease: decreaseOutro,
-                        onIncrease: increaseOutro
-                    )
-
-                    // Beside the fields it is about; in a section of its own
-                    // it would sit below the medium detent's edge.
-                    if let errorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                            .accessibilityIdentifier("Podcast Playback Settings Error")
+                    } header: {
+                        Text("Speed")
+                    } footer: {
+                        Text(
+                            isCustomSpeedOn
+                                ? "Episodes of this show play at this speed. Changing the speed in Now Playing while this show is playing updates this show only."
+                                : "Episodes of this show play at your global speed."
+                        )
                     }
 
-                    Button("Reset Both", systemImage: "arrow.counterclockwise", role: .destructive, action: resetBoth)
-                } footer: {
-                    Text("Enter m:ss or h:mm:ss. Changes apply the next time an episode loads or replays.")
+                    Section {
+                        Toggle("Add to Up Next", isOn: $isAutoAddOn)
+                            .accessibilityIdentifier("podcast-playback-settings-add-to-up-next-toggle")
+
+                        if isAutoAddOn {
+                            Picker("Position in Queue", selection: $autoAddPosition) {
+                                ForEach(UpNextAutoAddPosition.allCases) { position in
+                                    Text(position.title)
+                                        .tag(position)
+                                }
+                            }
+                            .accessibilityIdentifier("podcast-playback-settings-up-next-position-picker")
+                        }
+                    } header: {
+                        Text("Up Next")
+                    } footer: {
+                        Text("\(autoAddRuleSentence) Change the limit in Settings › Playback › Auto Add to Up Next.")
+                    }
+
+                    Section {
+                        PodcastPlaybackSkipRow(
+                            title: "Skip Intro",
+                            fieldAccessibilityIdentifier: "Skip Intro Duration",
+                            text: $introText,
+                            onDecrease: decreaseIntro,
+                            onIncrease: increaseIntro
+                        )
+
+                        PodcastPlaybackSkipRow(
+                            title: "Skip Outro",
+                            fieldAccessibilityIdentifier: "Skip Outro Duration",
+                            text: $outroText,
+                            onDecrease: decreaseOutro,
+                            onIncrease: increaseOutro
+                        )
+
+                        // Beside the fields it is about; in a section of its own
+                        // it would sit below the medium detent's edge.
+                        if let errorMessage {
+                            Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                                .accessibilityIdentifier("Podcast Playback Settings Error")
+                                .id(Self.errorRowID)
+                        }
+
+                        Button("Reset Both", systemImage: "arrow.counterclockwise", role: .destructive, action: resetBoth)
+                    } footer: {
+                        Text("Enter m:ss or h:mm:ss. Changes apply the next time an episode loads or replays.")
+                    }
                 }
-            }
-            .onChange(of: introText) { _, _ in
-                errorMessage = nil
-            }
-            .onChange(of: outroText) { _, _ in
-                errorMessage = nil
-            }
-            .onChange(of: isCustomSpeedOn) { _, isOn in
-                seedCustomSpeedFromGlobal(isOn: isOn)
-            }
-            .navigationTitle("Playback Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: dismiss.callAsFunction)
+                .onChange(of: introText) { _, _ in
+                    errorMessage = nil
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save", action: save)
+                .onChange(of: outroText) { _, _ in
+                    errorMessage = nil
                 }
+                .onChange(of: isCustomSpeedOn) { _, isOn in
+                    seedCustomSpeedFromGlobal(isOn: isOn)
+                }
+                .onChange(of: errorMessage) { _, message in
+                    revealError(message, with: proxy)
+                }
+                .navigationTitle("Playback Settings")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel", action: dismiss.callAsFunction)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save", action: save)
+                    }
+                }
+                .onAppear(perform: loadSettings)
             }
-            .onAppear(perform: loadSettings)
         }
+    }
+
+    private var autoAddRuleSentence: String {
+        UpNextAutoAddCopy.ruleSentence(
+            limit: appModel.upNextAutoAddSettings.limit,
+            limitReachedAction: appModel.upNextAutoAddSettings.limitReachedAction
+        )
     }
 
     private func loadSettings() {
@@ -104,6 +143,9 @@ struct PodcastPlaybackSettingsView: View {
         let settings = appModel.library.podcastPlaybackSkipSettings(forPodcastID: feedURL)
         introText = PodcastPlaybackDurationText.format(settings.skipIntroSeconds)
         outroText = PodcastPlaybackDurationText.format(settings.skipOutroSeconds)
+        let savedAutoAddPosition = appModel.library.podcastUpNextAutoAddPosition(forPodcastID: feedURL)
+        isAutoAddOn = savedAutoAddPosition != nil
+        autoAddPosition = savedAutoAddPosition ?? .bottom
     }
 
     /// A show with no saved speed starts from the global speed as it is
@@ -113,6 +155,17 @@ struct PodcastPlaybackSettingsView: View {
             return
         }
         customSpeed = PodcastPlaybackRateOverride.nearestStep(to: appModel.playbackSettings.globalPlaybackRate)
+    }
+
+    /// The Up Next section leaves the skip rows, and the error beside them,
+    /// below the medium detent's edge, so a new error scrolls into view.
+    private func revealError(_ message: String?, with proxy: ScrollViewProxy) {
+        guard message != nil else {
+            return
+        }
+        withAnimation(reduceMotion ? nil : .default) {
+            proxy.scrollTo(Self.errorRowID, anchor: .center)
+        }
     }
 
     private func decreaseIntro() {
@@ -154,18 +207,18 @@ struct PodcastPlaybackSettingsView: View {
             return
         }
 
-        let didSave = appModel.setPodcastPlaybackSettings(
+        let failure = appModel.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(
                 skipIntroSeconds: skipIntroSeconds,
                 skipOutroSeconds: skipOutroSeconds
             ),
             rateOverride: isCustomSpeedOn ? customSpeed : nil,
+            upNextAutoAdd: isAutoAddOn ? autoAddPosition : nil,
             feedURL: feedURL,
             modelContext: modelContext
         )
-        guard didSave else {
-            errorMessage = appModel.library.lastErrorMessage
-                ?? "Unable to save playback settings."
+        guard failure == nil else {
+            errorMessage = failure
             return
         }
         dismiss()

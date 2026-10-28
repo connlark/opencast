@@ -609,12 +609,30 @@ final class LibraryStore {
             .flatMap { PodcastPlaybackRateOverride.resolved($0.playbackRate) }
     }
 
-    /// Skips and speed in one synced save. A nil `rateOverride` returns the
-    /// show to the global speed.
+    /// The show's Auto Add to Up Next position, or nil when it is off.
+    func podcastUpNextAutoAddPosition(forPodcastID podcastID: String) -> UpNextAutoAddPosition? {
+        subscriptions.first { $0.feedURL == podcastID }
+            .flatMap { UpNextAutoAddPosition(stored: $0.autoAddToUpNext) }
+    }
+
+    /// The active subscriptions Auto Add to Up Next is on for, derived on
+    /// read because the setters change the records in place.
+    var upNextAutoAddPodcastIDs: Set<String> {
+        Set(
+            subscriptions.lazy
+                .filter { UpNextAutoAddPosition(stored: $0.autoAddToUpNext) != nil }
+                .map(\.feedURL)
+        )
+    }
+
+    /// Skips, speed and Auto Add to Up Next in one synced save. A nil
+    /// `rateOverride` returns the show to the global speed; a nil
+    /// `upNextAutoAdd` turns Auto Add to Up Next off.
     @discardableResult
     func setPodcastPlaybackSettings(
         _ skipSettings: PodcastPlaybackSkipSettings,
         rateOverride: Float?,
+        upNextAutoAdd: UpNextAutoAddPosition?,
         feedURL: String,
         modelContext: ModelContext
     ) -> Bool {
@@ -631,9 +649,11 @@ final class LibraryStore {
             return false
         }
         let playbackRate = PodcastPlaybackRateOverride.stored(rateOverride)
+        let changesUpNextAutoAdd = UpNextAutoAddPosition(stored: subscription.autoAddToUpNext) != upNextAutoAdd
         guard subscription.skipIntroSeconds != skipSettings.skipIntroSeconds
                 || subscription.skipOutroSeconds != skipSettings.skipOutroSeconds
                 || subscription.playbackRate != playbackRate
+                || changesUpNextAutoAdd
         else {
             lastErrorMessage = nil
             return true
@@ -642,9 +662,13 @@ final class LibraryStore {
         let previousSkipIntroSeconds = subscription.skipIntroSeconds
         let previousSkipOutroSeconds = subscription.skipOutroSeconds
         let previousPlaybackRate = subscription.playbackRate
+        let previousAutoAddToUpNext = subscription.autoAddToUpNext
         subscription.skipIntroSeconds = skipSettings.skipIntroSeconds
         subscription.skipOutroSeconds = skipSettings.skipOutroSeconds
         subscription.playbackRate = playbackRate
+        if changesUpNextAutoAdd {
+            subscription.autoAddToUpNext = UpNextAutoAddPosition.stored(upNextAutoAdd)
+        }
 
         do {
             try syncedStoreSelfSaveLedger.save(modelContext)
@@ -654,6 +678,7 @@ final class LibraryStore {
             subscription.skipIntroSeconds = previousSkipIntroSeconds
             subscription.skipOutroSeconds = previousSkipOutroSeconds
             subscription.playbackRate = previousPlaybackRate
+            subscription.autoAddToUpNext = previousAutoAddToUpNext
             modelContext.rollback()
             lastErrorMessage = "Unable to update playback settings: \(error.localizedDescription)"
             return false
@@ -698,6 +723,38 @@ final class LibraryStore {
     }
 
     private static let invalidPlaybackRateMessage = "Speed must be between 0.5x and 3x."
+
+    /// A position turns Auto Add to Up Next on for the show, or moves it; nil
+    /// turns it off.
+    @discardableResult
+    func setPodcastUpNextAutoAddPosition(
+        _ position: UpNextAutoAddPosition?,
+        feedURL: String,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard let subscription = subscriptions.first(where: { $0.feedURL == feedURL }) else {
+            lastErrorMessage = "Unable to find this podcast subscription."
+            return false
+        }
+        guard UpNextAutoAddPosition(stored: subscription.autoAddToUpNext) != position else {
+            lastErrorMessage = nil
+            return true
+        }
+
+        let previousAutoAddToUpNext = subscription.autoAddToUpNext
+        subscription.autoAddToUpNext = UpNextAutoAddPosition.stored(position)
+
+        do {
+            try syncedStoreSelfSaveLedger.save(modelContext)
+            lastErrorMessage = nil
+            return true
+        } catch {
+            subscription.autoAddToUpNext = previousAutoAddToUpNext
+            modelContext.rollback()
+            lastErrorMessage = "Unable to update Add to Up Next: \(error.localizedDescription)"
+            return false
+        }
+    }
 
     @discardableResult
     func setAdAutoDetectEnabled(
@@ -1484,7 +1541,8 @@ final class LibraryStore {
                   lhsRecord.isTranscriptAnalysisEnabled == rhsRecord.isTranscriptAnalysisEnabled,
                   lhsRecord.skipIntroSeconds == rhsRecord.skipIntroSeconds,
                   lhsRecord.skipOutroSeconds == rhsRecord.skipOutroSeconds,
-                  lhsRecord.playbackRate == rhsRecord.playbackRate
+                  lhsRecord.playbackRate == rhsRecord.playbackRate,
+                  lhsRecord.autoAddToUpNext == rhsRecord.autoAddToUpNext
             else {
                 return false
             }

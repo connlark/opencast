@@ -73,6 +73,11 @@ struct SettingsPlaybackView: View {
             }
 
             Section {
+                NavigationLink(value: AppRoute.settings(.autoAddToUpNext)) {
+                    LabeledContent("Auto Add to Up Next", value: autoAddToUpNextSummary)
+                }
+                .accessibilityIdentifier("playback-auto-add-to-up-next-row")
+
                 Toggle("Requeue Interrupted Episode", isOn: requeueInterruptedEpisodeBinding)
                     .accessibilityIdentifier("playback-requeue-interrupted-episode-toggle")
             } header: {
@@ -82,6 +87,18 @@ struct SettingsPlaybackView: View {
             }
         }
         .settingsSubscreen(title: "Playback")
+    }
+
+    /// Off, or how many shows add their new episodes.
+    private var autoAddToUpNextSummary: String {
+        switch appModel.library.upNextAutoAddPodcastIDs.count {
+        case 0:
+            "Off"
+        case 1:
+            "1 show"
+        case let count:
+            "\(count.formatted()) shows"
+        }
     }
 
     private var voiceBoostModeBinding: Binding<VoiceBoostMode> {

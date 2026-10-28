@@ -51,6 +51,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             .onChange(of: appModel.library.contentRefreshToken) { _, _ in
                 if scenePhase == .active {
                     appModel.scheduleAutoDownloadPass(modelContext: modelContext)
+                    appModel.runUpNextAutoAddPass(modelContext: modelContext)
                 }
             }
     }
@@ -193,6 +194,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             guard !Task.isCancelled else {
                 return
             }
+            appModel.runUpNextAutoAddPass(modelContext: modelContext)
             appModel.cacheController.pruneIfNeeded()
             guard !Task.isCancelled else {
                 return

@@ -619,6 +619,7 @@ struct LibraryStoreStateMachineTests {
         #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 20, skipOutroSeconds: 10),
             rateOverride: nil,
+            upNextAutoAdd: nil,
             feedURL: feedURL,
             modelContext: context
         ))

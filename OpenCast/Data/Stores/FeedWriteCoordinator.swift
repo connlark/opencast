@@ -422,6 +422,9 @@ final class FeedWriteCoordinator {
             let migrationPlaybackRate = PodcastPlaybackRateOverride.merged(
                 oldSubscriptionRecords.map(\.playbackRate)
             )
+            let migrationUpNextAutoAdd = UpNextAutoAddPosition.merged(
+                oldSubscriptionRecords.map(\.autoAddToUpNext)
+            )
             if !hasNewSubscription {
                 // subscribedAt must postdate the old URL's tombstone only if the
                 // keys collided — they don't — but a strictly newer stamp keeps
@@ -440,7 +443,8 @@ final class FeedWriteCoordinator {
                         isTranscriptAnalysisEnabled: template.isTranscriptAnalysisEnabled,
                         skipIntroSeconds: migrationSkipSettings.skipIntroSeconds,
                         skipOutroSeconds: migrationSkipSettings.skipOutroSeconds,
-                        playbackRate: migrationPlaybackRate
+                        playbackRate: migrationPlaybackRate,
+                        autoAddToUpNext: migrationUpNextAutoAdd
                     )
                 )
             } else {
@@ -452,6 +456,7 @@ final class FeedWriteCoordinator {
                         into: record
                     )
                     Self.mergePodcastPlaybackRate(migrationPlaybackRate, into: record)
+                    Self.mergeUpNextAutoAdd(migrationUpNextAutoAdd, into: record)
                 }
             }
             for record in oldSubscriptionRecords {
@@ -510,6 +515,18 @@ final class FeedWriteCoordinator {
 
         record.playbackRate = incoming
         return true
+    }
+
+    /// A record at the new URL keeps its own Add to Up Next position; one
+    /// that is off takes the moved subscription's.
+    private static func mergeUpNextAutoAdd(_ incoming: Int, into record: SubscriptionRecord) {
+        guard UpNextAutoAddPosition(stored: record.autoAddToUpNext) == nil,
+              UpNextAutoAddPosition(stored: incoming) != nil
+        else {
+            return
+        }
+
+        record.autoAddToUpNext = incoming
     }
 
     /// Diagnostics sweep for libraries duplicated before reconciliation

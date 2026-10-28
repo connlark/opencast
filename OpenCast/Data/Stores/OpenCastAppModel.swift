@@ -26,6 +26,7 @@ final class OpenCastAppModel {
     let library: LibraryStore
     let downloads: DownloadStore
     let downloadSettings: DownloadSettingsStore
+    let upNextAutoAddSettings: UpNextAutoAddSettingsStore
     let transcriptionModels: TranscriptionModelStore
     let transcriptionEngineSettings: TranscriptionEngineSettingsStore
     let adDetectionSettings: AdDetectionSettingsStore
@@ -154,6 +155,12 @@ final class OpenCastAppModel {
     /// for list views to derive cross-store state without observing partial
     /// startup data.
     private(set) var coreStoresHydrated = false
+    /// The launch's `library.load` succeeded, or a data nuke emptied the
+    /// store and the library together, so the library's subscriptions are
+    /// the stored ones. After a failed load they are empty, which Auto Add
+    /// to Up Next would read as every show turned off. `library.state`
+    /// cannot tell: a failed refresh also sets `.failed`.
+    @ObservationIgnored private(set) var hasLoadedLibrary = false
     /// Unsubscribe outcome surface, presented by the removal confirmation
     /// surfaces; unsubscribe failures never route through the playback error.
     var lastUnsubscribeErrorMessage: String?
@@ -214,6 +221,7 @@ final class OpenCastAppModel {
     // Internal for the `+DownloadSettings` extension.
     @ObservationIgnored let downloadCleanup: DownloadCleanupCoordinator
     @ObservationIgnored let autoDownloads: PodcastAutoDownloadCoordinator
+    @ObservationIgnored let upNextAutoAdd: UpNextAutoAddCoordinator
     @ObservationIgnored private let dataNuke: DataNukeRunner
     @ObservationIgnored private let siriMediaDiscovery: SiriMediaDiscovery
     @ObservationIgnored private var siriMediaUserContextObservationTask: Task<Void, Never>?
@@ -234,6 +242,7 @@ final class OpenCastAppModel {
         localLibraryCacheStore: (any LocalLibraryCacheStore)? = nil,
         downloads: DownloadStore = DownloadStore(),
         downloadSettings: DownloadSettingsStore = DownloadSettingsStore(),
+        upNextAutoAddSettings: UpNextAutoAddSettingsStore = UpNextAutoAddSettingsStore(),
         currentNetworkPath: @escaping () async -> NetworkPathSnapshot = NetworkPathObserver.currentPath,
         transcriptionModels: TranscriptionModelStore = TranscriptionModelStore(),
         transcriptionEngineSettings: TranscriptionEngineSettingsStore = TranscriptionEngineSettingsStore(),
@@ -315,6 +324,7 @@ final class OpenCastAppModel {
         self.library = resolvedLibrary
         self.downloads = downloads
         self.downloadSettings = downloadSettings
+        self.upNextAutoAddSettings = upNextAutoAddSettings
         self.transcriptionModels = transcriptionModels
         self.transcriptionEngineSettings = transcriptionEngineSettings
         self.adDetectionSettings = adDetectionSettings
@@ -497,6 +507,14 @@ final class OpenCastAppModel {
             downloads: downloads,
             settings: downloadSettings,
             currentNetworkPath: currentNetworkPath
+        )
+        upNextAutoAdd = UpNextAutoAddCoordinator(
+            library: resolvedLibrary,
+            upNextQueue: upNextQueue,
+            settings: upNextAutoAddSettings,
+            isCurrentEpisode: { [playback = self.playback] episodeID in
+                playback.currentEpisode?.id.rawValue == episodeID
+            }
         )
         self.appearanceSettings = appearanceSettings
         self.appIcon = appIcon
@@ -713,6 +731,7 @@ final class OpenCastAppModel {
         }
 
         coreStoresHydrated = false
+        hasLoadedLibrary = false
         let task = Task {
             // Before the library publishes, so a stored layout doesn't
             // flash the default container first, and a stored Inbox filter
@@ -724,8 +743,10 @@ final class OpenCastAppModel {
             analysisUsage.load(modelContext: modelContext)
             analysisKeyNotice.load(modelContext: modelContext)
             let didLoadLibrary = await library.load(modelContext: modelContext)
+            hasLoadedLibrary = didLoadLibrary
             await downloads.load(modelContext: modelContext)
             downloadSettings.load(modelContext: modelContext)
+            upNextAutoAddSettings.load(modelContext: modelContext)
             playbackSettings.load(modelContext: modelContext, playback: playback)
             podcastEpisodeListSettings.load(modelContext: modelContext)
             upNextQueue.load(
@@ -1687,6 +1708,12 @@ final class OpenCastAppModel {
                 modelContext: modelContext
             ) {
                 sidecarErrorMessage = sidecarErrorMessage ?? downloadSettings.lastErrorMessage
+            }
+            if !upNextAutoAddSettings.removeWatermark(
+                forPodcastID: feedURL,
+                modelContext: modelContext
+            ) {
+                sidecarErrorMessage = sidecarErrorMessage ?? upNextAutoAddSettings.lastErrorMessage
             }
             if !playbackSettings.removeVoiceBoostPreferences(
                 forEpisodeIDs: episodeIDs,
@@ -3189,6 +3216,7 @@ final class OpenCastAppModel {
         dismissNowPlayingAndDiscardFinishedPlayback()
         playback.unload()
         coreStoresHydrated = false
+        hasLoadedLibrary = false
         lastPlaybackError = nil
         lastUpNextError = nil
         lastPlaylistError = nil
@@ -3204,6 +3232,7 @@ final class OpenCastAppModel {
         analysisRuns.deleteAll()
         await downloads.load(modelContext: modelContext)
         downloadSettings.load(modelContext: modelContext)
+        upNextAutoAddSettings.load(modelContext: modelContext)
         transcriptions.load(modelContext: modelContext)
         adAnalyses.load(modelContext: modelContext)
         transcriptAnalysisQueue.resetAfterDataNuke()
@@ -3240,6 +3269,7 @@ final class OpenCastAppModel {
         playbackSettings.load(modelContext: modelContext, playback: playback)
         notificationSettings.resetAfterDataNuke()
         onboardingState.load(modelContext: modelContext)
+        hasLoadedLibrary = true
         coreStoresHydrated = true
         #if DEBUG
         try? FileManager.default.removeItem(at: VoiceBoostDeviceProbe.reportURL)

@@ -119,17 +119,19 @@ struct OpenCastAppModelPlaybackRateTests {
         #expect(fixture.appModel.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 30),
             rateOverride: 1.75,
+            upNextAutoAdd: nil,
             feedURL: Self.customShowID,
             modelContext: fixture.context
-        ))
+        ) == nil)
         #expect(fixture.appModel.playback.rate == 1.75)
 
         #expect(fixture.appModel.setPodcastPlaybackSettings(
             .disabled,
             rateOverride: 2,
+            upNextAutoAdd: nil,
             feedURL: Self.globalShowID,
             modelContext: fixture.context
-        ))
+        ) == nil)
         #expect(fixture.appModel.setPodcastPlaybackRateOverride(
             0.75,
             feedURL: Self.globalShowID,
@@ -141,9 +143,10 @@ struct OpenCastAppModelPlaybackRateTests {
         #expect(fixture.appModel.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 30),
             rateOverride: nil,
+            upNextAutoAdd: nil,
             feedURL: Self.customShowID,
             modelContext: fixture.context
-        ))
+        ) == nil)
         #expect(fixture.appModel.playback.rate == 1)
     }
 

@@ -220,7 +220,9 @@ enum SyncDuplicateRepairer {
             skipOutroSeconds: mergedSkipSettings.skipOutroSeconds,
             // Greatest valid speed, the skips' rule: order-independent, so
             // every peer merges the group to the same value.
-            playbackRate: PodcastPlaybackRateOverride.merged(records.map(\.playbackRate))
+            playbackRate: PodcastPlaybackRateOverride.merged(records.map(\.playbackRate)),
+            // Top over bottom over off: order-independent, like the speed.
+            autoAddToUpNext: UpNextAutoAddPosition.merged(records.map(\.autoAddToUpNext))
         )
 
         if let keep = deterministicWinner(in: records) {
@@ -237,6 +239,7 @@ enum SyncDuplicateRepairer {
             setIfChanged(keep, \.skipIntroSeconds, merged.skipIntroSeconds)
             setIfChanged(keep, \.skipOutroSeconds, merged.skipOutroSeconds)
             setIfChanged(keep, \.playbackRate, merged.playbackRate)
+            setIfChanged(keep, \.autoAddToUpNext, merged.autoAddToUpNext)
 
             for record in records where record !== keep {
                 modelContext.delete(record)
@@ -261,7 +264,8 @@ enum SyncDuplicateRepairer {
                     isTranscriptAnalysisEnabled: merged.isTranscriptAnalysisEnabled,
                     skipIntroSeconds: merged.skipIntroSeconds,
                     skipOutroSeconds: merged.skipOutroSeconds,
-                    playbackRate: merged.playbackRate
+                    playbackRate: merged.playbackRate,
+                    autoAddToUpNext: merged.autoAddToUpNext
                 )
             )
             for record in records {
@@ -410,6 +414,7 @@ enum SyncDuplicateRepairer {
         var skipIntroSeconds: Double
         var skipOutroSeconds: Double
         var playbackRate: Double
+        var autoAddToUpNext: Int
     }
 
     private static func isBetterSubscription(

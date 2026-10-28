@@ -23,6 +23,10 @@ final class SubscriptionRecord {
     /// the global speed; read it through `PodcastPlaybackRateOverride`, which
     /// treats anything not finite and positive the same way.
     var playbackRate: Double = 0
+    /// Auto Add to Up Next for the show (CloudKit `CD_autoAddToUpNext`) in
+    /// Pocket Casts' raw values: 0 off, 1 bottom, 2 top. Read it through
+    /// `UpNextAutoAddPosition(stored:)`, which treats any other value as off.
+    var autoAddToUpNext: Int = 0
     /// Stable per-record identity so duplicate repair picks the same winner on
     /// every device (smallest UUID wins); peers that chose opposite winners
     /// used to cross-delete both copies. Records imported from builds that
@@ -43,6 +47,7 @@ final class SubscriptionRecord {
         skipIntroSeconds: Double = 0,
         skipOutroSeconds: Double = 0,
         playbackRate: Double = 0,
+        autoAddToUpNext: Int = 0,
         dedupeUUID: String = UUID().uuidString
     ) {
         self.feedURL = feedURL
@@ -58,6 +63,7 @@ final class SubscriptionRecord {
         self.skipIntroSeconds = skipIntroSeconds
         self.skipOutroSeconds = skipOutroSeconds
         self.playbackRate = playbackRate
+        self.autoAddToUpNext = autoAddToUpNext
         self.dedupeUUID = dedupeUUID
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 enum SettingsRoute: Hashable {
     case playback
     case sleepTimer
+    case autoAddToUpNext
     case lookAndFeel
     case appIcon
     case notifications

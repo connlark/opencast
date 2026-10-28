@@ -563,6 +563,74 @@ struct UpNextQueueStoreTests {
         try expectPersistedOrder(["x", "y"], container: container)
     }
 
+    @Test("Batch Play Next evicts rows in the same save: the evicted rows go and the batch lands at the front")
+    func batchEnqueueNextEvictsInTheSameSave() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        var saveCount = 0
+        let store = UpNextQueueStore { saveContext in
+            saveCount += 1
+            try saveContext.save()
+        }
+        for id in ["w", "x", "y", "z"] {
+            #expect(store.enqueueLast(episode(id), modelContext: context))
+        }
+        var changeCount = 0
+        store.onQueueChanged = { changeCount += 1 }
+        saveCount = 0
+
+        #expect(store.enqueueNext([episode("a")], source: nil, evicting: ["y", "z"], modelContext: context))
+
+        #expect(store.items.map(\.episodeID) == ["a", "w", "x"])
+        #expect(isStrictlyIncreasing(store.items.map(\.sequence)))
+        #expect(saveCount == 1)
+        #expect(changeCount == 1)
+        #expect(store.lastErrorMessage == nil)
+        let reloaded = reloadedItems(container: container)
+        #expect(reloaded.map(\.episodeID) == ["a", "w", "x"])
+        #expect(reloaded.map(\.sequence) == store.items.map(\.sequence))
+        #expect(try ModelContext(container).fetch(FetchDescriptor<UpNextQueueItemRecord>()).count == 3)
+    }
+
+    @Test("Batch Play Last evicts rows in the same save and appends behind the rest")
+    func batchEnqueueLastEvictsInTheSameSave() throws {
+        let fixture = try loadedFixture(ids: ["w", "x", "y"])
+
+        #expect(fixture.store.enqueueLast([episode("a"), episode("b")], source: nil, evicting: ["w"], modelContext: fixture.context))
+
+        #expect(fixture.store.items.map(\.episodeID) == ["x", "y", "a", "b"])
+        #expect(isStrictlyIncreasing(fixture.store.items.map(\.sequence)))
+        #expect(reloadedItems(container: fixture.container).map(\.episodeID) == ["x", "y", "a", "b"])
+    }
+
+    @Test("A failed save of an evicting batch keeps every row, the evicted ones included, and reports it")
+    func failedEvictingBatchKeepsEveryRow() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        var failsSaves = false
+        let store = UpNextQueueStore { saveContext in
+            if failsSaves {
+                throw QueueSaveFailure()
+            }
+            try saveContext.save()
+        }
+        for id in ["w", "x", "y", "z"] {
+            #expect(store.enqueueLast(episode(id), modelContext: context))
+        }
+        let itemsBefore = store.items
+        var changeCount = 0
+        store.onQueueChanged = { changeCount += 1 }
+        failsSaves = true
+
+        #expect(!store.enqueueNext([episode("a")], source: nil, evicting: ["y", "z"], modelContext: context))
+
+        #expect(store.items == itemsBefore)
+        #expect(changeCount == 0)
+        #expect(store.lastErrorMessage == "Unable to add the episode to Up Next: Simulated queue save failure")
+        try expectPersistedOrder(["w", "x", "y", "z"], container: container)
+        #expect(try context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).map(\.episodeID).sorted() == ["w", "x", "y", "z"])
+    }
+
     @Test("An empty batch saves nothing, skips notifications, and keeps an unconsumed error")
     func emptyBatchIsNoOp() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

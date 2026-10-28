@@ -167,6 +167,66 @@ struct FeedMigrationTests {
         #expect(store.podcastPlaybackRateOverride(forPodcastID: Self.newFeedURL) == Float(expectedRate))
     }
 
+    @Test("A migration carries the show's Add to Up Next position to the new feed URL")
+    func migrationCarriesUpNextAutoAdd() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let newSnapshot = makeSnapshot(feedURL: Self.newFeedURL, title: "Moving Show")
+        let service = OutcomeStubFeedService(outcomes: [
+            Self.newFeedURL: [FeedFetchOutcome(snapshot: newSnapshot)]
+        ])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        context.insert(SubscriptionRecord(feedURL: Self.oldFeedURL, title: "Moving Show", autoAddToUpNext: 2))
+        try context.save()
+        await store.load(modelContext: context)
+
+        try await store.migrateSubscription(
+            from: Self.oldFeedURL,
+            toFeedURL: try #require(URL(string: Self.newFeedURL)),
+            modelContext: context
+        )
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.map(\.feedURL) == [Self.newFeedURL])
+        #expect(subscriptions.first?.autoAddToUpNext == 2)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: Self.newFeedURL) == .top)
+        #expect(store.upNextAutoAddPodcastIDs == [Self.newFeedURL])
+    }
+
+    @Test(
+        "A migration collision keeps the new record's own Add to Up Next position, else takes the old one",
+        arguments: [
+            (oldValue: 2, newValue: 1, expectedValue: 1),
+            (oldValue: 2, newValue: 0, expectedValue: 2),
+            (oldValue: 0, newValue: 1, expectedValue: 1),
+            (oldValue: 1, newValue: 7, expectedValue: 1)
+        ]
+    )
+    func migrationCollisionMergesUpNextAutoAdd(oldValue: Int, newValue: Int, expectedValue: Int) async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let newSnapshot = makeSnapshot(feedURL: Self.newFeedURL, title: "Moving Show")
+        let service = OutcomeStubFeedService(outcomes: [
+            Self.newFeedURL: [FeedFetchOutcome(snapshot: newSnapshot)]
+        ])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        context.insert(SubscriptionRecord(feedURL: Self.oldFeedURL, title: "Moving Show", autoAddToUpNext: oldValue))
+        context.insert(SubscriptionRecord(feedURL: Self.newFeedURL, title: "Moving Show", autoAddToUpNext: newValue))
+        try context.save()
+        await store.load(modelContext: context)
+
+        try await store.migrateSubscription(
+            from: Self.oldFeedURL,
+            toFeedURL: try #require(URL(string: Self.newFeedURL)),
+            modelContext: context
+        )
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.map(\.feedURL) == [Self.newFeedURL])
+        #expect(subscriptions.first?.autoAddToUpNext == expectedValue)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: Self.newFeedURL) == UpNextAutoAddPosition(stored: expectedValue))
+    }
+
     @Test("Persistent redirect divergence suggests but never auto-migrates")
     func redirectDivergenceSuggestsWithoutMigrating() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

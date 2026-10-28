@@ -77,7 +77,7 @@ final class UpNextQueueStore {
         source: String? = nil,
         modelContext: ModelContext
     ) -> Bool {
-        enqueue([episode], atFront: true, source: source, modelContext: modelContext)
+        enqueue([episode], atFront: true, source: source, evicting: [], modelContext: modelContext)
     }
 
     @discardableResult
@@ -86,29 +86,33 @@ final class UpNextQueueStore {
         source: String? = nil,
         modelContext: ModelContext
     ) -> Bool {
-        enqueue([episode], atFront: false, source: source, modelContext: modelContext)
+        enqueue([episode], atFront: false, source: source, evicting: [], modelContext: modelContext)
     }
 
     /// Inserts the whole batch at the front in array order, so `episodes[0]`
-    /// becomes the new head. One save; a failure leaves the queue untouched.
+    /// becomes the new head, and deletes the `evicting` rows in the same
+    /// save. A failure leaves the queue untouched, evicted rows included.
     @discardableResult
     func enqueueNext(
         _ episodes: [EpisodeListItemSnapshot],
         source: String?,
+        evicting: Set<String> = [],
         modelContext: ModelContext
     ) -> Bool {
-        enqueue(episodes, atFront: true, source: source, modelContext: modelContext)
+        enqueue(episodes, atFront: true, source: source, evicting: evicting, modelContext: modelContext)
     }
 
-    /// Appends the whole batch in array order. One save; a failure leaves the
-    /// queue untouched.
+    /// Appends the whole batch in array order and deletes the `evicting`
+    /// rows in the same save. A failure leaves the queue untouched, evicted
+    /// rows included.
     @discardableResult
     func enqueueLast(
         _ episodes: [EpisodeListItemSnapshot],
         source: String?,
+        evicting: Set<String> = [],
         modelContext: ModelContext
     ) -> Bool {
-        enqueue(episodes, atFront: false, source: source, modelContext: modelContext)
+        enqueue(episodes, atFront: false, source: source, evicting: evicting, modelContext: modelContext)
     }
 
     @discardableResult
@@ -298,11 +302,13 @@ final class UpNextQueueStore {
     /// Already-queued episodes move into the batch's slot and take its
     /// source; a repeat inside the batch keeps its first occurrence. The
     /// batch's sequences continue from its neighbour, so untouched rows keep
-    /// their stored order without a rewrite.
+    /// their stored order without a rewrite. Evicted rows only make room for
+    /// the batch, so an empty batch evicts nothing.
     private func enqueue(
         _ episodes: [EpisodeListItemSnapshot],
         atFront: Bool,
         source: String?,
+        evicting evictedEpisodeIDs: Set<String>,
         modelContext: ModelContext
     ) -> Bool {
         var batchEpisodeIDs: Set<String> = []
@@ -311,8 +317,9 @@ final class UpNextQueueStore {
             return true
         }
 
+        let removedEpisodeIDs = batchEpisodeIDs.union(evictedEpisodeIDs)
         let previousItems = items
-        let remainingItems = items.filter { !batchEpisodeIDs.contains($0.episodeID) }
+        let remainingItems = items.filter { !removedEpisodeIDs.contains($0.episodeID) }
         let firstSequence = atFront
             ? (remainingItems.first?.sequence ?? batch.count) - batch.count
             : (remainingItems.last?.sequence ?? -1) + 1
@@ -330,7 +337,7 @@ final class UpNextQueueStore {
 
         do {
             let records = try modelContext.fetch(FetchDescriptor<UpNextQueueItemRecord>())
-            for record in records where batchEpisodeIDs.contains(record.episodeID) {
+            for record in records where removedEpisodeIDs.contains(record.episodeID) {
                 modelContext.delete(record)
             }
             for item in addedItems {

@@ -9,6 +9,8 @@ struct SettingsRouteDestinationView: View {
             SettingsPlaybackView()
         case .sleepTimer:
             SettingsSleepTimerView()
+        case .autoAddToUpNext:
+            SettingsAutoAddToUpNextView()
         case .lookAndFeel:
             SettingsLookAndFeelView()
         case .appIcon:

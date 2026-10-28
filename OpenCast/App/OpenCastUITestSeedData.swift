@@ -60,6 +60,18 @@ enum OpenCastUITestSeedData {
     private static let playlistsEnvironmentKey = "OPENCAST_SEED_PLAYLISTS"
     private static let playlistQueueItemsEnvironmentKey = "OPENCAST_SEED_PLAYLIST_QUEUE_ITEMS"
     private static let playlistPlaybackSourceEnvironmentKey = "OPENCAST_SEED_PLAYLIST_PLAYBACK_SOURCE"
+    /// `top` or `bottom` turns Auto Add to Up Next on for the seeded show
+    /// with a watermark older than every seeded episode, so the launch pass
+    /// queues the ones that qualify.
+    private static let upNextAutoAddEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD"
+    /// A raw `UpNextAutoAddLimit` value, such as `10`.
+    private static let upNextAutoAddLimitEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD_LIMIT"
+    /// `top` seeds If Limit Reached as Only Add to Top.
+    private static let upNextAutoAddLimitReachedEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD_LIMIT_REACHED"
+    /// `1`, with `OPENCAST_SEED_UP_NEXT_QUEUE`, queues each extra show's
+    /// episode (`OPENCAST_SEED_EXTRA_FEED_COUNT`) after the three seeded
+    /// rows, in show order, so Up Next can start at an Auto Add Limit.
+    private static let upNextQueueIncludesExtraFeedsEnvironmentKey = "OPENCAST_SEED_UP_NEXT_QUEUE_INCLUDES_EXTRA_FEEDS"
     /// Gives each extra feed's episode a completed download of a different
     /// size, so the Downloads storage bar has several shows to draw.
     private static let extraFeedDownloadsEnvironmentKey = "OPENCAST_SEED_EXTRA_FEED_DOWNLOADS"
@@ -112,6 +124,10 @@ enum OpenCastUITestSeedData {
         let shouldSeedUpNextQueue = ProcessInfo.processInfo.environment[
             "OPENCAST_SEED_UP_NEXT_QUEUE"
         ] == "1"
+        let shouldQueueExtraFeedEpisodes = shouldSeedUpNextQueue
+            && ProcessInfo.processInfo.environment[upNextQueueIncludesExtraFeedsEnvironmentKey] == "1"
+        let seededUpNextAutoAddPosition = ProcessInfo.processInfo.environment[upNextAutoAddEnvironmentKey]
+            .flatMap(UpNextAutoAddPosition.init(rawValue:))
         let shouldSeedLibraryNewEpisodes = ProcessInfo.processInfo.environment[
             libraryNewEpisodesEnvironmentKey
         ] == "1"
@@ -153,7 +169,8 @@ enum OpenCastUITestSeedData {
                     : seedNow,
                 lastRefreshAt: refreshedAt,
                 skipIntroSeconds: overriddenSkipIntroSeconds ?? 0,
-                playbackRate: overriddenPlaybackRate ?? 0
+                playbackRate: overriddenPlaybackRate ?? 0,
+                autoAddToUpNext: UpNextAutoAddPosition.stored(seededUpNextAutoAddPosition)
             )
         )
         let seededEpisode = Episode(
@@ -297,7 +314,22 @@ enum OpenCastUITestSeedData {
                     )
                 )
             }
+            if shouldQueueExtraFeedEpisodes {
+                for index in stride(from: 1, through: extraFeedCount, by: 1) {
+                    let sequence = queuedEpisodeIDs.count + index - 1
+                    context.insert(
+                        UpNextQueueItemRecord(
+                            episodeID: extraEpisodeID(index),
+                            podcastID: extraFeedURL(index),
+                            sequence: sequence,
+                            enqueuedAt: refreshedAt.addingTimeInterval(Double(sequence))
+                        )
+                    )
+                }
+            }
         }
+
+        seedUpNextAutoAddSettings(isEnabled: seededUpNextAutoAddPosition != nil, context: context)
 
         if let playedPlaylistEpisode {
             seedPlaylists(
@@ -476,6 +508,31 @@ enum OpenCastUITestSeedData {
         }
 
         try context.save()
+    }
+
+    /// The rows `UpNextAutoAddSettingsStore` reads: the seeded show's
+    /// watermark when it is on, and the limit and rule when asked for.
+    /// Unknown values seed nothing.
+    private static func seedUpNextAutoAddSettings(isEnabled: Bool, context: ModelContext) {
+        let environment = ProcessInfo.processInfo.environment
+        if isEnabled {
+            context.insert(LocalPreferenceRecord(
+                key: UpNextAutoAddSettingsStore.watermarkKeyPrefix + feedURL,
+                value: UpNextAutoAddSettingsStore.encodeWatermark(.distantPast)
+            ))
+        }
+        if let limit = environment[upNextAutoAddLimitEnvironmentKey].flatMap(Int.init).flatMap(UpNextAutoAddLimit.init(rawValue:)) {
+            context.insert(LocalPreferenceRecord(
+                key: UpNextAutoAddSettingsStore.limitPreferenceKey,
+                value: String(limit.rawValue)
+            ))
+        }
+        if environment[upNextAutoAddLimitReachedEnvironmentKey] == "top" {
+            context.insert(LocalPreferenceRecord(
+                key: UpNextAutoAddSettingsStore.limitReachedActionPreferenceKey,
+                value: UpNextAutoAddLimitReachedAction.addToTopOnly.rawValue
+            ))
+        }
     }
 
     /// Inserts rows directly, as the Up Next seed does, so the fixture needs no
@@ -1035,9 +1092,9 @@ enum OpenCastUITestSeedData {
         }
 
         for index in 1...count {
-            let feedURL = "https://example.com/ui-test-extra-\(index).xml"
+            let feedURL = extraFeedURL(index)
             let title = "UI Test Extra Show \(index)"
-            let episodeID = "ui-test-extra-episode-\(index)"
+            let episodeID = extraEpisodeID(index)
             let publishedAt = Date(timeIntervalSince1970: 1_777_775_000 - Double(index))
 
             context.insert(
@@ -1090,6 +1147,14 @@ enum OpenCastUITestSeedData {
                 )
             }
         }
+    }
+
+    private static func extraFeedURL(_ index: Int) -> String {
+        "https://example.com/ui-test-extra-\(index).xml"
+    }
+
+    private static func extraEpisodeID(_ index: Int) -> String {
+        "ui-test-extra-episode-\(index)"
     }
 
     /// Writes a fresh WAV of `durationSeconds` straight into the episode's

@@ -29,6 +29,7 @@ struct OpenCastModelTests {
         #expect(fetched.first?.skipIntroSeconds == 0)
         #expect(fetched.first?.skipOutroSeconds == 0)
         #expect(fetched.first?.playbackRate == 0)
+        #expect(fetched.first?.autoAddToUpNext == 0)
     }
 
     @Test("Synced records use logical keys instead of unique attributes")
@@ -623,6 +624,7 @@ struct OpenCastModelTests {
         #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
             rateOverride: 1.5,
+            upNextAutoAdd: nil,
             feedURL: feedURL,
             modelContext: context
         ))
@@ -639,6 +641,7 @@ struct OpenCastModelTests {
         #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
             rateOverride: 1.5,
+            upNextAutoAdd: nil,
             feedURL: feedURL,
             modelContext: context
         ))
@@ -648,6 +651,7 @@ struct OpenCastModelTests {
         #expect(!store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: .infinity, skipOutroSeconds: 5),
             rateOverride: 2,
+            upNextAutoAdd: nil,
             feedURL: feedURL,
             modelContext: context
         ))
@@ -655,6 +659,7 @@ struct OpenCastModelTests {
         #expect(!store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 10, skipOutroSeconds: 5),
             rateOverride: 3.5,
+            upNextAutoAdd: nil,
             feedURL: feedURL,
             modelContext: context
         ))
@@ -670,6 +675,7 @@ struct OpenCastModelTests {
         #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
             rateOverride: nil,
+            upNextAutoAdd: nil,
             feedURL: feedURL,
             modelContext: context
         ))
@@ -709,6 +715,7 @@ struct OpenCastModelTests {
         #expect(!store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
             rateOverride: 2,
+            upNextAutoAdd: nil,
             feedURL: feedURL,
             modelContext: context
         ))
@@ -829,6 +836,250 @@ struct OpenCastModelTests {
         #expect(PodcastPlaybackRateOverride.nearestStep(to: 0.5) == 0.75)
         #expect(PodcastPlaybackRateOverride.nearestStep(to: 3) == 2)
         #expect(PodcastPlaybackRateOverride.nearestStep(to: 1.75) == 1.75)
+    }
+
+    @Test("A show's stored Add to Up Next value maps to Pocket Casts' positions, anything else is off")
+    func upNextAutoAddPositionMapsStoredValues() {
+        #expect(UpNextAutoAddPosition(stored: 0) == nil)
+        #expect(UpNextAutoAddPosition(stored: 1) == .bottom)
+        #expect(UpNextAutoAddPosition(stored: 2) == .top)
+        #expect(UpNextAutoAddPosition(stored: 7) == nil)
+        #expect(UpNextAutoAddPosition(stored: -1) == nil)
+        #expect(UpNextAutoAddPosition.bottom.stored == 1)
+        #expect(UpNextAutoAddPosition.top.stored == 2)
+        #expect(UpNextAutoAddPosition.stored(nil) == 0)
+        #expect(UpNextAutoAddPosition.stored(.top) == 2)
+        #expect(UpNextAutoAddPosition.allCases == [.top, .bottom])
+        #expect(UpNextAutoAddPosition.allCases.map(\.rawValue) == ["top", "bottom"])
+        #expect(UpNextAutoAddPosition.allCases.map(\.title) == ["Top", "Bottom"])
+    }
+
+    @Test("Per-show playback settings setter saves Add to Up Next with the skips and speed in one save")
+    func podcastPlaybackSettingsSetterPersistsUpNextAutoAdd() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/playback-up-next.xml"
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Up Next Show"))
+        try context.save()
+
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == nil)
+
+        #expect(store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 30, skipOutroSeconds: 15),
+            rateOverride: 1.5,
+            upNextAutoAdd: .bottom,
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.syncedStoreSelfSaveCount == 1)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == .bottom)
+        let persisted = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(persisted.autoAddToUpNext == 1)
+        #expect(persisted.skipIntroSeconds == 30)
+        #expect(persisted.skipOutroSeconds == 15)
+        #expect(persisted.playbackRate == 1.5)
+
+        // The same four values again are a no-op: no save, no credit.
+        #expect(store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 30, skipOutroSeconds: 15),
+            rateOverride: 1.5,
+            upNextAutoAdd: .bottom,
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.syncedStoreSelfSaveCount == 1)
+        #expect(!context.hasChanges)
+
+        // Only the position changes: still one save carrying all four fields.
+        #expect(store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 30, skipOutroSeconds: 15),
+            rateOverride: 1.5,
+            upNextAutoAdd: .top,
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.syncedStoreSelfSaveCount == 2)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == .top)
+        let moved = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(moved.autoAddToUpNext == 2)
+        #expect(moved.skipIntroSeconds == 30)
+        #expect(moved.skipOutroSeconds == 15)
+        #expect(moved.playbackRate == 1.5)
+
+        #expect(store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 30, skipOutroSeconds: 15),
+            rateOverride: 1.5,
+            upNextAutoAdd: nil,
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.syncedStoreSelfSaveCount == 3)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == nil)
+        let cleared = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(cleared.autoAddToUpNext == 0)
+        #expect(cleared.playbackRate == 1.5)
+    }
+
+    @Test("Per-show playback settings setter rolls all four values back when its save fails")
+    func podcastPlaybackSettingsSetterRollsBackUpNextAutoAdd() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/playback-up-next-rollback.xml"
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Rollback Up Next Show",
+                skipIntroSeconds: 15,
+                skipOutroSeconds: 10,
+                playbackRate: 1.25,
+                autoAddToUpNext: 1
+            )
+        )
+        try context.save()
+
+        let store = LibraryStore(
+            localCache: SQLiteLocalLibraryCacheStore.inMemory(),
+            savePlaybackSkipSettingsModelContext: { _ in
+                throw StubFeedError(message: "Simulated playback settings save failure")
+            }
+        )
+        await store.load(modelContext: context)
+
+        #expect(!store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
+            rateOverride: 2,
+            upNextAutoAdd: .top,
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(!store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 15, skipOutroSeconds: 10),
+            rateOverride: 1.25,
+            upNextAutoAdd: nil,
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.podcastPlaybackSkipSettings(forPodcastID: feedURL) == PodcastPlaybackSkipSettings(
+            skipIntroSeconds: 15,
+            skipOutroSeconds: 10
+        ))
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.25)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == .bottom)
+        #expect(store.upNextAutoAddPodcastIDs == [feedURL])
+        #expect(store.syncedStoreSelfSaveCount == 0)
+        #expect(store.lastErrorMessage?.contains("Simulated playback settings save failure") == true)
+        let persisted = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(persisted.skipIntroSeconds == 15)
+        #expect(persisted.skipOutroSeconds == 10)
+        #expect(persisted.playbackRate == 1.25)
+        #expect(persisted.autoAddToUpNext == 1)
+    }
+
+    @Test("Add to Up Next setter sets, changes and clears a show's position, one synced save each")
+    func podcastUpNextAutoAddPositionSetsChangesAndClears() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/up-next-position.xml"
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Position Show", skipIntroSeconds: 30, playbackRate: 1.5))
+        try context.save()
+
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+
+        #expect(store.setPodcastUpNextAutoAddPosition(.bottom, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == .bottom)
+        #expect(store.syncedStoreSelfSaveCount == 1)
+        let persisted = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(persisted.autoAddToUpNext == 1)
+        #expect(persisted.skipIntroSeconds == 30)
+        #expect(persisted.playbackRate == 1.5)
+
+        #expect(store.setPodcastUpNextAutoAddPosition(.bottom, feedURL: feedURL, modelContext: context))
+        #expect(store.syncedStoreSelfSaveCount == 1)
+        #expect(!context.hasChanges)
+
+        #expect(store.setPodcastUpNextAutoAddPosition(.top, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == .top)
+        #expect(store.syncedStoreSelfSaveCount == 2)
+        let moved = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(moved.autoAddToUpNext == 2)
+
+        #expect(store.setPodcastUpNextAutoAddPosition(nil, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == nil)
+        #expect(store.syncedStoreSelfSaveCount == 3)
+        #expect(store.lastErrorMessage == nil)
+        let cleared = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(cleared.autoAddToUpNext == 0)
+        #expect(cleared.skipIntroSeconds == 30)
+        #expect(cleared.playbackRate == 1.5)
+
+        let unknownFeedURL = "https://example.com/not-subscribed.xml"
+        #expect(!store.setPodcastUpNextAutoAddPosition(.top, feedURL: unknownFeedURL, modelContext: context))
+        #expect(store.lastErrorMessage == "Unable to find this podcast subscription.")
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: unknownFeedURL) == nil)
+        #expect(store.syncedStoreSelfSaveCount == 3)
+    }
+
+    @Test("Add to Up Next setter rolls back when its save fails")
+    func podcastUpNextAutoAddPositionRollsBackFailedSave() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/up-next-position-rollback.xml"
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Rollback Position Show", autoAddToUpNext: 2))
+        try context.save()
+
+        let store = LibraryStore(
+            localCache: SQLiteLocalLibraryCacheStore.inMemory(),
+            savePlaybackSkipSettingsModelContext: { _ in
+                throw StubFeedError(message: "Simulated Up Next save failure")
+            }
+        )
+        await store.load(modelContext: context)
+
+        #expect(!store.setPodcastUpNextAutoAddPosition(.bottom, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == .top)
+        #expect(store.lastErrorMessage?.hasPrefix("Unable to update Add to Up Next: ") == true)
+        #expect(store.lastErrorMessage?.contains("Simulated Up Next save failure") == true)
+        #expect(!store.setPodcastUpNextAutoAddPosition(nil, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == .top)
+        #expect(store.upNextAutoAddPodcastIDs == [feedURL])
+        #expect(store.syncedStoreSelfSaveCount == 0)
+        let persisted = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(persisted.autoAddToUpNext == 2)
+    }
+
+    @Test("Auto Add to Up Next show IDs are the active subscriptions that are on")
+    func upNextAutoAddPodcastIDsListActiveShowsThatAreOn() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let offFeedURL = "https://example.com/up-next-off.xml"
+        let bottomFeedURL = "https://example.com/up-next-bottom.xml"
+        let topFeedURL = "https://example.com/up-next-top.xml"
+        let unknownFeedURL = "https://example.com/up-next-unknown.xml"
+        let archivedFeedURL = "https://example.com/up-next-archived.xml"
+        context.insert(SubscriptionRecord(feedURL: offFeedURL, title: "Off"))
+        context.insert(SubscriptionRecord(feedURL: bottomFeedURL, title: "Bottom", autoAddToUpNext: 1))
+        context.insert(SubscriptionRecord(feedURL: topFeedURL, title: "Top", autoAddToUpNext: 2))
+        context.insert(SubscriptionRecord(feedURL: unknownFeedURL, title: "Unknown", autoAddToUpNext: 7))
+        context.insert(SubscriptionRecord(feedURL: archivedFeedURL, title: "Archived", isArchived: true, autoAddToUpNext: 2))
+        try context.save()
+
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+
+        #expect(store.upNextAutoAddPodcastIDs == [bottomFeedURL, topFeedURL])
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: archivedFeedURL) == nil)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: unknownFeedURL) == nil)
+
+        #expect(store.setPodcastUpNextAutoAddPosition(.top, feedURL: offFeedURL, modelContext: context))
+        #expect(store.upNextAutoAddPodcastIDs == [offFeedURL, bottomFeedURL, topFeedURL])
+        #expect(store.setPodcastUpNextAutoAddPosition(nil, feedURL: bottomFeedURL, modelContext: context))
+        #expect(store.upNextAutoAddPodcastIDs == [offFeedURL, topFeedURL])
+
+        await store.unsubscribe(feedURL: topFeedURL, modelContext: context)
+        #expect(store.upNextAutoAddPodcastIDs == [offFeedURL])
     }
 
     @Test("Playback skip merge keeps greatest valid trims and avoids no-op writes")
@@ -2430,6 +2681,38 @@ struct OpenCastModelTests {
         #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.75)
     }
 
+    @Test("Synced data reload publishes a remote Add to Up Next change")
+    func syncedDataReloadPublishesUpNextAutoAddChanges() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/remote-up-next.xml"
+        let subscribedAt = Date(timeIntervalSince1970: 1_780_000_000)
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Remote Up Next Show", subscribedAt: subscribedAt))
+        try context.save()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == nil)
+
+        // Every other field matches, so only the new one can tell the copies apart.
+        let subscription = try #require(context.fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        context.delete(subscription)
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Remote Up Next Show",
+                subscribedAt: subscribedAt,
+                autoAddToUpNext: 2
+            )
+        )
+        try context.save()
+
+        let result = try store.reloadSyncedUserData(modelContext: context)
+
+        #expect(result.activeSubscriptionRecordsChanged)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == .top)
+        #expect(store.upNextAutoAddPodcastIDs == [feedURL])
+    }
+
     @Test("Automatic foreground refresh skips fresh subscriptions")
     func automaticForegroundRefreshSkipsFreshSubscriptions() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -3293,6 +3576,69 @@ struct OpenCastModelTests {
         #expect(result.subscriptionGroupsMerged == 2)
         #expect(store.podcastPlaybackRateOverride(forPodcastID: identifiedFeedURL) == 2)
         #expect(store.podcastPlaybackRateOverride(forPodcastID: legacyFeedURL) == 2)
+    }
+
+    @Test(
+        "Duplicate subscriptions merge Add to Up Next top over bottom over off, in any order, legacy replacements included",
+        arguments: [[1, 0, 2], [2, 0, 1]]
+    )
+    func duplicateSubscriptionsMergeUpNextAutoAdd(values: [Int]) async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let identifiedFeedURL = "https://example.com/up-next-twins.xml"
+        let legacyFeedURL = "https://example.com/up-next-legacy-twins.xml"
+        let offFeedURL = "https://example.com/up-next-off-twins.xml"
+        let bottomFeedURL = "https://example.com/up-next-bottom-twins.xml"
+        let unknownFeedURL = "https://example.com/up-next-unknown-twins.xml"
+        let winnerUUID = "00000000-0000-0000-0000-000000000001"
+        let otherUUID = "00000000-0000-0000-0000-000000000002"
+
+        // The deterministic winner (smallest UUID) is the middle twin, which is off.
+        for (dedupeUUID, value) in zip(["00000000-0000-0000-0000-000000000003", winnerUUID, otherUUID], values) {
+            context.insert(
+                SubscriptionRecord(feedURL: identifiedFeedURL, title: "Up Next Twins", autoAddToUpNext: value, dedupeUUID: dedupeUUID)
+            )
+        }
+        for value in values {
+            context.insert(
+                SubscriptionRecord(feedURL: legacyFeedURL, title: "Legacy Up Next Twins", autoAddToUpNext: value, dedupeUUID: "")
+            )
+        }
+        let pairs: [(feedURL: String, winnerValue: Int, otherValue: Int)] = [
+            (offFeedURL, 0, 0),
+            (bottomFeedURL, 0, 1),
+            // A value this build doesn't know reads as off and loses to bottom.
+            (unknownFeedURL, 7, 1)
+        ]
+        for pair in pairs {
+            context.insert(
+                SubscriptionRecord(feedURL: pair.feedURL, title: "Pair", autoAddToUpNext: pair.winnerValue, dedupeUUID: winnerUUID)
+            )
+            context.insert(
+                SubscriptionRecord(feedURL: pair.feedURL, title: "Pair", autoAddToUpNext: pair.otherValue, dedupeUUID: otherUUID)
+            )
+        }
+        try context.save()
+
+        let result = try await store.repairSyncDuplicates(modelContext: context)
+        let records = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        let identified = records.filter { $0.feedURL == identifiedFeedURL }
+        let legacy = records.filter { $0.feedURL == legacyFeedURL }
+
+        #expect(identified.map(\.dedupeUUID) == [winnerUUID])
+        #expect(identified.first?.autoAddToUpNext == 2)
+        #expect(legacy.count == 1)
+        #expect(legacy.first?.dedupeUUID.isEmpty == false)
+        #expect(legacy.first?.autoAddToUpNext == 2)
+        #expect(records.filter { $0.feedURL == offFeedURL }.map(\.autoAddToUpNext) == [0])
+        #expect(records.filter { $0.feedURL == bottomFeedURL }.map(\.autoAddToUpNext) == [1])
+        #expect(records.filter { $0.feedURL == unknownFeedURL }.map(\.autoAddToUpNext) == [1])
+        #expect(result.subscriptionGroupsMerged == 5)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: identifiedFeedURL) == .top)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: legacyFeedURL) == .top)
+        #expect(store.podcastUpNextAutoAddPosition(forPodcastID: bottomFeedURL) == .bottom)
+        #expect(store.upNextAutoAddPodcastIDs == [identifiedFeedURL, legacyFeedURL, bottomFeedURL, unknownFeedURL])
     }
 
     @Test("Archived duplicate loses to active duplicate")

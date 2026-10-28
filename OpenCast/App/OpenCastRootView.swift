@@ -228,8 +228,9 @@ struct OpenCastRootView: View {
         appModel.trimDownloadsToKeepLimits(modelContext: modelContext)
         // The activation pass can run before hydration and find no enabled
         // show, and a fresh cache's launch refresh publishes nothing. The
-        // coordinator ignores the request unless the scene is active now.
+        // coordinators ignore the request unless the scene is active now.
         appModel.scheduleAutoDownloadPass(modelContext: modelContext)
+        appModel.runUpNextAutoAddPass(modelContext: modelContext)
         isInitialSetupComplete = true
         SearchColdStartProbe.recordFirstUsableIfRequested()
         initialSetupGate.complete()
