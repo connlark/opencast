@@ -784,6 +784,42 @@ final class OpenCastAppModel {
         return result
     }
 
+    /// Duplicate repair reported as the library activity. False when the
+    /// repair failed; the failure is the activity's.
+    func repairSyncDuplicatesReportingActivity(modelContext: ModelContext) async -> Bool {
+        syncStatus.beginLibraryActivity(.repairingDuplicates)
+        await repairSyncDuplicates(modelContext: modelContext)
+
+        if let errorMessage = syncStatus.lastRepairErrorMessage {
+            syncStatus.recordLibraryActivityFailure(errorMessage)
+            return false
+        }
+
+        return true
+    }
+
+    /// Reloads the library and its playlists from the store, then repairs
+    /// sync duplicates, each step reported as the library activity, and
+    /// reapplies the loaded episode's playback settings from the repaired
+    /// records. False when the reload or the repair failed.
+    func reloadPersistedDataAndRepairDuplicates(modelContext: ModelContext) async -> Bool {
+        syncStatus.beginLibraryActivity(.reloading)
+
+        do {
+            try await library.reloadPersistedData(modelContext: modelContext)
+        } catch {
+            syncStatus.recordLibraryActivityFailure(error.localizedDescription)
+            return false
+        }
+        reloadPlaylistsAfterSyncedChange(modelContext: modelContext)
+
+        guard await repairSyncDuplicatesReportingActivity(modelContext: modelContext) else {
+            return false
+        }
+        refreshCurrentPlaybackSettings(modelContext: modelContext)
+        return true
+    }
+
     /// Runs at most once per launch, before the first playlist load. A failure
     /// leaves the completion flag unset, so the next launch retries.
     private func migrateLegacyLocalPlaylists(modelContext: ModelContext) {
@@ -2706,7 +2742,7 @@ final class OpenCastAppModel {
                 source: preferredPlaybackSource(for: record.episodeID),
                 modelContext: modelContext
             )
-            applyVoiceBoostSetting(for: episode, modelContext: modelContext)
+            applyPlaybackSettings(for: episode, modelContext: modelContext)
             let boundaries = playbackEpisodeBoundaries(forPodcastID: record.podcastID)
             let startPosition = boundaries.ordinaryStartPosition(
                 library.resumePosition(for: record.episodeID),
@@ -2926,13 +2962,33 @@ final class OpenCastAppModel {
         return didSave
     }
 
-    func refreshCurrentVoiceBoostSetting(modelContext: ModelContext) {
+    /// Reapplies the playback settings to the loaded episode, its show's own
+    /// speed included.
+    func refreshCurrentPlaybackSettings(modelContext: ModelContext) {
+        let podcastID = playback.currentEpisode?.podcastID.rawValue
         playbackSettings.load(
             episodeID: playback.currentEpisode?.id.rawValue,
-            podcastID: playback.currentEpisode?.podcastID.rawValue,
+            podcastID: podcastID,
+            rateOverride: podcastID.flatMap(library.podcastPlaybackRateOverride(forPodcastID:)),
             modelContext: modelContext,
             playback: playback
         )
+    }
+
+    /// Refetches the playing show's subscription before reapplying: the
+    /// fetch lays a speed another device saved over the live record the
+    /// library reads, which a plain reapply would miss.
+    func refreshCurrentPlaybackSettingsFromStore(modelContext: ModelContext) {
+        if let feedURL = playback.currentEpisode?.podcastID.rawValue {
+            let descriptor = FetchDescriptor<SubscriptionRecord>(
+                predicate: #Predicate { record in
+                    record.feedURL == feedURL
+                }
+            )
+            // A failed refetch reapplies the speed last read.
+            _ = try? modelContext.fetch(descriptor)
+        }
+        refreshCurrentPlaybackSettings(modelContext: modelContext)
     }
 
     @discardableResult
@@ -2943,15 +2999,37 @@ final class OpenCastAppModel {
         appearanceSettings.setMode(mode, modelContext: modelContext)
     }
 
+    /// Edits the playing show's own speed while that show has one, the
+    /// global speed otherwise.
     @discardableResult
     func setPlaybackRate(
         _ rate: Float,
         modelContext: ModelContext
     ) -> Bool {
-        playbackSettings.setPlaybackRate(
+        guard let feedURL = playback.currentEpisode?.podcastID.rawValue,
+              library.podcastPlaybackRateOverride(forPodcastID: feedURL) != nil
+        else {
+            return playbackSettings.setPlaybackRate(
+                rate,
+                modelContext: modelContext,
+                playback: playback
+            )
+        }
+
+        return playbackSettings.setPlaybackRate(
             rate,
             modelContext: modelContext,
-            playback: playback
+            playback: playback,
+            persist: { [library] rate, modelContext in
+                guard library.setPodcastPlaybackRateOverride(rate, feedURL: feedURL, modelContext: modelContext) else {
+                    // The failure surfaces through the playback settings
+                    // error; left on the library it would raise the root
+                    // Library alert as well.
+                    let message = library.lastErrorMessage ?? "Unable to save this show's speed."
+                    library.clearLastError()
+                    throw PodcastPlaybackRateSaveError(message: message)
+                }
+            }
         )
     }
 
@@ -3209,7 +3287,7 @@ final class OpenCastAppModel {
             : nil
         let interruptedSourcePlaylistID = currentPlaylistSourceID
         nowPlayingProbeMark("play-validated")
-        applyVoiceBoostSetting(for: episode, modelContext: modelContext)
+        applyPlaybackSettings(for: episode, modelContext: modelContext)
         let boundaries = playbackEpisodeBoundaries(forPodcastID: snapshot.podcastID)
         let requestedStartPosition = startPosition ?? library.resumePosition(for: snapshot.episodeID)
         let resolvedStartPosition = startPosition != nil
@@ -3316,10 +3394,11 @@ final class OpenCastAppModel {
         )
     }
 
-    private func applyVoiceBoostSetting(for episode: Episode, modelContext: ModelContext) {
+    private func applyPlaybackSettings(for episode: Episode, modelContext: ModelContext) {
         playbackSettings.load(
             episodeID: episode.id.rawValue,
             podcastID: episode.podcastID.rawValue,
+            rateOverride: library.podcastPlaybackRateOverride(forPodcastID: episode.podcastID.rawValue),
             modelContext: modelContext,
             playback: playback
         )

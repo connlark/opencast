@@ -615,9 +615,10 @@ struct LibraryStoreStateMachineTests {
         #expect(store.setAdAutoDetectEnabled(true, feedURL: feedURL, modelContext: context))
         #expect(store.syncedStoreSelfSaveCount == 3)
 
-        // setPodcastPlaybackSkipSettings: both synced trims in one save.
-        #expect(store.setPodcastPlaybackSkipSettings(
+        // setPodcastPlaybackSettings: both synced trims and the speed in one save.
+        #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 20, skipOutroSeconds: 10),
+            rateOverride: nil,
             feedURL: feedURL,
             modelContext: context
         ))

@@ -419,6 +419,9 @@ final class FeedWriteCoordinator {
                     )
                 }
             )
+            let migrationPlaybackRate = PodcastPlaybackRateOverride.merged(
+                oldSubscriptionRecords.map(\.playbackRate)
+            )
             if !hasNewSubscription {
                 // subscribedAt must postdate the old URL's tombstone only if the
                 // keys collided — they don't — but a strictly newer stamp keeps
@@ -436,7 +439,8 @@ final class FeedWriteCoordinator {
                         isAdAutoDetectEnabled: template.isAdAutoDetectEnabled,
                         isTranscriptAnalysisEnabled: template.isTranscriptAnalysisEnabled,
                         skipIntroSeconds: migrationSkipSettings.skipIntroSeconds,
-                        skipOutroSeconds: migrationSkipSettings.skipOutroSeconds
+                        skipOutroSeconds: migrationSkipSettings.skipOutroSeconds,
+                        playbackRate: migrationPlaybackRate
                     )
                 )
             } else {
@@ -447,6 +451,7 @@ final class FeedWriteCoordinator {
                         migrationSkipSettings,
                         into: record
                     )
+                    Self.mergePodcastPlaybackRate(migrationPlaybackRate, into: record)
                 }
             }
             for record in oldSubscriptionRecords {
@@ -488,6 +493,23 @@ final class FeedWriteCoordinator {
             changed = true
         }
         return changed
+    }
+
+    /// A record at the new URL keeps its own speed; one that follows the
+    /// global speed takes the moved subscription's. Returns whether it wrote.
+    @discardableResult
+    static func mergePodcastPlaybackRate(
+        _ incoming: Double,
+        into record: SubscriptionRecord
+    ) -> Bool {
+        guard PodcastPlaybackRateOverride.resolved(record.playbackRate) == nil,
+              PodcastPlaybackRateOverride.resolved(incoming) != nil
+        else {
+            return false
+        }
+
+        record.playbackRate = incoming
+        return true
     }
 
     /// Diagnostics sweep for libraries duplicated before reconciliation

@@ -216,7 +216,7 @@ struct OpenCastRootView: View {
         appModel.appearanceSettings.load(modelContext: modelContext)
         appModel.recentSearches.load(modelContext: modelContext)
         await appModel.notificationSettings.load(modelContext: modelContext)
-        let didRepairSyncDuplicates = await repairSyncDuplicatesAfterImportedData()
+        let didRepairSyncDuplicates = await appModel.repairSyncDuplicatesReportingActivity(modelContext: modelContext)
         appModel.onboardingState.load(modelContext: modelContext)
         presentOnboardingIfNeeded()
         presentImportedSubscriptionsNotificationIfNeeded(
@@ -540,17 +540,7 @@ struct OpenCastRootView: View {
 
     private func performImportedDataRefresh(startsEmptyImportPolling: Bool) async {
         let activePodcastIDsBeforeReload = appModel.library.activePodcastIDs
-        appModel.syncStatus.beginLibraryActivity(.reloading)
-
-        do {
-            try await appModel.library.reloadPersistedData(modelContext: modelContext)
-        } catch {
-            appModel.syncStatus.recordLibraryActivityFailure(error.localizedDescription)
-            return
-        }
-        appModel.reloadPlaylistsAfterSyncedChange(modelContext: modelContext)
-
-        guard await repairSyncDuplicatesAfterImportedData() else {
+        guard await appModel.reloadPersistedDataAndRepairDuplicates(modelContext: modelContext) else {
             return
         }
         presentImportedSubscriptionsNotificationIfNeeded(
@@ -575,7 +565,7 @@ struct OpenCastRootView: View {
     }
 
     private func processImportedSubscriptionChanges(activePodcastIDsBeforeReload: Set<String>) async {
-        guard await repairSyncDuplicatesAfterImportedData() else {
+        guard await appModel.repairSyncDuplicatesReportingActivity(modelContext: modelContext) else {
             return
         }
 
@@ -593,18 +583,6 @@ struct OpenCastRootView: View {
         }
 
         appModel.syncStatus.finishLibraryActivity()
-    }
-
-    private func repairSyncDuplicatesAfterImportedData() async -> Bool {
-        appModel.syncStatus.beginLibraryActivity(.repairingDuplicates)
-        await appModel.repairSyncDuplicates(modelContext: modelContext)
-
-        if let errorMessage = appModel.syncStatus.lastRepairErrorMessage {
-            appModel.syncStatus.recordLibraryActivityFailure(errorMessage)
-            return false
-        }
-
-        return true
     }
 
     @discardableResult

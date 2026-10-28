@@ -34,6 +34,33 @@ struct SiriPlayMediaHandlerTests {
         #expect(fixture.appModel.nowPlayingPresentationRequest == 0)
     }
 
+    @Test("A requested speed for a show with its own speed sets that show's speed")
+    func requestedSpeedOnCustomSpeedShowSetsTheShowSpeed() async throws {
+        let fixture = try await makeFixture(playbackRate: 1.5)
+        let intent = SiriPlayMediaIntentFactory.make(
+            mediaItems: [
+                SiriPlayMediaIntentFactory.mediaItem(
+                    identifier: "newest",
+                    title: "Newest Episode",
+                    type: .podcastEpisode,
+                    artist: "Example Show"
+                )
+            ],
+            playbackSpeed: 2
+        )
+
+        let response = await fixture.handler.handle(intent: intent)
+
+        #expect(response.code == .success)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "newest")
+        #expect(fixture.appModel.playback.rate == 2)
+        #expect(fixture.appModel.library.podcastPlaybackRateOverride(forPodcastID: Self.feedURL) == 2)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
+            modelContext: fixture.modelContext
+        ) == nil)
+    }
+
     @Test("A donated show uses the same primary-action episode as the phone")
     func donatedShowPlayback() async throws {
         let fixture = try await makeFixture()
@@ -346,14 +373,14 @@ struct SiriPlayMediaHandlerTests {
         return playlist.playlistID
     }
 
-    private func makeFixture() async throws -> (
+    private func makeFixture(playbackRate: Double = 0) async throws -> (
         handler: SiriPlayMediaHandler,
         appModel: OpenCastAppModel,
         modelContext: ModelContext
     ) {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        context.insert(SubscriptionRecord(feedURL: Self.feedURL, title: "Example Show"))
+        context.insert(SubscriptionRecord(feedURL: Self.feedURL, title: "Example Show", playbackRate: playbackRate))
         try context.save()
 
         let cache = SQLiteLocalLibraryCacheStore.inMemory()

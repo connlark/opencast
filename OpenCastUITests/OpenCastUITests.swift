@@ -2202,7 +2202,7 @@ final class OpenCastUITests: XCTestCase {
         libraryPodcast.tap()
 
         openPodcastPlaybackSettings(in: app)
-        let navigationBar = app.navigationBars["Skip Intro & Outro"]
+        let navigationBar = app.navigationBars["Playback Settings"]
         let introField = app.textFields["Skip Intro Duration"]
         let outroField = app.textFields["Skip Outro Duration"]
         assertExists(navigationBar.buttons["Cancel"], named: "playback settings cancel action")
@@ -2246,7 +2246,7 @@ final class OpenCastUITests: XCTestCase {
         assertDoesNotExist(navigationBar, named: "playback settings after save")
 
         openPodcastPlaybackSettings(in: app)
-        let reopenedNavigationBar = app.navigationBars["Skip Intro & Outro"]
+        let reopenedNavigationBar = app.navigationBars["Playback Settings"]
         let reopenedIntroField = app.textFields["Skip Intro Duration"]
         let reopenedOutroField = app.textFields["Skip Outro Duration"]
         assertExists(reopenedIntroField, named: "reopened skip intro duration field")
@@ -2264,6 +2264,67 @@ final class OpenCastUITests: XCTestCase {
         openPodcastPlaybackSettings(in: app)
         XCTAssertEqual(app.textFields["Skip Intro Duration"].value as? String, "0:00")
         XCTAssertEqual(app.textFields["Skip Outro Duration"].value as? String, "0:00")
+    }
+
+    /// The seeded show has its own 1.5x. Custom for This Show in the speed
+    /// sheet returns it to the global speed and takes it back; the steps then
+    /// edit the show, and the show sheet's Save applies to the playing
+    /// episode without a replay.
+    @MainActor
+    func testSeededPodcastCustomSpeedAppliesAndTogglesFromNowPlaying() throws {
+        let app = makeSeededApp(audioDurationSeconds: 600, podcastPlaybackRate: 1.5)
+        app.launch()
+
+        openSeededNowPlaying(in: app)
+        let speedButton = app.buttons["Playback Speed"]
+        assertHittable(speedButton, named: "Playback Speed control")
+        assertValue(of: speedButton, becomes: "1.5x", named: "Playback Speed at the show's own speed")
+
+        speedButton.tap()
+        let customForShow = app.switches["playback-speed-custom-for-show-toggle"]
+        assertHittable(customForShow, named: "Custom for This Show toggle")
+        assertToggle(customForShow, isOn: true)
+        tapToggle(customForShow, to: false)
+        assertValue(of: speedButton, becomes: "1x", named: "Playback Speed back at the global speed")
+
+        tapToggle(customForShow, to: true)
+        assertValue(of: speedButton, becomes: "1x", named: "Playback Speed after the show takes the current speed")
+        assertExists(
+            app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Speed for UI Test Show")).firstMatch,
+            named: "Speed for UI Test Show header"
+        )
+        // The sheet opens at its medium detent; the last step sits below it.
+        app.navigationBars["Speed"].swipeUp()
+        let twoX = app.buttons["2.0x"]
+        assertHittable(twoX, named: "2.0x speed step")
+        twoX.tap()
+        assertValue(of: speedButton, becomes: "2.0x", named: "Playback Speed after picking 2.0x for the show")
+
+        dismissNowPlayingOverlay(in: app)
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+        openPodcastPlaybackSettings(in: app)
+        let customSpeed = app.switches["podcast-playback-settings-custom-speed-toggle"]
+        assertExists(customSpeed, named: "Custom Speed toggle")
+        assertToggle(customSpeed, isOn: true)
+        let speedPicker = app.buttons["podcast-playback-settings-speed-picker"]
+        assertHittable(speedPicker, named: "show speed picker")
+        assertExists(elementContaining(label: "2.0x", in: app), named: "show speed picker at 2.0x")
+        speedPicker.tap()
+        let oneTwentyFive = app.buttons["1.25x"].firstMatch
+        assertHittable(oneTwentyFive, named: "1.25x speed choice")
+        oneTwentyFive.tap()
+        let navigationBar = app.navigationBars["Playback Settings"]
+        navigationBar.buttons["Save"].tap()
+        assertDoesNotExist(navigationBar, named: "playback settings after save")
+
+        let miniPlayer = app.buttons["Open Now Playing"]
+        assertHittable(miniPlayer, named: "mini-player after saving the show's speed")
+        miniPlayer.tap()
+        assertNowPlayingOverlay(in: app)
+        assertValue(of: speedButton, becomes: "1.25x", named: "Playback Speed after saving 1.25x for the show")
     }
 
     @MainActor
@@ -7291,7 +7352,7 @@ final class OpenCastUITests: XCTestCase {
         )
         actionsButton.tap()
         assertExists(
-            labeledButton("Skip Intro & Outro\u{2026}", in: app),
+            labeledButton("Playback Settings\u{2026}", in: app),
             named: "podcast actions menu content",
             file: file,
             line: line
@@ -7633,6 +7694,7 @@ final class OpenCastUITests: XCTestCase {
         seededLibraryLayout: String? = nil,
         audioDurationSeconds: Int? = nil,
         skipIntroSeconds: Double? = nil,
+        podcastPlaybackRate: Double? = nil,
         extraFeedCount: Int = 0,
         artworkVariant: String? = nil,
         preferredContentSizeCategoryName: String? = nil
@@ -7740,6 +7802,9 @@ final class OpenCastUITests: XCTestCase {
         }
         if let skipIntroSeconds {
             app.launchEnvironment["OPENCAST_SEED_SKIP_INTRO_SECONDS"] = String(skipIntroSeconds)
+        }
+        if let podcastPlaybackRate {
+            app.launchEnvironment["OPENCAST_SEED_PODCAST_PLAYBACK_RATE"] = String(podcastPlaybackRate)
         }
         if extraFeedCount > 0 {
             app.launchEnvironment["OPENCAST_SEED_EXTRA_FEED_COUNT"] = String(extraFeedCount)
@@ -8426,11 +8491,11 @@ final class OpenCastUITests: XCTestCase {
         let actionsButton = app.buttons["Podcast Actions"]
         assertHittable(actionsButton, named: "podcast actions menu")
         actionsButton.tap()
-        let playbackSettings = app.buttons["Skip Intro & Outro…"]
-        assertHittable(playbackSettings, named: "Skip Intro & Outro menu action")
+        let playbackSettings = app.buttons["Playback Settings…"]
+        assertHittable(playbackSettings, named: "Playback Settings menu action")
         playbackSettings.tap()
         assertExists(
-            app.navigationBars["Skip Intro & Outro"],
+            app.navigationBars["Playback Settings"],
             named: "podcast playback settings sheet"
         )
     }

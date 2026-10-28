@@ -603,22 +603,37 @@ final class LibraryStore {
         ).sanitized
     }
 
+    /// The show's own speed, or nil when it follows the global speed.
+    func podcastPlaybackRateOverride(forPodcastID podcastID: String) -> Float? {
+        subscriptions.first { $0.feedURL == podcastID }
+            .flatMap { PodcastPlaybackRateOverride.resolved($0.playbackRate) }
+    }
+
+    /// Skips and speed in one synced save. A nil `rateOverride` returns the
+    /// show to the global speed.
     @discardableResult
-    func setPodcastPlaybackSkipSettings(
-        _ settings: PodcastPlaybackSkipSettings,
+    func setPodcastPlaybackSettings(
+        _ skipSettings: PodcastPlaybackSkipSettings,
+        rateOverride: Float?,
         feedURL: String,
         modelContext: ModelContext
     ) -> Bool {
-        guard settings.isValid else {
+        guard skipSettings.isValid else {
             lastErrorMessage = "Intro and outro skips must be finite, nonnegative durations."
+            return false
+        }
+        guard rateOverride.map(PodcastPlaybackRateOverride.isValid) ?? true else {
+            lastErrorMessage = Self.invalidPlaybackRateMessage
             return false
         }
         guard let subscription = subscriptions.first(where: { $0.feedURL == feedURL }) else {
             lastErrorMessage = "Unable to find this podcast subscription."
             return false
         }
-        guard subscription.skipIntroSeconds != settings.skipIntroSeconds
-                || subscription.skipOutroSeconds != settings.skipOutroSeconds
+        let playbackRate = PodcastPlaybackRateOverride.stored(rateOverride)
+        guard subscription.skipIntroSeconds != skipSettings.skipIntroSeconds
+                || subscription.skipOutroSeconds != skipSettings.skipOutroSeconds
+                || subscription.playbackRate != playbackRate
         else {
             lastErrorMessage = nil
             return true
@@ -626,8 +641,10 @@ final class LibraryStore {
 
         let previousSkipIntroSeconds = subscription.skipIntroSeconds
         let previousSkipOutroSeconds = subscription.skipOutroSeconds
-        subscription.skipIntroSeconds = settings.skipIntroSeconds
-        subscription.skipOutroSeconds = settings.skipOutroSeconds
+        let previousPlaybackRate = subscription.playbackRate
+        subscription.skipIntroSeconds = skipSettings.skipIntroSeconds
+        subscription.skipOutroSeconds = skipSettings.skipOutroSeconds
+        subscription.playbackRate = playbackRate
 
         do {
             try syncedStoreSelfSaveLedger.save(modelContext)
@@ -636,11 +653,51 @@ final class LibraryStore {
         } catch {
             subscription.skipIntroSeconds = previousSkipIntroSeconds
             subscription.skipOutroSeconds = previousSkipOutroSeconds
+            subscription.playbackRate = previousPlaybackRate
             modelContext.rollback()
-            lastErrorMessage = "Unable to update intro and outro skips: \(error.localizedDescription)"
+            lastErrorMessage = "Unable to update playback settings: \(error.localizedDescription)"
             return false
         }
     }
+
+    /// The speed alone: a rate sets the show's own speed, nil returns the
+    /// show to the global speed.
+    @discardableResult
+    func setPodcastPlaybackRateOverride(
+        _ rate: Float?,
+        feedURL: String,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard rate.map(PodcastPlaybackRateOverride.isValid) ?? true else {
+            lastErrorMessage = Self.invalidPlaybackRateMessage
+            return false
+        }
+        guard let subscription = subscriptions.first(where: { $0.feedURL == feedURL }) else {
+            lastErrorMessage = "Unable to find this podcast subscription."
+            return false
+        }
+        let playbackRate = PodcastPlaybackRateOverride.stored(rate)
+        guard subscription.playbackRate != playbackRate else {
+            lastErrorMessage = nil
+            return true
+        }
+
+        let previousPlaybackRate = subscription.playbackRate
+        subscription.playbackRate = playbackRate
+
+        do {
+            try syncedStoreSelfSaveLedger.save(modelContext)
+            lastErrorMessage = nil
+            return true
+        } catch {
+            subscription.playbackRate = previousPlaybackRate
+            modelContext.rollback()
+            lastErrorMessage = "Unable to update this show's speed: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private static let invalidPlaybackRateMessage = "Speed must be between 0.5x and 3x."
 
     @discardableResult
     func setAdAutoDetectEnabled(
@@ -1426,7 +1483,8 @@ final class LibraryStore {
                   lhsRecord.isAdAutoDetectEnabled == rhsRecord.isAdAutoDetectEnabled,
                   lhsRecord.isTranscriptAnalysisEnabled == rhsRecord.isTranscriptAnalysisEnabled,
                   lhsRecord.skipIntroSeconds == rhsRecord.skipIntroSeconds,
-                  lhsRecord.skipOutroSeconds == rhsRecord.skipOutroSeconds
+                  lhsRecord.skipOutroSeconds == rhsRecord.skipOutroSeconds,
+                  lhsRecord.playbackRate == rhsRecord.playbackRate
             else {
                 return false
             }

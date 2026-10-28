@@ -1,3 +1,4 @@
+import OpenCastPlayback
 import SwiftData
 import SwiftUI
 
@@ -8,6 +9,8 @@ struct PodcastPlaybackSettingsView: View {
 
     let feedURL: String
 
+    @State private var isCustomSpeedOn = false
+    @State private var customSpeed: Float = 1
     @State private var introText = "0:00"
     @State private var outroText = "0:00"
     @State private var errorMessage: String?
@@ -15,6 +18,29 @@ struct PodcastPlaybackSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("Custom Speed", isOn: $isCustomSpeedOn)
+                        .accessibilityIdentifier("podcast-playback-settings-custom-speed-toggle")
+
+                    if isCustomSpeedOn {
+                        Picker("Speed", selection: $customSpeed) {
+                            ForEach(PlaybackRateSteps.steps, id: \.self) { speed in
+                                Text(speed.formattedSpeed)
+                                    .tag(speed)
+                            }
+                        }
+                        .accessibilityIdentifier("podcast-playback-settings-speed-picker")
+                    }
+                } header: {
+                    Text("Speed")
+                } footer: {
+                    Text(
+                        isCustomSpeedOn
+                            ? "Episodes of this show play at this speed. Changing the speed in Now Playing while this show is playing updates this show only."
+                            : "Episodes of this show play at your global speed."
+                    )
+                }
+
                 Section {
                     PodcastPlaybackSkipRow(
                         title: "Skip Intro",
@@ -31,21 +57,19 @@ struct PodcastPlaybackSettingsView: View {
                         onDecrease: decreaseOutro,
                         onIncrease: increaseOutro
                     )
-                } footer: {
-                    Text("Enter m:ss or h:mm:ss. Changes apply the next time an episode loads or replays.")
-                }
 
-                if let errorMessage {
-                    Section {
+                    // Beside the fields it is about; in a section of its own
+                    // it would sit below the medium detent's edge.
+                    if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                             .font(.footnote)
                             .foregroundStyle(.orange)
                             .accessibilityIdentifier("Podcast Playback Settings Error")
                     }
-                }
 
-                Section {
                     Button("Reset Both", systemImage: "arrow.counterclockwise", role: .destructive, action: resetBoth)
+                } footer: {
+                    Text("Enter m:ss or h:mm:ss. Changes apply the next time an episode loads or replays.")
                 }
             }
             .onChange(of: introText) { _, _ in
@@ -54,7 +78,10 @@ struct PodcastPlaybackSettingsView: View {
             .onChange(of: outroText) { _, _ in
                 errorMessage = nil
             }
-            .navigationTitle("Skip Intro & Outro")
+            .onChange(of: isCustomSpeedOn) { _, isOn in
+                seedCustomSpeedFromGlobal(isOn: isOn)
+            }
+            .navigationTitle("Playback Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -69,9 +96,23 @@ struct PodcastPlaybackSettingsView: View {
     }
 
     private func loadSettings() {
+        let rateOverride = appModel.library.podcastPlaybackRateOverride(forPodcastID: feedURL)
+        isCustomSpeedOn = rateOverride != nil
+        customSpeed = PodcastPlaybackRateOverride.nearestStep(
+            to: rateOverride ?? appModel.playbackSettings.globalPlaybackRate
+        )
         let settings = appModel.library.podcastPlaybackSkipSettings(forPodcastID: feedURL)
         introText = PodcastPlaybackDurationText.format(settings.skipIntroSeconds)
         outroText = PodcastPlaybackDurationText.format(settings.skipOutroSeconds)
+    }
+
+    /// A show with no saved speed starts from the global speed as it is
+    /// now, which may have changed since the sheet opened.
+    private func seedCustomSpeedFromGlobal(isOn: Bool) {
+        guard isOn, appModel.library.podcastPlaybackRateOverride(forPodcastID: feedURL) == nil else {
+            return
+        }
+        customSpeed = PodcastPlaybackRateOverride.nearestStep(to: appModel.playbackSettings.globalPlaybackRate)
     }
 
     private func decreaseIntro() {
@@ -113,17 +154,18 @@ struct PodcastPlaybackSettingsView: View {
             return
         }
 
-        let didSave = appModel.library.setPodcastPlaybackSkipSettings(
+        let didSave = appModel.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(
                 skipIntroSeconds: skipIntroSeconds,
                 skipOutroSeconds: skipOutroSeconds
             ),
+            rateOverride: isCustomSpeedOn ? customSpeed : nil,
             feedURL: feedURL,
             modelContext: modelContext
         )
         guard didSave else {
             errorMessage = appModel.library.lastErrorMessage
-                ?? "Unable to save intro and outro skips."
+                ?? "Unable to save playback settings."
             return
         }
         dismiss()

@@ -57,7 +57,7 @@ struct PodcastActionsMenu: View {
             }
 
             Section {
-                Button("Skip Intro & Outro…", systemImage: "scissors", action: onPlaybackSettings)
+                Button("Playback Settings…", systemImage: "slider.horizontal.3", action: onPlaybackSettings)
 
                 Button("Download Settings…", systemImage: "arrow.down.circle", action: onDownloadSettings)
 

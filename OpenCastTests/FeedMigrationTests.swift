@@ -109,6 +109,64 @@ struct FeedMigrationTests {
         ))
     }
 
+    @Test("A migration carries the show's own speed to the new feed URL")
+    func migrationCarriesPlaybackRate() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let newSnapshot = makeSnapshot(feedURL: Self.newFeedURL, title: "Moving Show")
+        let service = OutcomeStubFeedService(outcomes: [
+            Self.newFeedURL: [FeedFetchOutcome(snapshot: newSnapshot)]
+        ])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        context.insert(SubscriptionRecord(feedURL: Self.oldFeedURL, title: "Moving Show", playbackRate: 1.5))
+        try context.save()
+        await store.load(modelContext: context)
+
+        try await store.migrateSubscription(
+            from: Self.oldFeedURL,
+            toFeedURL: try #require(URL(string: Self.newFeedURL)),
+            modelContext: context
+        )
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.map(\.feedURL) == [Self.newFeedURL])
+        #expect(subscriptions.first?.playbackRate == 1.5)
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: Self.newFeedURL) == 1.5)
+    }
+
+    @Test(
+        "A migration collision keeps the new record's own speed, else takes the old one",
+        arguments: [
+            (oldRate: 1.5, newRate: 2.0, expectedRate: 2.0),
+            (oldRate: 1.5, newRate: 0.0, expectedRate: 1.5),
+            (oldRate: 0.0, newRate: 1.25, expectedRate: 1.25)
+        ]
+    )
+    func migrationCollisionMergesPlaybackRate(oldRate: Double, newRate: Double, expectedRate: Double) async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let newSnapshot = makeSnapshot(feedURL: Self.newFeedURL, title: "Moving Show")
+        let service = OutcomeStubFeedService(outcomes: [
+            Self.newFeedURL: [FeedFetchOutcome(snapshot: newSnapshot)]
+        ])
+        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        context.insert(SubscriptionRecord(feedURL: Self.oldFeedURL, title: "Moving Show", playbackRate: oldRate))
+        context.insert(SubscriptionRecord(feedURL: Self.newFeedURL, title: "Moving Show", playbackRate: newRate))
+        try context.save()
+        await store.load(modelContext: context)
+
+        try await store.migrateSubscription(
+            from: Self.oldFeedURL,
+            toFeedURL: try #require(URL(string: Self.newFeedURL)),
+            modelContext: context
+        )
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.map(\.feedURL) == [Self.newFeedURL])
+        #expect(subscriptions.first?.playbackRate == expectedRate)
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: Self.newFeedURL) == Float(expectedRate))
+    }
+
     @Test("Persistent redirect divergence suggests but never auto-migrates")
     func redirectDivergenceSuggestsWithoutMigrating() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

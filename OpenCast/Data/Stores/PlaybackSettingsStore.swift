@@ -28,15 +28,13 @@ final class PlaybackSettingsStore {
     /// sorts them.
     private(set) var sleepTimerPresets = SleepTimerPresetDuration.defaults
     private(set) var lastErrorMessage: String?
-    @ObservationIgnored private let playbackRatePersistenceOverride: ((Float, ModelContext) throws -> Void)?
+    /// The stored global speed. The controller plays at a show's own speed
+    /// instead while one applies, so this can differ from `playback.rate`.
+    private(set) var globalPlaybackRate: Float = 1
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
     /// `save` is the test seam for preference saves.
-    init(
-        playbackRatePersistenceOverride: ((Float, ModelContext) throws -> Void)? = nil,
-        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
-    ) {
-        self.playbackRatePersistenceOverride = playbackRatePersistenceOverride
+    init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.save = save
     }
 
@@ -44,9 +42,12 @@ final class PlaybackSettingsStore {
         voiceBoostMode == .perEpisode && currentEpisodeID != nil
     }
 
+    /// `rateOverride` is the loaded show's own speed; nil plays the global
+    /// speed.
     func load(
         episodeID: String? = nil,
         podcastID: String? = nil,
+        rateOverride: Float? = nil,
         modelContext: ModelContext,
         playback: any PlaybackSettingsControlling
     ) {
@@ -83,7 +84,8 @@ final class PlaybackSettingsStore {
                 episodeID: episodeID,
                 modelContext: modelContext
             )
-            playback.setRate(playbackRate)
+            globalPlaybackRate = playbackRate
+            playback.setRate(rateOverride ?? playbackRate)
             lastErrorMessage = nil
         } catch {
             voiceBoostMode = .defaultMode
@@ -94,6 +96,7 @@ final class PlaybackSettingsStore {
             isRequeueInterruptedEpisodeEnabled = false
             sleepTimerPresets = SleepTimerPresetDuration.defaults
             isVoiceBoostEnabled = true
+            globalPlaybackRate = 1
             playback.setRate(1)
             lastErrorMessage = "Unable to load playback settings: \(error.localizedDescription)"
         }
@@ -101,36 +104,47 @@ final class PlaybackSettingsStore {
         apply(to: playback)
     }
 
+    /// Plays at `rate` and saves it: through `persist` when given (a show's
+    /// own speed), else as the global speed. The save follows the stored
+    /// target, not the controller: the speed already playing can differ from
+    /// the one stored for its scope.
     @discardableResult
     func setPlaybackRate(
         _ rate: Float,
         modelContext: ModelContext,
-        playback: any PlaybackSettingsControlling
+        playback: any PlaybackSettingsControlling,
+        persist: ((Float, ModelContext) throws -> Void)? = nil
     ) -> Bool {
         let rate = PlaybackRateSteps.clamped(rate)
-        guard playback.rate != rate else {
+        let previousRate = playback.rate
+        let savesGlobalRate = persist == nil && globalPlaybackRate != rate
+        guard persist != nil || savesGlobalRate || previousRate != rate else {
             return true
         }
 
-        let previousRate = playback.rate
-        playback.setRate(rate)
+        if previousRate != rate {
+            playback.setRate(rate)
+        }
 
         do {
-            if let playbackRatePersistenceOverride {
-                try playbackRatePersistenceOverride(rate, modelContext)
-            } else {
-                try LocalPreferenceRecord.upsert(
+            if let persist {
+                try persist(rate, modelContext)
+            } else if savesGlobalRate {
+                try persistPreference(
+                    String(rate),
                     key: Self.playbackRatePreferenceKey,
-                    value: String(rate),
                     modelContext: modelContext
                 )
-                try save(modelContext)
+                globalPlaybackRate = rate
             }
             lastErrorMessage = nil
             return true
         } catch {
-            playback.setRate(previousRate)
-            lastErrorMessage = "Unable to update playback speed: \(error.localizedDescription)"
+            if playback.rate != previousRate {
+                playback.setRate(previousRate)
+            }
+            lastErrorMessage = (error as? PodcastPlaybackRateSaveError)?.message
+                ?? "Unable to update playback speed: \(error.localizedDescription)"
             return false
         }
     }

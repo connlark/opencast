@@ -99,6 +99,11 @@ extension EpisodeDiagnosticsModel {
             let skipSettings = appModel.library.podcastPlaybackSkipSettings(forPodcastID: episode.podcastID)
             rows.append(("Skip Intro (Show)", EpisodeDiagnosticsFormatting.seconds(skipSettings.skipIntroSeconds)))
             rows.append(("Skip Outro (Show)", EpisodeDiagnosticsFormatting.seconds(skipSettings.skipOutroSeconds)))
+            rows.append((
+                "Speed (Show)",
+                appModel.library.podcastPlaybackRateOverride(forPodcastID: episode.podcastID)?.formattedSpeed
+                    ?? "Follows global"
+            ))
         }
         return EpisodeDiagnosticsSection(rows: rows)
     }

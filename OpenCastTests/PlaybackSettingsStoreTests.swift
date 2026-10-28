@@ -51,21 +51,258 @@ struct PlaybackSettingsStoreTests {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let playback = PlaybackVoiceBoostControllerSpy()
-        let store = PlaybackSettingsStore { _, _ in
-            throw PlaybackSettingsSaveFailure()
-        }
+        let store = PlaybackSettingsStore()
         store.load(modelContext: context, playback: playback)
 
         let didPersist = store.setPlaybackRate(
             1.5,
             modelContext: context,
-            playback: playback
+            playback: playback,
+            persist: { _, _ in throw PlaybackSettingsSaveFailure() }
         )
 
         #expect(!didPersist)
         #expect(playback.rate == 1)
         #expect(playback.appliedRates == [1, 1.5, 1])
         #expect(store.lastErrorMessage?.contains("Unable to update playback speed") == true)
+        #expect(store.lastErrorMessage?.contains("Simulated preference save failure") == true)
+        #expect(store.globalPlaybackRate == 1)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
+            modelContext: context
+        ) == nil)
+    }
+
+    @Test("A global playback-speed save failure keeps the global speed")
+    func globalPlaybackSpeedFailureKeepsTheGlobalSpeed() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore(save: { _ in
+            throw PlaybackSettingsSaveFailure()
+        })
+        store.load(modelContext: context, playback: playback)
+
+        #expect(!store.setPlaybackRate(1.5, modelContext: context, playback: playback))
+
+        #expect(playback.rate == 1)
+        #expect(store.globalPlaybackRate == 1)
+        #expect(store.lastErrorMessage?.contains("Unable to update playback speed") == true)
+    }
+
+    @Test(
+        "A global playback-speed save failure restores the stored speed without discarding other edits",
+        arguments: [nil, "1.25"] as [String?]
+    )
+    func globalPlaybackSpeedFailureRestoresTheStoredSpeed(storedValue: String?) throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let previousUpdatedAt = Date(timeIntervalSince1970: 1_000)
+        if let storedValue {
+            context.insert(LocalPreferenceRecord(
+                key: PlaybackSettingsStore.playbackRatePreferenceKey,
+                value: storedValue,
+                updatedAt: previousUpdatedAt
+            ))
+            try context.save()
+        }
+        let unrelatedPreference = LocalPreferenceRecord(key: "unrelated.pending.preference", value: "keep")
+        context.insert(unrelatedPreference)
+        var failsSaves = true
+        let store = PlaybackSettingsStore(save: { context in
+            if failsSaves {
+                throw PlaybackSettingsSaveFailure()
+            }
+            try context.save()
+        })
+        let playback = PlaybackVoiceBoostControllerSpy()
+        store.load(modelContext: context, playback: playback)
+        let previousRate = store.globalPlaybackRate
+
+        #expect(!store.setPlaybackRate(2, modelContext: context, playback: playback))
+
+        #expect(store.globalPlaybackRate == previousRate)
+        #expect(playback.rate == previousRate)
+        let restoredRecord = try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
+            modelContext: context
+        )
+        #expect(restoredRecord?.value == storedValue)
+        #expect(restoredRecord?.updatedAt == (storedValue == nil ? nil : previousUpdatedAt))
+        let reloadedPlayback = PlaybackVoiceBoostControllerSpy()
+        PlaybackSettingsStore().load(modelContext: context, playback: reloadedPlayback)
+        #expect(reloadedPlayback.rate == previousRate)
+
+        failsSaves = false
+        #expect(store.setTapToPlayEnabled(false, modelContext: context))
+
+        let freshContext = ModelContext(container)
+        let freshPlayback = PlaybackVoiceBoostControllerSpy()
+        PlaybackSettingsStore().load(modelContext: freshContext, playback: freshPlayback)
+        #expect(freshPlayback.rate == previousRate)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
+            modelContext: freshContext
+        )?.value == storedValue)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: unrelatedPreference.key,
+            modelContext: freshContext
+        )?.value == "keep")
+    }
+
+    @Test("A show's speed applies on load and leaves the global speed and its preference alone")
+    func loadAppliesTheShowSpeedWithoutTouchingTheGlobalSpeed() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        store.load(modelContext: context, playback: playback)
+        #expect(store.setPlaybackRate(1.25, modelContext: context, playback: playback))
+        #expect(store.globalPlaybackRate == 1.25)
+
+        store.load(
+            episodeID: "episode-1",
+            podcastID: "podcast-1",
+            rateOverride: 1.75,
+            modelContext: context,
+            playback: playback
+        )
+
+        #expect(playback.rate == 1.75)
+        #expect(store.globalPlaybackRate == 1.25)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
+            modelContext: context
+        )?.value == "1.25")
+    }
+
+    @Test("A load without a show speed restores the global speed")
+    func loadWithoutAShowSpeedRestoresTheGlobalSpeed() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        store.load(modelContext: context, playback: playback)
+        #expect(store.setPlaybackRate(1.25, modelContext: context, playback: playback))
+
+        store.load(episodeID: "episode-1", podcastID: "podcast-1", rateOverride: 1.75, modelContext: context, playback: playback)
+        store.load(episodeID: "episode-2", podcastID: "podcast-2", modelContext: context, playback: playback)
+
+        #expect(playback.rate == 1.25)
+        #expect(playback.appliedRates == [1, 1.25, 1.75, 1.25])
+        #expect(store.globalPlaybackRate == 1.25)
+    }
+
+    @Test("A show-scope speed change persists through its closure and never writes the global preference")
+    func showScopeSpeedChangePersistsThroughTheClosure() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        store.load(episodeID: "episode-1", podcastID: "podcast-1", rateOverride: 1.5, modelContext: context, playback: playback)
+        var persistedRates: [Float] = []
+
+        let didPersist = store.setPlaybackRate(
+            5,
+            modelContext: context,
+            playback: playback,
+            persist: { rate, _ in persistedRates.append(rate) }
+        )
+
+        #expect(didPersist)
+        #expect(persistedRates == [3])
+        #expect(playback.rate == 3)
+        #expect(store.globalPlaybackRate == 1)
+        #expect(store.lastErrorMessage == nil)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
+            modelContext: context
+        ) == nil)
+    }
+
+    @Test("A show-scope save failure that carries its own message surfaces it unchanged")
+    func showScopeSaveFailureMessageSurfacesUnchanged() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        store.load(episodeID: "episode-1", podcastID: "podcast-1", rateOverride: 1.5, modelContext: context, playback: playback)
+
+        let didPersist = store.setPlaybackRate(
+            2,
+            modelContext: context,
+            playback: playback,
+            persist: { _, _ in
+                throw PodcastPlaybackRateSaveError(message: "Unable to update this show's speed: Disk full")
+            }
+        )
+
+        #expect(!didPersist)
+        #expect(playback.rate == 1.5)
+        #expect(store.lastErrorMessage == "Unable to update this show's speed: Disk full")
+    }
+
+    @Test("A show-scope speed already playing still persists through its closure")
+    func showScopeSpeedAlreadyPlayingStillPersists() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        store.load(episodeID: "episode-1", podcastID: "podcast-1", rateOverride: 1.5, modelContext: context, playback: playback)
+        var persistedRates: [Float] = []
+
+        let didPersist = store.setPlaybackRate(
+            1.5,
+            modelContext: context,
+            playback: playback,
+            persist: { rate, _ in persistedRates.append(rate) }
+        )
+
+        #expect(didPersist)
+        #expect(persistedRates == [1.5])
+        #expect(playback.rate == 1.5)
+        #expect(playback.appliedRates == [1.5])
+        #expect(store.globalPlaybackRate == 1)
+    }
+
+    @Test("A global speed already playing is saved when the stored global speed differs")
+    func globalSpeedAlreadyPlayingIsSavedWhenTheStoredSpeedDiffers() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        store.load(episodeID: "episode-1", podcastID: "podcast-1", rateOverride: 1.5, modelContext: context, playback: playback)
+
+        #expect(store.setPlaybackRate(1.5, modelContext: context, playback: playback))
+
+        #expect(playback.appliedRates == [1.5])
+        #expect(store.globalPlaybackRate == 1.5)
+        #expect(store.lastErrorMessage == nil)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
+            modelContext: ModelContext(container)
+        )?.value == "1.5")
+    }
+
+    @Test("A speed that is both playing and stored as the global speed writes nothing")
+    func unchangedGlobalSpeedWritesNothing() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        var saveCount = 0
+        let store = PlaybackSettingsStore(save: { context in
+            saveCount += 1
+            try context.save()
+        })
+        store.load(modelContext: context, playback: playback)
+        #expect(store.setPlaybackRate(1.25, modelContext: context, playback: playback))
+        #expect(saveCount == 1)
+
+        #expect(store.setPlaybackRate(1.25, modelContext: context, playback: playback))
+
+        #expect(saveCount == 1)
+        #expect(playback.appliedRates == [1, 1.25])
+        #expect(store.globalPlaybackRate == 1.25)
     }
 
     @Test("Global Voice Boost off persists and overrides the current episode")

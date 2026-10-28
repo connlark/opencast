@@ -104,6 +104,9 @@ enum OpenCastUITestSeedData {
         let overriddenSkipIntroSeconds = Double(
             ProcessInfo.processInfo.environment["OPENCAST_SEED_SKIP_INTRO_SECONDS"] ?? ""
         ).flatMap { $0 > 0 ? $0 : nil }
+        let overriddenPlaybackRate = Double(
+            ProcessInfo.processInfo.environment["OPENCAST_SEED_PODCAST_PLAYBACK_RATE"] ?? ""
+        ).flatMap { $0 > 0 ? $0 : nil }
         let episodeDuration = Double(overriddenAudioDuration ?? 180)
         let audioDuration = overriddenAudioDuration ?? 300
         let shouldSeedUpNextQueue = ProcessInfo.processInfo.environment[
@@ -149,7 +152,8 @@ enum OpenCastUITestSeedData {
                     ? seedNow.addingTimeInterval(-20 * secondsPerDay)
                     : seedNow,
                 lastRefreshAt: refreshedAt,
-                skipIntroSeconds: overriddenSkipIntroSeconds ?? 0
+                skipIntroSeconds: overriddenSkipIntroSeconds ?? 0,
+                playbackRate: overriddenPlaybackRate ?? 0
             )
         )
         let seededEpisode = Episode(

@@ -9,7 +9,7 @@
 # Balanced by measured per-test wall-clock (log 'passed (N seconds)' lines), NOT the
 # .xcresult duration field — that reports 0.0s for screenshot-matrix tests. Regenerate
 # with scripts/gen-ui-test-shards.py <run-dir> after a fresh run.
-# Current assignments: shard1 74 tests | shard2 72 tests | serial 6 tests | exclude 15 tests
+# Current assignments: shard1 74 tests | shard2 73 tests | serial 6 tests | exclude 15 tests
 # Timing estimates are omitted until these scenarios are remeasured.
 
 # --- shard1 ---
@@ -129,6 +129,7 @@ shard2 OpenCastUITests/OpenCastUITests/testSeededOutdatedPolicyAnalysisSkipsNoth
 shard2 OpenCastUITests/OpenCastUITests/testSeededPlayEpisodeButtonWhileListeningExpandsNowPlaying
 shard2 OpenCastUITests/OpenCastUITests/testSeededPodcastEpisodeContextMenuPeekOpensEpisodeDetail
 shard2 OpenCastUITests/OpenCastUITests/testSeededPodcastPlaybackSkipSettingsValidateSaveAndReset
+shard2 OpenCastUITests/OpenCastUITests/testSeededPodcastCustomSpeedAppliesAndTogglesFromNowPlaying
 shard2 OpenCastUITests/OpenCastUITests/testSeededPodcastPullDownOpensSearch
 shard2 OpenCastUITests/OpenCastUITests/testSeededPodcastSearchKeepsResultsFrontAndCenter
 shard2 OpenCastUITests/OpenCastUITests/testSeededSoundLabStaysOpenWhenQueueAdvances

@@ -88,6 +88,8 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             appModel.transcriptIntelligence.refreshAvailability()
             appModel.analysisUsage.refreshCurrentMonth()
             startForegroundSyncedDataRefresh()
+            // Ahead of the maintenance, which waits while Now Playing is open.
+            appModel.refreshCurrentPlaybackSettingsFromStore(modelContext: modelContext)
             runOrDeferForegroundMaintenance()
             startConnectivityRecovery()
         @unknown default:
@@ -166,7 +168,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         hasPendingConnectivityRefresh = false
         foregroundMaintenanceTask?.cancel()
         appModel.library.refreshProgressRecords(modelContext: modelContext)
-        appModel.refreshCurrentVoiceBoostSetting(modelContext: modelContext)
+        appModel.refreshCurrentPlaybackSettings(modelContext: modelContext)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         appModel.trimDownloadsToKeepLimits(modelContext: modelContext)
         foregroundMaintenanceTask = Task {

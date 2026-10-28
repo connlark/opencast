@@ -28,6 +28,7 @@ struct OpenCastModelTests {
         #expect(fetched.first?.isAdAutoDetectEnabled == false)
         #expect(fetched.first?.skipIntroSeconds == 0)
         #expect(fetched.first?.skipOutroSeconds == 0)
+        #expect(fetched.first?.playbackRate == 0)
     }
 
     @Test("Synced records use logical keys instead of unique attributes")
@@ -606,8 +607,8 @@ struct OpenCastModelTests {
         #expect(!store.isAdAutoDetectEnabled(forPodcastID: "https://example.com/unknown.xml"))
     }
 
-    @Test("Per-show playback skip setter validates and persists both values atomically")
-    func podcastPlaybackSkipSetterValidatesAndPersists() async throws {
+    @Test("Per-show playback settings setter validates and persists skips and speed in one save")
+    func podcastPlaybackSettingsSetterValidatesAndPersists() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let feedURL = "https://example.com/playback-skips.xml"
@@ -618,32 +619,71 @@ struct OpenCastModelTests {
         await store.load(modelContext: context)
 
         #expect(store.podcastPlaybackSkipSettings(forPodcastID: feedURL) == .disabled)
-        #expect(store.setPodcastPlaybackSkipSettings(
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == nil)
+        #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
+            rateOverride: 1.5,
             feedURL: feedURL,
             modelContext: context
         ))
         #expect(store.syncedStoreSelfSaveCount == 1)
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.5)
 
         let freshContext = ModelContext(container)
         let persisted = try #require(freshContext.fetch(FetchDescriptor<SubscriptionRecord>()).first)
         #expect(persisted.skipIntroSeconds == 65)
         #expect(persisted.skipOutroSeconds == 40)
+        #expect(persisted.playbackRate == 1.5)
 
-        #expect(!store.setPodcastPlaybackSkipSettings(
-            PodcastPlaybackSkipSettings(skipIntroSeconds: .infinity, skipOutroSeconds: 5),
+        // The same three values again are a no-op: no save, no credit.
+        #expect(store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
+            rateOverride: 1.5,
             feedURL: feedURL,
             modelContext: context
         ))
+        #expect(store.syncedStoreSelfSaveCount == 1)
+        #expect(!context.hasChanges)
+
+        #expect(!store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: .infinity, skipOutroSeconds: 5),
+            rateOverride: 2,
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.lastErrorMessage == "Intro and outro skips must be finite, nonnegative durations.")
+        #expect(!store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 10, skipOutroSeconds: 5),
+            rateOverride: 3.5,
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.lastErrorMessage == "Speed must be between 0.5x and 3x.")
         #expect(store.podcastPlaybackSkipSettings(forPodcastID: feedURL) == PodcastPlaybackSkipSettings(
             skipIntroSeconds: 65,
             skipOutroSeconds: 40
         ))
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.5)
         #expect(store.syncedStoreSelfSaveCount == 1)
+
+        // Only the speed changes: still one save carrying all three fields.
+        #expect(store.setPodcastPlaybackSettings(
+            PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
+            rateOverride: nil,
+            feedURL: feedURL,
+            modelContext: context
+        ))
+        #expect(store.syncedStoreSelfSaveCount == 2)
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == nil)
+        let clearedContext = ModelContext(container)
+        let cleared = try #require(clearedContext.fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(cleared.playbackRate == 0)
+        #expect(cleared.skipIntroSeconds == 65)
+        #expect(cleared.skipOutroSeconds == 40)
     }
 
-    @Test("Per-show playback skip setter rolls both values back when its save fails")
-    func podcastPlaybackSkipSetterRollsBackFailedSave() async throws {
+    @Test("Per-show playback settings setter rolls all three values back when its save fails")
+    func podcastPlaybackSettingsSetterRollsBackFailedSave() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let feedURL = "https://example.com/playback-skips-rollback.xml"
@@ -652,7 +692,8 @@ struct OpenCastModelTests {
                 feedURL: feedURL,
                 title: "Rollback Show",
                 skipIntroSeconds: 15,
-                skipOutroSeconds: 10
+                skipOutroSeconds: 10,
+                playbackRate: 1.25
             )
         )
         try context.save()
@@ -665,8 +706,9 @@ struct OpenCastModelTests {
         )
         await store.load(modelContext: context)
 
-        #expect(!store.setPodcastPlaybackSkipSettings(
+        #expect(!store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
+            rateOverride: 2,
             feedURL: feedURL,
             modelContext: context
         ))
@@ -674,12 +716,119 @@ struct OpenCastModelTests {
             skipIntroSeconds: 15,
             skipOutroSeconds: 10
         ))
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.25)
         #expect(store.syncedStoreSelfSaveCount == 0)
         #expect(store.lastErrorMessage?.contains("Simulated playback settings save failure") == true)
         let freshContext = ModelContext(container)
         let persisted = try #require(freshContext.fetch(FetchDescriptor<SubscriptionRecord>()).first)
         #expect(persisted.skipIntroSeconds == 15)
         #expect(persisted.skipOutroSeconds == 10)
+        #expect(persisted.playbackRate == 1.25)
+    }
+
+    @Test("Per-show speed override sets, clears, and rejects speeds outside 0.5x to 3x")
+    func podcastPlaybackRateOverrideSetsClearsAndValidates() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/playback-rate.xml"
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Speed Show", skipIntroSeconds: 30))
+        try context.save()
+
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+
+        #expect(store.setPodcastPlaybackRateOverride(1.75, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.75)
+        #expect(store.syncedStoreSelfSaveCount == 1)
+        let persisted = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(persisted.playbackRate == 1.75)
+        #expect(persisted.skipIntroSeconds == 30)
+
+        #expect(store.setPodcastPlaybackRateOverride(1.75, feedURL: feedURL, modelContext: context))
+        #expect(store.syncedStoreSelfSaveCount == 1)
+
+        for invalidRate: Float in [0.25, 3.5, 0, -1, .nan, .infinity] {
+            #expect(!store.setPodcastPlaybackRateOverride(invalidRate, feedURL: feedURL, modelContext: context))
+            #expect(store.lastErrorMessage == "Speed must be between 0.5x and 3x.")
+        }
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.75)
+        #expect(store.syncedStoreSelfSaveCount == 1)
+
+        #expect(store.setPodcastPlaybackRateOverride(0.5, feedURL: feedURL, modelContext: context))
+        #expect(store.setPodcastPlaybackRateOverride(3, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 3)
+        #expect(store.syncedStoreSelfSaveCount == 3)
+
+        #expect(store.setPodcastPlaybackRateOverride(nil, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == nil)
+        #expect(store.lastErrorMessage == nil)
+        #expect(store.syncedStoreSelfSaveCount == 4)
+        let cleared = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(cleared.playbackRate == 0)
+        #expect(cleared.skipIntroSeconds == 30)
+
+        #expect(!store.setPodcastPlaybackRateOverride(
+            1.5,
+            feedURL: "https://example.com/not-subscribed.xml",
+            modelContext: context
+        ))
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: "https://example.com/not-subscribed.xml") == nil)
+    }
+
+    @Test("Per-show speed override rolls back when its save fails")
+    func podcastPlaybackRateOverrideRollsBackFailedSave() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/playback-rate-rollback.xml"
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Rollback Speed Show", playbackRate: 1.25))
+        try context.save()
+
+        let store = LibraryStore(
+            localCache: SQLiteLocalLibraryCacheStore.inMemory(),
+            savePlaybackSkipSettingsModelContext: { _ in
+                throw StubFeedError(message: "Simulated speed save failure")
+            }
+        )
+        await store.load(modelContext: context)
+
+        #expect(!store.setPodcastPlaybackRateOverride(2, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.25)
+        #expect(store.lastErrorMessage?.contains("Simulated speed save failure") == true)
+        #expect(!store.setPodcastPlaybackRateOverride(nil, feedURL: feedURL, modelContext: context))
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.25)
+        #expect(store.syncedStoreSelfSaveCount == 0)
+        let persisted = try #require(ModelContext(container).fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        #expect(persisted.playbackRate == 1.25)
+    }
+
+    @Test("Stored per-show speeds follow the global clamp and merge to the greatest valid speed")
+    func podcastPlaybackRateOverrideResolvesStoresAndMerges() {
+        #expect(PodcastPlaybackRateOverride.resolved(0) == nil)
+        #expect(PodcastPlaybackRateOverride.resolved(-1) == nil)
+        #expect(PodcastPlaybackRateOverride.resolved(.nan) == nil)
+        #expect(PodcastPlaybackRateOverride.resolved(.infinity) == nil)
+        #expect(PodcastPlaybackRateOverride.resolved(1.5) == 1.5)
+        // Off-step synced values are clamped like the global speed, never snapped.
+        #expect(PodcastPlaybackRateOverride.resolved(1.3) == 1.3)
+        #expect(PodcastPlaybackRateOverride.resolved(0.1) == 0.5)
+        #expect(PodcastPlaybackRateOverride.resolved(5) == 3)
+        #expect(PodcastPlaybackRateOverride.resolved(1e300) == 3)
+
+        #expect(PodcastPlaybackRateOverride.stored(nil) == 0)
+        #expect(PodcastPlaybackRateOverride.stored(1.25) == 1.25)
+        #expect(PodcastPlaybackRateOverride.stored(4) == 3)
+
+        #expect(PodcastPlaybackRateOverride.merged([0, 1.5, 2]) == 2)
+        #expect(PodcastPlaybackRateOverride.merged([2, 0, 1.5]) == 2)
+        #expect(PodcastPlaybackRateOverride.merged([0, .nan, -2, 1.25]) == 1.25)
+        #expect(PodcastPlaybackRateOverride.merged([0, 0]) == 0)
+        #expect(PodcastPlaybackRateOverride.merged([Double]()) == 0)
+
+        #expect(PodcastPlaybackRateOverride.nearestStep(to: 1.3) == 1.25)
+        #expect(PodcastPlaybackRateOverride.nearestStep(to: 1.45) == 1.5)
+        #expect(PodcastPlaybackRateOverride.nearestStep(to: 0.5) == 0.75)
+        #expect(PodcastPlaybackRateOverride.nearestStep(to: 3) == 2)
+        #expect(PodcastPlaybackRateOverride.nearestStep(to: 1.75) == 1.75)
     }
 
     @Test("Playback skip merge keeps greatest valid trims and avoids no-op writes")
@@ -724,6 +873,36 @@ struct OpenCastModelTests {
         #expect(context.hasChanges)
         #expect(record.skipIntroSeconds == 70)
         #expect(record.skipOutroSeconds == 40)
+    }
+
+    @Test("A migration speed merge keeps the record's own speed and writes only when it takes one")
+    func podcastPlaybackRateMigrationMergeIsChangeAware() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let customRecord = SubscriptionRecord(
+            feedURL: "https://example.com/merge-rate-custom.xml",
+            title: "Custom Speed Show",
+            playbackRate: 1.25
+        )
+        let globalRecord = SubscriptionRecord(
+            feedURL: "https://example.com/merge-rate-global.xml",
+            title: "Global Speed Show"
+        )
+        context.insert(customRecord)
+        context.insert(globalRecord)
+        try context.save()
+
+        #expect(!FeedWriteCoordinator.mergePodcastPlaybackRate(2, into: customRecord))
+        #expect(!FeedWriteCoordinator.mergePodcastPlaybackRate(0, into: customRecord))
+        #expect(!FeedWriteCoordinator.mergePodcastPlaybackRate(0, into: globalRecord))
+        #expect(!FeedWriteCoordinator.mergePodcastPlaybackRate(.nan, into: globalRecord))
+        #expect(!context.hasChanges)
+        #expect(customRecord.playbackRate == 1.25)
+        #expect(globalRecord.playbackRate == 0)
+
+        #expect(FeedWriteCoordinator.mergePodcastPlaybackRate(1.5, into: globalRecord))
+        #expect(context.hasChanges)
+        #expect(globalRecord.playbackRate == 1.5)
     }
 
     @Test("Resume progress transitions from in-progress to played")
@@ -2223,6 +2402,34 @@ struct OpenCastModelTests {
         ))
     }
 
+    @Test("Synced data reload publishes a remote per-show speed change")
+    func syncedDataReloadPublishesPlaybackRateChanges() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedURL = "https://example.com/remote-playback-rate.xml"
+        context.insert(SubscriptionRecord(feedURL: feedURL, title: "Remote Speed Show"))
+        try context.save()
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        await store.load(modelContext: context)
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == nil)
+
+        let subscription = try #require(context.fetch(FetchDescriptor<SubscriptionRecord>()).first)
+        context.delete(subscription)
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Remote Speed Show",
+                playbackRate: 1.75
+            )
+        )
+        try context.save()
+
+        let result = try store.reloadSyncedUserData(modelContext: context)
+
+        #expect(result.activeSubscriptionRecordsChanged)
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.75)
+    }
+
     @Test("Automatic foreground refresh skips fresh subscriptions")
     func automaticForegroundRefreshSkipsFreshSubscriptions() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -3034,6 +3241,58 @@ struct OpenCastModelTests {
         #expect(result.subscriptionGroupsMerged == 1)
         #expect(result.subscriptionRecordsDeleted == 1)
         #expect(store.subscriptions.map(\.feedURL) == ["https://example.com/feed.xml?a=1&b=2"])
+    }
+
+    @Test("Duplicate subscriptions merge to the greatest custom speed, legacy replacements included")
+    func duplicateSubscriptionsMergeGreatestPlaybackRate() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let identifiedFeedURL = "https://example.com/speed-twins.xml"
+        let legacyFeedURL = "https://example.com/speed-legacy-twins.xml"
+        let winnerUUID = "00000000-0000-0000-0000-000000000001"
+
+        // The deterministic winner (smallest UUID) has no speed of its own.
+        let identifiedTwins: [(dedupeUUID: String, playbackRate: Double)] = [
+            ("00000000-0000-0000-0000-000000000003", 1.5),
+            (winnerUUID, 0),
+            ("00000000-0000-0000-0000-000000000002", 2)
+        ]
+        for twin in identifiedTwins {
+            context.insert(
+                SubscriptionRecord(
+                    feedURL: identifiedFeedURL,
+                    title: "Speed Twins",
+                    playbackRate: twin.playbackRate,
+                    dedupeUUID: twin.dedupeUUID
+                )
+            )
+        }
+        for playbackRate in [0, 2, 1.5] {
+            context.insert(
+                SubscriptionRecord(
+                    feedURL: legacyFeedURL,
+                    title: "Legacy Speed Twins",
+                    playbackRate: playbackRate,
+                    dedupeUUID: ""
+                )
+            )
+        }
+        try context.save()
+
+        let result = try await store.repairSyncDuplicates(modelContext: context)
+        let records = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        let identified = records.filter { $0.feedURL == identifiedFeedURL }
+        let legacy = records.filter { $0.feedURL == legacyFeedURL }
+
+        #expect(identified.map(\.dedupeUUID) == [winnerUUID])
+        #expect(identified.first?.playbackRate == 2)
+        #expect(legacy.count == 1)
+        #expect(legacy.first?.dedupeUUID.isEmpty == false)
+        #expect(legacy.first?.playbackRate == 2)
+        #expect(result.subscriptionGroupsMerged == 2)
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: identifiedFeedURL) == 2)
+        #expect(store.podcastPlaybackRateOverride(forPodcastID: legacyFeedURL) == 2)
     }
 
     @Test("Archived duplicate loses to active duplicate")

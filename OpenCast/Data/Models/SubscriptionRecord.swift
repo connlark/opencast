@@ -19,6 +19,10 @@ final class SubscriptionRecord {
     var isTranscriptAnalysisEnabled: Bool = false
     var skipIntroSeconds: Double = 0
     var skipOutroSeconds: Double = 0
+    /// The show's own playback speed (CloudKit `CD_playbackRate`). 0 follows
+    /// the global speed; read it through `PodcastPlaybackRateOverride`, which
+    /// treats anything not finite and positive the same way.
+    var playbackRate: Double = 0
     /// Stable per-record identity so duplicate repair picks the same winner on
     /// every device (smallest UUID wins); peers that chose opposite winners
     /// used to cross-delete both copies. Records imported from builds that
@@ -38,6 +42,7 @@ final class SubscriptionRecord {
         isTranscriptAnalysisEnabled: Bool = false,
         skipIntroSeconds: Double = 0,
         skipOutroSeconds: Double = 0,
+        playbackRate: Double = 0,
         dedupeUUID: String = UUID().uuidString
     ) {
         self.feedURL = feedURL
@@ -52,6 +57,7 @@ final class SubscriptionRecord {
         self.isTranscriptAnalysisEnabled = isTranscriptAnalysisEnabled
         self.skipIntroSeconds = skipIntroSeconds
         self.skipOutroSeconds = skipOutroSeconds
+        self.playbackRate = playbackRate
         self.dedupeUUID = dedupeUUID
     }
 }
