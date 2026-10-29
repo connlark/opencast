@@ -55,7 +55,7 @@ final class HTTPFixtureServer: @unchecked Sendable {
         }
         listener.start(queue: queue)
 
-        guard readySemaphore.wait(timeout: .now() + 5) == .success,
+        guard readySemaphore.wait(timeout: .now() + 60) == .success,
               let port = listener.port?.rawValue,
               let baseURL = URL(string: "http://127.0.0.1:\(port)"),
               let url = URL(string: scenario.primaryPath, relativeTo: baseURL)?.absoluteURL

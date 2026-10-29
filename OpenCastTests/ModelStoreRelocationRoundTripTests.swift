@@ -10,7 +10,7 @@ struct ModelStoreRelocationRoundTripTests {
     private static let schema = Schema([ModelStoreRoundTripRecord.self, ModelStoreRoundTripPayloadRecord.self])
 
     @Test("Rows and an external-storage payload saved at the group URL read back through SwiftData at the app URL")
-    func rowsAndExternalPayloadSurviveTheMove() throws {
+    func rowsAndExternalPayloadSurviveTheMove() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "ModelStoreRelocationRoundTripTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -35,23 +35,32 @@ struct ModelStoreRelocationRoundTripTests {
             "the payload must sit in the group store's _EXTERNAL_DATA before the move"
         )
 
-        let result = ModelStoreRelocation.relocate(
-            ModelStoreLocation(
-                configurationName: Self.configurationName,
-                groupURL: groupURL,
-                appURL: appURL,
-                resolvedURL: groupURL
-            )
+        let location = ModelStoreLocation(
+            configurationName: Self.configurationName,
+            groupURL: groupURL,
+            appURL: appURL,
+            resolvedURL: groupURL
         )
+        // Core Data closes the released group store on its own queue, so a
+        // relocation right after the save can find it locked. It defers then
+        // and repeats on the next launch; here it repeats until the close ends.
+        var result = ModelStoreRelocation.relocate(location)
+        _ = await waitUntil {
+            guard case .deferred(.inaccessible(let reason)) = result.outcome,
+                  reason.contains("database is locked") else {
+                return true
+            }
+            result = ModelStoreRelocation.relocate(location)
+            return false
+        }
 
         try #require(result.outcome == .moved)
         #expect(result.resolvedURL == appURL)
         #expect(!FileManager.default.fileExists(atPath: groupURL.path(percentEncoded: false)))
         let context = ModelContext(try Self.container(at: result.resolvedURL))
-        let records = try context.fetch(
-            FetchDescriptor<ModelStoreRoundTripRecord>(sortBy: [SortDescriptor(\.dedupeUUID)])
-        )
-        #expect(records.map(\.dedupeUUID) == dedupeUUIDs)
+        // Sorted in Swift: a SwiftData String sort compares digit runs as numbers ("0FE7…" before "0387…").
+        let records = try context.fetch(FetchDescriptor<ModelStoreRoundTripRecord>())
+        #expect(records.map(\.dedupeUUID).sorted() == dedupeUUIDs)
         let payloads = try context.fetch(FetchDescriptor<ModelStoreRoundTripPayloadRecord>())
         #expect(payloads.map(\.dedupeUUID) == ["payload"])
         #expect(payloads.first?.payload == payload)

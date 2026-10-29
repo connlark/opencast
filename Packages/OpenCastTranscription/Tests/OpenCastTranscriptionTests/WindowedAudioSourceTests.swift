@@ -270,7 +270,7 @@ struct WindowedAudioSourceTests {
         )
         let service = OpenCastTranscriptionService(
             modelLocator: RecordingModelLocator(),
-            runtimeLoader: RecordingRuntimeLoader(log: TranscriptionEventLog(), decodeDelay: .seconds(30)),
+            runtimeLoader: RecordingRuntimeLoader(log: TranscriptionEventLog(), decodeDelay: .seconds(300)),
             audioLoader: loader
         )
         let request = OpenCastLongFormTranscriptionRequest(
@@ -284,14 +284,16 @@ struct WindowedAudioSourceTests {
         )
 
         // Abandon the stream at the first event; termination cancels the run
-        // mid-decode (the runtime holds the decode open for 30 s).
+        // mid-decode (the runtime holds the decode open for 300 s, so only
+        // the cancellation can remove the file inside the 60 s wait).
         for try await _ in await service.transcribe(request) {
             break
         }
 
         let destination = try #require(loader.recordedDestinations.first)
         var removed = false
-        for _ in 0..<200 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if !FileManager.default.fileExists(atPath: destination.path) {
                 removed = true
                 break

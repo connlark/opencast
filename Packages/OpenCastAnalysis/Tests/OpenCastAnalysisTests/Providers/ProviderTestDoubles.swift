@@ -210,7 +210,7 @@ final class GatedHTTPClient: AnalysisHTTPClient {
 /// for many yields; a wait that gives up early lets the test move a manual
 /// clock before a sleeper registers, and that sleeper then never wakes.
 @discardableResult
-func eventually(within seconds: Double = 10, _ condition: () -> Bool) async -> Bool {
+func eventually(within seconds: Double = 60, _ condition: () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(seconds)
     var polls = 0
     while !condition() {

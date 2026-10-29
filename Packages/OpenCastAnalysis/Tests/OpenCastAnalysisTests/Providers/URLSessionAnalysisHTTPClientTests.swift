@@ -67,7 +67,7 @@ struct URLSessionAnalysisHTTPClientTests {
         )
     }
 
-    func result(_ request: AnalysisHTTPRequest, timeout: Double = 5, maximum: Int = 1_000) async -> Result<AnalysisHTTPResponse, AnalysisHTTPFailure> {
+    func result(_ request: AnalysisHTTPRequest, timeout: Double = 60, maximum: Int = 1_000) async -> Result<AnalysisHTTPResponse, AnalysisHTTPFailure> {
         do {
             return .success(try await client.send(request, timeoutSeconds: timeout, maximumBodyBytes: maximum))
         } catch {

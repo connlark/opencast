@@ -173,12 +173,12 @@ extension ReplayToolTests {
     static let childLifetimeSeconds = 300
 
     /// Whether the process `pid` is gone, waiting up to `seconds` for it.
-    static func processGone(_ pid: pid_t, within seconds: Double = 30) async -> Bool {
+    static func processGone(_ pid: pid_t, within seconds: Double = 60) async -> Bool {
         await eventually(within: seconds) { kill(pid, 0) != 0 && errno == ESRCH }
     }
 
     static func pid(in file: URL) async -> pid_t? {
-        guard await eventually(within: 30, { (try? String(contentsOf: file, encoding: .utf8))?.isEmpty == false }) else { return nil }
+        guard await eventually({ (try? String(contentsOf: file, encoding: .utf8))?.isEmpty == false }) else { return nil }
         return (try? String(contentsOf: file, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 

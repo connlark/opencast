@@ -116,10 +116,6 @@ struct AnalysisExecutionSessionTests {
         AnalysisExecutionSession(identifier: Self.identifier, title: "Generating Chapters", scheduler: scheduler, arbiter: arbiter, tickInterval: tick, clock: clock)
     }
 
-    func yieldMany() async {
-        for _ in 0..<200 { await Task.yield() }
-    }
-
     @Test("A launched card ticks forward every interval and completes at the total on success")
     func ticksAndCompletes() async {
         let scheduler = FakeContinuedTaskScheduler()
@@ -127,8 +123,7 @@ struct AnalysisExecutionSessionTests {
         let session = session(scheduler, clock: clock)
         let gate = Gate()
         let running = Task { await session.run(subtitle: "Episode", expectedSeconds: 100) { await gate.wait() } }
-        await yieldMany()
-        #expect(session.state == .submitted)
+        #expect(await eventually { session.state == .submitted })
         #expect(scheduler.submitted.map(\.0) == [Self.identifier])
 
         let handle = FakeContinuedTaskHandle()
@@ -141,8 +136,7 @@ struct AnalysisExecutionSessionTests {
         for _ in 0..<60 {
             await clock.waitForSleepers()
             clock.advance(by: 2)
-            await yieldMany()
-            #expect(handle.progress.completedUnitCount > previous)
+            #expect(await eventually { handle.progress.completedUnitCount > previous })
             previous = handle.progress.completedUnitCount
         }
         #expect(previous < 1_000)
@@ -161,15 +155,14 @@ struct AnalysisExecutionSessionTests {
         let session = session(scheduler, clock: clock, tick: .seconds(30))
         let gate = Gate()
         let running = Task { await session.run(subtitle: "E", expectedSeconds: 30) { await gate.wait() } }
-        await yieldMany()
+        #expect(await eventually { session.state == .submitted })
         let handle = FakeContinuedTaskHandle()
         scheduler.launch(handle)
         var previous = handle.progress.completedUnitCount
         for _ in 0..<5 {
             await clock.waitForSleepers()
             clock.advance(by: 30)
-            await yieldMany()
-            #expect(handle.progress.completedUnitCount > previous)
+            #expect(await eventually { handle.progress.completedUnitCount > previous })
             previous = handle.progress.completedUnitCount
         }
         #expect(previous <= 999)
@@ -185,14 +178,13 @@ struct AnalysisExecutionSessionTests {
         let session = session(scheduler, clock: clock, tick: .seconds(600))
         let gate = Gate()
         let running = Task { await session.run(subtitle: "E", expectedSeconds: 540) { await gate.wait() } }
-        await yieldMany()
+        #expect(await eventually { session.state == .submitted })
         let handle = FakeContinuedTaskHandle()
         scheduler.launch(handle)
         let before = handle.progress.completedUnitCount
         await clock.waitForSleepers()
         clock.advance(by: 60)
-        await yieldMany()
-        #expect(handle.progress.completedUnitCount > before)
+        #expect(await eventually { handle.progress.completedUnitCount > before })
         gate.open(Self.success)
         _ = await running.value
     }
@@ -207,7 +199,7 @@ struct AnalysisExecutionSessionTests {
                 return Self.cancelled
             }
         }
-        await yieldMany()
+        #expect(await eventually { session.state == .submitted })
         let handle = FakeContinuedTaskHandle()
         scheduler.launch(handle)
         handle.expirationHandler?()
@@ -262,7 +254,7 @@ struct AnalysisExecutionSessionTests {
                 return Self.cancelled
             }
         }
-        await yieldMany()
+        #expect(await eventually { session.state == .submitted })
         running.cancel()
         #expect(await running.value == .finished(Self.cancelled, background: false))
     }
@@ -282,8 +274,7 @@ struct AnalysisExecutionSessionTests {
                 return Self.cancelled
             }
         }
-        await yieldMany()
-        #expect(hold.waiting)
+        #expect(await eventually { hold.waiting })
         running.cancel()
         #expect(await eventually(within: 60) { observed.isSet }, "the work did not see the cancellation while submission was held")
         #expect(hold.waiting)

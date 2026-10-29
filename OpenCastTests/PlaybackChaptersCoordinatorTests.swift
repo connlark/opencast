@@ -20,23 +20,23 @@ struct PlaybackChaptersCoordinatorTests {
         )
         try model.playback.load(episode)
         model.refreshPlaybackSkipZonesForCurrentEpisode()
-        #expect(await Self.waitUntil { model.currentEpisodeChapters.chapters.count == 3 })
+        #expect(await waitUntil { model.currentEpisodeChapters.chapters.count == 3 })
         #expect(model.currentEpisodeChapters.source == .embedded)
 
         // The controller rebuilds its item on its own for a download switch
         // (and for a failed-item recovery); no app-model refresh follows.
         #expect(model.playback.useDownloadedAudio(at: Self.fixture("UntaggedSilence.mp3"), for: episode.id))
-        #expect(await Self.waitUntil { model.currentEpisodeChapters.isEmpty })
+        #expect(await waitUntil { model.currentEpisodeChapters.isEmpty })
         // The clear above is immediate; the untagged file's read must settle
         // empty too, so a late read of the old item cannot repopulate it.
         await model.waitForChapterRefresh()
         #expect(model.currentEpisodeChapters.isEmpty)
 
         try model.playback.load(episode)
-        #expect(await Self.waitUntil { model.currentEpisodeChapters.chapters.count == 3 })
+        #expect(await waitUntil { model.currentEpisodeChapters.chapters.count == 3 })
 
         model.playback.unload()
-        #expect(await Self.waitUntil { model.currentEpisodeChapters.isEmpty })
+        #expect(await waitUntil { model.currentEpisodeChapters.isEmpty })
     }
 
     private static func fixture(_ name: String) -> URL {
@@ -44,20 +44,5 @@ struct PlaybackChaptersCoordinatorTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appending(path: "Packages/OpenCastPlayback/Tests/OpenCastPlaybackTests/Fixtures/\(name)")
-    }
-
-    private static func waitUntil(
-        timeout: Duration = .seconds(10),
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while clock.now < deadline {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        return condition()
     }
 }

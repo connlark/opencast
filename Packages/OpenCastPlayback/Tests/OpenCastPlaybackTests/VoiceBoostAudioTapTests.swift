@@ -57,7 +57,7 @@ struct VoiceBoostAudioTapTests {
             try? FileManager.default.removeItem(at: fixtureURL)
         }
 
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(30)
         while diagnostics.snapshot.processedFrameCount == 0 && Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }

@@ -538,7 +538,7 @@ struct PreparedFeedTests {
         let first = Task { try await service.prepareFeed(at: feedURL) }
         let second = Task { try await service.prepareFeed(at: feedURL) }
         defer { first.cancel(); second.cancel() }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
         while await client.started < 2, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(2))
         }
@@ -816,7 +816,7 @@ private actor SuspendedFeedTestClient: OpenCastHTTPClient {
 
     func data(for _: URLRequest) async throws -> OpenCastHTTPResult {
         started += 1
-        try await Task.sleep(for: .seconds(60))
+        try await Task.sleep(for: .seconds(300))
         throw CancellationError()
     }
 }

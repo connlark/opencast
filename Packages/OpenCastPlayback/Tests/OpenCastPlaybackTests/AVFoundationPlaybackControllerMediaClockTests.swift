@@ -95,7 +95,8 @@ struct AVFoundationPlaybackControllerMediaClockTests {
         // fresh subscriptions instead of waiting on a paused player that will
         // never produce periodic callbacks.
         var primed: PlaybackMediaClockSample?
-        for _ in 0..<100 where primed == nil {
+        let deadline = Date.now.addingTimeInterval(60)
+        while primed == nil, Date.now < deadline {
             let stream = controller.mediaClockSamples()
             let probe = Task {
                 for await sample in stream {
@@ -167,7 +168,8 @@ struct AVFoundationPlaybackControllerMediaClockTests {
         _ expected: Int,
         in controller: AVFoundationPlaybackController
     ) async throws {
-        for _ in 0..<100 {
+        let deadline = Date.now.addingTimeInterval(60)
+        while Date.now < deadline {
             if controller.mediaClockClientCount == expected {
                 return
             }

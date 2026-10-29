@@ -30,7 +30,7 @@ struct AnalysisKeyPacerTests {
         let first = admissions(pacer, count: 4)
         for task in first { #expect(await task.value == .admitted(waitedSeconds: 0)) }
         let fifth = Task { await pacer.admit(deadline: 1_000) }
-        await settle()
+        await clock.waitForSleepers()
         clock.advance(by: 3)
         await pacer.release()
         #expect(await fifth.value == .admitted(waitedSeconds: 3))
@@ -55,7 +55,7 @@ struct AnalysisKeyPacerTests {
         #expect(await next.value == .admitted(waitedSeconds: 5))
 
         let waiting = Task { await pacer.admit(deadline: 1_000) }
-        await settle()
+        await clock.waitForSleepers()
         clock.advance(by: 2)
         await pacer.release()
         #expect(await waiting.value == .admitted(waitedSeconds: 2))
@@ -68,7 +68,7 @@ struct AnalysisKeyPacerTests {
         await pacer.noteRateLimited(retryAfterSeconds: nil)
         #expect(await pacer.admit(deadline: 10) == .admitted(waitedSeconds: 0))
         let second = Task { await pacer.admit(deadline: 10) }
-        await settle()
+        await clock.waitForSleepers()
         await pacer.release()
         #expect(await second.value == .admitted(waitedSeconds: 0))
     }
@@ -125,12 +125,13 @@ struct AnalysisKeyPacerTests {
         await clock.waitForSleepers(2)
         await pacer.release()
         #expect(await early.value == .deadlinePassed)
-        await settle()
-        clock.advance(by: 20)
-        await settle()
-        // Without the hand-off the late request sleeps on until its own
-        // deadline and is refused there.
-        clock.advance(by: 80)
+        // Leaving, the early request wakes the late one, which drops its
+        // deadline timer and sleeps to the end of the cooldown instead.
+        // Without the hand-off it sleeps on until its own deadline and is
+        // refused there.
+        let handedOff = await eventually { clock.wakeTimes == [20] }
+        #expect(handedOff)
+        clock.advance(by: handedOff ? 20 : 100)
         #expect(await late.value == .admitted(waitedSeconds: 20))
     }
 

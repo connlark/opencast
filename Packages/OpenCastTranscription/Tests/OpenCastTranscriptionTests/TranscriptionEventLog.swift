@@ -10,12 +10,13 @@ actor TranscriptionEventLog {
     }
 
     func waitForPrefix(_ prefix: String) async -> Bool {
-        for _ in 0..<100 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if events.contains(where: { $0.hasPrefix(prefix) }) {
                 return true
             }
             try? await Task.sleep(for: .milliseconds(10))
         }
-        return false
+        return events.contains(where: { $0.hasPrefix(prefix) })
     }
 }
