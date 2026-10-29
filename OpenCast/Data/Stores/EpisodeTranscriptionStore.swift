@@ -27,6 +27,10 @@ final class EpisodeTranscriptionStore {
     // record must still invalidate when one appears (house pattern:
     // LibraryStore.progressIndexRevision).
     private var recordsRevision = 0
+    // Reservations live in the plain work coordinator; every reserve and
+    // release bumps this so `holdsWorkReservation(forEpisodeID:)` registers
+    // a dependency the same way.
+    private var workRevision = 0
     private(set) var progressByEpisodeID: [String: EpisodeTranscriptionProgress] = [:]
     private(set) var lastErrorMessage: String?
     private(set) var activeEpisodeID: String?
@@ -100,30 +104,64 @@ final class EpisodeTranscriptionStore {
         activeTask != nil
     }
 
+    /// Reads the observable `activeEpisodeID` first, so an idle answer
+    /// still registers a dependency (`activeTask` is ignored).
     func isActivelyTranscribing(episodeID: String) -> Bool {
-        activeTask != nil && activeEpisodeID == episodeID
+        activeEpisodeID == episodeID && activeTask != nil
     }
 
     func reserveLocalWork(
         for episodeID: String,
         allowsSameEpisodeAttachment: Bool = false
     ) -> Result<EpisodeTranscriptionWorkCoordinator.LocalReservation, EpisodeTranscriptionWorkCoordinator.Conflict> {
+        let result: Result<
+            EpisodeTranscriptionWorkCoordinator.LocalReservation,
+            EpisodeTranscriptionWorkCoordinator.Conflict
+        >
         if activeTask != nil {
-            if allowsSameEpisodeAttachment, activeEpisodeID == episodeID {
-                return workCoordinator.joinLocal(episodeID: episodeID)
+            guard allowsSameEpisodeAttachment, activeEpisodeID == episodeID else {
+                recordFailure(EpisodeTranscriptionError.anotherJobActive, episodeID: episodeID)
+                return .failure(.anotherLocalTranscription)
             }
-            recordFailure(EpisodeTranscriptionError.anotherJobActive, episodeID: episodeID)
-            return .failure(.anotherLocalTranscription)
+            result = workCoordinator.joinLocal(episodeID: episodeID)
+        } else {
+            result = workCoordinator.reserveLocal(episodeID: episodeID)
+            if case .failure(let conflict) = result {
+                recordFailure(conflict, episodeID: episodeID)
+            }
         }
-        let result = workCoordinator.reserveLocal(episodeID: episodeID)
-        if case .failure(let conflict) = result {
-            recordFailure(conflict, episodeID: episodeID)
+        if case .success = result {
+            workRevision &+= 1
         }
         return result
     }
 
     func releaseLocalWork(_ reservation: EpisodeTranscriptionWorkCoordinator.LocalReservation) {
         workCoordinator.releaseLocal(reservation)
+        workRevision &+= 1
+    }
+
+    func reserveRemoteWork(
+        for episodeID: String
+    ) -> Result<EpisodeTranscriptionWorkCoordinator.RemoteReservation, EpisodeTranscriptionWorkCoordinator.Conflict> {
+        let result = workCoordinator.reserveRemote(episodeID: episodeID, activeLocalEpisodeID: activeEpisodeID)
+        if case .success = result {
+            workRevision &+= 1
+        }
+        return result
+    }
+
+    func releaseRemoteWork(_ reservation: EpisodeTranscriptionWorkCoordinator.RemoteReservation) {
+        workCoordinator.releaseRemote(reservation)
+        workRevision &+= 1
+    }
+
+    /// Whether a local or remote transcription request holds the episode,
+    /// from its first step to its release; observable, unlike the work
+    /// coordinator it asks.
+    func holdsWorkReservation(forEpisodeID episodeID: String) -> Bool {
+        _ = workRevision
+        return workCoordinator.holdsReservation(forEpisodeID: episodeID)
     }
 
     func activeEngine(for episodeID: String) -> EpisodeTranscriptionEngine? {

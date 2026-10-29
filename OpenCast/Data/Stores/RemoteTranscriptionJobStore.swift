@@ -34,6 +34,9 @@ final class RemoteTranscriptionJobStore {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored let diagnostics: any RemoteJobDiagnosticSink
     @ObservationIgnored var activeTask: Task<Void, Never>?
+    // `UserDefaults` is not observable; every write bumps this so
+    // `references()` registers a dependency.
+    private var referencesRevision = 0
 
     init(
         defaults: UserDefaults = .standard,
@@ -213,6 +216,7 @@ final class RemoteTranscriptionJobStore {
     }
 
     func references() -> [RemoteTranscriptionJobReference] {
+        _ = referencesRevision
         guard let data = defaults.data(forKey: Self.referencesDefaultsKey) else {
             return []
         }
@@ -271,6 +275,7 @@ final class RemoteTranscriptionJobStore {
             return
         }
         defaults.set(data, forKey: Self.referencesDefaultsKey)
+        referencesRevision &+= 1
     }
 
     private func record(

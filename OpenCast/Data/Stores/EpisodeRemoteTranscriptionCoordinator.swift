@@ -95,10 +95,7 @@ final class EpisodeRemoteTranscriptionCoordinator {
         }
 
         let reservation: EpisodeTranscriptionWorkCoordinator.RemoteReservation
-        switch transcriptions.workCoordinator.reserveRemote(
-            episodeID: episode.episodeID,
-            activeLocalEpisodeID: transcriptions.activeEpisodeID
-        ) {
+        switch transcriptions.reserveRemoteWork(for: episode.episodeID) {
         case .success(let value):
             reservation = value
         case .failure(let conflict):
@@ -111,7 +108,7 @@ final class EpisodeRemoteTranscriptionCoordinator {
                 episodeID: episode.episodeID,
                 deliveryOwner: store.completionDeliveryOwner(for: episode.episodeID)
             )
-            transcriptions.workCoordinator.releaseRemote(reservation)
+            transcriptions.releaseRemoteWork(reservation)
             return .started
         }
 
@@ -248,7 +245,7 @@ final class EpisodeRemoteTranscriptionCoordinator {
         modelContext: ModelContext
     ) async {
         defer {
-            transcriptions.workCoordinator.releaseRemote(reservation)
+            transcriptions.releaseRemoteWork(reservation)
         }
         let episodeID = episode.episodeID
         // Snapshotted before the run: a terminal server failure clears the

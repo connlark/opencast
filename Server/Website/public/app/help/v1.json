@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-25T19:03:07Z",
+  "updatedAt": "2026-10-29T03:01:55Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -409,7 +409,7 @@
       "title": "Storage",
       "symbol": "internaldrive",
       "summary": "Automatic caches are capped; downloads follow your limits.",
-      "updatedAt": "2026-10-21T00:00:00Z",
+      "updatedAt": "2026-10-29T03:01:55Z",
       "related": [
         "icloud-sync"
       ],
@@ -420,7 +420,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Downloaded episodes stay until you delete them, unless a limit removes them. Keep Downloaded, set for every show in Download Settings (the gear in Downloads) or for one show in its own download settings, keeps only a show's most recently downloaded episodes; when it has more, the oldest are removed. Delete Downloads After Played removes episodes once they're played. Neither removes the episode that's playing, or one being transcribed, scanned for ads, or whose transcript follows the downloaded audio."
+          "text": "Downloaded episodes stay until you delete them, unless a limit removes them. Keep Downloaded, set for every show in Download Settings (the gear in Downloads) or for one show in its own download settings, keeps only a show's most recently downloaded episodes; when it has more, the oldest are removed. Delete Downloads After Played removes episodes once they're played. Neither removes the current episode, or an episode being transcribed or scanned for ads."
         },
         {
           "type": "paragraph",

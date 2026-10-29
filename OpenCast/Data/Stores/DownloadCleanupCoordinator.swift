@@ -92,18 +92,25 @@ final class DownloadCleanupCoordinator {
 
     func deletePlayedDownloads(modelContext: ModelContext) {
         let remoteJobEpisodeIDs = remoteJobEpisodeIDs()
-        let eligibleRecords = downloads.records.filter { record in
-            record.state == .completed
-                && library.progressRecord(for: record.episodeID)?.isPlayed == true
-                && !isProtectedFromAutomaticDeletion(record, remoteJobEpisodeIDs: remoteJobEpisodeIDs)
+        let eligibleRecords = downloads.records.filter {
+            isRemovablePlayedDownload($0, remoteJobEpisodeIDs: remoteJobEpisodeIDs)
         }
         deleteDownloads(eligibleRecords, modelContext: modelContext)
     }
 
+    /// What Remove Played would delete now. Every state it reads is
+    /// observable, so a view's count follows protection as it changes.
+    func removablePlayedDownloadCount() -> Int {
+        let remoteJobEpisodeIDs = remoteJobEpisodeIDs()
+        return downloads.records.count {
+            isRemovablePlayedDownload($0, remoteJobEpisodeIDs: remoteJobEpisodeIDs)
+        }
+    }
+
     /// Keeps the show's most recently completed downloads up to its Keep
-    /// Downloaded limit and deletes the rest. A protected download is never
-    /// deleted but still holds its place, so a show can sit above its limit
-    /// while one is in use. Played state is irrelevant.
+    /// Downloaded limit and deletes the rest, played or not. A download in
+    /// use, or an unplayed episode's transcript audio, is never deleted but
+    /// still holds its place, so a show can sit above its limit.
     func trimDownloadsToKeepLimit(forPodcastID podcastID: String, modelContext: ModelContext) {
         guard let maximumCount = settings.resolvedKeepLimit(forPodcastID: podcastID).maximumCount else {
             return
@@ -120,7 +127,7 @@ final class DownloadCleanupCoordinator {
         let excessRecords = completedRecords
             .sorted(by: Self.isMoreRecentlyCompleted)
             .dropFirst(maximumCount)
-            .filter { !isProtectedFromAutomaticDeletion($0, remoteJobEpisodeIDs: remoteJobEpisodeIDs) }
+            .filter { !(isInUse($0, remoteJobEpisodeIDs: remoteJobEpisodeIDs) || isUnheardTranscriptAsset($0)) }
         deleteDownloads(Array(excessRecords), modelContext: modelContext)
     }
 
@@ -153,30 +160,32 @@ final class DownloadCleanupCoordinator {
         }
     }
 
-    /// Downloads in use survive every automatic deletion: the episode
-    /// that's playing, one a transcription request holds (local or remote,
-    /// from its preparation on), one with a remote job that may still ask
-    /// for an exact-copy upload, one whose bytes a transcript describes,
-    /// and one an ad-free pass is waiting on or running.
-    private func isProtectedFromAutomaticDeletion(
+    /// The played sweep and Remove Played delete a completed, played
+    /// download unless it is in use. A transcript of its bytes doesn't keep
+    /// it, so a replay needs a fresh scan for ad skips.
+    private func isRemovablePlayedDownload(
         _ record: EpisodeDownloadRecord,
         remoteJobEpisodeIDs: Set<String>
     ) -> Bool {
-        guard playback.currentEpisode?.id.rawValue != record.episodeID,
-              !transcriptions.isActivelyTranscribing(episodeID: record.episodeID),
-              !transcriptions.workCoordinator.holdsReservation(forEpisodeID: record.episodeID),
-              !remoteJobEpisodeIDs.contains(record.episodeID)
-        else {
-            return true
-        }
-        // A download whose bytes a transcript describes is that
-        // transcript's karaoke asset; deleting it would strand the
-        // transcript on a mismatch no re-download can repair (dynamic
-        // enclosures return different assemblies).
-        if TranscriptSourceAlignment.downloadMatchesTranscript(
-            trustedDownloadSHA256: record.sourceFileSHA256,
-            documentSHA256: transcriptions.record(for: record.episodeID)?.sourceFileSHA256 ?? ""
-        ) {
+        record.state == .completed
+            && library.progressRecord(for: record.episodeID)?.isPlayed == true
+            && !isInUse(record, remoteJobEpisodeIDs: remoteJobEpisodeIDs)
+    }
+
+    /// Downloads in use survive every automatic deletion and Remove Played:
+    /// the current episode (loaded, playing or paused), one with an active
+    /// transcription, one a transcription request holds (local or remote,
+    /// from its preparation on), one with a remote job that may still ask
+    /// for an exact-copy upload, and one an ad-free pass has queued, is
+    /// running or has parked remotely.
+    private func isInUse(
+        _ record: EpisodeDownloadRecord,
+        remoteJobEpisodeIDs: Set<String>
+    ) -> Bool {
+        if playback.currentEpisode?.id.rawValue == record.episodeID
+            || transcriptions.isActivelyTranscribing(episodeID: record.episodeID)
+            || transcriptions.holdsWorkReservation(forEpisodeID: record.episodeID)
+            || remoteJobEpisodeIDs.contains(record.episodeID) {
             return true
         }
 
@@ -186,6 +195,18 @@ final class DownloadCleanupCoordinator {
         case .notQueued, .completed, .failed, .cloudUnavailable, .keyRequired:
             return false
         }
+    }
+
+    /// The trim's one other exception, and only while the episode is
+    /// unplayed: a download whose bytes its transcript describes is that
+    /// transcript's karaoke and ad-skip audio, which a re-download of a
+    /// dynamic enclosure may not reproduce. Once the episode is played it is
+    /// ordinary trim material.
+    private func isUnheardTranscriptAsset(_ record: EpisodeDownloadRecord) -> Bool {
+        TranscriptSourceAlignment.downloadMatchesTranscript(
+            trustedDownloadSHA256: record.sourceFileSHA256,
+            documentSHA256: transcriptions.record(for: record.episodeID)?.sourceFileSHA256 ?? ""
+        ) && library.progressRecord(for: record.episodeID)?.isPlayed != true
     }
 
     /// Newest completion first. Records completed before `completedAt`

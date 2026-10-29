@@ -274,9 +274,7 @@ struct DownloadsView: View {
     }
 
     private var playedDownloadCount: Int {
-        appModel.downloads.records.count { record in
-            record.state == .completed && appModel.library.progressRecord(for: record.episodeID)?.isPlayed == true
-        }
+        appModel.removablePlayedDownloadCount()
     }
 
     @ViewBuilder

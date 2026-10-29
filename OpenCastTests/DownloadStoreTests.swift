@@ -1325,6 +1325,299 @@ struct DownloadStoreTests {
         transcriptions.cancelTranscription(episodeID: episode.episodeID, modelContext: context)
     }
 
+    @Test("Auto-delete sweeps a played download whose completed transcript matches it")
+    func autoDeleteSweepsPlayedTranscriptMatchedDownload() async throws {
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let episode = fixture.episode("scanned-swept", podcastID: KeepLimitFixture.showA)
+        let record = try fixture.insert(episode.episodeID, podcastID: episode.podcastID, completedDay: 1)
+        let downloadHash = record.sourceFileSHA256
+        let downloadPath = try #require(record.localRelativePath)
+        let transcriptPath = try writeCompletedTranscript(
+            for: record,
+            fileStore: transcriptFileStore,
+            context: fixture.context
+        )
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        #expect(fixture.library.markEpisodePlayed(episode, modelContext: fixture.context))
+        #expect(fixture.downloads.setAutoDeletesPlayedDownloads(true, modelContext: fixture.context))
+        #expect(!downloadHash.isEmpty)
+        #expect(transcriptions.record(for: episode.episodeID)?.sourceFileSHA256 == downloadHash)
+        try #require(transcriptions.record(for: episode.episodeID)?.state == .completed)
+
+        fixture.appModel.sweepPlayedDownloadsIfEnabled(modelContext: fixture.context)
+
+        #expect(fixture.downloads.record(for: episode.episodeID) == nil)
+        #expect(!fixture.fileStore.fileExists(relativePath: downloadPath))
+        let transcript = try #require(transcriptions.record(for: episode.episodeID))
+        #expect(transcript.state == .completed)
+        #expect(transcript.sourceFileSHA256 == downloadHash)
+        #expect(transcriptFileStore.documentExists(relativePath: transcriptPath))
+    }
+
+    @Test("Remove Played removes a played download whose completed transcript matches it")
+    func removePlayedRemovesTranscriptMatchedDownload() async throws {
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let episode = fixture.episode("scanned-removed", podcastID: KeepLimitFixture.showA)
+        let record = try fixture.insert(episode.episodeID, podcastID: episode.podcastID, completedDay: 1)
+        let downloadHash = record.sourceFileSHA256
+        let downloadPath = try #require(record.localRelativePath)
+        let transcriptPath = try writeCompletedTranscript(
+            for: record,
+            fileStore: transcriptFileStore,
+            context: fixture.context
+        )
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        #expect(fixture.library.markEpisodePlayed(episode, modelContext: fixture.context))
+        #expect(!fixture.downloads.autoDeletesPlayedDownloads)
+        #expect(!downloadHash.isEmpty)
+        #expect(transcriptions.record(for: episode.episodeID)?.sourceFileSHA256 == downloadHash)
+        try #require(transcriptions.record(for: episode.episodeID)?.state == .completed)
+
+        fixture.appModel.deletePlayedDownloads(modelContext: fixture.context)
+
+        #expect(fixture.downloads.record(for: episode.episodeID) == nil)
+        #expect(!fixture.fileStore.fileExists(relativePath: downloadPath))
+        #expect(transcriptions.record(for: episode.episodeID)?.state == .completed)
+        #expect(transcriptFileStore.documentExists(relativePath: transcriptPath))
+    }
+
+    @Test("Remove Played leaves a transcript-matched download that is the current episode")
+    func removePlayedKeepsCurrentTranscriptMatchedDownload() async throws {
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let episode = fixture.episode("scanned-current", podcastID: KeepLimitFixture.showA)
+        let record = try fixture.insert(episode.episodeID, podcastID: episode.podcastID, completedDay: 1)
+        try writeCompletedTranscript(for: record, fileStore: transcriptFileStore, context: fixture.context)
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        #expect(fixture.library.markEpisodePlayed(episode, modelContext: fixture.context))
+        try fixture.appModel.playDownloadedEpisode(episode, downloadRecord: record, modelContext: fixture.context)
+        defer { fixture.appModel.playback.unload() }
+        #expect(fixture.library.progressRecord(for: episode.episodeID)?.isPlayed == true)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == episode.episodeID)
+        try #require(transcriptions.record(for: episode.episodeID)?.state == .completed)
+
+        fixture.appModel.deletePlayedDownloads(modelContext: fixture.context)
+
+        #expect(fixture.downloads.record(for: episode.episodeID)?.state == .completed)
+
+        fixture.appModel.playback.unload()
+        #expect(fixture.appModel.playback.currentEpisode == nil)
+        #expect(fixture.library.progressRecord(for: episode.episodeID)?.isPlayed == true)
+        fixture.appModel.deletePlayedDownloads(modelContext: fixture.context)
+
+        #expect(fixture.downloads.record(for: episode.episodeID) == nil)
+    }
+
+    @Test("A completed matching transcript with an open remote reference keeps the download")
+    func autoDeleteKeepsTranscriptMatchedDownloadWithRemoteReference() async throws {
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
+        let jobs = RemoteTranscriptionJobStore(
+            defaults: try #require(UserDefaults(suiteName: "SweepRemoteReference-\(UUID().uuidString)"))
+        )
+        let fixture = try await KeepLimitFixture.make(
+            transcriptions: transcriptions,
+            remoteTranscriptionJobStore: jobs
+        )
+        let episode = fixture.episode("scanned-remote", podcastID: KeepLimitFixture.showA)
+        let record = try fixture.insert(episode.episodeID, podcastID: episode.podcastID, completedDay: 1)
+        try writeCompletedTranscript(for: record, fileStore: transcriptFileStore, context: fixture.context)
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        #expect(fixture.library.markEpisodePlayed(episode, modelContext: fixture.context))
+        #expect(fixture.downloads.setAutoDeletesPlayedDownloads(true, modelContext: fixture.context))
+        // A remote run imports its transcript before it clears its reference.
+        _ = jobs.reference(for: episode.episodeID)
+        try #require(transcriptions.record(for: episode.episodeID)?.state == .completed)
+
+        fixture.appModel.sweepPlayedDownloadsIfEnabled(modelContext: fixture.context)
+
+        #expect(fixture.downloads.record(for: episode.episodeID)?.state == .completed)
+
+        jobs.clearReference(for: episode.episodeID)
+        fixture.appModel.sweepPlayedDownloadsIfEnabled(modelContext: fixture.context)
+
+        #expect(fixture.downloads.record(for: episode.episodeID) == nil)
+    }
+
+    @Test("A failed or interrupted transcript's hash doesn't keep a played download")
+    func autoDeleteSweepsDownloadsWithStaleTranscriptHashes() async throws {
+        let transcriptions = EpisodeTranscriptionStore(
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        )
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let staleStates: [(episodeID: String, state: EpisodeTranscriptState)] = [
+            ("stale-failed", .failed),
+            ("stale-interrupted", .interrupted),
+        ]
+        for (day, stale) in staleStates.enumerated() {
+            let record = try fixture.insert(stale.episodeID, podcastID: KeepLimitFixture.showA, completedDay: day)
+            fixture.context.insert(EpisodeTranscriptRecord(
+                episodeID: record.episodeID,
+                podcastID: record.podcastID,
+                sourceAudioURL: record.sourceAudioURL,
+                sourceFileSHA256: record.sourceFileSHA256,
+                state: stale.state
+            ))
+        }
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        for stale in staleStates {
+            #expect(fixture.library.markEpisodePlayed(
+                fixture.episode(stale.episodeID, podcastID: KeepLimitFixture.showA),
+                modelContext: fixture.context
+            ))
+        }
+        #expect(fixture.downloads.setAutoDeletesPlayedDownloads(true, modelContext: fixture.context))
+        for stale in staleStates {
+            let transcript = try #require(transcriptions.record(for: stale.episodeID))
+            #expect(transcript.state == stale.state)
+            #expect(!transcript.sourceFileSHA256.isEmpty)
+            #expect(transcript.sourceFileSHA256 == fixture.downloads.record(for: stale.episodeID)?.sourceFileSHA256)
+        }
+
+        fixture.appModel.sweepPlayedDownloadsIfEnabled(modelContext: fixture.context)
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA).isEmpty)
+    }
+
+    @Test("The removable count matches what Remove Played removes")
+    func removablePlayedDownloadCountMatchesRemovePlayed() async throws {
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let scanned = try fixture.insert("count-a-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        let current = try fixture.insert("count-a-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
+        let played = try fixture.insert("count-b-1", podcastID: KeepLimitFixture.showB, completedDay: 1)
+        try fixture.insert("count-b-2", podcastID: KeepLimitFixture.showB, completedDay: 2)
+        for record in [scanned, current] {
+            try writeCompletedTranscript(for: record, fileStore: transcriptFileStore, context: fixture.context)
+        }
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        for record in [scanned, current, played] {
+            #expect(fixture.library.markEpisodePlayed(
+                fixture.episode(record.episodeID, podcastID: record.podcastID),
+                modelContext: fixture.context
+            ))
+        }
+        try fixture.appModel.playDownloadedEpisode(
+            fixture.episode("count-a-2", podcastID: KeepLimitFixture.showA),
+            downloadRecord: current,
+            modelContext: fixture.context
+        )
+        defer { fixture.appModel.playback.unload() }
+        #expect(fixture.library.progressRecord(for: "count-a-2")?.isPlayed == true)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "count-a-2")
+        try #require(transcriptions.record(for: "count-a-1")?.state == .completed)
+        try #require(transcriptions.record(for: "count-a-2")?.state == .completed)
+        #expect(fixture.appModel.removablePlayedDownloadCount() == 2)
+
+        fixture.appModel.deletePlayedDownloads(modelContext: fixture.context)
+
+        #expect(fixture.appModel.removablePlayedDownloadCount() == 0)
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["count-a-2"])
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showB) == ["count-b-2"])
+    }
+
+    @Test("The removable count invalidates when protection changes")
+    func removablePlayedDownloadCountInvalidatesWhenProtectionChanges() async throws {
+        let transcriptions = EpisodeTranscriptionStore(
+            transcriber: HangingAutoDeleteEpisodeTranscriber(),
+            fileStore: EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        )
+        let jobs = RemoteTranscriptionJobStore(
+            defaults: try #require(UserDefaults(suiteName: "RemovableCount-\(UUID().uuidString)"))
+        )
+        let fixture = try await KeepLimitFixture.make(
+            transcriptions: transcriptions,
+            remoteTranscriptionJobStore: jobs
+        )
+        let appModel = fixture.appModel
+        let episode = fixture.episode("count-protected", podcastID: KeepLimitFixture.showA)
+        let record = try fixture.insert(episode.episodeID, podcastID: episode.podcastID, completedDay: 1)
+        try await fixture.reload()
+        #expect(fixture.library.markEpisodePlayed(episode, modelContext: fixture.context))
+        #expect(appModel.removablePlayedDownloadCount() == 1)
+
+        let localReservation = try transcriptions.reserveLocalWork(for: episode.episodeID).get()
+        #expect(transcriptions.holdsWorkReservation(forEpisodeID: episode.episodeID))
+        await confirmation("releasing a local reservation invalidates the count") { invalidated in
+            withObservationTracking {
+                #expect(appModel.removablePlayedDownloadCount() == 0)
+            } onChange: {
+                invalidated()
+            }
+            transcriptions.releaseLocalWork(localReservation)
+        }
+        #expect(appModel.removablePlayedDownloadCount() == 1)
+
+        let remoteReservation = try transcriptions.reserveRemoteWork(for: episode.episodeID).get()
+        #expect(transcriptions.holdsWorkReservation(forEpisodeID: episode.episodeID))
+        await confirmation("releasing a remote reservation invalidates the count") { invalidated in
+            withObservationTracking {
+                #expect(appModel.removablePlayedDownloadCount() == 0)
+            } onChange: {
+                invalidated()
+            }
+            transcriptions.releaseRemoteWork(remoteReservation)
+        }
+        #expect(appModel.removablePlayedDownloadCount() == 1)
+
+        _ = jobs.reference(for: episode.episodeID)
+        await confirmation("clearing a remote job reference invalidates the count") { invalidated in
+            withObservationTracking {
+                #expect(appModel.removablePlayedDownloadCount() == 0)
+            } onChange: {
+                invalidated()
+            }
+            jobs.clearReference(for: episode.episodeID)
+        }
+        #expect(appModel.removablePlayedDownloadCount() == 1)
+
+        let localFileURL = try #require(fixture.downloads.localFileURL(for: record))
+        await confirmation("starting a transcription invalidates the count") { invalidated in
+            withObservationTracking {
+                #expect(appModel.removablePlayedDownloadCount() == 1)
+            } onChange: {
+                invalidated()
+            }
+            #expect(transcriptions.startTranscription(
+                episode,
+                downloadRecord: record,
+                localFileURL: localFileURL,
+                engine: .appleSpeech,
+                modelIdentity: EpisodeTranscriptionModelIdentity(
+                    modelIdentifier: "apple-speech-transcriber.en_US",
+                    version: "iOS 26 test",
+                    treeSHA256: "installed-en-US"
+                ),
+                languageCode: "en-US",
+                modelContext: fixture.context
+            ))
+        }
+        #expect(appModel.removablePlayedDownloadCount() == 0)
+
+        await confirmation("cancelling the transcription invalidates the count") { invalidated in
+            withObservationTracking {
+                #expect(appModel.removablePlayedDownloadCount() == 0)
+            } onChange: {
+                invalidated()
+            }
+            transcriptions.cancelTranscription(episodeID: episode.episodeID, modelContext: fixture.context)
+            #expect(await waitUntil { !transcriptions.isActivelyTranscribing(episodeID: episode.episodeID) })
+        }
+        #expect(appModel.removablePlayedDownloadCount() == 1)
+    }
+
     @Test("Keep Downloaded keeps a show's most recently completed downloads, by completion time")
     func keepLimitTrimsByCompletionTime() async throws {
         let fixture = try await KeepLimitFixture.make()
@@ -1478,30 +1771,145 @@ struct DownloadStoreTests {
         #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["remote-job-1", "remote-job-2"])
     }
 
-    @Test("The trim keeps a download whose bytes a transcript describes")
-    func keepLimitKeepsTranscriptMatchedDownload() async throws {
-        let temporaryDirectory = try makeTemporaryDirectory()
-        let transcriptions = EpisodeTranscriptionStore(
-            fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
-        )
+    @Test("The trim keeps an unplayed download whose completed transcript matches it")
+    func keepLimitKeepsUnplayedTranscriptMatchedDownload() async throws {
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
         let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
         let matched = try fixture.insert("matched-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
-        matched.sourceFileSHA256 = String(repeating: "a", count: 64)
         try fixture.insert("matched-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
-        fixture.context.insert(EpisodeTranscriptRecord(
-            episodeID: "matched-1",
-            podcastID: KeepLimitFixture.showA,
-            sourceAudioURL: matched.sourceAudioURL,
-            sourceFileSHA256: matched.sourceFileSHA256,
-            state: .completed
-        ))
+        try writeCompletedTranscript(for: matched, fileStore: transcriptFileStore, context: fixture.context)
         try await fixture.reload()
         transcriptions.load(modelContext: fixture.context)
+        #expect(!matched.sourceFileSHA256.isEmpty)
         #expect(transcriptions.record(for: "matched-1")?.sourceFileSHA256 == matched.sourceFileSHA256)
+        #expect(fixture.library.progressRecord(for: "matched-1")?.isPlayed != true)
+        try #require(transcriptions.record(for: "matched-1")?.state == .completed)
 
         #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
 
         #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["matched-1", "matched-2"])
+    }
+
+    @Test("The trim removes a played download whose completed transcript matches it")
+    func keepLimitRemovesPlayedTranscriptMatchedDownload() async throws {
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let matched = try fixture.insert("matched-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        try fixture.insert("matched-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
+        try writeCompletedTranscript(for: matched, fileStore: transcriptFileStore, context: fixture.context)
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        #expect(fixture.library.markEpisodePlayed(
+            fixture.episode("matched-1", podcastID: KeepLimitFixture.showA),
+            modelContext: fixture.context
+        ))
+        #expect(!matched.sourceFileSHA256.isEmpty)
+        #expect(transcriptions.record(for: "matched-1")?.sourceFileSHA256 == matched.sourceFileSHA256)
+        try #require(transcriptions.record(for: "matched-1")?.state == .completed)
+
+        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["matched-2"])
+        #expect(transcriptions.record(for: "matched-1")?.state == .completed)
+    }
+
+    @Test("Only the trim keeps a transcript's audio, and only an unplayed episode's exact hash match")
+    func transcriptAudioNeedsAnExactHashMatchAndOnlyTheTrimKeepsIt() async throws {
+        func makeFixture() async throws -> KeepLimitFixture {
+            let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+            let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
+            let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+            try fixture.insert("boundary-no-transcript", podcastID: KeepLimitFixture.showA, completedDay: 1)
+            let unhashed = try fixture.insert("boundary-unhashed", podcastID: KeepLimitFixture.showA, completedDay: 2)
+            try writeCompletedTranscript(for: unhashed, fileStore: transcriptFileStore, context: fixture.context)
+            unhashed.sourceFileSHA256 = ""
+            let unequal = try fixture.insert("boundary-unequal", podcastID: KeepLimitFixture.showA, completedDay: 3)
+            try writeCompletedTranscript(
+                for: unequal,
+                sourceFileSHA256: OpenCastSHA256.hash(Data("other bytes".utf8)),
+                fileStore: transcriptFileStore,
+                context: fixture.context
+            )
+            let matched = try fixture.insert("boundary-matched", podcastID: KeepLimitFixture.showA, completedDay: 4)
+            try writeCompletedTranscript(for: matched, fileStore: transcriptFileStore, context: fixture.context)
+            try fixture.insert("boundary-newest", podcastID: KeepLimitFixture.showA, completedDay: 5)
+            try await fixture.reload()
+            transcriptions.load(modelContext: fixture.context)
+            for episodeID in ["boundary-unhashed", "boundary-unequal", "boundary-matched"] {
+                #expect(transcriptions.record(for: episodeID)?.state == .completed)
+                #expect(transcriptions.record(for: episodeID)?.sourceFileSHA256.isEmpty == false)
+            }
+            #expect(fixture.downloads.record(for: "boundary-no-transcript")?.sourceFileSHA256.isEmpty == false)
+            #expect(fixture.downloads.record(for: "boundary-unhashed")?.sourceFileSHA256 == "")
+            #expect(transcriptions.record(for: "boundary-unequal")?.sourceFileSHA256
+                != fixture.downloads.record(for: "boundary-unequal")?.sourceFileSHA256)
+            #expect(transcriptions.record(for: "boundary-matched")?.sourceFileSHA256
+                == fixture.downloads.record(for: "boundary-matched")?.sourceFileSHA256)
+            return fixture
+        }
+
+        let sweepFixture = try await makeFixture()
+        for episodeID in ["boundary-no-transcript", "boundary-unhashed", "boundary-unequal"] {
+            #expect(sweepFixture.library.markEpisodePlayed(
+                sweepFixture.episode(episodeID, podcastID: KeepLimitFixture.showA),
+                modelContext: sweepFixture.context
+            ))
+        }
+        #expect(sweepFixture.downloads.setAutoDeletesPlayedDownloads(true, modelContext: sweepFixture.context))
+
+        sweepFixture.appModel.sweepPlayedDownloadsIfEnabled(modelContext: sweepFixture.context)
+
+        #expect(sweepFixture.episodeIDs(for: KeepLimitFixture.showA) == ["boundary-matched", "boundary-newest"])
+
+        let trimFixture = try await makeFixture()
+
+        #expect(trimFixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: trimFixture.context))
+
+        #expect(trimFixture.episodeIDs(for: KeepLimitFixture.showA) == ["boundary-matched", "boundary-newest"])
+    }
+
+    @Test("The launch sweep and trim remove a played scanned download above its show's limit once")
+    func launchSweepThenTrimRemovesPlayedTranscriptMatchedDownloadOnce() async throws {
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let scanned = try fixture.insert("launch-a-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
+        try fixture.insert("launch-a-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
+        let otherShowScanned = try fixture.insert("launch-b-1", podcastID: KeepLimitFixture.showB, completedDay: 1)
+        try fixture.insert("launch-b-2", podcastID: KeepLimitFixture.showB, completedDay: 2)
+        for record in [scanned, otherShowScanned] {
+            try writeCompletedTranscript(for: record, fileStore: transcriptFileStore, context: fixture.context)
+        }
+        let scannedPath = try #require(scanned.localRelativePath)
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        // Saved without the app model, so nothing has trimmed show A yet.
+        #expect(fixture.appModel.downloadSettings.setKeepLimitOverride(
+            .one,
+            forPodcastID: KeepLimitFixture.showA,
+            modelContext: fixture.context
+        ))
+        #expect(fixture.library.markEpisodePlayed(
+            fixture.episode("launch-a-1", podcastID: KeepLimitFixture.showA),
+            modelContext: fixture.context
+        ))
+        #expect(fixture.downloads.setAutoDeletesPlayedDownloads(true, modelContext: fixture.context))
+        try #require(transcriptions.record(for: "launch-a-1")?.state == .completed)
+        try #require(transcriptions.record(for: "launch-b-1")?.state == .completed)
+
+        fixture.appModel.sweepPlayedDownloadsIfEnabled(modelContext: fixture.context)
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["launch-a-2"])
+
+        fixture.appModel.trimDownloadsToKeepLimits(modelContext: fixture.context)
+
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["launch-a-2"])
+        #expect(fixture.episodeIDs(for: KeepLimitFixture.showB) == ["launch-b-1", "launch-b-2"])
+        #expect(try fixture.context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).count == 3)
+        #expect(!fixture.fileStore.fileExists(relativePath: scannedPath))
+        #expect(transcriptions.record(for: "launch-a-1")?.state == .completed)
     }
 
     @Test("Played state doesn't decide what the trim keeps")
@@ -2170,8 +2578,77 @@ struct DownloadStoreTests {
             bytesExpected: Int64(data.count),
             completedAt: .now
         )
+        record.sourceFileSHA256 = OpenCastSHA256.hash(data)
         context.insert(record)
         return record
+    }
+
+    /// A completed transcript of the download's bytes (or of the bytes
+    /// `sourceFileSHA256` names), with its document on disk so the
+    /// transcription store's `load` keeps it completed.
+    @discardableResult
+    private func writeCompletedTranscript(
+        for record: EpisodeDownloadRecord,
+        sourceFileSHA256: String? = nil,
+        fileStore: EpisodeTranscriptFileStore,
+        context: ModelContext
+    ) throws -> String {
+        let text = "Welcome back to the show."
+        let document = EpisodeTranscriptDocument(
+            schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
+            episodeID: record.episodeID,
+            podcastID: record.podcastID,
+            sourceAudioURL: record.sourceAudioURL,
+            sourceFileByteCount: record.bytesReceived,
+            sourceFileSHA256: sourceFileSHA256 ?? record.sourceFileSHA256,
+            modelIdentifier: "model",
+            modelVersion: "v1",
+            modelTreeSHA256: "tree-sha",
+            languageCode: "en",
+            audioDuration: 120,
+            checkpoints: [],
+            segments: [
+                OpenCastTranscriptSegment(
+                    id: 0,
+                    start: 0,
+                    end: 5,
+                    text: text,
+                    avgLogProbability: -0.1,
+                    noSpeechProbability: 0.01
+                )
+            ],
+            text: text,
+            timings: EpisodeTranscriptTimings(),
+            createdAt: .now,
+            updatedAt: .now
+        )
+        let fingerprint = fileStore.fingerprint(
+            sourceFileSHA256: document.sourceFileSHA256,
+            modelIdentifier: document.modelIdentifier,
+            modelVersion: document.modelVersion,
+            modelTreeSHA256: document.modelTreeSHA256
+        )
+        let relativePath = fileStore.relativePath(episodeID: document.episodeID, fingerprint: fingerprint)
+        try fileStore.write(document, relativePath: relativePath)
+        context.insert(EpisodeTranscriptRecord(
+            episodeID: document.episodeID,
+            podcastID: document.podcastID,
+            sourceAudioURL: document.sourceAudioURL,
+            sourceFileByteCount: document.sourceFileByteCount,
+            sourceFileSHA256: document.sourceFileSHA256,
+            modelIdentifier: document.modelIdentifier,
+            modelVersion: document.modelVersion,
+            modelTreeSHA256: document.modelTreeSHA256,
+            languageCode: document.languageCode,
+            state: .completed,
+            audioDuration: document.audioDuration,
+            completedDuration: document.audioDuration,
+            transcriptRelativePath: relativePath,
+            createdAt: document.createdAt,
+            updatedAt: document.updatedAt
+        ))
+        try context.save()
+        return relativePath
     }
 
     private func makeTemporaryDirectory() throws -> URL {
@@ -2576,6 +3053,7 @@ private final class KeepLimitFixture {
             completedAt: completedDay.map(Self.day),
             createdAt: Self.day(createdDay)
         )
+        record.sourceFileSHA256 = OpenCastSHA256.hash(data)
         context.insert(record)
         return record
     }

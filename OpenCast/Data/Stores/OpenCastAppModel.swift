@@ -2663,6 +2663,10 @@ final class OpenCastAppModel {
         downloadCleanup.deletePlayedDownloads(modelContext: modelContext)
     }
 
+    func removablePlayedDownloadCount() -> Int {
+        downloadCleanup.removablePlayedDownloadCount()
+    }
+
     func resolvedPlaybackEpisode(
         for snapshot: EpisodeListItemSnapshot,
         source: EpisodePlaybackSource = .stream,
