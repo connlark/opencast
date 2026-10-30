@@ -56,6 +56,41 @@ yarn deploy:dry-run
 The provisioning scripts are fail-closed helpers. Review their placeholder
 resource names before running them against your account.
 
+## API
+
+- `GET /health`
+- `POST /v1/app-attest/challenge`
+- `POST /v1/app-attest/register`
+- `POST /v1/install/delete` — App Attest only, envelope payload `"{}"`;
+  200 `{"message":"deleted"}`. Available when public transcription is off;
+  an `Authorization` header returns 401 `missing_assertion`. Unlinks the
+  raw install id's PurchaseWorker audit entry on purchase lanes, then
+  atomically deletes keys, challenges, `install_account_links` and the dev
+  `accounts` mapping. Unlink failure returns 503 `deregistration_unavailable`
+  with all local identity/link rows intact for retry (a lost response can
+  follow a committed remote unlink). Shared purchase accounts, credit
+  ledgers, reservations and jobs remain.
+- `POST /v1/remote-transcription/purchases/redeem`
+- `POST /v1/apple/storekit/notifications`
+- `POST /v1/remote-transcription/account/bootstrap`
+- `POST /v1/remote-transcription/jobs`
+- `POST /v1/remote-transcription/jobs/{job_id}/source`
+- `POST /v1/remote-transcription/jobs/{job_id}/poll`
+- `POST /v1/remote-transcription/jobs/{job_id}/result` (`Cache-Control: no-store`)
+- `POST /v1/remote-transcription/jobs/{job_id}/ack`
+- `POST /v1/remote-transcription/jobs/{job_id}/cancel`
+
+App Attest bootstrap link writes require the install's key row in the same
+D1 statement. A bootstrap overtaken by deletion returns 401 `unknown_key`
+and best-effort unlinks any PurchaseWorker audit link it already requested
+(logging compensation failures). Development install-account mappings use
+the same fence; the development bearer identity has no App Attest key.
+
+A detached dev account's jobs retain the job object's terminal metadata and
+D1 `jobs` index row after the seven-day result deadline. Expiry removes
+media and keeps the record; there is no terminal-metadata purge. Those
+records carry the account id, not the install id.
+
 ## Gap Repair
 
 Whisper occasionally drops speech after a pause or music sting. With

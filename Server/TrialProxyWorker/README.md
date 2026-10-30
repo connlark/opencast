@@ -64,6 +64,7 @@ yarn wrangler d1 migrations apply TRIAL_DB --remote
 | GET | `/health` | none | `{"message":"ok","bundle_version":N,"trial_model":"…"}` |
 | POST | `/v1/app-attest/challenge` | none (rate-limited) | `{install_id, purpose:"register"}` → `{challenge_id, challenge}` |
 | POST | `/v1/app-attest/register` | challenge | registers an App Attest key with this service |
+| POST | `/v1/install/delete` | App Attest only (payload `"{}"`) | 200 `{"message":"deleted"}`; revokes identity and forgets unit-free run summaries, retaining the trial count |
 | POST | `/v1/trial/analyze` | App Attest envelope, or the ops bearer | the forward |
 | POST | `/v1/trial/status` | App Attest envelope (payload `{}`), or the ops bearer | status |
 | GET | `/v1/trial/status` | ops bearer only | status |
@@ -213,6 +214,44 @@ D1 (`TRIAL_DB`) holds the App Attest tables and a write-behind mirror for ops
 readback (`trial_install`, `trial_run`, `trial_month`, `trial_day`); the
 object's storage is the truth and admission never waits on D1.
 
+Delete Data removes the install's App Attest keys and challenges and its
+unit-free `trial_run` mirrors in one D1 batch, then calls the private ledger
+`POST /forget` with `{"subject":"app-attest-install:<sha256(install_id)>"}`.
+The object transaction deletes only unit-free `runs`, returns
+`{"deleted":n}`, and writes a `run_forget` mirror mark per deleted run.
+It needs no analysis configuration or bundle and arms the housekeeping
+alarm even if none was scheduled. The public route needs only the three
+App Attest configuration fields and works with `TRIAL_PROXY_ENABLED=false`;
+any `Authorization` header gets 401 `unauthorized`. Entry-point query-string
+and `x-goog-api-key` refusals, body caps and assertion checks still apply.
+
+The `installs` lifetime count and cumulative `open_runs`, `trial_install`,
+unit-consumed runs and their mirrors, and all reservations remain. The app
+keeps its trial install id while retiring its key, so Delete Data itself
+cannot mint another trial. A replacement key under that id can see
+`trial_busy` until an outstanding reservation settles or expires (its
+forward budget plus 60 s); finalized reservations remain for 40 days.
+
+Mirror flushes from alarms and settlement share an in-object guard. A flush
+already awaiting D1 can still insert an old unit-free summary after the
+direct delete; its separate forget mark survives that flush and a later
+successful flush deletes the mirror again. Convergence requires the flush
+in progress and a subsequent successful flush that reaches the mark, at
+200 marks per flush; backlog or D1 failures can require more alarms. Ordinary
+45-day object pruning retains its existing 90-day mirror archive. A client
+that recreates the same hashed run id during this window can lose its new
+mirror row until another run update; the object's accounting remains the
+truth. Delete Data clears the app's run journals.
+
+A request authenticated before key revocation may still admit after
+`/forget`: in open mode its summary follows 45-day object / 90-day mirror
+retention; in trial mode it consumes a unit and stays with the lifetime
+count. If `/forget` fails after D1 committed, the public route returns 503
+`deregistration_unavailable`. This is partial success: the old key is gone,
+the next delete gets 401 `unknown_key`, and unit-free summaries left in the
+object/mirror follow the 45/90-day retention. No permanent forgotten marker
+is stored.
+
 Alerts go to Pushover with the deployer's app token and user key: the ceiling
 (once a month), the backstop and a missing price (once a day), provider
 failures (5xx, timeouts, unreachable: at least 5 and at least 20 % of
@@ -324,7 +363,8 @@ deploy. Durable Object code updates land up to five minutes after a deploy
 ## Rollback
 
 - Stop the trial without a code change: set `TRIAL_PROXY_ENABLED = "false"`
-  for the lane and deploy; every route but `/health` answers `trial_disabled`.
+  for the lane and deploy; feature admission stops. `/health` and authenticated
+  `/v1/install/delete` remain reachable; the switch is not a write freeze.
 - Roll back code: `wrangler rollback <version-id> --env <lane>`
   (`wrangler deployments list --name <worker>` lists versions, oldest first).
   The ledger's storage survives deploys and rollbacks; every settlement is

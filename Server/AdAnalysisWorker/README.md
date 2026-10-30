@@ -89,6 +89,20 @@ python3 scripts/watch_ad_analysis.py --credentials-env-file /path/to/operator.en
 python3 -B -m unittest discover -s scripts
 ```
 
+## API
+
+- `GET /health` reports service availability.
+- `POST /v1/app-attest/challenge` and `POST /v1/app-attest/register` manage
+  App Attest identity state.
+- `POST /v1/install/delete` — App Attest envelope with payload `"{}"`;
+  200 `{"message":"deleted"}`. Deletes every key and challenge for this
+  install in one D1 batch, including when `PUBLIC_AD_ANALYSIS_ENABLED=false`.
+  POST and authentication still apply. Day objects retain key-hash
+  `daily_usage` and `accounted_runs` for about 48 h; job `subjects` remain
+  for 24 h after success or 30 min after failure.
+- `POST /v1/ad-analysis/transcript` submits a transcript for analysis.
+- `POST /v1/ad-analysis/jobs/{job_id}` polls an authorized job.
+
 ## Result retention
 
 A completed analysis is readable for 24 hours from durable completion; a failed

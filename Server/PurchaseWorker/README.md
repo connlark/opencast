@@ -28,6 +28,14 @@ are configured.
 Use independent random values of at least 32 bytes for `APP_TX_HMAC_KEY` and
 `APP_TX_ENCRYPTION_KEY`; do not reuse them across lanes.
 
+## Internal routes
+
+Service-binding only; all routes are POST JSON. Deregistration uses:
+
+| Route | Purpose |
+| --- | --- |
+| `/internal/v1/install-links/delete` | audit-index delete: `{install_key}` (non-empty string, at most 200 UTF-8 bytes); 200 `{deleted: n}`, idempotent; accounts and ledgers untouched. Gateways unlink before deleting their local App Attest keys, fence bootstrap link writes on those keys, and compensate a revoked in-flight bootstrap with another best-effort unlink (logged on failure) |
+
 ## Commands
 
 ```sh

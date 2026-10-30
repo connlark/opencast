@@ -90,13 +90,28 @@ Worker locally with `yarn dev`.
 ## API
 
 - `GET /health` reports service availability.
-- `POST /v1/app-attest/challenge`, `POST /v1/app-attest/register`, and
-  `POST /v1/install/delete` manage App Attest identity state.
+- `POST /v1/app-attest/challenge` and `POST /v1/app-attest/register` manage
+  App Attest identity state.
+- `POST /v1/install/delete` — App Attest envelope with payload `"{}"`;
+  200 `{"message":"deleted"}`. Removes all keys, challenges and the local
+  install-account link in one D1 batch, after unlinking PurchaseWorker's
+  `tan:<install_id>` audit entry on purchase lanes. A failed unlink returns
+  503 `deregistration_unavailable` and preserves local identity/link rows
+  for retry (a lost response may follow a committed remote unlink).
+  Ignores `PUBLIC_TRANSCRIPT_ANALYSIS_ENABLED`; POST and authentication still
+  apply. Account balances and reservations remain. Key-hash usage objects
+  expire after about 48 h; job records retain subjects for 24 h after success
+  or 30 min after failure.
 - `POST /v1/transcript-analysis/transcript` validates and submits transcript
   analysis. Asynchronous requests return a job identifier and poll delay.
 - `POST /v1/transcript-analysis/jobs/{job_id}` polls an authorized job.
 - `POST /v1/transcript-analysis/account/bootstrap` links an App Attest install
   to the configured credit authority.
+
+App Attest bootstrap link writes require the install's key row in the same
+D1 statement. A bootstrap overtaken by deletion returns 401 `unknown_key`
+and best-effort unlinks any PurchaseWorker audit link it already requested
+(logging compensation failures).
 
 ## Result retention
 
