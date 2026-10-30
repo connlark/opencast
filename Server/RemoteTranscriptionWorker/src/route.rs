@@ -4,6 +4,7 @@ pub const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 pub const HEALTH_PATH: &str = "/health";
 pub const APP_ATTEST_CHALLENGE_PATH: &str = "/v1/app-attest/challenge";
 pub const APP_ATTEST_REGISTER_PATH: &str = "/v1/app-attest/register";
+pub const INSTALL_DELETE_PATH: &str = "/v1/install/delete";
 pub const ACCOUNT_BOOTSTRAP_PATH: &str = "/v1/remote-transcription/account/bootstrap";
 pub const JOBS_PATH: &str = "/v1/remote-transcription/jobs";
 pub const JOBS_PREFIX: &str = "/v1/remote-transcription/jobs/";
@@ -58,6 +59,7 @@ pub enum RouteAction {
     Static(StaticResponse),
     AppAttestChallenge,
     AppAttestRegister,
+    InstallDelete,
     AccountBootstrap,
     CreateJob,
     Job { job_id: String, action: JobAction },
@@ -88,6 +90,10 @@ pub fn route_request(method: &str, path: &str, enabled: bool) -> RouteAction {
         // Challenge minting remains disabled, so no new registration can
         // succeed until the feature flag is deliberately enabled.
         return post_action(method, true, RouteAction::AppAttestRegister);
+    }
+
+    if path == INSTALL_DELETE_PATH {
+        return post_action(method, true, RouteAction::InstallDelete);
     }
 
     if path == ACCOUNT_BOOTSTRAP_PATH {
@@ -198,7 +204,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flags_off_keeps_only_fail_closed_verification_and_money_routes() {
+    fn install_delete_requires_post_and_ignores_the_kill_switch() {
+        for enabled in [false, true] {
+            assert_eq!(
+                route_request("POST", INSTALL_DELETE_PATH, enabled),
+                RouteAction::InstallDelete
+            );
+            assert!(matches!(
+                route_request("GET", INSTALL_DELETE_PATH, enabled),
+                RouteAction::Static(StaticResponse { status: 405, .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn flags_off_keeps_verification_money_and_deregistration_routes() {
         assert!(matches!(
             route_request("POST", JOBS_PATH, false),
             RouteAction::Static(StaticResponse { status: 503, .. })

@@ -4,6 +4,7 @@
 // test` cannot reach. Requires `build/index.js` (see `yarn build:worker`).
 import {
   SELF,
+  createExecutionContext,
   env,
   runDurableObjectAlarm,
   runInDurableObject,
@@ -948,5 +949,59 @@ describe("result budget (AA-5)", () => {
     }
     expect(failed.status).toBe(502);
     expect((await failed.json()).error).toBe("result_oversized");
+  });
+});
+
+import Worker from '../build/index.js';
+
+describe('install deregistration', () => {
+  const path = '/v1/install/delete';
+  async function seedInstall() {
+    const identity = await makeSyntheticAppAttestIdentity();
+    identity.counter = 0;
+    await seedSyntheticKey(identity);
+    const extra = await makeSyntheticAppAttestIdentity();
+    extra.installID = identity.installID;
+    await seedSyntheticKey(extra);
+    await env.AD_ANALYSIS_DB.prepare('INSERT INTO app_attest_challenges (challenge_id, challenge_hash, purpose, install_id, created_at, expires_at) VALUES (?1, ?1, ?2, ?3, 1, 2)')
+      .bind(crypto.randomUUID(), 'register', identity.installID).run();
+    return identity;
+  }
+  async function counts(identity) {
+    return Promise.all(['app_attest_keys', 'app_attest_challenges'].map(async (table) =>
+      (await env.AD_ANALYSIS_DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE install_id = ?1`).bind(identity.installID).first()).n));
+  }
+  async function post(identity, target = path, fetcher = SELF.fetch.bind(SELF)) {
+    const payload = '{}';
+    const assertion = await syntheticAssertion(identity, target, payload, ++identity.counter);
+    return fetcher(`${BASE}${target}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ install_id: identity.installID, key_id: identity.keyID, payload, assertion }),
+    });
+  }
+  it('removes only one install, rejects its old key and accepts a seeded replacement', async () => {
+    const a = await seedInstall();
+    const b = await seedInstall();
+    const response = await post(a);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ message: 'deleted' });
+    expect(await counts(a)).toEqual([0, 0]);
+    expect(await counts(b)).toEqual([2, 1]);
+    for (const target of [ANALYZE_PATH, path]) {
+      const old = await post(a, target);
+      expect(old.status).toBe(401);
+      expect(await old.json()).toEqual({ error: 'unknown_key' });
+    }
+    const replacement = await makeSyntheticAppAttestIdentity();
+    replacement.installID = a.installID;
+    replacement.counter = 0;
+    await seedSyntheticKey(replacement);
+    expect((await post(replacement)).status).toBe(200);
+  });
+  it('deletes while feature admission is disabled', async () => {
+    const a = await seedInstall();
+    const disabled = new Worker(createExecutionContext(), { ...env, PUBLIC_AD_ANALYSIS_ENABLED: 'false' });
+    expect((await post(a, path, (url, init) => disabled.fetch(new Request(url, init)))).status).toBe(200);
+    expect(await counts(a)).toEqual([0, 0]);
   });
 });

@@ -8,6 +8,7 @@ import {
   errorJson,
   handleBalance,
   handleBootstrap,
+  handleInstallLinkDelete,
   handleNotification,
   handleReconcile,
   handleRedeem,
@@ -37,6 +38,8 @@ export default {
           return json(200, { ok: true, lane: env.LANE });
         case '/internal/v1/bootstrap':
           return await handleBootstrap(env, request);
+        case '/internal/v1/install-links/delete':
+          return await handleInstallLinkDelete(env, request);
         case '/internal/v1/balance':
           return await handleBalance(env, request);
         case '/internal/v1/reserve':

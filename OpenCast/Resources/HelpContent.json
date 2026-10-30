@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-29T03:01:55Z",
+  "updatedAt": "2026-10-30T07:42:02Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -409,7 +409,7 @@
       "title": "Storage",
       "symbol": "internaldrive",
       "summary": "Automatic caches are capped; downloads follow your limits.",
-      "updatedAt": "2026-10-29T03:01:55Z",
+      "updatedAt": "2026-10-30T07:42:02Z",
       "related": [
         "icloud-sync"
       ],
@@ -432,7 +432,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Whisper models are managed from Settings › Transcription, and Delete Data removes everything else opencast stores on this device."
+          "text": "Whisper models are managed from Settings › Transcription. Delete Data removes your library, listening progress, downloads, transcripts, analyses, caches, downloaded models, and settings from this device and, from version 2026.11.1, asks every opencast service this app uses to forget this install (earlier versions told only the notification service). If a service can't be reached, the next Delete Data asks again. Your own AI keys stay, and the free-trial count is not reset."
         }
       ]
     },

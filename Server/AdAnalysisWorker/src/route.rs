@@ -69,7 +69,7 @@ pub fn route_request(
     }
 
     if path == INSTALL_DELETE_PATH {
-        return handle_app_attest_write(method, enabled, RouteAction::InstallDelete);
+        return handle_app_attest_write(method, true, RouteAction::InstallDelete);
     }
 
     if path == ANALYZE_TRANSCRIPT_PATH {

@@ -6,14 +6,19 @@ use opencast_transcript_analysis_worker::route::{
 };
 
 #[test]
-fn install_delete_requires_post_and_enabled_feature() {
+fn install_delete_requires_post_and_ignores_the_kill_switch() {
     let wrong_method = static_response(route_request("GET", INSTALL_DELETE_PATH, true));
     assert_eq!(wrong_method.status, 405);
     assert_header(&wrong_method, "allow", "POST");
 
-    let disabled = static_response(route_request("POST", INSTALL_DELETE_PATH, false));
-    assert_eq!(disabled.status, 503);
-    assert_eq!(disabled.body, r#"{"error":"transcript_analysis_disabled"}"#);
+    assert_eq!(
+        route_request("POST", INSTALL_DELETE_PATH, false),
+        RouteAction::InstallDelete
+    );
+    assert_eq!(
+        static_response(route_request("GET", INSTALL_DELETE_PATH, false)).status,
+        405
+    );
 
     assert!(matches!(
         route_request("POST", INSTALL_DELETE_PATH, true),

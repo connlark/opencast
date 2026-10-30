@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { purchaseAccountCount, purchaseAccountIdsAfter, reconciliationDue } from '../../src/d1';
+import { deleteInstallLink, purchaseAccountCount, purchaseAccountIdsAfter, reconciliationDue } from '../../src/d1';
 
 // Records every prepared statement and its bound values; `results` feeds `all()`.
 function recordingDb(results) {
@@ -16,12 +16,23 @@ function recordingDb(results) {
         },
         first: async () => ({ value: 42 }),
         all: async () => ({ results }),
+        run: async () => ({ meta: { changes: results } }),
       };
     },
   };
 }
 
 describe('D1 query cost guards', () => {
+  it('deletes only the bound install audit link and returns the actual change count', async () => {
+    for (const changes of [0, 1]) {
+      const db = recordingDb(changes);
+      await expect(deleteInstallLink(db, 'tan:install-a')).resolves.toBe(changes);
+      expect(db.statements).toEqual([{
+        sql: 'DELETE FROM install_account_links WHERE install_key = ?1',
+        values: ['tan:install-a'],
+      }]);
+    }
+  });
   it('joins the due account rows into the reconciliation query instead of re-reading each account', async () => {
     const db = recordingDb([
       {

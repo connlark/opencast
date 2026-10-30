@@ -34,10 +34,12 @@ use crate::admission::{
     forward_budget_ms, plan, status_window, SETTLE_FLOOR_MS,
 };
 use crate::bundle::{self, TrialBundle};
-use crate::config::{self, ConfigError, ConfigField, ConfigReason, TrialConfig, VarSource};
+use crate::config::{
+    self, AuthConfig, ConfigError, ConfigField, ConfigReason, TrialConfig, VarSource,
+};
 use crate::identifiers::{self, CHALLENGE_BYTES, CHALLENGE_ID_BYTES};
 use crate::ledger::{Decision, Lane, RefusalCode, SettleResult, StatusView};
-use crate::ledger_do::{AdmitResponse, SettleRequest, StatusRequest};
+use crate::ledger_do::{AdmitResponse, ForgetRequest, SettleRequest, StatusRequest};
 use crate::provider::{
     classify_reply, count_tokens_body, parse_count_tokens, sanitized_retry_after, status_family,
     AmbiguousClass, SettleOutcome, COUNT_FAILED_RETRY_AFTER_SECONDS, MAX_PROVIDER_BODY_BYTES,
@@ -45,7 +47,7 @@ use crate::provider::{
 use crate::request::{parse_window, RequestError, TrialWindow};
 use crate::route::{
     error_body, refused_unlogged, route, ChallengeSourceFailure, ProxyCode, RouteAction,
-    StatusBody, JSON_CONTENT_TYPE, TRIAL_ANALYZE_PATH, TRIAL_STATUS_PATH,
+    StatusBody, INSTALL_DELETE_PATH, JSON_CONTENT_TYPE, TRIAL_ANALYZE_PATH, TRIAL_STATUS_PATH,
 };
 use crate::telemetry::{line, ConfigErrorEvent, ForwardEvent, StageEvent, StatusEvent};
 
@@ -163,6 +165,16 @@ async fn handle(req: &mut Request, env: &Env, started: i64) -> Result<Response> 
             response.headers_mut().set("allow", allow)?;
             return Ok(response);
         }
+        RouteAction::InstallDelete => {
+            let auth = match config::load_auth(&EnvVars(env)) {
+                Ok(auth) => auth,
+                Err(error) => {
+                    log_config_error(error);
+                    return Ok(proxy_response(ProxyCode::TrialUnavailable, None));
+                }
+            };
+            return install_delete(req, env, &auth).await;
+        }
         _ => {}
     }
     if !config::enabled(&EnvVars(env)) {
@@ -191,9 +203,10 @@ async fn handle(req: &mut Request, env: &Env, started: i64) -> Result<Response> 
         RouteAction::Analyze => Ok(analyze(req, env, &config, bundle, started).await),
         RouteAction::Status => Ok(status(req, env, &config, bundle, false).await),
         RouteAction::StatusBearer => Ok(status(req, env, &config, bundle, true).await),
-        RouteAction::Health | RouteAction::NotFound | RouteAction::MethodNotAllowed(_) => {
-            Ok(proxy_response(ProxyCode::NotFound, None))
-        }
+        RouteAction::Health
+        | RouteAction::NotFound
+        | RouteAction::MethodNotAllowed(_)
+        | RouteAction::InstallDelete => Ok(proxy_response(ProxyCode::NotFound, None)),
     }
 }
 
@@ -279,6 +292,41 @@ async fn authenticate(
     if bearer_only {
         return Ok(Err(ProxyCode::Unauthorized));
     }
+    let auth = AuthConfig {
+        app_id: config.app_id.clone(),
+        app_attest_environment: config.app_attest_environment.clone(),
+    };
+    Ok(
+        authenticate_app_attest(req, env, &auth, path, max_payload_bytes)
+            .await?
+            .map(|authenticated| {
+                (
+                    Caller {
+                        subject: authenticated.subject,
+                        lane: Lane::AppAttest,
+                    },
+                    authenticated.payload,
+                )
+            }),
+    )
+}
+
+struct AttestedCaller {
+    install_id: String,
+    subject: String,
+    payload: Vec<u8>,
+}
+
+async fn authenticate_app_attest(
+    req: &mut Request,
+    env: &Env,
+    auth: &AuthConfig,
+    path: &'static str,
+    max_payload_bytes: usize,
+) -> Result<std::result::Result<AttestedCaller, ProxyCode>> {
+    if req.headers().has(AUTHORIZATION_HEADER)? {
+        return Ok(Err(ProxyCode::Unauthorized));
+    }
     // A POST without a body has no stream to open: malformed client input,
     // answered with AppAttestCore's own code for it.
     if req.inner().body().is_none() {
@@ -297,8 +345,8 @@ async fn authenticate(
     let authenticated = match authenticate_envelope_with_storage(
         req,
         &checked,
-        &config.app_id,
-        &config.app_attest_environment,
+        &auth.app_id,
+        &auth.app_attest_environment,
         now_ms() / 1_000,
         "POST",
         path,
@@ -324,13 +372,45 @@ async fn authenticate(
             return Ok(Err(ProxyCode::TrialUnavailable));
         }
     };
-    Ok(Ok((
-        Caller {
-            subject: app_attest_subject(&authenticated.install_id),
-            lane: Lane::AppAttest,
+    Ok(Ok(AttestedCaller {
+        subject: app_attest_subject(&authenticated.install_id),
+        install_id: authenticated.install_id,
+        payload: authenticated.payload.into_bytes(),
+    }))
+}
+
+async fn install_delete(req: &mut Request, env: &Env, auth: &AuthConfig) -> Result<Response> {
+    let authenticated =
+        match authenticate_app_attest(req, env, auth, INSTALL_DELETE_PATH, MAX_STATUS_BODY_BYTES)
+            .await?
+        {
+            Ok(authenticated) => authenticated,
+            Err(code) => return Ok(proxy_response(code, None)),
+        };
+    let db = env.d1(TRIAL_DB)?;
+    let mut statements = storage::install_delete_statements(&db, &authenticated.install_id)?;
+    statements.push(
+        db.prepare("DELETE FROM trial_run WHERE subject = ?1 AND unit_consumed = 0")
+            .bind_refs(&[worker::D1Type::Text(&authenticated.subject)])?,
+    );
+    db.batch(statements).await?;
+    // Revocation precedes object cleanup. Failure here is intentionally partial:
+    // the old key cannot retry, and normal retention completes unit-free cleanup.
+    if ledger_exchange::<serde_json::Value>(
+        env,
+        "/forget",
+        &ForgetRequest {
+            subject: authenticated.subject,
         },
-        authenticated.payload.into_bytes(),
-    )))
+        now_ms() + STATUS_EXCHANGE_BUDGET_MS,
+        0,
+    )
+    .await
+    .is_err()
+    {
+        return Ok(proxy_response(ProxyCode::DeregistrationUnavailable, None));
+    }
+    json_response(200, br#"{"message":"deleted"}"#.to_vec())
 }
 
 /// AppAttestCore's D1 key storage behind an install-id check: an envelope

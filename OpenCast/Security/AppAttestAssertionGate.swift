@@ -11,8 +11,16 @@ import Foundation
 actor AppAttestAssertionGate {
     nonisolated static let shared = AppAttestAssertionGate()
 
+    private let suspension: AppAttestSuspension
+
+    init(suspension: AppAttestSuspension = .shared) {
+        self.suspension = suspension
+    }
+
     private var tails: [String: (id: UInt64, task: Task<Void, Never>)] = [:]
     private var nextTailID: UInt64 = 0
+
+    var enqueuedSendCount: UInt64 { nextTailID }
 
     /// Runs `operation` after every previously enqueued send for `keyID`
     /// has delivered its response (or failed). Distinct keys never wait on
@@ -20,14 +28,17 @@ actor AppAttestAssertionGate {
     /// leaves the chain intact for the sends queued behind it.
     func withSerializedSend<T: Sendable>(
         keyID: String,
+        exemptFromSuspension: Bool = false,
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
+        if !exemptFromSuspension { try suspension.checkAdmission() }
         nextTailID += 1
         let tailID = nextTailID
         let previousTail = tails[keyID]?.task
         let work = Task {
             await previousTail?.value
             try Task.checkCancellation()
+            if !exemptFromSuspension { try suspension.checkAdmission() }
             return try await operation()
         }
         tails[keyID] = (tailID, Task { _ = try? await work.value })

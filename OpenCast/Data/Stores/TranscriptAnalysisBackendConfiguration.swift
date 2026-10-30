@@ -38,6 +38,20 @@ struct TranscriptAnalysisBackendConfiguration: Sendable {
         #endif
     }()
 
+    nonisolated static func resolve(
+        routing: AnalysisBackendRouting = .currentBuild,
+        storeEnvironment: @Sendable () async throws -> RemoteTranscriptionStoreEnvironment
+    ) async -> Self? {
+        #if INTERNAL_NOTIFICATIONS_DIAGNOSTICS
+        if routing == .currentBuild { return prodStaging }
+        #elseif DEBUG
+        if routing == .currentBuild { return debug(environment: ProcessInfo.processInfo.environment) }
+        #endif
+        guard let environment = try? await storeEnvironment() else { return nil }
+        if case .unknown = environment { return nil }
+        return release(for: environment)
+    }
+
     #if DEBUG
     nonisolated static func debug(environment: [String: String]) -> Self {
         let workerBaseURL = environment["OPENCAST_TRANSCRIPT_ANALYSIS_BASE_URL"]

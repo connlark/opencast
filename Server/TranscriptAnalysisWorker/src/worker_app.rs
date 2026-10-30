@@ -692,14 +692,26 @@ async fn handle_install_delete(req: &mut Request, env: &Env) -> Result<Response>
         Err(failure) => return json_error_code(failure.status, failure.code),
     };
 
-    // The install's deletable D1 surface is its App Attest identity rows.
-    // Day-keyed usage DOs are unreachable by design (named by hashed key
-    // subject and day index, never addressed after their day) and self-wipe
-    // via their cleanup alarms, so there is nothing to purge there. The
-    // 30-minute job DO records purge on their TTL alarms; a future shared
-    // store, when it lands, holds nothing user-linked by design
-    // needs a separate durable store.
-    storage::delete_install_rows(&db, &authenticated.install_id).await?;
+    // Preserve local authorization until the external audit unlink succeeds.
+    if config.credit_backend == CreditBackend::Purchase {
+        let purchase = match PurchaseAuthority::from_env(env) {
+            Ok(purchase) => purchase,
+            Err(_) => return json_error_code(503, "deregistration_unavailable"),
+        };
+        if purchase
+            .delete_install_link(&purchase_install_key(&authenticated.install_id))
+            .await
+            .is_err()
+        {
+            return json_error_code(503, "deregistration_unavailable");
+        }
+    }
+    let mut statements = storage::install_delete_statements(&db, &authenticated.install_id)?;
+    statements.push(
+        db.prepare("DELETE FROM install_account_links WHERE install_id = ?1")
+            .bind_refs(&[worker::D1Type::Text(&authenticated.install_id)])?,
+    );
+    db.batch(statements).await?;
 
     json_success(200, &serde_json::json!({ "message": "deleted" }))
 }
@@ -755,7 +767,13 @@ async fn handle_account_bootstrap(req: &mut Request, env: &Env) -> Result<Respon
                         random::random_urlsafe_token(12)
                             .map_err(|error| worker::Error::RustError(error.to_string()))?
                     );
-                    claim_install_account(&db, &authenticated.install_id, &candidate, now).await?
+                    let Some(account_id) =
+                        claim_install_account(&db, &authenticated.install_id, &candidate, now)
+                            .await?
+                    else {
+                        return json_error_code(401, "unknown_key");
+                    };
+                    account_id
                 }
             };
             let credit = DevCreditAuthority::new(
@@ -837,13 +855,24 @@ async fn handle_account_bootstrap(req: &mut Request, env: &Env) -> Result<Respon
                     return json_error_code(503, ERROR_BILLING_UNAVAILABLE);
                 }
             };
-            link_install_account(
+            if !link_install_account(
                 &db,
                 &authenticated.install_id,
                 &parsed.account_id,
                 now_seconds(),
             )
-            .await?;
+            .await?
+            {
+                if let Err(error) = purchase
+                    .delete_install_link(&purchase_install_key(&authenticated.install_id))
+                    .await
+                {
+                    worker::console_error!(
+                        "transcript-analysis revoked bootstrap unlink failed: {error}"
+                    );
+                }
+                return json_error_code(401, "unknown_key");
+            }
             json_success(
                 200,
                 &BootstrapResponse {

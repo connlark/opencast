@@ -408,6 +408,7 @@ fn mirror_parts(key: &MirrorKey) -> (&'static str, String, String) {
     match key {
         MirrorKey::Install(subject) => ("install", subject.clone(), String::new()),
         MirrorKey::Run(subject, run_id) => ("run", subject.clone(), run_id.clone()),
+        MirrorKey::ForgetRun(subject, run_id) => ("run_forget", subject.clone(), run_id.clone()),
         MirrorKey::Month(month) => ("month", month.clone(), String::new()),
         MirrorKey::Day(day) => ("day", day.to_string(), String::new()),
     }
@@ -417,6 +418,7 @@ fn mirror_key(table: &str, key_a: String, key_b: String) -> StoreResult<MirrorKe
     match table {
         "install" => Ok(MirrorKey::Install(key_a)),
         "run" => Ok(MirrorKey::Run(key_a, key_b)),
+        "run_forget" => Ok(MirrorKey::ForgetRun(key_a, key_b)),
         "month" => Ok(MirrorKey::Month(key_a)),
         "day" => key_a
             .parse()
@@ -769,6 +771,21 @@ impl<B: SqlBackend> LedgerStore for SqlStore<B> {
         )
     }
 
+    fn forget_unit_free_runs(&mut self, subject: &str) -> StoreResult<Vec<String>> {
+        let ids = self
+            .rows(
+                "DELETE FROM runs WHERE subject = ?1 AND unit_consumed = 0 RETURNING run_id",
+                &[text(subject)],
+            )?
+            .iter()
+            .map(|row| Row(row).text(0))
+            .collect::<StoreResult<Vec<_>>>()?;
+        for id in &ids {
+            crate::ledger::bump(self, MirrorKey::ForgetRun(subject.to_string(), id.clone()))?;
+        }
+        Ok(ids)
+    }
+
     fn mark_dirty(&mut self, key: &MirrorKey, version: u64) -> StoreResult<()> {
         let (table, key_a, key_b) = mirror_parts(key);
         self.exec(
@@ -889,8 +906,8 @@ fn alert_row(row: &[SqlValue]) -> StoreResult<AlertRecord> {
     })
 }
 
-/// One D1 mirror upsert: newer versions only, so a late or replayed flush
-/// never moves a row backwards.
+/// One D1 mirror write. Upserts accept only newer versions; forget deletes
+/// rely on the object serializing flushes so an older upsert cannot land last.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirrorStatement {
     pub sql: &'static str,
@@ -902,6 +919,7 @@ pub const MIRROR_INSTALL_SQL: &str = "INSERT INTO trial_install \
      ON CONFLICT(subject) DO UPDATE SET trial_units_used = excluded.trial_units_used, \
      open_runs = excluded.open_runs, version = excluded.version, updated_at = excluded.updated_at \
      WHERE excluded.version > trial_install.version";
+pub const MIRROR_DELETE_RUN_SQL: &str = "DELETE FROM trial_run WHERE subject = ?1 AND run_id = ?2";
 pub const MIRROR_RUN_SQL: &str = "INSERT INTO trial_run \
      (subject, run_id, feature, windows, reservations, reserved_input_tokens, charged_micros, \
      unit_consumed, created_at, version, updated_at) \
@@ -937,13 +955,17 @@ pub const MIRROR_RUN_RETENTION_MS: i64 = 90 * crate::clock::MS_PER_DAY;
 pub const MIRROR_PRUNE_RUNS_SQL: &str =
     "DELETE FROM trial_run WHERE unit_consumed = 0 AND updated_at < ?1";
 
-/// The mirror statement for a dirty key's current row (`None` when the row
-/// is gone, e.g. pruned).
+/// The mirror statement for a dirty key's current row (`None` when an ordinary
+/// row is gone, e.g. pruned). Explicit forget marks always produce a delete.
 pub fn mirror_statement<S: LedgerStore>(
     store: &S,
     key: &MirrorKey,
 ) -> StoreResult<Option<MirrorStatement>> {
     match key {
+        MirrorKey::ForgetRun(subject, run_id) => Some(Ok(MirrorStatement {
+            sql: MIRROR_DELETE_RUN_SQL,
+            args: vec![text(subject), text(run_id)],
+        })),
         MirrorKey::Install(subject) => store.install(subject)?.map(|i| -> StoreResult<_> {
             Ok(MirrorStatement {
                 sql: MIRROR_INSTALL_SQL,

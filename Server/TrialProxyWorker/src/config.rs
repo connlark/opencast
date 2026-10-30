@@ -1,6 +1,7 @@
 //! Worker vars → the ledger's bounds and the price table. Every var is
-//! required on every lane; a bad or missing one refuses every request with
-//! a logged config error naming the var (never its value).
+//! required for feature admission on every lane; a bad or missing one refuses it with
+//! a logged config error naming the var (never its value). Identity cleanup
+//! uses only `load_auth`.
 
 use opencast_app_attest_core::challenge_limits::challenge_source_hash_key_for_environment;
 use serde::Deserialize;
@@ -302,13 +303,28 @@ pub fn enabled(vars: &impl VarSource) -> bool {
     vars.var(ConfigField::TrialProxyEnabled.as_str()).as_deref() == Some("true")
 }
 
-pub fn load(vars: &impl VarSource, bundle: &TrialBundle) -> Result<TrialConfig, ConfigError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub app_id: String,
+    pub app_attest_environment: String,
+}
+
+/// Deregistration needs only identity verification, even after feature shutdown.
+pub fn load_auth(vars: &impl VarSource) -> Result<AuthConfig, ConfigError> {
     let team_id = text(vars, ConfigField::AppleTeamId)?;
     let bundle_id = text(vars, ConfigField::AppleBundleId)?;
     let environment = text(vars, ConfigField::AppAttestEnvironment)?;
     if !matches!(environment.as_str(), "development" | "production") {
         return Err(invalid(ConfigField::AppAttestEnvironment));
     }
+    Ok(AuthConfig {
+        app_id: format!("{team_id}.{bundle_id}"),
+        app_attest_environment: environment,
+    })
+}
+
+pub fn load(vars: &impl VarSource, bundle: &TrialBundle) -> Result<TrialConfig, ConfigError> {
+    let auth = load_auth(vars)?;
     let enabled = match text(vars, ConfigField::TrialProxyEnabled)?.as_str() {
         "true" => true,
         "false" => false,
@@ -358,8 +374,8 @@ pub fn load(vars: &impl VarSource, bundle: &TrialBundle) -> Result<TrialConfig, 
         });
     }
     Ok(TrialConfig {
-        app_id: format!("{team_id}.{bundle_id}"),
-        app_attest_environment: environment,
+        app_id: auth.app_id,
+        app_attest_environment: auth.app_attest_environment,
         enabled,
         alert_lane,
         mode_starts_at,

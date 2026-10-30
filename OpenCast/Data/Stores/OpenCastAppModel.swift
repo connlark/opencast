@@ -222,6 +222,8 @@ final class OpenCastAppModel {
     @ObservationIgnored let downloadCleanup: DownloadCleanupCoordinator
     @ObservationIgnored let autoDownloads: PodcastAutoDownloadCoordinator
     @ObservationIgnored let upNextAutoAdd: UpNextAutoAddCoordinator
+    private(set) var lastAnalysisServicesDeregistrationErrorMessage: String?
+    @ObservationIgnored private let appAttestSuspension: AppAttestSuspension
     @ObservationIgnored private let dataNuke: DataNukeRunner
     @ObservationIgnored private let siriMediaDiscovery: SiriMediaDiscovery
     @ObservationIgnored private var siriMediaUserContextObservationTask: Task<Void, Never>?
@@ -235,6 +237,7 @@ final class OpenCastAppModel {
     @ObservationIgnored private let playlistMigrationDefaults: UserDefaults
 
     init(
+        appAttestSuspension: AppAttestSuspension = .shared,
         cacheController: OpenCastCacheController = OpenCastCacheController(),
         httpClient: (any OpenCastHTTPClient)? = nil,
         helpContent: HelpContentStore? = nil,
@@ -270,6 +273,7 @@ final class OpenCastAppModel {
         remoteTranscriptionBackgroundSession: EpisodeRemoteTranscriptionBackgroundSession = EpisodeRemoteTranscriptionBackgroundSession(),
         analysisRuns: AnalysisRunRecordStore = AnalysisRunRecordStore(),
         analysisTrialConnection: AnalysisTrialConnection = AnalysisTrialConnection(),
+        analysisServicesDeregistration: AnalysisServicesDeregistration = .init(slots: [:]),
         analysisTransportFixture: AnalysisUITestTransportMode? = nil,
         analysisContinuedTaskScheduler: (any AnalysisContinuedTaskScheduling)? = nil,
         analysisTrialStatusDefaults: UserDefaults = .standard,
@@ -309,6 +313,7 @@ final class OpenCastAppModel {
             )
         )
 
+        self.appAttestSuspension = appAttestSuspension
         self.cacheController = cacheController
         self.httpClient = resolvedHTTPClient
         self.helpContent = helpContent ?? HelpContentStore(
@@ -548,7 +553,8 @@ final class OpenCastAppModel {
             transcriptAnalyses: transcriptAnalyses,
             transcriptionModels: transcriptionModels,
             cacheController: cacheController,
-            siriMediaDiscovery: siriMediaDiscovery
+            siriMediaDiscovery: siriMediaDiscovery,
+            appAttestSuspension: appAttestSuspension
         )
         self.unsubscribeSidecarCleanupOverride = unsubscribeSidecarCleanupOverride
         self.transcriptions.onEpisodeStateChanged = { [weak self] episodeID in
@@ -596,6 +602,22 @@ final class OpenCastAppModel {
         }
         dataNuke.prepareRuntime = { [weak self] in
             await self?.prepareRuntimeForDataNuke()
+        }
+        dataNuke.deregisterServices = { [weak self] in
+            guard let self else { return }
+            appAttestSuspension.suspend()
+            let outcomes = await analysisServicesDeregistration.run()
+            let failures = outcomes.sorted { $0.key.rawValue < $1.key.rawValue }.compactMap { slot, outcome -> String? in
+                let message: String
+                switch outcome {
+                case .notRegistered, .deregistered: return nil
+                case .configurationUnavailable: message = "Service configuration unavailable."
+                case .busy: message = "Registration is still in progress."
+                case .failed(let error): message = error.localizedDescription
+                }
+                return "\(slot.rawValue): \(message)"
+            }
+            self.lastAnalysisServicesDeregistrationErrorMessage = failures.isEmpty ? nil : failures.joined(separator: "\n")
         }
         dataNuke.resetRuntime = { [weak self] modelContext in
             await self?.resetRuntimeStateAfterDataNuke(modelContext: modelContext)
@@ -3281,6 +3303,7 @@ final class OpenCastAppModel {
         lastVoiceBoostDeviceProbeApplicationState = nil
         refreshVoiceBoostDeviceProbeReportStatus()
         #endif
+        appAttestSuspension.resume()
     }
 
     private func startSiriMediaUserContextObservation() {

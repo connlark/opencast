@@ -10,6 +10,7 @@ pub const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 pub const HEALTH_PATH: &str = "/health";
 pub const APP_ATTEST_CHALLENGE_PATH: &str = "/v1/app-attest/challenge";
 pub const APP_ATTEST_REGISTER_PATH: &str = "/v1/app-attest/register";
+pub const INSTALL_DELETE_PATH: &str = "/v1/install/delete";
 pub const TRIAL_ANALYZE_PATH: &str = "/v1/trial/analyze";
 pub const TRIAL_STATUS_PATH: &str = "/v1/trial/status";
 
@@ -18,6 +19,7 @@ pub enum RouteAction {
     Health,
     Challenge,
     Register,
+    InstallDelete,
     Analyze,
     /// `POST`: the App Attest envelope or the bearer lane.
     Status,
@@ -33,10 +35,15 @@ pub fn route(method: &str, path: &str) -> RouteAction {
         (HEALTH_PATH, _) => RouteAction::MethodNotAllowed("GET"),
         (APP_ATTEST_CHALLENGE_PATH, "POST") => RouteAction::Challenge,
         (APP_ATTEST_REGISTER_PATH, "POST") => RouteAction::Register,
+        (INSTALL_DELETE_PATH, "POST") => RouteAction::InstallDelete,
         (TRIAL_ANALYZE_PATH, "POST") => RouteAction::Analyze,
-        (APP_ATTEST_CHALLENGE_PATH | APP_ATTEST_REGISTER_PATH | TRIAL_ANALYZE_PATH, _) => {
-            RouteAction::MethodNotAllowed("POST")
-        }
+        (
+            APP_ATTEST_CHALLENGE_PATH
+            | APP_ATTEST_REGISTER_PATH
+            | TRIAL_ANALYZE_PATH
+            | INSTALL_DELETE_PATH,
+            _,
+        ) => RouteAction::MethodNotAllowed("POST"),
         (TRIAL_STATUS_PATH, "POST") => RouteAction::Status,
         (TRIAL_STATUS_PATH, "GET") => RouteAction::StatusBearer,
         (TRIAL_STATUS_PATH, _) => RouteAction::MethodNotAllowed("GET, POST"),
@@ -52,6 +59,7 @@ pub enum ProxyCode {
     Unauthorized,
     TrialDisabled,
     TrialUnavailable,
+    DeregistrationUnavailable,
     ProviderTimeout,
     ProviderUnreachable,
     ProviderBodyTooLarge,
@@ -77,6 +85,7 @@ impl ProxyCode {
             Self::Unauthorized => "unauthorized",
             Self::TrialDisabled => "trial_disabled",
             Self::TrialUnavailable => "trial_unavailable",
+            Self::DeregistrationUnavailable => "deregistration_unavailable",
             Self::ProviderTimeout => "provider_timeout",
             Self::ProviderUnreachable => "provider_unreachable",
             Self::ProviderBodyTooLarge => "provider_body_too_large",
@@ -95,7 +104,7 @@ impl ProxyCode {
             Self::Refusal(RefusalCode::RequestInvalid) => 400,
             Self::PayloadTooLarge => 413,
             Self::Unauthorized => 401,
-            Self::TrialDisabled | Self::TrialUnavailable => 503,
+            Self::TrialDisabled | Self::TrialUnavailable | Self::DeregistrationUnavailable => 503,
             Self::ProviderTimeout => 504,
             Self::ProviderUnreachable | Self::ProviderBodyTooLarge => 502,
             Self::NotFound => 404,
@@ -163,6 +172,15 @@ mod tests {
 
     #[test]
     fn routes_and_methods() {
+        assert_eq!(
+            route("POST", INSTALL_DELETE_PATH),
+            RouteAction::InstallDelete
+        );
+        assert_eq!(
+            route("GET", INSTALL_DELETE_PATH),
+            RouteAction::MethodNotAllowed("POST")
+        );
+
         assert_eq!(route("GET", "/health"), RouteAction::Health);
         assert_eq!(route("POST", "/v1/trial/analyze"), RouteAction::Analyze);
         assert_eq!(

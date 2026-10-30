@@ -12,6 +12,110 @@ import Testing
 struct DataNukeTests {
     private let seededFeedURL = "https://example.com/nuke.xml"
 
+    @Test("Nuke deregisters services after store nukes and before the row wipe")
+    func serviceDeregistrationOrdering() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let suspension = AppAttestSuspension()
+        context.insert(SubscriptionRecord(feedURL: seededFeedURL, title: "Nuke Show"))
+        context.insert(EpisodeAdAnalysisRecord(episodeID: "episode", podcastID: seededFeedURL))
+        context.insert(EpisodeTranscriptAnalysisRecord(episodeID: "episode", podcastID: seededFeedURL))
+        context.insert(EpisodeTranscriptRecord(episodeID: "episode", podcastID: seededFeedURL, sourceAudioURL: "https://example.com/audio.mp3"))
+        try context.save()
+        var called = false
+        let verifyOrdering: @MainActor @Sendable () -> Void = {
+            called = true
+            #expect(suspension.isSuspended)
+            #expect((try? context.fetchCount(FetchDescriptor<EpisodeAdAnalysisRecord>())) == 0)
+            #expect((try? context.fetchCount(FetchDescriptor<EpisodeTranscriptAnalysisRecord>())) == 0)
+            #expect((try? context.fetchCount(FetchDescriptor<EpisodeTranscriptRecord>())) == 0)
+            #expect((try? context.fetchCount(FetchDescriptor<SubscriptionRecord>())) == 1)
+        }
+        let appModel = try deregistrationAppModel(suspension: suspension, services: .init(slots: [
+            .trialProxy: { _ in await verifyOrdering(); return nil }
+        ]))
+        try await appModel.nukeAllData(modelContext: context)
+        #expect(called)
+        #expect(try context.fetchCount(FetchDescriptor<SubscriptionRecord>()) == 0)
+        #expect(appModel.dataNukeCompletionID == 1)
+        #expect(!suspension.isSuspended)
+    }
+
+    @Test("Every slot failing still completes the nuke and keeps retry credentials")
+    func allServiceFailuresStillComplete() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        context.insert(SubscriptionRecord(feedURL: seededFeedURL, title: "Nuke Show"))
+        try context.save()
+        let release = DeregistrationTestLatch()
+        let serverFailure = DeregistrationTestSlot(transport: .init(replies: [.init(status: 500, body: "{}")]))
+        let assertionFailure = DeregistrationTestSlot(attest: .init(assertionError: URLError(.cannotConnectToHost)))
+        let timeout = DeregistrationTestSlot(transport: .init(release: release))
+        let trialFailure = DeregistrationTestSlot(transport: .init(replies: [.init(status: 503, body: "{}")]))
+        let slots = [serverFailure, assertionFailure, timeout, trialFailure]
+        defer { release.release(); for slot in slots { try? slot.keychain.deleteAll() } }
+        for slot in slots { _ = try slot.registerLocally() }
+        let suspension = AppAttestSuspension()
+        let appModel = try deregistrationAppModel(suspension: suspension, services: .init(slots: [
+            .transcriptAnalysis: { _ in serverFailure.deregistration() },
+            .adAnalysis: { _ in assertionFailure.deregistration() },
+            .remoteTranscription: { _ in timeout.deregistration() },
+            .trialProxy: { _ in trialFailure.deregistration(keepsInstallID: true) }
+        ], timeoutSeconds: 0.05))
+        try await appModel.nukeAllData(modelContext: context)
+        #expect(try context.fetchCount(FetchDescriptor<SubscriptionRecord>()) == 0)
+        #expect(appModel.dataNukeCompletionID == 1)
+        #expect(appModel.lastAnalysisServicesDeregistrationErrorMessage != nil)
+        #expect(!suspension.isSuspended)
+        for slot in slots { #expect(try slot.keychain.loadAppAttestKeyID() == "old-key") }
+    }
+
+    @Test("Failure after suspension closes reopens admission in the runner catch path")
+    func failureReopensSuspension() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let root = try makeTemporaryDirectory()
+        let cache = OpenCastCacheController(rootDirectory: root.appending(path: "Cache"))
+        try FileManager.default.removeItem(at: cache.artworkCacheDirectory)
+        try Data("not a directory".utf8).write(to: cache.artworkCacheDirectory)
+        let suspension = AppAttestSuspension()
+        let runner = DataNukeRunner(
+            syncStatus: SyncStatusStore(accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])),
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(fileStore: EpisodeDownloadFileStore(baseDirectory: root)),
+            transcriptions: EpisodeTranscriptionStore(fileStore: EpisodeTranscriptFileStore(baseDirectory: root)),
+            adAnalyses: EpisodeAdAnalysisStore(client: UnusedEpisodeAdAnalysisClient(), fileStore: EpisodeAdAnalysisFileStore(baseDirectory: root)),
+            transcriptAnalyses: EpisodeTranscriptAnalysisStore(),
+            transcriptionModels: TranscriptionModelStore(),
+            cacheController: cache, siriMediaDiscovery: SiriMediaDiscovery(), appAttestSuspension: suspension
+        )
+        runner.deregisterServices = { suspension.suspend() }
+        // Hold admission closed so the error handler itself must reopen it.
+        runner.resetRuntime = { _ in #expect(suspension.isSuspended) }
+        await #expect(throws: (any Error).self) { try await runner.run(modelContext: context) }
+        #expect(!suspension.isSuspended)
+        #expect(runner.completionID == 0)
+        #expect(runner.lastErrorMessage != nil)
+    }
+
+    private func deregistrationAppModel(
+        suspension: AppAttestSuspension,
+        services: AnalysisServicesDeregistration
+    ) throws -> OpenCastAppModel {
+        let root = try makeTemporaryDirectory()
+        return OpenCastAppModel(
+            appAttestSuspension: suspension,
+            cacheController: OpenCastCacheController(rootDirectory: root.appending(path: "Caches")),
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(fileStore: EpisodeDownloadFileStore(baseDirectory: root)),
+            transcriptions: EpisodeTranscriptionStore(fileStore: EpisodeTranscriptFileStore(baseDirectory: root)),
+            adAnalyses: EpisodeAdAnalysisStore(client: UnusedEpisodeAdAnalysisClient(), fileStore: EpisodeAdAnalysisFileStore(baseDirectory: root)),
+            analysisServicesDeregistration: services,
+            syncStatus: SyncStatusStore(accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])),
+            allowsAutomaticFeedRefresh: false
+        )
+    }
+
     @Test("Confirmation text ignores case and non-letters")
     func confirmationTextIgnoresCaseAndNonLetters() {
         #expect(DataNukeConfirmation.isConfirmed("NUKE"))
@@ -35,6 +139,7 @@ struct DataNukeTests {
         let adAnalysisFileStore = EpisodeAdAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
         let localCache = SQLiteLocalLibraryCacheStore.inMemory()
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: cacheController,
             library: LibraryStore(localCache: localCache),
             downloads: DownloadStore(fileStore: fileStore),
@@ -123,6 +228,7 @@ struct DataNukeTests {
             baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
         )
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: cacheController,
             library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             downloads: DownloadStore(fileStore: fileStore),
@@ -174,6 +280,7 @@ struct DataNukeTests {
         let syncStatus = SyncStatusStore(accountStatusProvider: provider)
         let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             downloads: DownloadStore(fileStore: fileStore),
             syncStatus: syncStatus,
@@ -204,6 +311,7 @@ struct DataNukeTests {
         let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
         let temporaryDirectory = try makeTemporaryDirectory()
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: OpenCastCacheController(
                 rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
             ),
@@ -247,6 +355,7 @@ struct DataNukeTests {
             fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
         )
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: cacheController,
             library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             downloads: DownloadStore(fileStore: fileStore),
@@ -313,6 +422,7 @@ struct DataNukeTests {
             fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
         )
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: cacheController,
             library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             downloads: DownloadStore(fileStore: fileStore),
@@ -352,6 +462,7 @@ struct DataNukeTests {
         let runsDirectory = fileStore.baseDirectory.appending(path: "AnalysisRuns", directoryHint: .isDirectory)
         let runs = AnalysisRunRecordStore(directory: runsDirectory)
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: OpenCastCacheController(
                 rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
             ),
@@ -481,6 +592,7 @@ struct DataNukeTests {
             baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
         )
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: cacheController,
             library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             downloads: DownloadStore(fileStore: fileStore),
@@ -597,6 +709,7 @@ struct DataNukeTests {
             baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
         )
         return OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: OpenCastCacheController(
                 rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
             ),
@@ -620,6 +733,7 @@ struct DataNukeTests {
         let localCache = SQLiteLocalLibraryCacheStore.inMemory()
         let temporaryDirectory = try makeTemporaryDirectory()
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: OpenCastCacheController(
                 rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
             ),
@@ -673,6 +787,7 @@ struct DataNukeTests {
         let localCache = GatedLocalLibraryCacheStore(base: baseCache)
         let temporaryDirectory = try makeTemporaryDirectory()
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: OpenCastCacheController(
                 rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
             ),
@@ -744,6 +859,7 @@ struct DataNukeTests {
         )
         let localCache = SQLiteLocalLibraryCacheStore.inMemory()
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: cacheController,
             library: LibraryStore(localCache: localCache),
             downloads: DownloadStore(fileStore: fileStore),
@@ -792,6 +908,7 @@ struct DataNukeTests {
         )
         transcriptionModels.loadLocalStatus()
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             cacheController: OpenCastCacheController(
                 rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
             ),

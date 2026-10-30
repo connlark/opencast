@@ -24,6 +24,7 @@ struct LibraryStoreNukeRaceProbeTests {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             syncStatus: SyncStatusStore(accountStatusProvider: AvailableAccountStatusProvider()),
             allowsAutomaticFeedRefresh: false
@@ -82,6 +83,7 @@ struct LibraryStoreNukeRaceProbeTests {
         let snapshot = Self.makeSnapshot(episodeID: "probe-episode-1")
         let feedService = ProbeFeedService(steps: [.hang])
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             library: LibraryStore(feedService: feedService, localCache: cache),
             syncStatus: SyncStatusStore(accountStatusProvider: AvailableAccountStatusProvider()),
             allowsAutomaticFeedRefresh: false
@@ -126,6 +128,7 @@ struct LibraryStoreNukeRaceProbeTests {
         let snapshot = Self.makeSnapshot(episodeID: "probe-episode-1")
         let feedService = ProbeFeedService(steps: [.hang])
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             library: LibraryStore(feedService: feedService, localCache: cache),
             syncStatus: SyncStatusStore(accountStatusProvider: AvailableAccountStatusProvider()),
             allowsAutomaticFeedRefresh: false
@@ -168,6 +171,7 @@ struct LibraryStoreNukeRaceProbeTests {
         let cache = GatedLocalLibraryCacheStore(base: SQLiteLocalLibraryCacheStore.inMemory(), gates: gates)
         let feedService = ProbeFeedService(steps: [.snapshot(Self.makeSnapshot(episodeID: "probe-episode-1"))])
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             library: LibraryStore(feedService: feedService, localCache: cache),
             syncStatus: SyncStatusStore(accountStatusProvider: AvailableAccountStatusProvider()),
             allowsAutomaticFeedRefresh: false
@@ -217,6 +221,7 @@ struct LibraryStoreNukeRaceProbeTests {
             .snapshot(Self.makeSnapshot(feedURL: Self.migratedFeedURL, episodeID: "probe-episode-1-migrated"))
         ])
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             library: LibraryStore(feedService: feedService, localCache: cache),
             syncStatus: SyncStatusStore(accountStatusProvider: AvailableAccountStatusProvider()),
             allowsAutomaticFeedRefresh: false
@@ -308,6 +313,7 @@ struct LibraryStoreNukeRaceProbeTests {
         let snapshot = Self.makeSnapshot(episodeID: "probe-episode-1")
         let feedService = ProbeFeedService(steps: [.snapshot(snapshot), .snapshot(snapshot), .hang])
         let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
             library: LibraryStore(feedService: feedService, localCache: cache),
             syncStatus: SyncStatusStore(accountStatusProvider: AvailableAccountStatusProvider()),
             allowsAutomaticFeedRefresh: false

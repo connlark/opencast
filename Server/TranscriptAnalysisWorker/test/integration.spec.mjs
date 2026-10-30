@@ -1131,3 +1131,6 @@ describe("register", () => {
     expect((await response.json()).error).toBe("invalid_challenge");
   });
 });
+
+import { installDeleteTests } from "./install-delete.mjs";
+describe("install deregistration", installDeleteTests);

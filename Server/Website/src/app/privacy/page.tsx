@@ -197,9 +197,12 @@ export default function PrivacyPage() {
                   anywhere by default.
                 </p>
                 <p>
-                  Settings › Delete Data removes all of it and tells
-                  opencast&apos;s services to forget this install. Your device
-                  backup may include this data under Apple&apos;s terms.
+                  Settings › Delete Data removes all of it and asks the opencast
+                  services this app uses to forget this install.
+                  If a service can&apos;t be reached, the next
+                  Delete Data asks again. Your own AI keys stay on
+                  the device. Your device backup may include this
+                  data under Apple&apos;s terms.
                 </p>
               </PolicyArticleSection>
 
@@ -295,9 +298,9 @@ export default function PrivacyPage() {
                     email addresses, Apple IDs, or IP addresses.
                   </li>
                   <li>
-                    Turning notifications off disables the push token and ends
-                    the subscriptions. Delete Data removes the install record
-                    entirely.
+                    Turning notifications off disables the push token and ends the
+                    subscriptions. Delete Data removes the install
+                    record; a hashed marker that stops a stale re-registration is kept for seven days.
                   </li>
                   <li>
                     Apple Push Notification service delivers the pushes.
@@ -307,7 +310,7 @@ export default function PrivacyPage() {
                 <DataPathFacts
                   leaves="The feed URLs you follow and a push token."
                   receiver="opencast's notification service on Cloudflare; Apple delivers the push."
-                  kept="While notifications are on. Turning them off ends the subscriptions; Delete Data removes the record."
+                  kept="While notifications are on. Turning them off ends the subscriptions; Delete Data removes the record and leaves only a seven-day hashed marker."
                 />
               </PolicyArticleSection>
 
@@ -338,16 +341,18 @@ export default function PrivacyPage() {
                     has received it, with a seven-day backstop.
                   </li>
                   <li>
-                    Episode URLs are encrypted at rest and cleared when staging
-                    finishes. Logs and records hold keyed hashes, job state,
-                    timing, and usage counts, never audio or text.
+                    Episode URLs are encrypted at rest and cleared when staging finishes.
+                    Logs and job records hold keyed hashes, job state,
+                    timing, and usage counts, never audio or text. The
+                    job records are tied to your purchase account and
+                    are kept indefinitely.
                   </li>
                   <li>The service keeps no library of your audio or transcripts.</li>
                 </ul>
                 <DataPathFacts
                   leaves="The episode's audio address, or the audio itself when the host serves different bytes."
                   receiver="opencast's transcription service, running Whisper on Cloudflare Workers AI."
-                  kept="Audio only while the job runs. The transcript until the app confirms receipt, seven days at most."
+                  kept="Audio only while the job runs. The transcript until the app confirms receipt, seven days at most. Job records, with no audio or text, are kept indefinitely."
                 />
               </PolicyArticleSection>
 
@@ -387,6 +392,17 @@ export default function PrivacyPage() {
                   tokens, and cost, which carry no install or run identifier,
                   are also kept for as long as the service runs.
                 </p>
+                <p>
+                  Delete Data asks the trial service to forget this install&apos;s key and
+                  its runs that used no free analysis. The hashed counts
+                  of this install&apos;s analyses, free or not, stay,
+                  together with the runs that used a free analysis, so
+                  Delete Data does not grant a new trial. A run still in
+                  progress at that moment can still finish and keeps its
+                  place in the count. The summaries of other runs are
+                  gone within about 90 days; the hashed note that marks
+                  a run for cleanup stays until that cleanup has run.
+                </p>
                 <ul className="policy-list">
                   <li>
                     The episode and show titles may go along as context.
@@ -424,7 +440,7 @@ export default function PrivacyPage() {
                 <DataPathFacts
                   leaves="Transcript text, sometimes with the episode and show titles."
                   receiver="The provider whose key you added, straight from your device. Without a key, opencast's trial service, which forwards it to Google."
-                  kept="By your provider under its API terms. The trial service keeps no text and no results; its hashed install count and the runs that used a free analysis for as long as it runs, other runs up to 90 days, and daily and monthly totals with no identifiers for as long as it runs."
+                  kept="By your provider under its API terms. The trial service keeps no text and no results. Its hashed counts of this install's analyses and the runs that used a free analysis stay for as long as it runs; other run summaries are gone within about 90 days, and a hashed cleanup note stays until the cleanup has run. Daily and monthly totals with no identifiers stay for as long as it runs."
                 />
               </PolicyArticleSection>
 
@@ -634,7 +650,7 @@ export default function PrivacyPage() {
                 <DataPathFacts
                   leaves="An App Attest key certified by Apple and short-lived challenges."
                   receiver="opencast's services on Cloudflare."
-                  kept="The public key for the life of the install. Delete Data deregisters it."
+                  kept="The public key for the life of the install. Delete Data asks the service to forget it; if the service can't be reached, the next Delete Data asks again."
                 />
               </PolicyArticleSection>
 
@@ -649,7 +665,11 @@ export default function PrivacyPage() {
                   alternative. Turn notifications off in Settings, keep
                   transcription on the device, leave Recap, Ask, and Make a
                   Playlist untapped, or use Delete Data to erase local data
-                  and deregister this install from every service.
+                  and ask every opencast service this app uses to forget this
+                  install. If a service can&apos;t be reached, the
+                  next Delete Data asks again. Your own AI keys
+                  stay on the device, and the free-trial count is
+                  not reset.
                 </p>
                 <p>
                   Email the privacy contact to have service-side records

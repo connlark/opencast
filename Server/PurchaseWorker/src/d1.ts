@@ -191,6 +191,15 @@ export async function upsertInstallLink(
     .run();
 }
 
+/** Remove only the audit index; account balances and ledgers are shared. */
+export async function deleteInstallLink(db: D1Database, installKey: string): Promise<number> {
+  const result = await db
+    .prepare('DELETE FROM install_account_links WHERE install_key = ?1')
+    .bind(installKey)
+    .run();
+  return result.meta.changes;
+}
+
 export interface NotificationReceipt {
   notification_uuid: string;
   state: string;

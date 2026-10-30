@@ -4,9 +4,9 @@ import SwiftData
 
 /// The data nuke: every store's destructive reset in a fixed order, the
 /// SwiftData row wipe, and the local-cache clears. The app model hands in
-/// its own two runtime steps — the pre-nuke queue and session teardown, and
-/// the post-wipe runtime reset that runs before any later suspension so the
-/// UI never renders deleted-and-saved records.
+/// its runtime steps — pre-nuke teardown, service deregistration before the
+/// row wipe, and the post-wipe runtime reset that runs before any later
+/// suspension so the UI never renders deleted-and-saved records.
 @Observable
 final class DataNukeRunner {
     private(set) var isNukingData = false
@@ -25,6 +25,9 @@ final class DataNukeRunner {
     @ObservationIgnored private let transcriptRecaps: TranscriptRecapCache
     /// Runs after the iCloud check and before any store is nuked.
     @ObservationIgnored var prepareRuntime: () async -> Void = {}
+    /// Runs after the store nukes and before the row wipe.
+    @ObservationIgnored var deregisterServices: () async -> Void = {}
+    @ObservationIgnored private let appAttestSuspension: AppAttestSuspension
     /// Runs after the row wipe and before the cache clears.
     @ObservationIgnored var resetRuntime: (ModelContext) async -> Void = { _ in }
 
@@ -38,7 +41,8 @@ final class DataNukeRunner {
         transcriptionModels: TranscriptionModelStore,
         cacheController: OpenCastCacheController,
         siriMediaDiscovery: SiriMediaDiscovery,
-        transcriptRecaps: TranscriptRecapCache = TranscriptRecapCache()
+        transcriptRecaps: TranscriptRecapCache = TranscriptRecapCache(),
+        appAttestSuspension: AppAttestSuspension = .shared
     ) {
         self.syncStatus = syncStatus
         self.library = library
@@ -50,6 +54,7 @@ final class DataNukeRunner {
         self.cacheController = cacheController
         self.siriMediaDiscovery = siriMediaDiscovery
         self.transcriptRecaps = transcriptRecaps
+        self.appAttestSuspension = appAttestSuspension
     }
 
     func run(modelContext: ModelContext) async throws {
@@ -75,6 +80,7 @@ final class DataNukeRunner {
             try await transcriptions.nukeAllTranscripts(modelContext: modelContext)
             try await downloads.nukeAllDownloads(modelContext: modelContext)
             try transcriptionModels.deleteInstalledModelImmediately()
+            await deregisterServices()
             let siriPodcastIDs = library.activePodcastIDs
             let siriPlaylistIDs = Set(try modelContext.fetch(FetchDescriptor<PlaylistRecord>()).map(\.playlistID))
             try deleteAllModelRows(modelContext: modelContext)
@@ -93,6 +99,7 @@ final class DataNukeRunner {
             try transcriptRecaps.removeAll()
             completionID += 1
         } catch {
+            appAttestSuspension.resume()
             lastErrorMessage = error.localizedDescription
             throw error
         }

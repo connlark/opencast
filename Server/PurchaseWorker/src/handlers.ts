@@ -110,6 +110,23 @@ function mapHandledError(error: unknown): Response | null {
   return null;
 }
 
+export async function handleInstallLinkDelete(env: Env, request: Request): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorJson(400, ERROR_INVALID_REQUEST);
+  }
+  if (
+    body === null || typeof body !== 'object' || !('install_key' in body) ||
+    typeof body.install_key !== 'string' || body.install_key.length === 0 ||
+    new TextEncoder().encode(body.install_key).length > 200
+  ) {
+    return errorJson(400, ERROR_INVALID_REQUEST);
+  }
+  return json(200, { deleted: await d1.deleteInstallLink(env.PURCHASE_DB, body.install_key) });
+}
+
 export async function handleBootstrap(env: Env, request: Request): Promise<Response> {
   let body: BootstrapRequest;
   try {

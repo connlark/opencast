@@ -8,15 +8,18 @@ nonisolated struct AppAttestCredentialService: Sendable {
     private let appAttestService: any AppAttestServiceProtocol
     private let apiClient: AppAttestAPIClient
     private let keychain: AppAttestKeychain
+    private let suspension: AppAttestSuspension
 
     init(
         appAttestService: any AppAttestServiceProtocol = DeviceCheckAppAttestService.shared,
         apiClient: AppAttestAPIClient,
-        keychain: AppAttestKeychain
+        keychain: AppAttestKeychain,
+        suspension: AppAttestSuspension = .shared
     ) {
         self.appAttestService = appAttestService
         self.apiClient = apiClient
         self.keychain = keychain
+        self.suspension = suspension
     }
 
     var isAppAttestSupported: Bool {
@@ -92,6 +95,8 @@ nonisolated struct AppAttestCredentialService: Sendable {
         operation: @Sendable (AppAttestCredential) async throws -> T
     ) async throws -> T {
         try await AppAttestCredentialRecovery.withFreshCredentialOnRecoverableFailure(
+            keychainService: keychain.service,
+            suspension: suspension,
             ensureCredential: {
                 try await ensureRegisteredCredential(validate: validate)
             },
@@ -112,46 +117,48 @@ nonisolated struct AppAttestCredentialService: Sendable {
         fallbackReason: String?,
         validate: CredentialValidation?
     ) async throws -> AppAttestCredential {
-        let keyID = try await appAttestService.generateKey()
-        let challenge = try await apiClient.requestChallenge(installID: installID)
-        let challengeHash = Data(SHA256.hash(data: Data(challenge.challenge.utf8)))
-        let attestationObject = try await appAttestService.attestKey(
-            keyID,
-            clientDataHash: challengeHash
-        )
-        let registerMessage = try await apiClient.register(
-            installID: installID,
-            keyID: keyID,
-            challengeID: challenge.challengeID,
-            challenge: challenge.challenge,
-            attestationObject: attestationObject
-        )
-        try keychain.saveAppAttestKeyID(keyID)
+        try await suspension.withRegistrationSection(keychainService: keychain.service) {
+            let keyID = try await appAttestService.generateKey()
+            let challenge = try await apiClient.requestChallenge(installID: installID)
+            let challengeHash = Data(SHA256.hash(data: Data(challenge.challenge.utf8)))
+            let attestationObject = try await appAttestService.attestKey(
+                keyID,
+                clientDataHash: challengeHash
+            )
+            let registerMessage = try await apiClient.register(
+                installID: installID,
+                keyID: keyID,
+                challengeID: challenge.challengeID,
+                challenge: challenge.challenge,
+                attestationObject: attestationObject
+            )
+            try keychain.saveAppAttestKeyID(keyID)
 
-        let baseCredential = AppAttestCredential(
-            installID: installID,
-            keyID: keyID,
-            secureMessage: registerMessage,
-            detail: ""
-        )
-        let secureMessage = if let validate {
-            try await validate(baseCredential)
-        } else {
-            registerMessage
+            let baseCredential = AppAttestCredential(
+                installID: installID,
+                keyID: keyID,
+                secureMessage: registerMessage,
+                detail: ""
+            )
+            let secureMessage = if let validate {
+                try await validate(baseCredential)
+            } else {
+                registerMessage
+            }
+
+            let detail: String
+            if let fallbackReason {
+                detail = "Cached key was replaced after \(fallbackReason). Registration returned \(registerMessage)."
+            } else {
+                detail = "Registration returned \(registerMessage)."
+            }
+
+            return AppAttestCredential(
+                installID: installID,
+                keyID: keyID,
+                secureMessage: secureMessage,
+                detail: detail
+            )
         }
-
-        let detail: String
-        if let fallbackReason {
-            detail = "Cached key was replaced after \(fallbackReason). Registration returned \(registerMessage)."
-        } else {
-            detail = "Registration returned \(registerMessage)."
-        }
-
-        return AppAttestCredential(
-            installID: installID,
-            keyID: keyID,
-            secureMessage: secureMessage,
-            detail: detail
-        )
     }
 }

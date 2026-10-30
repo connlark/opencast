@@ -1828,3 +1828,45 @@ fn both_stores_reach_the_same_state() {
     months_sql.sort();
     assert_eq!(months_mem, months_sql);
 }
+
+fn forgetting_preserves_entitlement_and_settlement<H: Harness>(h: &mut H) {
+    let mut config = config();
+    let now = trial_day();
+    for run in ["consumed-a", "consumed-b"] {
+        admitted(&run_once(h, &config, now, "s", run));
+    }
+    config.mode_starts_at_ms = now + DAY;
+    admitted(&admit(
+        h,
+        &config,
+        now,
+        &Req::new("pending", "s", "free", 0),
+    ));
+    let before = h.store().install("s").unwrap().unwrap();
+    assert_eq!(before.trial_units_used, 2);
+    assert_eq!(h.op(|s| s.forget_unit_free_runs("s")).unwrap(), ["free"]);
+    assert_eq!(h.store().install("s").unwrap().unwrap(), before);
+    assert!(h.store().run("s", "consumed-a").unwrap().is_some());
+    settle(h, now + 1, "pending", usage(10, 10));
+    assert!(h.store().run("s", "free").unwrap().is_none());
+    assert_eq!(h.store().install("s").unwrap().unwrap().trial_units_used, 2);
+
+    admitted(&admit(
+        h,
+        &config,
+        now + 2,
+        &Req::new("expires", "s", "free-expiry", 0),
+    ));
+    let deadline = h.store().reservation("expires").unwrap().unwrap().deadline;
+    h.op(|s| s.forget_unit_free_runs("s")).unwrap();
+    h.op(|s| ledger::expire_due(s, deadline + 1, 100)).unwrap();
+    assert!(h.store().run("s", "free-expiry").unwrap().is_none());
+    assert_eq!(h.store().install("s").unwrap().unwrap().trial_units_used, 2);
+    assert!(h.op(|s| s.forget_unit_free_runs("s")).unwrap().is_empty());
+}
+
+#[test]
+fn forgetting_keeps_count_and_reservations_in_both_stores() {
+    forgetting_preserves_entitlement_and_settlement(&mut Mem(MemoryStore::default()));
+    forgetting_preserves_entitlement_and_settlement(&mut Sql::new());
+}

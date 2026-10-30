@@ -5,7 +5,7 @@ nonisolated struct AppAttestKeychain: Sendable {
     private static let installIDAccount = "install-id"
     private static let appAttestKeyIDAccount = "app-attest-key-id"
 
-    private let service: String
+    let service: String
 
     init(service: String) {
         self.service = service

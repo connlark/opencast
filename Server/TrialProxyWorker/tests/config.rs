@@ -559,3 +559,26 @@ fn the_worst_month_must_fit_the_stored_integer_range() {
         assert!(load(&Vars(&sections[section]), bundle).is_ok(), "{section}");
     }
 }
+
+#[test]
+fn auth_config_needs_only_the_three_identity_fields() {
+    use opencast_trial_proxy_worker::config::load_auth;
+    let mut vars = BTreeMap::from([
+        ("APPLE_TEAM_ID".to_string(), "TEAM".to_string()),
+        (
+            "APPLE_BUNDLE_ID".to_string(),
+            "com.example.test".to_string(),
+        ),
+        (
+            "APP_ATTEST_ENVIRONMENT".to_string(),
+            "production".to_string(),
+        ),
+    ]);
+    let auth = load_auth(&Vars(&vars)).unwrap();
+    assert_eq!(auth.app_id, "TEAM.com.example.test");
+    assert_eq!(auth.app_attest_environment, "production");
+    vars.insert("APP_ATTEST_ENVIRONMENT".into(), "invalid".into());
+    assert!(load_auth(&Vars(&vars)).is_err());
+    vars.remove("APPLE_TEAM_ID");
+    assert!(load_auth(&Vars(&vars)).is_err());
+}

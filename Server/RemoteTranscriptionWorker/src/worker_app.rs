@@ -21,7 +21,7 @@ use crate::job_do::CreateMessage;
 use crate::origin;
 use crate::route::{
     json_response as static_json_response, route_request, Header as StaticHeader, JobAction,
-    RouteAction, StaticResponse, JSON_CONTENT_TYPE,
+    RouteAction, StaticResponse, INSTALL_DELETE_PATH, JSON_CONTENT_TYPE,
 };
 use crate::storage;
 use crate::types::{
@@ -68,6 +68,7 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
         RouteAction::AppAttestRegister => {
             handle_register(&mut req, &db, &config, now_seconds()).await
         }
+        RouteAction::InstallDelete => handle_install_delete(&mut req, &env, &db, &config).await,
         RouteAction::AccountBootstrap => {
             handle_bootstrap(&mut req, &env, &db, &config, &path).await
         }
@@ -84,7 +85,61 @@ pub async fn handle_request(mut req: Request, env: Env) -> Result<Response> {
     }
 }
 
+/// App Attest only: a bearer has no registered install identity to erase.
+async fn handle_install_delete(
+    req: &mut Request,
+    env: &Env,
+    db: &worker::D1Database,
+    config: &AppConfig,
+) -> Result<Response> {
+    if req.headers().get(AUTHORIZATION_HEADER)?.is_some() {
+        return json_error_code(401, "missing_assertion");
+    }
+    let authenticated = match app_attest_envelope::authenticate_envelope(
+        req,
+        db,
+        &config.app_id,
+        &config.app_attest_environment,
+        now_seconds(),
+        "POST",
+        INSTALL_DELETE_PATH,
+        16 * 1024,
+        16 * 1024,
+    )
+    .await?
+    {
+        Ok(authenticated) => authenticated,
+        Err(failure) => return json_error_code(failure.status, failure.code),
+    };
+    if config.credit_backend == CreditBackend::Purchase {
+        let purchase = match PurchaseAuthority::from_env(env) {
+            Ok(purchase) => purchase,
+            Err(_) => return json_error_code(503, "deregistration_unavailable"),
+        };
+        if purchase
+            .delete_install_link(&authenticated.install_id)
+            .await
+            .is_err()
+        {
+            return json_error_code(503, "deregistration_unavailable");
+        }
+    }
+    let mut statements = storage::install_delete_statements(db, &authenticated.install_id)?;
+    for sql in [
+        "DELETE FROM install_account_links WHERE install_id = ?1",
+        "DELETE FROM accounts WHERE install_id = ?1",
+    ] {
+        statements.push(
+            db.prepare(sql)
+                .bind_refs(&[worker::D1Type::Text(&authenticated.install_id)])?,
+        );
+    }
+    db.batch(statements).await?;
+    json_success(200, &serde_json::json!({ "message": "deleted" }))
+}
+
 struct Authenticated {
+    requires_registered_key: bool,
     install_id: String,
     payload: String,
 }
@@ -119,6 +174,7 @@ async fn authenticate(
         }
         let install_id = format!("dev-bearer:{}", &token_hash(provided)[..16]);
         return Ok(Ok(Authenticated {
+            requires_registered_key: false,
             install_id,
             payload,
         }));
@@ -137,6 +193,7 @@ async fn authenticate(
     )
     .await?
     .map(|authenticated| Authenticated {
+        requires_registered_key: true,
         install_id: authenticated.install_id,
         payload: authenticated.payload,
     }))
@@ -175,9 +232,16 @@ async fn handle_bootstrap(
     match config.credit_backend {
         CreditBackend::Dev => {
             // Development fake: install-keyed accounts, fixed grant.
-            let account_id = match resolve_account(db, config, &authenticated.install_id).await? {
+            let account_id = match resolve_account(
+                db,
+                config,
+                &authenticated.install_id,
+                authenticated.requires_registered_key,
+            )
+            .await?
+            {
                 Some(account_id) => account_id,
-                None => return json_error_code(403, types::ERROR_BOOTSTRAP_REQUIRED),
+                None => return json_error_code(401, "unknown_key"),
             };
             let credit =
                 DevCreditAuthority::new(env.d1(TRANSCRIPTION_DB)?, config.dev_credit_grant_seconds);
@@ -235,13 +299,25 @@ async fn handle_bootstrap(
                     return json_error_code(503, types::ERROR_INTERNAL);
                 }
             };
-            storage::link_install_account(
+            if !storage::link_install_account(
                 db,
                 &authenticated.install_id,
                 &parsed.account_id,
                 now_seconds(),
+                authenticated.requires_registered_key,
             )
-            .await?;
+            .await?
+            {
+                if let Err(error) = purchase
+                    .delete_install_link(&authenticated.install_id)
+                    .await
+                {
+                    worker::console_error!(
+                        "remote-transcription revoked bootstrap unlink failed: {error}"
+                    );
+                }
+                return json_error_code(401, "unknown_key");
+            }
             json_success(
                 200,
                 &BootstrapResponse {
@@ -286,7 +362,14 @@ async fn handle_purchase_redeem(
     if request.schema_version != SCHEMA_VERSION || request.transaction_jws.is_empty() {
         return json_error_code(400, types::ERROR_INVALID_REQUEST);
     }
-    let Some(account_id) = resolve_account(db, config, &authenticated.install_id).await? else {
+    let Some(account_id) = resolve_account(
+        db,
+        config,
+        &authenticated.install_id,
+        authenticated.requires_registered_key,
+    )
+    .await?
+    else {
         return json_error_code(403, types::ERROR_BOOTSTRAP_REQUIRED);
     };
     let purchase = match PurchaseAuthority::from_env(env) {
@@ -395,7 +478,14 @@ async fn handle_create_job(
         Err(_) => true,
     };
 
-    let Some(account_id) = resolve_account(db, config, &authenticated.install_id).await? else {
+    let Some(account_id) = resolve_account(
+        db,
+        config,
+        &authenticated.install_id,
+        authenticated.requires_registered_key,
+    )
+    .await?
+    else {
         return json_error_code(403, types::ERROR_BOOTSTRAP_REQUIRED);
     };
 
@@ -473,7 +563,14 @@ async fn handle_job_action(
     let Some(index_row) = storage::job_index(db, job_id).await? else {
         return json_error_code(404, types::ERROR_JOB_NOT_FOUND);
     };
-    let Some(account_id) = resolve_account(db, config, &authenticated.install_id).await? else {
+    let Some(account_id) = resolve_account(
+        db,
+        config,
+        &authenticated.install_id,
+        authenticated.requires_registered_key,
+    )
+    .await?
+    else {
         return json_error_code(403, types::ERROR_BOOTSTRAP_REQUIRED);
     };
     if index_row.account_id != account_id {
@@ -597,6 +694,7 @@ async fn resolve_account(
     db: &worker::D1Database,
     config: &AppConfig,
     install_id: &str,
+    requires_registered_key: bool,
 ) -> Result<Option<String>> {
     if config.credit_backend == CreditBackend::Purchase {
         return storage::purchase_account_for_install(db, install_id).await;
@@ -609,9 +707,14 @@ async fn resolve_account(
         random::random_urlsafe_token(12)
             .map_err(|error| worker::Error::RustError(error.to_string()))?
     );
-    storage::ensure_account(db, install_id, &candidate, now_seconds())
-        .await
-        .map(Some)
+    storage::ensure_account(
+        db,
+        install_id,
+        &candidate,
+        now_seconds(),
+        requires_registered_key,
+    )
+    .await
 }
 
 // --- App Attest challenge/register (mirrors AdAnalysisWorker) ---

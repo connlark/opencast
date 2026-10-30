@@ -6,7 +6,7 @@
 //! mirror and sends pending alerts; its alarm expires lapsed reservations,
 //! logs closed days, prunes and retries both.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,11 @@ const MIRROR_BATCH: usize = 200;
 /// often in the background before leaving it to the next entry point.
 const ALARM_RETRY_ATTEMPTS: u32 = 3;
 const ALARM_RETRY_DELAY_MS: u64 = 1_000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgetRequest {
+    pub subject: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettleRequest {
@@ -105,6 +110,7 @@ pub struct TrialLedger {
     state: State,
     env: Env,
     sql: SqlStorage,
+    mirror_flushing: Rc<Cell<bool>>,
 }
 
 impl DurableObject for TrialLedger {
@@ -116,19 +122,28 @@ impl DurableObject for TrialLedger {
         {
             stage("schema", StoreError::Storage);
         }
-        Self { state, env, sql }
+        Self {
+            state,
+            env,
+            sql,
+            mirror_flushing: Rc::new(Cell::new(false)),
+        }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
         if req.method() != Method::Post {
             return json_response(405, br#"{"error":"method_not_allowed"}"#.to_vec());
         }
-        let Some(ledger_config) = self.ledger_config() else {
-            return unavailable("config", StoreError::Storage);
-        };
         let body = match req.bytes().await {
             Ok(body) => body,
             Err(_) => return unavailable("read", StoreError::Storage),
+        };
+        // Identity cleanup has no dependency on analysis configuration or bundle.
+        if req.path() == "/forget" {
+            return self.forget(&body).await;
+        }
+        let Some(ledger_config) = self.ledger_config() else {
+            return unavailable("config", StoreError::Storage);
         };
         match req.path().as_str() {
             "/admit" => self.admit(&ledger_config, &body).await,
@@ -245,6 +260,21 @@ impl TrialLedger {
         operation: impl FnOnce(&mut SqlStore<ObjectSql>) -> StoreResult<T> + 'static,
     ) -> StoreResult<T> {
         transaction_on(&self.state.storage(), self.store(), operation)
+    }
+
+    async fn forget(&self, body: &[u8]) -> Result<Response> {
+        let Ok(request) = serde_json::from_slice::<ForgetRequest>(body) else {
+            return unavailable("forget_decode", StoreError::Corrupt);
+        };
+        let ids = match self.transaction(move |store| {
+            ledger::LedgerStore::forget_unit_free_runs(store, &request.subject)
+        }) {
+            Ok(ids) => ids,
+            Err(error) => return unavailable("forget", error),
+        };
+        // A scheduled flush must survive even if a previous alarm was absent.
+        self.ensure_alarm(now_ms()).await;
+        json(200, &serde_json::json!({ "deleted": ids.len() }))
     }
 
     async fn admit(&self, ledger_config: &LedgerConfig, body: &[u8]) -> Result<Response> {
@@ -372,6 +402,7 @@ impl TrialLedger {
             env: self.env.clone(),
             sql: self.sql.clone(),
             lane: self.alert_lane(),
+            mirror_flushing: self.mirror_flushing.clone(),
         }
     }
 
@@ -436,6 +467,16 @@ struct Handles {
     env: Env,
     sql: SqlStorage,
     lane: AlertLane,
+    mirror_flushing: Rc<Cell<bool>>,
+}
+
+/// Clears on every exit, including a dropped flush future. All handles for
+/// one object share the cell, so settlement and alarm flushes cannot overlap.
+struct MirrorFlushGuard(Rc<Cell<bool>>);
+impl Drop for MirrorFlushGuard {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
 }
 
 impl Handles {
@@ -453,6 +494,11 @@ impl Handles {
     /// Writes every dirty row's current state to D1 (newer versions only)
     /// and clears the marks that did not move meanwhile.
     async fn flush_mirror(&self) {
+        if self.mirror_flushing.replace(true) {
+            return;
+        }
+        let _guard = MirrorFlushGuard(self.mirror_flushing.clone());
+
         let now = now_ms();
         let store = self.store();
         let dirty = match ledger::LedgerStore::dirty(&store, MIRROR_BATCH) {

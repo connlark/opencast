@@ -3,6 +3,8 @@ import Foundation
 
 nonisolated enum AppAttestCredentialRecovery {
     static func withFreshCredentialOnRecoverableFailure<Credential, T>(
+        keychainService: String,
+        suspension: AppAttestSuspension = .shared,
         ensureCredential: () async throws -> Credential,
         deleteCachedAppAttestKey: () throws -> Void,
         isRecoverableServerCredentialFailure: (any Error) -> Bool,
@@ -13,18 +15,22 @@ nonisolated enum AppAttestCredentialRecovery {
             return try await operation(credential)
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as AppAttestSuspendedError {
+            throw error
         } catch let error where isRecoverableLocalCredentialFailure(error)
             || isRecoverableServerCredentialFailure(error) {
-            do {
-                try deleteCachedAppAttestKey()
-            } catch _ {
-                // Without the deletion the retry would reuse the same stale
-                // key; surface the original credential failure rather than
-                // masking it with the keychain error.
-                throw error
+            return try await suspension.withRegistrationSection(keychainService: keychainService) {
+                do {
+                    try deleteCachedAppAttestKey()
+                } catch _ {
+                    // Without the deletion the retry would reuse the same stale
+                    // key; surface the original credential failure rather than
+                    // masking it with the keychain error.
+                    throw error
+                }
+                let credential = try await ensureCredential()
+                return try await operation(credential)
             }
-            let credential = try await ensureCredential()
-            return try await operation(credential)
         }
     }
 

@@ -116,6 +116,11 @@ final class OpenCastAppRuntime {
             let syncStatus = Self.syncStatusStore(launchConfiguration: launchConfiguration)
             let appleSpeechAssets = Self.makeAppleSpeechAssetStore()
             let transcriptions = Self.transcriptionStore(launchConfiguration: launchConfiguration)
+            let analysisPolicy = Self.analysisPolicyStore(launchConfiguration: launchConfiguration)
+            let trialConnection = Self.analysisTrialConnection(launchConfiguration: launchConfiguration)
+            let deregistration: AnalysisServicesDeregistration = launchConfiguration.usesInMemoryStore
+                ? .init(slots: [:])
+                : .live(trialConnection: trialConnection, trialEndpoint: { analysisPolicy.snapshot.bundle.trial.endpoint })
             appModel = OpenCastAppModel(
                 cacheController: cacheController,
                 httpClient: httpClient,
@@ -125,13 +130,14 @@ final class OpenCastAppRuntime {
                 appleSpeechAssets: appleSpeechAssets,
                 transcriptions: transcriptions,
                 transcriptIntelligence: Self.transcriptIntelligenceStore(launchConfiguration: launchConfiguration),
-                analysisPolicy: Self.analysisPolicyStore(launchConfiguration: launchConfiguration),
+                analysisPolicy: analysisPolicy,
                 analysisKeys: Self.analysisKeyStore(launchConfiguration: launchConfiguration),
                 analysisKeyNotice: AnalysisKeyNoticeStore(trialStatus: launchConfiguration.uiTestAnalysisTrialStatus),
                 analysisKeyRequired: Self.analysisKeyRequiredPresenter(launchConfiguration: launchConfiguration),
                 analysisKeyTester: Self.analysisKeyTester(launchConfiguration: launchConfiguration),
                 analysisRuns: Self.analysisRunRecordStore(launchConfiguration: launchConfiguration),
-                analysisTrialConnection: Self.analysisTrialConnection(launchConfiguration: launchConfiguration),
+                analysisTrialConnection: trialConnection,
+                analysisServicesDeregistration: deregistration,
                 analysisTransportFixture: launchConfiguration.uiTestAnalysisTransport,
                 analysisContinuedTaskScheduler: launchConfiguration.uiTestChaptersSummarySession
                     .map(UITestAnalysisContinuedTaskScheduler.init(mode:)),

@@ -106,24 +106,26 @@ pub async fn link_install_account(
     install_id: &str,
     account_id: &str,
     now: i64,
-) -> worker::Result<()> {
+) -> worker::Result<bool> {
     let args = [
         D1Type::Text(install_id),
         D1Type::Text(account_id),
         d1_i64(now)?,
         d1_i64(now)?,
     ];
-    db.prepare(
-        "INSERT INTO install_account_links (install_id, account_id, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4) \
+    let result = db
+        .prepare(
+            "INSERT INTO install_account_links (install_id, account_id, created_at, updated_at) \
+         SELECT ?1, ?2, ?3, ?4 \
+         WHERE EXISTS (SELECT 1 FROM app_attest_keys WHERE install_id = ?1) \
          ON CONFLICT(install_id) DO UPDATE SET \
            account_id = excluded.account_id, \
            updated_at = excluded.updated_at",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-    Ok(())
+        )
+        .bind_refs(&args)?
+        .run()
+        .await?;
+    Ok(result.meta()?.and_then(|meta| meta.changes).unwrap_or(0) > 0)
 }
 
 /// First-writer-wins claim for the dev fake's install-keyed accounts:
@@ -134,24 +136,27 @@ pub async fn claim_install_account(
     install_id: &str,
     candidate_account_id: &str,
     now: i64,
-) -> worker::Result<String> {
+) -> worker::Result<Option<String>> {
     let args = [
         D1Type::Text(install_id),
         D1Type::Text(candidate_account_id),
         d1_i64(now)?,
         d1_i64(now)?,
     ];
-    db.prepare(
-        "INSERT INTO install_account_links (install_id, account_id, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4) \
-         ON CONFLICT(install_id) DO NOTHING",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-    Ok(account_for_install(db, install_id)
-        .await?
-        .unwrap_or_else(|| candidate_account_id.to_string()))
+    let result = db
+        .prepare(
+            "INSERT INTO install_account_links (install_id, account_id, created_at, updated_at) \
+         SELECT ?1, ?2, ?3, ?4 \
+         WHERE EXISTS (SELECT 1 FROM app_attest_keys WHERE install_id = ?1) \
+         ON CONFLICT(install_id) DO UPDATE SET install_id = excluded.install_id",
+        )
+        .bind_refs(&args)?
+        .run()
+        .await?;
+    if result.meta()?.and_then(|meta| meta.changes).unwrap_or(0) == 0 {
+        return Ok(None);
+    }
+    account_for_install(db, install_id).await
 }
 
 async fn ensure_dev_credit_account(
@@ -497,6 +502,19 @@ impl PurchaseAuthority {
             .with_body(Some(body.into()));
         let request = Request::new_with_init(&format!("{PURCHASE_INTERNAL_ORIGIN}{path}"), &init)?;
         self.fetcher.fetch_request(request).await
+    }
+
+    pub async fn delete_install_link(&self, install_key: &str) -> worker::Result<()> {
+        let response = self
+            .call_raw(
+                "/internal/v1/install-links/delete",
+                serde_json::json!({ "install_key": install_key }).to_string(),
+            )
+            .await?;
+        if !(200..300).contains(&response.status_code()) {
+            return Err(worker::Error::RustError("purchase unlink failed".into()));
+        }
+        Ok(())
     }
 
     async fn call_seam(&self, path: &str, body: serde_json::Value) -> Result<Balance, CreditError> {

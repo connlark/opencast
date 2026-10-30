@@ -32,6 +32,18 @@ struct RemoteTranscriptionBackendConfiguration: Sendable {
     nonisolated static let productionWorkerBaseURL =
         URL(string: "https://remote-transcription.example.com")!
 
+    nonisolated static func resolve(
+        routing: AnalysisBackendRouting = .currentBuild,
+        storeEnvironment: @Sendable () async throws -> RemoteTranscriptionStoreEnvironment
+    ) async -> Self? {
+        #if DEBUG
+        if routing == .currentBuild { return debug(environment: ProcessInfo.processInfo.environment) }
+        #endif
+        guard let environment = try? await storeEnvironment() else { return nil }
+        if case .unknown = environment { return nil }
+        return release(for: environment)
+    }
+
     #if DEBUG
     nonisolated static func debug(environment: [String: String]) -> Self {
         let workerBaseURL = environment["OPENCAST_REMOTE_TRANSCRIPTION_BASE_URL"]

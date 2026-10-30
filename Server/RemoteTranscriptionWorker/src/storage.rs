@@ -7,7 +7,7 @@ use worker::{D1Database, D1Type, Result};
 // (one copy for AdAnalysisWorker, NotificationsWorker, and this worker).
 pub use opencast_app_attest_core::app_attest_storage::{
     app_attest_key_count_since, challenge, increment_challenge_source_bucket,
-    insert_challenge_within_limits, key, mark_challenge_consumed,
+    insert_challenge_within_limits, install_delete_statements, key, mark_challenge_consumed,
     prune_challenge_source_buckets_before, prune_challenges_before, update_key_counter, upsert_key,
     AppAttestKeyRow, ChallengeRow,
 };
@@ -178,29 +178,35 @@ pub async fn ensure_account(
     install_id: &str,
     candidate_account_id: &str,
     now: i64,
-) -> Result<String> {
+    requires_registered_key: bool,
+) -> Result<Option<String>> {
     let args = [
         D1Type::Text(candidate_account_id),
         D1Type::Text(install_id),
         d1_i64(now)?,
         d1_i64(now)?,
+        D1Type::Integer(i32::from(requires_registered_key)),
     ];
-    db.prepare(
-        "INSERT INTO accounts (account_id, install_id, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4) \
-         ON CONFLICT(install_id) DO NOTHING",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
+    let result = db
+        .prepare(
+            "INSERT INTO accounts (account_id, install_id, created_at, updated_at) \
+         SELECT ?1, ?2, ?3, ?4 \
+         WHERE ?5 = 0 OR EXISTS (SELECT 1 FROM app_attest_keys WHERE install_id = ?2) \
+         ON CONFLICT(install_id) DO UPDATE SET install_id = excluded.install_id",
+        )
+        .bind_refs(&args)?
+        .run()
+        .await?;
 
+    if result.meta()?.and_then(|meta| meta.changes).unwrap_or(0) == 0 {
+        return Ok(None);
+    }
     let row = db
         .prepare("SELECT account_id AS value FROM accounts WHERE install_id = ?1 LIMIT 1")
         .bind_refs(&[D1Type::Text(install_id)])?
         .first::<TextRow>(None)
         .await?;
-    row.map(|row| row.value)
-        .ok_or_else(|| worker::Error::RustError("account row missing after upsert".to_string()))
+    Ok(row.map(|row| row.value))
 }
 
 pub async fn account_for_install(db: &D1Database, install_id: &str) -> Result<Option<String>> {
@@ -237,24 +243,28 @@ pub async fn link_install_account(
     install_id: &str,
     account_id: &str,
     now: i64,
-) -> Result<()> {
+    requires_registered_key: bool,
+) -> Result<bool> {
     let args = [
         D1Type::Text(install_id),
         D1Type::Text(account_id),
         d1_i64(now)?,
         d1_i64(now)?,
+        D1Type::Integer(i32::from(requires_registered_key)),
     ];
-    db.prepare(
-        "INSERT INTO install_account_links (install_id, account_id, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4) \
+    let result = db
+        .prepare(
+            "INSERT INTO install_account_links (install_id, account_id, created_at, updated_at) \
+         SELECT ?1, ?2, ?3, ?4 \
+         WHERE ?5 = 0 OR EXISTS (SELECT 1 FROM app_attest_keys WHERE install_id = ?1) \
          ON CONFLICT(install_id) DO UPDATE SET \
            account_id = excluded.account_id, \
            updated_at = excluded.updated_at",
-    )
-    .bind_refs(&args)?
-    .run()
-    .await?;
-    Ok(())
+        )
+        .bind_refs(&args)?
+        .run()
+        .await?;
+    Ok(result.meta()?.and_then(|meta| meta.changes).unwrap_or(0) > 0)
 }
 
 // --- Job index ---

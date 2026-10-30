@@ -258,6 +258,8 @@ pub struct AlertRecord {
 pub enum MirrorKey {
     Install(String),
     Run(String, String),
+    /// A deletion mark distinct from ordinary retention pruning.
+    ForgetRun(String, String),
     Month(String),
     Day(i64),
 }
@@ -296,6 +298,8 @@ pub trait LedgerStore {
     fn put_install(&mut self, install: &Install) -> StoreResult<()>;
     fn run(&self, subject: &str, run_id: &str) -> StoreResult<Option<Run>>;
     fn put_run(&mut self, run: &Run) -> StoreResult<()>;
+    /// Caller wraps the deletes and mirror marks in one transaction.
+    fn forget_unit_free_runs(&mut self, subject: &str) -> StoreResult<Vec<String>>;
     fn month(&self, month: &str) -> StoreResult<Option<Month>>;
     fn put_month(&mut self, month: &Month) -> StoreResult<()>;
     fn day(&self, day: i64) -> StoreResult<Option<Day>>;
@@ -459,7 +463,7 @@ pub struct StatusView {
     pub month_paused: bool,
 }
 
-fn bump<S: LedgerStore>(store: &mut S, key: MirrorKey) -> StoreResult<u64> {
+pub(crate) fn bump<S: LedgerStore>(store: &mut S, key: MirrorKey) -> StoreResult<u64> {
     let version = store.meta(META_VERSION)?.unwrap_or(0).saturating_add(1);
     store.put_meta(META_VERSION, version)?;
     let version = u64::try_from(version).map_err(|_| StoreError::Range)?;
@@ -1470,6 +1474,20 @@ impl LedgerStore for MemoryStore {
     fn put_meta(&mut self, key: &str, value: i64) -> StoreResult<()> {
         self.meta.insert(key.to_string(), value);
         Ok(())
+    }
+
+    fn forget_unit_free_runs(&mut self, subject: &str) -> StoreResult<Vec<String>> {
+        let ids: Vec<_> = self
+            .runs
+            .values()
+            .filter(|run| run.subject == subject && !run.unit_consumed)
+            .map(|run| run.run_id.clone())
+            .collect();
+        for id in &ids {
+            self.runs.remove(&(subject.to_string(), id.clone()));
+            bump(self, MirrorKey::ForgetRun(subject.to_string(), id.clone()))?;
+        }
+        Ok(ids)
     }
 
     fn mark_dirty(&mut self, key: &MirrorKey, version: u64) -> StoreResult<()> {

@@ -22,6 +22,10 @@ describe("production self-hosting posture", () => {
     expect(create.status).toBe(503);
     expect((await create.json()).error).toBe("feature_disabled");
 
+    const deregister = await post("/v1/install/delete", {});
+    expect(deregister.status).toBe(401);
+    expect((await deregister.json()).error).toBe("missing_assertion");
+
     const redeem = await post(
       "/v1/remote-transcription/purchases/redeem",
       { schema_version: 1, transaction_jws: "junk" },

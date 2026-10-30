@@ -423,3 +423,53 @@ fn a_dump_after_a_forward_carries_nothing_from_the_request() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn forget_marks_delete_mirrors_while_ordinary_pruning_keeps_the_archive() {
+    use opencast_trial_proxy_worker::ledger_sql::MIRROR_DELETE_RUN_SQL;
+    let mut sql = Sql::new();
+    sql.0.backend().connection.execute_batch(
+        "INSERT INTO runs VALUES ('s','free','ad_detection','0',1,1,0,0,1,1,1);
+         INSERT INTO runs VALUES ('s','paid','ad_detection','0',1,1,0,1,1,1,1);
+         INSERT INTO runs VALUES ('other','free','ad_detection','0',1,1,0,0,1,1,1);
+         CREATE TRIGGER fail_mark BEFORE INSERT ON mirror_dirty BEGIN SELECT RAISE(ABORT, 'injected'); END;"
+    ).unwrap();
+    assert!(sql.op(|s| s.forget_unit_free_runs("s")).is_err());
+    assert!(
+        sql.0.run("s", "free").unwrap().is_some(),
+        "failed transaction rolled back deletion"
+    );
+    sql.0
+        .backend()
+        .connection
+        .execute_batch("DROP TRIGGER fail_mark")
+        .unwrap();
+    assert_eq!(sql.op(|s| s.forget_unit_free_runs("s")).unwrap(), ["free"]);
+    assert!(sql.0.run("s", "paid").unwrap().is_some());
+    assert!(sql.0.run("other", "free").unwrap().is_some());
+    let dirty = sql.0.dirty(100).unwrap();
+    assert_eq!(dirty.len(), 1);
+    assert_eq!(dirty[0].0, MirrorKey::ForgetRun("s".into(), "free".into()));
+    let table: String = sql
+        .0
+        .backend()
+        .connection
+        .query_row("SELECT tbl FROM mirror_dirty", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(table, "run_forget");
+    let statement = mirror_statement(&sql.0, &dirty[0].0).unwrap().unwrap();
+    assert_eq!(statement.sql, MIRROR_DELETE_RUN_SQL);
+    assert_eq!(
+        statement.args,
+        [SqlValue::Text("s".into()), SqlValue::Text("free".into())]
+    );
+    assert!(
+        mirror_statement(&sql.0, &MirrorKey::Run("s".into(), "free".into()))
+            .unwrap()
+            .is_none()
+    );
+    sql.0.clear_dirty(&dirty[0].0, dirty[0].1 + 1).unwrap();
+    assert_eq!(sql.0.dirty(100).unwrap().len(), 1);
+    sql.0.clear_dirty(&dirty[0].0, dirty[0].1).unwrap();
+    assert!(sql.0.dirty(100).unwrap().is_empty());
+}

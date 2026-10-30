@@ -10,18 +10,21 @@ nonisolated final class AnalysisTrialConnection: AnalysisTrialConnecting {
     static let statusTimeoutSeconds = 15.0
     static let statusMaximumBytes = 16 * 1024
 
+    private let routing: AnalysisBackendRouting
     private let storeEnvironment: @Sendable () async throws -> RemoteTranscriptionStoreEnvironment
     /// UI tests: the seeded status, answered without a request.
     private let fixtureStatus: AnalysisTrialProxyStatus?
     private let isFixture: Bool
-    private let resolved = Mutex<TrialProxyBackendConfiguration??>(nil)
+    private let resolved = Mutex<TrialProxyBackendConfiguration?>(nil)
 
     init(
+        routing: AnalysisBackendRouting = .currentBuild,
         storeEnvironment: @escaping @Sendable () async throws -> RemoteTranscriptionStoreEnvironment =
             RemoteTranscriptionAppTransactionProvider.currentEnvironment,
         fixtureStatus: AnalysisTrialProxyStatus? = nil,
         isFixture: Bool = false
     ) {
+        self.routing = routing
         self.storeEnvironment = storeEnvironment
         self.fixtureStatus = fixtureStatus
         self.isFixture = isFixture
@@ -39,14 +42,21 @@ nonisolated final class AnalysisTrialConnection: AnalysisTrialConnecting {
         #endif
     }
 
-    func configuration(trialEndpoint: URL) async -> TrialProxyBackendConfiguration? {
+    func configuration(
+        trialEndpoint: URL,
+        storeEnvironment: (@Sendable () async throws -> RemoteTranscriptionStoreEnvironment)? = nil
+    ) async -> TrialProxyBackendConfiguration? {
         if let cached = resolved.withLock({ $0 }) { return cached }
         let configuration = await TrialProxyBackendConfiguration.resolve(
             trialEndpoint: trialEndpoint,
-            storeEnvironment: storeEnvironment
+            routing: routing,
+            storeEnvironment: storeEnvironment ?? self.storeEnvironment
         )
-        resolved.withLock { $0 = .some(configuration) }
-        return configuration
+        return resolved.withLock { cached in
+            if let cached { return cached }
+            if let configuration { cached = configuration }
+            return configuration
+        }
     }
 
     /// The exchange for this build's deployment, or `nil` when it has no

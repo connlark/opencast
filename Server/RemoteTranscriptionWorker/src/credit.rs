@@ -246,6 +246,19 @@ impl PurchaseAuthority {
         self.fetcher.fetch_request(request).await
     }
 
+    pub async fn delete_install_link(&self, install_key: &str) -> worker::Result<()> {
+        let response = self
+            .call_raw(
+                "/internal/v1/install-links/delete",
+                serde_json::json!({ "install_key": install_key }).to_string(),
+            )
+            .await?;
+        if !(200..300).contains(&response.status_code()) {
+            return Err(worker::Error::RustError("purchase unlink failed".into()));
+        }
+        Ok(())
+    }
+
     async fn call_seam(
         &self,
         path: &str,

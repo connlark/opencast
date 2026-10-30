@@ -287,7 +287,7 @@ export async function syntheticAssertion(identity, path, payload, counter) {
 
 /// Envelope POST as the given seeded identity, auto-incrementing its sign
 /// counter (each identity's counter is process-local test state).
-export async function postEnvelope(identity, path, payloadObject) {
+export async function postEnvelope(identity, path, payloadObject, fetcher = SELF.fetch.bind(SELF)) {
   const payload = JSON.stringify(payloadObject);
   identity.counter += 1;
   const assertion = await syntheticAssertion(
@@ -296,7 +296,7 @@ export async function postEnvelope(identity, path, payloadObject) {
     payload,
     identity.counter,
   );
-  return SELF.fetch(`${BASE}${path}`, {
+  return fetcher(`${BASE}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

@@ -3,13 +3,16 @@ import Foundation
 nonisolated struct AppAttestSecureAPIClient: Sendable {
     let apiClient: AppAttestAPIClient
     let appAttestService: any AppAttestServiceProtocol
+    private let assertionGate: AppAttestAssertionGate
 
     init(
         apiClient: AppAttestAPIClient,
-        appAttestService: any AppAttestServiceProtocol
+        appAttestService: any AppAttestServiceProtocol,
+        assertionGate: AppAttestAssertionGate = .shared
     ) {
         self.apiClient = apiClient
         self.appAttestService = appAttestService
+        self.assertionGate = assertionGate
     }
 
     func sendJSONPayload<Payload: Encodable, ResponseBody: Decodable & Sendable>(
@@ -35,12 +38,15 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         keyID: String,
         payload: String,
         timeout: TimeInterval? = nil,
+        exemptFromSuspension: Bool = false,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
         // One gate turn spans issuance → response (including the single
         // counter-race retry), so a key's counters reach the server in
         // issuance order regardless of which service is sending.
-        try await AppAttestAssertionGate.shared.withSerializedSend(keyID: keyID) {
+        try await assertionGate.withSerializedSend(
+            keyID: keyID, exemptFromSuspension: exemptFromSuspension
+        ) {
             do {
                 return try await issueAssertionAndSend(
                     path: path,
@@ -79,7 +85,7 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         timeout: TimeInterval?,
         maximumBodyBytes: Int
     ) async throws -> AppAttestRawHTTPResponse {
-        try await AppAttestAssertionGate.shared.withSerializedSend(keyID: keyID) {
+        try await assertionGate.withSerializedSend(keyID: keyID) {
             let first = try await issueAssertionAndSendForRawResponse(
                 path: path,
                 installID: installID,
@@ -110,6 +116,7 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         timeout: TimeInterval?,
         maximumBodyBytes: Int
     ) async throws -> AppAttestRawHTTPResponse {
+        try Task.checkCancellation()
         let clientDataHash = AppAttestRequestBinding.clientDataHash(
             method: "POST",
             path: path,
@@ -119,6 +126,7 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
             keyID,
             clientDataHash: clientDataHash
         )
+        try Task.checkCancellation()
         return try await apiClient.sendAuthenticatedEnvelopeForRawResponse(
             path: path,
             installID: installID,
@@ -138,6 +146,7 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         timeout: TimeInterval?,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
+        try Task.checkCancellation()
         let clientDataHash = AppAttestRequestBinding.clientDataHash(
             method: "POST",
             path: path,
@@ -147,6 +156,7 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
             keyID,
             clientDataHash: clientDataHash
         )
+        try Task.checkCancellation()
         return try await apiClient.sendAuthenticatedEnvelope(
             path: path,
             installID: installID,

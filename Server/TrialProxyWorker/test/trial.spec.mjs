@@ -5,6 +5,7 @@
 // `build/index.js` (`yarn build:worker`).
 import {
   SELF,
+  createExecutionContext,
   env,
   runDurableObjectAlarm,
   runInDurableObject,
@@ -197,12 +198,12 @@ function cborText(value) {
   return concatBytes(Uint8Array.of(0x60 + bytes.length), bytes);
 }
 
-async function makeIdentity() {
+async function makeIdentity(installID = crypto.randomUUID().toUpperCase()) {
   const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", keys.publicKey));
   const identity = {
     // The app's install id: `UUID().uuidString`.
-    installID: crypto.randomUUID().toUpperCase(),
+    installID,
     keyID: bytesToBase64(await sha256Bytes(publicKey)),
     privateKey: keys.privateKey,
     publicKey,
@@ -304,6 +305,7 @@ describe("a query string or key header", () => {
       ["GET", "/v1/trial/status"],
       ["POST", "/v1/app-attest/challenge"],
       ["POST", "/v1/app-attest/register"],
+      ["POST", "/v1/install/delete"],
       ["POST", "/no-such-route"],
     ];
     for (const [method, path] of routes) {
@@ -1048,4 +1050,249 @@ describe("open-mode backstop", () => {
     expect(alarm).toBeGreaterThan(Date.now() - 1_000);
     expect(alarm).toBeLessThanOrEqual(Date.now() + 3_600_000);
   }, 60_000);
+});
+
+import Worker from '../build/index.js';
+
+const DELETE_PATH = '/v1/install/delete';
+const subjectFor = async (identity) => `app-attest-install:${bytesToHex(await sha256Bytes(identity.installID))}`;
+const deletedRun = (subject, runID) => env.TRIAL_DB.prepare('SELECT * FROM trial_run WHERE subject = ?1 AND run_id = ?2').bind(subject, runID).first();
+async function attestedDelete(identity, worker) {
+  const body = await envelope(identity, DELETE_PATH, '{}');
+  return worker ? worker.fetch(new Request(`${BASE}${DELETE_PATH}`, { method: 'POST', body })) : post(DELETE_PATH, body);
+}
+async function seedForgetRows(subject, stub = ledger()) {
+  const now = Date.now();
+  const free = bytesToHex(await sha256Bytes(`free-${subject}`));
+  const paid = bytesToHex(await sha256Bytes(`paid-${subject}`));
+  await runInDurableObject(stub, (_instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec('INSERT INTO installs VALUES (?, 2, 5, 1, ?)', subject, now);
+    for (const [id, used] of [[free, 0], [paid, 1]]) {
+      sql.exec("INSERT INTO runs VALUES (?, ?, 'ad_detection', '0', 1, 1, 1, ?, ?, ?, 1)", subject, id, used, now, now);
+    }
+    sql.exec("INSERT INTO mirror_dirty VALUES ('run', ?, ?, 1)", subject, free);
+  });
+  await env.TRIAL_DB.prepare('INSERT INTO trial_install VALUES (?1, 2, 5, 1, ?2)').bind(subject, now).run();
+  for (const [id, used] of [[free, 0], [paid, 1]]) {
+    await env.TRIAL_DB.prepare("INSERT INTO trial_run VALUES (?1, ?2, 'ad_detection', 1, 1, 1, 1, ?3, ?4, 1, ?4)").bind(subject, id, used, now).run();
+  }
+  return { free, paid, now };
+}
+async function identityRows(identity) {
+  return Promise.all(['app_attest_keys', 'app_attest_challenges'].map(async (table) =>
+    (await env.TRIAL_DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE install_id = ?1`).bind(identity.installID).first()).n));
+}
+async function flush(stub = ledger()) {
+  await runInDurableObject(stub, (instance) => instance.alarm());
+}
+
+describe('install deregistration', () => {
+  it('keeps the entitlement and reservations, forgets unit-free runs and converges the mirror', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-12-20T12:00:00Z'));
+    const identity = await makeIdentity();
+    await makeIdentity(identity.installID);
+    const other = await makeIdentity();
+    const subject = await subjectFor(identity);
+    const otherSubject = await subjectFor(other);
+    const { free, paid, now } = await seedForgetRows(subject);
+    await seedForgetRows(otherSubject);
+    await env.TRIAL_DB.prepare("INSERT INTO app_attest_challenges VALUES (?1, ?1, 'register', ?2, 1, 2, NULL)")
+      .bind(crypto.randomUUID(), identity.installID).run();
+    // A real open-mode reservation settles after its summary is forgotten.
+    let release;
+    let entered = false;
+    const gate = new Promise(resolve => { release = resolve; });
+    generateReplies.push(async () => { entered = true; await gate; return reply(REPLY)(); });
+    const pending = attestedAnalyze(identity, wrapper(DEVICE_BODY));
+    // Poll in the test context; awaiting a provider-owned promise transfers I/O context.
+    while (!entered) await new Promise(resolve => setTimeout(resolve, 10));
+    try {
+      const before = await dumpLedger();
+      const install = before.installs.find(row => row.subject === subject);
+      const reservations = before.reservations.filter(row => row.subject === subject);
+      expect(reservations).toHaveLength(1);
+      const response = await attestedDelete(identity);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ message: 'deleted' });
+      expect(await identityRows(identity)).toEqual([0, 0]);
+      expect(await identityRows(other)).toEqual([1, 0]);
+      const after = await dumpLedger();
+      expect(after.installs.find(row => row.subject === subject)).toEqual(install);
+      expect(after.reservations.filter(row => row.subject === subject)).toEqual(reservations);
+      expect(after.runs.filter(row => row.subject === subject).map(row => row.run_id)).toEqual([paid]);
+      expect(after.runs.filter(row => row.subject === otherSubject)).toHaveLength(2);
+      expect(await deletedRun(subject, free)).toBeNull();
+      expect(await deletedRun(subject, paid)).not.toBeNull();
+      expect((await env.TRIAL_DB.prepare('SELECT trial_units_used FROM trial_install WHERE subject = ?1').bind(subject).first()).trial_units_used).toBe(2);
+      const mark = after.mirror_dirty.find(row => row.tbl === 'run_forget' && row.key_a === subject && row.key_b === free);
+      expect(mark.version).toBeGreaterThan(1);
+      // Model a pre-forget snapshot landing late; the forget mark outlives it.
+      await env.TRIAL_DB.prepare("INSERT INTO trial_run VALUES (?1, ?2, 'ad_detection', 1, 1, 1, 1, 0, ?3, 1, ?3)").bind(subject, free, now).run();
+      await flush();
+      expect(await deletedRun(subject, free)).toBeNull();
+      expect((await dumpLedger()).mirror_dirty.some(row => row.tbl === 'run_forget' && row.key_a === subject)).toBe(false);
+      for (const response of [await attestedStatus(identity), await attestedDelete(identity)]) {
+        expect(response.status).toBe(401);
+        expect(await response.json()).toEqual({ error: 'unknown_key' });
+      }
+    } finally {
+      release();
+      expect((await pending).status).toBe(200);
+    }
+    expect((await dumpLedger()).runs.filter(row => row.subject === subject).map(row => row.run_id)).toEqual([paid]);
+    // Seed a replacement key under the kept install ID (not Apple registration).
+    const replacement = await makeIdentity(identity.installID);
+    vi.setSystemTime(new Date('2027-01-15T12:00:00Z'));
+    const status = await attestedStatus(replacement);
+    expect(status.status).toBe(200);
+    expect((await status.json()).units_remaining).toBe(3);
+  });
+
+  it('deletes with only auth configuration and rejects every Authorization header', async () => {
+    const identity = await makeIdentity();
+    const minimal = new Worker(createExecutionContext(), {
+      APPLE_TEAM_ID: env.APPLE_TEAM_ID, APPLE_BUNDLE_ID: env.APPLE_BUNDLE_ID,
+      APP_ATTEST_ENVIRONMENT: env.APP_ATTEST_ENVIRONMENT, TRIAL_PROXY_ENABLED: 'false',
+      TRIAL_DB: env.TRIAL_DB, TRIAL_LEDGER: env.TRIAL_LEDGER,
+    });
+    const rejected = await minimal.fetch(new Request(`${BASE}${DELETE_PATH}`, {
+      method: 'POST', headers: { authorization: `Bearer ${BEARER}` },
+      body: await envelope(identity, DELETE_PATH, '{}'),
+    }));
+    expect(rejected.status).toBe(401);
+    expect(await rejected.json()).toEqual({ error: 'unauthorized' });
+    expect(await identityRows(identity)).toEqual([1, 0]);
+    expect((await attestedDelete(identity, minimal)).status).toBe(200);
+    expect((await minimal.fetch(new Request(`${BASE}${DELETE_PATH}`))).status).toBe(405);
+  });
+
+  it('runs object forget without bundle configuration and arms a missing alarm', async () => {
+    const stub = env.TRIAL_LEDGER.getByName(`forget-minimal-${crypto.randomUUID()}`);
+    const subject = await subjectFor(await makeIdentity());
+    const { paid } = await seedForgetRows(subject, stub);
+    const result = await runInDurableObject(stub, async (instance, state) => {
+      await state.storage.deleteAlarm();
+      const minimal = new instance.constructor(state, {});
+      const response = await minimal.fetch(new Request('https://ledger/forget', {
+        method: 'POST', body: JSON.stringify({ subject }),
+      }));
+      return { status: response.status, body: await response.json(), alarm: await state.storage.getAlarm(),
+        runs: state.storage.sql.exec('SELECT run_id FROM runs WHERE subject = ?', subject).toArray() };
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ deleted: 1 });
+    expect(result.runs).toEqual([{ run_id: paid }]);
+    expect(result.alarm).not.toBeNull();
+  });
+
+  it('reports partial failure after key revocation when object forget fails', async () => {
+    const identity = await makeIdentity();
+    const subject = await subjectFor(identity);
+    const { free } = await seedForgetRows(subject);
+    await runInDurableObject(ledger(), (_instance, state) => {
+      state.storage.sql.exec("CREATE TRIGGER fail_forget BEFORE DELETE ON runs BEGIN SELECT RAISE(ABORT, 'injected forget failure'); END");
+    });
+    try {
+      const response = await attestedDelete(identity);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: 'deregistration_unavailable' });
+      expect(await identityRows(identity)).toEqual([0, 0]);
+      expect((await dumpLedger()).runs.some(row => row.subject === subject && row.run_id === free)).toBe(true);
+      const again = await attestedDelete(identity);
+      expect(again.status).toBe(401);
+      expect(await again.json()).toEqual({ error: 'unknown_key' });
+    } finally {
+      await runInDurableObject(ledger(), (_instance, state) => state.storage.sql.exec('DROP TRIGGER fail_forget').toArray());
+    }
+  });
+
+  it('serializes overlapping flushes so a stale upsert cannot outlive the forget mark', async () => {
+    const stub = env.TRIAL_LEDGER.getByName(`forget-flush-${crypto.randomUUID()}`);
+    const subject = await subjectFor(await makeIdentity());
+    const { free } = await seedForgetRows(subject, stub);
+    await runInDurableObject(stub, async (original, state) => {
+      let release;
+      let entered;
+      const gate = new Promise(resolve => { release = resolve; });
+      const started = new Promise(resolve => { entered = resolve; });
+      let batches = 0;
+      const db = new Proxy(env.TRIAL_DB, { get(target, key) {
+        if (key === 'batch') return async (statements) => {
+          batches += 1;
+          if (batches === 1) { entered(); await gate; }
+          return target.batch(statements);
+        };
+        if (key === 'constructor') return target.constructor;
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+      const instance = new original.constructor(state, { ...env, TRIAL_DB: db });
+      const first = instance.alarm();
+      await started;
+      try {
+        await env.TRIAL_DB.prepare('DELETE FROM trial_run WHERE subject = ?1 AND unit_consumed = 0').bind(subject).run();
+        const forgot = await instance.fetch(new Request('https://ledger/forget', {
+          method: 'POST', body: JSON.stringify({ subject }),
+        }));
+        expect(forgot.status).toBe(200);
+        await instance.alarm();
+        expect(batches).toBe(1);
+        expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM mirror_dirty WHERE tbl = 'run_forget'").one().n).toBe(1);
+      } finally {
+        release();
+        await first;
+      }
+      expect(await deletedRun(subject, free)).not.toBeNull();
+      await instance.alarm();
+      expect(await deletedRun(subject, free)).toBeNull();
+    });
+  });
+
+  it.each(['open', 'trial'])('documents an already-authenticated late admission in %s mode', async (mode) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(mode === 'trial' ? '2027-02-15T12:00:00Z' : '2026-12-21T12:00:00Z'));
+    const identity = await makeIdentity();
+    const subject = await subjectFor(identity);
+    let release;
+    let entered = false;
+    const gate = new Promise(resolve => { release = resolve; });
+    countReplies.push(async () => { entered = true; await gate; return reply({ totalTokens: 2039 })(); });
+    generateReplies.push(reply(REPLY));
+    const pending = attestedAnalyze(identity, wrapper(DEVICE_BODY));
+    while (!entered) await new Promise(resolve => setTimeout(resolve, 10));
+    try {
+      expect((await attestedDelete(identity)).status).toBe(200);
+    } finally { release(); }
+    expect((await pending).status).toBe(200);
+    const rows = (await dumpLedger()).runs.filter(row => row.subject === subject);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].unit_consumed).toBe(mode === 'trial' ? 1 : 0);
+  });
+});
+
+it('expires a reservation after forgetting its run without recreating it or resetting units', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-12-22T12:00:00Z'));
+  const identity = await makeIdentity();
+  const subject = await subjectFor(identity);
+  await seedForgetRows(subject);
+  let release;
+  let entered = false;
+  const gate = new Promise(resolve => { release = resolve; });
+  generateReplies.push(async () => { entered = true; await gate; return reply(REPLY)(); });
+  const pending = attestedAnalyze(identity, wrapper(DEVICE_BODY));
+  while (!entered) await new Promise(resolve => setTimeout(resolve, 10));
+  try {
+    expect((await attestedDelete(identity)).status).toBe(200);
+    await runInDurableObject(ledger(), (_instance, state) => {
+      state.storage.sql.exec("UPDATE reservations SET deadline = ? WHERE subject = ? AND state = 'open'", Date.now() - 1, subject);
+    });
+    await flush();
+    const after = await dumpLedger();
+    expect(after.reservations.filter(row => row.subject === subject).map(row => row.state)).toEqual(['expired']);
+    expect(after.runs.filter(row => row.subject === subject).every(row => row.unit_consumed === 1)).toBe(true);
+    expect(after.installs.find(row => row.subject === subject).trial_units_used).toBe(2);
+  } finally { release(); await pending; }
 });

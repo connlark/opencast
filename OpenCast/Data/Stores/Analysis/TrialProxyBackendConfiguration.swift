@@ -42,20 +42,20 @@ nonisolated struct TrialProxyBackendConfiguration: Sendable, Equatable {
     )
 
     /// The configuration for this build. `trialEndpoint` is the bundle's
-    /// `trial.endpoint`; `storeEnvironment` is read only by App Store and
-    /// TestFlight builds.
+    /// `trial.endpoint`; normal build routing reads `storeEnvironment` only
+    /// in App Store and TestFlight builds.
     static func resolve(
         trialEndpoint: URL,
+        routing: AnalysisBackendRouting = .currentBuild,
         storeEnvironment: @Sendable () async throws -> RemoteTranscriptionStoreEnvironment
     ) async -> Self? {
         #if INTERNAL_NOTIFICATIONS_DIAGNOSTICS
-        return prodStaging
+        if routing == .currentBuild { return prodStaging }
         #elseif DEBUG
-        return debug(environment: ProcessInfo.processInfo.environment)
-        #else
+        if routing == .currentBuild { return debug(environment: ProcessInfo.processInfo.environment) }
+        #endif
         guard let environment = try? await storeEnvironment() else { return nil }
         return release(for: environment, trialEndpoint: trialEndpoint)
-        #endif
     }
 
     #if DEBUG

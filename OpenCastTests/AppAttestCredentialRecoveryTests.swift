@@ -14,6 +14,7 @@ struct AppAttestCredentialRecoveryTests {
 
         await #expect(throws: RecoverableServerError.self) {
             try await AppAttestCredentialRecovery.withFreshCredentialOnRecoverableFailure(
+                keychainService: "credential-recovery-tests-\(UUID().uuidString)",
                 ensureCredential: {
                     ensureCredentialCalls += 1
                     return "credential"
@@ -37,6 +38,7 @@ struct AppAttestCredentialRecoveryTests {
         var operationCalls = 0
 
         let result = try await AppAttestCredentialRecovery.withFreshCredentialOnRecoverableFailure(
+            keychainService: "credential-recovery-tests-\(UUID().uuidString)",
             ensureCredential: { "credential" },
             deleteCachedAppAttestKey: { deletedKeys += 1 },
             isRecoverableServerCredentialFailure: { $0 is RecoverableServerError },
