@@ -10,20 +10,20 @@ struct EpisodeNotesExportTests {
         whole.isEpisodeWide = true
         let later = EpisodeNoteRecord(episodeID: "a", timestamp: 125, text: "Later")
         let earlier = EpisodeNoteRecord(episodeID: "a", timestamp: 10, text: "Earlier")
-        #expect(EpisodeNotesExport.text(episodeTitle: "Episode Title", showTitle: "Show Name", notes: [later, whole, earlier]) == "Episode Title\nShow Name\n\nPrivate Notes from opencast:\n\nOverall thoughts\nSecond line\n\n0:10\nEarlier\n\n2:05\nLater")
+        #expect(EpisodeNotesExport.text(episodeTitle: "Episode Title", showTitle: "Show Name", notes: [later, whole, earlier]) == "Episode Title\nShow Name\n\nOverall thoughts\nSecond line\n\n0:10\nEarlier\n\n2:05\nLater")
     }
 
     @Test("Timestamp-only exports omit an empty whole-episode section")
     func timestampOnly() {
         let note = EpisodeNoteRecord(episodeID: "a", timestamp: 0, text: "Beginning")
-        #expect(EpisodeNotesExport.text(episodeTitle: "Episode", showTitle: "Show", notes: [note]) == "Episode\nShow\n\nPrivate Notes from opencast:\n\n0:00\nBeginning")
-        #expect(EpisodeNotesExport.text(episodeTitle: "Episode", showTitle: "Show", notes: []) == "Episode\nShow\n\nPrivate Notes from opencast:")
+        #expect(EpisodeNotesExport.text(episodeTitle: "Episode", showTitle: "Show", notes: [note]) == "Episode\nShow\n\n0:00\nBeginning")
+        #expect(EpisodeNotesExport.text(episodeTitle: "Episode", showTitle: "Show", notes: []) == "Episode\nShow")
     }
 
     @Test("Notes Markdown uses headings and preserves literal user text")
     func markdown() {
         let note = EpisodeNoteRecord(episodeID: "a", timestamp: 10, text: "# Literal *text*\n[link](url)")
-        #expect(EpisodeNotesExport.markdown(episodeTitle: "A *title*", showTitle: "Show", notes: [note]) == "# A \\*title\\*\n## Show\n\n*Private Notes from opencast:*\n\n0:10  \n\\# Literal \\*text\\*  \n\\[link\\]\\(url\\)")
+        #expect(EpisodeNotesExport.markdown(episodeTitle: "A *title*", showTitle: "Show", notes: [note]) == "# A \\*title\\*\n## Show\n\n0:10  \n\\# Literal \\*text\\*  \n\\[link\\]\\(url\\)")
     }
 
     @Test("AirDrop gets a named UTF-8 txt file; Notes gets Markdown; temporary files are removed")
@@ -37,7 +37,7 @@ struct EpisodeNotesExportTests {
         #expect(try String(contentsOf: airDrop, encoding: .utf8).contains("Thought 📝"))
         let notes = export.file(for: "com.apple.mobilenotes.SharingExtension")
         #expect(notes.pathExtension == "md")
-        #expect(try String(contentsOf: notes, encoding: .utf8).hasPrefix("# Episode/Title\n## Show\n\n*Private Notes from opencast:*"))
+        #expect(try String(contentsOf: notes, encoding: .utf8) == "# Episode/Title\n## Show\n\n0:00  \nThought 📝")
         export.removeFiles()
         #expect(!FileManager.default.fileExists(atPath: export.directory.path))
     }

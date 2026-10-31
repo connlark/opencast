@@ -100,6 +100,39 @@ struct EpisodeNoteStoreTests {
         #expect(try context.fetchCount(FetchDescriptor<EpisodeNoteRecord>()) == 2)
     }
 
+    @Test("The whole-episode lookup finds only that episode's episode note")
+    func wholeEpisodeLookup() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        try EpisodeNoteStore.save("Moment", for: draft("episode-a", at: 12), in: context)
+        #expect(try EpisodeNoteStore.wholeEpisodeNote(for: "episode-a", in: context) == nil)
+        var whole = draft("episode-a", at: 0)
+        whole.isEpisodeWide = true
+        let saved = try EpisodeNoteStore.save("Overall", for: whole, in: context)
+        var other = draft("episode-b", at: 0)
+        other.isEpisodeWide = true
+        try EpisodeNoteStore.save("Other", for: other, in: context)
+        let found = try EpisodeNoteStore.wholeEpisodeNote(for: "episode-a", in: ModelContext(container))
+        #expect(found?.noteID == saved.noteID)
+        #expect(found?.text == "Overall")
+        #expect(try EpisodeNoteStore.wholeEpisodeNote(for: "episode-c", in: context) == nil)
+    }
+
+    @Test("A whole-episode draft edits the existing note, or starts a new one")
+    func wholeEpisodeDraft() throws {
+        let fresh = EpisodeNoteDraft.wholeEpisode(episodeID: "a", episodeTitle: "Episode", existing: nil)
+        #expect(fresh.isEpisodeWide)
+        #expect(fresh.noteID == nil)
+        #expect(fresh.initialText.isEmpty)
+        let existing = EpisodeNoteRecord(episodeID: "a", timestamp: 0, text: "Overall")
+        existing.isEpisodeWide = true
+        let editing = EpisodeNoteDraft.wholeEpisode(episodeID: "a", episodeTitle: "Episode", existing: existing)
+        #expect(editing.isEpisodeWide)
+        #expect(editing.noteID == existing.noteID)
+        #expect(editing.initialText == "Overall")
+        #expect(editing.episodeID == "a")
+    }
+
     @Test("Editing a timestamped note preserves identity, episode and timestamp")
     func editTimestampedNote() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

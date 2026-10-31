@@ -4,12 +4,18 @@ import SwiftUI
 struct AddEpisodeNoteSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @State private var text = ""
-    @State private var editingNoteID: String?
+    @State private var text: String
     @State private var errorMessage: String?
     @FocusState private var isEditing: Bool
 
+    /// Callers resolve an existing note into the draft before presenting, so
+    /// the editor opens with its text and never fetches.
     let draft: EpisodeNoteDraft
+
+    init(draft: EpisodeNoteDraft) {
+        self.draft = draft
+        _text = State(initialValue: draft.initialText)
+    }
 
     var body: some View {
         NavigationStack {
@@ -27,57 +33,43 @@ struct AddEpisodeNoteSheet: View {
                     .accessibilityLabel("Private Note")
                     .accessibilityIdentifier("Episode Note Text")
                     .padding(8)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+                    .background(.quaternary, in: .rect(cornerRadius: 12))
             }
             .padding()
-            .navigationTitle(editingNoteID != nil ? "Edit Private Note" : "Add Private Note")
+            .navigationTitle(draft.noteID != nil ? "Edit Private Note" : "Add Private Note")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", role: .cancel) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        do {
-                            var savedDraft = draft
-                            savedDraft.noteID = editingNoteID
-                            try EpisodeNoteStore.save(text, for: savedDraft, in: modelContext)
-                            dismiss()
-                        } catch {
-                            errorMessage = error.localizedDescription
-                        }
-                    }
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityIdentifier("Save Episode Note")
+                    Button("Save", action: save)
+                        .disabled(!hasText)
+                        .accessibilityIdentifier("Save Episode Note")
                 }
             }
-            .alert("Couldn’t Save Private Note", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "")
+            .alert("Couldn’t Save Private Note", item: $errorMessage) { _ in
+            } message: { message in
+                Text(message)
             }
-            .onAppear {
-                editingNoteID = draft.noteID
-                text = draft.initialText
-                if draft.isEpisodeWide && draft.noteID == nil {
-                    let episodeID = draft.episodeID
-                    do {
-                        if let existing = try modelContext.fetch(FetchDescriptor<EpisodeNoteRecord>(
-                            predicate: #Predicate { $0.episodeID == episodeID && $0.isEpisodeWide }
-                        )).first {
-                            editingNoteID = existing.noteID
-                            text = existing.text
-                        }
-                    } catch { errorMessage = error.localizedDescription }
-                }
+            .task {
                 isEditing = true
             }
-
         }
         .presentationDetents([.large])
-        .interactiveDismissDisabled(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .interactiveDismissDisabled(hasText)
+    }
+
+    private var hasText: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func save() {
+        do {
+            try EpisodeNoteStore.save(text, for: draft, in: modelContext)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

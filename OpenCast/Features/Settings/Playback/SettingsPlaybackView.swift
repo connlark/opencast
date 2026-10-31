@@ -64,12 +64,12 @@ struct SettingsPlaybackView: View {
             }
 
             Section {
-                Toggle("Show Note Buttons", isOn: privateNoteButtonsBinding)
+                Toggle("Show Note Button", isOn: privateNoteButtonsBinding)
                     .accessibilityIdentifier("playback-private-notes-toggle")
             } header: {
                 Text("Private Notes")
             } footer: {
-                Text("Show note buttons in Now Playing. Saved notes are always available in episode details and the More Actions menu. Notes are stored on this device.")
+                Text("Adds a note button to Now Playing; notes stay on this device.")
             }
 
             Section {

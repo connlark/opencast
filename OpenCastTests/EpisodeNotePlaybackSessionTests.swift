@@ -1,3 +1,5 @@
+import Foundation
+import OpenCastCore
 import OpenCastPlayback
 import Testing
 @testable import OpenCast
@@ -37,6 +39,43 @@ struct EpisodeNotePlaybackSessionTests {
         session.finish(currentEpisodeID: "a", state: .failed("Failure"), playbackIntentRevision: 0) { plays += 1 }
         #expect(plays == 0)
     }
+    @Test(
+        "On the real controller a skip or a scrub while the editor is open keeps dismissal from resuming",
+        arguments: ["nothing", "skip", "scrub"]
+    )
+    func realControllerSupersession(command: String) throws {
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        try controller.load(Episode(
+            id: EpisodeID(rawValue: "note-episode"),
+            podcastID: PodcastID(rawValue: "https://example.com/notes.xml"),
+            podcastTitle: "Notes Show",
+            title: "Notes Episode",
+            duration: 240,
+            audioURL: URL(string: "https://example.com/notes.mp3")
+        ))
+        controller.play()
+        #expect(controller.state.showsPauseButton)
+        let session = EpisodeNotePlaybackSession(
+            episodeID: "note-episode", title: "Notes Episode", timestamp: controller.position,
+            state: controller.state, pause: controller.pause,
+            playbackIntentRevision: { controller.playbackIntentRevision }
+        )
+        #expect(controller.state == .paused)
+        switch command {
+        case "skip": controller.skip(by: 15)
+        case "scrub": controller.seek(to: 10, intent: .scrub)
+        default: break
+        }
+        var plays = 0
+        session.finish(
+            currentEpisodeID: controller.currentEpisode?.id.rawValue,
+            state: controller.state,
+            playbackIntentRevision: controller.playbackIntentRevision
+        ) { plays += 1 }
+        #expect(plays == (command == "nothing" ? 1 : 0))
+    }
+
     @Test("A later playback command supersedes the editor pause even when still paused", arguments: [false, true])
     func pauseOwnership(superseded: Bool) {
         var revision: UInt64 = 10

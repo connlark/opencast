@@ -1,19 +1,26 @@
 import SwiftUI
 
 struct NowPlayingUtilityControls: View {
+    static let spacing = 12.0
+
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
+    @ScaledMetric(relativeTo: .body) private var circleDiameter = PlayerUtilityCircleChrome.defaultDiameter
 
     let rate: Float
+    /// The width the controls are laid out in; a single row that would not
+    /// fit falls back to the grid instead of overflowing the screen edges.
+    let availableWidth: Double
     let onShowSpeed: () -> Void
     let onShowSleepTimer: () -> Void
     let onShowUpNext: () -> Void
+    var onAddNote: (() -> Void)? = nil
 
     var body: some View {
-        GlassEffectContainer(spacing: 12) {
-            if dynamicTypeSize.isAccessibilitySize {
-                Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+        GlassEffectContainer(spacing: Self.spacing) {
+            if usesGrid {
+                Grid(horizontalSpacing: Self.spacing, verticalSpacing: Self.spacing) {
                     GridRow {
                         playbackSpeedButton
                         AirPlayRoutePickerButton()
@@ -22,17 +29,41 @@ struct NowPlayingUtilityControls: View {
                         sleepTimerButton
                         upNextButton
                     }
+                    if let onAddNote {
+                        GridRow {
+                            addNoteButton(action: onAddNote)
+                                .gridCellColumns(2)
+                        }
+                    }
                 }
             } else {
-                HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .center, spacing: Self.spacing) {
                     playbackSpeedButton
                     AirPlayRoutePickerButton()
                     sleepTimerButton
                     upNextButton
+                    if let onAddNote {
+                        addNoteButton(action: onAddNote)
+                    }
                 }
             }
         }
         .foregroundStyle(.primary)
+    }
+
+    private var usesGrid: Bool {
+        dynamicTypeSize.isAccessibilitySize
+            || Self.rowWidth(circleCount: onAddNote == nil ? 4 : 5, scaledDiameter: circleDiameter) > availableWidth
+    }
+
+    static func rowWidth(circleCount: Int, scaledDiameter: Double) -> Double {
+        let count = Double(circleCount)
+        return count * PlayerUtilityCircleChrome.diameter(scaled: scaledDiameter) + (count - 1) * spacing
+    }
+
+    private func addNoteButton(action: @escaping () -> Void) -> some View {
+        PlayerUtilityCircleButton(title: "Add Note", systemImage: "square.and.pencil", action: action)
+            .accessibilityIdentifier("Add Timestamped Note")
     }
 
     private var playbackSpeedButton: some View {

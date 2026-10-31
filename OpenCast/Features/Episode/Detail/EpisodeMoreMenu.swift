@@ -10,6 +10,7 @@ struct EpisodeMoreMenu: View {
     @Environment(AnalysisKeyNoticeGate.self) private var noticeGate: AnalysisKeyNoticeGate?
 
     @State private var noteDraft: EpisodeNoteDraft?
+    @State private var noteErrorMessage: String?
 
     let episode: EpisodeListItemSnapshot
     let isPlayed: Bool
@@ -25,13 +26,8 @@ struct EpisodeMoreMenu: View {
             }
             progressActions
             Button("Add to Playlist…", systemImage: "music.note.list", action: addToPlaylist)
-            Button("Add Episode Note", systemImage: "square.and.pencil") {
-                noteDraft = EpisodeNoteDraft(
-                    episodeID: episode.episodeID, episodeTitle: episode.title,
-                    timestamp: 0, isEpisodeWide: true
-                )
-            }
-            .accessibilityIdentifier("Add Whole Episode Note")
+            Button("Add Episode Note", systemImage: "square.and.pencil", action: addEpisodeNote)
+                .accessibilityIdentifier("Add Whole Episode Note")
             Divider()
             downloadActions
             transcriptActions
@@ -43,6 +39,19 @@ struct EpisodeMoreMenu: View {
         }
         .sheet(item: $noteDraft) { draft in
             AddEpisodeNoteSheet(draft: draft)
+        }
+        .alert("Couldn’t Open Episode Note", item: $noteErrorMessage) { _ in
+        } message: { message in
+            Text(message)
+        }
+    }
+
+    private func addEpisodeNote() {
+        do {
+            let existing = try EpisodeNoteStore.wholeEpisodeNote(for: episode.episodeID, in: modelContext)
+            noteDraft = .wholeEpisode(episodeID: episode.episodeID, episodeTitle: episode.title, existing: existing)
+        } catch {
+            noteErrorMessage = error.localizedDescription
         }
     }
 

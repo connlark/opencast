@@ -405,50 +405,14 @@ final class PlaybackSettingsStore {
         _ isEnabled: Bool,
         modelContext: ModelContext
     ) -> Bool {
-        guard showsPrivateNoteButtons != isEnabled else {
-            return true
-        }
-
-        let previousValue = showsPrivateNoteButtons
-        showsPrivateNoteButtons = isEnabled
-
-        do {
-            let existingRecord = try LocalPreferenceRecord.preference(
-                forKey: Self.privateNoteButtonsPreferenceKey,
-                modelContext: modelContext
-            )
-            let record = existingRecord ?? LocalPreferenceRecord(
-                key: Self.privateNoteButtonsPreferenceKey,
-                value: isEnabled.description
-            )
-            let previousStoredValue = record.value
-            let previousUpdatedAt = record.updatedAt
-            if existingRecord == nil {
-                modelContext.insert(record)
-            }
-            record.value = isEnabled.description
-            record.updatedAt = .now
-
-            do {
-                try save(modelContext)
-            } catch {
-                // Undo only this preference; the shared context can contain
-                // unrelated edits that must survive a failed save.
-                if existingRecord != nil {
-                    record.value = previousStoredValue
-                    record.updatedAt = previousUpdatedAt
-                } else {
-                    modelContext.delete(record)
-                }
-                throw error
-            }
-            lastErrorMessage = nil
-            return true
-        } catch {
-            showsPrivateNoteButtons = previousValue
-            lastErrorMessage = "Unable to update the Private Notes setting: \(error.localizedDescription)"
-            return false
-        }
+        updateBooleanPreference(
+            isEnabled,
+            key: Self.privateNoteButtonsPreferenceKey,
+            current: \.showsPrivateNoteButtons,
+            assign: { showsPrivateNoteButtons = $0 },
+            failureDescription: "the Private Notes setting",
+            modelContext: modelContext
+        )
     }
 
     @discardableResult

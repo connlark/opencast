@@ -292,6 +292,11 @@ final class OpenCastUITests: XCTestCase {
         let close = shareSheet.buttons["header.closeButton"]
         if close.exists {
             close.tap()
+            // The launch's first share card comes from a cold remote host that
+            // can drop a tap made as the card appears; Close works on a re-tap.
+            if !caption.waitForNonExistence(timeout: 3), close.exists {
+                close.tap()
+            }
         } else {
             // Compact remote cards have no close button and expose an empty frame.
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
@@ -889,10 +894,10 @@ final class OpenCastUITests: XCTestCase {
         assertExists(row, named: "seeded episode")
         row.tap()
         assertNowPlayingOverlay(in: app)
-        XCTAssertFalse(app.buttons["Add Episode Note"].exists)
-        XCTAssertFalse(app.buttons["Show Episode Notes"].exists)
+        XCTAssertFalse(app.buttons["Add Timestamped Note"].exists)
         openCurrentEpisodeDetailFromNowPlaying(in: app)
         XCTAssertFalse(app.staticTexts["Private Notes"].exists)
+        XCTAssertFalse(app.buttons["Share Private Notes"].exists)
     }
 
     @MainActor
@@ -911,24 +916,28 @@ final class OpenCastUITests: XCTestCase {
         editor.tap()
         editor.typeText("Whole note from episode page")
         app.buttons["Save Episode Note"].tap()
-        assertExists(app.staticTexts["Whole note from episode page"], named: "whole episode note")
+        let saved = privateNote("Whole note from episode page", in: app)
+        assertExists(saved, named: "whole episode note")
+        assertExists(app.staticTexts["Private Notes"], named: "Private Notes heading")
         app.buttons["Episode Actions"].firstMatch.tap()
         app.buttons["Add Whole Episode Note"].tap()
         assertExists(editor, named: "existing episode note editor")
         XCTAssertEqual(editor.value as? String, "Whole note from episode page")
         app.buttons["Cancel"].tap()
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5))
         openSettingsScreen("Delete Data", in: app)
         let deleteAll = app.buttons["Delete All Private Notes"].firstMatch
-        assertExists(deleteAll, named: "delete all notes action")
-        deleteAll.tap()
-        app.navigationBars["Delete Data"].tap()
+        // One tap, once the pushed screen has settled; no product defect
+        // makes the first tap miss.
+        assertHittable(deleteAll, named: "delete all notes action")
+        XCTAssertTrue(waitForStableFrame(of: deleteAll), "Delete Data should finish its push before the tap")
         deleteAll.tap()
         let confirmation = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "Delete All Private Notes", "Delete All Private Notes")).firstMatch
         assertExists(confirmation, named: "bulk note deletion confirmation")
         confirmation.tap()
         openInbox(in: app)
         assertExists(app.buttons["Episode Actions"], named: "episode details retained after switching tabs")
-        XCTAssertFalse(app.staticTexts["Whole note from episode page"].exists)
+        assertDoesNotExist(saved, named: "deleted whole episode note")
         XCTAssertFalse(app.staticTexts["Private Notes"].exists)
     }
 
@@ -936,143 +945,204 @@ final class OpenCastUITests: XCTestCase {
     func testWholeEpisodeNoteCanBeCreatedEditedAndDeleted() throws {
         let app = makeSeededApp()
         app.launch()
-        openSettingsScreen("Playback", expecting: "Playback", in: app)
-        let toggle = app.switches["playback-private-notes-toggle"]
-        assertExists(toggle, named: "Private Notes toggle")
-        if !toggle.isHittable { app.swipeUp() }
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        app.tabBars.buttons["Inbox"].tap()
+        openInbox(in: app)
         seededEpisodeRow(in: app).tap()
         assertNowPlayingOverlay(in: app)
-        app.buttons["Add Episode Note"].tap()
-        app.buttons["Add Whole Episode Note"].tap()
+        openPrivateNotesSheet(in: app)
+        assertExists(app.staticTexts["No Notes Yet"], named: "empty notes sheet")
+        let addEpisodeNote = app.buttons["Add Whole Episode Note"]
+        assertExists(addEpisodeNote, named: "add episode note row")
+        addEpisodeNote.tap()
         let editor = app.textViews["Episode Note Text"]
         assertExists(editor, named: "whole episode editor")
         editor.tap()
         editor.typeText("Whole episode fixture")
         app.buttons["Save Episode Note"].tap()
-        app.buttons["Show Episode Notes"].tap()
-        assertExists(app.staticTexts["Whole episode fixture"], named: "whole episode note")
-        app.staticTexts["Whole episode fixture"].press(forDuration: 1)
-        app.buttons.matching(NSPredicate(format: "identifier == %@", "Edit Episode Note")).firstMatch.tap()
+        let note = privateNote("Whole episode fixture", in: app)
+        assertExists(note, named: "whole episode note row")
+        assertDoesNotExist(addEpisodeNote, named: "add row once the episode note exists")
+        // The heading area, not the text: the whole card opens the editor.
+        note.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.2)).tap()
         assertExists(editor, named: "prefilled editor")
         XCTAssertEqual(editor.value as? String, "Whole episode fixture")
         editor.tap()
         editor.typeText(" updated")
         app.buttons["Save Episode Note"].tap()
-        let updated = app.staticTexts["Whole episode fixture updated"]
+        let updated = privateNote("Whole episode fixture updated", in: app)
         assertExists(updated, named: "updated note")
-        XCTAssertEqual(app.staticTexts.matching(identifier: "Whole episode fixture updated").count, 1)
-        updated.press(forDuration: 1)
-        app.buttons["Delete Episode Note"].tap()
+        XCTAssertEqual(app.buttons.matching(identifier: "Whole episode fixture updated").count, 1)
+        updated.swipeLeft()
+        let delete = app.buttons["Delete"]
+        assertExists(delete, named: "Delete swipe action")
+        delete.tap()
         assertDoesNotExist(updated, named: "deleted whole episode note")
-        assertExists(app.staticTexts["No Notes Yet"], named: "empty notes pane")
+        assertExists(app.staticTexts["No Notes Yet"], named: "empty notes sheet after deletion")
+        assertExists(addEpisodeNote, named: "add row after deleting the episode note")
     }
 
     @MainActor
     func testPrivateNotesSaveVisibilityAndDeletion() throws {
         let app = makeSeededApp(audioDurationSeconds: 600)
         app.launch()
-        openSettingsScreen("Playback", expecting: "Playback", in: app)
-        let toggle = app.switches["playback-private-notes-toggle"]
-        assertExists(toggle, named: "Private Notes toggle")
-        if !toggle.isHittable { app.swipeUp() }
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        XCTAssertEqual(toggle.value as? String, "1")
+        setPrivateNoteButtons(true, in: app)
         app.tabBars.buttons["Inbox"].tap()
         let row = seededEpisodeRow(in: app)
         assertExists(row, named: "seeded episode")
         row.tap()
         assertNowPlayingOverlay(in: app)
-        let add = app.buttons["Add Episode Note"]
-        assertExists(add, named: "Add Note")
-        assertExists(nowPlayingOverlay(in: app).buttons["Pause"], named: "playing before adding a note")
+        let overlay = nowPlayingOverlay(in: app)
+        let add = app.buttons["Add Timestamped Note"]
+        assertExists(add, named: "Add Note circle")
+        XCTAssertFalse(app.buttons["Show Episode Notes"].exists)
+        XCTAssertFalse(app.buttons["Add Episode Note"].exists)
+        assertExists(overlay.buttons["Pause"], named: "playing before adding a note")
         add.tap()
-        app.buttons["Add Timestamped Note"].tap()
         let editor = app.textViews["Episode Note Text"]
-        assertExists(editor, named: "note editor")
+        assertExists(editor, named: "note editor after one tap")
         editor.tap()
         editor.typeText("Private note UI fixture")
         app.buttons["Save Episode Note"].tap()
-        let overlay = nowPlayingOverlay(in: app)
         assertExists(overlay.buttons["Pause"], named: "playback resumed after saving")
         add.tap()
-        app.buttons["Add Timestamped Note"].tap()
         assertExists(editor, named: "cancelled note editor")
         editor.tap()
         editor.typeText("Discard this draft")
         app.buttons["Cancel"].tap()
         assertExists(overlay.buttons["Pause"], named: "playback resumed after cancelling")
         add.tap()
-        app.buttons["Add Timestamped Note"].tap()
         assertExists(editor, named: "empty note editor")
         app.navigationBars["Add Private Note"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
         XCTAssertTrue(editor.waitForNonExistence(timeout: 5))
         assertExists(overlay.buttons["Pause"], named: "playback resumed after dismissing an empty draft")
         overlay.buttons["Pause"].tap()
+        assertExists(overlay.buttons["Play"], named: "paused before the second note")
+        let progress = playbackProgress(in: app)
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5))
+            .press(forDuration: 0.08, thenDragTo: progress.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)))
         add.tap()
-        app.buttons["Add Timestamped Note"].tap()
         assertExists(editor, named: "editor while already paused")
-        app.buttons["Cancel"].tap()
+        editor.tap()
+        editor.typeText("Second note fixture")
+        app.buttons["Save Episode Note"].tap()
         assertExists(overlay.buttons["Play"], named: "previously paused playback stays paused")
-        overlay.buttons["Play"].tap()
-        let notes = app.buttons["Show Episode Notes"]
-        assertExists(notes, named: "Private Notes button")
-        notes.tap()
-        assertExists(app.staticTexts["Private note UI fixture"], named: "saved note")
-        app.navigationBars["Private Notes"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
-        XCTAssertTrue(app.navigationBars["Private Notes"].waitForNonExistence(timeout: 5))
+        attachSmokeScreenshot(named: "private_notes_now_playing")
+
+        openPrivateNotesSheet(in: app)
+        assertExists(privateNote("Private note UI fixture", in: app), named: "first saved note in the sheet")
+        assertExists(privateNote("Second note fixture", in: app), named: "second saved note in the sheet")
+        assertExists(app.buttons["Add Whole Episode Note"], named: "add episode note row in the sheet")
+        attachSmokeScreenshot(named: "private_notes_sheet")
+        let seekButtons = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play from"))
+        XCTAssertEqual(seekButtons.count, 2)
+        seekButtons.element(boundBy: 1).tap()
+        XCTAssertTrue(app.navigationBars["Private Notes"].waitForNonExistence(timeout: 5), "seeking from a note closes the sheet")
+        assertExists(overlay.buttons["Pause"], named: "seeking from a note plays")
+
         dismissNowPlayingOverlay(in: app)
-        openSettingsScreen("Playback", expecting: "Playback", in: app)
-        let enabledToggle = app.switches["playback-private-notes-toggle"]
-        if !enabledToggle.isHittable { app.swipeUp() }
-        enabledToggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        XCTAssertEqual(enabledToggle.value as? String, "0")
+        setPrivateNoteButtons(false, in: app)
         app.tabBars.buttons["Inbox"].tap()
         app.buttons["Open Now Playing"].tap()
         assertNowPlayingOverlay(in: app)
-        XCTAssertFalse(app.buttons["Add Episode Note"].exists)
-        let more = app.buttons["More Actions"].firstMatch
-        let expandedMenu = NSPredicate { _, _ in more.isHittable && more.frame.maxY < 200 }
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: expandedMenu, object: more)], timeout: 5), .completed)
-        more.tap()
-        let menuNotes = app.buttons["Menu Private Notes"]
-        assertExists(menuNotes, named: "notes menu with buttons hidden")
-        menuNotes.tap()
-        assertExists(app.staticTexts["Private note UI fixture"], named: "notes via playback menu")
-        assertExists(app.buttons["Share Private Notes"], named: "share notes in playback pane")
+        XCTAssertFalse(app.buttons["Add Timestamped Note"].exists)
+        openPrivateNotesSheet(in: app)
+        assertExists(privateNote("Private note UI fixture", in: app), named: "notes via the More menu with the button hidden")
+        assertExists(app.buttons["Share Private Notes"], named: "share notes in the sheet")
         app.buttons["Share Private Notes"].tap()
         assertEpisodeShareSheetThenDismiss(in: app, screenshotName: "private_notes_playback_share_sheet")
-        app.navigationBars["Private Notes"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
-        XCTAssertTrue(app.navigationBars["Private Notes"].waitForNonExistence(timeout: 5))
+        dismissPrivateNotesSheet(in: app)
+
         openCurrentEpisodeDetailFromNowPlaying(in: app)
-        let saved = app.staticTexts["Private note UI fixture"]
+        let saved = privateNote("Private note UI fixture", in: app)
         if !saved.isHittable { app.swipeUp() }
-        assertExists(saved, named: "note with buttons hidden")
+        assertExists(saved, named: "note in episode details")
+        assertExists(app.staticTexts["Private Notes"], named: "Private Notes heading")
         let share = app.buttons["Share Private Notes"]
         assertExists(share, named: "share notes in episode details")
+        attachSmokeScreenshot(named: "private_notes_episode_details")
         share.tap()
         assertEpisodeShareSheetThenDismiss(in: app, screenshotName: "private_notes_share_sheet")
-        saved.press(forDuration: 1)
-        app.buttons.matching(NSPredicate(format: "identifier == %@", "Edit Episode Note")).firstMatch.tap()
-        let editEditor = app.textViews["Episode Note Text"]
-        assertExists(editEditor, named: "timestamped note editor")
-        XCTAssertEqual(editEditor.value as? String, "Private note UI fixture")
-        XCTAssertFalse(app.segmentedControls["Note Scope"].exists)
-        editEditor.tap()
-        editEditor.typeText(" updated")
+        let detailSeek = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play from")).firstMatch
+        assertHittable(detailSeek, named: "seek button on a detail card")
+        detailSeek.tap()
+        XCTAssertFalse(editor.waitForExistence(timeout: 2), "seeking from a detail card must not open the editor")
+        saved.tap()
+        assertExists(editor, named: "timestamped note editor from a card tap")
+        XCTAssertEqual(editor.value as? String, "Private note UI fixture")
+        editor.tap()
+        editor.typeText(" updated")
         app.buttons["Save Episode Note"].tap()
-        let edited = app.staticTexts["Private note UI fixture updated"]
+        let edited = privateNote("Private note UI fixture updated", in: app)
         assertExists(edited, named: "edited timestamped note")
-        edited.press(forDuration: 1)
-        let delete = app.buttons["Delete Episode Note"]
-        assertExists(delete, named: "Delete Note menu action")
-        delete.tap()
-        assertDoesNotExist(edited, named: "deleted note")
+        for note in [edited, privateNote("Second note fixture", in: app)] {
+            note.press(forDuration: 1)
+            let delete = app.buttons["Delete Episode Note"]
+            assertExists(delete, named: "Delete Note menu action")
+            delete.tap()
+            assertDoesNotExist(note, named: "deleted note")
+        }
         XCTAssertFalse(app.staticTexts["Private Notes"].exists)
+    }
+
+    /// A saved note's text is the button that opens its editor.
+    @MainActor
+    private func privateNote(_ text: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons[text].firstMatch
+    }
+
+    @MainActor
+    private func setPrivateNoteButtons(
+        _ isEnabled: Bool,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        openSettingsScreen("Playback", expecting: "Playback", in: app, file: file, line: line)
+        let toggle = app.switches["playback-private-notes-toggle"]
+        assertExists(toggle, named: "Private Notes toggle", file: file, line: line)
+        if !toggle.isHittable { app.swipeUp() }
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, isEnabled ? "1" : "0", file: file, line: line)
+    }
+
+    /// Opens the notes sheet from Now Playing's More menu once the card has
+    /// finished expanding (the menu sits near the top of the expanded card).
+    @MainActor
+    private func openPrivateNotesSheet(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let more = app.buttons["More Actions"].firstMatch
+        let expandedMenu = NSPredicate { _, _ in more.isHittable && more.frame.maxY < 200 }
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: expandedMenu, object: more)], timeout: 5),
+            .completed,
+            "More Actions should settle at the top of the expanded card",
+            file: file,
+            line: line
+        )
+        more.tap()
+        let menuNotes = app.buttons["Menu Private Notes"]
+        assertExists(menuNotes, named: "Private Notes menu action", file: file, line: line)
+        menuNotes.tap()
+        assertExists(app.navigationBars["Private Notes"], named: "Private Notes sheet", file: file, line: line)
+    }
+
+    @MainActor
+    private func dismissPrivateNotesSheet(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        app.navigationBars["Private Notes"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
+        XCTAssertTrue(
+            app.navigationBars["Private Notes"].waitForNonExistence(timeout: 5),
+            "Private Notes sheet should dismiss",
+            file: file,
+            line: line
+        )
     }
 
     @MainActor

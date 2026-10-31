@@ -483,6 +483,9 @@ public final class AVFoundationPlaybackController {
             return
         }
 
+        if intent.supersedesTemporaryPause {
+            playbackIntentRevision &+= 1
+        }
         let clamped = clampedPosition(position)
         currentVoiceBoostTap?.reset()
         seekPlayer(to: clamped, mode: .userInitiated(intent))

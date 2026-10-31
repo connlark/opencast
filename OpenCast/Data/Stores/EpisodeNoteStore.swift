@@ -18,6 +18,23 @@ enum EpisodeNoteStore {
         }
     }
 
+    /// One episode's notes in timeline order, for the views that list them.
+    static func notes(for episodeID: String) -> FetchDescriptor<EpisodeNoteRecord> {
+        FetchDescriptor(
+            predicate: #Predicate { $0.episodeID == episodeID },
+            sortBy: [SortDescriptor(\.timestamp), SortDescriptor(\.createdAt)]
+        )
+    }
+
+    /// The episode's single whole-episode note, if one has been saved.
+    static func wholeEpisodeNote(for episodeID: String, in context: ModelContext) throws -> EpisodeNoteRecord? {
+        var descriptor = FetchDescriptor<EpisodeNoteRecord>(
+            predicate: #Predicate { $0.episodeID == episodeID && $0.isEpisodeWide }
+        )
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
     static func delete(
         _ note: EpisodeNoteRecord,
         in context: ModelContext,
@@ -67,9 +84,7 @@ enum EpisodeNoteStore {
             )).first
             guard existing != nil else { throw ValidationError.missingNote }
         } else if draft.isEpisodeWide {
-            existing = try context.fetch(FetchDescriptor<EpisodeNoteRecord>(
-                predicate: #Predicate { $0.episodeID == episodeID && $0.isEpisodeWide }
-            )).first
+            existing = try wholeEpisodeNote(for: episodeID, in: context)
         } else {
             existing = nil
         }

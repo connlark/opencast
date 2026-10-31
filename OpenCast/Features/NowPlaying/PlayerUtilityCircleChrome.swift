@@ -1,18 +1,21 @@
 import SwiftUI
 
 struct PlayerUtilityCircleChrome: ViewModifier {
-    @ScaledMetric(relativeTo: .body) private var scaledDiameter = 52.0
+    static let defaultDiameter = 52.0
+
+    @ScaledMetric(relativeTo: .body) private var scaledDiameter = Self.defaultDiameter
 
     let isActive: Bool
     let progress: Double?
 
     func body(content: Content) -> some View {
+        let diameter = Self.diameter(scaled: scaledDiameter)
         content
             .font(.title3)
             .foregroundStyle(
                 isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary)
             )
-            .frame(width: max(44, scaledDiameter), height: max(44, scaledDiameter))
+            .frame(width: diameter, height: diameter)
             .contentShape(.circle)
             .overlay {
                 if let progress {
@@ -39,6 +42,10 @@ struct PlayerUtilityCircleChrome: ViewModifier {
                 }
             }
             .glassEffect(.regular.interactive(), in: .circle)
+    }
+
+    static func diameter(scaled: Double) -> Double {
+        max(44, scaled)
     }
 }
 

@@ -23,6 +23,34 @@ struct AVFoundationPlaybackControllerTests {
         #expect(controller.playbackIntentRevision > revision)
     }
 
+    @Test(
+        "Explicit seeks invalidate temporary pause ownership; the ad skipper and position restore do not",
+        arguments: zip(
+            [PlaybackSeekIntent.scrub, .skipButton, .chapter, .autoSkip, .restore],
+            [true, true, true, false, false]
+        )
+    )
+    func playbackIntentRevisionFollowsExplicitSeeks(intent: PlaybackSeekIntent, supersedes: Bool) throws {
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        try controller.load(episode(duration: 240))
+        controller.pause()
+        let revision = controller.playbackIntentRevision
+        controller.seek(to: 30, intent: intent)
+        #expect((controller.playbackIntentRevision > revision) == supersedes)
+    }
+
+    @Test("A skip invalidates temporary pause ownership")
+    func playbackIntentRevisionFollowsSkips() throws {
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        try controller.load(episode(duration: 240))
+        controller.pause()
+        let revision = controller.playbackIntentRevision
+        controller.skip(by: 15)
+        #expect(controller.playbackIntentRevision > revision)
+    }
+
     @Test("Play and same-episode replacement invalidate temporary pause ownership")
     func playbackIntentRevisionTracksCommands() throws {
         let controller = AVFoundationPlaybackController()

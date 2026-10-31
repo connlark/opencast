@@ -17,4 +17,19 @@ public nonisolated enum PlaybackSeekIntent: Sendable, Equatable {
             false
         }
     }
+
+    /// Whether the seek is a listener's command, which takes over from a
+    /// temporary pause (the note editor's) so dismissing the editor does not
+    /// resume at the new position. The ad skipper (`autoSkip`) and the
+    /// position restore on load (`restore`; `load` already advances the
+    /// revision) are the player's own moves, not the listener's, so they
+    /// leave a temporary pause in place.
+    public var supersedesTemporaryPause: Bool {
+        switch self {
+        case .scrub, .skipButton, .chapter:
+            true
+        case .autoSkip, .restore:
+            false
+        }
+    }
 }

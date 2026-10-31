@@ -64,13 +64,9 @@ struct SettingsDeleteDataView: View {
             }
         }
         .settingsSubscreen(title: "Delete Data")
-        .alert("Couldn’t Delete Private Notes", isPresented: Binding(
-            get: { noteDeletionError != nil },
-            set: { if !$0 { noteDeletionError = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(noteDeletionError ?? "")
+        .alert("Couldn’t Delete Private Notes", item: $noteDeletionError) { _ in
+        } message: { message in
+            Text(message)
         }
     }
 

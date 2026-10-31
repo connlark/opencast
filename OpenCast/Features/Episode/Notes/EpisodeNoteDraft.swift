@@ -11,4 +11,16 @@ struct EpisodeNoteDraft: Identifiable {
     var initialText = ""
     var isEpisodeWide = false
     var resumesPlaybackOnDismiss = false
+
+    /// A whole-episode draft that edits `existing` when the episode already has one.
+    static func wholeEpisode(episodeID: String, episodeTitle: String, existing: EpisodeNoteRecord?) -> EpisodeNoteDraft {
+        EpisodeNoteDraft(
+            episodeID: episodeID,
+            episodeTitle: episodeTitle,
+            timestamp: 0,
+            noteID: existing?.noteID,
+            initialText: existing?.text ?? "",
+            isEpisodeWide: true
+        )
+    }
 }

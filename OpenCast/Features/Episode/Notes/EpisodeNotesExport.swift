@@ -1,18 +1,15 @@
 import Foundation
 
 enum EpisodeNotesExport {
-    private static let attribution = "Private Notes from opencast:"
-
     static func text(episodeTitle: String, showTitle: String, notes: [EpisodeNoteRecord]) -> String {
-        ([episodeTitle + "\n" + showTitle, attribution] + noteSections(notes)).joined(separator: "\n\n")
+        ([episodeTitle + "\n" + showTitle] + noteSections(notes)).joined(separator: "\n\n")
     }
 
     static func markdown(episodeTitle: String, showTitle: String, notes: [EpisodeNoteRecord]) -> String {
         let title = episodeTitle.components(separatedBy: .newlines).joined(separator: " ")
         let show = showTitle.components(separatedBy: .newlines).joined(separator: " ")
         let headers = "# \(escapedMarkdown(title))\n## \(escapedMarkdown(show))"
-        let body = (["*\(attribution)*"] + noteSections(notes).map(escapedMarkdown)).joined(separator: "\n\n")
-        return headers + "\n\n" + body
+        return ([headers] + noteSections(notes).map(escapedMarkdown)).joined(separator: "\n\n")
     }
 
     private static func noteSections(_ notes: [EpisodeNoteRecord]) -> [String] {

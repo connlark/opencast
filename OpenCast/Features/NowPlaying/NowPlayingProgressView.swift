@@ -21,22 +21,19 @@ struct NowPlayingProgressView: View {
                 in: 0...sliderUpperBound,
                 onEditingChanged: onEditingChanged
             )
-            .overlay {
-                NowPlayingNoteMarkers(duration: duration, timestamps: noteTimestamps)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
             .accessibilityHint(noteTimestamps.isEmpty ? "" : "Notes marked at " + noteTimestamps.sorted().map { $0.formattedPlaybackDuration }.joined(separator: ", "))
             .accessibilityLabel("Playback Progress")
             .accessibilityIdentifier("Playback Progress")
             .accessibilityValue(progressAccessibilityValue)
 
-            if !zones.isEmpty || !displayOnlyZones.isEmpty || !chapterMarkers.isEmpty {
+            let noteMarkers = Self.noteMarkers(duration: duration, timestamps: noteTimestamps)
+            if !zones.isEmpty || !displayOnlyZones.isEmpty || !chapterMarkers.isEmpty || !noteMarkers.isEmpty {
                 NowPlayingSkipZoneRail(
                     duration: sliderUpperBound,
                     zones: zones,
                     displayOnlyZones: displayOnlyZones,
-                    chapterMarkers: chapterMarkers
+                    chapterMarkers: chapterMarkers,
+                    noteMarkers: noteMarkers
                 )
             }
 
@@ -66,6 +63,15 @@ struct NowPlayingProgressView: View {
             return []
         }
         return chapterBoundaries.filter { $0 > 0 && $0 < duration }
+    }
+
+    /// Unlike chapters, a note at 0 or at the very end keeps its marker; the
+    /// rail clamps those dots to its edges.
+    static func noteMarkers(duration: TimeInterval?, timestamps: [TimeInterval]) -> [TimeInterval] {
+        guard let duration, duration.isFinite, duration > 0 else {
+            return []
+        }
+        return timestamps.filter { $0.isFinite && $0 >= 0 && $0 <= duration }
     }
 
     private var remainingDurationText: String {

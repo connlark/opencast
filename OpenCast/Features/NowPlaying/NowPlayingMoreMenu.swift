@@ -16,7 +16,6 @@ struct NowPlayingMoreMenu: View {
     let onShowPlaylist: () -> Void
     let onAddToPlaylist: () -> Void
     let onAddTimestampedNote: () -> Void
-    let onAddEpisodeNote: () -> Void
     let onStopPlayback: () -> Void
 
     var body: some View {
@@ -47,10 +46,8 @@ struct NowPlayingMoreMenu: View {
             if episode != nil {
                 Button("Add to Playlist…", systemImage: "music.note.list", action: onAddToPlaylist)
             }
-            Menu("Add Private Note", systemImage: "square.and.pencil") {
-                Button("Add Timestamped Note", systemImage: "clock", action: onAddTimestampedNote)
-                Button("Add Episode Note", systemImage: "note.text", action: onAddEpisodeNote)
-            }
+            Button("Add Note", systemImage: "square.and.pencil", action: onAddTimestampedNote)
+                .accessibilityIdentifier("Menu Add Note")
             Divider()
             Button("Stop Playback", systemImage: "stop.circle", action: onStopPlayback)
         } label: {

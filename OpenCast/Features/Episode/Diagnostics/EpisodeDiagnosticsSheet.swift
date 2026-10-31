@@ -45,7 +45,7 @@ struct EpisodeDiagnosticsSheet: View {
             }
             .onDisappear(perform: model.handleDisappear)
             .sheet(item: $model.presentedShareFile, onDismiss: model.shareSheetDismissed) { shareFile in
-                EpisodeDiagnosticsActivitySheet(fileURL: shareFile.url)
+                ActivityViewControllerSheet(items: [shareFile.url])
                     .presentationDetents([.medium, .large])
             }
         }
