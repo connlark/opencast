@@ -9,13 +9,16 @@ struct NowPlayingMoreMenu: View {
     let canShowShow: Bool
     /// The name of the playlist playback came from; nil when there is none.
     let playlistSourceName: String?
+    /// Whether Private Notes appears; follows the Playback setting that shows
+    /// the note circle, so a listener who hasn't opted in doesn't see it here
+    /// either. Adding a note is the circle's job, never the menu's.
+    let showsPrivateNotes: Bool
     let onTranscriptAction: () -> Void
     let onShowNotes: () -> Void
     let onShowDescription: () -> Void
     let onShowShow: () -> Void
     let onShowPlaylist: () -> Void
     let onAddToPlaylist: () -> Void
-    let onAddTimestampedNote: () -> Void
     let onStopPlayback: () -> Void
 
     var body: some View {
@@ -30,8 +33,10 @@ struct NowPlayingMoreMenu: View {
                 systemImage: "text.quote",
                 action: onTranscriptAction
             )
-            Button("Private Notes", systemImage: "note.text", action: onShowNotes)
-                .accessibilityIdentifier("Menu Private Notes")
+            if showsPrivateNotes {
+                Button("Private Notes", systemImage: "note.text", action: onShowNotes)
+                    .accessibilityIdentifier("Menu Private Notes")
+            }
             Button("Show Description", systemImage: "info.circle", action: onShowDescription)
                 .disabled(!canShowDescription)
             Button("Show Show", systemImage: "rectangle.stack", action: onShowShow)
@@ -46,8 +51,6 @@ struct NowPlayingMoreMenu: View {
             if episode != nil {
                 Button("Add to Playlist…", systemImage: "music.note.list", action: onAddToPlaylist)
             }
-            Button("Add Note", systemImage: "square.and.pencil", action: onAddTimestampedNote)
-                .accessibilityIdentifier("Menu Add Note")
             Divider()
             Button("Stop Playback", systemImage: "stop.circle", action: onStopPlayback)
         } label: {

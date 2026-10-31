@@ -81,6 +81,7 @@ struct SettingsDeleteDataView: View {
     private func deleteAllNotes() {
         do {
             try EpisodeNoteStore.deleteAll(in: modelContext)
+            appModel.episodeNotes.notesDidChangeEverywhere()
         } catch {
             noteDeletionError = error.localizedDescription
         }

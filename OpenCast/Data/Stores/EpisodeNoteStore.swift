@@ -26,6 +26,14 @@ enum EpisodeNoteStore {
         )
     }
 
+    /// The positions of one episode's timestamped notes, for the Now Playing
+    /// rail; an episode without notes costs one empty fetch.
+    static func noteTimestamps(for episodeID: String, in context: ModelContext) throws -> [TimeInterval] {
+        try context.fetch(FetchDescriptor<EpisodeNoteRecord>(
+            predicate: #Predicate { $0.episodeID == episodeID && $0.isEpisodeWide == false }
+        )).map(\.timestamp)
+    }
+
     /// The episode's single whole-episode note, if one has been saved.
     static func wholeEpisodeNote(for episodeID: String, in context: ModelContext) throws -> EpisodeNoteRecord? {
         var descriptor = FetchDescriptor<EpisodeNoteRecord>(

@@ -250,6 +250,18 @@ struct EpisodeNoteStoreTests {
         #expect(try ModelContext(container).fetchCount(FetchDescriptor<EpisodeNoteRecord>()) == 1)
     }
 
+    @Test("Rail timestamps are the episode's timestamped notes only")
+    func railTimestamps() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        #expect(try EpisodeNoteStore.noteTimestamps(for: "episode-a", in: context).isEmpty)
+        try EpisodeNoteStore.save("Later", for: draft("episode-a", at: 90), in: context)
+        try EpisodeNoteStore.save("Earlier", for: draft("episode-a", at: 15), in: context)
+        try EpisodeNoteStore.save("Whole", for: .wholeEpisode(episodeID: "episode-a", episodeTitle: "A", existing: nil), in: context)
+        try EpisodeNoteStore.save("Elsewhere", for: draft("episode-b", at: 5), in: context)
+        #expect(try EpisodeNoteStore.noteTimestamps(for: "episode-a", in: context).sorted() == [15, 90])
+    }
+
     private func draft(_ episodeID: String, at timestamp: TimeInterval) -> EpisodeNoteDraft {
         EpisodeNoteDraft(episodeID: episodeID, episodeTitle: "Episode", timestamp: timestamp)
     }

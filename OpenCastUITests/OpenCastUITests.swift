@@ -895,6 +895,7 @@ final class OpenCastUITests: XCTestCase {
         row.tap()
         assertNowPlayingOverlay(in: app)
         XCTAssertFalse(app.buttons["Add Timestamped Note"].exists)
+        assertMoreMenuHidesPrivateNotes(in: app)
         openCurrentEpisodeDetailFromNowPlaying(in: app)
         XCTAssertFalse(app.staticTexts["Private Notes"].exists)
         XCTAssertFalse(app.buttons["Share Private Notes"].exists)
@@ -945,6 +946,7 @@ final class OpenCastUITests: XCTestCase {
     func testWholeEpisodeNoteCanBeCreatedEditedAndDeleted() throws {
         let app = makeSeededApp()
         app.launch()
+        setPrivateNoteButtons(true, in: app)
         openInbox(in: app)
         seededEpisodeRow(in: app).tap()
         assertNowPlayingOverlay(in: app)
@@ -1033,6 +1035,9 @@ final class OpenCastUITests: XCTestCase {
         assertExists(privateNote("Second note fixture", in: app), named: "second saved note in the sheet")
         assertExists(app.buttons["Add Whole Episode Note"], named: "add episode note row in the sheet")
         attachSmokeScreenshot(named: "private_notes_sheet")
+        assertExists(app.buttons["Share Private Notes"], named: "share notes in the sheet")
+        app.buttons["Share Private Notes"].tap()
+        assertEpisodeShareSheetThenDismiss(in: app, screenshotName: "private_notes_playback_share_sheet")
         let seekButtons = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Play from"))
         XCTAssertEqual(seekButtons.count, 2)
         seekButtons.element(boundBy: 1).tap()
@@ -1045,12 +1050,7 @@ final class OpenCastUITests: XCTestCase {
         app.buttons["Open Now Playing"].tap()
         assertNowPlayingOverlay(in: app)
         XCTAssertFalse(app.buttons["Add Timestamped Note"].exists)
-        openPrivateNotesSheet(in: app)
-        assertExists(privateNote("Private note UI fixture", in: app), named: "notes via the More menu with the button hidden")
-        assertExists(app.buttons["Share Private Notes"], named: "share notes in the sheet")
-        app.buttons["Share Private Notes"].tap()
-        assertEpisodeShareSheetThenDismiss(in: app, screenshotName: "private_notes_playback_share_sheet")
-        dismissPrivateNotesSheet(in: app)
+        assertMoreMenuHidesPrivateNotes(in: app)
 
         openCurrentEpisodeDetailFromNowPlaying(in: app)
         let saved = privateNote("Private note UI fixture", in: app)
@@ -1105,10 +1105,10 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertEqual(toggle.value as? String, isEnabled ? "1" : "0", file: file, line: line)
     }
 
-    /// Opens the notes sheet from Now Playing's More menu once the card has
-    /// finished expanding (the menu sits near the top of the expanded card).
+    /// Opens Now Playing's More menu once the card has finished expanding
+    /// (the menu sits near the top of the expanded card).
     @MainActor
-    private func openPrivateNotesSheet(
+    private func openNowPlayingMoreMenu(
         in app: XCUIApplication,
         file: StaticString = #filePath,
         line: UInt = #line
@@ -1123,23 +1123,50 @@ final class OpenCastUITests: XCTestCase {
             line: line
         )
         more.tap()
+        assertExists(app.buttons["Stop Playback"], named: "Now Playing More menu", file: file, line: line)
+        XCTAssertFalse(
+            app.buttons["Menu Add Note"].exists,
+            "Adding a note belongs to the note circle, never the More menu",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Opens the notes sheet from Now Playing's More menu; the Playback note
+    /// button setting must be on, since it also lists the note actions there.
+    @MainActor
+    private func openPrivateNotesSheet(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        openNowPlayingMoreMenu(in: app, file: file, line: line)
         let menuNotes = app.buttons["Menu Private Notes"]
         assertExists(menuNotes, named: "Private Notes menu action", file: file, line: line)
         menuNotes.tap()
         assertExists(app.navigationBars["Private Notes"], named: "Private Notes sheet", file: file, line: line)
     }
 
+    /// With the Playback note button setting off, the More menu has no
+    /// Private Notes entry.
     @MainActor
-    private func dismissPrivateNotesSheet(
+    private func assertMoreMenuHidesPrivateNotes(
         in app: XCUIApplication,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        app.navigationBars["Private Notes"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
+        openNowPlayingMoreMenu(in: app, file: file, line: line)
+        XCTAssertFalse(
+            app.buttons["Menu Private Notes"].exists,
+            "Private Notes should leave the More menu while the note button is off",
+            file: file,
+            line: line
+        )
+        // A tap outside the menu dismisses it.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.08)).tap()
         XCTAssertTrue(
-            app.navigationBars["Private Notes"].waitForNonExistence(timeout: 5),
-            "Private Notes sheet should dismiss",
+            app.buttons["Stop Playback"].waitForNonExistence(timeout: 5),
+            "More menu should dismiss",
             file: file,
             line: line
         )

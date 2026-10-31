@@ -1,21 +1,17 @@
 import SwiftData
 import SwiftUI
 
-/// The Private Notes cards on episode detail; hidden while the episode has none.
+/// The Private Notes cards on episode detail; hidden while the episode has
+/// none. The detail view fetches the notes and keeps them current.
 struct EpisodeNotesSection: View {
+    @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
     @State private var actions = EpisodeNotesActions()
-    @Query private var notes: [EpisodeNoteRecord]
+    /// In the query's timeline order.
+    let notes: [EpisodeNoteRecord]
     let episodeTitle: String
     let showTitle: String
     let onSeek: (TimeInterval) -> Void
-
-    init(episodeID: String, episodeTitle: String, showTitle: String, onSeek: @escaping (TimeInterval) -> Void) {
-        _notes = Query(EpisodeNoteStore.notes(for: episodeID))
-        self.episodeTitle = episodeTitle
-        self.showTitle = showTitle
-        self.onSeek = onSeek
-    }
 
     var body: some View {
         if !notes.isEmpty {
@@ -71,6 +67,9 @@ struct EpisodeNotesSection: View {
     }
 
     private func delete(_ note: EpisodeNoteRecord) {
-        actions.delete(note, in: modelContext)
+        let episodeID = note.episodeID
+        if actions.delete(note, in: modelContext) {
+            appModel.episodeNotes.notesDidChange(episodeID: episodeID)
+        }
     }
 }

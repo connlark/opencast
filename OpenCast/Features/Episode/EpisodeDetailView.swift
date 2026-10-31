@@ -18,6 +18,7 @@ struct EpisodeDetailView: View {
     @State private var adSection = EpisodeAdAnalysisSectionModel()
     @State private var chaptersSection = EpisodeChaptersSummarySectionModel()
     @State private var embeddedChapters: [EpisodeChapter] = []
+    @State private var privateNotes: [EpisodeNoteRecord] = []
     @State private var isConfirmingClearProgress = false
     @State private var isConfirmingGenerateDisclosure = false
     @State private var sheetDestination: SheetDestination?
@@ -111,6 +112,9 @@ struct EpisodeDetailView: View {
         }
         .task(id: adAnalysisContentIdentifier) {
             await adSection.load(appModel: appModel, episode: episode, key: adAnalysisContentIdentifier)
+        }
+        .task(id: EpisodeNotesFetchKey(episodeID: episodeID, revision: appModel.episodeNotes.revision(for: episodeID))) {
+            privateNotes = (try? modelContext.fetch(EpisodeNoteStore.notes(for: episodeID))) ?? []
         }
         .task(id: transcriptAnalysisContentIdentifier) {
             await chaptersSection.load(appModel: appModel, episode: episode, key: transcriptAnalysisContentIdentifier)
@@ -253,7 +257,7 @@ struct EpisodeDetailView: View {
                     )
                 }
 
-                EpisodeNotesSection(episodeID: episode.episodeID, episodeTitle: episode.title, showTitle: episode.podcastTitle) { timestamp in
+                EpisodeNotesSection(notes: privateNotes, episodeTitle: episode.title, showTitle: episode.podcastTitle) { timestamp in
                     seekToTimestamp(timestamp, episode: episode)
                 }
 

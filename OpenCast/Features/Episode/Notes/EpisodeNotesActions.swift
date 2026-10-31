@@ -39,11 +39,14 @@ final class EpisodeNotesActions {
         }
     }
 
-    func delete(_ note: EpisodeNoteRecord, in context: ModelContext) {
+    /// False when the delete failed; the error is in `deleteErrorMessage`.
+    func delete(_ note: EpisodeNoteRecord, in context: ModelContext) -> Bool {
         do {
             try EpisodeNoteStore.delete(note, in: context)
+            return true
         } catch {
             deleteErrorMessage = error.localizedDescription
+            return false
         }
     }
 }

@@ -40,6 +40,8 @@ final class OpenCastAppModel {
     let remoteTranscriptionPurchases: RemoteTranscriptionPurchaseStore
     let adAnalyses: EpisodeAdAnalysisStore
     let transcriptAnalyses: EpisodeTranscriptAnalysisStore
+    /// Which episodes' Private Notes changed, for the views that fetch them.
+    let episodeNotes = EpisodeNotesChangeTracker()
     let transcriptIntelligence: TranscriptIntelligenceStore
     let analysisPolicy: AnalysisPolicySnapshotStore
     let analysisKeys: AnalysisProviderKeyStore
@@ -436,7 +438,9 @@ final class OpenCastAppModel {
         let playlists = PlaylistStore(saveSyncedStore: { [unowned resolvedLibrary] modelContext in
             try resolvedLibrary.saveSyncedStore(modelContext)
         })
-        resolvedLibrary.episodeSidecarMigrators = [downloads, transcriptions, adAnalyses, transcriptAnalyses, playlists]
+        // The notes tracker goes first: the applier re-keys notes before any
+        // migrator runs, so it must stage them before a later migrator can throw.
+        resolvedLibrary.episodeSidecarMigrators = [episodeNotes, downloads, transcriptions, adAnalyses, transcriptAnalyses, playlists]
         notificationSettings.feedHealthRecorder = { [weak resolvedLibrary] records in
             await resolvedLibrary?.recordNotificationFeedHealth(records)
         }
@@ -3189,7 +3193,6 @@ final class OpenCastAppModel {
     func setPrivateNoteButtonsEnabled(_ isEnabled: Bool, modelContext: ModelContext) -> Bool {
         playbackSettings.setPrivateNoteButtonsEnabled(isEnabled, modelContext: modelContext)
     }
-
     func runVoiceBoostDeviceProbeIfNeeded(modelContext: ModelContext) async {
         #if DEBUG
         guard runsVoiceBoostDeviceProbe, !hasRunVoiceBoostDeviceProbe else {

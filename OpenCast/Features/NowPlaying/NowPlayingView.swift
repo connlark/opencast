@@ -200,13 +200,13 @@ struct NowPlayingView: View {
                         canShowDescription: canOpenCurrentEpisode,
                         canShowShow: canOpenCurrentPodcast,
                         playlistSourceName: appModel.currentPlaylistSource?.name,
+                        showsPrivateNotes: appModel.playbackSettings.showsPrivateNoteButtons,
                         onTranscriptAction: performTranscriptAction,
                         onShowNotes: { utilitySheet = .notes },
                         onShowDescription: openEpisode,
                         onShowShow: openPodcast,
                         onShowPlaylist: openPlaylist,
                         onAddToPlaylist: addCurrentEpisodeToPlaylist,
-                        onAddTimestampedNote: addTimestampedNote,
                         onStopPlayback: stopPlayback
                     )
                     .padding(.top, moreMenuTopPadding)

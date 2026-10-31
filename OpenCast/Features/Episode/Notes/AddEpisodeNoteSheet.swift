@@ -2,6 +2,7 @@ import SwiftData
 import SwiftUI
 
 struct AddEpisodeNoteSheet: View {
+    @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @State private var text: String
@@ -67,6 +68,7 @@ struct AddEpisodeNoteSheet: View {
     private func save() {
         do {
             try EpisodeNoteStore.save(text, for: draft, in: modelContext)
+            appModel.episodeNotes.notesDidChange(episodeID: draft.episodeID)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

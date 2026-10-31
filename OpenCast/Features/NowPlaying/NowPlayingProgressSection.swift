@@ -11,14 +11,7 @@ struct NowPlayingProgressSection: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
 
-    @Query private var notes: [EpisodeNoteRecord]
-
-    init(episodeID: String, onShowChapters: @escaping () -> Void) {
-        self.onShowChapters = onShowChapters
-        let id = episodeID
-        _notes = Query(filter: #Predicate<EpisodeNoteRecord> { $0.episodeID == id })
-    }
-
+    @State private var noteTimestamps: [TimeInterval] = []
     @State private var scrubPosition: TimeInterval = 0
     @State private var isScrubbing = false
     @State private var scrubFeedback = 0
@@ -26,6 +19,7 @@ struct NowPlayingProgressSection: View {
     @State private var scrubbingEpisodeID: String?
     @State private var pendingSeekPosition: TimeInterval?
 
+    let episodeID: String
     let onShowChapters: () -> Void
 
     private static let pendingSeekTolerance: TimeInterval = 1.5
@@ -40,7 +34,7 @@ struct NowPlayingProgressSection: View {
                 zones: appModel.playback.skipZones,
                 displayOnlyZones: appModel.displayOnlySkipZones,
                 chapterBoundaries: chapters.timelineMarkers,
-                noteTimestamps: notes.filter { !$0.isEpisodeWide }.map(\.timestamp),
+                noteTimestamps: noteTimestamps,
                 scrubPosition: $scrubPosition,
                 onEditingChanged: updateScrubbing
             )
@@ -61,6 +55,9 @@ struct NowPlayingProgressSection: View {
         .sensoryFeedback(.selection, trigger: chapterSkipFeedback)
         .onAppear {
             scrubPosition = appModel.playback.position
+        }
+        .task(id: EpisodeNotesFetchKey(episodeID: episodeID, revision: appModel.episodeNotes.revision(for: episodeID))) {
+            noteTimestamps = (try? EpisodeNoteStore.noteTimestamps(for: episodeID, in: modelContext)) ?? []
         }
         .onChange(of: observedPosition) { _, newPosition in
             guard let newPosition, !isScrubbing else {
