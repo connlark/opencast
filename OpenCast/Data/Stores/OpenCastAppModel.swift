@@ -3185,6 +3185,11 @@ final class OpenCastAppModel {
         playbackSettings.setSleepTimerPreset(duration, at: index, modelContext: modelContext)
     }
 
+    @discardableResult
+    func setPrivateNoteButtonsEnabled(_ isEnabled: Bool, modelContext: ModelContext) -> Bool {
+        playbackSettings.setPrivateNoteButtonsEnabled(isEnabled, modelContext: modelContext)
+    }
+
     func runVoiceBoostDeviceProbeIfNeeded(modelContext: ModelContext) async {
         #if DEBUG
         guard runsVoiceBoostDeviceProbe, !hasRunVoiceBoostDeviceProbe else {

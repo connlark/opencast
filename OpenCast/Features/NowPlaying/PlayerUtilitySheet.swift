@@ -5,6 +5,7 @@ enum PlayerUtilitySheet: String, Identifiable {
     case sleep
     case upNext
     case chapters
+    case notes
     case transcript
 
     var id: String { rawValue }
