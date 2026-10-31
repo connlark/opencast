@@ -9,6 +9,8 @@ struct EpisodeMoreMenu: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AnalysisKeyNoticeGate.self) private var noticeGate: AnalysisKeyNoticeGate?
 
+    @State private var noteDraft: EpisodeNoteDraft?
+
     let episode: EpisodeListItemSnapshot
     let isPlayed: Bool
     let hasProgressRecord: Bool
@@ -23,6 +25,13 @@ struct EpisodeMoreMenu: View {
             }
             progressActions
             Button("Add to Playlist…", systemImage: "music.note.list", action: addToPlaylist)
+            Button("Add Episode Note", systemImage: "square.and.pencil") {
+                noteDraft = EpisodeNoteDraft(
+                    episodeID: episode.episodeID, episodeTitle: episode.title,
+                    timestamp: 0, isEpisodeWide: true
+                )
+            }
+            .accessibilityIdentifier("Add Whole Episode Note")
             Divider()
             downloadActions
             transcriptActions
@@ -31,6 +40,9 @@ struct EpisodeMoreMenu: View {
             Button("Episode Diagnostics", systemImage: "stethoscope", action: onShowEpisodeDiagnostics)
         } label: {
             Label("Episode Actions", systemImage: "ellipsis.circle")
+        }
+        .sheet(item: $noteDraft) { draft in
+            AddEpisodeNoteSheet(draft: draft)
         }
     }
 

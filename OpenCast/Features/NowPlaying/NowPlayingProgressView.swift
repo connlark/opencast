@@ -10,6 +10,7 @@ struct NowPlayingProgressView: View {
     /// off the slider itself: the stock tick initializer turns the control
     /// into a discrete slider that snaps to its ticks, which breaks scrubbing.
     var chapterBoundaries: [TimeInterval] = []
+    var noteTimestamps: [TimeInterval] = []
     @Binding var scrubPosition: TimeInterval
     let onEditingChanged: (Bool) -> Void
 
@@ -20,6 +21,12 @@ struct NowPlayingProgressView: View {
                 in: 0...sliderUpperBound,
                 onEditingChanged: onEditingChanged
             )
+            .overlay {
+                NowPlayingNoteMarkers(duration: duration, timestamps: noteTimestamps)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .accessibilityHint(noteTimestamps.isEmpty ? "" : "Notes marked at " + noteTimestamps.sorted().map { $0.formattedPlaybackDuration }.joined(separator: ", "))
             .accessibilityLabel("Playback Progress")
             .accessibilityIdentifier("Playback Progress")
             .accessibilityValue(progressAccessibilityValue)

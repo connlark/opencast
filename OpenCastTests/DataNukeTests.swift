@@ -1011,11 +1011,16 @@ struct DataNukeTests {
                 context: context
             )
         }
+        context.insert(EpisodeNoteRecord(episodeID: episode.episodeID, timestamp: 12, text: "Moment"))
+        let wholeNote = EpisodeNoteRecord(episodeID: episode.episodeID, timestamp: 0, text: "Episode")
+        wholeNote.isEpisodeWide = true
+        context.insert(wholeNote)
         try context.save()
         return episode
     }
 
     private func expectAllTablesEmpty(_ context: ModelContext) throws {
+        #expect(try context.fetchCount(FetchDescriptor<EpisodeNoteRecord>()) == 0)
         #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<PodcastCacheRecord>()).isEmpty)

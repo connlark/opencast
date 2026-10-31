@@ -64,6 +64,15 @@ struct SettingsPlaybackView: View {
             }
 
             Section {
+                Toggle("Show Note Buttons", isOn: privateNoteButtonsBinding)
+                    .accessibilityIdentifier("playback-private-notes-toggle")
+            } header: {
+                Text("Private Notes")
+            } footer: {
+                Text("Show note buttons in Now Playing. Saved notes are always available in episode details and the More Actions menu. Notes are stored on this device.")
+            }
+
+            Section {
                 Toggle("Tap to Play", isOn: tapToPlayBinding)
                     .accessibilityIdentifier("playback-tap-to-play-toggle")
             } header: {
@@ -122,6 +131,14 @@ struct SettingsPlaybackView: View {
             appModel.playbackSettings.skipForwardOption
         } set: { option in
             _ = appModel.setSkipForwardOption(option, modelContext: modelContext)
+        }
+    }
+
+    private var privateNoteButtonsBinding: Binding<Bool> {
+        Binding {
+            appModel.playbackSettings.showsPrivateNoteButtons
+        } set: { isEnabled in
+            _ = appModel.setPrivateNoteButtonsEnabled(isEnabled, modelContext: modelContext)
         }
     }
 

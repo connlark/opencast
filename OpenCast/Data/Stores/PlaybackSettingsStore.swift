@@ -8,6 +8,7 @@ final class PlaybackSettingsStore {
     static let playbackRatePreferenceKey = "playback.rate"
     static let voiceBoostModePreferenceKey = "playback.voiceBoost.mode"
     static let autoSkipPromosAndAdsPreferenceKey = "playback.autoSkipPromosAndAds"
+    static let privateNoteButtonsPreferenceKey = "playback.privateNotes.showButtons"
     static let tapToPlayPreferenceKey = "playback.episodeRow.tapToPlay"
     static let requeueInterruptedEpisodePreferenceKey = "playback.upNext.requeueInterruptedEpisode"
     static let sleepTimerPresetsPreferenceKey = "playback.sleepTimer.presets"
@@ -22,6 +23,7 @@ final class PlaybackSettingsStore {
     private(set) var skipBackwardOption = PlaybackSkipIntervalOption.defaultBackward
     private(set) var skipForwardOption = PlaybackSkipIntervalOption.defaultForward
     private(set) var isAutoSkipPromosAndAdsEnabled = true
+    private(set) var showsPrivateNoteButtons = false
     private(set) var isTapToPlayEnabled = true
     private(set) var isRequeueInterruptedEpisodeEnabled = false
     /// Six distinct slots in the listener's order; the sleep timer sheet
@@ -71,6 +73,10 @@ final class PlaybackSettingsStore {
                 key: Self.autoSkipPromosAndAdsPreferenceKey,
                 modelContext: modelContext
             ) ?? true
+            showsPrivateNoteButtons = try booleanPreference(
+                key: Self.privateNoteButtonsPreferenceKey,
+                modelContext: modelContext
+            ) ?? false
             isTapToPlayEnabled = try booleanPreference(
                 key: Self.tapToPlayPreferenceKey,
                 modelContext: modelContext
@@ -95,6 +101,7 @@ final class PlaybackSettingsStore {
             isTapToPlayEnabled = true
             isRequeueInterruptedEpisodeEnabled = false
             sleepTimerPresets = SleepTimerPresetDuration.defaults
+            showsPrivateNoteButtons = false
             isVoiceBoostEnabled = true
             globalPlaybackRate = 1
             playback.setRate(1)
@@ -390,6 +397,57 @@ final class PlaybackSettingsStore {
                 modelContext.delete(record)
             }
             throw error
+        }
+    }
+
+    @discardableResult
+    func setPrivateNoteButtonsEnabled(
+        _ isEnabled: Bool,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard showsPrivateNoteButtons != isEnabled else {
+            return true
+        }
+
+        let previousValue = showsPrivateNoteButtons
+        showsPrivateNoteButtons = isEnabled
+
+        do {
+            let existingRecord = try LocalPreferenceRecord.preference(
+                forKey: Self.privateNoteButtonsPreferenceKey,
+                modelContext: modelContext
+            )
+            let record = existingRecord ?? LocalPreferenceRecord(
+                key: Self.privateNoteButtonsPreferenceKey,
+                value: isEnabled.description
+            )
+            let previousStoredValue = record.value
+            let previousUpdatedAt = record.updatedAt
+            if existingRecord == nil {
+                modelContext.insert(record)
+            }
+            record.value = isEnabled.description
+            record.updatedAt = .now
+
+            do {
+                try save(modelContext)
+            } catch {
+                // Undo only this preference; the shared context can contain
+                // unrelated edits that must survive a failed save.
+                if existingRecord != nil {
+                    record.value = previousStoredValue
+                    record.updatedAt = previousUpdatedAt
+                } else {
+                    modelContext.delete(record)
+                }
+                throw error
+            }
+            lastErrorMessage = nil
+            return true
+        } catch {
+            showsPrivateNoteButtons = previousValue
+            lastErrorMessage = "Unable to update the Private Notes setting: \(error.localizedDescription)"
+            return false
         }
     }
 

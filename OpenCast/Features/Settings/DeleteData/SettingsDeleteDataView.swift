@@ -6,6 +6,8 @@ struct SettingsDeleteDataView: View {
     @Environment(\.modelContext) private var modelContext
 
     @State private var isConfirmingClearUnfollowedHistory = false
+    @State private var isConfirmingDeleteNotes = false
+    @State private var noteDeletionError: String?
     @State private var isConfirmingDataNuke = false
 
     var body: some View {
@@ -28,6 +30,21 @@ struct SettingsDeleteDataView: View {
                     Text("Played status and playback positions for every show you don't currently follow will be removed, and the change syncs to your other devices.")
                 }
 
+                Button("Delete All Private Notes", systemImage: "note.text", role: .destructive) {
+                    isConfirmingDeleteNotes = true
+                }
+                .accessibilityIdentifier("Delete All Private Notes")
+                .confirmationDialog(
+                    "Delete all private notes?",
+                    isPresented: $isConfirmingDeleteNotes,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete All Private Notes", role: .destructive) { deleteAllNotes() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This permanently deletes all episode notes and timestamped notes on this device.")
+                }
+
                 Button(
                     "Nuke opencast Data",
                     systemImage: "trash",
@@ -47,6 +64,14 @@ struct SettingsDeleteDataView: View {
             }
         }
         .settingsSubscreen(title: "Delete Data")
+        .alert("Couldn’t Delete Private Notes", isPresented: Binding(
+            get: { noteDeletionError != nil },
+            set: { if !$0 { noteDeletionError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(noteDeletionError ?? "")
+        }
     }
 
     private func confirmClearUnfollowedHistory() {
@@ -55,6 +80,14 @@ struct SettingsDeleteDataView: View {
 
     private func clearUnfollowedHistory() {
         appModel.library.clearProgressForUnsubscribedShows(modelContext: modelContext)
+    }
+
+    private func deleteAllNotes() {
+        do {
+            try EpisodeNoteStore.deleteAll(in: modelContext)
+        } catch {
+            noteDeletionError = error.localizedDescription
+        }
     }
 
     private func confirmDataNuke() {

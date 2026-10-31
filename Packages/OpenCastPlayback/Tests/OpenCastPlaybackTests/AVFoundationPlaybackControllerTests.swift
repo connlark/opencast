@@ -7,6 +7,40 @@ import Testing
 @MainActor
 @Suite
 struct AVFoundationPlaybackControllerTests {
+    @Test("Repeated pause requests invalidate temporary pause ownership", arguments: ["pause", "route", "interruption"])
+    func playbackIntentRevisionWhilePaused(source: String) throws {
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        try controller.load(episode(duration: 240))
+        controller.pause()
+        let revision = controller.playbackIntentRevision
+        switch source {
+        case "route": controller.handleAudioSessionOldDeviceUnavailable()
+        case "interruption": controller.handleAudioSessionInterruptionBegan()
+        default: controller.pause()
+        }
+        #expect(controller.state == .paused)
+        #expect(controller.playbackIntentRevision > revision)
+    }
+
+    @Test("Play and same-episode replacement invalidate temporary pause ownership")
+    func playbackIntentRevisionTracksCommands() throws {
+        let controller = AVFoundationPlaybackController()
+        defer { controller.unload() }
+        let current = episode(duration: 240)
+        try controller.load(current)
+        var revision = controller.playbackIntentRevision
+        controller.play()
+        #expect(controller.playbackIntentRevision > revision)
+        controller.pause()
+        revision = controller.playbackIntentRevision
+        controller.unload()
+        #expect(controller.playbackIntentRevision > revision)
+        revision = controller.playbackIntentRevision
+        try controller.load(current)
+        #expect(controller.playbackIntentRevision > revision)
+    }
+
     @Test("Source and skip events are logged without opening playback diagnostics")
     func eventLogRecordsSourceAndSkip() throws {
         let controller = AVFoundationPlaybackController()
@@ -882,10 +916,12 @@ struct AVFoundationPlaybackControllerTests {
         }
         try controller.load(episode(duration: 60))
         controller.setSleepTimer(mode: .duration(0.02))
+        let revision = controller.playbackIntentRevision
 
         try await waitUntil { controller.sleepTimerMode == .off }
 
         #expect(controller.snapshot.state == .paused)
+        #expect(controller.playbackIntentRevision > revision)
     }
 
     @Test
