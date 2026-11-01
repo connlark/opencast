@@ -18,7 +18,7 @@ struct SettingsAboutHeroSection: View {
                     .frame(maxWidth: .infinity)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("opencast glass icon")
-                    .accessibilityValue(isShowingModel && model.showsBack ? "Engraved back: with thanks to gonzalo flirt and Derek Passen" : "Icon front")
+                    .accessibilityValue(isShowingModel && model.showsBack ? "Engraved back: with thanks to gonzalo flirt, Derek Passen and Shreyas Patil" : "Icon front")
                     .accessibilityAddTraits(.isImage)
                     // Dragging is the only visible way to turn the icon.
                     .accessibilityActions {

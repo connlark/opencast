@@ -9,8 +9,8 @@ run_dir="${artifact_root}/${timestamp}"
 test_identifier="OpenCastUITests/AppStoreScreenshotUITests/testAppStoreScreenshotSet"
 
 # OS-pinned: bare names are ambiguous across installed runtimes.
-iphone_destination="${IPHONE_DESTINATION:-platform=iOS Simulator,name=iPhone 17 Pro Max,OS=27.0}"
-ipad_destination="${IPAD_DESTINATION:-platform=iOS Simulator,name=iPad Pro 13-inch (M4),OS=27.0}"
+iphone_destination="${IPHONE_DESTINATION:-platform=iOS Simulator,name=iPhone 17 Pro Max,OS=27.2}"
+ipad_destination="${IPAD_DESTINATION:-platform=iOS Simulator,name=iPad Pro 13-inch (M4),OS=27.2}"
 capture_ipad="${CAPTURE_IPAD:-1}"
 
 mkdir -p "${run_dir}"

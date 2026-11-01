@@ -69,18 +69,6 @@ final class OpenCastPadUITests: XCTestCase {
 
         // Launch lands on Inbox, where no Library row can share the label.
         assertExists(app.navigationBars["Inbox"], named: "Inbox navigation title")
-        // A narrow window left by an earlier resize test has no sidebar and,
-        // by design, no Playlists tab; a double tap on the top edge restores it.
-        let window = app.windows.firstMatch
-        if window.frame.width < 700 {
-            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.005)).doubleTap()
-            let regularWidth = NSPredicate { _, _ in window.frame.width >= 700 }
-            XCTAssertEqual(
-                XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: regularWidth, object: app)], timeout: 5),
-                .completed,
-                "The window should return to regular width before the sidebar is used"
-            )
-        }
         let playlistsEntry = revealPlaylistsSidebarEntry(in: app)
         assertHittable(playlistsEntry, named: "Playlists sidebar entry")
         attachSmokeScreenshot(named: "pad_playlists_sidebar")
@@ -205,17 +193,9 @@ final class OpenCastPadUITests: XCTestCase {
         app.launch()
         assertExists(app.navigationBars["Inbox"], named: "Inbox before window resize")
 
-        let window = app.windows.firstMatch
-        let originalWidth = window.frame.width
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.99))
-            .press(
-                forDuration: 0.5,
-                thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.42))
-            )
+        let originalWidth = app.windows.firstMatch.frame.width
+        let window = narrowWindow(of: app)
         XCTAssertLessThan(window.frame.width, 700, "The app window itself must be narrow, not just the Simulator scale")
-        defer {
-            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.005)).doubleTap()
-        }
 
         openLibrary(in: app)
         app.swipeUp()
@@ -271,15 +251,7 @@ final class OpenCastPadUITests: XCTestCase {
 
         // Automatic follows the window: narrowing it to compact width swaps
         // in the list with no further choice.
-        let window = app.windows.firstMatch
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.99))
-            .press(
-                forDuration: 0.5,
-                thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.42))
-            )
-        defer {
-            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.005)).doubleTap()
-        }
+        let window = narrowWindow(of: app)
         XCTAssertLessThan(window.frame.width, 700, "The app window itself must be narrow, not just the Simulator scale")
         assertExists(list, named: "Library list under Automatic in a narrow window")
         assertDoesNotExist(grid, named: "Library grid under Automatic in a narrow window", timeout: 5)
@@ -438,7 +410,9 @@ final class OpenCastPadUITests: XCTestCase {
                 "UI Test Show - Deterministic UI Episode"
             )
         ).firstMatch
-        assertExists(shareHeader, named: "activity sheet with sanitized share filename")
+        // The app hands the sheet a hard link at once; the remote sheet's own
+        // content took about 5 s to arrive on a booted iPadOS 27.2 simulator.
+        assertExists(shareHeader, named: "activity sheet with sanitized share filename", timeout: 15)
         attachSmokeScreenshot(named: "ipad_episode_diagnostics_share")
     }
 
@@ -691,6 +665,58 @@ final class OpenCastPadUITests: XCTestCase {
         assertExists(app.navigationBars[navigationTitle], named: "\(navigationTitle.lowercased()) sheet for \(title)", timeout: 8)
     }
 
+    /// Narrows the app window by dragging its bottom-right corner. The window
+    /// keeps that size for later launches in the same simulator session, so the
+    /// restore runs as a teardown block, which also runs after a failure.
+    @MainActor
+    private func narrowWindow(of app: XCUIApplication) -> XCUIElement {
+        addTeardownBlock { @MainActor in
+            OpenCastPadUITests.restoreFullScreenWindow(of: XCUIApplication())
+        }
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.99))
+            .press(
+                forDuration: 0.5,
+                thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.40, dy: 0.42))
+            )
+        return window
+    }
+
+    /// iPadOS 27.2 no longer maximizes a window on a double tap at its top edge;
+    /// dragging SpringBoard's resize grabber to the screen corner does.
+    @MainActor
+    private static func restoreFullScreenWindow(of app: XCUIApplication) {
+        guard app.state == .runningForeground else {
+            return
+        }
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let window = app.windows.firstMatch
+        let screenWidth = springboard.frame.width
+        guard window.frame.width < screenWidth else {
+            return
+        }
+        // A keyboard left up by the test covers the grabber; Return ends editing.
+        let focusedField = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        if focusedField.exists {
+            focusedField.typeText("\n")
+        }
+        let grabber = springboard.otherElements["resize-grabber"].firstMatch
+        XCTAssertTrue(grabber.waitForExistence(timeout: 5), "SpringBoard's window resize grabber should exist")
+        grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(
+                forDuration: 0.5,
+                thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1))
+                    .withOffset(CGVector(dx: -2, dy: -2))
+            )
+        let fullScreen = NSPredicate { _, _ in window.frame.width >= screenWidth }
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: fullScreen, object: nil)], timeout: 5),
+            .completed,
+            "The app window should return to full screen for the tests that follow"
+        )
+    }
+
     @MainActor
     private func makeSeededApp(
         seedsLibraryNewEpisodes: Bool = false,
@@ -759,17 +785,31 @@ final class OpenCastPadUITests: XCTestCase {
 
     @MainActor
     private func openLibrary(in app: XCUIApplication) {
-        openSection("Library", in: app)
+        openPadSection("Library", in: app)
     }
 
     @MainActor
     private func openInbox(in app: XCUIApplication) {
-        openSection("Inbox", in: app)
+        openPadSection("Inbox", in: app)
     }
 
     @MainActor
     private func openSettings(in app: XCUIApplication) {
-        openSection("Settings", in: app)
+        openPadSection("Settings", in: app)
+    }
+
+    /// The iPadOS 27.2 runtime shows the sidebar in a full-screen landscape
+    /// window, and its entries are cells rather than tab bar buttons.
+    @MainActor
+    private func openPadSection(_ title: String, in app: XCUIApplication) {
+        let sidebarEntry = app.cells.matching(NSPredicate(format: "label == %@", title)).firstMatch
+        if !app.tabBars.buttons[title].exists,
+           sidebarEntry.waitForExistence(timeout: 2),
+           sidebarEntry.isHittable {
+            sidebarEntry.tap()
+            return
+        }
+        openSection(title, in: app)
     }
 
     @MainActor
@@ -823,9 +863,14 @@ final class OpenCastPadUITests: XCTestCase {
 
     @MainActor
     private func dragDismissNowPlayingOverlay(in app: XCUIApplication) {
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.24))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.74))
+        // The regular-width card is bottom-anchored below the top of a portrait
+        // screen. Start on the card itself: on the iPadOS 27.2 runtime a drag
+        // that starts on the dimmed backdrop above it does not dismiss.
+        let overlay = nowPlayingOverlay(in: app)
+        let start = overlay.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
         start.press(forDuration: 0.05, thenDragTo: end)
+        assertDoesNotExist(overlay, named: "Now Playing overlay after drag dismissal", timeout: 5)
     }
 
     @MainActor
