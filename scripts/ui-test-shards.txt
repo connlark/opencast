@@ -9,12 +9,13 @@
 # Balanced by measured per-test wall-clock (log 'passed (N seconds)' lines), NOT the
 # .xcresult duration field — that reports 0.0s for screenshot-matrix tests. Regenerate
 # with scripts/gen-ui-test-shards.py <run-dir> after a fresh run.
-# Current assignments: shard1 78 tests | shard2 77 tests | serial 6 tests | exclude 15 tests
+# Current assignments: shard1 79 tests | shard2 78 tests | serial 6 tests | exclude 15 tests
 # Timing estimates are omitted until these scenarios are remeasured.
 
 # --- shard1 ---
 shard1 OpenCastUITests/OpenCastUITests/testPrivateNotesDefaultOffAndEmptyDetailsUnchanged
 shard1 OpenCastUITests/OpenCastUITests/testPrivateNotesSaveVisibilityAndDeletion
+shard1 OpenCastUITests/OpenCastUITests/testPrivateNotesLibraryRowNeedsNotesInEmptyLibrary
 shard1 OpenCastUITests/OpenCastUITests/testAddPodcastRSSClipboardPrefillScreenshots
 shard1 OpenCastUITests/OpenCastUITests/testCloudUnavailableDetectPassOffersOneTapOnDeviceFallback
 shard1 OpenCastUITests/OpenCastUITests/testEpisodeMenuShowsRemoteSurfacesOnFreshLaunchWithoutSettings
@@ -94,6 +95,7 @@ shard1 OpenCastUITests/OpenCastUITests/testSeededSmartPlaylistChipsEditRulesInPl
 # --- shard2 ---
 shard2 OpenCastUITests/OpenCastUITests/testWholeEpisodeNoteCanBeCreatedEditedAndDeleted
 shard2 OpenCastUITests/OpenCastUITests/testEpisodeMenuCreatesWholeEpisodeNoteWithButtonsOff
+shard2 OpenCastUITests/OpenCastUITests/testPrivateNotesLibraryFollowsToggleAndSearches
 shard2 OpenCastUITests/OpenCastUITests/testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty
 shard2 OpenCastUITests/OpenCastUITests/testEmptyLibraryNamesTheICloudAccountCheckWhileItIsPending
 shard1 OpenCastUITests/OpenCastUITests/testEmptyLibraryStopsWaitingForAnICloudAccountCheckThatDoesNotAnswer

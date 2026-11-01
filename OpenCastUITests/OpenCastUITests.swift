@@ -32,6 +32,8 @@ final class OpenCastUITests: XCTestCase {
     ]
     private static let commutePlaylistItemIDs = (1...3).map { "ui-test-playlist-commute-item-\($0)" }
     private static let nowPlayingSourceIdentifier = "Now Playing Source"
+    /// The system sheet grabber's accessibility value at the large detent.
+    private static let largeDetentGrabberValue = "Expanded"
     private static let soundLabTranscriptActionIdentifier = "Now Playing Sound Lab Transcript Action"
     private static let seedVoiceBoostModeEnvironmentKey = "OPENCAST_SEED_VOICE_BOOST_MODE"
     private static let seedAdDetectionModeEnvironmentKey = "OPENCAST_SEED_AD_DETECTION_MODE"
@@ -1082,6 +1084,119 @@ final class OpenCastUITests: XCTestCase {
             assertDoesNotExist(note, named: "deleted note")
         }
         XCTAssertFalse(app.staticTexts["Private Notes"].exists)
+    }
+
+    @MainActor
+    func testPrivateNotesLibraryFollowsToggleAndSearches() throws {
+        let app = makeSeededApp()
+        app.launch()
+        let notesRow = app.buttons.matching(identifier: "Library Notes Row").firstMatch
+        openLibrary(in: app)
+        assertExists(libraryPlaylistsRow(in: app), named: "Library Playlists row")
+        assertDoesNotExist(notesRow, named: "Library Notes row before any note, toggle off")
+
+        openInbox(in: app)
+        openEpisodeDetailFromContextMenu(seededEpisodeRow(in: app), in: app, named: "seeded episode")
+        app.buttons["Episode Actions"].firstMatch.tap()
+        app.buttons["Add Whole Episode Note"].tap()
+        let editor = app.textViews["Episode Note Text"]
+        assertExists(editor, named: "episode note editor")
+        editor.tap()
+        editor.typeText("Library note about lighthouses")
+        app.buttons["Save Episode Note"].tap()
+        let note = privateNote("Library note about lighthouses", in: app)
+        assertExists(note, named: "whole episode note on the episode page")
+
+        openLibrary(in: app)
+        assertExists(libraryPlaylistsRow(in: app), named: "Library Playlists row with a note, toggle off")
+        assertDoesNotExist(notesRow, named: "Library Notes row with a note, toggle off")
+
+        setPrivateNoteButtons(true, in: app)
+        openLibrary(in: app)
+        assertLibraryCollectionRowValue(of: notesRow, is: "1", named: "Library Notes row")
+        attachSmokeScreenshot(named: "notes-library-row")
+        notesRow.tap()
+        let notesBar = app.navigationBars["Notes"]
+        assertExists(notesBar, named: "Notes screen")
+        assertExists(notesBar.buttons["Library"], named: "Notes screen's back button to the Library")
+        assertDoesNotExist(notesBar.buttons["Playlists"], named: "Playlists collection behind Notes")
+        let notesList = libraryContainer("Notes Library List", in: app)
+        assertExists(notesList, named: "Notes library list")
+        let header = notesList.buttons["notes-library-episode-ui-test-episode-1"].firstMatch
+        let libraryNote = notesList.buttons["Library note about lighthouses"].firstMatch
+        assertExists(header, named: "seeded episode header")
+        assertExists(libraryNote, named: "note under its episode header")
+        XCTAssertLessThan(header.frame.midY, libraryNote.frame.midY, "The episode header should lead its notes")
+        attachSmokeScreenshot(named: "notes-library-grouped")
+
+        let searchField = app.searchFields.firstMatch
+        if !searchField.waitForExistence(timeout: 2) {
+            pullDownToSearch(in: app)
+        }
+        assertHittable(searchField, named: "Notes search field")
+        searchField.tap()
+        searchField.typeText("lighthouses")
+        assertExists(libraryNote, named: "note matching the search")
+        attachSmokeScreenshot(named: "notes-library-search")
+        let clearButton = searchField.buttons["Clear text"].firstMatch
+        assertExists(clearButton, named: "Notes search clear button")
+        clearButton.tap()
+        searchField.typeText("zzqq")
+        assertExists(elementContaining(label: "No Results", in: app), named: "no search results")
+        assertDoesNotExist(libraryNote, named: "note under a search that misses it")
+        clearButton.tap()
+        assertExists(libraryNote, named: "note after clearing the search")
+        let closeSearch = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Close", "Cancel")).firstMatch
+        assertHittable(closeSearch, named: "Notes search close button")
+        closeSearch.tap()
+
+        let sortMenu = app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "Notes Sort Menu", "Sort By")
+        ).firstMatch
+        assertHittable(sortMenu, named: "Notes sort menu")
+        sortMenu.tap()
+        let showOrder = app.buttons.matching(NSPredicate(format: "label == %@", "Show")).firstMatch
+        assertHittable(showOrder, named: "Show sort order")
+        showOrder.tap()
+        XCTAssertTrue(showOrder.waitForNonExistence(timeout: 5), "The sort menu should close after choosing Show")
+        assertExists(libraryNote, named: "note under the Show sort")
+
+        assertHittable(header, named: "seeded episode header under the Show sort")
+        header.tap()
+        assertExists(app.buttons["Episode Actions"], named: "episode detail opened from the Notes header")
+        tapBackButton(in: app)
+        assertExists(app.navigationBars["Notes"], named: "Notes screen after leaving episode detail")
+        tapBackButton(in: app)
+        assertExists(notesRow, named: "Library Notes row after leaving Notes")
+
+        setPrivateNoteButtons(false, in: app)
+        openLibrary(in: app)
+        assertExists(libraryPlaylistsRow(in: app), named: "Library Playlists row after turning the toggle off")
+        assertDoesNotExist(notesRow, named: "Library Notes row after turning the toggle off", timeout: 5)
+    }
+
+    @MainActor
+    func testPrivateNotesLibraryRowNeedsNotesInEmptyLibrary() throws {
+        let app = makeSeededApp(seedsPlaylists: true)
+        app.launch()
+        let notesRow = app.buttons.matching(identifier: "Library Notes Row").firstMatch
+        setPrivateNoteButtons(true, in: app)
+        openLibrary(in: app)
+        assertLibraryCollectionRowValue(of: notesRow, is: "", named: "Library Notes row with no notes beside a show")
+
+        let podcastRow = seededSubscriptionRow(in: app)
+        assertExists(podcastRow, named: "seeded library podcast row")
+        podcastRow.swipeLeft()
+        let removeButton = app.buttons["Remove"]
+        assertExists(removeButton, named: "Remove swipe action")
+        removeButton.tap()
+        let confirmButton = app.buttons["Remove Podcast"]
+        assertExists(confirmButton, named: "Remove Podcast confirmation action")
+        confirmButton.tap()
+
+        assertExists(app.staticTexts["No Subscriptions"], named: "empty Library after removing its only show")
+        assertExists(libraryPlaylistsRow(in: app), named: "Library Playlists row that outlives its show")
+        assertDoesNotExist(notesRow, named: "Library Notes row with no notes in the empty Library", timeout: 5)
     }
 
     /// A saved note's text is the button that opens its editor.
@@ -2548,7 +2663,7 @@ final class OpenCastUITests: XCTestCase {
         let reopenedNavigationBar = app.navigationBars["Playback Settings"]
         // The Up Next section leaves the skip rows and Reset Both below the
         // medium detent's edge.
-        reopenedNavigationBar.swipeUp()
+        expandSheetToLargeDetent(in: app)
         let reopenedIntroField = app.textFields["Skip Intro Duration"]
         let reopenedOutroField = app.textFields["Skip Outro Duration"]
         assertExists(reopenedIntroField, named: "reopened skip intro duration field")
@@ -2564,7 +2679,7 @@ final class OpenCastUITests: XCTestCase {
         assertDoesNotExist(reopenedNavigationBar, named: "playback settings after reset save")
 
         openPodcastPlaybackSettings(in: app)
-        app.navigationBars["Playback Settings"].swipeUp()
+        expandSheetToLargeDetent(in: app)
         XCTAssertEqual(app.textFields["Skip Intro Duration"].value as? String, "0:00")
         XCTAssertEqual(app.textFields["Skip Outro Duration"].value as? String, "0:00")
     }
@@ -9053,6 +9168,30 @@ final class OpenCastUITests: XCTestCase {
         assertExists(
             app.navigationBars["Playback Settings"],
             named: "podcast playback settings sheet"
+        )
+    }
+
+    /// A swipe on the sheet is a flick whose detent UIKit reads from the
+    /// release velocity, so it can settle back at medium; a grabber tap
+    /// always moves to the next detent.
+    @MainActor
+    private func expandSheetToLargeDetent(
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let grabber = app.buttons["Sheet Grabber"]
+        assertHittable(grabber, named: "sheet grabber", timeout: 60, file: file, line: line)
+        if grabber.value as? String != Self.largeDetentGrabberValue {
+            grabber.tap()
+        }
+        assertValue(
+            of: grabber,
+            becomes: Self.largeDetentGrabberValue,
+            named: "sheet grabber at the large detent",
+            timeout: 60,
+            file: file,
+            line: line
         )
     }
 

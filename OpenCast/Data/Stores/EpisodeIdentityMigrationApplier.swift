@@ -20,6 +20,7 @@ enum EpisodeIdentityMigrationApplier {
             try migrateNotes(
                 from: match.departedEpisodeID,
                 to: match.successorEpisodeID,
+                canonicalFeedURL: canonicalFeedURL,
                 modelContext: modelContext
             )
             try migrateProgressRecords(
@@ -62,6 +63,7 @@ enum EpisodeIdentityMigrationApplier {
     private static func migrateNotes(
         from oldEpisodeID: String,
         to newEpisodeID: String,
+        canonicalFeedURL: String,
         modelContext: ModelContext
     ) throws {
         guard oldEpisodeID != newEpisodeID else { return }
@@ -69,7 +71,10 @@ enum EpisodeIdentityMigrationApplier {
             predicate: #Predicate { $0.episodeID == oldEpisodeID || $0.episodeID == newEpisodeID }
         ))
         guard notes.contains(where: { $0.episodeID == oldEpisodeID }) else { return }
-        for note in notes { note.episodeID = newEpisodeID }
+        for note in notes {
+            note.episodeID = newEpisodeID
+            note.podcastID = canonicalFeedURL
+        }
         let wholeEpisode = notes.filter(\.isEpisodeWide).sorted {
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.noteID < $1.noteID
@@ -77,6 +82,12 @@ enum EpisodeIdentityMigrationApplier {
         // Identity collisions must preserve both texts while keeping one episode note.
         if let kept = wholeEpisode.first, wholeEpisode.count > 1 {
             kept.text = wholeEpisode.map(\.text).joined(separator: "\n\n")
+            // The deleted notes' activity carries over, so Most Recent still
+            // places the episode by its latest edit.
+            let latestActivity = wholeEpisode.map { $0.updatedAt ?? $0.createdAt }.max()
+            if let latestActivity, latestActivity > (kept.updatedAt ?? kept.createdAt) {
+                kept.updatedAt = latestActivity
+            }
             for note in wholeEpisode.dropFirst() { modelContext.delete(note) }
         }
     }

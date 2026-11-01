@@ -20,7 +20,8 @@ struct OpenCastTabRootView: View {
                     LibraryView(
                         onAdd: onAdd,
                         onOpenUpNext: onOpenUpNext,
-                        onOpenPlaylist: openPlaylist(on: .library)
+                        onOpenPlaylist: openPlaylist(on: .library),
+                        onOpenNotes: { navigationPaths[.library].append(.notes) }
                     )
                     .withOpenCastDestinations(
                         onOpenEpisode: openEpisode(on: .library),

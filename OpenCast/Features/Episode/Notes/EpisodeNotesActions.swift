@@ -11,21 +11,15 @@ final class EpisodeNotesActions {
     var shareErrorMessage: String?
     var deleteErrorMessage: String?
 
-    func edit(_ note: EpisodeNoteRecord, episodeTitle: String) {
-        editDraft = EpisodeNoteDraft(
-            episodeID: note.episodeID,
-            episodeTitle: episodeTitle,
-            timestamp: note.timestamp,
-            noteID: note.noteID,
-            initialText: note.text,
-            isEpisodeWide: note.isEpisodeWide
-        )
+    /// `episode` is nil once the note's episode no longer resolves.
+    func edit(_ note: EpisodeNoteRecord, episode: EpisodeListItemSnapshot?) {
+        editDraft = .editing(note, episode: episode)
     }
 
-    func addEpisodeNote(episodeID: String, episodeTitle: String, in context: ModelContext) {
+    func addEpisodeNote(episode: EpisodeListItemSnapshot, in context: ModelContext) {
         do {
-            let existing = try EpisodeNoteStore.wholeEpisodeNote(for: episodeID, in: context)
-            editDraft = .wholeEpisode(episodeID: episodeID, episodeTitle: episodeTitle, existing: existing)
+            let existing = try EpisodeNoteStore.wholeEpisodeNote(for: episode.episodeID, in: context)
+            editDraft = .wholeEpisode(episode: episode, existing: existing)
         } catch {
             openErrorMessage = error.localizedDescription
         }

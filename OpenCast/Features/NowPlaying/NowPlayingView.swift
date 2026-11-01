@@ -304,7 +304,7 @@ struct NowPlayingView: View {
                 case .notes:
                     NavigationStack {
                         if let episode = appModel.playback.currentEpisode {
-                            EpisodeNotesList(episodeID: episode.id.rawValue, episodeTitle: episode.title, showTitle: episode.podcastTitle) { timestamp in
+                            EpisodeNotesList(episode: EpisodeListItemSnapshot(episode: episode)) { timestamp in
                                 playNote(at: timestamp, episodeID: episode.id.rawValue)
                             }
                             .navigationTitle("Private Notes")
@@ -376,20 +376,18 @@ struct NowPlayingView: View {
 
     private func addTimestampedNote() {
         guard let episode = appModel.playback.currentEpisode else { return }
-        beginNote(episodeID: episode.id.rawValue, title: episode.title, isEpisodeWide: false)
+        beginNote(episode: EpisodeListItemSnapshot(episode: episode))
     }
 
-    private func beginNote(episodeID: String, title: String, isEpisodeWide: Bool) {
+    private func beginNote(episode: EpisodeListItemSnapshot) {
         let session = EpisodeNotePlaybackSession(
-            episodeID: episodeID, title: title,
+            episode: episode,
             timestamp: appModel.playback.position,
             state: appModel.playback.state, pause: appModel.playback.pause,
             playbackIntentRevision: { appModel.playback.playbackIntentRevision }
         )
         notePlaybackSession = session
-        var draft = session.draft
-        draft.isEpisodeWide = isEpisodeWide
-        noteDraft = draft
+        noteDraft = session.draft
     }
 
     private func playNote(at timestamp: TimeInterval, episodeID: String) {

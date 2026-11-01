@@ -8,9 +8,7 @@ struct EpisodeNotesList: View {
     @Environment(\.modelContext) private var modelContext
     @State private var actions = EpisodeNotesActions()
     @State private var notes: [EpisodeNoteRecord] = []
-    let episodeID: String
-    let episodeTitle: String
-    let showTitle: String
+    let episode: EpisodeListItemSnapshot
     let onSeek: (TimeInterval) -> Void
 
     var body: some View {
@@ -48,45 +46,30 @@ struct EpisodeNotesList: View {
             }
         }
         .episodeNotesActions(actions)
-        .task(id: EpisodeNotesFetchKey(episodeID: episodeID, revision: appModel.episodeNotes.revision(for: episodeID))) {
-            notes = (try? modelContext.fetch(EpisodeNoteStore.notes(for: episodeID))) ?? []
+        .task(id: EpisodeNotesFetchKey(episodeID: episode.episodeID, revision: appModel.episodeNotes.revision(for: episode.episodeID))) {
+            notes = (try? modelContext.fetch(EpisodeNoteStore.notes(for: episode.episodeID))) ?? []
         }
     }
 
     private func row(for note: EpisodeNoteRecord) -> some View {
-        EpisodeNoteRowContent(note: note, onSeek: onSeek) {
-            edit(note)
-        }
-        .swipeActions(edge: .trailing) {
-            Button("Delete", systemImage: "trash", role: .destructive) { delete(note) }
-        }
-        .swipeActions(edge: .leading) {
-            Button("Edit", systemImage: "square.and.pencil") { edit(note) }
-                .tint(.accentColor)
-        }
-        .contextMenu {
-            Button("Edit Note", systemImage: "square.and.pencil") { edit(note) }
-                .accessibilityIdentifier("Edit Episode Note")
-            Button("Delete Note", systemImage: "trash", role: .destructive) { delete(note) }
-                .accessibilityIdentifier("Delete Episode Note")
-        }
+        EpisodeNoteListRow(note: note, onSeek: onSeek, onEdit: edit, onDelete: delete)
     }
 
     private func addEpisodeNote() {
-        actions.addEpisodeNote(episodeID: episodeID, episodeTitle: episodeTitle, in: modelContext)
+        actions.addEpisodeNote(episode: episode, in: modelContext)
     }
 
     private func share() {
-        actions.share(notes, episodeTitle: episodeTitle, showTitle: showTitle)
+        actions.share(notes, episodeTitle: episode.title, showTitle: episode.podcastTitle)
     }
 
     private func edit(_ note: EpisodeNoteRecord) {
-        actions.edit(note, episodeTitle: episodeTitle)
+        actions.edit(note, episode: episode)
     }
 
     private func delete(_ note: EpisodeNoteRecord) {
         if actions.delete(note, in: modelContext) {
-            appModel.episodeNotes.notesDidChange(episodeID: episodeID)
+            appModel.episodeNotes.notesDidChange(episodeID: episode.episodeID)
         }
     }
 }

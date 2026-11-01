@@ -257,7 +257,7 @@ struct EpisodeDetailView: View {
                     )
                 }
 
-                EpisodeNotesSection(notes: privateNotes, episodeTitle: episode.title, showTitle: episode.podcastTitle) { timestamp in
+                EpisodeNotesSection(notes: privateNotes, episode: episode) { timestamp in
                     seekToTimestamp(timestamp, episode: episode)
                 }
 
@@ -729,21 +729,9 @@ struct EpisodeDetailView: View {
         }
     }
 
-    /// Show-notes timestamps are publisher-authored against the published
-    /// enclosure, so unlike chapters there is no transcript hash to align
-    /// against: a plain seek, or a plain start at that time, is the best
-    /// available answer.
     private func seekToTimestamp(_ seconds: TimeInterval, episode: EpisodeListItemSnapshot) {
-        if appModel.playback.currentEpisode?.id.rawValue == episode.episodeID {
-            appModel.playback.seek(to: seconds, intent: .scrub)
-            if appModel.playback.state != .playing {
-                appModel.playback.play()
-            }
-            return
-        }
-
         runPlaybackAction {
-            try appModel.playEpisode(episode, at: seconds, presentsNowPlaying: false, modelContext: modelContext)
+            try EpisodeTimestampPlayback.seek(to: seconds, episode: episode, appModel: appModel, modelContext: modelContext)
         }
     }
 

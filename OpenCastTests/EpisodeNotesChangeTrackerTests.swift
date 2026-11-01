@@ -20,6 +20,19 @@ struct EpisodeNotesChangeTrackerTests {
         #expect(tracker.revision(for: "b") != b)
     }
 
+    @Test("The all-notes revision moves on a per-episode change and on a bulk change")
+    func allNotesRevision() {
+        let tracker = EpisodeNotesChangeTracker()
+        let start = tracker.allNotesRevision
+        let b = tracker.revision(for: "b")
+        tracker.notesDidChange(episodeID: "a")
+        let afterEpisode = tracker.allNotesRevision
+        #expect(afterEpisode != start)
+        #expect(tracker.revision(for: "b") == b)
+        tracker.notesDidChangeEverywhere()
+        #expect(tracker.allNotesRevision != afterEpisode)
+    }
+
     @Test("An identity migration publishes the re-keyed episodes whether or not its save landed")
     func identityMigration() throws {
         let tracker = EpisodeNotesChangeTracker()
@@ -27,6 +40,7 @@ struct EpisodeNotesChangeTrackerTests {
         try EpisodeNoteStore.save("Moved", for: EpisodeNoteDraft(episodeID: "old", episodeTitle: "Episode", timestamp: 30), in: context)
         let old = tracker.revision(for: "old")
         let new = tracker.revision(for: "new")
+        let all = tracker.allNotesRevision
         try EpisodeIdentityMigrationApplier.apply(
             [EpisodeIdentityReconciler.Match(departedEpisodeID: "old", successorEpisodeID: "new")],
             canonicalFeedURL: "https://example.com/feed",
@@ -38,6 +52,7 @@ struct EpisodeNotesChangeTrackerTests {
         tracker.finishEpisodeSidecarMigration(committed: false)
         #expect(tracker.revision(for: "old") != old)
         #expect(tracker.revision(for: "new") != new)
+        #expect(tracker.allNotesRevision != all)
         #expect(tracker.revision(for: "other") == 0)
         #expect(try EpisodeNoteStore.noteTimestamps(for: "old", in: context).isEmpty)
         #expect(try EpisodeNoteStore.noteTimestamps(for: "new", in: context) == [30])

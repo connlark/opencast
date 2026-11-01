@@ -9,8 +9,7 @@ struct EpisodeNotesSection: View {
     @State private var actions = EpisodeNotesActions()
     /// In the query's timeline order.
     let notes: [EpisodeNoteRecord]
-    let episodeTitle: String
-    let showTitle: String
+    let episode: EpisodeListItemSnapshot
     let onSeek: (TimeInterval) -> Void
 
     var body: some View {
@@ -59,11 +58,11 @@ struct EpisodeNotesSection: View {
     }
 
     private func share() {
-        actions.share(notes, episodeTitle: episodeTitle, showTitle: showTitle)
+        actions.share(notes, episodeTitle: episode.title, showTitle: episode.podcastTitle)
     }
 
     private func edit(_ note: EpisodeNoteRecord) {
-        actions.edit(note, episodeTitle: episodeTitle)
+        actions.edit(note, episode: episode)
     }
 
     private func delete(_ note: EpisodeNoteRecord) {

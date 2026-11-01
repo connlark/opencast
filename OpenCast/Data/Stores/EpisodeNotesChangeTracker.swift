@@ -6,9 +6,11 @@ import SwiftData
 /// episode: a save, edit or delete of one of its notes, a bulk delete, or an
 /// identity migration that re-keyed notes onto or off it. Nothing else
 /// re-fetches, so a listener without notes pays one empty fetch per episode
-/// and nothing per save.
+/// and nothing per save. The views that span every episode follow
+/// `allNotesRevision`, which moves on any of those changes.
 @Observable
 final class EpisodeNotesChangeTracker {
+    private(set) var allNotesRevision = 0
     private var revisionsByEpisodeID: [String: Int] = [:]
     private var bulkRevision = 0
     @ObservationIgnored private var stagedEpisodeIDs: Set<String> = []
@@ -19,10 +21,12 @@ final class EpisodeNotesChangeTracker {
 
     func notesDidChange(episodeID: String) {
         revisionsByEpisodeID[episodeID, default: 0] &+= 1
+        allNotesRevision &+= 1
     }
 
     func notesDidChangeEverywhere() {
         bulkRevision &+= 1
+        allNotesRevision &+= 1
     }
 }
 

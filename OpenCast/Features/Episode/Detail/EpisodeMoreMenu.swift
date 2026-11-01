@@ -49,7 +49,7 @@ struct EpisodeMoreMenu: View {
     private func addEpisodeNote() {
         do {
             let existing = try EpisodeNoteStore.wholeEpisodeNote(for: episode.episodeID, in: modelContext)
-            noteDraft = .wholeEpisode(episodeID: episode.episodeID, episodeTitle: episode.title, existing: existing)
+            noteDraft = .wholeEpisode(episode: episode, existing: existing)
         } catch {
             noteErrorMessage = error.localizedDescription
         }

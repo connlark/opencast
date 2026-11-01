@@ -11,10 +11,12 @@ struct LibraryView: View {
     @State private var isSubscribingSample = false
     @State private var namePromptRequest: PlaylistNamePromptRequest?
     @State private var pendingOpenPlaylistID: String?
+    @State private var notesCount: Int?
 
     let onAdd: () -> Void
     let onOpenUpNext: () -> Void
     let onOpenPlaylist: (String) -> Void
+    let onOpenNotes: () -> Void
 
     private var displaySettings: LibraryDisplaySettingsStore {
         appModel.libraryDisplaySettings
@@ -76,6 +78,9 @@ struct LibraryView: View {
                     appModel.library.advanceNewEpisodeReferenceDate()
                 }
             }
+            .task(id: notesCountKey) {
+                loadNotesCount()
+            }
     }
 
     @ViewBuilder
@@ -98,9 +103,10 @@ struct LibraryView: View {
                 List {
                     // Playlists outlive their shows and the Playlists tab is
                     // hidden on iPhone, so the rows stay while they lead
-                    // somewhere; they are absent only when both are empty.
+                    // somewhere: they are absent only when all are empty, and
+                    // Notes keeps its row here only while it holds a note.
                     if hasCollections {
-                        collectionsSection
+                        collectionsSection(notesCount: notesCount == 0 ? nil : notesCount)
                     }
 
                     LibraryEmptyStateView(
@@ -119,7 +125,7 @@ struct LibraryView: View {
                     if appModel.library.lastRefreshWasOffline {
                         LibraryOfflineNotice()
                     }
-                    collectionsHeader
+                    collectionsHeader(notesCount: notesCount)
                         .padding(.vertical, 4)
                 }
                 .transition(.opacity)
@@ -127,7 +133,7 @@ struct LibraryView: View {
                 List {
                     offlineNoticeSection
 
-                    collectionsSection
+                    collectionsSection(notesCount: notesCount)
 
                     Section {
                         ForEach(subscriptions) { subscription in
@@ -158,24 +164,45 @@ struct LibraryView: View {
     }
 
     private var hasCollections: Bool {
-        !appModel.playlists.playlists.isEmpty || !appModel.upNextQueue.items.isEmpty
+        !appModel.playlists.playlists.isEmpty || !appModel.upNextQueue.items.isEmpty || (notesCount ?? 0) > 0
     }
 
-    private var collectionsSection: some View {
+    private func collectionsSection(notesCount: Int?) -> some View {
         Section {
-            collectionsHeader
+            collectionsHeader(notesCount: notesCount)
                 .listRowInsets(.vertical, 0)
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
         }
     }
 
-    private var collectionsHeader: some View {
+    private func collectionsHeader(notesCount: Int?) -> some View {
         LibraryCollectionsHeader(
             playlistCount: appModel.playlists.playlists.count,
             upNextCount: appModel.upNextQueue.items.count,
-            onOpenUpNext: onOpenUpNext
+            notesCount: notesCount,
+            onOpenUpNext: onOpenUpNext,
+            onOpenNotes: onOpenNotes
         )
+    }
+
+    /// With Show Note Button off this reads no notes revision, so note
+    /// changes never reach the Library and nothing is counted.
+    private var notesCountKey: LibraryNotesCountKey {
+        let isEnabled = appModel.playbackSettings.showsPrivateNoteButtons
+        return LibraryNotesCountKey(
+            isEnabled: isEnabled,
+            revision: isEnabled ? appModel.episodeNotes.allNotesRevision : 0
+        )
+    }
+
+    private func loadNotesCount() {
+        guard appModel.playbackSettings.showsPrivateNoteButtons else {
+            notesCount = nil
+            return
+        }
+        // A count that fails to load still shows the row, without a number.
+        notesCount = (try? EpisodeNoteStore.noteCount(in: modelContext)) ?? 0
     }
 
     private func promptNewPlaylist() {

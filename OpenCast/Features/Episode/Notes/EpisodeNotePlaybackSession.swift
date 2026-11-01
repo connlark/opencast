@@ -7,14 +7,15 @@ struct EpisodeNotePlaybackSession {
     let draft: EpisodeNoteDraft
     let playbackIntentRevision: UInt64
 
-    init(episodeID: String, title: String, timestamp: TimeInterval, state: PlaybackState, pause: () -> Void, playbackIntentRevision: () -> UInt64) {
+    init(
+        episode: EpisodeListItemSnapshot,
+        timestamp: TimeInterval,
+        state: PlaybackState,
+        pause: () -> Void,
+        playbackIntentRevision: () -> UInt64
+    ) {
         let shouldPause = state.showsPauseButton
-        draft = EpisodeNoteDraft(
-            episodeID: episodeID,
-            episodeTitle: title,
-            timestamp: timestamp,
-            resumesPlaybackOnDismiss: shouldPause
-        )
+        draft = .timestamped(episode: episode, timestamp: timestamp, resumesPlaybackOnDismiss: shouldPause)
         if shouldPause { pause() }
         // Capture after our own pause advances the revision.
         self.playbackIntentRevision = playbackIntentRevision()

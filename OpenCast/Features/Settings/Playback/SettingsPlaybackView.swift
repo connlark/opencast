@@ -69,7 +69,7 @@ struct SettingsPlaybackView: View {
             } header: {
                 Text("Private Notes")
             } footer: {
-                Text("Adds a note button to Now Playing; notes stay on this device.")
+                Text("Adds a note button to Now Playing and a Notes section to the Library; notes stay on this device.")
             }
 
             Section {
