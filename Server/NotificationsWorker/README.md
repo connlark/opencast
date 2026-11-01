@@ -86,12 +86,13 @@ psql "<schema owner connection>" \
 
 Storage is PostgreSQL 16 or later with UTF8 server encoding; the Worker reaches
 it through a Hyperdrive configuration bound as `DB`. As the schema owner, apply
-`postgres/migrations/0001` through `0004` and the grant files to one runtime
-role, in the single-runtime-role order of
-[`postgres/README.md`](postgres/README.md). Create the Hyperdrive configuration
-with the runtime role's credentials, never the owner's, and put its ID in the
-lane's `[[hyperdrive]]` block. FeedPollingWorker binds its own `DB` to the same
-database.
+every migration in `postgres/migrations/` (`0001` through `0007`) and the grant
+files to one runtime role, in the single-runtime-role order of
+[`postgres/README.md`](postgres/README.md): the grant files interleave with
+`0001` through `0004`, and `0005` through `0007` come last. Create the
+Hyperdrive configuration with the runtime role's credentials, never the
+owner's, and put its ID in the lane's `[[hyperdrive]]` block. FeedPollingWorker
+binds its own `DB` to the same database.
 
 `STORAGE_AUTHORITY = "postgres"` selects this storage; an absent or any other
 value is refused at the first storage call. `STORAGE_IDENTITY` pins a version
