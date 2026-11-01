@@ -38,13 +38,16 @@ owner=opencast_local_owner
 runtime=opencast_local_runtime
 reader=opencast_local_reader
 # Production's single-runtime-role order (postgres/README.md), reader-grants.sql
-# last; these twelve are the marker's inputs. reader-stats-grant.sql is a
-# superuser role grant, outside the template.
+# after the runtime grants, then the later owner migrations 0005-0007 in order;
+# these fifteen are the marker's inputs. reader-stats-grant.sql is a superuser
+# role grant, outside the template.
 files='migrations/0001_slice_a.sql runtime-grants.sql migrations/0002_slice_b.sql
 runtime-grants-slice-b.sql migrations/0003_delivery_member.sql
 migrations/0004_identity_delivery_support.sql runtime-grants-slice-c.sql
 runtime-grants-slice-d.sql runtime-grants-slice-e.sql runtime-grants-slice-f.sql
-runtime-grants-integration.sql reader-grants.sql'
+runtime-grants-integration.sql reader-grants.sql
+migrations/0005_retire_five_minute_polling.sql
+migrations/0006_retire_legacy_bridge_hydration.sql migrations/0007_drop_legacy_bridge.sql'
 
 say() { printf 'local-postgres: %s\n' "$*" >&2; }
 die() { say "$*"; exit 1; }
@@ -155,7 +158,7 @@ ready() {
 
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 
-# The SHA-256 of the twelve files concatenated in install order.
+# The SHA-256 of the fifteen files concatenated in install order.
 files_hash() {
   local f
   for f in $files; do [ -f "$source_dir/$f" ] || die "missing $source_dir/$f"; done

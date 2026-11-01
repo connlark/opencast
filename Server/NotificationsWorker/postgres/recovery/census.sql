@@ -1,4 +1,4 @@
--- Recovery census: row counts and state vocabularies of the 32 application
+-- Recovery census: row counts and state vocabularies of the 31 application
 -- tables, never a row value. Read-only. Runs as any role that reads every
 -- application table, and inside reconcile.sql's transaction (before and after).
 -- Prints one census|<phase>|<key>|<count> line per key, ordered by key.
@@ -30,7 +30,6 @@ FROM (
     ('n_install', (SELECT count(*) FROM opencast.n_install)),
     ('n_interest', (SELECT count(*) FROM opencast.n_interest)),
     ('n_job_interest', (SELECT count(*) FROM opencast.n_job_interest)),
-    ('n_legacy_bridge', (SELECT count(*) FROM opencast.n_legacy_bridge)),
     ('n_observation', (SELECT count(*) FROM opencast.n_observation)),
     ('n_outbox', (SELECT count(*) FROM opencast.n_outbox)),
     ('n_poll_dispatch', (SELECT count(*) FROM opencast.n_poll_dispatch)),
@@ -73,7 +72,7 @@ FROM (
     + (SELECT count(*) FROM opencast.n_event) + (SELECT count(*) FROM opencast.n_feed)
     + (SELECT count(*) FROM opencast.n_feed_catalog) + (SELECT count(*) FROM opencast.n_group_member)
     + (SELECT count(*) FROM opencast.n_install) + (SELECT count(*) FROM opencast.n_interest)
-    + (SELECT count(*) FROM opencast.n_job_interest) + (SELECT count(*) FROM opencast.n_legacy_bridge)
+    + (SELECT count(*) FROM opencast.n_job_interest)
     + (SELECT count(*) FROM opencast.n_observation) + (SELECT count(*) FROM opencast.n_outbox)
     + (SELECT count(*) FROM opencast.n_poll_dispatch) + (SELECT count(*) FROM opencast.n_poll_origin)
     + (SELECT count(*) FROM opencast.n_poll_stat) + (SELECT count(*) FROM opencast.n_requester_ticket)

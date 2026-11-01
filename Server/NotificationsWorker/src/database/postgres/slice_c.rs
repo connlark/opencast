@@ -220,7 +220,6 @@ fn describe(operation: &Operation) -> Plan {
                 "DELETE FROM n_requester_ticket WHERE EXISTS(SELECT 1 FROM n_job_interest j WHERE j.install_id=$1 AND j.operation_id=n_requester_ticket.operation_id AND j.requester_ref=n_requester_ticket.requester_ref AND j.producer=n_requester_ticket.producer)",
                 "DELETE FROM n_job_interest WHERE install_id=$1",
                 "DELETE FROM n_interest WHERE install_id=$1",
-                "DELETE FROM n_legacy_bridge WHERE install_id=$1",
                 "DELETE FROM n_install WHERE install_id=$1",
                 "DELETE FROM n_delivery_history WHERE install_id=$1",
                 "DELETE FROM push_send_attempts WHERE install_id=$1",

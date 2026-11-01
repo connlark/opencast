@@ -92,7 +92,7 @@ The commands:
      restart.
    - ORM02: another database or cluster.
    - ORM03: an effective role that does not own schema `opencast`.
-   - ORM04: a schema without the 32 application tables.
+   - ORM04: a schema without the 31 application tables.
    - ORM05: an existing marker.
 
    The marker records `restored_at`, the recovery target, the last replayed
@@ -163,7 +163,6 @@ statement timeout 300 s, idle timeout 60 s. The projection triggers stay enabled
 | R18 | delete `n_requester_ticket` | restored tickets rejected |
 | R10 | delete `n_job_interest` | job grants rejected |
 | R5 | delete `n_interest` | erased; `n_interest_removed` moves each feed's eligibility generation |
-| R11c | delete `n_legacy_bridge` | erased |
 | R6 | delete `n_install` | installations erased; registration re-required |
 | R19 | delete `n_delivery_history` | erased |
 | R11a | delete `push_send_attempts` | audit erased |

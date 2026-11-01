@@ -8,8 +8,8 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// The 32 application tables, in byte order.
-pub(crate) const APPLICATION_TABLES: [&str; 32] = [
+/// The 31 application tables, in byte order.
+pub(crate) const APPLICATION_TABLES: [&str; 31] = [
     "app_attest_challenge_source_buckets",
     "app_attest_challenges",
     "app_attest_keys",
@@ -31,7 +31,6 @@ pub(crate) const APPLICATION_TABLES: [&str; 32] = [
     "n_install",
     "n_interest",
     "n_job_interest",
-    "n_legacy_bridge",
     "n_observation",
     "n_outbox",
     "n_poll_dispatch",
@@ -45,15 +44,15 @@ pub(crate) const APPLICATION_TABLES: [&str; 32] = [
 ];
 
 /// SHA-256 of the catalog text (columns and types, primary keys, trigger
-/// names and enabled states of the 32 tables) that a fresh install of the
+/// names and enabled states of the 31 tables) that a fresh install of the
 /// shipped PostgreSQL migrations produces. Derived by applying them to an
 /// empty PostgreSQL 18 database; `POSTGRES_MIGRATIONS` pins those inputs.
 pub(crate) const POSTGRES_SCHEMA: &str =
-    "e75c21086694d9ee8d7159797836732852a78a8c1164ca314184dcf0eec26a52";
+    "a1a63d4f2ccc5fba7f2c1d8734782b6f31fd2e659192b9dccebcaf9c80103352";
 /// SHA-256 of the shipped PostgreSQL migration files, concatenated in order.
 #[cfg(test)]
 pub(crate) const POSTGRES_MIGRATIONS: &str =
-    "29538044238a354c3cd76082c02989ef05178a9c7c02ab219a7b0345b6795b4b";
+    "0198620a2258f563ded71e6954fc0ebfe9966f22314f12d7e49ef90c0f05e3f0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Database {
@@ -465,11 +464,11 @@ mod tests {
         let digest = |text: String| hex::encode(Sha256::digest(text.as_bytes()));
         assert_eq!(
             digest(postgres_identity_sql(true)),
-            "e733a8988ea6dc5ab4f9658745864cd54ead5a7ba0fc090795b25ad0648e4b52"
+            "ceeeb421edfb2c3a9b03bfa6452a53eaaf6dfc830fe4574a3bf94532ad2245cb"
         );
         assert_eq!(
             digest(postgres_identity_sql(false)),
-            "0010741326e25e4fa02ea5701bd3ee32ef2b6dadbf1b21d8d07211e0f2641b64"
+            "20387bcdcc17fe5ac7d6c7bd2bd900084528a8b8bc41d44574d3afa2026d5d59"
         );
         for system in [true, false] {
             let text = postgres_identity_sql(system);
@@ -495,6 +494,8 @@ mod tests {
             "0003_delivery_member.sql",
             "0004_identity_delivery_support.sql",
             "0005_retire_five_minute_polling.sql",
+            "0006_retire_legacy_bridge_hydration.sql",
+            "0007_drop_legacy_bridge.sql",
         ] {
             postgres.update(std::fs::read(root.join("postgres/migrations").join(name)).unwrap());
         }
@@ -503,10 +504,13 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect();
         // A new migration re-pins POSTGRES_MIGRATIONS, and POSTGRES_SCHEMA only
-        // when it changes the catalog (0005 deletes a seed row: data only).
+        // when it changes the hashed catalog text of APPLICATION_TABLES (0005
+        // deletes a seed row: data only; 0006 replaces a trigger function's
+        // body, which that text omits; 0007 drops n_legacy_bridge, which the
+        // list no longer names).
         assert_eq!(
             shipped.len(),
-            5,
+            7,
             "a new PostgreSQL migration re-pins POSTGRES_MIGRATIONS (and POSTGRES_SCHEMA when it changes the catalog)"
         );
         // Editing a migration changes this digest: regenerate POSTGRES_SCHEMA

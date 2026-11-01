@@ -88,7 +88,6 @@ BEGIN
     ('n_install', (SELECT count(*) FROM opencast.n_install)),
     ('n_interest', (SELECT count(*) FROM opencast.n_interest)),
     ('n_job_interest', (SELECT count(*) FROM opencast.n_job_interest)),
-    ('n_legacy_bridge', (SELECT count(*) FROM opencast.n_legacy_bridge)),
     ('n_outbox_pending', (SELECT count(*) FROM opencast.n_outbox WHERE state = 'pending')),
     ('n_poll_dispatch_missing', (SELECT 1 - count(*) FROM opencast.n_poll_dispatch WHERE id = 1)),
     ('n_requester_ticket', (SELECT count(*) FROM opencast.n_requester_ticket)),

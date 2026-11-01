@@ -28,6 +28,13 @@ After owner-only role creation, apply in this order:
 7. `runtime-grants-slice-f.sql` with psql `-v runtime_role=<ingress role>`,
    for the selected ingress/control runtime role only. Do not add these grants
    to the unchanged A or B comparison role.
+8. `migrations/0005_retire_five_minute_polling.sql` deletes the retired
+   `five_minute_polling` control row that 0001 seeds (data only).
+9. `migrations/0006_retire_legacy_bridge_hydration.sql` replaces the
+   `n_feed_insert` trigger function with 0001's body less its two
+   `n_legacy_bridge` inserts.
+10. `migrations/0007_drop_legacy_bridge.sql` drops `n_legacy_bridge`, refusing
+    while the trigger function still writes it or any row is unexpired.
 
 The local comparison roles are `opencast_slice_a` and `opencast_slice_b`.
 Give them the fixture search path
@@ -47,10 +54,13 @@ role with `-v runtime_role=<runtime role>`: `migrations/0001_slice_a.sql`,
 `runtime-grants-slice-e.sql`, `runtime-grants-slice-f.sql`, then
 `runtime-grants-integration.sql` (owner-applied additions to the runtime grant
 union: the cleanup lease, until and generation columns on the dispatch
-singleton and the retention deletes; no schema change). Finally,
+singleton and the retention deletes; no schema change). Then
 `reader-grants.sql` with `-v reader_role=<read-only role>` gives the separate
 read-only role schema usage and SELECT on every application table, which the
-cutover tool's `manifest-target` requires. Objects are created
+cutover tool's `manifest-target` requires. After the grant files come the
+later owner migrations, in order: `migrations/0005_retire_five_minute_polling.sql`,
+`migrations/0006_retire_legacy_bridge_hydration.sql`, then
+`migrations/0007_drop_legacy_bridge.sql`. Objects are created
 as the owner; any default privileges the host grants to the runtime role are
 re-established only after this sequence, so the installed tables carry
 exactly these grants.
@@ -60,10 +70,22 @@ grant predefined-role membership) grants that role `pg_read_all_stats WITH INHER
 TRUE` for the dashboard's session-state view; no table or write access.
 
 `migrations/0005_retire_five_minute_polling.sql` is data only: it deletes the
-retired `five_minute_polling` control row that 0001 seeds. Apply it once as
-the owner after the release whose claim no longer reads that row (an earlier
-binary reads it COALESCEd to zero, so the row is inert until then); the local
-topology's template keeps the twelve-file order above.
+retired `five_minute_polling` control row that 0001 seeds. On a live database
+it applies once as the owner after the release whose claim no longer reads
+that row (an earlier binary reads it COALESCEd to zero, so the row is inert
+until then).
+`migrations/0006_retire_legacy_bridge_hydration.sql` and
+`migrations/0007_drop_legacy_bridge.sql` retire the legacy handoff-dedupe
+bridge `n_legacy_bridge`. On a live database each
+applies once as the owner after the release of both Workers whose builds list
+31 application tables: 0006 first (the `n_feed_insert` trigger stops writing
+the table; its name and enabled state, and so the identity digest, stay), then
+0007 separately (it refuses while the trigger function still writes the table
+or any row is unexpired, then drops it). A build listing 32 tables binds only
+while the table exists; rolling back to one after 0007 needs the empty table
+and its grants re-created first (0007's header). Both take the maintenance
+gate below before any application object and are idempotent. A fresh install
+applies all of them in the order above; so does the local topology's template.
 
 Local topology: `local/local-postgres.sh up` runs one PostgreSQL 18.6 container
 on 127.0.0.1:55432 (Podman first; Docker Desktop through
@@ -107,7 +129,8 @@ slice_d's and slice_f's executors.
 The local roles' passwords are fixed constants, not secrets.
 
 The schema preserves the final D1 table/column/key/check/index definitions for
-32 application tables and 13 projection triggers. Integer values are BIGINT, binary values are BYTEA, flags retain
+31 application tables (32 until 0007 dropped `n_legacy_bridge`) and 13
+projection triggers. Integer values are BIGINT, binary values are BYTEA, flags retain
 integer CHECKs, JSON stays exact text with `IS JSON` only where the frozen
 schema requires validity, and nullable lease-pair checks remain. Primary keys
 are non-null logical identities in PostgreSQL; callers already supply them. No sequences or new interest/feed FK.

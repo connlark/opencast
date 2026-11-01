@@ -35,7 +35,7 @@ one `REPEATABLE READ READ ONLY` snapshot, and writes `target-manifest.json`:
 per table its columns and types, primary key, row count and digest; the
 control rows (`n_control`, `n_circuit`, `n_poll_dispatch`) and the highest
 `epoch` of `n_install` and `n_feed`; the projection triggers' names and enabled
-states. It stops on a table set other than the 32 application tables, a
+states. It stops on a table set other than the 31 application tables, a
 column type other than `bigint`, `text` or `bytea`, a table without a primary
 key, a row line that is not canonical, or a catalog that changed between its
 two reads.

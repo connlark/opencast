@@ -62,9 +62,6 @@ pub enum Operation {
         source: String,
         event: String,
     },
-    ExpireLegacyBridges {
-        now: i64,
-    },
     ExpireTickets {
         now: i64,
     },
@@ -155,7 +152,6 @@ impl Operation {
             Self::ExpireDeletedInstalls { .. } => "e_expire_deleted_installs",
             Self::ReadTerminalEvents { .. } => "e_read_terminal_events",
             Self::RetireEvent { .. } => "B05",
-            Self::ExpireLegacyBridges { .. } => "e_expire_legacy_bridges",
             Self::ExpireTickets { .. } => "e_expire_tickets",
             Self::RetireJobInterests { .. } => "e_retire_job_interests",
             Self::PruneFeeds { .. } => "B06",
@@ -359,10 +355,9 @@ pub(super) mod readback {
         TerminalizeEvents { now, .. } => (vec![("n_event", "fanout_complete=1 AND (terminal_at IS NULL OR terminal_at=?1)")], vec![integer(*now)]),
         ExpireDeletedInstalls { now, .. } => (vec![("n_deleted_install", "expires_at<=?1")], vec![integer(*now)]),
         RetireEvent { source, event, .. } => (vec![("n_delivery_member", "source=?1 AND event_id=?2"), ("n_delivery", "(source=?1 AND event_id=?2) OR delivery_id IN(SELECT delivery_id FROM n_delivery_member WHERE source=?1 AND event_id=?2)"), ("n_group_member", "source=?1 AND event_id=?2"), ("n_event", "source=?1 AND event_id=?2")], vec![text(source), text(event)]),
-        ExpireLegacyBridges { now, .. } => (vec![("n_legacy_bridge", "expires_at<=?1")], vec![integer(*now)]),
         ExpireTickets { now, .. } => (vec![("n_requester_ticket", "expires_at<=?1")], vec![integer(*now)]),
         RetireJobInterests { before, .. } => (vec![("n_job_interest", "register_before<?1")], vec![integer(*before)]),
-        PruneFeeds { .. } => (vec![("n_interest", "1=1"), ("n_legacy_bridge", "1=1"), ("n_feed", "1=1")], vec![]),
+        PruneFeeds { .. } => (vec![("n_interest", "1=1"), ("n_feed", "1=1")], vec![]),
         ExpireFeedHistory { now, .. } => (vec![("n_observation", "feed_id IN(SELECT feed_id FROM n_feed WHERE no_interest_since<=?1-2592000)"), ("n_episode_release", "feed_id IN(SELECT feed_id FROM n_feed WHERE no_interest_since<=?1-2592000)"), ("n_feed", "feed_id IN(SELECT feed_id FROM n_feed WHERE no_interest_since<=?1-2592000)")], vec![integer(*now)]),
         ExpireOutbox { now, .. } => (vec![("n_outbox", "source='feed_polling' AND expires_at<=?1")], vec![integer(*now)]),
         ScrubOutbox { now, .. } => (vec![("n_outbox", "source='feed_polling' AND expires_at<=?1")], vec![integer(*now)]),
@@ -582,13 +577,6 @@ pub(super) mod readback {
                 ("receipt_id", true, true),
                 ("attempt_started_at", false, true),
                 ("local_fallback_safe", false, true),
-            ],
-            "n_legacy_bridge" => &[
-                ("install_id", true, false),
-                ("feed_id", true, false),
-                ("identity_key", true, false),
-                ("disposition", true, false),
-                ("expires_at", false, false),
             ],
             "n_observation" => &[
                 ("observation_id", true, true),

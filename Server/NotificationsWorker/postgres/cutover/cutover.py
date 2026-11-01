@@ -32,7 +32,7 @@ TOOL = Path(__file__).resolve()
 COPY_ORDER = (
     'app_attest_challenge_source_buckets', 'app_attest_challenges', 'app_attest_keys', 'devices',
     'feed_admission_attempts', 'feed_subscriptions', 'n_circuit', 'n_control', 'n_deleted_install',
-    'n_delivery_history', 'n_event', 'n_feed', 'n_feed_catalog', 'n_install', 'n_legacy_bridge',
+    'n_delivery_history', 'n_event', 'n_feed', 'n_feed_catalog', 'n_install',
     'n_poll_dispatch', 'n_poll_origin', 'n_poll_stat', 'n_requester_ticket', 'push_send_attempts',
     'secure_hello_attempts',
     'n_burst', 'n_delivery', 'n_group_member', 'n_interest', 'n_job_interest', 'n_snapshot',

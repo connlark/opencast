@@ -155,7 +155,7 @@ class CatalogFixture(unittest.TestCase):
         self.assertEqual(digest, shipped, 'the shipped migrations changed: regenerate the catalog fixture (README.md)')
         self.assertEqual(catalog, sorted(catalog))
         tables, columns, keys, triggers, privileges = cutover.read_catalog(catalog)
-        self.assertEqual(len(cutover.COPY_ORDER), 32)
+        self.assertEqual(len(cutover.COPY_ORDER), 31)
         self.assertEqual(tables, set(cutover.COPY_ORDER))
         self.assertEqual({t: tuple(sorted(n)) for t, n in triggers.items()}, cutover.TRIGGERS)
         self.assertEqual({s for states in triggers.values() for s in states.values()}, {'O'})

@@ -74,9 +74,7 @@ try {
  // Real-user accepted history remains immutable through control operations,
  // returning interest, reconciliation and ordinary garbage collection.
  await sql("INSERT INTO n_delivery_history(send_id,install_id,device_token_hash,feed_url,episode_id,apns_environment,apns_status,created_at,updated_at) VALUES('accepted','current-install','hash',?,?,'development',200,?,?)",url,H(['accepted']),now-60,now-60).run();
- await sql("INSERT INTO n_legacy_bridge(install_id,feed_id,identity_key,disposition,expires_at) VALUES('current-install',?,?,'accepted',?)",feed,'episode:'+H(['accepted']),now+30*86400).run();
  const ledger=await first("SELECT * FROM n_delivery_history WHERE send_id='accepted'");
- const bridge=await first('SELECT * FROM n_legacy_bridge WHERE feed_id=?',feed);
  await sync(false);await sync();await scan();
  assert.equal((await first('SELECT snapshot_key FROM n_feed WHERE feed_id=?',feed)).snapshot_key,snapshot);
  const before=requests;
@@ -86,11 +84,9 @@ try {
  await expect(await post('/queue',{queue:'opencast-notification-episode-development',message:{schema_version:1,environment:'development',source:'legacy',id:H(['old-wakeup']),generation:1}}),400);
  await observation('gc');
  assert.deepEqual(await first("SELECT * FROM n_delivery_history WHERE send_id='accepted'"),ledger);
- assert.deepEqual(await first('SELECT * FROM n_legacy_bridge WHERE feed_id=?',feed),bridge);
  assert.equal((await first('SELECT COUNT(*) n FROM n_episode_release WHERE feed_id=?',feed)).n,0);
- console.log('PASS quiet initial/returning enrollment, accepted history and duplicate-suppression bridge survive; no legacy cron or wakeups');
+ console.log('PASS quiet initial/returning enrollment, accepted history survives; no legacy cron or wakeups');
  await expect(await auth(worker,'/v1/install/delete',{}));
  assert.equal((await first("SELECT COUNT(*) n FROM n_delivery_history WHERE install_id='current-install'")).n,0);
- assert.equal((await first("SELECT COUNT(*) n FROM n_legacy_bridge WHERE install_id='current-install'")).n,0);
- console.log('PASS authenticated installation erasure removes retained history and bridge keys');
+ console.log('PASS authenticated installation erasure removes retained history');
 } finally {try{await mf.dispose();}finally{await storage.dispose();}}

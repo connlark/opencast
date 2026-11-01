@@ -86,7 +86,7 @@ to `v1;<environment>;postgres;pg:<datname>[:<system identifier>]` (without
 the identifier when the role cannot read it). Absent, the Worker behaves
 exactly as before: no identity statement, no log line. The schema identity is
 compiled in from the shipped migrations: the digest of the catalog text
-(columns and types, primary keys, trigger names and states of the 32
+(columns and types, primary keys, trigger names and states of the 31
 application tables) a fresh install produces; a host test pins the migration
 files' digest beside it. Any other pin, a `d1` one included, is malformed and
 refuses with reason `pin` before any read.

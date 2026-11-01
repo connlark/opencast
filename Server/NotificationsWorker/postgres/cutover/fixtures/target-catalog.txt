@@ -1,4 +1,4 @@
-migrations|77b7c7aab8abd453429dccd0c9b39ceb1d24406d012800d53cdf52715919d7d5
+migrations|0198620a2258f563ded71e6954fc0ebfe9966f22314f12d7e49ef90c0f05e3f0
 column|app_attest_challenge_source_buckets|1|source_token|text
 column|app_attest_challenge_source_buckets|2|window_start|bigint
 column|app_attest_challenge_source_buckets|3|request_count|bigint
@@ -221,11 +221,6 @@ column|n_job_interest|6|generation|bigint
 column|n_job_interest|7|grant_digest|text
 column|n_job_interest|8|grant_nonce|text
 column|n_job_interest|9|grant_key_version|bigint
-column|n_legacy_bridge|1|install_id|text
-column|n_legacy_bridge|2|feed_id|text
-column|n_legacy_bridge|3|identity_key|text
-column|n_legacy_bridge|4|disposition|text
-column|n_legacy_bridge|5|expires_at|bigint
 column|n_observation|10|candidate_count|bigint
 column|n_observation|11|staged_count|bigint
 column|n_observation|12|valid_eof|bigint
@@ -355,9 +350,6 @@ key|n_interest|2|feed_id
 key|n_job_interest|1|install_id
 key|n_job_interest|2|install_epoch
 key|n_job_interest|3|operation_id
-key|n_legacy_bridge|1|install_id
-key|n_legacy_bridge|2|feed_id
-key|n_legacy_bridge|3|identity_key
 key|n_observation|1|observation_id
 key|n_outbox|1|source
 key|n_outbox|2|event_id
@@ -391,7 +383,6 @@ privilege|n_group_member|true|false
 privilege|n_install|true|false
 privilege|n_interest|true|false
 privilege|n_job_interest|true|false
-privilege|n_legacy_bridge|true|false
 privilege|n_observation|true|false
 privilege|n_outbox|true|false
 privilege|n_poll_dispatch|true|false
@@ -423,7 +414,6 @@ table|n_group_member
 table|n_install
 table|n_interest
 table|n_job_interest
-table|n_legacy_bridge
 table|n_observation
 table|n_outbox
 table|n_poll_dispatch

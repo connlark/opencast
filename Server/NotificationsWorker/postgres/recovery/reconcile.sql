@@ -118,7 +118,6 @@ BEGIN
     ('n_install', (SELECT count(*) FROM opencast.n_install)),
     ('n_interest', (SELECT count(*) FROM opencast.n_interest)),
     ('n_job_interest', (SELECT count(*) FROM opencast.n_job_interest)),
-    ('n_legacy_bridge', (SELECT count(*) FROM opencast.n_legacy_bridge)),
     ('n_outbox_pending', (SELECT count(*) FROM opencast.n_outbox WHERE state = 'pending')),
     ('n_poll_dispatch_missing', (SELECT 1 - count(*) FROM opencast.n_poll_dispatch WHERE id = 1)),
     ('n_requester_ticket', (SELECT count(*) FROM opencast.n_requester_ticket)),
@@ -157,8 +156,6 @@ WITH d AS (DELETE FROM opencast.n_job_interest RETURNING 1)
 SELECT 'recovery|stmt|R10|' || count(*) || '|' || extract(epoch FROM clock_timestamp()) FROM d;
 WITH d AS (DELETE FROM opencast.n_interest RETURNING 1)
 SELECT 'recovery|stmt|R5|' || count(*) || '|' || extract(epoch FROM clock_timestamp()) FROM d;
-WITH d AS (DELETE FROM opencast.n_legacy_bridge RETURNING 1)
-SELECT 'recovery|stmt|R11c|' || count(*) || '|' || extract(epoch FROM clock_timestamp()) FROM d;
 WITH d AS (DELETE FROM opencast.n_install RETURNING 1)
 SELECT 'recovery|stmt|R6|' || count(*) || '|' || extract(epoch FROM clock_timestamp()) FROM d;
 WITH d AS (DELETE FROM opencast.n_delivery_history RETURNING 1)
@@ -225,7 +222,6 @@ FROM (
     ('n_install', (SELECT count(*) FROM opencast.n_install)),
     ('n_interest', (SELECT count(*) FROM opencast.n_interest)),
     ('n_job_interest', (SELECT count(*) FROM opencast.n_job_interest)),
-    ('n_legacy_bridge', (SELECT count(*) FROM opencast.n_legacy_bridge)),
     ('n_outbox_pending', (SELECT count(*) FROM opencast.n_outbox WHERE state = 'pending')),
     ('n_poll_dispatch_missing', (SELECT 1 - count(*) FROM opencast.n_poll_dispatch WHERE id = 1)),
     ('n_requester_ticket', (SELECT count(*) FROM opencast.n_requester_ticket)),

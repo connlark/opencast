@@ -33,7 +33,7 @@ TOOL = Path(__file__).resolve()
 SQL_FILES = ('marker', 'census', 'reconcile', 'close', 'fence', 'unfence', 'acl', 'probe')
 
 # reconcile.sql's statements in execution order (README.md, "The statement set").
-STATEMENTS = ('R13', 'R14', 'R15', 'R7', 'R16', 'R17', 'R18', 'R10', 'R5', 'R11c', 'R6', 'R19', 'R11a', 'R20',
+STATEMENTS = ('R13', 'R14', 'R15', 'R7', 'R16', 'R17', 'R18', 'R10', 'R5', 'R6', 'R19', 'R11a', 'R20',
               'R4', 'R3', 'R11b', 'R1', 'R2', 'R11d', 'R8', 'R9', 'R12')
 # The privileges fence.sql revokes: table writes, and sequence USAGE/UPDATE.
 FENCED = {('table', 'INSERT'), ('table', 'UPDATE'), ('table', 'DELETE'), ('table', 'TRUNCATE'),

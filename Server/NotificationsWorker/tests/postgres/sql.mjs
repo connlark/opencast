@@ -39,7 +39,7 @@
 export const PG_TABLES = new Set(['app_attest_challenge_source_buckets','app_attest_challenges','app_attest_keys','devices',
  'feed_admission_attempts','feed_subscriptions','n_burst','n_circuit','n_control','n_deleted_install','n_delivery',
  'n_delivery_history','n_delivery_member','n_episode_release','n_event','n_feed','n_feed_catalog','n_group_member',
- 'n_install','n_interest','n_job_interest','n_legacy_bridge','n_observation','n_outbox','n_poll_dispatch','n_poll_origin',
+ 'n_install','n_interest','n_job_interest','n_observation','n_outbox','n_poll_dispatch','n_poll_origin',
  'n_poll_stat','n_requester_ticket','n_snapshot','n_snapshot_ref','push_send_attempts','secure_hello_attempts']);
 export const TEXT_ORDER_KEYS = new Set(['feed_id','episode_id','event_id','last_poll_outcome','object_key','send_id','install_id',
  'identity_key','delivery_id','observation_id','name','state','reason','feed_url','source','interest_key','presentation_key','manifest_key','page_key']);

@@ -75,16 +75,8 @@ GRANT UPDATE(generation,activated_at,enabled,changed_at) ON opencast.n_interest 
 -- S270 Server/NotificationsWorker/src/storage.rs:613
 -- Exact D1 predicate: DELETE FROM n_interest WHERE install_id=?1
 GRANT DELETE ON opencast.n_interest TO :"runtime_role";
--- S015 Server/NotificationsWorker/src/delivery/db.rs:83
--- Invoker trigger: n_feed_insert
-GRANT INSERT(install_id,feed_id,identity_key,disposition,expires_at) ON opencast.n_legacy_bridge TO :"runtime_role";
--- S271 Server/NotificationsWorker/src/storage.rs:614
-GRANT SELECT(install_id) ON opencast.n_legacy_bridge TO :"runtime_role";
--- S271 Server/NotificationsWorker/src/storage.rs:614
--- Exact D1 predicate: DELETE FROM n_legacy_bridge WHERE install_id=?1
-GRANT DELETE ON opencast.n_legacy_bridge TO :"runtime_role";
--- S015 Server/NotificationsWorker/src/delivery/db.rs:83; S273 Server/NotificationsWorker/src/storage.rs:616
--- Invoker trigger: n_feed_insert
+-- S273 Server/NotificationsWorker/src/storage.rs:616
+-- Installation erasure: its DELETE ... WHERE install_id reads install_id; the other columns are unread since 0006
 GRANT SELECT(install_id,feed_url,episode_id,episode_fingerprint,apns_status,apns_error,updated_at) ON opencast.n_delivery_history TO :"runtime_role";
 -- S273 Server/NotificationsWorker/src/storage.rs:616
 -- Exact D1 predicate: DELETE FROM n_delivery_history WHERE install_id = ?1

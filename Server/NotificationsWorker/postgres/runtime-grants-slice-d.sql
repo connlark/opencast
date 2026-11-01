@@ -4,9 +4,6 @@ GRANT SELECT ON opencast.n_event,opencast.n_delivery TO :"runtime_role";
 -- S019/S021/S077/S080: job selection, eligibility, attempt and disable trigger.
 GRANT SELECT(interest_id,install_id,install_epoch,generation,state,run_id,attempt_started_at)
  ON opencast.n_job_interest TO :"runtime_role";
--- S020/S034: legacy eligibility exclusions.
-GRANT SELECT(install_id,feed_id,expires_at,identity_key)
- ON opencast.n_legacy_bridge TO :"runtime_role";
 -- S082/S084/S090: endpoint read, invalidation predicate and outcome readback.
 GRANT SELECT(install_id,device_token,device_token_hash,apns_environment,bundle_id,notifications_enabled,last_seen_at)
  ON opencast.devices TO :"runtime_role";

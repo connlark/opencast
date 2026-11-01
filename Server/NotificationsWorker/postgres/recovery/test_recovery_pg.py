@@ -37,8 +37,8 @@ SOURCE = HERE.parents[1] / 'src' / 'database' / 'postgres'
 CONFIG = os.environ.get('OPENCAST_RECOVERY_PG')
 PSQL_FLAGS = ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1']
 
-# Synthetic, FK- and CHECK-consistent; every time lies before any boundary. 99 rows
-# over the 32 tables (with the schema files' seeds). Applied as a superuser with
+# Synthetic, FK- and CHECK-consistent; every time lies before any boundary. 96 rows
+# over the 31 tables (with the schema files' seeds, after 0005's control deletion). Applied as a superuser with
 # session_replication_role=replica, so no projection trigger adds rows.
 SEED_SQL = r"""
 BEGIN;
@@ -118,8 +118,6 @@ INSERT INTO n_delivery_member(delivery_id, source, event_id, install_id, install
  ('delivery-3', 'feed_polling', 'event-3', 'install-2', 2, 2), ('delivery-4', 'feed_polling', 'event-1', 'install-2', 2, 2),
  ('delivery-5', 'ad_analysis', 'event-5', 'install-3', 1, 1), ('delivery-6', 'feed_polling', 'event-3', 'install-3', 1, 1),
  ('delivery-7', 'feed_polling', 'event-3', 'install-1', 1, 1), ('delivery-8', 'feed_polling', 'event-2', 'install-3', 1, 1);
-INSERT INTO n_legacy_bridge(install_id, feed_id, identity_key, disposition, expires_at) VALUES
- ('install-1', 'feed-1', 'episode:episode-a', 'accepted', 1702592000), ('install-2', 'feed-2', 'episode:episode-b', 'uncertain', 1702592000);
 INSERT INTO n_delivery_history(send_id, install_id, device_token_hash, feed_url, episode_id, apns_environment, apns_status, apns_id, apns_error, created_at, updated_at, episode_fingerprint) VALUES
  ('send-1', 'install-1', 'token-hash-1', 'https://feeds.example.com/one.xml', 'episode-a', 'production', 200, 'apns-a', NULL, 1700000000, 1700000000, NULL),
  ('send-2', 'install-2', 'token-hash-2', 'https://feeds.example.com/two.xml', 'episode-b', 'production', NULL, NULL, NULL, 1700000000, 1700000000, NULL);
@@ -154,22 +152,25 @@ COMMIT;
 """
 
 # Stated at the design stop, before any implementation; never edited after a run.
+# Re-derived 2026-11-01 for migrations 0005-0007, not run since: one control
+# row (five_minute_polling, disabled) and the bridge's two rows are gone, and
+# with them R11c.
 PREDICTED_BEFORE = dict(
-    n_control=9, n_control_enabled=6, n_interest=5, n_interest_enabled=4, n_delivery_member=8, n_delivery=8,
-    n_group_member=2, n_event=7, n_event_unfinished=3, n_requester_ticket=2, n_job_interest=3, n_legacy_bridge=2,
+    n_control=8, n_control_enabled=6, n_interest=5, n_interest_enabled=4, n_delivery_member=8, n_delivery=8,
+    n_group_member=2, n_event=7, n_event_unfinished=3, n_requester_ticket=2, n_job_interest=3,
     n_install=5, n_install_enabled=4, n_delivery_history=2, push_send_attempts=3, feed_admission_attempts=2,
     feed_subscriptions=6, devices=4, devices_enabled=3, secure_hello_attempts=1, app_attest_challenges=3,
     app_attest_keys=4, app_attest_keys_counter_positive=3, app_attest_challenge_source_buckets=2,
     n_outbox=5, n_outbox_pending=2, n_feed=3, n_feed_generation_sum=14, n_feed_leased=1, n_feed_no_interest_null=2,
     n_deleted_install=1, n_feed_catalog=3, n_snapshot=1, n_observation=1, n_episode_release=2, n_snapshot_ref=0,
-    n_burst=1, n_poll_origin=1, n_poll_stat=1, n_circuit=1, n_poll_dispatch=1, rows_total=99)
+    n_burst=1, n_poll_origin=1, n_poll_stat=1, n_circuit=1, n_poll_dispatch=1, rows_total=96)
 PREDICTED_AFTER = dict(
     PREDICTED_BEFORE, n_control_enabled=0, n_interest=0, n_interest_enabled=0, n_delivery_member=0, n_delivery=0,
-    n_group_member=1, n_event=4, n_event_unfinished=0, n_requester_ticket=0, n_job_interest=0, n_legacy_bridge=0,
+    n_group_member=1, n_event=4, n_event_unfinished=0, n_requester_ticket=0, n_job_interest=0,
     n_install=0, n_install_enabled=0, n_delivery_history=0, push_send_attempts=0, feed_admission_attempts=0,
     feed_subscriptions=0, devices=0, devices_enabled=0, secure_hello_attempts=0, app_attest_challenges=0,
     app_attest_keys=0, app_attest_keys_counter_positive=0, app_attest_challenge_source_buckets=0,
-    n_outbox_pending=0, n_feed_generation_sum=22, n_feed_leased=0, n_feed_no_interest_null=0, rows_total=35)
+    n_outbox_pending=0, n_feed_generation_sum=22, n_feed_leased=0, n_feed_no_interest_null=0, rows_total=34)
 PREDICTED_STATES_BEFORE = {
     'n_delivery': {s: 1 for s in ('pending', 'leased', 'accepted', 'uncertain', 'suppressed', 'expired',
                                   'permanent_failure', 'poisoned')},
@@ -186,16 +187,16 @@ PREDICTED_STATES_AFTER = {
     'n_control_revision_sum_delta': 6,
 }
 PREDICTED_STATEMENTS = (('R13', 6), ('R14', 5), ('R15', 8), ('R7', 8), ('R16', 1), ('R17', 3), ('R18', 2), ('R10', 3),
-                        ('R5', 5), ('R11c', 2), ('R6', 5), ('R19', 2), ('R11a', 3), ('R20', 2), ('R4', 6), ('R3', 4),
+                        ('R5', 5), ('R6', 5), ('R19', 2), ('R11a', 3), ('R20', 2), ('R4', 6), ('R3', 4),
                         ('R11b', 1), ('R1', 3), ('R2', 4), ('R11d', 2), ('R8', 2), ('R9', 2), ('R12', 3))
 # The fix round's tests (T18-T20), stated before their first run.
 PREDICTED_FIXES = {
     'T18_missing_gate_reconcile': dict(exit=2, verdict='REFUSED', streamed=False, direct_sqlstates=['22012'],
-                                       statements_printed=0, rows_total_while_missing=98, census_unchanged=True),
+                                       statements_printed=0, rows_total_while_missing=95, census_unchanged=True),
     'T19_missing_gate_close': dict(exit=2, verdict='REFUSED', direct_sqlstates=['22012'], marker_intact=True,
-                                   rows_total_while_missing=34, census_unchanged=True),
+                                   rows_total_while_missing=33, census_unchanged=True),
     'T20_post_stream_read_loss': dict(exit=1, verdict='STOP', outcome='COMMITTED_UNVERIFIED', stream_exit=0,
-                                      statement_rows=[0] * 23, census_after_rows_total=35, independent_rows_total=35),
+                                      statement_rows=[0] * 22, census_after_rows_total=34, independent_rows_total=34),
 }
 SEEDED_VALUES = ('install-1', 'install-2', 'install-3', 'install-4', 'install-5', 'token-hash-', 'token-1', 'key-1',
                  'challenge-hash', 'grant-nonce', 'ticket-1', 'feeds.example.com', 'apns-1', 'source-1', 'send-1')

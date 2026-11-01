@@ -12,7 +12,7 @@
 -- (pg_last_xact_replay_timestamp() is set only by archive recovery and stays
 -- fixed after promotion until the next restart); ORM02 not the database or
 -- cluster named; ORM03 the effective role does not own schema opencast; ORM04
--- schema opencast does not hold the 32 application tables; ORM05 a marker
+-- schema opencast does not hold the 31 application tables; ORM05 a marker
 -- already exists.
 \set ON_ERROR_STOP on
 \set VERBOSITY sqlstate
@@ -68,8 +68,8 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = 'ORM03', MESSAGE = 'the effective role does not own schema opencast';
   END IF;
   IF (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'opencast' AND c.relkind IN ('r', 'p')) <> 32 THEN
-    RAISE EXCEPTION USING ERRCODE = 'ORM04', MESSAGE = 'schema opencast does not hold the 32 application tables';
+      WHERE n.nspname = 'opencast' AND c.relkind IN ('r', 'p')) <> 31 THEN
+    RAISE EXCEPTION USING ERRCODE = 'ORM04', MESSAGE = 'schema opencast does not hold the 31 application tables';
   END IF;
   IF to_regnamespace('opencast_recovery') IS NOT NULL THEN
     RAISE EXCEPTION USING ERRCODE = 'ORM05', MESSAGE = 'this database already holds a recovery marker';

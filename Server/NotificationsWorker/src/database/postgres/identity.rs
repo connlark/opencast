@@ -1,5 +1,5 @@
 //! The bind-time identity read: database name, optional system identifier and
-//! the catalog digest of the 32 application tables, on its own storage
+//! the catalog digest of the 31 application tables, on its own storage
 //! segment. One unnamed typed read; no gate lock, no `SET`, no write.
 use super::*;
 use crate::database_identity::postgres_identity_sql;

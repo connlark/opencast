@@ -14,8 +14,6 @@ GRANT SELECT ON opencast.n_event TO :"runtime_role";
 GRANT SELECT ON opencast.n_group_member TO :"runtime_role";
 -- S069.
 GRANT SELECT ON opencast.n_job_interest TO :"runtime_role";
--- S067, S071.
-GRANT SELECT ON opencast.n_legacy_bridge TO :"runtime_role";
 -- S068.
 GRANT SELECT ON opencast.n_requester_ticket TO :"runtime_role";
 -- S061.
@@ -28,8 +26,6 @@ GRANT DELETE ON opencast.n_delivery TO :"runtime_role";
 GRANT DELETE ON opencast.n_group_member TO :"runtime_role";
 -- S066.
 GRANT DELETE ON opencast.n_event TO :"runtime_role";
--- S067, S071.
-GRANT DELETE ON opencast.n_legacy_bridge TO :"runtime_role";
 -- S068.
 GRANT DELETE ON opencast.n_requester_ticket TO :"runtime_role";
 -- S069.

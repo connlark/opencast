@@ -452,7 +452,7 @@ class StatementSet(unittest.TestCase):
         for name in recovery.SQL_FILES:
             self.assertNotRegex(recovery.sql_text(name), r'(?i)DISABLE\s+TRIGGER|session_replication_role')
 
-    def test_census_tables_are_the_32_application_tables_and_print_no_row_value(self):
+    def test_census_tables_are_the_31_application_tables_and_print_no_row_value(self):
         sys.path.insert(0, str(POSTGRES / 'cutover'))
         try:
             import cutover
@@ -489,7 +489,7 @@ class FenceSet(unittest.TestCase):
 
     def test_the_derived_writable_tables_cover_every_grant_statement(self):
         statements = sum(len(re.findall(r'(?m)^GRANT\b', (POSTGRES / n).read_text())) for n in GRANT_FILES)
-        self.assertEqual(statements, 126)
+        self.assertEqual(statements, 120)
         tables = derived_writable_tables()
         self.assertIn('n_poll_dispatch', tables)
         self.assertNotIn('n_control', tables)

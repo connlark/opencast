@@ -268,12 +268,78 @@ try {
     const pair = await Promise.all([clone(), clone()]);
     for (const c of pair) assert.equal(c.code, 0, c.stderr);
     assert.ok(pair[0].started < pair[1].ended && pair[1].started < pair[0].ended, 'both sessions in flight together');
-    for (const c of pair) assert.deepEqual(await sql(c.name, "SELECT count(*) FROM pg_tables WHERE schemaname = 'opencast'; SELECT count(*) FROM n_control;", owner), ['32', '9'], c.name);
+    for (const c of pair) assert.deepEqual(await sql(c.name, "SELECT count(*) FROM pg_tables WHERE schemaname = 'opencast'; SELECT count(*) FROM n_control;", owner), ['31', '8'], c.name);
   });
   await check('opencast_dev: a connectable clone owned by the owner, open to the runtime role', async () => {
     assert.deepEqual(await sql('postgres', "SELECT pg_get_userbyid(datdba), datistemplate, datallowconn, datcollate, datlocprovider FROM pg_database WHERE datname = 'opencast_dev';"),
       [`${owner}|f|t|en_US.utf8|c`]);
-    assert.deepEqual(await sql('opencast_dev', "SELECT count(*) FROM pg_tables WHERE schemaname = 'opencast';", runtime), ['32']);
+    assert.deepEqual(await sql('opencast_dev', "SELECT count(*) FROM pg_tables WHERE schemaname = 'opencast';", runtime), ['31']);
+  });
+  // Legacy bridge exit: 0006 stops the n_feed trigger hydrating the legacy
+  // handoff-dedupe bridge and 0007 drops it. The bridge's DDL and 0001's
+  // trigger function are re-created below from 0001 itself, so these checks
+  // exercise the shipped files against the exact objects production held.
+  const migration = name => readFileSync(join(source, 'migrations', name), 'utf8');
+  const [m0006, m0007, m0001] = ['0006_retire_legacy_bridge_hydration.sql', '0007_drop_legacy_bridge.sql', '0001_slice_a.sql'].map(migration);
+  const bridgeDdl = m0001.slice(m0001.indexOf('CREATE TABLE opencast.n_legacy_bridge ('), m0001.indexOf('\n);', m0001.indexOf('CREATE TABLE opencast.n_legacy_bridge (')) + 3);
+  const hydratingFn = m0001.slice(m0001.indexOf('CREATE FUNCTION opencast.n_feed_insert_fn()'), m0001.indexOf('$trigger$;', m0001.indexOf('CREATE FUNCTION opencast.n_feed_insert_fn()')) + '$trigger$;'.length)
+    .replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION');
+  assert.ok(bridgeDdl.endsWith('\n);') && hydratingFn.includes('INSERT INTO opencast.n_legacy_bridge'), 'the 0001 bridge DDL and hydrating function');
+  const state = c => sql(c, `SELECT to_regclass('opencast.n_legacy_bridge') IS NULL,
+  strpos(pg_get_functiondef('opencast.n_feed_insert_fn()'::regprocedure), 'n_legacy_bridge') = 0,
+  md5(pg_get_functiondef('opencast.n_feed_insert_fn()'::regprocedure));`, owner);
+  // A migration through the script's sql, as the owner; its code, and its stderr at verbose verbosity.
+  const apply = (c, text) => run(['sql', c, owner], { input: `\\set VERBOSITY verbose\n${text}` });
+  const applied = async (c, text, what) => { const r = await apply(c, text); assert.equal(r.code, 0, `${what}: ${r.stderr.trim()}`); };
+  const bridgeRows = c => sql(c, 'SELECT install_id, feed_id, identity_key, disposition, expires_at FROM n_legacy_bridge ORDER BY identity_key;', owner);
+  await check('legacy bridge: a fresh clone holds no n_legacy_bridge and its n_feed trigger function never names it', async () => {
+    const [absent] = await state(fresh);
+    assert.match(absent, /^t\|t\|[0-9a-f]{32}$/);
+    await refused(fresh, owner, 'SELECT count(*) FROM n_legacy_bridge;', /42P01: relation "n_legacy_bridge" does not exist/);
+  });
+  await check('legacy bridge: 0006 and 0007 are idempotent; 0007 refuses an unexpired row or a hydrating trigger and changes nothing, drops an expired-only table, and is a no-op without it', async () => {
+    const c = (await clone()).name, [shipped] = await state(c);
+    for (const [name, text] of [['0006', m0006], ['0006 again', m0006], ['0007', m0007], ['0007 again', m0007]]) {
+      await applied(c, text, name);
+      assert.deepEqual(await state(c), [shipped], `${name} on a fresh clone changes nothing`);
+    }
+    // The bridge as 0001 created it, one expired and one unexpired row (the server's clock).
+    await applied(c, `${bridgeDdl}
+INSERT INTO n_legacy_bridge VALUES ('install-a', 'feed-a', 'episode:expired', 'accepted', extract(epoch FROM now())::bigint - 3600),
+  ('install-a', 'feed-a', 'episode:unexpired', 'uncertain', extract(epoch FROM now())::bigint + 3600);`, 'the 0001 bridge with two rows');
+    const seeded = await bridgeRows(c);
+    assert.equal(seeded.length, 2);
+    const refusedUnexpired = await apply(c, m0007);
+    assert.notEqual(refusedUnexpired.code, 0, '0007 with an unexpired row');
+    assert.match(refusedUnexpired.stderr, /55000: n_legacy_bridge holds unexpired rows: the drop is refused/);
+    assert.deepEqual(await bridgeRows(c), seeded, 'the table and both rows survive the refused run');
+    // With the trigger function hydrating again (0006 not applied), 0007 refuses even an empty table.
+    await applied(c, `DELETE FROM n_legacy_bridge;\n${hydratingFn}`, 'an empty bridge and 0001\'s function');
+    const refusedOrder = await apply(c, m0007);
+    assert.notEqual(refusedOrder.code, 0, '0007 before 0006');
+    assert.match(refusedOrder.stderr, /55000: n_feed_insert_fn still writes n_legacy_bridge: apply 0006 first/);
+    assert.match((await state(c))[0], /^f\|f\|/, 'the table and the hydrating function survive the refused run');
+    await applied(c, m0006, '0006 after the refusal');
+    assert.deepEqual(await state(c), [shipped.replace(/^t\|/, 'f|')], '0006 restores the shipped function; the table stays');
+    await applied(c, `INSERT INTO n_legacy_bridge VALUES ('install-a', 'feed-a', 'episode:expired', 'accepted', extract(epoch FROM now())::bigint - 3600);`, 'one expired row');
+    await applied(c, m0007, '0007 with only an expired row');
+    assert.deepEqual(await state(c), [shipped], '0007 drops the table');
+    await applied(c, m0007, '0007 once the table is gone');
+    assert.deepEqual(await state(c), [shipped], 'the no-op leaves the clone as shipped');
+  });
+  await check('legacy bridge: 0006 and 0007 refuse a missing n_poll_dispatch singleton by division by zero and change nothing', async () => {
+    const c = (await clone()).name;
+    // State each migration would change: 0001's hydrating function, and an empty bridge 0007 would drop.
+    await applied(c, `${bridgeDdl}\n${hydratingFn}\nBEGIN;\n${gate}\nDELETE FROM n_poll_dispatch WHERE id = 1;\nCOMMIT;`, 'the 0001 objects and no singleton');
+    assert.deepEqual(await sql(c, 'SELECT count(*) FROM n_poll_dispatch;', owner), ['0']);
+    const before = await state(c);
+    assert.match(before[0], /^f\|f\|/);
+    for (const [name, text] of [['0006', m0006], ['0007', m0007]]) {
+      const r = await apply(c, text);
+      assert.notEqual(r.code, 0, `${name} without the singleton`);
+      assert.match(r.stderr, /22012: division by zero/, name);
+      assert.deepEqual(await state(c), before, `${name} changes nothing`);
+    }
   });
   const transport = process.env.OPENCAST_PG_PSQL ?? 'container';
   const runtimeCli = transport === 'host' ? null : await selectedRuntime();

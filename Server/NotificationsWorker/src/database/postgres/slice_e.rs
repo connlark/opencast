@@ -72,7 +72,7 @@ pub(in crate::database) async fn execute(
         return Err(decode_failure(read));
     }
     let mut replies = Vec::with_capacity(results.len());
-    for (index, (reply, statement)) in results.into_iter().zip(descriptor.statements).enumerate() {
+    for (reply, statement) in results.into_iter().zip(descriptor.statements) {
         if !statement.count.accepts(reply.affected) {
             return Err(decode_failure(read));
         }
@@ -81,19 +81,20 @@ pub(in crate::database) async fn execute(
             .into_iter()
             .map(|row| decode(row, read))
             .collect::<Result<Vec<_>>>()?;
-        let count =
-            if matches!(operation, Operation::PruneFeeds { .. }) && (index == 0 || index == 2) {
-                if rows.len() != 1 || rows[0].as_object().is_none_or(|row| row.len() != 1) {
-                    return Err(decode_failure(false));
-                }
-                let count = rows[0]["d1_changes"]
-                    .as_u64()
-                    .ok_or_else(|| decode_failure(false))?;
-                rows.clear();
-                count
-            } else {
-                reply.affected
-            };
+        // PruneFeeds' two statements each return one d1_changes row: the D1
+        // change count of its interest and its feed deletions.
+        let count = if matches!(operation, Operation::PruneFeeds { .. }) {
+            if rows.len() != 1 || rows[0].as_object().is_none_or(|row| row.len() != 1) {
+                return Err(decode_failure(false));
+            }
+            let count = rows[0]["d1_changes"]
+                .as_u64()
+                .ok_or_else(|| decode_failure(false))?;
+            rows.clear();
+            count
+        } else {
+            reply.affected
+        };
         replies.push(Reply { rows, count });
     }
     crate::database::slice_e::readback::normalize(operation, &mut replies)?;
@@ -156,10 +157,9 @@ fn describe(operation: &Operation) -> Descriptor {
         ExpireDeletedInstalls { now } => Descriptor { statements: vec![Statement { sql: r###"DELETE FROM n_deleted_install WHERE fence IN(SELECT fence FROM n_deleted_install WHERE expires_at<=$1 LIMIT 100)"###.into(), parameters: vec![integer(*now)], count: CountRule::Any }] },
         ReadTerminalEvents { before } => Descriptor { statements: vec![Statement { sql: READ_TERMINAL_EVENTS.into(), parameters: vec![integer(*before)], count: CountRule::Any }] },
         RetireEvent { source, event } => Descriptor { statements: vec![Statement { sql: RETIRE_DELIVERIES.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }, Statement { sql: r###"DELETE FROM n_group_member WHERE source=$1 AND event_id=$2"###.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }, Statement { sql: r###"DELETE FROM n_event WHERE source=$1 AND event_id=$2 AND NOT EXISTS(SELECT 1 FROM n_delivery WHERE source=$1 AND event_id=$2)"###.into(), parameters: vec![text(source), text(event)], count: CountRule::Any }] },
-        ExpireLegacyBridges { now } => Descriptor { statements: vec![Statement { sql: r###"DELETE FROM n_legacy_bridge WHERE ctid IN(SELECT ctid FROM n_legacy_bridge WHERE expires_at<=$1 LIMIT 100)"###.into(), parameters: vec![integer(*now)], count: CountRule::Any }] },
         ExpireTickets { now } => Descriptor { statements: vec![Statement { sql: r###"DELETE FROM n_requester_ticket WHERE ticket_digest IN(SELECT ticket_digest FROM n_requester_ticket WHERE expires_at<=$1 LIMIT 100)"###.into(), parameters: vec![integer(*now)], count: CountRule::Any }] },
         RetireJobInterests { before } => Descriptor { statements: vec![Statement { sql: r###"DELETE FROM n_job_interest WHERE ctid IN(SELECT ctid FROM n_job_interest j WHERE register_before<$1 AND NOT EXISTS(SELECT 1 FROM n_event WHERE interest_id=j.interest_id) AND NOT EXISTS(SELECT 1 FROM n_delivery WHERE interest_key=j.interest_id) LIMIT 100)"###.into(), parameters: vec![integer(*before)], count: CountRule::Any }] },
-        PruneFeeds { before } => Descriptor { statements: vec![Statement { sql: PRUNE_INTERESTS.into(), parameters: vec![integer(*before)], count: CountRule::Exactly(1) }, Statement { sql: r###"DELETE FROM n_legacy_bridge WHERE feed_id IN(SELECT feed_id FROM n_feed f WHERE no_interest_since<$1 AND NOT EXISTS(SELECT 1 FROM n_interest WHERE feed_id=f.feed_id AND enabled=1) AND NOT EXISTS(SELECT 1 FROM n_event WHERE feed_id=f.feed_id) AND NOT EXISTS(SELECT 1 FROM n_delivery WHERE interest_key=f.feed_id) AND NOT EXISTS(SELECT 1 FROM n_snapshot WHERE feed_id=f.feed_id) AND NOT EXISTS(SELECT 1 FROM n_observation WHERE feed_id=f.feed_id) ORDER BY no_interest_since LIMIT 100)"###.into(), parameters: vec![integer(*before)], count: CountRule::Any }, Statement { sql: PRUNE_FEEDS.into(), parameters: vec![integer(*before)], count: CountRule::Exactly(1) }] },
+        PruneFeeds { before } => Descriptor { statements: vec![Statement { sql: PRUNE_INTERESTS.into(), parameters: vec![integer(*before)], count: CountRule::Exactly(1) }, Statement { sql: PRUNE_FEEDS.into(), parameters: vec![integer(*before)], count: CountRule::Exactly(1) }] },
         ReadDeliverySummary => Descriptor { statements: vec![Statement { sql: r###"SELECT state,COUNT(*) AS count,MIN(next_attempt_at) AS oldest_due FROM n_delivery WHERE state IN('pending','uncertain','leased','poisoned') GROUP BY state ORDER BY state"###.into(), parameters: vec![], count: CountRule::Any }] },
         ReadEventSummary => Descriptor { statements: vec![Statement { sql: r###"SELECT COUNT(*) AS count,MIN(next_attempt_at) AS oldest_due,SUM(CASE WHEN failures>=10 THEN 1 ELSE 0 END) AS poisoned FROM n_event WHERE fanout_complete=0"###.into(), parameters: vec![], count: CountRule::AtMost(1) }] },
         ReadCircuit => Descriptor { statements: vec![Statement { sql: r###"SELECT paused,reason,updated_at FROM n_circuit WHERE lane='apns'"###.into(), parameters: vec![], count: CountRule::AtMost(1) }] },

@@ -106,6 +106,8 @@ test('R8 a table outside PG_TABLES (lineage, bookkeeping, retired) raises',()=>{
  raises("SELECT p.job_id FROM n_feed f JOIN n_poll p ON p.feed_id=f.feed_id",D1PhysicalStatement,/^lineage$/);
  raises("UPDATE feeds SET source_url='x' WHERE feed_url='y'",D1PhysicalStatement,/^lineage$/);
  assert.throws(()=>translate('DELETE FROM episode_notification_sends'),/D1PhysicalStatement\(lineage episode_notification_sends\)/);
+ // Dropped by migration 0007: the retired handoff-dedupe bridge.
+ raises('SELECT COUNT(*) AS n FROM n_legacy_bridge',D1PhysicalStatement,/^lineage$/);
  // A CTE name is not a table.
  mapped('WITH due AS (SELECT feed_id FROM n_feed WHERE due_at<=?) SELECT COUNT(*) AS n FROM due','WITH due AS (SELECT feed_id FROM n_feed WHERE due_at<=$1) SELECT COUNT(*) AS n FROM due',['R1'],{read:true});
 });

@@ -165,7 +165,6 @@ pub async fn reconcile(env: &Env, db: crate::database::Authority) -> Result<()> 
         }
     }
     if crate::database::permitted(env, &db, "cleanup").await? {
-        slice_e::execute(&db, EOperation::ExpireLegacyBridges { now: t }).await?;
         slice_e::execute(&db, EOperation::ExpireTickets { now: t }).await?;
         slice_e::execute(
             &db,
