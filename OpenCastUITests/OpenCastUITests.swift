@@ -1304,11 +1304,10 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "episode_tap_expanded_now_playing")
 
         openCurrentEpisodeDetailFromNowPlaying(in: app)
-        swipeBack(in: app)
+        edgeSwipeBack(in: app, untilVisible: seededEpisodeRow(in: app))
         let inboxTab = app.tabBars.buttons["Inbox"]
         assertExists(inboxTab, named: "Inbox tab after episode detail Back")
         XCTAssertTrue(inboxTab.isSelected)
-        assertExists(seededEpisodeRow(in: app), named: "Inbox after episode detail Back")
 
         let miniPlayer = app.buttons["Open Now Playing"]
         assertExists(miniPlayer, named: "mini-player after episode detail Back")
@@ -1320,7 +1319,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.descendants(matching: .any)["Podcast Hero Header"], named: "show detail from Now Playing")
         assertExists(app.staticTexts["Episodes"], named: "show episodes section")
 
-        swipeBack(in: app)
+        tapBackButton(in: app)
         assertExists(inboxTab, named: "Inbox tab after show detail Back")
         XCTAssertTrue(inboxTab.isSelected)
         assertExists(seededEpisodeRow(in: app), named: "Inbox after show detail Back")
@@ -1355,7 +1354,7 @@ final class OpenCastUITests: XCTestCase {
             timeout: 2
         )
 
-        swipeBack(in: app)
+        tapBackButton(in: app)
         let playButton = app.buttons["episode-play-ui-test-episode-1"].firstMatch
         assertHittable(playButton, named: "Inbox row play button")
         playButton.tap()
@@ -2712,7 +2711,7 @@ final class OpenCastUITests: XCTestCase {
             named: "Speed for UI Test Show header"
         )
         // The sheet opens at its medium detent; the last step sits below it.
-        app.navigationBars["Speed"].swipeUp()
+        expandSheetToLargeDetent(in: app)
         let twoX = app.buttons["2.0x"]
         assertHittable(twoX, named: "2.0x speed step")
         twoX.tap()
@@ -5802,7 +5801,7 @@ final class OpenCastUITests: XCTestCase {
 
         let upNextBar = app.navigationBars["Up Next"]
         assertExists(upNextBar, named: "Up Next sheet from the accessory")
-        upNextBar.swipeUp()
+        expandSheetToLargeDetent(in: app)
         var rows: [XCUIElement] = []
         for identifier in Self.seededQueuedEpisodeRowIdentifiers + [Self.seededEpisodeRowIdentifier] {
             XCTAssertTrue(
@@ -5839,7 +5838,7 @@ final class OpenCastUITests: XCTestCase {
 
         let upNextBar = app.navigationBars["Up Next"]
         assertExists(upNextBar, named: "Up Next sheet from the accessory")
-        upNextBar.swipeUp()
+        expandSheetToLargeDetent(in: app)
         let queuedIdentifiers = Self.seededQueuedEpisodeRowIdentifiers
             + (1...7).map { "episode-row-ui-test-extra-episode-\($0)" }
         for identifier in queuedIdentifiers {
@@ -7402,7 +7401,7 @@ final class OpenCastUITests: XCTestCase {
 
         // Popping the Library stack leaves the pill as the only way a Seeded
         // Commute detail can appear later.
-        swipeBack(in: app)
+        tapBackButton(in: app)
         assertExists(app.navigationBars["Playlists"], named: "Playlists collection after Back")
 
         openInbox(in: app)
@@ -7483,7 +7482,11 @@ final class OpenCastUITests: XCTestCase {
         var deterministicRow = hittableUpNextRow(Self.seededEpisodeRowIdentifier, in: app)
         if deterministicRow == nil {
             // The third row can sit below the medium detent's fold.
-            app.navigationBars["Up Next"].swipeUp()
+            expandSheetToLargeDetent(in: app)
+            XCTAssertTrue(
+                waitUntil { hittableUpNextRow(Self.seededEpisodeRowIdentifier, in: app) != nil },
+                "Deterministic UI Episode should be hittable in the expanded Up Next sheet"
+            )
             deterministicRow = hittableUpNextRow(Self.seededEpisodeRowIdentifier, in: app)
         }
         let secondQueuedRow = try XCTUnwrap(hittableQueuedRow(2, in: app), "Queued UI Episode 2 in the Up Next sheet")
@@ -7573,7 +7576,7 @@ final class OpenCastUITests: XCTestCase {
             in: app
         )
         if !footer.waitForExistence(timeout: 2) {
-            app.navigationBars["Up Next"].swipeUp()
+            expandSheetToLargeDetent(in: app)
         }
         assertExists(footer, named: "Up Next playlist footer")
         attachSmokeScreenshot(named: "playlists_up_next_sheet_source")
@@ -9096,11 +9099,30 @@ final class OpenCastUITests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
     }
 
+    /// On the iOS 27.2 simulator UIKit cancels about one complete interactive
+    /// pop in twenty for the same touch input, so a cancelled swipe is tried
+    /// again, three swipes in all. It is retried only while the pushed
+    /// screen's Back button is still there: on the screen below, the same drag
+    /// would swipe a list row.
     @MainActor
-    private func swipeBack(in app: XCUIApplication) {
+    private func edgeSwipeBack(
+        in app: XCUIApplication,
+        untilVisible destination: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
         let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: 0.5))
+        let backButton = app.navigationBars.buttons["BackButton"]
         start.press(forDuration: 0.05, thenDragTo: end)
+        var attempt = 1
+        while attempt < 3, !destination.waitForExistence(timeout: 5), backButton.exists {
+            attempt += 1
+            XCTContext.runActivity(named: "Edge-swipe pop cancelled by UIKit, attempt \(attempt)") { _ in
+                start.press(forDuration: 0.05, thenDragTo: end)
+            }
+        }
+        assertExists(destination, named: "screen below after edge-swipe Back", file: file, line: line)
     }
 
     @MainActor
