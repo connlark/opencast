@@ -12,6 +12,10 @@ permissions:
 
 env:
   DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+  # The iOS simulator runtime that matches the SDK above (the final 27.2
+  # build). The install step downloads it when the runner image ships the
+  # Xcode without its runtime. Move it together with DEVELOPER_DIR.
+  IOS_SIMULATOR_RUNTIME_BUILD: 24B8117
 
 # Pull requests cancel their superseded runs. Pushes to main never do: every
 # commit there keeps its own run, so a follow-up push cannot erase its evidence.
@@ -39,6 +43,70 @@ jobs:
           printf '%s\n' "${xcode_version}" "${swift_version}"
           grep -Eq '^Xcode 27([.]|$)' <<< "${xcode_version}"
           grep -Eq 'Apple Swift version 6[.]4([. ]|$)' <<< "${swift_version}"
+
+      # The runner image can ship an Xcode without its own simulator runtime
+      # (the 27.2 release candidate came with only the 27.0 runtime). A test
+      # bundle built against the newer SDK then fails to load on the older
+      # runtime (AppIntentsTesting needs AppIntentsTypeSupport symbols the
+      # old runtime lacks), so install the matching runtime instead of
+      # falling back.
+      - name: Install the iOS simulator runtime matching the SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          runtime_ready() {
+            xcrun simctl runtime list -j | python3 -c '
+          import json
+          import sys
+
+          wanted = sys.argv[1]
+          ready = any(
+              runtime.get("platformIdentifier") == "com.apple.platform.iphonesimulator"
+              and runtime.get("version") == wanted
+              and runtime.get("state") == "Ready"
+              for runtime in json.load(sys.stdin).values()
+          )
+          sys.exit(0 if ready else 1)
+          ' "$1"
+          }
+          if runtime_ready "${sdk_version}"; then
+            echo "iOS ${sdk_version} simulator runtime is installed."
+          else
+            echo "No iOS ${sdk_version} simulator runtime on this image; downloading build ${IOS_SIMULATOR_RUNTIME_BUILD}."
+            xcodebuild -downloadPlatform iOS -buildVersion "${IOS_SIMULATOR_RUNTIME_BUILD}" \
+              || sudo xcodebuild -downloadPlatform iOS -buildVersion "${IOS_SIMULATOR_RUNTIME_BUILD}" \
+              || sudo xcodebuild -downloadPlatform iOS
+            xcrun simctl runtime list
+            runtime_ready "${sdk_version}" || {
+              echo "The iOS ${sdk_version} simulator runtime did not install." >&2
+              exit 1
+            }
+          fi
+          # A freshly installed runtime may carry no devices; the selector
+          # below needs a fixed-size iPhone on it.
+          xcrun simctl list devices available -j | python3 -c '
+          import json
+          import subprocess
+          import sys
+
+          wanted = sys.argv[1]
+          runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + wanted.replace(".", "-")
+          for runtime_identifier, devices in json.load(sys.stdin)["devices"].items():
+              if runtime_identifier == runtime and any(
+                  device.get("isAvailable")
+                  and device.get("name", "").startswith("iPhone")
+                  and "Duo" not in device.get("name", "")
+                  for device in devices
+              ):
+                  sys.exit(0)
+          print("Creating an iPhone 18 Pro on " + runtime)
+          subprocess.run(
+              ["xcrun", "simctl", "create", "CI iPhone 18 Pro",
+               "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro", runtime],
+              check=True,
+          )
+          ' "${sdk_version}"
 
       - name: Select an iOS 27 simulator
         id: simulator
@@ -179,6 +247,70 @@ jobs:
           printf '%s\n' "${xcode_version}" "${swift_version}"
           grep -Eq '^Xcode 27([.]|$)' <<< "${xcode_version}"
           grep -Eq 'Apple Swift version 6[.]4([. ]|$)' <<< "${swift_version}"
+
+      # The runner image can ship an Xcode without its own simulator runtime
+      # (the 27.2 release candidate came with only the 27.0 runtime). A test
+      # bundle built against the newer SDK then fails to load on the older
+      # runtime (AppIntentsTesting needs AppIntentsTypeSupport symbols the
+      # old runtime lacks), so install the matching runtime instead of
+      # falling back.
+      - name: Install the iOS simulator runtime matching the SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          runtime_ready() {
+            xcrun simctl runtime list -j | python3 -c '
+          import json
+          import sys
+
+          wanted = sys.argv[1]
+          ready = any(
+              runtime.get("platformIdentifier") == "com.apple.platform.iphonesimulator"
+              and runtime.get("version") == wanted
+              and runtime.get("state") == "Ready"
+              for runtime in json.load(sys.stdin).values()
+          )
+          sys.exit(0 if ready else 1)
+          ' "$1"
+          }
+          if runtime_ready "${sdk_version}"; then
+            echo "iOS ${sdk_version} simulator runtime is installed."
+          else
+            echo "No iOS ${sdk_version} simulator runtime on this image; downloading build ${IOS_SIMULATOR_RUNTIME_BUILD}."
+            xcodebuild -downloadPlatform iOS -buildVersion "${IOS_SIMULATOR_RUNTIME_BUILD}" \
+              || sudo xcodebuild -downloadPlatform iOS -buildVersion "${IOS_SIMULATOR_RUNTIME_BUILD}" \
+              || sudo xcodebuild -downloadPlatform iOS
+            xcrun simctl runtime list
+            runtime_ready "${sdk_version}" || {
+              echo "The iOS ${sdk_version} simulator runtime did not install." >&2
+              exit 1
+            }
+          fi
+          # A freshly installed runtime may carry no devices; the selector
+          # below needs a fixed-size iPhone on it.
+          xcrun simctl list devices available -j | python3 -c '
+          import json
+          import subprocess
+          import sys
+
+          wanted = sys.argv[1]
+          runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + wanted.replace(".", "-")
+          for runtime_identifier, devices in json.load(sys.stdin)["devices"].items():
+              if runtime_identifier == runtime and any(
+                  device.get("isAvailable")
+                  and device.get("name", "").startswith("iPhone")
+                  and "Duo" not in device.get("name", "")
+                  for device in devices
+              ):
+                  sys.exit(0)
+          print("Creating an iPhone 18 Pro on " + runtime)
+          subprocess.run(
+              ["xcrun", "simctl", "create", "CI iPhone 18 Pro",
+               "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro", runtime],
+              check=True,
+          )
+          ' "${sdk_version}"
 
       - name: Select an iOS 27 simulator
         id: simulator
